@@ -359,6 +359,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// company no longer has. A captured chart would go on waking
 			// a seat that left, for the life of a process.
 			Roster: liveRoster{engine: e},
+			// THE COMPANY'S OWN NUMBER, converted once at this edge.
+			// How much of a thread a woken seat reads is founder
+			// policy, and internal/chat holds it as a plain int so the
+			// domain's vocabulary needs no dependency on config. A nil
+			// block answers the default rather than zero.
+			ThreadContext: c.Config.Chat.Native.ThreadContext(),
 		}); err != nil {
 			return fmt.Errorf("engine: chat store: %w", err)
 		}

@@ -322,6 +322,24 @@ type Notify struct {
 	// subtract and can never forget to. At most [MaxRecipients].
 	Recipients []Recipient `json:"recipients,omitempty"`
 
+	// ThreadContext is the earlier lines of this message's thread, oldest
+	// first, empty on a root post and on a thread with nothing before
+	// this message.
+	//
+	// ON THE RECORD, which is the whole reason a native chat turn needs no
+	// reconciliation pass where a vendor one does. The node that wins a
+	// feed message is rarely the node running the woken seat and is often
+	// behind on the rows, so a prompt that fetched the thread at wake time
+	// would read a thread shorter than the one it is answering — or none
+	// at all, on a node that has not applied the root yet.
+	//
+	// HOW MANY is the company's own `chat.native.thread_context_messages`,
+	// read once at the edge and carried here; [MaxThreadContext] and
+	// [MaxThreadContextBytes] are the ceilings that hold whatever it asked
+	// for, so no config value can widen a record past what
+	// [MaxRecordBytes] was sized for.
+	ThreadContext []ThreadLine `json:"thread_context,omitempty"`
+
 	// WakesTruncated says the routing reached fewer seats than the
 	// message named, because a collective address exceeded
 	// [MaxCollectiveRecipients].
@@ -331,6 +349,23 @@ type Notify struct {
 	// record deliberately does not carry that set. A room that cannot see
 	// this reads a partial broadcast as a complete one.
 	WakesTruncated bool `json:"wakes_truncated,omitempty"`
+}
+
+// ThreadLine is one earlier message of a thread, as a woken seat reads it.
+//
+// AN EXCERPT RATHER THAN A BODY, and the same [Excerpt] every card uses: this
+// is context for answering the newest message, not a transcript to reproduce,
+// and a thread of full bodies is what [MaxThreadContextBytes] exists to
+// refuse.
+//
+// NO MESSAGE ID. A line here is something to read, and every id it could
+// carry would invite a model to act on a message it was only shown — reply to
+// it, react to it, quote it back. The message being answered is the one on
+// the record.
+type ThreadLine struct {
+	Author     string     `json:"author"`
+	AuthorKind AuthorKind `json:"author_kind"`
+	Excerpt    string     `json:"excerpt"`
 }
 
 // Excerpt is the ONE spelling of how a body becomes a card's preview.
@@ -383,6 +418,26 @@ func (n *Notify) Validate() error {
 	if len(n.Mentions) > MaxMentions {
 		return invalid("notify.mentions", "a notification names %d mentions "+
 			"and the maximum is %d", len(n.Mentions), MaxMentions)
+	}
+	if len(n.ThreadContext) > MaxThreadContext {
+		return invalid("notify.thread_context", "a notification carries %d "+
+			"earlier lines of its thread and the maximum is %d — the count is "+
+			"the company's `chat.native.thread_context_messages`, which is "+
+			"itself bounded there, so a record past this cap is one built "+
+			"from something other than that setting",
+			len(n.ThreadContext), MaxThreadContext)
+	}
+	if size := threadContextBytes(n.ThreadContext); size > MaxThreadContextBytes {
+		return invalid("notify.thread_context", "a notification's thread "+
+			"context is %d bytes against a %d cap — build it with "+
+			"chat.ThreadContextOf, which takes lines newest first and stops "+
+			"when the budget is spent", size, MaxThreadContextBytes)
+	}
+	for _, line := range n.ThreadContext {
+		if !line.AuthorKind.Valid() {
+			return invalid("notify.thread_context", "%q is not an author kind "+
+				"this build serves", line.AuthorKind)
+		}
 	}
 	if len(n.Recipients) > MaxRecipients {
 		return invalid("notify.recipients", "a notification wakes %d seats and "+
@@ -570,4 +625,58 @@ func fieldSet(v any, omitted ...string) map[string]bool {
 		out[name] = true
 	}
 	return out
+}
+
+// threadContextBytes is what a thread costs on the record: the excerpts and
+// the authors, which is every field a line carries that is not a fixed-width
+// enum.
+//
+// THE AUTHORS COUNT. A thread of fifty one-word replies from handles that are
+// each forty bytes is two thirds handle, and a budget that measured only the
+// text would let exactly that shape through.
+func threadContextBytes(lines []ThreadLine) int {
+	total := 0
+	for _, line := range lines {
+		total += len(line.Excerpt) + len(line.Author)
+	}
+	return total
+}
+
+// ThreadContextOf takes at most n lines of a thread for a routing snapshot,
+// within [MaxThreadContextBytes].
+//
+// THE INPUT IS OLDEST FIRST and so is the answer, because that is the order a
+// person reads a conversation in and the order a prompt renders. What the
+// budget is spent in is the OTHER direction: lines are admitted newest first
+// and the answer is re-ordered, so a long thread keeps the exchange nearest
+// the message being answered rather than its opening.
+//
+// A LINE THAT DOES NOT FIT ENDS THE WALK rather than being skipped over for a
+// shorter one behind it. A thread with a hole in it reads as a complete
+// conversation that did not happen, which is worse than a short one: the
+// model answers a sequence nobody had.
+func ThreadContextOf(lines []ThreadLine, n int) []ThreadLine {
+	if n <= 0 || len(lines) == 0 {
+		return nil
+	}
+	if n > MaxThreadContext {
+		n = MaxThreadContext
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	budget := MaxThreadContextBytes
+	first := len(lines)
+	for i := len(lines) - 1; i >= 0; i-- {
+		cost := len(lines[i].Excerpt) + len(lines[i].Author)
+		if cost > budget {
+			break
+		}
+		budget -= cost
+		first = i
+	}
+	if first == len(lines) {
+		return nil
+	}
+	return slices.Clone(lines[first:])
 }

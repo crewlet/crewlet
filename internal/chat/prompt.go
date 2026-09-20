@@ -132,9 +132,37 @@ func (p Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 
 	var b strings.Builder
 	b.WriteString(p.ChatPrompt.Build(n, parties))
+	b.WriteString(earlier(n.Metadata))
 	b.WriteString(whyYou(n.Metadata))
 	b.WriteString(handling(n.Metadata))
 	return b.String()
+}
+
+// earlier renders the thread this message is part of, when there is one.
+//
+// BEFORE the routing reason and the handling block, because it is what the
+// newest message MEANS: a reply read without the exchange behind it is a
+// sentence the seat has to guess the subject of, and a model that guesses
+// answers the wrong question confidently.
+//
+// IT IS ALREADY BOUNDED when it arrives — the record carries at most the
+// company's `chat.native.thread_context_messages` lines within
+// [MaxThreadContextBytes], taken newest-first at write time — so nothing here
+// trims, and nothing here reads a clock or a row. This frame renders what the
+// record decided.
+//
+// NOTHING AT ALL FOR A ROOT POST, rather than an empty heading: a block that
+// announces a conversation and then shows none reads as a thread whose
+// history was lost.
+func earlier(meta map[string]string) string {
+	thread := meta[MetaThread]
+	if thread == "" {
+		return ""
+	}
+	return "\n## Earlier in this thread\n\n" +
+		"What was said before the message above, oldest first. It is context " +
+		"for answering, not something to reply to line by line.\n\n" +
+		thread
 }
 
 // senderLabel renders the author as a colleague, BY HANDLE.

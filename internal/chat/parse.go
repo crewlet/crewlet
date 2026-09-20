@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"strconv"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -57,6 +58,19 @@ const (
 	// complete one: the seats that WERE woken then assume the rest heard
 	// it too, and nobody says the thing again.
 	MetaTruncated = "chat_wakes_truncated"
+
+	// MetaThread is the earlier lines of this message's thread, already
+	// rendered, one line per message and oldest first.
+	//
+	// RENDERED HERE rather than carried as structure, for two reasons.
+	// Metadata is a string map, so a list would have to be encoded
+	// anyway; and this is the frame that decoded the record, so it is the
+	// last one that can tell a thread that was EMPTY from one this build
+	// could not read. A prompt handed a blank key cannot.
+	//
+	// It is present only where there is a thread: a root post carries no
+	// key at all, rather than an empty one.
+	MetaThread = "chat_thread"
 )
 
 // AddressRule is this domain's answer to "was this message addressed to this
@@ -288,6 +302,9 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	if n.WakesTruncated {
 		meta[MetaTruncated] = strconv.FormatBool(true)
 	}
+	if rendered := renderThread(n.ThreadContext); rendered != "" {
+		meta[MetaThread] = rendered
+	}
 	return notify.Inbound{
 		Source: Source,
 		// THE RECORD'S OWN WORD for what happened — `post` or `edit` —
@@ -400,4 +417,35 @@ func recordFromBody(body map[string]any) (MutationRecord, error) {
 		return MutationRecord{}, fmt.Errorf("chat: read the delivery: %w", err)
 	}
 	return Decode(data)
+}
+
+// renderThread turns the record's thread lines into the block a prompt shows.
+//
+// ONE LINE PER MESSAGE, oldest first, in the order a person reads a
+// conversation. The author is named on every line because the whole value of
+// the block is knowing WHO said what — a thread rendered as anonymous prose
+// is a paragraph the model attributes to whoever woke it.
+//
+// AN OPERATOR AND THE ENGINE ARE LABELLED, for [senderLabel]'s reason one
+// level down: a seat that reads a system line as a colleague speaking will
+// try to answer it.
+func renderThread(lines []ThreadLine) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, line := range lines {
+		who := line.Author
+		switch line.AuthorKind {
+		case AuthorOperator:
+			who += " (operator)"
+		case AuthorSystem:
+			who = "the engine"
+		}
+		b.WriteString(who)
+		b.WriteString(": ")
+		b.WriteString(line.Excerpt)
+		b.WriteString("\n")
+	}
+	return b.String()
 }

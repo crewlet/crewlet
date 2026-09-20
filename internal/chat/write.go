@@ -104,6 +104,11 @@ type Store struct {
 	// newOpID mints the operation id for a gesture with no derivation of
 	// its own. A message has one — see ids.go — and does not come here.
 	newOpID func() string
+
+	// threadContext is how many earlier lines of a thread a reply's
+	// snapshot carries. See [Options.ThreadContext]; it is held to
+	// [MaxThreadContext] at construction, so nothing downstream re-checks.
+	threadContext int
 }
 
 // Roster is what the write path asks about the company the rooms belong to.
@@ -150,7 +155,33 @@ type Options struct {
 	// applier is forbidden. Every instant that reaches a ROW is the
 	// broker's; this one reaches the record's envelope and nothing else.
 	Now func() time.Time
+
+	// ThreadContext is how many earlier lines of a thread a reply's
+	// routing snapshot carries — the company's own
+	// `chat.native.thread_context_messages`, read once at this edge.
+	//
+	// AN OPTION RATHER THAN A CONSTANT, because it is founder policy: a
+	// company spending fewer tokens per turn writes a smaller number, and
+	// a company whose threads carry argument writes a larger one. It is a
+	// CONFIG VALUE CONVERTED AT THE EDGE, which is why this package needs
+	// no dependency on config to honour it.
+	//
+	// Zero takes [DefaultThreadContext] rather than meaning "carry none",
+	// the same reading the config field itself takes — there is no "none"
+	// setting to collide with, because a seat handed a reply with none of
+	// the thread it replies to cannot answer it and would answer anyway.
+	// [MaxThreadContext] is the ceiling whatever arrives here is held to.
+	ThreadContext int
 }
+
+// DefaultThreadContext is how many earlier thread lines a record carries when
+// the caller names no number.
+//
+// TEN, which is `config.DefaultThreadContextMessages`. The two are one number
+// and the config package is the one that states its derivation; this is what
+// a caller that supplied nothing gets, so a store built in a test carries the
+// same thread a company does.
+const DefaultThreadContext = 10
 
 // NewStore builds the company's chat over its own log.
 //
@@ -180,9 +211,16 @@ func NewStore(opts Options) (*Store, error) {
 	s := &Store{
 		publisher: opts.Publisher, db: opts.DB, roster: opts.Roster,
 		now: opts.Now, newID: newOperationID, newOpID: newOperationID,
+		threadContext: opts.ThreadContext,
 	}
 	if s.now == nil {
 		s.now = nowUTC
+	}
+	if s.threadContext <= 0 {
+		s.threadContext = DefaultThreadContext
+	}
+	if s.threadContext > MaxThreadContext {
+		s.threadContext = MaxThreadContext
 	}
 	return s, nil
 }
@@ -1535,6 +1573,19 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		}
 		routing.ThreadParticipants, routing.Followers = parties, followers
 	}
+	// THE THREAD ITSELF, read in the same transaction the routing is read
+	// in, so the lines a seat is shown are the lines that were there when
+	// the decision was made. A reply is the only record that carries one:
+	// a root post has no thread behind it.
+	var thread []ThreadLine
+	if routing.ThreadRoot != "" {
+		lines, err := threadLinesTx(ctx, tx, room.ID, routing.ThreadRoot,
+			s.threadContext)
+		if err != nil {
+			return nil, err
+		}
+		thread = ThreadContextOf(lines, s.threadContext)
+	}
 	if room.Kind == KindUnit && room.Unit != "" {
 		routing.Lead = s.roster.Lead(room.Unit)
 	}
@@ -1545,7 +1596,7 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		ChannelKind: room.Kind, ThreadRoot: message.ThreadRoot,
 		Author: message.Author, AuthorKind: message.AuthorKind,
 		Excerpt: Excerpt(message.Body), Mentions: message.Mentions,
-		Lead: routing.Lead,
+		Lead: routing.Lead, ThreadContext: thread,
 		// ROUTED AT WRITE TIME, so the feed never has to subtract and
 		// can never forget to. The parser routes again against the
 		// roster IT has — a seat may have left between the commit and
@@ -2045,4 +2096,61 @@ func cleanHandles(in []string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+// threadLinesTx reads the earlier messages of one thread, oldest first.
+//
+// THE ROOT IS PART OF ITS OWN THREAD, which is what the `id = root` arm is
+// for: a reply's context is the message that started the conversation and
+// everything said since, and a walk over `thread_root` alone omits the one
+// line that says what the thread is about.
+//
+// A TOMBSTONE IS SKIPPED rather than rendered blank. The row survives so
+// replies still resolve, and its body is gone — a line with an empty excerpt
+// spends the budget to tell a model that somebody said nothing.
+//
+// THE NEWEST n ARE TAKEN AND THEN RE-ORDERED. A prompt renders a conversation
+// in reading order, so the answer is oldest first — but the bound belongs at
+// the other end, because the lines worth keeping in a long thread are the ones
+// nearest the message being answered. A sub-select takes the newest n by
+// sequence and the outer statement puts them back in order.
+//
+// THE MESSAGE BEING WRITTEN IS NOT AMONG THEM, and nothing excludes it: the
+// decide runs before the record is published, so its row does not exist on any
+// node yet.
+func threadLinesTx(ctx context.Context, tx *sql.Tx, channelID, root string, n int) (
+	[]ThreadLine, error) {
+
+	if n <= 0 {
+		return nil, nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT author_handle, author_kind, body FROM (
+			SELECT author_handle, author_kind, body, channel_seq
+			  FROM chat_messages
+			 WHERE channel_id = ? AND (thread_root = ? OR id = ?)
+			   AND deleted_at IS NULL
+			 ORDER BY channel_seq DESC
+			 LIMIT ?
+		) ORDER BY channel_seq ASC`, channelID, root, root, n)
+	if err != nil {
+		return nil, fmt.Errorf("chat: read the thread's earlier lines in %s: %w",
+			channelID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []ThreadLine
+	for rows.Next() {
+		var line ThreadLine
+		var body string
+		if err := rows.Scan(&line.Author, &line.AuthorKind, &body); err != nil {
+			return nil, fmt.Errorf("chat: scan a thread line: %w", err)
+		}
+		line.Excerpt = Excerpt(body)
+		out = append(out, line)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("chat: read the thread's earlier lines in %s: %w",
+			channelID, err)
+	}
+	return out, nil
 }

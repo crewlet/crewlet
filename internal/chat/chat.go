@@ -250,6 +250,30 @@ const (
 	// more than that issues more than one gesture, each of which is its own
 	// auditable record.
 	MaxEraseMessages = 250
+
+	// MaxThreadContext bounds how many earlier lines of a thread a
+	// routing snapshot carries.
+	//
+	// FIFTY, which is `config.MaxThreadContextMessages` — the largest
+	// number a company may ask for. The record carries what the company
+	// ASKED for rather than a fixed slice, because the count is founder
+	// policy read once at the edge; this is the ceiling that holds
+	// whatever it asked, so a config change can never widen a record past
+	// what [MaxRecordBytes] was sized for.
+	MaxThreadContext = 50
+
+	// MaxThreadContextBytes bounds those lines TOGETHER, and it is the cap
+	// that actually decides the record's size.
+	//
+	// FOUR KIBIBYTES. A line count alone cannot bound bytes — fifty lines
+	// at [MaxExcerpt] would be 30 KiB on top of a snapshot already sized
+	// at 54 — so the lines are taken NEWEST FIRST and stop when this
+	// budget is spent, which is the order that keeps the closest context
+	// when a thread is long and verbose. Four is about a sixth of the
+	// conversation ledger's own injected budget, which is the other
+	// structured block a turn's prompt carries, and it is what keeps a
+	// thread from displacing what the seat already knows.
+	MaxThreadContextBytes = 4 << 10
 )
 
 // MaxRecordBytes is the design maximum for one encoded record, envelope
@@ -260,8 +284,9 @@ const (
 // not running the embedded one, and the only ceiling in the path this package
 // does not own. The worst record this build can write is a post at every cap
 // at once: [MaxBody] plus [MaxLinks] times [MaxLinkBytes] plus a routing
-// snapshot at [MaxRecipients], which sums to about 54 KiB and leaves the rest
-// for JSON escaping of text that is not ASCII.
+// snapshot at [MaxRecipients] and a thread at [MaxThreadContextBytes], which
+// sums to about 58 KiB and leaves the rest for JSON escaping of text that is
+// not ASCII.
 const MaxRecordBytes = 64 << 10
 
 // ChatMessagesPerDay is the declared census this domain is sized against.
