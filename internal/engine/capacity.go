@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -87,6 +88,19 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 			"engine: a capacity target of zero would be an unbounded log, which " +
 				"is a real setting this verb does not set")
 	}
+	// AND A TARGET PAST int64 IS THE SAME SETTING WEARING A LARGE NUMBER.
+	// A stream's ceiling is an int64 on the wire, so anything above that
+	// wraps NEGATIVE on the way out — and a negative MaxBytes is how
+	// JetStream spells "unbounded". Refused for the reason zero is, and
+	// with the ceiling named, because the two produce an identical stream
+	// from opposite-looking inputs.
+	if req.TargetMaxBytes > math.MaxInt64 {
+		return coord.MaintenanceOperation{}, fmt.Errorf(
+			"engine: a capacity target of %d is past the %d bytes a stream's "+
+				"ceiling can carry, and it would be sent as a negative — which "+
+				"is how an unbounded log is spelled, the one setting this verb "+
+				"does not set", req.TargetMaxBytes, int64(math.MaxInt64))
+	}
 	// AN EXTERNAL BROKER IS ONE THE ENGINE DOES NOT OWN, so it cannot
 	// establish who else holds a connection to it. A refusal an operator
 	// can override knowingly is honest; a check that quietly proves
@@ -117,14 +131,12 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 	return e.driveCapacity(ctx, running, op)
 }
 
-// growthBudgeter is the broker's answer to how far a running log's ceiling may
-// be raised, which a new capacity window is decided against.
-type growthBudgeter interface {
-	GrowthBudget(ctx context.Context) (jetstream.StorageBudget, error)
-}
-
 // growthRoom is how far the broker will let a running log's ceiling grow, as
 // far as this node can read it, and unstated where it cannot.
+//
+// ASKED OF THE STATE LOG'S OWN HOST, which is the handle [stateLog.host] is
+// kept for and the one that holds the stream being resized. A node with no
+// state log has no such stream either, so the two absences are the same one.
 //
 // UNREAD IS UNSTATED, and the window still opens. The check this feeds only
 // spares an operator the restarts of learning a refusal late; the broker is the
@@ -132,8 +144,8 @@ type growthBudgeter interface {
 // window refused because a read failed would block a raise it would grant.
 func (e *Engine) growthRoom(ctx context.Context) jetstream.StorageBudget {
 	unstated := jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUnstated}
-	host, ok := e.backends.Queue.(growthBudgeter)
-	if !ok {
+	host := e.capacityHost()
+	if host == nil {
 		return unstated
 	}
 	room, err := host.GrowthBudget(ctx)
@@ -370,13 +382,7 @@ func (e *Engine) apply(ctx context.Context, running *runningDomain,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	if err := running.log.SetMaxBytes(ctx, op.TargetMaxBytes); err != nil {
-		// THE JOURNAL RECORD STAYS `issued`. A request that returned an
-		// error is an UNKNOWN: it may have landed. What resolves it is
-		// the barrier, and the operation stays where it is so the seal
-		// is the next step.
-		return op, fmt.Errorf("engine: set %s's ceiling to %d: the outcome is "+
-			"unknown and the operation stays open — restart the fleet with "+
-			"`-mode seal` to retire it: %w", op.Stream, op.TargetMaxBytes, err)
+		return op, e.applyFailure(ctx, op, err)
 	}
 	stats, err := running.log.Stats(ctx)
 	if err != nil {
@@ -401,6 +407,85 @@ func (e *Engine) apply(ctx context.Context, running *runningDomain,
 		"operation", op.OperationID, "attempt", op.Attempt,
 		"target", op.TargetMaxBytes, "observed", stats.MaxBytes, "phase", next)
 	return e.reread(ctx, op.Stream)
+}
+
+// applyFailure is what an operator is told when the configuration request did
+// not succeed, and the two answers are not the same fact.
+//
+// A REFUSAL IS AN ANSWER. The broker checked the new ceiling against its limit
+// and declined to propose it, so nothing was written and nothing is in flight
+// — and the number that was wrong is nameable. Reported as an unknown, that
+// sent an operator to the seal for evidence they already had, with the one
+// number they needed left out.
+//
+// EVERYTHING ELSE IS AN UNKNOWN, and the journal record stays `issued` for it:
+// a request that returned a transport error may still have landed, and what
+// resolves that is the barrier rather than a guess.
+//
+// THE JOURNAL RECORD STAYS `issued` ON BOTH, which is why even the terminal
+// half tells the operator to abandon rather than to walk away: the record
+// cannot distinguish THIS attempt's refusal from an earlier attempt's
+// outstanding request, and abandoning from any phase past `opened` still
+// crosses the barrier. What changes is what they are told went wrong.
+func (e *Engine) applyFailure(ctx context.Context, op coord.MaintenanceOperation,
+	err error) error {
+
+	if !errors.Is(err, jetstream.ErrInsufficientStorage) {
+		return fmt.Errorf("engine: set %s's ceiling to %d: the outcome is "+
+			"unknown and the operation stays open — restart the fleet with "+
+			"`-mode seal` to retire it: %w", op.Stream, op.TargetMaxBytes, err)
+	}
+	return fmt.Errorf("engine: set %s's ceiling to %d: the broker REFUSED it "+
+		"and wrote nothing%s. A target is chosen once for the life of an "+
+		"operation, so abandon this one with `crewlet retention maintenance "+
+		"abandon -stream %s` and open another at a ceiling that fits: %w",
+		op.Stream, op.TargetMaxBytes, e.capacityRefusal(ctx, op.TargetMaxBytes),
+		op.Stream, err)
+}
+
+// streamVolume is the directory the state logs' ceilings were derived from,
+// which [limitSource] names where that volume is what bounds the broker. Empty
+// on a node with no state log, where no such limit can be the answer either.
+func (e *Engine) streamVolume() string {
+	if e.native == nil || e.native.log == nil {
+		return ""
+	}
+	return e.native.log.volume
+}
+
+// capacityHost is the broker a capacity question is put to, or nil on a node
+// that runs no state log.
+func (e *Engine) capacityHost() domainHost {
+	if e.native == nil || e.native.log == nil {
+		return nil
+	}
+	return e.native.log.host
+}
+
+// capacityRefusal is what the broker had left to grant when it refused the
+// raise, or nothing at all where this node cannot ask.
+//
+// THE GROWTH BUDGET, not the create budget, because a raise is what was
+// refused: the broker checks an update against the server leading the metadata
+// group rather than against placement, which is the whole of
+// [jetstream.Queue.GrowthBudget]'s distinction. Read AT the refusal rather than
+// carried from the window's opening, because an operation spans restarts and
+// the number that matters is what the broker had when it said no.
+//
+// AN EMPTY CLAUSE IS THE HONEST ANSWER where this node has nothing to read:
+// the refusal it would decorate already carries the broker's own error, and a
+// sentence invented here would be numbers nobody read. An unstated limit is
+// the same case — an external broker's account may set none, and "the limit is
+// -1" is not a sentence.
+func (e *Engine) capacityRefusal(ctx context.Context, want uint64) string {
+	room := e.growthRoom(ctx)
+	if room.Limit < 0 {
+		return ""
+	}
+	return fmt.Sprintf(" — it asks to reserve %d bytes and the broker has %d "+
+		"left to reserve (%d of its %d-byte limit already reserved), and %s",
+		want, room.Available(), room.Committed, room.Limit,
+		limitSource(room.Source, e.streamVolume()))
 }
 
 // seal collects the barrier, retires the journal against it, and asks the

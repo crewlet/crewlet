@@ -258,14 +258,20 @@ func (e *embeddedServer) budget(memory bool) (StorageBudget, error) {
 	}, nil
 }
 
-// ErrInsufficientStorage reports a stream the broker would not create because
-// it could not reserve the stream's byte ceiling.
+// ErrInsufficientStorage reports a reservation the broker would not make —
+// a stream it would not create, or a ceiling it would not raise.
 //
 // A SENTINEL rather than the broker's own error, because the broker says it in
 // two codes, one per storage class, and neither names the number it compared
 // against: a caller that wants to say what was needed, what was available and
 // what to change has to recognise the refusal first, and must not have to know
 // this backend's vocabulary to do it.
+//
+// BOTH WRITES, because both callers act on it the same way and for the same
+// reason: a refusal is an ANSWER. The broker compared the ceiling against its
+// limit and declined, so nothing was written and nothing is in flight — which
+// is the one create failure that is not read back, and the one capacity-apply
+// failure that is not an unknown the fleet has to seal to retire.
 var ErrInsufficientStorage = errors.New("jetstream: the broker cannot reserve the stream's byte ceiling")
 
 // The broker's codes for a reservation it refused for want of room.

@@ -358,7 +358,18 @@ func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
 	}
 	config := info.Config
 	config.MaxBytes = int64(maxBytes)
-	if _, err := l.js.UpdateStream(ctx, config); err != nil {
+	_, err = l.js.UpdateStream(ctx, config)
+	if refusedStorage(err) {
+		// NAMED, exactly as a refused CREATE is. The broker answers a
+		// raise it cannot reserve with the same two codes and the same
+		// numberless sentence, and a caller that reported it as "the
+		// outcome is unknown" sent an operator to a fleet-wide seal for
+		// evidence the broker had already given: a refusal wrote
+		// nothing and nothing is in flight.
+		return fmt.Errorf("jetstream: set %q's ceiling to %d: %w: %w",
+			l.name, maxBytes, ErrInsufficientStorage, err)
+	}
+	if err != nil {
 		return fmt.Errorf("jetstream: set %q's ceiling to %d: %w",
 			l.name, maxBytes, err)
 	}
