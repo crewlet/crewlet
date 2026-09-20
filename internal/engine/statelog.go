@@ -82,6 +82,13 @@ type domainHost interface {
 	// space alone is refused on machines that have the space.
 	StreamBudget(ctx context.Context) (jetstream.StorageBudget, error)
 
+	// GrowthBudget is how far a RUNNING log's ceiling may be raised, which
+	// is a different rule and so a different number: a create is placed
+	// and weighed against a member's own room, an update is checked by
+	// whichever server leads the metadata group. A capacity operation
+	// resizes a stream that exists, so this is the one it is held to.
+	GrowthBudget(ctx context.Context) (jetstream.StorageBudget, error)
+
 	// DomainStreamCeiling is the ceiling a domain's stream already holds,
 	// and whether it exists. What the logs hold counts as theirs when they
 	// are sized, which is what sizes a restart as the first boot was.

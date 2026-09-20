@@ -88,10 +88,23 @@ var contentSubtypes = map[string]bool{
 //
 // An app_mention carries neither field and always passes.
 func SkipReason(event map[string]any) string {
-	if hidden, _ := event["hidden"].(bool); hidden {
-		return "hidden bookkeeping event (subtype " + orNone(str(event, "subtype")) + ")"
+	hidden, _ := event["hidden"].(bool)
+	return skipReason(hidden, str(event, "subtype"))
+}
+
+// skipReason is that rule over the two fields that decide it.
+//
+// ONE FUNCTION, because the same message shape arrives twice: the Events API
+// delivers it as an untyped map and `conversations.replies` returns it as
+// [Reply]. The two must agree about what counts as something somebody said —
+// a join line that wakes nobody but renders into a seat's thread block is a
+// divergence nothing would report, because the thread block degrades silently
+// by design.
+func skipReason(hidden bool, subtype string) string {
+	if hidden {
+		return "hidden bookkeeping event (subtype " + orNone(subtype) + ")"
 	}
-	if subtype := str(event, "subtype"); !contentSubtypes[subtype] {
+	if !contentSubtypes[subtype] {
 		return "non-content message subtype: " + subtype
 	}
 	return ""
@@ -103,9 +116,6 @@ func SkipReason(event map[string]any) string {
 // file names are rendered — a genuine message must never produce a blank
 // notification body, which reads to the agent as an empty turn.
 func Text(event map[string]any) string {
-	if text := str(event, "text"); text != "" {
-		return text
-	}
 	files, _ := event["files"].([]any)
 	var names []string
 	for _, raw := range files {
@@ -115,8 +125,18 @@ func Text(event map[string]any) string {
 		}
 		names = append(names, firstOf(str(file, "name"), str(file, "title"), "unnamed file"))
 	}
-	if len(names) > 0 {
-		return "(shared file: " + strings.Join(names, ", ") + ")"
+	return messageText(str(event, "text"), names)
+}
+
+// messageText is that rule over the two values that decide it, shared with
+// [Reply.Body] for the reason [skipReason] is shared: one message shape, two
+// decoders, and a rule written twice is a rule that drifts.
+func messageText(text string, files []string) string {
+	if text != "" {
+		return text
+	}
+	if len(files) > 0 {
+		return "(shared file: " + strings.Join(files, ", ") + ")"
 	}
 	return ""
 }
@@ -146,6 +166,22 @@ type Seat struct {
 	// half of own-message suppression: a `bot_message` echo of this seat's
 	// own post carries the app id and no user id at all.
 	AppID string
+}
+
+// Owns reports whether a message with these ids is this seat's own.
+//
+// BOTH IDS, and that is the whole point of the method. A `bot_message` echo
+// of this seat's own post carries the APP id and NO user id at all, so a
+// check on the bot user id alone misses exactly the messages a seat most has
+// to recognise — its own earlier replies. The parser uses it to suppress
+// them; the thread reader uses it to MARK them, and the two disagreeing would
+// present an agent's own replies back to it as a colleague's, which is the
+// confusion the thread block exists to remove.
+func (s Seat) Owns(userID, appID string) bool {
+	if s.BotUserID != "" && userID == s.BotUserID {
+		return true
+	}
+	return appID != "" && appID == s.AppID
 }
 
 // Seats resolves a handle to the app this node has registered for it.
@@ -305,17 +341,19 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 // no `user` at all, and only the app id identifies it. Missing either one
 // makes the seat answer itself, one turn per reply, for ever.
 func (p *Parser) isOwn(seat Seat, body, event map[string]any) bool {
-	if seat.BotUserID != "" && str(event, "user") == seat.BotUserID {
+	appID := str(event, "app_id")
+	if seat.Owns(str(event, "user"), appID) {
 		return true
 	}
-	appID := str(event, "app_id")
 	if appID == "" {
 		return false
 	}
-	// The seat's own app id where the engine knows it, and the delivery's
-	// own `api_app_id` otherwise — the envelope names the app the request
-	// URL belongs to, which IS this seat's.
-	return appID == seat.AppID || appID == str(body, "api_app_id")
+	// The delivery's own `api_app_id` where the engine does not know the
+	// seat's — the envelope names the app the request URL belongs to,
+	// which IS this seat's. Only available here: a thread read has no
+	// delivery envelope to fall back on, which is why the shared half is
+	// [Seat.Owns] and this clause is not.
+	return appID == str(body, "api_app_id")
 }
 
 // botUserID is the account this delivery's app authenticates as, as Slack
@@ -382,9 +420,9 @@ func metadata(body, event map[string]any, seat Seat, msg notify.ChatMessage,
 	kind, ts, thread string, reach notify.Delivery,
 ) map[string]string {
 	m := map[string]string{
-		"transport":    Backend,
-		"channel":      msg.Channel,
-		"channel_type": kind,
+		notify.TransportField: Backend,
+		"channel":             msg.Channel,
+		"channel_type":        kind,
 		// The canonical shape beside the third-party app's own word. Both,
 		// because the raw one is what a prompt and an operator
 		// recognise and the canonical one is what the learning workers

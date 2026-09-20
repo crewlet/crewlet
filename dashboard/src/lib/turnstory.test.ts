@@ -16,6 +16,7 @@ import {
   promptWeights,
   tellStory,
 } from "./turnstory.ts";
+import type { PromptWeight } from "./turnstory.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 
 function event(type: string, over: Partial<EventRecord> = {}): EventRecord {
@@ -156,15 +157,71 @@ describe("the prefetch", () => {
     });
   }
 
-  test("all six blocks are named, hit or not", () => {
-    // The event's own summary is "2/6 hits", which is right for a feed and
+  test("all seven blocks are named, hit or not", () => {
+    // The event's own summary is "2/7 hits", which is right for a feed and
     // useless on the screen about this turn: WHICH two is the whole question.
     const blocks = prefetchBlocks(prefetch());
-    expect(blocks).toHaveLength(6);
+    expect(blocks).toHaveLength(7);
     expect(blocks.filter((b) => b.hit).map((b) => b.label)).toEqual([
       "Personal memory",
       "Who it was with",
     ]);
+  });
+
+  test("the thread the turn was woken in counts its messages", () => {
+    // A block the list omits simply never renders, and nothing anywhere goes
+    // red — this list is hand-written with no gate behind it, so the seventh
+    // block needs its own case or it can vanish from the screen silently.
+    const blocks = prefetchBlocks(
+      prefetch({ thread_context_hit: true, thread_context_read: true, thread_context_posts: 12 }),
+    );
+    const thread = blocks.find((b) => b.label === "The thread so far")!;
+    expect(thread.hit).toBe(true);
+    expect(thread.note).toBe("12 messages handed over");
+  });
+
+  test("the three zero-message thread states read as three different things", () => {
+    // Both of the block's zero-message paths render non-empty prose into the
+    // prompt, so hit and bytes look identical on a thread that was READ and
+    // empty and on one no backend answered for. Reading the first as the
+    // second tells an operator that a healthy node cannot reach its own chat
+    // surface — which is why the engine reports whether it was read at all.
+    const note = (over: Record<string, unknown>) =>
+      prefetchBlocks(prefetch(over)).find((b) => b.label === "The thread so far")!.note;
+
+    expect(note({ thread_context_hit: true })).toBe("the thread could not be read from that node");
+    expect(note({ thread_context_hit: true, thread_context_read: true })).toBe(
+      "read, and there was nothing earlier",
+    );
+    // And a trigger with no thread at all claims nothing about one.
+    expect(note({})).toBe("");
+  });
+
+  test("a thread too long to read says the newest messages are missing", () => {
+    // The count reads the same on a truncated thread as on a whole one, and
+    // the messages that are missing are the NEWEST — the one that woke the
+    // turn included. A seat answering a message it never saw is exactly the
+    // turn this screen is opened to explain.
+    const blocks = prefetchBlocks(
+      prefetch({
+        thread_context_hit: true,
+        thread_context_read: true,
+        thread_context_posts: 30,
+        thread_context_stopped_short: true,
+      }),
+    );
+    expect(blocks.find((b) => b.label === "The thread so far")!.note).toBe(
+      "30 messages handed over, but not the newest — the thread was too long to read",
+    );
+  });
+
+  test("the thread block is never gated", () => {
+    // It is what makes a thin trigger thick: the trigger body is still a bare
+    // pointer, so the flag stays set, and this block still ran.
+    const blocks = prefetchBlocks(
+      prefetch({ trigger_requires_recon: true, thread_context_hit: false }),
+    );
+    expect(blocks.find((b) => b.label === "The thread so far")!.gated).toBe("");
   });
 
   test("gated is not the same as empty", () => {
@@ -200,7 +257,7 @@ describe("the prefetch", () => {
     expect(blocks.find((b) => b.label === "Relevant knowledge")!.note).toBe("3 pages selected");
   });
 
-  test("no prefetch event means no blocks, not six empty ones", () => {
+  test("no prefetch event means no blocks, not seven empty ones", () => {
     // A turn whose prefetch event fell outside the store's window has no
     // answer here, which is different from a turn whose every block missed.
     expect(prefetchBlocks(undefined)).toEqual([]);
@@ -222,6 +279,9 @@ describe("what each phase's prompt weighed", () => {
         approximate_tokens: tokens,
         system_chars: 24_000,
         user_chars: 2_800,
+        message_chars: 0,
+        tool_chars: 3_800,
+        tool_count: 11,
         ...over,
       },
     });
@@ -332,6 +392,50 @@ describe("what each phase's prompt weighed", () => {
     // And the token count still arrives, which is exactly what makes the
     // zero read as a fact rather than as a row that failed to load.
     expect(row!.approximateTokens).toBe(6807);
+  });
+
+  test("every term the engine measured reaches the row", () => {
+    // The tool-definition array is the term this event was blind to, and the
+    // dominant one: a measured turn reported ~6,900 tokens here against the
+    // provider's 205,000. Asserting a NON-ZERO value is the point — the parse
+    // coerces with `?? 0`, so a key that never arrives renders a permanent
+    // zero that a "renders 0" assertion could never catch.
+    const [w] = promptWeights([size("execute", 2, 7_400)]) as [PromptWeight];
+    expect(w.phase).toBe("execute");
+    expect(w.iteration).toBe(2);
+    expect(w.approximateTokens).toBe(7_400);
+    expect(w.systemBytes).toBe(24_000);
+    expect(w.userBytes).toBe(2_800);
+    expect(w.toolBytes).toBe(3_800);
+    expect(w.toolCount).toBe(11);
+  });
+
+  test("a resumed phase's conversation is carried, not folded into the user term", () => {
+    // A detached coding run re-enters its saved messages, so the engine sends
+    // no system or user text at all and reports the seed instead. Folding it
+    // into `userBytes` would make one column mean two different things
+    // depending on whether the phase was resumed.
+    const [w] = promptWeights([
+      size("execute", 1, 12_950, { system_chars: 0, user_chars: 0, message_chars: 48_000 }),
+    ]) as [PromptWeight];
+    expect(w.messageBytes).toBe(48_000);
+    expect(w.systemBytes).toBe(0);
+    expect(w.userBytes).toBe(0);
+  });
+
+  test("an older engine's row reads as zero rather than NaN", () => {
+    // A rolling upgrade puts a node that never measured the tool array on the
+    // same stream. Its rows must render — `NaN B` in a column is worse than a
+    // zero, because it reads as a broken screen rather than a quiet term.
+    const [w] = promptWeights([
+      event("prompt.size", {
+        payload: { phase: "review", iteration: 1, approximate_tokens: 900, system_chars: 3_600 },
+      }),
+    ]) as [PromptWeight];
+    expect(w.toolBytes).toBe(0);
+    expect(w.toolCount).toBe(0);
+    expect(w.messageBytes).toBe(0);
+    expect(Number.isNaN(w.toolBytes)).toBe(false);
   });
 });
 

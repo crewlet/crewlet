@@ -388,19 +388,107 @@ func (t *Transport) Handles() []string {
 	return out
 }
 
-// Client exposes a seat's authenticated client, keyed by handle.
+// ---------------------------------------------------------------- //
+// notify.ThreadReader
+// ---------------------------------------------------------------- //
+
+// ThreadBackend implements [notify.ThreadReader].
+func (t *Transport) ThreadBackend() string { return Backend }
+
+// ReadThread implements [notify.ThreadReader].
 //
-// ONE PER SEAT and never shared, which is the whole point of a bot per
-// agent: every call carries that seat's own token, so the instance
-// attributes it to the agent rather than to one company-wide account.
-// Nothing here creates a post — an agent speaks through the Mattermost MCP
-// server, on this same token — so what this client does is read, and raise
-// the seat's typing indicator.
-func (t *Transport) Client(handle string) (*Client, bool) {
+// It reads as the SEAT, on the seat's own bot token, which is what makes the
+// block match what that agent can actually see: a channel the bot is not in
+// answers an error and the turn gets the unreadable hint rather than somebody
+// else's conversation.
+//
+// A seat this node has no client for reports false rather than dereferencing
+// one. That is not defensive: a bot whose token was refused at boot is left
+// out of the map deliberately (see [Transport.startSeat]), and a node running
+// in maintenance mode starts no chat transport at all — both are ordinary
+// states, and both must render "the thread could not be read" rather than
+// panicking a turn.
+func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string) (notify.Transcript, bool) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	s, ok := t.seats[handle]
-	return s.client, ok
+	t.mu.Unlock()
+	if !ok || s.client == nil {
+		return notify.Transcript{}, false
+	}
+	posts, err := s.client.Thread(ctx, root)
+	if err != nil {
+		log.DebugContext(ctx, "mattermost_thread_unreadable", "handle", handle,
+			"channel", channel, "root", root, "error", err.Error())
+		return notify.Transcript{}, false
+	}
+	// NOTHING STOPS SHORT HERE, and the zero values say so rather than
+	// being guessed at: GET /api/v4/posts/{root}/thread answers the WHOLE
+	// thread in one response, with no cursor and no page size, so this
+	// backend has no bound of its own to drop an older message or to stop
+	// before the newest one. Slack's paged read does, which is why
+	// [notify.Transcript] carries the two fields at all.
+	out := notify.Transcript{Messages: make([]notify.Message, 0, len(posts))}
+	var rootSeen bool
+	for _, post := range posts {
+		// THE ROOT IS KEPT WHATEVER IT SAYS, recognised by its own id
+		// rather than by its position. [notify.ThreadReader] promises the
+		// root FIRST, and dropping it for want of a body hands the
+		// renderer a transcript whose first line is the oldest surviving
+		// REPLY — which every bound then protects and the prompt then
+		// calls the thread's opening.
+		//
+		// It travels with an EMPTY body rather than an invented one: what
+		// to say in its place is the renderer's decision, and this
+		// transport rendering prose would put one backend's wording in
+		// front of a seat and the other's beside it.
+		isRoot := post.ID != "" && post.ID == root
+		bookkeeping := post.Bookkeeping() != ""
+		if bookkeeping && !isRoot {
+			continue
+		}
+		// SCOPED TO THE CHANNEL THE TRIGGER NAMED. The endpoint is
+		// addressed by post id alone, so nothing in the request says
+		// which channel this thread is meant to be in — and a root id
+		// that names a post somewhere else would render another
+		// conversation into this seat's prompt under the trigger's own
+		// heading. Checked rather than trusted, because it is the one
+		// thing the request itself cannot assert.
+		if post.ChannelID != "" && post.ChannelID != channel {
+			continue
+		}
+		body := ""
+		if !bookkeeping {
+			body = post.Body()
+		}
+		if body == "" && !isRoot {
+			continue
+		}
+		rootSeen = rootSeen || isRoot
+		out.Messages = append(out.Messages, notify.Message{
+			SenderID: post.UserID,
+			// NO NAME. A Mattermost post carries a user id and nothing
+			// else, so the party registry is the only thing that can
+			// turn one into a colleague — and a miss renders the raw
+			// id, which is what a person reading the channel sees a
+			// stranger as too.
+			Text: body,
+			// THE RESOLVED IDENTITY, never the configured one: an id
+			// the engine guessed would mark none of the seat's posts
+			// as its own, and an agent that cannot recognise its own
+			// replies reads them as a colleague's and answers itself.
+			Own: s.seat.UserID != "" && post.UserID == s.seat.UserID,
+		})
+	}
+	if len(out.Messages) > 0 && !rootSeen {
+		// A DELETED ROOT, which is the ordinary way to get here: the
+		// thread endpoint leaves a deleted post out of its answer while
+		// every reply to it stays, so the read comes back with no root at
+		// all. Its slot is kept empty rather than closed up, because
+		// "somebody deleted the opening" and "this thread opens with the
+		// oldest line below" are different threads to a seat.
+		out.Messages = append([]notify.Message{{}}, out.Messages...)
+	}
+	return out, true
 }
 
 // ---------------------------------------------------------------- //
@@ -440,6 +528,13 @@ func (t *Transport) DMChannelPrefix() string { return "" }
 //
 // The status text is ignored, and that is what SupportsStatusText declares:
 // there is nothing here to render it with.
+//
+// REACHED ONCE PER TURN AND THEN EVERY FEW SECONDS. The engine raises the
+// indicator at the start of every chat-triggered turn and the session's
+// heartbeat re-asserts it at the interval this instance itself declares (see
+// [Transport.StatusRefresh]), so on this backend it is the most frequent call
+// the transport makes — which is what `typing_status: addressed` exists to
+// bound, and why a failure here is a DEBUG line rather than anything louder.
 func (t *Transport) SetStatus(ctx context.Context, handle, channel, thread, _ string) bool {
 	t.mu.Lock()
 	s, ok := t.seats[handle]

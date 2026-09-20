@@ -46,6 +46,19 @@ func (c *capture) blocked() []*types.ToolSkillGuardBlocked {
 	return out
 }
 
+// startedPhases is the phase each agent_phase_started event names, in order.
+func (c *capture) startedPhases() []string {
+	c.mu <- struct{}{}
+	defer func() { <-c.mu }()
+	var out []string
+	for _, ev := range c.events {
+		if got, ok := events.DataAs[*types.AgentPhaseStarted](ev); ok {
+			out = append(out, string(got.Phase))
+		}
+	}
+	return out
+}
+
 // promptsFor is the opening prompt each phase published, as the live view
 // renders it: the round with RoundNum -1 carries the whole conversation.
 func (c *capture) promptsFor(ph string) []string {

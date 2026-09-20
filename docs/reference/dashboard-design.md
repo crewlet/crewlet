@@ -1684,16 +1684,29 @@ Four rules replace it, and each one names what it fixes.
    a newer node publishes has to still render.
 
    A band is not a rendering, though, and *What the turn was given* was
-   rendering half of its own. `prompt.size` — six integers per phase, which
-   exist so prompt-slimming progress is measurable rather than argued about —
-   was banded here and then read by nobody: the panel took `prefetch_summary`
-   out of the band and dropped the rest, so the only route to a phase's prompt
-   size was the raw payload of a row in the residual list. The panel carries
-   both halves now, which is the pair that says whether a heavy prompt is
-   heavy *because* of what was prefetched or in spite of it. Per phase and per
-   round, never summed: a prompt is re-sent on every round of the tool loop,
-   so a total would be neither the turn's input bill — the tiles above already
-   report that — nor any single thing that was ever sent.
+   rendering half of its own. `prompt.size` — a row of integers per phase,
+   which exist so prompt-slimming progress is measurable rather than argued
+   about — was banded here and then read by nobody: the panel took
+   `prefetch_summary` out of the band and dropped the rest, so the only route
+   to a phase's prompt size was the raw payload of a row in the residual list.
+   The panel carries both halves now, which is the pair that says whether a
+   heavy prompt is heavy *because* of what was prefetched or in spite of it.
+   Per phase and per round, never summed: a prompt is re-sent on every round
+   of the tool loop, so a total would be neither the turn's input bill — the
+   tiles above already report that — nor any single thing that was ever sent.
+
+   Every term of the approximation gets a column — **System**, **User**,
+   **Messages**, **Tools**, **Approx. tokens** — so the total can be checked
+   against the row rather than taken on trust. *Tools* is the
+   tool-definition array as compact JSON, with the definition count on its
+   hover, and it is usually the largest: while the engine did not measure it, a
+   turn reported ~6,900 tokens on a prompt the provider billed 205,000 input
+   tokens for. *Messages* is what a **resumed** phase sends in place of a
+   system and user pair — a detached coding run re-enters its saved
+   conversation, counted with the reasoning each parked round carries and the
+   arguments of its tool calls — and reads 0 on every phase that opens one of
+   its own. Five fixed columns overflow a phone, which is what the sideways
+   scroll on `.num-block` is for.
 
    And then that half grew rule 1's own failure back. `turn_id|phase|iteration`
    is the phase key, and the turn id **is** the work key, so a dispatch that is

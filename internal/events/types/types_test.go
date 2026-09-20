@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -275,7 +276,7 @@ var wireTags = map[string][]string{
 	"scheduled_task_fired":            {"schedule_name", "scheduled_at", "scope_id", "scope_type", "target_handle"},
 	"external_notification":           {"addressed", "agent_id", "body", "context_requires_recon", "messages", "metadata", "notification_source", "recipient_email", "salient_body", "sender", "source_event_type", "subject"},
 	"turn_trigger_skipped":            {"agent_handle", "agent_id", "reason", "trigger_id", "trigger_type"},
-	"notifications_coalesced":         {"agent_handle", "conversation_key", "count", "first_at", "last_at", "notification_source"},
+	"notifications_coalesced":         {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
 	"notification_skipped":            {"handle", "notification_source", "reason"},
 	"a2a_request":                     {"channel_id", "content", "requester", "sender_role"},
 	"a2a_message":                     {"channel_id", "content", "question", "sender", "sender_role"},
@@ -295,7 +296,7 @@ var wireTags = map[string][]string{
 	"episode_written":                 {"agent_handle", "agent_id", "duration_ms", "review_outcome", "role", "tool_count", "turn_id", "work_key"},
 	"persist_decider_completed":       {"agent_handle", "agent_id", "classification", "doc_id", "persisted", "review_outcome", "role", "scope", "ttl_until", "turn_id", "work_key"},
 	"skill_used":                      {"agent_handle", "agent_id", "file_loaded", "role", "skill_id", "skill_name", "source_kind", "turn_id", "work_key"},
-	"prefetch_summary":                {"agent_handle", "agent_id", "counterparty_bytes", "counterparty_hit", "episode_recall_bytes", "episode_recall_hit", "onboarding_hint_bytes", "onboarding_hint_hit", "personal_memory_bytes", "personal_memory_hit", "relevant_knowledge_bytes", "relevant_knowledge_hit", "relevant_knowledge_selection_count", "role", "synthesized_skills_bytes", "synthesized_skills_hit", "trigger_requires_recon", "turn_id", "work_key"},
+	"prefetch_summary":                {"agent_handle", "agent_id", "counterparty_bytes", "counterparty_hit", "episode_recall_bytes", "episode_recall_hit", "onboarding_hint_bytes", "onboarding_hint_hit", "personal_memory_bytes", "personal_memory_hit", "relevant_knowledge_bytes", "relevant_knowledge_hit", "relevant_knowledge_selection_count", "role", "synthesized_skills_bytes", "synthesized_skills_hit", "thread_context_bytes", "thread_context_hit", "thread_context_posts", "thread_context_read", "thread_context_stopped_short", "trigger_requires_recon", "turn_id", "work_key"},
 	"counterparty_profile_updated":    {"observer_handle", "role", "subject_external_id", "subject_handle", "subject_name", "subject_platform", "traits_patched", "turn_id", "work_key"},
 	"skill_synthesized":               {"agent_handle", "agent_id", "cluster_size", "role", "skill_id", "skill_name", "tool_count", "trigger", "turn_id", "work_key"},
 	"skill_refined":                   {"agent_handle", "agent_id", "refinement_kind", "role", "skill_id", "skill_name", "skill_version", "turn_id", "work_key"},
@@ -312,7 +313,7 @@ var wireTags = map[string][]string{
 	"sandbox_run_failed":              {"agent_handle", "agent_id", "coding_agent", "detail", "reason", "role", "sandbox_id", "turn_id", "work_key"},
 	"sandbox_clarification_requested": {"agent_handle", "agent_id", "audience", "conversation_key", "question", "role", "sandbox_id", "turn_id", "work_key"},
 	"phase.tool_skill_blocked":        {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
-	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "phase", "role", "system_chars", "turn_id", "user_chars", "work_key"},
+	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "message_chars", "phase", "role", "system_chars", "tool_chars", "tool_count", "turn_id", "user_chars", "work_key"},
 	"turn.guard_breach":               {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
 	"tool_skill_page_changed":         {"backend", "container", "page_id"},
 	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers"},
@@ -814,6 +815,44 @@ func TestASummaryLeadIsUpperCasedByRuneNotByte(t *testing.T) {
 		}
 		if !utf8.ValidString(got) {
 			t.Errorf("lead(\"\", %q) produced invalid UTF-8", tc.in)
+		}
+	}
+}
+
+// A PROMOTED TAG MEANS ONE THING, AND THE CATALOGUE IS WHERE THAT IS HELD.
+//
+// internal/store promotes the flat wire field `conversation_key` out of every
+// event into one column of the event log, and the value a query gets back has
+// to mean the same thing whichever row it matched. It did not: every event a
+// turn publishes puts the conversation IDENTITY there, while the coalescing
+// record put the inbox PARTITION there — two values that differ exactly where
+// it matters, since a direct message's identity is the bare channel and its
+// partition can be a thread inside it. So a filter on that tag silently mixed
+// the thread a seat is talking on with the batch a wake arrived in.
+//
+// The rule this holds is the naming one, because that is the half a reviewer
+// can check: a field spelled `conversation_key` on the wire is the
+// conversation and is called ConversationKey, and a field holding a partition
+// is called PartitionKey and spells itself `partition_key`. A new event
+// stamping its batch into the shared tag now has to rename a field to do it.
+func TestNoPayloadPutsAPartitionInTheConversationField(t *testing.T) {
+	t.Parallel()
+	for _, payload := range catalogue() {
+		typ := reflect.TypeOf(payload)
+		for i := range typ.NumField() {
+			field := typ.Field(i)
+			wire, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			switch {
+			case wire == "conversation_key" && field.Name != "ConversationKey":
+				t.Errorf("%s.%s is `conversation_key` on the wire: that tag is "+
+					"the conversation identity on every event, so a field "+
+					"holding anything else must not be promoted through it",
+					typ.Name(), field.Name)
+			case field.Name == "PartitionKey" && wire != "partition_key":
+				t.Errorf("%s.PartitionKey is `%s` on the wire, want partition_key: "+
+					"the partition has its own tag so the conversation's keeps "+
+					"one meaning", typ.Name(), wire)
+			}
 		}
 	}
 }

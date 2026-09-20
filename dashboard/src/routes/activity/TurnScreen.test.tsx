@@ -196,22 +196,37 @@ test("a cut view withholds the clean badge, and a complete one gives it", async 
   expect(screen.queryByText("nothing went wrong")).toBeNull();
 });
 
-// prompt.size REACHES THE PAGE.
+// prompt.size REACHES THE PAGE, EVERY TERM OF IT.
 //
-// Six small integers per phase were banded into `given` and read by nobody:
-// the screen took `prefetch_summary` out of that band and dropped the rest,
-// so the only route to a phase's prompt size was the raw payload of a row in
-// the residual list.
+// A whole row of integers per phase was banded into `given` and read by
+// nobody: the screen took `prefetch_summary` out of that band and dropped the
+// rest, so the only route to a phase's prompt size was the raw payload of a
+// row in the residual list. The tool-definition array is the term the ENGINE
+// then turned out not to be measuring either — the largest one — so a column
+// that renders a permanent 0 is the failure this case exists to catch, which
+// is why the figures asserted are ones only a measuring engine produces.
 test("each phase's prompt size is rendered rather than banded and dropped", async () => {
   mount({
     events: [
       phase("2026-09-13T10:01:30Z", 90_000),
-      promptSize({ approximate_tokens: 7400, system_chars: 24000, user_chars: 1200 }),
+      promptSize({
+        approximate_tokens: 7400,
+        system_chars: 24000,
+        user_chars: 1200,
+        message_chars: 0,
+        tool_chars: 3800,
+        tool_count: 11,
+      }),
     ],
   });
   expect(await screen.findByText("Prompt sent")).toBeTruthy();
   expect(screen.getByTitle("the engine's own approximation").textContent).toBe("7,400");
   expect(screen.getByTitle("bytes in the system prompt")).toBeTruthy();
+  // THE TOOL ARRAY IS ON THE PAGE, which is the term this panel was blind to
+  // and the dominant one: a measured turn read ~6,900 tokens here against the
+  // provider's 205,000.
+  expect(screen.getByTitle("11 tool definitions, as compact JSON").textContent).toBe("3.7 KB");
+  expect(screen.getByTitle("bytes of conversation a resumed phase re-entered")).toBeTruthy();
 });
 
 // A PHASE THAT RAN TWICE IS ONE ROW AND A COUNT.

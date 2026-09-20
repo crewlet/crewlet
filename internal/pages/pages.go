@@ -229,14 +229,6 @@ func NormalizeTitle(title string) string {
 	return strings.ToLower(strings.Join(strings.Fields(title), " "))
 }
 
-// ConversationKey is the key a wake about this page carries, so every message
-// about one page lands in one conversation ledger.
-//
-// THE PAGE ID rather than its title, unlike a work item's human key: a title
-// changes, and a conversation keyed on one would split in half at a rename,
-// silently — each half looking like a perfectly ordinary conversation.
-func ConversationKey(pageID string) string { return "page:" + pageID }
-
 // nowUTC is the default clock.
 func nowUTC() time.Time { return time.Now().UTC() }
 

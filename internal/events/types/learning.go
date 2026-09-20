@@ -224,7 +224,7 @@ func (e SkillUsed) SummaryFor(actor string) string {
 	return lead(actor, "used skill '"+e.SkillName+"' ("+string(e.SourceKind)+")")
 }
 
-// PrefetchSummary fires once per turn, after the six context blocks the
+// PrefetchSummary fires once per turn, after the seven context blocks the
 // executor's prompt is built from resolve, recording hit and rendered size for
 // each of them.
 //
@@ -262,7 +262,38 @@ type PrefetchSummary struct {
 	// hit=true means it ran, found nothing relevant, and rendered the empty
 	// hint. Operators investigating low effectiveness pivot on this to tell "no
 	// signal" from "hint nudge only".
-	RelevantKnowledgeSelectionCount int `json:"relevant_knowledge_selection_count"`
+	RelevantKnowledgeSelectionCount int  `json:"relevant_knowledge_selection_count"`
+	ThreadContextHit                bool `json:"thread_context_hit"`
+	ThreadContextBytes              int  `json:"thread_context_bytes"`
+	// ThreadContextPosts is how many messages of the chat thread the turn
+	// was woken in were handed to the seat. It answers HOW MUCH, and
+	// nothing else: a zero is produced by a thread that could not be read
+	// AND by one that was read and had nothing in it, which is what
+	// ThreadContextRead is for.
+	ThreadContextPosts int `json:"thread_context_posts"`
+	// ThreadContextRead says a chat backend ANSWERED the read.
+	//
+	// THE THIRD STATE, and the one the count alone got wrong. Both of the
+	// block's zero-message paths render non-empty prose — "there is nothing
+	// earlier" and "it could not be read from this node" — so hit and bytes
+	// cannot separate them either, and the count was read as "unreadable"
+	// for every successfully-read empty thread in the company. An explicit
+	// field rather than a sentinel count, because a sentinel is a magic
+	// value every reader of this event has to know.
+	//
+	// false with hit=false is the ordinary case: the trigger was not a
+	// thread reply, so there was no thread and nothing read one.
+	ThreadContextRead bool `json:"thread_context_read"`
+	// ThreadContextStoppedShort says the backend could not reach the end of
+	// the thread, so what the seat was handed stops short of the NEWEST
+	// messages — the one that woke the turn included.
+	//
+	// Its own field for the same reason: the count reads the same on a
+	// complete thread and on a truncated one, and this is precisely the
+	// turn an operator is looking at when a seat answers something nobody
+	// asked it. Only a PAGED backend can set it; see
+	// internal/notify.Transcript.
+	ThreadContextStoppedShort bool `json:"thread_context_stopped_short"`
 	// TriggerRequiresRecon says the trigger was a bare pointer, so the
 	// personal-memory, relevant-knowledge and episode-recall prefetches skipped
 	// their aux-LLM call entirely: their hit and byte counts reflect the GATE,
@@ -282,15 +313,23 @@ func (e PrefetchSummary) Role() string { return e.RoleName }
 // AgentID is the instance whose stores were searched.
 func (e PrefetchSummary) AgentID() string { return e.Agent }
 
-// SummaryFor counts hits out of six and flags a gated turn separately: without
-// the flag, a thin trigger and a genuinely empty set of stores produce the same
-// "0/6" and lead an operator to look in the wrong place.
+// SummaryFor counts hits out of every block and flags a gated turn
+// separately: without the flag, a thin trigger and a genuinely empty set of
+// stores produce the same "0/7" and lead an operator to look in the wrong
+// place.
+//
+// THE DENOMINATOR IS THE SLICE'S OWN LENGTH. It was a literal, and a literal
+// beside a hand-written list is a number that goes on saying six after the
+// seventh block lands — which reads to an operator as a turn that hit
+// everything, or as one that hit more blocks than exist.
 func (e PrefetchSummary) SummaryFor(actor string) string {
-	hits := 0
-	for _, hit := range []bool{
+	blocks := []bool{
 		e.CounterpartyHit, e.SynthesizedSkillsHit, e.EpisodeRecallHit,
 		e.OnboardingHintHit, e.PersonalMemoryHit, e.RelevantKnowledgeHit,
-	} {
+		e.ThreadContextHit,
+	}
+	hits := 0
+	for _, hit := range blocks {
 		if hit {
 			hits++
 		}
@@ -299,7 +338,7 @@ func (e PrefetchSummary) SummaryFor(actor string) string {
 	if e.TriggerRequiresRecon {
 		gated = " (thin trigger — filters gated)"
 	}
-	return lead(actor, fmt.Sprintf("prefetch: %d/6 hits%s", hits, gated))
+	return lead(actor, fmt.Sprintf("prefetch: %d/%d hits%s", hits, len(blocks), gated))
 }
 
 // CounterpartyProfileUpdated fires after one observation pass, whenever the

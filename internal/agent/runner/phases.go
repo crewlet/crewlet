@@ -139,6 +139,27 @@ type Config struct {
 	// Turn identifies the turn these events belong to.
 	Turn Turn
 
+	// OnPhase is called as each phase OPENS, with the phase that is about to
+	// run. Nil is the ordinary case for anything driving a runner directly.
+	//
+	// It exists for the working indicator, which has to say which phase a
+	// seat is in and had no way to learn it: the engine owns the turn's
+	// lifetime but not its phases, and a turn's own indicator must not
+	// depend on a broker round trip to find out what it is doing.
+	//
+	// ONE SEAM, wired where agent_phase_started is published (see
+	// [emitter.started]) rather than at each phase's own call site, so the
+	// name a reader sees and the name every dashboard reads cannot drift:
+	// both are the same argument to the same call. It fires whether or not
+	// anything is listening on the stream, because an indicator is not
+	// telemetry — a node with no publisher still has a person waiting.
+	//
+	// Called SYNCHRONOUSLY, immediately before the phase's first provider
+	// call, so an implementation that blocks delays the turn. The one in the
+	// engine only writes state and wakes a goroutine: see
+	// [notify.StatusSession.Phase].
+	OnPhase func(phase.Phase)
+
 	// Onboarding wires the dedicated first-turn pass. Zero disables it,
 	// which is what a node with no marker store has — a pass that could
 	// never be marked would run every turn forever.
@@ -363,6 +384,7 @@ func (r *Runner) executorPrompt(_ int, notes string, history []ledger.Iteration,
 		ToolCatalogue:  r.cfg.Registry.Catalogue(),
 		AvailableTools: snapshot.Names(),
 
+		ThreadContext:       r.cfg.Context.ThreadContext,
 		PersonalMemory:      r.cfg.Context.PersonalMemory,
 		RelevantKnowledge:   r.cfg.Context.RelevantKnowledge,
 		EpisodeRecall:       r.cfg.Context.EpisodeRecall,
@@ -786,7 +808,13 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// Published BEFORE the first provider call, so a seat that is thinking
 	// says which phase it is thinking in. The completed event is the durable
 	// record and may be minutes away.
-	emit.started(ctx, ph, iteration, system, user)
+	//
+	// THE SEED AND THE SURFACE TRAVEL WITH THE TEXT because the prompt is
+	// all three: a resumed loop opens with the saved messages instead of
+	// the strings, and every round of either carries the tool-definition
+	// array, which both HTTP vendors bill as input and the cli-agent text
+	// backend writes into the prompt literally.
+	emit.started(ctx, ph, iteration, system, user, in.seed, surface)
 
 	messages := in.seed
 	if messages == nil {

@@ -200,7 +200,13 @@ Two things that do **not** work, and cost an afternoon each:
 Mattermost **MCP tool** server is a separate `mcp_servers` entry
 (`shared: false`). Per agent, the same `${VAR}` names the token in both
 places — one credential, three readers (websocket, REST, MCP), no secret
-duplicated:
+duplicated. The REST reader makes two kinds of call on that token, both reads:
+the backfill a seat runs over a websocket reconnect gap, and
+`GET /api/v4/posts/{root}/thread` at the start of a turn woken in a thread, so
+the agent is handed the conversation instead of being told to go and fetch it
+(see [the thread block](../concepts/agent-runtime.md#the-thread-a-turn-was-woken-in)).
+Both read as that bot account, so a channel it is not in simply answers an
+error and the turn runs without the block.
 
 ```yaml
 integrations:
@@ -713,6 +719,16 @@ slower leaves a visible gap. Tune the server setting and the engine follows.
 |---|---|
 | `always` *(default)* | every Mattermost-triggered turn |
 | `addressed` | a DM, a direct mention, or a thread the agent already follows |
+
+The lifecycle is the turn's, and it is the same on both chat backends: every
+point the indicator is raised, held, released and cleared at is the table in
+[Turn Engine § The working status](../concepts/turn-engine.md#the-working-status),
+and that table is the only copy of it — a second one here would be a second
+thing to keep true, which is exactly what this page's own point argues against.
+
+What differs here is what a phase change does: **nothing**. The engine still
+tracks which phase a turn is in, but this indicator has no text to move, so a
+phase boundary costs no request at all — where on Slack it redraws the line.
 
 > **There is no `off`.** What it bought was a company whose agents think in
 > silence for minutes at a time, which is the state this feature exists to

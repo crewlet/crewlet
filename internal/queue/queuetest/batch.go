@@ -3,6 +3,8 @@ package queuetest
 import (
 	"context"
 	"errors"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,9 +13,17 @@ import (
 )
 
 // runBatch covers batched, key-partitioned delivery: the drain, the
-// partitioning, per-partition acking, and the two places a batch loop has to
-// stop early — a mid-batch quiesce and the linger window closing on a paused
-// attachment.
+// partitioning, per-partition acking, and the places a batch loop has to stop
+// early.
+//
+// THE EARLY STOPS ARE AN ENUMERATION, not a pair, and this comment said "the
+// two" for as long as only two of them were asked about. The contract names
+// four conditions a partition loop must answer BETWEEN partitions — a deferral
+// it just applied, a hold, a drain pause, a detach (see queue.DeliveriesLeft)
+// — and there is one case per condition below, plus the linger window closing
+// on an attachment that has since been paused or held, which is a different
+// gate in both backends. A fifth thing every one of them shares is what the
+// undispatched remainder COSTS, which is its own case again.
 func (s *suite) runBatch(t *testing.T) {
 	ctx := t.Context()
 
@@ -110,6 +120,190 @@ func (s *suite) runBatch(t *testing.T) {
 			publish(ctx, t, q, "t", newConvEvent(string(rune('0'+i)), "c1"))
 		}
 		batches.awaitSizes(t, "the backlog to arrive as capped batches", 2, 2, 1)
+	})
+
+	t.Run("a_batch_handler_is_told_how_many_deliveries_are_left", func(t *testing.T) {
+		t.Parallel()
+		// The same number a single delivery carries — see
+		// a_handler_is_told_how_many_deliveries_are_left — because a
+		// partition's handler spends the budget the same way: one
+		// outcome, applied to every message it was handed.
+		//
+		// A partition whose messages sit at DIFFERENT counts is the next
+		// case, which is where the two numbers a handler is told stop
+		// being the same number.
+		newQueueWithAttempts := s.needAttempts(t)
+		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
+
+		j := newJournal()
+		var attempts int
+		subscribeBatch(ctx, t, q, "t.left", "g",
+			func(hctx context.Context, _ []*events.Event) queue.Result {
+				attempts++
+				left, known := queue.DeliveriesLeft(hctx)
+				if !known {
+					j.record("unknown")
+					return queue.Ack()
+				}
+				j.record(strconv.Itoa(left))
+				if attempts < 3 {
+					return queue.Nak(errors.New("still failing"))
+				}
+				return queue.Ack()
+			}, queue.DefaultBatchOptions())
+		publish(ctx, t, q, "t.left", newConvEvent("a", "c1"))
+
+		j.awaitLabels(t, "the partition's headroom to count down", "2", "1", "0")
+	})
+
+	t.Run("a_partition_at_mixed_counts_tells_each_message_its_own_headroom", func(t *testing.T) {
+		t.Parallel()
+		// TWO NUMBERS, BECAUSE ONE CANNOT ANSWER BOTH QUESTIONS.
+		//
+		// A partition's messages sit at different delivery counts as a
+		// matter of course: a conversation whose first message has been
+		// handed back keeps collecting fresh replies, and each of those
+		// arrives with a whole budget. So a handler is told BOTH — the
+		// partition's own headroom ([queue.DeliveriesLeft], the smallest,
+		// which answers "will handing this batch back dead-letter
+		// something") and each message's ([queue.DeliveriesLeftFor],
+		// which answers "how much is left of THIS one").
+		//
+		// Reading the first where the second is meant is a defect with a
+		// name: the engine's sandbox answer route gated its offer on the
+		// partition's number and so refused a person's clarification
+		// reply that was on its FIRST delivery, because an older message
+		// on the same conversation was near its own budget — and kept
+		// refusing every later reply on that conversation, since the
+		// spent message stays in the partition. See
+		// internal/sandbox.MayOfferAnswer.
+		//
+		// HOW THE MIXED PARTITION IS BUILT, since the previous round of
+		// this work recorded that it could not be. It needs a redelivery
+		// and a never-delivered message to meet in ONE drain, and the two
+		// halves that make that deterministic are:
+		//
+		//   - the fresh message is published BY THE HANDLER, on its first
+		//     invocation, before that invocation hands the first message
+		//     back. On an inline-dispatch twin that is the only ordering
+		//     that works at all: nothing else runs between the nak and
+		//     the next chunk, so a publish from the test goroutine can
+		//     never land in between. On a fetching backend it puts the
+		//     fresh message in the stream before the nak, so it is
+		//     already available when the next drain opens its window.
+		//   - the linger window is [mixedCountLinger] rather than
+		//     lingerFor, so it outlasts the nak spacing the redelivered
+		//     half comes back on instead of racing it.
+		//
+		// The assertion is RELATIONAL rather than two literals, because
+		// a backend is entitled to an extra redelivery on the way here
+		// and the rule does not depend on how many: the two counts must
+		// DIFFER, and the partition's must be the smaller. On the common
+		// path the numbers are attempts-2 and attempts-1.
+		newQueueWithAttempts := s.needAttempts(t)
+		const attempts = 6
+		q := startQueue(ctx, t, newQueueWithAttempts(t, attempts))
+
+		const topic, group, conv = "t.mixed", "g", "c1"
+		older := newConvEvent("older", conv)
+		fresher := newConvEvent("fresher", conv)
+
+		var (
+			mu                 sync.Mutex
+			seeded             bool
+			rounds             int
+			readings           map[string]int
+			partLeft           int
+			partKnown, missing bool
+		)
+		j := newJournal()
+		subscribeBatch(ctx, t, q, topic, group,
+			func(hctx context.Context, evs []*events.Event) queue.Result {
+				mu.Lock()
+				first := !seeded
+				seeded = true
+				rounds++
+				round := rounds
+				mu.Unlock()
+
+				if first {
+					// Published from INSIDE the handler; see above.
+					// A failure here is recorded rather than
+					// fataled: this is not the test goroutine.
+					if err := q.Publish(hctx, topic, fresher); err != nil {
+						j.record("publish failed: " + err.Error())
+						return queue.Ack()
+					}
+					return queue.Nak(errors.New("hand the first one back"))
+				}
+				if len(evs) < 2 {
+					// They have not met yet. Hand it back and let
+					// the next drain try, bounded by the budget so
+					// a backend that never pairs them fails loudly
+					// instead of hanging.
+					if round < attempts-1 {
+						return queue.Nak(errors.New("still waiting for the pair"))
+					}
+					mu.Lock()
+					missing = true
+					mu.Unlock()
+					j.record("never met")
+					return queue.Ack()
+				}
+
+				got := make(map[string]int, len(evs))
+				var unstated bool
+				for _, ev := range evs {
+					left, known := queue.DeliveriesLeftFor(hctx, ev.ID)
+					if !known {
+						unstated = true
+						continue
+					}
+					got[labelOf(ev)] = left
+				}
+				left, known := queue.DeliveriesLeft(hctx)
+
+				mu.Lock()
+				readings, partLeft, partKnown, missing = got, left, known, unstated
+				mu.Unlock()
+				j.record("paired")
+				return queue.Ack()
+			}, queue.NewBatchOptions(mixedCountLinger.Seconds(), 20))
+
+		publish(ctx, t, q, topic, older)
+		j.await(t, "a redelivery and a fresh publish to reach one handler together",
+			func(seen []string) bool { return len(seen) == 1 })
+
+		mu.Lock()
+		defer mu.Unlock()
+		if missing {
+			t.Fatalf("the partition never carried both messages with both counts "+
+				"stated (saw %v): a handler cannot ask what one message has left "+
+				"if the backend states nothing for it", j.all())
+		}
+		olderLeft, olderOK := readings["older"]
+		fresherLeft, fresherOK := readings["fresher"]
+		if !olderOK || !fresherOK {
+			t.Fatalf("the handler read %v, want a count for each of the two "+
+				"messages in the partition", readings)
+		}
+		if olderLeft >= fresherLeft {
+			t.Errorf("the redelivered message reported %d deliveries left and the "+
+				"never-delivered one %d: a per-message count that cannot tell them "+
+				"apart is the partition's number wearing another name, which is what "+
+				"refused a reply with a whole budget in hand",
+				olderLeft, fresherLeft)
+		}
+		if !partKnown || partLeft != olderLeft {
+			t.Errorf("the partition reported (%d, %v), want (%d, true): one outcome "+
+				"covers every message, so the partition's headroom is its NEAREST "+
+				"message's", partLeft, partKnown, olderLeft)
+		}
+		if fresherLeft > attempts-1 {
+			t.Errorf("a never-delivered message reported %d deliveries left on a "+
+				"%d-attempt budget: the count is the headroom AFTER the delivery in "+
+				"hand", fresherLeft, attempts)
+		}
 	})
 
 	t.Run("failing_partition_redelivers_only_itself", func(t *testing.T) {
@@ -498,6 +692,233 @@ func (s *suite) runBatch(t *testing.T) {
 		awaitState(t, "the undispatched partitions to return", func() bool {
 			return equalStrings(convsOf(backlog(q, "topic.hold", "grp")), []string{"b", "c"})
 		})
+	})
+
+	t.Run("a_detach_taken_mid_batch_stops_the_rest", func(t *testing.T) {
+		t.Parallel()
+		// THE FOURTH CONDITION, and the one that was stated in two
+		// backend comments and certified on neither.
+		//
+		// The contract names four things that stop a partition loop
+		// between partitions — a deferral just applied, a hold, a pause,
+		// a DETACH (see queue.DeliveriesLeft). The two cases above cover
+		// the first two, and the twin's guard was written to cover all
+		// four; its comment said so. It did not cover this one, because a
+		// detach is the only one that is not a FLAG: it is a consumer
+		// leaving the subscription's member list, and the partition loop
+		// holds the consumer directly and never re-reads that list. So
+		// the twin ran the remaining partitions, ACKED them, and reported
+		// the seat's mail consumed — on a consumer this node had already
+		// given up.
+		//
+		// WHICH IS THE ONE THAT MATTERS MOST. A detach is the fenced
+		// release: internal/node detaches when a seat's lease is lost,
+		// precisely to abandon in-flight work rather than finish it on a
+		// seat a peer already owns. An engine or node test asserting that
+		// path against the twin was certifying the exact opposite of what
+		// the shipped broker does — and this suite, which exists to stop
+		// that, had no case to ask with.
+		//
+		// The undispatched partitions come back like any other stopped
+		// drain's: charged one delivery each and left in the
+		// subscription's retained mail, which outlives every attachment,
+		// so whoever attaches next gets them. What that costs is
+		// an_undispatched_partition_pays_for_its_hand_back's subject and
+		// is deliberately not re-asserted here — this case is about the
+		// loop STOPPING.
+		backlog := s.needBacklog(t)
+		q := s.start(ctx, t)
+
+		seen := newJournal()
+		if err := q.SubscribeBatch(ctx, "topic.detach", "grp",
+			func(hctx context.Context, evs []*events.Event) queue.Result {
+				seen.record(firstConv(t, evs))
+				// The seat's lease moves while the rest of this very
+				// batch is still waiting to run, and the node gives the
+				// seat up at once rather than when the drain happens to
+				// end. Detach does NOT join this handler — that is the
+				// contract — so this call returns and the loop is left
+				// holding partitions it no longer has any claim to.
+				if _, err := q.Detach(hctx, "topic.detach", "grp"); err != nil {
+					t.Errorf("Detach: %v", err)
+				}
+				return queue.Ack()
+			}, convKey, queue.DefaultBatchOptions()); err != nil {
+			t.Fatalf("SubscribeBatch: %v", err)
+		}
+
+		fillOneBatch(ctx, t, q, "topic.detach", "grp", "a", "b", "c")
+
+		seen.awaitLabels(t, "only the first partition to be handled", "a")
+		seen.staysAt(t, 1, "the detach did not stop the batch")
+		awaitState(t, "the undispatched partitions to return", func() bool {
+			return equalStrings(convsOf(backlog(q, "topic.detach", "grp")), []string{"b", "c"})
+		})
+	})
+
+	t.Run("a_pause_taken_mid_batch_stops_the_rest", func(t *testing.T) {
+		t.Parallel()
+		// AND THE LAST OF THE FOUR, added with the detach case above
+		// rather than after the next finding, because the detach one was
+		// found by reading the enumeration and this is what reading the
+		// rest of it produced.
+		//
+		// MEASURED, not assumed. Deleting the process-wide delivery
+		// pause from the between-partition guard fails THIS case and
+		// nothing else, on either backend — so before it existed, that
+		// condition was held by no case at all. Both backends answer it
+		// correctly and always have; it rides the same predicate as the
+		// hold and the quiesce. But "rides the same predicate" is exactly
+		// the argument that was made for the detach condition, in a
+		// comment, while that condition was not in the predicate at all.
+		// A condition the contract names and no case asks about is one
+		// delete away from being gone, whether or not anything is wrong
+		// with it today.
+		//
+		// THE DRAIN PAUSE IS A DIFFERENT GATE FROM THE TWO NEAR IT, which
+		// is why it cannot borrow their coverage. A hold is per
+		// (topic, group) and reversible; a quiesce is per attachment and
+		// reversible; this is per PROCESS and one-way, because it is the
+		// shutdown drain — the node has stopped taking work and is
+		// waiting out its in-flight handlers. Landing mid-batch is its
+		// ordinary case rather than an exotic one: a drain that began
+		// while a seat was working arrives exactly here.
+		//
+		// pause_during_linger_retains_pending covers the same verb at the
+		// OTHER gate — a window open when the pause lands — which is a
+		// different branch in both backends.
+		backlog := s.needBacklog(t)
+		q := s.start(ctx, t)
+
+		seen := newJournal()
+		if err := q.SubscribeBatch(ctx, "topic.drain", "grp",
+			func(hctx context.Context, evs []*events.Event) queue.Result {
+				seen.record(firstConv(t, evs))
+				// The node begins its shutdown drain while the rest of
+				// this batch is still waiting to run. The handler in
+				// flight finishes — that is what a drain waits for —
+				// and nothing new starts.
+				if err := q.PauseDelivery(hctx); err != nil {
+					t.Errorf("PauseDelivery: %v", err)
+				}
+				return queue.Ack()
+			}, convKey, queue.DefaultBatchOptions()); err != nil {
+			t.Fatalf("SubscribeBatch: %v", err)
+		}
+
+		fillOneBatch(ctx, t, q, "topic.drain", "grp", "a", "b", "c")
+
+		seen.awaitLabels(t, "only the first partition to be handled", "a")
+		seen.staysAt(t, 1, "the drain pause did not stop the batch")
+		awaitState(t, "the undispatched partitions to return", func() bool {
+			return equalStrings(convsOf(backlog(q, "topic.drain", "grp")), []string{"b", "c"})
+		})
+	})
+
+	t.Run("an_undispatched_partition_pays_for_its_hand_back", func(t *testing.T) {
+		t.Parallel()
+		// WHAT THE REST OF A STOPPED DRAIN COSTS, which is the same as
+		// what the partition that stopped it costs: one delivery each.
+		//
+		// The two cases above certify that the loop STOPS and that the
+		// undispatched partitions come back in order. Neither says what
+		// coming back is charged, and the two backends answered that
+		// differently for as long as nothing asked. JetStream FETCHES a
+		// drain, so its counter has already moved on every message in it
+		// before the loop discovers it may not finish — the remainder
+		// goes back through the same budget check as a failure. The twin
+		// spliced its undispatched partitions into the mailbox untouched,
+		// so on a seat whose drains are stopped over and over — a lease
+		// that keeps moving, an inbox held for one parked coding run
+		// after another — the same message rode round for ever on a
+		// counter that never moved, while the identical message on the
+		// shipped broker was walking through its twenty-five.
+		//
+		// That is the LAST HALF of the divergence the deferral's own cost
+		// had: one partition of a drain paying the broker's price and
+		// every other partition of the same drain paying nothing. The
+		// contract states one rule for all of it — see
+		// queue.DeliveriesLeft — so this certifies the rule rather than
+		// either backend's mechanism.
+		//
+		// A HOLD RATHER THAN A DEFERRAL, because the hold is released in
+		// place: ResumeTopic clears it and the same attachment carries
+		// on, so the held-back partition comes back to a handler that can
+		// read what it has left. A deferral would quiesce the attachment,
+		// and un-quiescing it is a different verb testing a different
+		// thing.
+		//
+		// OBSERVED AS A COMPARISON rather than against a literal, for the
+		// reason the mixed-count case gives: the two readings are taken
+		// through the same accessor in the same run, so an extra
+		// redelivery on the way here cannot turn the rule into a timing
+		// test. What must hold is that the partition handed back
+		// undispatched comes back with LESS than a never-delivered one,
+		// which is false by exactly one if the hand-back was free.
+		newQueueWithAttempts := s.needAttempts(t)
+		const attempts = 5
+		q := startQueue(ctx, t, newQueueWithAttempts(t, attempts))
+
+		const topic, group = "topic.charged", "grp"
+		var (
+			mu     sync.Mutex
+			first  = map[string]int{}
+			parked bool
+		)
+		j := newJournal()
+		subscribeBatch(ctx, t, q, topic, group,
+			func(hctx context.Context, evs []*events.Event) queue.Result {
+				conv := firstConv(t, evs)
+				left, known := queue.DeliveriesLeft(hctx)
+
+				mu.Lock()
+				if _, seen := first[conv]; !seen && known {
+					first[conv] = left
+				}
+				park := !parked
+				parked = true
+				mu.Unlock()
+
+				if park {
+					// The seat parks while the REST of this batch is
+					// still waiting to run, so the second partition
+					// goes back having been drained and never
+					// dispatched — the state this case is about.
+					if err := q.PauseTopic(hctx, topic, group, "queuetest-charged"); err != nil {
+						t.Errorf("PauseTopic: %v", err)
+					}
+				}
+				j.record(conv)
+				return queue.Ack()
+			}, queue.NewBatchOptions(lingerFor.Seconds(), 20))
+
+		fillOneBatch(ctx, t, q, topic, group, "a", "b")
+		j.awaitLabels(t, "only the first partition to be handled", "a")
+		j.staysAt(t, 1, "the hold did not stop the batch")
+
+		if err := q.ResumeTopic(ctx, topic, group, "queuetest-charged"); err != nil {
+			t.Fatalf("ResumeTopic: %v", err)
+		}
+		j.awaitLabels(t, "the held-back partition to come back", "a", "b")
+
+		mu.Lock()
+		defer mu.Unlock()
+		fresh, freshOK := first["a"]
+		handed, handedOK := first["b"]
+		if !freshOK || !handedOK {
+			t.Fatalf("the handler read %v, want a headroom for each partition: "+
+				"a backend that states nothing cannot be asked what a hand-back "+
+				"cost", first)
+		}
+		if handed >= fresh {
+			t.Errorf("the partition handed back undispatched reported %d deliveries "+
+				"left and the never-delivered one %d: a drain the consumer stopped "+
+				"is handed back, and every hand-back spends a delivery — the "+
+				"partition that stopped it is charged, so the rest of it cannot be "+
+				"free. (If this backend split the fill into separate batches there "+
+				"was no undispatched remainder to charge and this case never ran "+
+				"the loop it is named for; see fillOneBatch.)", handed, fresh)
+		}
 	})
 
 	t.Run("a_publish_during_the_batch_does_not_move_the_splice", func(t *testing.T) {

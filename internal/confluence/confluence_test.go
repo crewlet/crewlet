@@ -683,8 +683,15 @@ func TestTheSpacePromptTellsTheLeadSilenceIsOrdinary(t *testing.T) {
 func TestThePageIsTheConversation(t *testing.T) {
 	t.Parallel()
 	meta := map[string]string{"page_id": "1001", "space": "ENG"}
-	if got := (confluence.Prompt{}).ConversationKey(meta, ""); got != "1001" {
-		t.Fatalf("conversation key = %q", got)
+	if got := (confluence.Prompt{}).PartitionKey(meta, ""); got != "1001" {
+		t.Fatalf("partition key = %q", got)
+	}
+	// AND THE TWO KEYS COINCIDE: a page is one object that is both the
+	// merge unit and the durable thread, so an identity that diverged from
+	// the key would file the page's history where the next edit on it never
+	// looks.
+	if got := (confluence.Prompt{}).ConversationIdentity(meta, ""); got != "1001" {
+		t.Fatalf("conversation identity = %q, want the page id the key uses", got)
 	}
 }
 
@@ -719,8 +726,8 @@ func TestACommentWithNoTopLevelPageStillNamesItsPage(t *testing.T) {
 		t.Fatalf("page_id = %q, want the container's — an empty one keys the "+
 			"comment on its own event id and coalesces with nothing", id)
 	}
-	if key := (confluence.Prompt{}).ConversationKey(got[0].Metadata, ""); key != "1001" {
-		t.Fatalf("conversation key = %q", key)
+	if key := (confluence.Prompt{}).PartitionKey(got[0].Metadata, ""); key != "1001" {
+		t.Fatalf("partition key = %q", key)
 	}
 }
 

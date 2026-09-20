@@ -324,3 +324,114 @@ func TestTheSnapshotDirectoryResolvesAgainstTheStore(t *testing.T) {
 		t.Errorf("absolute = %q", got)
 	}
 }
+
+// THE BROKER'S OWN STORAGE LIMIT IS BOUNDED, IS EMBEDDED-ONLY, AND CANNOT BE
+// SMALLER THAN THE CEILINGS DECLARED INSIDE IT.
+//
+// # Why each of those is a refusal rather than a warning
+//
+// This field is the number every stream ceiling on this node's broker is
+// compared against, and the failure it prevents is the one that has no
+// symptom of its own: a create refused with `insufficient storage resources
+// available` — or, on a clustered member, `no suitable peers for placement,
+// insufficient storage` — on whichever stream a bring-up happened to reach
+// last rather than on the one that is too big.
+//
+// So a limit smaller than the operator's OWN ceilings cannot be honoured by
+// anybody, and both numbers are on the same page of the same file — the
+// honest moment to say so is while they are still being written. And on an
+// external cluster this reaches nothing at all, which is the rule `url`,
+// `store_dir` and `debug` already keep.
+func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *testing.T) {
+	t.Parallel()
+	const gib = int64(1) << 30
+	for name, tc := range map[string]struct {
+		mutate func(*config.Bootstrap)
+		accept bool
+		says   string
+	}{
+		"unset":                {func(*config.Bootstrap) {}, true, ""},
+		"below four gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 4*gib - 1 }, false, "store_max_bytes"},
+		"at four gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 4 * gib }, true, ""},
+		"at 64 TiB":            {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
+		"past 64 TiB":          {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
+		// OTHERWISE A VALID EXTERNAL DOCUMENT, coordination included: a
+		// case whose document has a second problem passes on whichever
+		// of the two fires, which would leave this rule uncovered.
+		"on an external cluster": {func(b *config.Bootstrap) {
+			b.Stream.Type, b.Stream.URL, b.Stream.StoreDir = config.StreamNATS, "nats://broker:4222", ""
+			b.Coordination.Type = config.CoordinationEmbeddedKV
+			b.Stream.StoreMaxBytes = 16 * gib
+		}, false, "store_max_bytes"},
+		"an external cluster with none of its own": {func(b *config.Bootstrap) {
+			b.Stream.Type, b.Stream.URL, b.Stream.StoreDir = config.StreamNATS, "nats://broker:4222", ""
+			b.Coordination.Type = config.CoordinationEmbeddedKV
+		}, true, ""},
+		"holding ceilings that fit": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 64 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+		}, true, ""},
+		"smaller than its own ceilings": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 16 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+		}, false, "store_max_bytes"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := config.DefaultBootstrap()
+			tc.mutate(&b)
+			err := b.Validate()
+			if tc.accept {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			if !strings.Contains(err.Error(), tc.says) {
+				t.Errorf("refusal = %q, want it to name %q", err, tc.says)
+			}
+		})
+	}
+}
+
+// A STORE LIMIT ON A BROKER WITH NO STORE BOUNDS NOTHING, and says so.
+//
+// An embedded server with no `store_dir` holds its streams in MEMORY, where a
+// ceiling is reserved against the memory allowance rather than against this
+// number. The configuration is valid — a test, an ingress-only node — so it is
+// a warning; what it must not be is silent, because the pair reads exactly
+// like "I have bounded this node's broker".
+func TestAStoreLimitWithNoStoreDirectoryIsCalledOut(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Stream.StoreDir, b.Stream.StoreMaxBytes = "", 16<<30
+	if err := b.Validate(); err != nil {
+		t.Fatalf("refused a valid document: %v", err)
+	}
+
+	var found bool
+	for _, w := range b.Warnings() {
+		if strings.Contains(w.Path, "store_max_bytes") {
+			found = true
+			if !strings.Contains(w.Message, "memory") {
+				t.Errorf("the warning does not say what does bound those "+
+					"streams: %q", w.Message)
+			}
+		}
+	}
+	if !found {
+		t.Error("a store limit on an in-memory broker was not mentioned at all")
+	}
+
+	// AND IT IS NOT RAISED ON A BROKER THAT HAS A STORE, or it is noise on
+	// every deployment that configured the field correctly.
+	b.Stream.StoreDir = t.TempDir()
+	for _, w := range b.Warnings() {
+		if strings.Contains(w.Path, "store_max_bytes") {
+			t.Errorf("a store limit beside a store directory was warned about: %q",
+				w.Message)
+		}
+	}
+}

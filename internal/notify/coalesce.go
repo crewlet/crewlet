@@ -9,12 +9,13 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// Coalescing: N events in one conversation become ONE trigger.
+// Coalescing: N events in one partition become ONE trigger.
 //
 // The companion of the broker's batched delivery. A seat's pending inbox is
-// partitioned by conversation key, and a partition with more than one event is
-// merged here — so five comments on one issue, or a person typing four
-// messages in a row, cost one turn instead of five.
+// partitioned by PARTITION KEY — the merge unit, which is either the
+// conversation identity or a finer cut of it — and a partition with more than
+// one event is merged here, so five comments on one issue, or a person typing
+// four messages in a row, cost one turn instead of five.
 //
 // What makes it safe is that the merged event is shaped so every existing
 // consumer keeps working unchanged. The flat fields mirror the LATEST

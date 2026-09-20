@@ -260,6 +260,42 @@ backend is enough: a company on Jira whose knowledge base is the engine's own,
 which is the default without Confluence, is refused the same way. Only a
 company on vendors for both can run an in-memory member.
 
+**Divide `store_max_bytes` when several engines share a filesystem.** Every
+stream ceiling on the embedded broker is a *reservation*: the broker refuses to
+create a stream whose ceiling it cannot back, and the number it compares
+against is this limit. Unset, the broker sizes itself from the free space on
+`store_dir` when its JetStream comes up — three quarters of it, measured once —
+which is right when it is the volume's only tenant and wrong the moment it is
+not, because free space bounds the *sum* of the engines on a disk rather than
+each of them. Two engines each taking what they can see over-commit the volume;
+three over-commit it by half again. The failure is not a disk-full message: on
+a single node it is `insufficient storage resources available`, and on a fleet
+— where the limit is applied by the metadata leader placing the stream rather
+than by the member creating it — it is `no suitable peers for placement,
+insufficient storage`. Either way it names whichever stream that node happened
+to provision last, which reads as a problem with that subsystem. So on
+a host running N engines against one filesystem — a test runner, a
+multi-tenant box, several companies on one machine — give each of them its own
+share:
+
+```yaml
+stream:
+  store_dir: "/var/lib/crewlet/acme/stream"
+  store_max_bytes: 68719476736   # 64 GiB of the volume, this engine's share
+```
+
+It is measured once, at boot, on both paths: a volume that later grows or
+shrinks does not move the limit, and a node that should see a resized disk is
+restarted. Half of whatever is in force is what the state logs' derived
+ceilings may reserve between them; the other half is for the streams that
+reserve nothing and simply grow against it — the seats' mailboxes, the event
+log, the dead-letter stream, the memory changelog and every coordination
+bucket. A refusal names the ceiling that did not fit and the Tier A field
+that sets it on either topology; it adds the limit in force and what is already
+reserved only where this node can read them, which is the standalone one. On a
+fleet the room that refused is another member's disk, and no member can read
+another's.
+
 > **The clustered embedded broker has no authentication and no TLS. Run it on
 > a trusted network.**
 >
@@ -446,6 +482,63 @@ itself — but `stream.url` names an address rather than a member list, so how
 many servers answer behind it is yours to know. Asking for more replicas than
 the cluster has members fails at boot, on the first stream the engine tries to
 create.
+
+**On an external cluster `stream.replicas` also picks which storage limit the
+engine is held to.** There is no `store_max_bytes` on that topology — the limit
+is the *account's*, and the engine reads it back — and a NATS account states
+that limit in one of two shapes, never both. An ordinary account has a single
+limit, which the server charges `replicas × ceiling` against, so the engine
+divides it by `stream.replicas` before it sizes anything. A **tiered** account
+states one limit per replica class (`R1`, `R3`, `R5`, …), already counting
+replication, so the engine takes the tier for `stream.replicas` whole.
+
+A tiered account that has **no tier for the class you asked for** — `R1` and
+`R5` declared while `stream.replicas: 3` — is neither, and neither is a tier
+that *is* declared but carries no storage limit: the account's report lists
+every class it holds objects in, whether or not a limit was ever set for one,
+so `R3` being present is not `R3` being declared. The engine reports a budget
+of **zero** under its own source — `account_no_tier` or
+`account_tier_no_limit` — rather than as an account that is merely full: the
+two carry the same number and the opposite instruction, since one clears by
+somebody freeing room and these only by a change of configuration. A tier
+declared **unlimited** is neither again: it states its limit as a negative, the
+broker creates against it, and the engine sizes from its own free disk as it
+does for any broker that states no limit.
+
+The broker refuses every stream, consumer and bucket create either way, but
+**not with the same words**, so the engine's own refusal carries the ones you
+will actually see. A class the account's limit table has no entry for is never
+resolved at all — `no JetStream default or applicable tiered limit present`,
+before a single byte is compared — and that covers both the missing tier and a
+tier the report carries only because the account holds objects in that class. A
+class it really does declare with no disk, a memory-only tier, resolves
+normally and is refused by the byte comparison instead: `insufficient storage
+resources available` on every create that reserves bytes.
+
+What that does to a node depends on **whether its objects already exist**, and
+the two cases look nothing alike.
+
+*A node that has not provisioned them does not start.* `crewlet run` creates
+its streams while it is opening its broker client, and its coordination buckets
+straight after — all of it before anything sizes a ceiling — so the first
+create is refused and the process exits. The first of those two refusals names
+the class the account carries no limit for and the two levers that move it: the
+engine classifies it rather than reading it as the object having failed to
+appear, so what you get is `R3` and `stream.replicas` and not `(and it is not
+there: stream not found)` appended to the broker's bare text.
+
+*A node whose objects are all already there boots, on numbers the broker never
+agreed to.* Nothing is created, so nothing is refused. The
+`statelog_broker_states_no_limit` warning says which shape it is and which
+lever to move, and the `statelog_ceilings` line below it carries
+`broker_source=account_no_tier` (or `account_tier_no_limit`) with
+`broker_limit=0` — so the logs are sized against nothing but what they already
+hold between them, floored at a gibibyte each. It keeps working until it has to
+make something new: a state-log stream a new version adds, the mailbox for a
+seat you just added, a coordination bucket. That create is refused as above.
+
+Either way: set `stream.replicas` to a class the account carries a limit for,
+or have the cluster's operator declare one for the class you asked for.
 
 ---
 

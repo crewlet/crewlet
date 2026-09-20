@@ -20,7 +20,7 @@ subcommand below is served by it.
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
 | `crewlet retention evict <node> -confirm <node>` | Stop a node's records applying anywhere in the fleet, so the trim can pass a floor an absent machine is pinning. Prints the watermark before and after |
 | `crewlet retention readmit <node> -confirm <node>` | The inverse commit. Can be refused when the node's own position is below the current trim floor, and the refusal prints both |
-| `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with |
+| `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
 | `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream: declare every position below the next generation comparable and safely stale |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
@@ -756,6 +756,17 @@ in the retention guide; this command's help prints the five steps.
 `-confirm` repeats the byte count, and the target is then fixed for the life of
 the operation: a verify compares the observed ceiling against it, so a target
 that could move would make a mismatch unreadable.
+
+A raise the broker has no room for is refused **before** the maintenance window
+opens, naming what the raise would reserve, what the broker has left, the limit
+it is held to and the field that sets it — so an operator learns it in one
+round trip rather than after three fleet-wide restarts. A raise the broker
+refuses at the apply is reported as a refusal rather than as an unknown
+outcome, with the same numbers, read at that moment rather than carried from
+the window's opening: an operation spans restarts, and what matters is what the
+broker had when it said no. A limit this node could not read is **not** a
+refusal — a node that could not hear has not been told no — and the operation
+goes ahead for the broker to decide.
 
 `-i-have-excluded-all-publishers` is required only on `stream.type: nats`.
 There the engine does not run the broker and cannot establish who else holds a

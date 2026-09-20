@@ -46,7 +46,7 @@ type Alert struct {
 	// opposite of what this package promises.
 	//
 	// Empty for an alert delivered by a definition written before the
-	// template carried it, which is why [Prompt.ConversationKey] still
+	// template carried it, which is why [Prompt.PartitionKey] still
 	// falls back to the title.
 	MonitorID string
 

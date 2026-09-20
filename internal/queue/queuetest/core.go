@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -397,11 +398,88 @@ func (s *suite) runCore(t *testing.T) {
 		}
 	})
 
+	t.Run("a_handler_is_told_how_many_deliveries_are_left", func(t *testing.T) {
+		t.Parallel()
+		// WHAT A HANDLER MAY BOUND ITS OWN RETRIES ON. A handler that
+		// hands a message back — and on a real broker every return does,
+		// including a deferral — is spending a budget it cannot otherwise
+		// see: the count is carried by the MESSAGE and survives the
+		// handoffs and restarts that reset anything a process remembers.
+		// The engine's sandbox answer route documented a headroom claim
+		// over a per-process count for exactly this reason and the claim
+		// was false; see internal/sandbox.AnswerDeliveryReserve.
+		//
+		// THE CONTRACT'S CONVENTION, not a backend's: deliveries LEFT
+		// after the one in hand, so the last attempt before the
+		// dead-letter reports zero. That is what lets a caller reason
+		// about headroom without knowing which of the two conventions
+		// its broker counts in.
+		//
+		// BOTH READERS, ON THE PATH THAT CARRIES ONE MESSAGE. A backend
+		// states each message's own count and the contract folds the
+		// partition's from that list, so with exactly one message the two
+		// answers MUST be the same number — and that agreement is itself
+		// worth pinning, because it is the only place the fold can be
+		// checked against its own input. Without it the single-delivery
+		// path was certified on the partition's number alone while
+		// [queue.DeliveriesLeftFor] — the number the engine's one caller
+		// actually reads — was exercised only by the batch suite: half a
+		// shared suite covering half a shared contract, which is the shape
+		// this whole package exists to prevent.
+		newQueueWithAttempts := s.needAttempts(t)
+		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
+
+		j := newJournal()
+		var attempts int
+		subscribe(ctx, t, q, "topic.left", "grp",
+			func(hctx context.Context, ev *events.Event) queue.Result {
+				attempts++
+				left, known := queue.DeliveriesLeft(hctx)
+				mine, stated := queue.DeliveriesLeftFor(hctx, ev.ID)
+				switch {
+				case !known:
+					j.record("the partition stated nothing")
+				case !stated:
+					j.record("the message stated nothing")
+				case mine != left:
+					// One message, two numbers, one of them folded
+					// from the other — a disagreement here is a
+					// backend stating the two separately.
+					j.record("partition " + strconv.Itoa(left) +
+						" but message " + strconv.Itoa(mine))
+				default:
+					j.record(strconv.Itoa(left))
+				}
+				if !known {
+					return queue.Ack()
+				}
+				if attempts < 3 {
+					return queue.Nak(errors.New("still failing"))
+				}
+				return queue.Ack()
+			})
+		publish(ctx, t, q, "topic.left", newEvent("t"))
+
+		// Three attempts were configured, so the first delivery has two
+		// further ones and the third has none — the delivery after which
+		// a hand-back dead-letters, which is where
+		// exhausted_redeliveries_dead_letter_the_event draws the same
+		// line from the other side.
+		j.awaitLabels(t, "both headroom readers to count down to the last delivery, "+
+			"agreeing on every one of them", "2", "1", "0")
+	})
+
 	t.Run("defer_delivery_leaves_the_event_and_stops_consuming", func(t *testing.T) {
 		t.Parallel()
 		// The third handler outcome, and the one a lost seat needs. It
-		// neither claims the work (ack) nor spends the message's
-		// dead-letter budget (nak).
+		// does not claim the work (ack) and it does not leave the
+		// attachment taking more of it: the events go back, in order,
+		// and this consumer stops.
+		//
+		// What it COSTS is a delivery, on every backend — see
+		// a_deferral_spends_one_delivery_like_every_other_hand_back.
+		// The budget is sized for handoffs, which is why one deferral
+		// here is nowhere near the dead-letter boundary.
 		backlog := s.needBacklog(t)
 		deadLetters := s.needDeadLetters(t)
 		q := s.start(ctx, t)
@@ -421,7 +499,9 @@ func (s *suite) runCore(t *testing.T) {
 			return equalStrings(labelsOf(backlog(q, "topic.d", "grp")), []string{"e1", "e2"})
 		})
 		if got := deadLetters(q, "topic.d", "grp"); len(got) != 0 {
-			t.Fatalf("a deferral spent dead-letter budget: %v", labelsOf(got))
+			t.Fatalf("one deferral killed a healthy event: %v. A deferral spends a "+
+				"delivery, but a budget sized for handoffs must absorb far more "+
+				"than one of them", labelsOf(got))
 		}
 	})
 

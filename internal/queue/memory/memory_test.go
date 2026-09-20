@@ -77,22 +77,26 @@ func TestConformance(t *testing.T) {
 			// backend with real fetch latency cannot promise.
 			InlineDispatch:   true,
 			StrictRoundRobin: true,
-			// Both are properties of a mutex over a map rather than
-			// choices: a NAK puts the event back at the head of the
-			// slice it came from, and a deferral returns the batch
-			// untouched, so nothing is acked and nothing is counted.
+			// A property of a mutex over a map rather than a choice: a
+			// NAK puts the event back at the head of the slice it came
+			// from.
 			//
-			// BOTH ARE MORE FORGIVING THAN THE ONLY SHIPPED BROKER, and
+			// IT IS MORE FORGIVING THAN THE ONLY SHIPPED BROKER, and
 			// that is the thing to know when reading a test that passes
 			// here. JetStream returns a redelivery BEHIND
-			// never-delivered messages and spends an attempt on every
-			// deferral. Nothing above internal/queue may depend on
-			// either: conversation order comes from event timestamps
-			// (see queue.OrderForDispatch) precisely so that it does
-			// not, and the contract's actual requirement — that a
-			// deferral must not kill a healthy event — is met by both
-			// backends through different mechanisms.
-			FreeDeferral:    true,
+			// never-delivered messages. Nothing above internal/queue may
+			// depend on either answer: conversation order comes from
+			// event timestamps (see queue.OrderForDispatch) precisely so
+			// that it does not.
+			//
+			// THE DEFERRAL COST IS NOT ON THIS LIST ANY MORE, and that
+			// is the difference between a degradation and a divergence.
+			// This twin used to declare a free deferral, so the one case
+			// certifying what a handoff costs ran against the twin alone
+			// — while the contract's own DeliveriesLeft said every
+			// return that puts a message back spends one. The twin
+			// spends one now, for the same reason the broker does, and
+			// the capability is gone.
 			HeadReplayOnNak: true,
 			RequiresStart:   true,
 			// Stop is a client disconnect, not a teardown: the broker and
@@ -115,9 +119,18 @@ func TestConformance(t *testing.T) {
 //
 // JetStream is the twin to track because it is the only broker this engine
 // ships. Its budget is 25 rather than the 10 a free-handoff broker needs
-// because a deferral there returns via Nak and spends an attempt; this twin
-// defers for free and would otherwise sit on less than half the production
-// budget, calibrating every test written against it to a broker nobody runs.
+// because every path back to it — the Nak a deferral, a hold, a pause or a
+// detach returns through — spends an attempt.
+//
+// THAT REASONING NOW APPLIES TO BOTH BACKENDS, and this paragraph used to say
+// the opposite twenty lines under the capability note that retired it: it
+// argued the default had to be 25 because "this twin defers for free and would
+// otherwise sit on less than half the production budget". The twin has not
+// deferred for free since b1cff6f — it spends one for the same reason the
+// broker does — so what makes the value load-bearing is no longer a
+// divergence to compensate for but the plain fact that a handoff costs the
+// same on both, and a twin sized differently would calibrate every test
+// written against it to a broker nobody runs.
 //
 // SCOPE, measured by counterfactual rather than assumed, because a landing
 // check on this test proves only that the test reads the constant. The one

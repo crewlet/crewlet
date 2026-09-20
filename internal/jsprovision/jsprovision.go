@@ -55,6 +55,7 @@ package jsprovision
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -633,6 +634,11 @@ const PlacementRetry = 250 * time.Millisecond
 // A NUMBER rather than a description match, because nats.go names only a
 // handful of its codes and this is not one of them — and matching the text
 // would break the moment the server reworded it.
+//
+// It is ONE code over several unrelated facts, which is why the description is
+// read below after all: the server flattens every reason its peer selection
+// accumulated into this code's `{err}` slot (server/jetstream_errors_generated.go,
+// JSClusterNoPeersErrF).
 const errCodeNoPeers jetstream.ErrorCode = 10005
 
 // Unplaceable reports the transient "the cluster is still forming" error, and
@@ -641,9 +647,187 @@ const errCodeNoPeers jetstream.ErrorCode = 10005
 // Every other create failure — a bad TTL, a conflicting replica count, an auth
 // failure — clears by nobody waiting, so retrying it would turn a
 // configuration mistake into a two-minute hang ending in the same message.
+//
+// A STORAGE CLAUSE INSIDE THIS CODE IS STILL WAITED OUT, which is what keeps
+// it disjoint from [OutOfCapacity] rather than overlapping it. A clustered
+// create that no member can place reports this one code with every reason its
+// peer selection accumulated flattened into the description, and the room it
+// weighed is somebody else's disk — a figure this node cannot read and so
+// cannot name in a terminal message.
+//
+// AND THE REASONS ARE THE GROUP'S CURRENT MEMBERS' ONLY. selectPeerGroup walks
+// the metadata group's peers, sets one shared flag for each member it discards
+// for want of room, and never sees a member that has not joined at all — so
+// during a bring-up, which is the one moment this whole package exists to be
+// patient through, a refusal whose every reason is storage can be the verdict
+// of the single member that has come up so far. Waiting is right for that, and
+// for a peer an operator is about to give room to; the cost is that a cluster
+// which really has no room says so when the budget runs out rather than at
+// once.
 func Unplaceable(err error) bool {
+	apiErr, ok := apiError(err)
+	return ok && apiErr.ErrorCode == errCodeNoPeers
+}
+
+// The broker's codes for a create it refused because the reservation would not
+// fit inside the storage limit in force.
+//
+// BOTH, because which one a broker answers with is decided by where its
+// streams live rather than by what went wrong: a file-backed server reports
+// the first and a memory-backed one the second, for the identical event.
+// Naming only one leaves the other as the silent half nobody notices is
+// missing.
+//
+// A NUMBER rather than a description match, for [errCodeNoPeers]'s reason:
+// nats.go names neither, and the text is the server's to reword.
+const (
+	errCodeOutOfStore  jetstream.ErrorCode = 10047
+	errCodeOutOfMemory jetstream.ErrorCode = 10028
+)
+
+// errCodeNoLimits is JetStream's "no JetStream default or applicable tiered
+// limit present", a NUMBER for [errCodeNoPeers]'s reason.
+//
+// It is the one refusal in this family that is about the LIMIT TABLE rather
+// than about a quantity: the server resolves an object's limits through
+// jsAccount.selectLimits, which answers not-ok when the account carries
+// neither a default limit nor one for this object's replica class, and every
+// create path returns this code at that point — before it compares a byte
+// (server/stream.go and server/jetstream_cluster.go for a stream,
+// server/consumer.go for a consumer, in the pinned nats-server).
+const errCodeNoLimits jetstream.ErrorCode = 10120
+
+// NoApplicableLimit reports a create the broker refused because NO LIMIT IN
+// THE ACCOUNT APPLIES TO IT AT ALL.
+//
+// # Why it needs a predicate of its own, beside [OutOfCapacity]
+//
+// Because it is terminal in the same way and remedied in a different one, and
+// a caller that cannot tell them apart sends an operator to the wrong lever.
+// OutOfCapacity means the ceiling asked for does not fit inside a limit that
+// exists: what moves is the limit, or what is already reserved against it.
+// This means the account states no limit that COULD be fitted into — its
+// limits are tiered and it carries none for the replica class this node's
+// objects land in — so nothing here fits by being made smaller. What moves is
+// `stream.replicas`, or the account's own tier declarations.
+//
+// Folded in as a third arm of OutOfCapacity it would have inherited that
+// refusal's sentence, which names a limit, a usage and
+// `stream.store_max_bytes`: three numbers and a field that do not exist on
+// this account, offered as the thing to change.
+//
+// # And unclassified it was reported as an object that is not there
+//
+// Which is what it was. Neither OutOfCapacity nor [Unplaceable] matched, so
+// every create path fell through to its read-back, spent [ReadBack] asking
+// after an object the broker had refused to make, and appended `(and it is not
+// there: stream not found)` to the one sentence that said what was actually
+// wrong. An operator reading that goes looking for a missing stream on a
+// cluster whose account never carried a limit for it.
+//
+// TERMINAL, and never waited out: no member arriving changes a limit table, so
+// unlike [Unplaceable] there is nothing here for the placement retry to wait
+// for.
+func NoApplicableLimit(err error) bool {
+	apiErr, ok := apiError(err)
+	return ok && apiErr.ErrorCode == errCodeNoLimits
+}
+
+// NoApplicableLimitDetail is the clause a caller attaches to that refusal, in
+// the shape [Unplaceable]'s and [OutOfCapacity]'s callers already use: a
+// leading-space sentence appended to the broker's own words.
+//
+// ONE WORDING FOR FOUR CALLERS — the stream create, the bucket create and the
+// two consumer creates — because the remedy is the same at each and the server
+// makes no distinction between them either. Written per caller it would drift
+// the way every other pair in this tree has.
+//
+// IT NAMES THE CLASS RATHER THAN THE OBJECT, because the class is the whole
+// fact: the account's limits are per replica class and this node's number is
+// `stream.replicas`. replicas is normalised the way the server normalises it
+// (server/jetstream.go, tierName reads 0 as 1), so the class named here is the
+// class the refusal was decided against.
+//
+// It states that the account IS tiered rather than guessing: selectLimits can
+// only answer not-ok when there is no default limit, and an account with no
+// limits at all is not a shape the server permits — EnableJetStream installs
+// defaultJSAccountTiers for one. It also says an embedded broker never answers
+// this, because that is the first thing a reader will wonder and the answer
+// saves them looking at Tier A for a field that is not the lever.
+//
+// A TIER THAT IS THERE AND CARRIES NO LIMIT reaches this same refusal, which
+// is why the sentence says "carries none for" rather than "declares no tier
+// for": the account's report lists every class it holds objects in, and
+// [internal/queue/jetstream]'s budget tells the two apart for the operator who
+// reads it there.
+func NoApplicableLimitDetail(replicas int) string {
+	if replicas < 1 {
+		replicas = 1
+	}
+	return fmt.Sprintf(" — this account's storage limits are TIERED and it "+
+		"carries none for R%d, which is the replica class `stream.replicas` "+
+		"puts this node's streams, consumers and buckets in. The broker "+
+		"refuses every create in this state before it compares a byte, so "+
+		"nothing here fits by being made smaller: set `stream.replicas` to a "+
+		"class the account carries a limit for, or have whoever runs that "+
+		"cluster declare one for R%d. An embedded broker never answers this — "+
+		"the account is an external cluster's, and its limits are its "+
+		"operator's", replicas, replicas)
+}
+
+// OutOfCapacity reports a create the broker refused because the byte ceiling
+// asked for does not fit inside the storage limit in force.
+//
+// # Why this is named here rather than beside either caller
+//
+// Two subsystems provision replicated objects and both meet this refusal —
+// [internal/queue/jetstream] creating streams and [internal/coord/kv] creating
+// buckets, a bucket BEING a stream — which is the same reason [Unplaceable],
+// [Budget] and [ReadBack] live here. Written twice the two spellings drift,
+// exactly as this package's own doc records for every other rule it holds.
+//
+// # Why PLACEMENT is deliberately not one of these codes
+//
+// A clustered create that no member can place reports [errCodeNoPeers], whose
+// code is shared by every placement failure and whose storage clause is prose
+// accumulated across the peers the metadata group HAS. What it weighed is
+// another member's disk, which this node cannot read — so a message calling it
+// terminal could only quote a budget that is not the one that refused. And the
+// accumulation is over the group's CURRENT membership rather than over the
+// fleet, so during a bring-up that verdict can be the single member that has
+// come up so far speaking for peers still starting: read as terminal it would
+// refuse a boot on a cluster where nothing is wrong. It stays [Unplaceable]. `insufficient resources` (10023) is excluded for the
+// opposite reason: the server answers a publish, a catch-up or a consumer's
+// placement with it, never a stream's create, so naming it here would read
+// some other failure as a ceiling nobody reserved.
+//
+// Like [Unplaceable] it is TERMINAL — nothing frees a limit by being waited
+// for — and, like Unplaceable, a caller must not read back afterwards: nothing
+// was placed, and a not-found appended to the message only obscures what is
+// actually wrong.
+func OutOfCapacity(err error) bool {
+	apiErr, ok := apiError(err)
+	if !ok {
+		return false
+	}
+	switch apiErr.ErrorCode {
+	case errCodeOutOfStore, errCodeOutOfMemory:
+		return true
+	}
+	return false
+}
+
+// apiError unwraps the broker's own answer out of whatever a caller wrapped it
+// in, which is how both predicates above are asked the question.
+func apiError(err error) (*jetstream.APIError, bool) {
+	// TWO STATEMENTS, because `return apiErr, errors.As(err, &apiErr)` reads
+	// a variable the call it sits beside WRITES, and Go orders the function
+	// call against the other operand's evaluation for nobody.
 	var apiErr *jetstream.APIError
-	return errors.As(err, &apiErr) && apiErr.ErrorCode == errCodeNoPeers
+	if !errors.As(err, &apiErr) {
+		return nil, false
+	}
+	return apiErr, true
 }
 
 // NotYetVisible reports a create that landed at the metadata layer but is not

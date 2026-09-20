@@ -26,6 +26,10 @@ type instance struct {
 	identities map[string]mattermost.User
 	mu         sync.Mutex
 	typing     []string
+	// reads is the bearer token each thread read arrived on, which is
+	// what says a read was made as ONE seat rather than on a client the
+	// transport shares.
+	reads []string
 }
 
 func newInstance(t *testing.T, identities map[string]mattermost.User) *instance {
@@ -39,6 +43,48 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 			json.NewEncoder(w).Encode(map[string]string{
 				"SiteURL": inst.siteURL,
 				"TimeBetweenUserTypingUpdatesMilliseconds": inst.throttle,
+			})
+		case strings.HasSuffix(r.URL.Path, "/thread"):
+			inst.mu.Lock()
+			inst.reads = append(inst.reads, token)
+			inst.mu.Unlock()
+			if _, ok := inst.identities[token]; !ok {
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(`{"message":"Invalid or expired session"}`))
+				return true
+			}
+			// A THREAD ROOTED ON A POST WITH NOTHING TO RENDER, served
+			// for one root id so the ordinary thread above stays the
+			// ordinary thread. A system line is one way to get here and
+			// an attachment-only post is the other; both are threads
+			// people then reply in.
+			if strings.Contains(r.URL.Path, "/posts/quiet/") {
+				json.NewEncoder(w).Encode(map[string]any{
+					"order": []string{"quiet", "q1"},
+					"posts": map[string]any{
+						"quiet": map[string]any{"id": "quiet", "channel_id": "C1",
+							"user_id": "U-ana", "type": "system_add_to_channel",
+							"message": "ana added bob", "create_at": 1000},
+						"q1": map[string]any{"id": "q1", "channel_id": "C1",
+							"user_id": "U-ana", "message": "so what broke", "create_at": 2000},
+					},
+				})
+				return true
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"order": []string{"root", "p1", "p2", "p3"},
+				"posts": map[string]any{
+					"root": map[string]any{"id": "root", "channel_id": "C1", "user_id": "U-ana",
+						"message": "staging redirects in a loop", "create_at": 1000},
+					"p1": map[string]any{"id": "p1", "channel_id": "C1", "user_id": "bot-swe",
+						"message": "on it", "create_at": 2000},
+					"p2": map[string]any{"id": "p2", "channel_id": "C1", "user_id": "U-ana",
+						"message": "deleted regret", "create_at": 3000, "delete_at": 3100},
+					"p3": map[string]any{"id": "p3", "channel_id": "C1", "user_id": "U-ana",
+						"type": "system_join_channel", "message": "ana joined", "create_at": 4000},
+					"p4": map[string]any{"id": "p4", "channel_id": "C-OTHER", "user_id": "U-ana",
+						"message": "another channel entirely", "create_at": 5000},
+				},
 			})
 		case strings.HasSuffix(r.URL.Path, "/typing"):
 			inst.mu.Lock()
@@ -60,6 +106,13 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 		return true
 	})
 	return inst
+}
+
+// readTokens is the token each thread read was made on, in order.
+func (i *instance) readTokens() []string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return slices.Clone(i.reads)
 }
 
 func (i *instance) typings() int {
@@ -107,11 +160,16 @@ func TestStartResolvesEachSeatsIdentity(t *testing.T) {
 	if got := tr.Handles(); !slices.Equal(got, []string{"swe"}) {
 		t.Fatalf("Handles = %v", got)
 	}
-	// The SERVER's username wins over the configured one, because the
-	// server is what a person's mention will be matched against.
-	c, ok := tr.Client("swe")
-	if !ok || c.Token() != "tok-swe" {
-		t.Fatalf("the seat's client is %v/%v", c, ok)
+	// AND THE CLIENT BEHIND THAT IDENTITY IS THE SEAT'S OWN — asserted
+	// through the read that uses it rather than through an accessor
+	// exported for this line, which only ever proved the map had an entry.
+	// The instance authenticates every call, so a read that succeeds is a
+	// read made on this seat's token and the recorder names which.
+	if _, ok := tr.ReadThread(t.Context(), "swe", "C1", "root"); !ok {
+		t.Fatal("the seat could not read a thread on its own client")
+	}
+	if got := inst.readTokens(); !slices.Equal(got, []string{"tok-swe"}) {
+		t.Fatalf("the thread was read on %v, want the seat's own token", got)
 	}
 }
 
@@ -389,5 +447,155 @@ func TestSeatsStartConcurrently(t *testing.T) {
 	// alone, before the instance read.
 	if elapsed > seats*50*time.Millisecond {
 		t.Fatalf("Start took %v, which is sequential for %d seats", elapsed, seats)
+	}
+}
+
+// THE THREAD IS READ AS THE SEAT, on the seat's own bot token, and the seat's
+// own posts come back MARKED.
+//
+// The identity is the one resolved at connect rather than anything config
+// declared: an agent that cannot recognise its own replies reads them as a
+// colleague's and answers itself, which is the confusion the block exists to
+// remove.
+func TestASeatsThreadComesBackMarkedWithItsOwnPosts(t *testing.T) {
+	inst := newInstance(t, map[string]mattermost.User{
+		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},
+	})
+	tr := transport(t, inst, nil)
+	if err := tr.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	var _ notify.ThreadReader = tr
+	if tr.ThreadBackend() != mattermost.Backend {
+		t.Fatalf("ThreadBackend = %q", tr.ThreadBackend())
+	}
+
+	got, ok := tr.ReadThread(t.Context(), "swe", "C1", "root")
+	if !ok {
+		t.Fatal("a running seat could not read its own thread")
+	}
+	// Oldest first, with the root first — and the bookkeeping gone: a
+	// deleted post and a join line wake nobody, so neither belongs in a
+	// thread rendered for a seat.
+	if len(got.Messages) != 2 {
+		t.Fatalf("the thread came back as %+v", got)
+	}
+	if got.Messages[0].Text != "staging redirects in a loop" || got.Messages[0].Own {
+		t.Errorf("the root came back as %+v", got.Messages[0])
+	}
+	if got.Messages[1].Text != "on it" || !got.Messages[1].Own {
+		t.Errorf("the seat's own reply came back as %+v", got.Messages[1])
+	}
+	if got.Messages[0].SenderID != "U-ana" {
+		t.Errorf("the sender id was lost: %+v", got.Messages[0])
+	}
+	// AND NOTHING IS CLAIMED MISSING. This endpoint answers the WHOLE
+	// thread in one response — no cursor, no page size — so a transcript
+	// from here can never be short at either end, and a renderer told
+	// otherwise would print a drop notice for messages that are in front
+	// of the seat and tell it to go and read a thread it already has.
+	if got.Older != 0 || got.StoppedShort {
+		t.Errorf("a whole-thread read claimed to be short: %+v", got)
+	}
+	// AND SCOPED TO THE CHANNEL THE TRIGGER NAMED. The endpoint is
+	// addressed by post id alone, so nothing in the request says which
+	// channel the thread is meant to be in — a root id naming a post
+	// somewhere else would render another conversation under this
+	// trigger's own heading.
+	for _, m := range got.Messages {
+		if strings.Contains(m.Text, "another channel entirely") {
+			t.Errorf("a post from another channel reached the thread: %+v", m)
+		}
+	}
+}
+
+// THE ROOT KEEPS ITS PLACE EVEN WITH NOTHING IN IT, and a root the endpoint
+// did not answer with keeps an empty one.
+//
+// [notify.ThreadReader] promises the root FIRST, and the renderer exempts
+// that first message from every bound and frames it as what the thread is
+// about. Dropping a root for want of a body hands over a transcript that
+// starts at the oldest surviving REPLY — which is then kept, rendered first
+// and described to the seat as the opening. A deleted root is the ordinary
+// way to get there here: this endpoint leaves the post out and answers with
+// every reply to it.
+func TestAThreadRootWithNothingToRenderStillComesBackFirst(t *testing.T) {
+	inst := newInstance(t, map[string]mattermost.User{
+		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},
+	})
+	tr := transport(t, inst, nil)
+	if err := tr.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// A system post as the root: kept, and empty, so the renderer says so
+	// rather than promoting the reply under it.
+	got, ok := tr.ReadThread(t.Context(), "swe", "C1", "quiet")
+	if !ok {
+		t.Fatal("a thread rooted on a system post could not be read")
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("the thread came back as %+v", got)
+	}
+	if got.Messages[0].Text != "" || got.Messages[0].SenderID != "U-ana" {
+		t.Errorf("the root came back as %+v, want its slot with no body", got.Messages[0])
+	}
+	if got.Messages[1].Text != "so what broke" {
+		t.Errorf("the reply came back as %+v", got.Messages[1])
+	}
+
+	// A ROOT THE ANSWER DOES NOT CARRY AT ALL — a deleted opening — still
+	// gets its slot, because "somebody deleted the first message" and
+	// "this thread opens with the line below" are different threads.
+	deleted, ok := tr.ReadThread(t.Context(), "swe", "C1", "gone")
+	if !ok {
+		t.Fatal("a thread whose root was deleted could not be read")
+	}
+	if len(deleted.Messages) != 3 || deleted.Messages[0] != (notify.Message{}) {
+		t.Fatalf("a thread with no root came back as %+v", deleted)
+	}
+	if deleted.Messages[1].Text != "staging redirects in a loop" {
+		t.Errorf("the oldest reply moved: %+v", deleted.Messages[1])
+	}
+}
+
+// A SEAT THIS NODE HAS NO CLIENT FOR REPORTS NOT-FOUND rather than
+// dereferencing one.
+//
+// A bot whose token was refused at boot is left out of the map deliberately,
+// and a node in maintenance mode runs no transport at all — both ordinary
+// states, and both have to render "the thread could not be read" rather than
+// panicking a turn.
+func TestAThreadForASeatThisNodeDoesNotRunIsUnreadable(t *testing.T) {
+	inst := newInstance(t, map[string]mattermost.User{
+		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},
+	})
+	tr := transport(t, inst, nil)
+	if err := tr.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, ok := tr.ReadThread(t.Context(), "nobody", "C1", "root"); ok {
+		t.Fatal("a thread was read for a seat this node does not run")
+	}
+}
+
+// AN INSTANCE THAT REFUSES THE READ is reported as unreadable, never as an
+// empty thread: the turn renders a different sentence for each, and the two
+// send a seat to opposite places.
+func TestARefusedThreadReadIsNotAnEmptyThread(t *testing.T) {
+	inst := newInstance(t, map[string]mattermost.User{
+		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},
+	})
+	tr := transport(t, inst, nil)
+	if err := tr.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	inst.server.responds(func(w http.ResponseWriter, r *http.Request) bool {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"You do not have the appropriate permissions"}`))
+		return true
+	})
+	if got, ok := tr.ReadThread(t.Context(), "swe", "C1", "root"); ok {
+		t.Fatalf("a refused read reported success: %+v", got)
 	}
 }

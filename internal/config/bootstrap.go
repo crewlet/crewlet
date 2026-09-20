@@ -803,6 +803,43 @@ type Stream struct {
 	// provisions in memory.
 	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded stream persistence directory. Empty = in-memory (nothing survives a restart)."`
 
+	// StoreMaxBytes is how much of that directory's volume this node's
+	// EMBEDDED broker may hold — the ONE number every stream ceiling on it
+	// is bounded by, and the one an operator divides when more than one
+	// engine shares a filesystem.
+	//
+	// WHY IT HAS TO BE DECLARED RATHER THAN INFERRED. A stream's ceiling is
+	// a RESERVATION: the broker refuses to create a stream whose ceiling it
+	// cannot back, and the number it compares against is this limit. With
+	// nothing declaring one, each engine sized its own logs from the
+	// volume's FREE SPACE — which is true for one engine and false for two,
+	// because the disk bounds their SUM and not each of them. Two engines
+	// on one filesystem each believed they might have half of the same free
+	// space; three over-committed it by half again, and the symptom was
+	// `insufficient storage resources available` — `no suitable peers for
+	// placement, insufficient storage` on a clustered member, where the
+	// limit is applied by the metadata leader placing the stream — naming
+	// whichever stream happened to be provisioned last.
+	//
+	// SO N ENGINES ON ONE FILESYSTEM DIVIDE IT. Give each of them its own
+	// share — the whole point of the field — and each one's ceilings are
+	// bounded by what it was given rather than by what it can see.
+	//
+	// UNSET, THE BROKER SIZES ITSELF: three quarters of the free space on
+	// `store_dir` when its JetStream came up, plus whatever it already
+	// occupies there, which is nats-server's own derivation and what a
+	// single-engine host should have. Either way the engine READS BACK the
+	// number in force rather than guessing it, so a refusal can name it.
+	//
+	// MEASURED ONCE, AT BOOT, on both paths. A volume that later grows or
+	// shrinks does not move this limit, and a node that should see a
+	// resized disk is restarted.
+	//
+	// EMBEDDED ONLY, for the reason `store_dir` and `debug` are: it is
+	// handed to the server this process STARTS. An external cluster's
+	// account limits are its own operator's to set.
+	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=4294967296;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
+
 	// Cluster makes the embedded server join peers, which is the fleet
 	// topology: every node embeds a member of one cluster.
 	Cluster StreamCluster `yaml:"cluster,omitempty" json:"cluster,omitzero"`
@@ -878,8 +915,14 @@ type Stream struct {
 	// TrackerLogMaxBytes is the byte ceiling on the mutation log — the
 	// ordered stream a state-log domain writes through.
 	//
-	// UNSET DERIVES IT from the volume the stream is stored on: a quarter
-	// of its free space, clamped to 4 GiB..64 GiB. A fixed default is
+	// UNSET DERIVES IT from the volume the STREAMS live on: a quarter of
+	// that volume's free space, clamped to 4 GiB..64 GiB. That is the one
+	// holding StoreDir where an embedded broker has one, and the one
+	// holding Store.Path otherwise — an external cluster writes its
+	// streams on a disk this node cannot measure at all, so the volume it
+	// CAN measure is the honest bound there. The two are the same disk in
+	// every layout but one an operator built deliberately, which is why
+	// the field says which. A fixed default is
 	// wrong in both directions — the same number is five years of history
 	// on the modelled write rate and one boot on a small disk — and the
 	// boot that creates the stream logs what it derived the value from
@@ -904,7 +947,7 @@ type Stream struct {
 	// CROSSING IT REFUSES; IT DOES NOT SHED. There is no age bound on this
 	// stream, so a full log drops no history — the append is refused,
 	// loudly, naming this field and whatever is blocking the trim.
-	TrackerLogMaxBytes int64 `yaml:"tracker_log_max_bytes,omitempty" json:"tracker_log_max_bytes,omitempty" js:"min=1073741824;max=1099511627776" desc:"Byte ceiling on the mutation log; unset derives a quarter of the stream volume's free space, clamped to 4 GiB..64 GiB."`
+	TrackerLogMaxBytes int64 `yaml:"tracker_log_max_bytes,omitempty" json:"tracker_log_max_bytes,omitempty" js:"min=1073741824;max=1099511627776" desc:"Byte ceiling on the mutation log; unset derives a quarter of the free space on the volume the streams live on - stream.store_dir where an embedded broker has one, store.path otherwise - clamped to 4 GiB..64 GiB."`
 
 	// TrackerVectorsMaxBytes is the byte ceiling on the vector changelog.
 	//
@@ -1112,6 +1155,19 @@ func (s *Stream) validate(path Path) error {
 			"store_dir is where an EMBEDDED server persists; an external "+
 				"cluster keeps its own storage")
 	}
+	// THE SAME RULE, and the same reason: this is the limit handed to the
+	// server this process starts. An external cluster's account limits
+	// belong to whoever runs it, and the engine reads them back from the
+	// account rather than declaring them — so a number written here would
+	// reach nothing and quietly leave the operator believing they had
+	// bounded a broker they do not own.
+	if external && s.StoreMaxBytes != 0 {
+		p.add(at(path, "store_max_bytes"), ErrConflict,
+			"store_max_bytes is the EMBEDDED broker's own storage limit; an "+
+				"external cluster's account limits are set by its operator, and "+
+				"this node reads them back from the account. Remove it, or set "+
+				"type to %q", StreamEmbedded)
+	}
 	// THE SAME RULE `url` AND `store_dir` KEEP, and for the same reason:
 	// the flag is handed to the server this process STARTS, so against an
 	// external cluster it is read by nobody. Accepting it would leave an
@@ -1193,6 +1249,42 @@ func (s *Stream) validate(path Path) error {
 		TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling)
 	bytesInRange(&p, path, "pages_log_max_bytes", s.PagesLogMaxBytes,
 		PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling)
+	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
+		StoreMaxBytesFloor, StoreMaxBytesCeiling)
+	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
+	// waiting for a boot: the broker compares each stream's ceiling against
+	// this number, so one of these logs cannot be created at all and the
+	// node fails naming whichever one it reached last. Every value is the
+	// operator's own, on the same page of the same file, so the honest
+	// moment to say so is now.
+	//
+	// ONLY THE EXPLICIT ONES ARE SUMMED. A derived ceiling is already
+	// scaled to fit inside whatever limit is in force (see
+	// engine.sizeCeilings), so it cannot conflict with one.
+	//
+	// IT IS NECESSARY AND NOT SUFFICIENT, and the message says so rather
+	// than implying a clean bill of health. The state logs get a SHARE of
+	// what the broker can grant rather than all of it
+	// (engine.StreamBudgetShare), because every other object on that
+	// broker — the seats' mailboxes, the event log, the dead-letter
+	// stream, the memory changelog and every coordination bucket — reserves
+	// nothing at create time and grows against this same limit. So a limit
+	// these ceilings exactly fill still fails at boot; what covers that is
+	// the refusal itself, which names this limit, what was already spoken
+	// for, and the field the ceiling came from.
+	declared := s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes
+	if s.StoreMaxBytes > 0 && declared > s.StoreMaxBytes {
+		p.add(at(path, "store_max_bytes"), ErrConflict,
+			"%d bytes is smaller than the stream ceilings declared inside it "+
+				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
+				"pages_log_max_bytes %d = %d): the broker refuses a stream whose "+
+				"ceiling it cannot back, so this node would fail to provision one "+
+				"of them. Raise store_max_bytes, or lower the ceilings — and leave "+
+				"headroom, because the state logs reserve only a share of this "+
+				"limit and every other stream on the broker grows inside it",
+			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
+			s.PagesLogMaxBytes, declared)
+	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an
 	// advertise address while STARTING, logs it and shuts the server down

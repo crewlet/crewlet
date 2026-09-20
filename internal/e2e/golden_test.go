@@ -244,7 +244,26 @@ func (n *node) wakeInConversation(t *testing.T, handle, text, conversation strin
 	n.publishWake(t, handle, text, conversation, events.TraceContext{})
 }
 
+// wakeInDirectThread is a message in a thread on a DIRECT MESSAGE — the one
+// shape where the two keys differ. The inbox partitions on the thread, because
+// that is the batch the reply belongs to, while the conversation is the whole
+// DM line, because that is what a person is talking on.
+//
+// Worth a helper of its own: a wake whose two keys are equal cannot tell a
+// reader of either field from a reader of the right one, so every assertion
+// about which key something was filed under passes for a frame that copied the
+// other.
+func (n *node) wakeInDirectThread(t *testing.T, handle, text, channel, thread string) {
+	t.Helper()
+	n.publishWakeKeyed(t, handle, text, channel+":"+thread, channel, events.TraceContext{})
+}
+
 func (n *node) publishWake(t *testing.T, handle, text, conversation string, tc events.TraceContext) {
+	t.Helper()
+	n.publishWakeKeyed(t, handle, text, conversation, conversation, tc)
+}
+
+func (n *node) publishWakeKeyed(t *testing.T, handle, text, partition, conversation string, tc events.TraceContext) {
 	t.Helper()
 	body := text
 	ev := events.New(types.ExternalNotification{
@@ -261,7 +280,12 @@ func (n *node) publishWake(t *testing.T, handle, text, conversation string, tc e
 		Body:        text,
 		SalientBody: &body,
 	}, tc)
-	notify.Stamp(ev, conversation)
+	// BOTH KEYS, as the notification service stamps them. A golden wake
+	// that named only the partition would leave the turn's ledger entry
+	// filed through the identity read's peer fallback rather than through
+	// the field this build stamps — green either way, and silent the day
+	// that fallback is the only thing holding it up.
+	notify.Stamp(ev, partition, conversation)
 	if err := n.engine.Backends().Queue.Publish(t.Context(),
 		topics.AgentInbox(handle), ev); err != nil {
 		t.Fatalf("wake %s: %v", handle, err)

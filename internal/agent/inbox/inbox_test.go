@@ -58,7 +58,7 @@ func TestDedupeRunsBeforeEveryParkingBranch(t *testing.T) {
 	partition := []*events.Event{one, dup, ev(t, "notification")}
 
 	c := healthy()
-	c.AwaitingSandbox = true
+	c.SeatHeldBySandbox = true
 	got := inbox.Screen(c, partition)
 	if got.Action != inbox.ActionPark {
 		t.Fatalf("action = %s, want park", got.Action)
@@ -111,10 +111,10 @@ func TestTheGuardsFireInTheDocumentedOrder(t *testing.T) {
 	}{
 		{"ownership outranks everything", inbox.Conditions{}, inbox.ActionDefer},
 		{"no engine outranks sandbox and posture", inbox.Conditions{
-			Owned: true, AwaitingSandbox: true,
+			Owned: true, SeatHeldBySandbox: true,
 		}, inbox.ActionPauseAndPark},
 		{"sandbox outranks posture", inbox.Conditions{
-			Owned: true, TurnEngineReady: true, AwaitingSandbox: true,
+			Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true,
 		}, inbox.ActionPark},
 		{"posture is last", inbox.Conditions{
 			Owned: true, TurnEngineReady: true,
@@ -138,9 +138,71 @@ func TestSandboxOutranksPostureSoAClarificationBehavesTheSameEverywhere(t *testi
 	// reaching a SHEDDING node must behave exactly as it does on a healthy
 	// one. Deferring it instead strands a box whose pending row is already
 	// flipped.
-	c := inbox.Conditions{Owned: true, TurnEngineReady: true, AwaitingSandbox: true, AdmitsTriggers: false}
+	c := inbox.Conditions{Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true, AdmitsTriggers: false}
 	if got := inbox.Screen(c, []*events.Event{ev(t, "notification")}); got.Action != inbox.ActionPark {
 		t.Errorf("action = %s, want park", got.Action)
+	}
+}
+
+// A RUN WAITING FOR A PERSON DOES NOT PARK ITS SEAT, AND STILL CLAIMS FIRST.
+//
+// This is the case the screening could not express while one field answered
+// both questions. A parked run frees its seat by design — the answer arrives
+// on the seat's own inbox, and a person can take days — so the reply comes
+// through the ORDINARY path looking like any other message. Offered only from
+// the park, the match ran exclusively while the seat was HELD, which is the
+// one state a parked run is never in: no clarification answer ever reached the
+// run that asked, and every box waited out its pause TTL instead.
+func TestAnOpenQuestionOffersTheDeliveryOnTheOrdinaryPath(t *testing.T) {
+	t.Parallel()
+	c := healthy()
+	c.SandboxAwaitsAnswer = true
+	got := inbox.Screen(c, []*events.Event{ev(t, "notification")})
+	if got.Action != inbox.ActionProceed {
+		t.Fatalf("action = %s (%s), want proceed — a run waiting on a person "+
+			"holds nothing", got.Action, got.Reason)
+	}
+	if !got.OfferAsSandboxAnswer {
+		t.Error("the delivery was not offered to the run that is waiting for it, " +
+			"so the answer is consumed as an unrelated turn")
+	}
+	if len(got.Events) != 1 {
+		t.Errorf("events = %d, want the one to offer", len(got.Events))
+	}
+}
+
+// A HELD SEAT OFFERS ITS PARK WITHOUT BEING TOLD A QUESTION IS OPEN, because
+// one seat can drive a job while another of its runs waits for a person. Only
+// the store knows, and this delivery is about to be requeued.
+func TestAHeldSeatAlwaysOffersItsPark(t *testing.T) {
+	t.Parallel()
+	c := healthy()
+	c.SeatHeldBySandbox = true
+	got := inbox.Screen(c, []*events.Event{ev(t, "notification")})
+	if got.Action != inbox.ActionPark || !got.OfferAsSandboxAnswer {
+		t.Errorf("action = %s, offered = %v; want a park that is offered first",
+			got.Action, got.OfferAsSandboxAnswer)
+	}
+}
+
+// NOTHING ELSE IS OFFERED. Every other outcome either has no run to answer or
+// consumes nothing, and offering a delivery a seat was never able to read
+// would answer somebody's question with a message that went nowhere.
+func TestOnlyASeatWithADetachedRunOffersItsDelivery(t *testing.T) {
+	t.Parallel()
+	shedding := inbox.Conditions{Owned: true, TurnEngineReady: true, SandboxAwaitsAnswer: true}
+	for name, c := range map[string]inbox.Conditions{
+		"no detached run at all": healthy(),
+		"not owned here":         {SandboxAwaitsAnswer: true},
+		"no turn engine":         {Owned: true, SandboxAwaitsAnswer: true},
+		// A DEFER CONSUMES NOTHING and stops the consumer, so the answer
+		// is still on the inbox to be offered when the posture clears —
+		// unlike the sandbox park above, which acks.
+		"shedding": shedding,
+	} {
+		if got := inbox.Screen(c, []*events.Event{ev(t, "notification")}); got.OfferAsSandboxAnswer {
+			t.Errorf("%s: the delivery was offered as a clarification answer", name)
+		}
 	}
 }
 
@@ -172,7 +234,7 @@ func TestEveryDeferRecordsThatTheConsumerStopped(t *testing.T) {
 	// park's pause belongs to the engine, which lifts it when a model
 	// arrives; neither is the seat host's to resume.
 	c := healthy()
-	c.AwaitingSandbox = true
+	c.SeatHeldBySandbox = true
 	if got := inbox.Screen(c, []*events.Event{ev(t, "notification")}); got.NoteDeferred {
 		t.Error("a park asked the host to quiesce the consumer")
 	}
@@ -188,7 +250,7 @@ func TestOnlyADeferReachesTheQueueAsADefer(t *testing.T) {
 		t.Errorf("a defer mapped to %v", deferred.Result().Outcome)
 	}
 	c := healthy()
-	c.AwaitingSandbox = true
+	c.SeatHeldBySandbox = true
 	parked := inbox.Screen(c, []*events.Event{ev(t, "notification")})
 	if parked.Result().Outcome != queue.OutcomeAck {
 		t.Errorf("a park mapped to %v, want an ack", parked.Result().Outcome)

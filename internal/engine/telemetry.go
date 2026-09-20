@@ -48,10 +48,19 @@ type turnTelemetry struct {
 	// completion name the same run. See ADR-0017.
 	runID string
 	// workKey is the unit of work, stable across a re-run.
-	workKey   string
-	agentID   string
-	trigger   types.Trigger
+	workKey string
+	agentID string
+	trigger types.Trigger
+
+	// convKey is the CONVERSATION IDENTITY — what every event this turn
+	// publishes is tagged with, what the episode row is filed under, and
+	// what matches a person's answer back to a detached run — while
+	// partKey is the inbox PARTITION the trigger arrived in, carried only
+	// so a detached coding run's row can also state the batch it was
+	// launched from, which is all a peer predating the identity can match
+	// on.
 	convKey   string
+	partKey   string
 	startedAt time.Time
 	trace     events.TraceContext
 
@@ -88,10 +97,18 @@ func newRunID() string { return uuid.NewString() }
 // message happened to arrive while the seat was busy.
 func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) turnTelemetry {
 	t := turnTelemetry{
-		handle:    req.Handle,
-		runID:     req.RunID,
-		workKey:   req.WorkKey,
-		convKey:   req.ConversationKey,
+		handle:  req.Handle,
+		runID:   req.RunID,
+		workKey: req.WorkKey,
+		convKey: req.ConversationKey,
+		// READ OFF THE PARTITION'S OWN EVENTS rather than carried on the
+		// Request beside the identity, because every constituent already
+		// holds it and a field would be one more thing a second Request
+		// construction site could leave empty — which is exactly how the
+		// conversation reached the sandbox row as "" for the whole life of
+		// that feature. The identity has no such source: a resumed turn
+		// has no events at all, so it has to travel.
+		partKey:   partitionKeyOf(req.Events),
 		startedAt: time.Now().UTC(),
 	}
 	t.role, t.agentID = seatIdentity(company, req.Handle)
@@ -154,8 +171,17 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			Chain: chain,
 			// The conversation this turn owes an answer to, so work it
 			// detaches carries it: a coding run's row is written from
-			// here, and the resumed turn reports back from the row.
+			// here, the resumed turn reports back through it, and a
+			// person's answer is MATCHED on it — because a person
+			// answers on the conversation rather than into the batch
+			// their reply lands in.
+			//
+			// The partition rides along so the row can state the batch
+			// the run was launched from: it tells two runs parked on
+			// one direct message apart, and it is all a peer predating
+			// the conversation field has to match on.
 			ConversationKey: t.convKey,
+			PartitionKey:    t.partKey,
 			// The brief and the delivery obligation, carried for the
 			// same reason: a resumed turn sees neither its trigger nor
 			// this frame, so both have to reach the row from here.
@@ -410,9 +436,26 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// second id here would split one turn across two on every screen.
 		// The work key rides the row for the same reason its reply does:
 		// the resume sees no trigger and could not re-derive it.
-		runID:     in.Run.TurnID,
-		workKey:   in.Run.UnitOfWork(),
-		convKey:   in.Run.ConversationKey,
+		runID:   in.Run.TurnID,
+		workKey: in.Run.UnitOfWork(),
+		// AND EACH CONVERSATION VALUE FROM ITS OWN FIELD: the resumed
+		// turn's events are tagged with the conversation it reports back
+		// to and is answered on, while the partition it was launched from
+		// is carried forward so a run that suspends AGAIN writes the same
+		// pair a first launch would.
+		//
+		// PartitionKey rather than ConversationKey for the second one,
+		// which is the whole of it: the row's ConversationKey is the
+		// IDENTITY — that is the field the split moved the name onto —
+		// so reading it here collapsed the pair the moment a run parked
+		// twice. A re-parked row then held the bare DM channel where its
+		// first launch held the thread, and [sandbox.ConversationRef.Best]
+		// lost the one fact that tells two questions on one direct
+		// message apart: with no partition to agree with, both rows fall
+		// through to recency and the reply to the question in one thread
+		// resumes the run waiting in the other.
+		convKey:   in.Run.Conversation(),
+		partKey:   in.Run.PartitionKey,
 		startedAt: time.Now().UTC(),
 		role:      in.Run.Role,
 		agentID:   in.Run.AgentID,

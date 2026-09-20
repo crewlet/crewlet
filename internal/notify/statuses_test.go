@@ -43,9 +43,9 @@ func TestTheIndicatorGoesUpOnTheBackendThatTriggeredTheTurn(t *testing.T) {
 	}
 	defer session.End(context.Background(), true)
 
-	if len(secondPoster.shown()) == 0 {
-		t.Error("the Slack indicator was not raised")
-	}
+	// Waited for: the raise is made by the session's own goroutine so that
+	// no turn ever waits on a chat backend. See [poster.shownAtLeast].
+	secondPoster.shownAtLeast(t, 1)
 	if len(firstPoster.shown()) != 0 {
 		t.Errorf("a Slack trigger raised the Mattermost indicator: %v", firstPoster.shown())
 	}
@@ -64,7 +64,7 @@ func TestATriggerFromNoChatBackendRaisesNothing(t *testing.T) {
 		t.Fatal("a tracker event raised a chat indicator")
 	}
 	// Every method on that nil session is a no-op.
-	session.Phase(context.Background(), "execute")
+	session.Phase("execute")
 	session.End(context.Background(), false)
 }
 
@@ -108,6 +108,50 @@ func TestStoppingTheSetClearsEveryBackend(t *testing.T) {
 	if firstPoster.clears() == 0 || secondPoster.clears() == 0 {
 		t.Errorf("stopping the set left an indicator up: %d / %d",
 			firstPoster.clears(), secondPoster.clears())
+	}
+}
+
+// RELEASING ONE TURN'S HOLD LEAVES EVERY OTHER TURN'S INDICATOR UP.
+//
+// A detached coding run that parks on a question has STOPPED — the agent is
+// waiting on a person — so the turn that suspended into it gives its hold
+// back. What must not go with it is the indicator of a second turn working in
+// the same thread: the session is shared and reference-counted by turn id, and
+// a clear that ignored that would take the working turn's indicator down and
+// leave the person watching it with nothing.
+func TestReleasingOneTurnsHoldLeavesTheOthersUp(t *testing.T) {
+	t.Parallel()
+	driver, backend := driverFor("slack")
+	set := notify.NewStatuses(driver)
+	thread := map[string]string{"transport": "slack", "channel": "C0ENG", "ts": "1700000001.000100"}
+
+	if s := set.Begin(context.Background(), "swe", "parks", "execute", thread); s == nil {
+		t.Fatal("the turn that went on to park raised no indicator")
+	}
+	alongside := set.Begin(context.Background(), "swe", "works-on", "execute", thread)
+	if alongside == nil {
+		t.Fatal("a second turn in the same thread joined no session")
+	}
+	backend.shownAtLeast(t, 1)
+
+	set.Release(context.Background(), "swe", "parks")
+	if got := backend.clears(); got != 0 {
+		t.Fatalf("the park cleared an indicator a working turn still holds (%d clears)", got)
+	}
+	if live := driver.Live(); len(live) != 1 {
+		t.Fatalf("live = %v, want the working turn's indicator still up", live)
+	}
+
+	// A hold this node does not have is a no-op, not a clear: the park may
+	// land on a node that never raised the indicator.
+	set.Release(context.Background(), "swe", "never-here")
+	if got := backend.clears(); got != 0 {
+		t.Fatalf("releasing a hold nobody holds cleared an indicator (%d clears)", got)
+	}
+
+	alongside.End(context.Background(), false)
+	if got := backend.clears(); got != 1 {
+		t.Fatalf("the last hold ending produced %d clears, want one", got)
 	}
 }
 

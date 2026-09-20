@@ -608,6 +608,27 @@ func (b *Bootstrap) Warnings() []Warning {
 				"serves a company, whatever its node.roles"))
 	}
 
+	// A STORE LIMIT ON A BROKER WITH NO STORE bounds nothing. An embedded
+	// server with no `store_dir` keeps its streams in MEMORY, and a
+	// memory-backed stream's ceiling is reserved against the broker's
+	// memory allowance rather than against this number — so the pair that
+	// reads as "I have bounded this node's broker" is the pair that has
+	// not.
+	//
+	// A WARNING RATHER THAN A REFUSAL, because the pair is still valid: a
+	// company on external backends keeps nothing of its own on the stream,
+	// and a test runs this way on purpose. What is NOT valid is a native
+	// tracker or knowledge base on it, and that is refused already — see
+	// [Company.validate] — so this never softens that rule, it covers the
+	// deployments the rule leaves standing.
+	if b.Stream.Type != StreamNATS && b.Stream.StoreMaxBytes > 0 &&
+		strings.TrimSpace(b.Stream.StoreDir) == "" {
+		out = append(out, advisory(field("stream.store_max_bytes"),
+			"this embedded stream has no `store_dir`, so its streams are held in "+
+				"memory and this limit bounds none of them: what bounds them is the "+
+				"broker's memory allowance. Name a `store_dir`, or drop the limit"))
+	}
+
 	// A BROKER TOLD TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG says
 	// nothing at all. `stream.debug` unlocks nats-server's own Debugf
 	// population, but those are still DEBUG records and every destination

@@ -84,7 +84,7 @@ func TestARegistryIsNeverNil(t *testing.T) {
 		t.Fatal("a company with no chat backend raised an indicator")
 	}
 	// And every method on that nil session is a no-op.
-	session.Phase(context.Background(), "execute")
+	session.Phase("execute")
 	session.End(context.Background(), false)
 }
 

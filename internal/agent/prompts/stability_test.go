@@ -73,6 +73,7 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 	frozen := ExecutorInput{
 		ToolCatalogue:     "- post_message: Post to a channel.",
 		AvailableTools:    []string{"post_message", "mark_onboarded", "refresh_memory"},
+		ThreadContext:     "- **Ana Ruiz (ana)**: staging redirects in a loop",
 		PersonalMemory:    "- prefers short replies",
 		RelevantKnowledge: "- **Runbook**: steps",
 		OnboardingHint:    "Read the onboarding pages.",

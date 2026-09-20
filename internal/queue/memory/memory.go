@@ -33,8 +33,16 @@
 // flags another pass instead of nesting one (see dispatch.go).
 //
 // Redelivery matches the broker's shape: the budget counts redeliveries AFTER
-// the first delivery (so N+1 total attempts), and an exhausted message moves to
-// the dead-letter subject rather than being destroyed.
+// the first delivery (so N+1 total attempts), an exhausted message moves to
+// the dead-letter subject rather than being destroyed, and EVERY return that
+// puts a message back spends one — a deferral as much as a nak, and the
+// partitions a blocked drain never dispatched as much as the one that blocked
+// it. That last clause is the contract's rather than this backend's
+// convenience: a free handoff here would model a broker nobody runs and
+// certify a bound production does not have. On the only broker this engine
+// ships, leaving the mailbox IS the delivery — its counter moves when a
+// message is FETCHED — so nothing it drained can be given back for free, and a
+// twin whose mailbox is a slice has to charge for a take deliberately.
 package memory
 
 import (
@@ -96,13 +104,13 @@ const (
 	//
 	// JetStream is the twin to track because it is the only broker this
 	// engine ships. It budgets 25 rather than the 10 a free-handoff broker
-	// needs because its deferral returns via Nak and spends an attempt —
-	// and this twin, whose Defer costs nothing, would otherwise sit on a
-	// budget less than half the production one. Where the twin's default
-	// disagrees with the real backend, every test written against the twin
-	// is calibrated to a broker nobody runs. See
-	// internal/queue/jetstream/stream.go maxDeliver; if it moves, this
-	// moves with it.
+	// needs because its deferral returns via Nak and spends an attempt, and
+	// this twin's deferral now spends one for the same reason — so the two
+	// budgets have to match in the quantity they denote as well as in what
+	// they are spent on. Where the twin's default disagrees with the real
+	// backend, every test written against the twin is calibrated to a broker
+	// nobody runs. See internal/queue/jetstream/stream.go maxDeliver; if it
+	// moves, this moves with it.
 	defaultMaxRedeliveries = 24
 
 	// defaultMaxHistory bounds the published-event log this backend keeps
@@ -258,6 +266,27 @@ type consumer struct {
 	// batching the same seat linger independently, exactly as two
 	// processes would.
 	window *lingerWindow
+
+	// detached records that this consumer has been dropped, and exists
+	// because REMOVING IT FROM THE SUBSCRIPTION IS NOT ENOUGH.
+	//
+	// Every other gate a delivery passes is read off the subscription or
+	// the client, so [Broker.drainPass] re-deriving the deliverable members
+	// each time round answers them. A detach is the one that is read off
+	// neither: it is a member LEAVING sub.members, which a loop already
+	// holding the *consumer never looks at again — and [Broker.deliverBatch]
+	// is exactly such a loop, holding one across a partition walk that can
+	// span many handler calls. So a detach landing mid-drain stopped
+	// nothing: the twin went on invoking, and ACKING, partitions 2..N on a
+	// consumer this node had already released, which is precisely the work
+	// the fenced release exists to abandon (internal/node detaches when a
+	// seat's lease is lost). The jetstream backend answers it with a flag
+	// of the same name on its own attachment, read by blocked() beside the
+	// other three.
+	//
+	// Never cleared: attaching again mints a NEW consumer, so there is no
+	// state from a previous life for a re-attach to inherit.
+	detached bool
 }
 
 type streamSub struct {
@@ -392,14 +421,19 @@ func (q *Queue) Stop(context.Context) error {
 	return nil
 }
 
-// dropMembersLocked removes this client's consumers from a subscription and
-// closes any linger window they were holding open.
+// dropMembersLocked removes this client's consumers from a subscription,
+// marks them detached and closes any linger window they were holding open.
+//
+// THE MARK AND THE REMOVAL ARE BOTH REQUIRED, for the reason [consumer.detached]
+// gives: the removal stops a FUTURE delivery being routed here, and the mark
+// stops a drain that is already holding this consumer from finishing on it.
 func (q *Queue) dropMembersLocked(sub *subscription) int {
 	mine := sub.membersOf(q)
 	if len(mine) == 0 {
 		return 0
 	}
 	for _, m := range mine {
+		m.detached = true
 		m.closeWindowLocked()
 	}
 	sub.members = slices.DeleteFunc(sub.members, func(m *consumer) bool { return m.client == q })

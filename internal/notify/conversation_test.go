@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 func evOf(t *testing.T, payload map[string]any) *events.Event {
@@ -39,7 +40,7 @@ func TestTheFallbackIsUniquePerEvent(t *testing.T) {
 // A stamped key is what the producer meant; the broker must not second-guess.
 func TestAStampedKeyWins(t *testing.T) {
 	ev := evOf(t, nil)
-	notify.Stamp(ev, "chat:C1:1718.003")
+	notify.Stamp(ev, "chat:C1:1718.003", "chat:C1:1718.003")
 	if got := notify.KeyOf(ev); got != "chat:C1:1718.003" {
 		t.Fatalf("KeyOf = %q, want the stamped key", got)
 	}
@@ -49,19 +50,30 @@ func TestAStampedKeyWins(t *testing.T) {
 // empty key is not stamped at all and the fallback stays in one place.
 func TestAnEmptyKeyIsNotStamped(t *testing.T) {
 	ev := evOf(t, nil)
-	notify.Stamp(ev, "")
-	if _, present := ev.Payload[notify.KeyField]; present {
+	notify.Stamp(ev, "", "")
+	if _, present := ev.Payload[notify.PartitionField]; present {
 		t.Fatal("an empty key was stamped, so the fallback is now bypassed by an empty string")
+	}
+	if _, present := ev.Payload[notify.ConversationField]; present {
+		t.Fatal("an empty identity was stamped, so the fallback is now bypassed by an empty string")
 	}
 	if !strings.HasPrefix(notify.KeyOf(ev), notify.EventPrefix) {
 		t.Fatal("the fallback did not apply")
+	}
+	// BOTH READS FALL BACK TO THE SAME VALUE, which is what keeps
+	// [notify.Derived] gating recording and the answerable-in-chat column
+	// identically: an event that can be "derived" under one key and not the
+	// other writes a row no later message can read back.
+	if notify.ConversationIdentityOf(ev) != notify.KeyOf(ev) {
+		t.Fatalf("an event naming neither key fell back to %q and %q",
+			notify.KeyOf(ev), notify.ConversationIdentityOf(ev))
 	}
 }
 
 func TestStampingAnEventWithNoPayloadWorks(t *testing.T) {
 	ev := events.New(types.ExternalNotification{}, events.TraceContext{})
 	ev.Payload = nil
-	notify.Stamp(ev, "chat:C1")
+	notify.Stamp(ev, "chat:C1", "chat:C1")
 	if got := notify.KeyOf(ev); got != "chat:C1" {
 		t.Fatalf("KeyOf = %q", got)
 	}
@@ -108,8 +120,8 @@ func TestDerivedTellsAReplyableConversationFromAnEventFallback(t *testing.T) {
 // answer stable rather than depending on which event sorted last.
 func TestAPartitionsKeyIsItsFirstStampedOne(t *testing.T) {
 	first, second := evOf(t, nil), evOf(t, nil)
-	notify.Stamp(first, "chat:C1")
-	notify.Stamp(second, "chat:C2")
+	notify.Stamp(first, "chat:C1", "chat:C1")
+	notify.Stamp(second, "chat:C2", "chat:C2")
 	if got := notify.KeyOfAll([]*events.Event{first, second}); got != "chat:C1" {
 		t.Fatalf("KeyOfAll = %q, want the first", got)
 	}
@@ -128,5 +140,133 @@ func TestNilEventsAreSurvivable(t *testing.T) {
 	if got := notify.KeyOfAll([]*events.Event{nil, nil}); got != "" {
 		t.Fatalf("KeyOfAll(nils) = %q", got)
 	}
-	notify.Stamp(nil, "chat:C1") // must not panic
+	if got := notify.ConversationIdentityOf(nil); got != "" {
+		t.Fatalf("ConversationIdentityOf(nil) = %q", got)
+	}
+	if got := notify.ConversationIdentityOfAll([]*events.Event{nil, nil}); got != "" {
+		t.Fatalf("ConversationIdentityOfAll(nils) = %q", got)
+	}
+	notify.Stamp(nil, "chat:C1", "chat:C1") // must not panic
+}
+
+// THE TWO FIELDS ARE INDEPENDENT ON THE WIRE, because the one case they exist
+// for is the one where they differ: a direct message's thread reply partitions
+// on the thread and belongs to the whole channel.
+func TestBothKeysRoundTripIndependently(t *testing.T) {
+	ev := evOf(t, nil)
+	notify.Stamp(ev, "chat:D1:root-1", "chat:D1")
+	if got := notify.KeyOf(ev); got != "chat:D1:root-1" {
+		t.Errorf("the broker would partition this on %q", got)
+	}
+	if got := notify.ConversationIdentityOf(ev); got != "chat:D1" {
+		t.Errorf("the ledger would key this on %q", got)
+	}
+	if got := notify.KeyOfAll([]*events.Event{ev}); got != "chat:D1:root-1" {
+		t.Errorf("KeyOfAll = %q", got)
+	}
+	if got := notify.ConversationIdentityOfAll([]*events.Event{ev}); got != "chat:D1" {
+		t.Errorf("ConversationIdentityOfAll = %q", got)
+	}
+}
+
+// AN OLDER PEER'S EVENT CARRIES ONE FIELD, and the identity read has to fall
+// back to it. CREWLET_AGENT is interest retention with no maxAge and a parked
+// seat republishes for hours, so an event stamped by a build from before the
+// split reaches this one whenever — and reading the absence as "no
+// conversation" would refuse to record the turn at all, losing history a
+// person can see, where the fallback merely reproduces that build's own
+// answer.
+func TestAnEventFromBeforeTheSplitStillNamesAConversation(t *testing.T) {
+	ev := evOf(t, map[string]any{notify.PartitionField: "chat:D1:root-1"})
+	if got := notify.ConversationIdentityOf(ev); got != "chat:D1:root-1" {
+		t.Errorf("a single-field event resolved to %q, want the field it carries", got)
+	}
+	if got := notify.ConversationIdentityOfAll([]*events.Event{ev}); got != "chat:D1:root-1" {
+		t.Errorf("the partition resolved to %q", got)
+	}
+	// And the PARTITION read is untouched by the split, which is the half a
+	// mixed fleet cannot afford to get wrong: an unkeyed wake is a partition
+	// of one, so ten comments on one thread wake a seat ten times.
+	if got := notify.KeyOf(ev); got != "chat:D1:root-1" {
+		t.Errorf("the partition function reads %q", got)
+	}
+}
+
+// THE NEW FIELD WINS WHERE BOTH ARE PRESENT, or the fallback above would make
+// the split unobservable on every event that carries it.
+func TestTheStampedIdentityBeatsTheFallback(t *testing.T) {
+	ev := evOf(t, map[string]any{
+		notify.PartitionField:    "chat:D1:root-1",
+		notify.ConversationField: "chat:D1",
+	})
+	if got := notify.ConversationIdentityOf(ev); got != "chat:D1" {
+		t.Fatalf("identity = %q, want the stamped one rather than the partition", got)
+	}
+}
+
+// A PARTITION THAT MIXES PRODUCERS IS FILED UNDER THE STATED IDENTITY, not
+// under whichever constituent happened to arrive first.
+//
+// A rolling upgrade puts both shapes on one stream — the retention that
+// carries a seat's wakes has no maxAge, and a parked seat republishes its
+// deliveries for hours — so one partition really can hold an old peer's event
+// with only a partition key beside a new one carrying the identity. Resolved
+// per event, the first constituent decided: an old event in front re-filed the
+// whole turn under the partition key, which for a direct message is exactly
+// the batch its next turn never looks up — the miss this pair of fields was
+// split apart to end.
+//
+// Preferring a STATED identity to an INFERRED one can never disagree with a
+// correct producer, because every event in a partition carries the same
+// identity: it is choosing between two spellings of one answer.
+func TestAMixedPartitionIsFiledUnderTheStatedIdentity(t *testing.T) {
+	older := evOf(t, map[string]any{notify.PartitionField: "chat:D1:root-1"})
+	newer := evOf(t, map[string]any{
+		notify.PartitionField:    "chat:D1:root-1",
+		notify.ConversationField: "chat:D1",
+	})
+	for _, tc := range []struct {
+		name string
+		evs  []*events.Event
+	}{
+		{"the old peer's event arrived first", []*events.Event{older, newer}},
+		{"and the other way round", []*events.Event{newer, older}},
+	} {
+		if got := notify.ConversationIdentityOfAll(tc.evs); got != "chat:D1" {
+			t.Errorf("%s: the partition resolved to %q, want the identity one of "+
+				"its events states", tc.name, got)
+		}
+	}
+	// AND THE INFERENCE STILL HAPPENS when nothing states one, which is the
+	// half a mixed fleet cannot lose: a partition of old events must not
+	// read as having no conversation at all.
+	if got := notify.ConversationIdentityOfAll([]*events.Event{older, older}); got != "chat:D1:root-1" {
+		t.Errorf("a partition of old events resolved to %q, want the one field "+
+			"they carry", got)
+	}
+}
+
+// THE QUEUE MINTS THE SAME FALLBACK NAMESPACE THIS PACKAGE DOES, and nothing
+// else pins the two spellings together: internal/queue holds its own hardcoded
+// copy of "event:" for a key function that answered empty, and it cannot
+// import this package (notify imports queue). Rename [notify.EventPrefix]
+// alone and the broker goes on minting the old namespace — which [Derived]
+// then reads as a real conversation, so a parked run is offered as answerable
+// in a thread that does not exist.
+func TestTheQueuesOwnFallbackSharesThisNamespace(t *testing.T) {
+	ev := evOf(t, nil)
+	parts := queue.PartitionByKey([]*events.Event{ev},
+		func(*events.Event) string { return "" },
+		func(e *events.Event) *events.Event { return e })
+	if len(parts) != 1 {
+		t.Fatalf("one event made %d partitions", len(parts))
+	}
+	if got := parts[0].Key; got != notify.Fallback(ev.ID.String()) {
+		t.Fatalf("the queue minted %q and this package mints %q", got,
+			notify.Fallback(ev.ID.String()))
+	}
+	if notify.Derived(parts[0].Key) {
+		t.Fatal("the queue's fallback reads as a real conversation, so a parked run " +
+			"would be offered as answerable in a thread nobody can reach")
+	}
 }

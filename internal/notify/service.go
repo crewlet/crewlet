@@ -524,19 +524,32 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		ContextRequiresRecon: prompt.RequiresRecon(r.Inbound),
 		Addressed:            prompt.Addressed(r.Inbound),
 	}
-	// The conversation key rides on the event so the inbox coalescer can
-	// partition by it without re-deriving a third-party app's rule. Derived
-	// here, where the third-party app's prompt is already in hand.
+	// BOTH KEYS ride on the event: the partition key so the inbox coalescer
+	// can group without re-deriving a third-party app's rule, and the
+	// conversation identity so the ledger, the episodes and the event
+	// store's tag file this turn where the next turn will look for it.
+	// Derived here, where the third-party app's prompt is already in hand.
 	//
-	// THROUGH [Prompts.Key], which exists so the namespacing rule has one
-	// caller: a third-party app's local key is namespaced by source precisely
-	// so a Jira issue "42" and a GitLab issue "42" cannot merge into one
-	// trigger.
-	// This is that one caller; hand-rolling the same two steps beside it
-	// made the rule's home a function nothing called.
-	conversation := prompts.Key(r.Inbound)
+	// THROUGH [Prompts.Partition] and [Prompts.Conversation], which exist so
+	// the namespacing rule has one caller each: a third-party app's local key
+	// is namespaced by source precisely so a Jira issue "42" and a GitLab
+	// issue "42" cannot merge into one trigger. Those are the two callers;
+	// hand-rolling the same two steps beside them made the rule's home a
+	// function nothing called.
+	partition := prompts.Partition(r.Inbound)
+	conversation := prompts.Conversation(r.Inbound)
+	// THE METADATA COPY CARRIES BOTH, and that is a decision rather than
+	// symmetry: nothing in production reads either back from here — the
+	// envelope below is what every reader uses — but this map is what a
+	// stored event shows a person debugging one, and the envelope's own bag
+	// is not rendered anywhere. A copy holding one of two values under the
+	// older of the two names would tell that person the split had not
+	// happened.
+	if partition != "" {
+		meta[PartitionField] = partition
+	}
 	if conversation != "" {
-		meta[KeyField] = conversation
+		meta[ConversationField] = conversation
 	}
 
 	// The SAME trace the webhook edge started, so a delivery and the turn
@@ -544,10 +557,6 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	wake := events.New(out, events.TraceContext{
 		TraceID: ev.TraceID, ParentSpanID: ev.SpanID,
 	})
-	// A DERIVED ID WHERE THE PRODUCER HAD ONE — see [Routed.WakeID]. It
-	// replaces the random one events.New minted rather than being carried
-	// beside it, because the id is what the inbox and the ledger key on
-	// and a second field would be a second thing to remember to check.
 	// A DERIVED ID WHERE THE PRODUCER HAD ONE — see [Routed.WakeID]. It
 	// REPLACES the random one events.New minted rather than riding beside
 	// it, because the id is what the inbox and the fleet completion ledger
@@ -557,16 +566,16 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		wake.ID = r.WakeID
 	}
 	wake.Source = "notify." + r.Source
-	// AND ONTO THE ENVELOPE, which is what the inbox actually partitions
-	// on. The metadata map above travels INSIDE the typed payload, and the
-	// partition function sees only an *events.Event — it reads the
-	// envelope's own bag (see [Stamp] and [KeyOf]). While the key was
-	// written to the metadata copy alone, every partition fell back to the
-	// event's own id, so ten comments on one thread woke a seat ten times
-	// and ran ten turns instead of the one digest turn the design
-	// describes. Both copies are kept: the metadata one is what a prompt
-	// renders from, this one is what the broker groups on.
-	Stamp(wake, conversation)
+	// AND ONTO THE ENVELOPE, which is what every reader actually uses. The
+	// metadata map above travels INSIDE the typed payload, and the partition
+	// function sees only an *events.Event — it reads the envelope's own bag
+	// (see [Stamp] and [KeyOf]). While the key was written to the metadata
+	// copy alone, every partition fell back to the event's own id, so ten
+	// comments on one thread woke a seat ten times and ran ten turns instead
+	// of the one digest turn the design describes. Both copies are kept: the
+	// metadata one is what a prompt renders from, this one is what the broker
+	// groups on and what the ledger keys off.
+	Stamp(wake, partition, conversation)
 	if err := s.queue.Publish(ctx, topics.AgentInbox(party.Handle), wake); err != nil {
 		return fmt.Errorf("notify: wake %s: %w", party.Handle, err)
 	}

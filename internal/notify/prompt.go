@@ -10,8 +10,8 @@ import (
 
 // Prompt is everything the spine needs to know about ONE third-party app.
 //
-// Four questions, and each is asked by a different part of the spine — which
-// is why they are one interface rather than four registries that could drift
+// Seven questions, and each is asked by a different part of the spine — which
+// is why they are one interface rather than seven registries that could drift
 // out of step about what a source is:
 //
 //   - Build renders the trigger a seat is woken with.
@@ -19,8 +19,19 @@ import (
 //     it, which the turn-start prefetches read.
 //   - Addressed says whether somebody is waiting on this seat for an answer,
 //     which the turn engine's delivery check reads.
-//   - ConversationKey identifies the conversation, for inbox partitioning.
+//   - PartitionKey says which other events this one is handled WITH: the
+//     broker's inbox partition and the coalescer's merge unit.
+//   - ConversationIdentity says which ongoing conversation it is part of: the
+//     conversation ledger's key, the turn telemetry's conversation_key tag,
+//     the episodes column, and the value a parked coding run matches a
+//     person's answer against — they answer on the conversation, not into
+//     the batch.
+//   - WakesActor says whether an event reaches the party who caused it.
 //   - DigestBody is the supersede rule when several of them merge.
+//
+// The count was "four" over five bullets for as long as the interface had
+// five questions on it, which is how the two identities above stayed one
+// bullet — and one method — long after they had stopped being one answer.
 //
 // A third-party app implements it; nothing in the spine does. The generic
 // fallback below is the answer for a source nobody has written one for (an
@@ -66,12 +77,47 @@ type Prompt interface {
 	// must post something on every broadcast it observes.
 	Addressed(n Inbound) bool
 
-	// ConversationKey is the SOURCE-LOCAL identity of the conversation.
+	// PartitionKey is the SOURCE-LOCAL grouping key: which other events
+	// this one is handled together with.
 	//
 	// Local — "ENG-42", "C42:1718.003" — because the caller namespaces it.
 	// Empty means this source cannot derive one for this event, and the
 	// event is then never merged with anything.
-	ConversationKey(metadata map[string]string, subject string) string
+	//
+	// Two readers, and both are positional rather than historical: the
+	// broker partitions a seat's inbox by it and the coalescer merges a
+	// partition into one trigger. A parked coding run was a third until
+	// its match moved onto the identity — a person answers on the
+	// conversation, and the engine's own prompt routinely puts their reply
+	// in a finer partition than the question was asked from.
+	PartitionKey(metadata map[string]string, subject string) string
+
+	// ConversationIdentity is the SOURCE-LOCAL identity of the ongoing
+	// conversation: what the ledger, the episodes and the event store's
+	// conversation_key tag file this event under.
+	//
+	// Local, like [Prompt.PartitionKey], because the caller namespaces
+	// both through the same rule. Empty means the same thing: this source
+	// cannot name a conversation for this event.
+	//
+	// REQUIRED, not an optional side-interface a source can decline. A
+	// type assertion would hand a source that forgot the method a silent
+	// default — which is exactly the failure this pair was split to
+	// remove, a key that answered a question nobody had asked it.
+	//
+	// THE INVARIANT EVERY IMPLEMENTATION OWES: the identity must be
+	// CONSTANT ACROSS EVERY EVENT IN A PARTITION, so a partition key is
+	// always the identity itself or a finer cut of it. A turn is a
+	// partition and the ledger is written once per turn, so if two
+	// constituents of one coalesced trigger disagreed about the identity
+	// the ledger key would depend on which event sorted first.
+	//
+	// For eight of the nine sources the two coincide, because an issue
+	// key, a page id, a monitor id and a task key are each one object that
+	// is both the merge unit and the durable thread; those delegate in one
+	// line. [ChatPrompt] is where they differ, and its doc shows the
+	// invariant deciding the answer.
+	ConversationIdentity(metadata map[string]string, subject string) string
 
 	// WakesActor reports whether an event type reaches the party who
 	// caused it, overriding the self-action rule.
@@ -267,12 +313,20 @@ func (r Prompts) For(source string) Prompt {
 // Sources names the third-party apps with a prompt of their own, sorted.
 func (r Prompts) Sources() []string { return slices.Sorted(maps.Keys(r.bySource)) }
 
-// Key is the FULL conversation key for a notification: the source's own local
-// key, namespaced.
+// Partition is the FULL partition key for a notification: the source's own
+// local key, namespaced.
 //
 // Empty when the source cannot derive one, which the caller turns into the
 // per-event fallback. It is a method on the registry rather than a function
-// taking a Prompt so the namespacing rule has exactly one caller.
-func (r Prompts) Key(n Inbound) string {
-	return Namespaced(n.Source, r.For(n.Source).ConversationKey(n.Metadata, n.Subject))
+// taking a Prompt so the namespacing rule has exactly one caller per key —
+// two namespacing sites is how a Jira issue "42" and a GitLab issue "42" get
+// to merge into one trigger on one of them and not the other.
+func (r Prompts) Partition(n Inbound) string {
+	return Namespaced(n.Source, r.For(n.Source).PartitionKey(n.Metadata, n.Subject))
+}
+
+// Conversation is the FULL conversation identity for a notification, through
+// the same namespacing rule for the same reason.
+func (r Prompts) Conversation(n Inbound) string {
+	return Namespaced(n.Source, r.For(n.Source).ConversationIdentity(n.Metadata, n.Subject))
 }

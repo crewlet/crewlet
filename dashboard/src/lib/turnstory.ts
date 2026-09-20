@@ -202,11 +202,11 @@ export function tellStory(events: readonly EventRecord[]): Story {
 export interface PromptWeight {
   phase: string;
   iteration: number;
-  /** The engine's own approximation, off `prompt.size`. */
+  /** The engine's own approximation, over every character term below. */
   approximateTokens: number;
   /**
    * BYTES, which is what the engine measures — `len()` of a Go string — read
-   * off the wire keys `system_chars` / `user_chars`.
+   * off the wire keys `system_chars` / `user_chars` and the three beside them.
    *
    * THE NAMES DISAGREE ON PURPOSE. The measurement has always been bytes and
    * the keys have always said chars, and the panel used to print "24 KB"
@@ -218,6 +218,14 @@ export interface PromptWeight {
    */
   systemBytes: number;
   userBytes: number;
+  /**
+   * The conversation a RESUMED phase re-entered — zero for a phase that
+   * opened one of its own, which is nearly all of them.
+   */
+  messageBytes: number;
+  /** The tool-definition array, as compact JSON: usually the largest term. */
+  toolBytes: number;
+  toolCount: number;
   /**
    * How many times this phase key was measured in this turn — 1 for every
    * phase of a turn that ran once. See [promptWeights].
@@ -235,9 +243,16 @@ export interface PromptWeight {
  * about, and it is addressed like every other phase event precisely so the
  * size a TURN paid is readable on that turn. It was banded into `given` here
  * and then read by nobody: the Turn screen took one event out of that band
- * (`prefetch_summary`) and dropped the rest, so six small integers per phase
- * reached the browser and went nowhere. The only way to the number was the
- * raw payload of a row in the residual list.
+ * (`prefetch_summary`) and dropped the rest, so a whole row of integers per
+ * phase reached the browser and went nowhere. The only way to the number was
+ * the raw payload of a row in the residual list.
+ *
+ * `?? 0` ON EVERY TERM, which is load-bearing in one direction only: a node
+ * running an older engine publishes a row without the tool and message keys,
+ * and the columns for them read 0 rather than NaN. It is also how a key that
+ * never arrives — a misspelled tag, a term the engine stopped measuring —
+ * renders as a permanent zero instead of raising, which is why the tests
+ * behind these fields assert a value only the engine could have produced.
  *
  * ONE ROW PER PHASE KEY, because `turn_id|phase|iteration` IS the phase key —
  * the same identity `agent_phase_started` and `agent_phase_completed` share,
@@ -282,6 +297,9 @@ export function promptWeights(events: readonly EventRecord[]): PromptWeight[] {
       // key, and `??` does not fall through on 0.
       systemBytes: Number(p.system_chars ?? 0),
       userBytes: Number(p.user_chars ?? 0),
+      messageBytes: Number(p.message_chars ?? 0),
+      toolBytes: Number(p.tool_chars ?? 0),
+      toolCount: Number(p.tool_count ?? 0),
       runs: 1,
       minTokens: tokens,
       maxTokens: tokens,
@@ -317,9 +335,9 @@ export interface PrefetchBlock {
 }
 
 /**
- * The six context blocks an executor's prompt is built from.
+ * The seven context blocks an executor's prompt is built from.
  *
- * The event's own one-line summary collapses this to "2/6 hits", which is the
+ * The event's own one-line summary collapses this to "2/7 hits", which is the
  * right shape for a feed and the wrong one for the screen about this turn:
  * every block degrades to empty on failure by design, so an unreachable store,
  * an unconfigured auxiliary model and a filter that selected nothing all
@@ -334,6 +352,11 @@ export function prefetchBlocks(event: EventRecord | undefined): PrefetchBlock[] 
   const thin = gated ? "the trigger was a bare pointer — this filter never ran" : "";
   const picks = Number(p.relevant_knowledge_selection_count ?? 0);
   return [
+    // NOT GATED, and that is the point of it: this block is what makes a thin
+    // trigger thick. `trigger_requires_recon` says the trigger BODY is a
+    // pointer, which is still true of a "+1" whose thread the engine handed
+    // over — so the flag stays set and this block still ran.
+    block("The thread so far", p, "thread_context", "", threadNote(p)),
     block("Personal memory", p, "personal_memory", thin),
     block("Similar prior work", p, "episode_recall", thin),
     block(
@@ -351,6 +374,32 @@ export function prefetchBlocks(event: EventRecord | undefined): PrefetchBlock[] 
     block("Synthesized skills", p, "synthesized_skills", ""),
     block("First-turn onboarding", p, "onboarding_hint", ""),
   ];
+}
+
+/**
+ * What the thread block actually did, in one phrase.
+ *
+ * THREE STATES BEHIND ONE HIT. Both of the block's zero-message paths render
+ * non-empty prose into the prompt — "there is nothing earlier" and "it could
+ * not be read from this node" — so hit and bytes look identical on a thread
+ * that was read and empty and on one no backend answered for. This read the
+ * first as the second until the engine started reporting `thread_context_read`
+ * beside the count, and told an operator that a healthy node could not reach
+ * its own chat surface.
+ *
+ * `thread_context_stopped_short` is the fourth: a thread too long to read to
+ * its end is handed over missing the NEWEST messages, the one that woke the
+ * turn included, and its message count reads exactly like a whole thread's.
+ */
+function threadNote(p: Record<string, unknown>): string {
+  if (p.thread_context_hit !== true) return "";
+  if (p.thread_context_read !== true) return "the thread could not be read from that node";
+  const posts = Number(p.thread_context_posts ?? 0);
+  if (posts === 0) return "read, and there was nothing earlier";
+  const handed = `${posts} message${posts === 1 ? "" : "s"} handed over`;
+  return p.thread_context_stopped_short === true
+    ? `${handed}, but not the newest — the thread was too long to read`
+    : handed;
 }
 
 function block(

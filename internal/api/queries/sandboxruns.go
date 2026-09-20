@@ -58,6 +58,13 @@ func (s Sources) sandboxRuns(ctx context.Context, _ Params) (any, error) {
 }
 
 func serialiseRun(run sandbox.PendingRun) map[string]any {
+	// HELD, NOT STAMPED. A box parked on a question is being paid for
+	// whether or not the pause instant reached the row, and drawing the raw
+	// stamp showed exactly that box as a live one — the one reading that
+	// says nobody is being billed. It is the same answer the pause reaper
+	// acts on ([sandbox.PendingRun.HeldSince]), so the screen and the
+	// reclaim cannot disagree about which boxes are held.
+	heldSince, _ := run.HeldSince()
 	return map[string]any{
 		"turn_id": run.TurnID,
 		// The unit of work behind that run, so a board row links back to
@@ -86,11 +93,11 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// non-empty sandbox id means a box exists, and a set paused_at
 		// means it is currently held as a snapshot and being paid for.
 		"box_exists":         run.SandboxID != "",
-		"paused_at":          isoOrEmpty(run.PausedAt),
+		"paused_at":          isoOrEmpty(heldSince),
 		"pause_ttl_seconds":  run.PauseTTLSeconds,
 		"started_at":         isoOrEmpty(run.CreatedAt),
 		"updated_at":         isoOrEmpty(run.UpdatedAt),
-		"answerable_in_chat": answerableInChat(run.ConversationKey),
+		"answerable_in_chat": answerableInChat(run.Conversation()),
 		// WHO IS WAITING, which is the question a board full of parked
 		// runs exists to answer and had no field for. Persisted rather
 		// than re-derived precisely because the resumed turn does not see
@@ -119,17 +126,34 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 // answerableInChat reports whether a reply on a chat surface could ever reach
 // this run.
 //
-// The resume path matches an inbound notification's conversation key against
-// the one stored at kick-off, by exact string equality. A run started by
-// anything OTHER than an external notification — a schedule tick, a task
-// assignment, an A2A wake — stored a key derived from an event id, which no
-// inbound message can reproduce. Such a run is not answerable through any chat
-// surface, and telling somebody to "reply in the thread" would send them to a
-// thread that does not exist.
+// A run started by anything OTHER than an external notification — a schedule
+// tick, a task assignment, an A2A wake — stored NOTHING: its trigger names
+// neither key, [notify.ConversationIdentityOfAll] answers "" for a partition
+// like that rather than inventing one, and [notify.Stamp] declines an empty
+// value, so both of the row's conversation columns are empty. Such a run is
+// not answerable through any chat surface, and telling somebody to "reply in
+// the thread" would send them to a thread that does not exist.
+//
+// The per-event `event:` fallback is a different thing in a different place:
+// [notify.KeyOf] mints it at READ time, for the broker's partition function,
+// which has to give an event that names no conversation a partition of its
+// own. It is not written onto a row from here. [notify.Derived] refuses it as
+// well as the empty string, which is what keeps this column honest for a row
+// whose key was minted that way by somebody else — a peer, or a writer this
+// package does not know about.
+//
+// ASKED OF THE CONVERSATION the run reports back to and is answered on, never
+// of the partition beside it. The question a person reading this board has is
+// "is there a thread I can answer in", which is a property of the durable
+// conversation; the partition is an inbox-grouping artefact with no surface
+// anybody could reply to. The two are derivable or not TOGETHER on every
+// source — a chat event naming a channel yields both, one naming none yields
+// neither — so the verdict is the same either way; what this states is that
+// the column answers the same question the resume path does.
 //
 // [notify.Derived] answers exactly that, and this had its own copy of the
 // prefix to answer it with — so a rename of the fallback's namespace would
 // have left this route confidently offering a thread that does not exist.
-func answerableInChat(conversationKey string) bool {
-	return notify.Derived(conversationKey)
+func answerableInChat(conversation string) bool {
+	return notify.Derived(conversation)
 }

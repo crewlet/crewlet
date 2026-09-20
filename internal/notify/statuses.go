@@ -54,6 +54,61 @@ func (s *Statuses) Begin(ctx context.Context, handle, turnID, phase string, meta
 	return nil
 }
 
+// Rejoin takes back the hold a resumed turn already has, on whichever backend
+// holds it.
+//
+// NEVER NIL-CHECKED BY THE CALLER, on the same terms as Begin: a resume whose
+// session is not on this node — the seat moved, or the process restarted —
+// answers a nil session whose methods are no-ops. At most one driver can hold
+// a given turn's hold, because a turn is woken by exactly one surface.
+func (s *Statuses) Rejoin(handle, turnID string) *StatusSession {
+	if s == nil {
+		return nil
+	}
+	for _, d := range s.drivers {
+		if session := d.Rejoin(handle, turnID); session != nil {
+			return session
+		}
+	}
+	return nil
+}
+
+// Release drops ONE turn's hold on its indicator, wherever that hold is.
+//
+// It is what the engine calls when a turn that was kept alive has STOPPED
+// without ending: a detached coding run that parked on a question is waiting
+// on a person, not working, and an indicator still saying "is thinking…" over
+// that wait is worse than no indicator at all.
+//
+// [Statuses.Rejoin] then [StatusSession.End] rather than a clear of its own,
+// which is the whole of it: the hold is reference-counted by turn id, so a
+// second turn holding the same thread — a queued follow-up, a colleague's ask
+// — keeps ITS indicator and only the last hold takes the indicator down. A
+// driver-level clear would have taken that second turn's indicator with it.
+//
+// A hold this node does not have answers a nil session whose End is a no-op,
+// which is the honest outcome where the park landed on a node that is not the
+// one that raised the indicator: that node cleared it when it released the
+// seat ([Statuses.ClearFor]).
+func (s *Statuses) Release(ctx context.Context, handle, turnID string) {
+	s.Rejoin(handle, turnID).End(ctx, false)
+}
+
+// ClearFor takes down every indicator either backend holds for one seat.
+//
+// Both, unconditionally: a seat can be configured on two chat surfaces at
+// once, and a driver holding nothing for it does nothing. See
+// [StatusDriver.ClearFor] for why a node that stops running a seat has to make
+// this call.
+func (s *Statuses) ClearFor(ctx context.Context, handle string) {
+	if s == nil {
+		return
+	}
+	for _, d := range s.drivers {
+		d.ClearFor(ctx, handle)
+	}
+}
+
 // Backends names the chat surfaces with a live driver, sorted.
 func (s *Statuses) Backends() []string {
 	if s == nil {

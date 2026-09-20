@@ -26,6 +26,28 @@ var chatPrompt = notify.ChatPrompt{
 	},
 }
 
+// direct builds one message's metadata in a direct conversation, and shared
+// one in an open channel: the two shapes the two keys answer differently for.
+func direct(mutate func(map[string]string)) map[string]string {
+	m := map[string]string{"channel": "D1", "channel_type": "D", "ts": "p1"}
+	if mutate != nil {
+		mutate(m)
+	}
+	return m
+}
+
+func shared(ts, root string) string {
+	return chatPrompt.PartitionKey(map[string]string{
+		"channel": "C1", "channel_type": "O", "ts": ts, "thread_ts": root,
+	}, "")
+}
+
+func identity(ts, root string) string {
+	return chatPrompt.ConversationIdentity(map[string]string{
+		"channel": "C1", "channel_type": "O", "ts": ts, "thread_ts": root,
+	}, "")
+}
+
 func chatNote(mutate func(map[string]string)) notify.Inbound {
 	m := map[string]string{
 		"transport": "chat", "channel": "C1", "ts": "p1",
@@ -85,9 +107,24 @@ func TestAThreadReplyGetsTheThreadBlock(t *testing.T) {
 	if !strings.Contains(got, "Messages from `@agent-swe` in this thread are YOUR previous replies") {
 		t.Fatalf("the self-check does not name the agent:\n%s", got)
 	}
+	// IT NO LONGER SENDS THE AGENT TO GO AND READ THE THREAD. On a company
+	// whose chat tools come from a per-role MCP server that instruction cost
+	// three rounds before a word was read, and an agent that skipped it
+	// answered eleven words of trigger text with no idea what the thread was
+	// about. The thread is now in the SYSTEM prompt, under its own heading.
+	if strings.Contains(got, "Read the thread with your chat tools") {
+		t.Fatalf("the prompt still tells the agent to go and fetch the thread:\n%s", got)
+	}
 	if !strings.Contains(got, "**Thread:** root-1 (existing thread)") {
 		t.Fatalf("the thread pointer is wrong:\n%s", got)
 	}
+	// THE RECON FLAG STAYS TRUE, and the engine handing the thread over does
+	// not change it. It describes the trigger BODY, and "+1" is exactly as
+	// useless a search query with the thread in the system prompt as it was
+	// without — so flipping it would turn two auxiliary LLM calls back on for
+	// every chat thread reply in the company. It is also stored on every past
+	// event and read by the dashboard, so its meaning cannot be changed
+	// retroactively.
 	if !chatPrompt.RequiresRecon(reply) {
 		t.Fatal("a thread reply does not ask for recon")
 	}
@@ -172,20 +209,12 @@ func TestAnUnnamedSenderNeverRendersBlank(t *testing.T) {
 	}
 }
 
-// In a direct conversation consecutive TOP-LEVEL messages are one
-// conversation, so a typing burst coalesces into one turn — the headline
-// case for coalescing at all.
-func TestConversationKeysGroupATypingBurstButNotTwoAsks(t *testing.T) {
-	direct := func(mutate func(map[string]string)) map[string]string {
-		m := map[string]string{"channel": "D1", "channel_type": "D", "ts": "p1"}
-		if mutate != nil {
-			mutate(m)
-		}
-		return m
-	}
-
-	first := chatPrompt.ConversationKey(direct(nil), "")
-	second := chatPrompt.ConversationKey(direct(func(m map[string]string) { m["ts"] = "p2" }), "")
+// In a direct conversation consecutive TOP-LEVEL messages are one partition,
+// so a typing burst coalesces into one turn — the headline case for
+// coalescing at all.
+func TestPartitionKeysGroupATypingBurstButNotTwoAsks(t *testing.T) {
+	first := chatPrompt.PartitionKey(direct(nil), "")
+	second := chatPrompt.PartitionKey(direct(func(m map[string]string) { m["ts"] = "p2" }), "")
 	if first != "D1" || second != "D1" {
 		t.Fatalf("a DM burst keyed %q and %q, want the channel both times", first, second)
 	}
@@ -193,7 +222,7 @@ func TestConversationKeysGroupATypingBurstButNotTwoAsks(t *testing.T) {
 	// A DM THREAD REPLY keeps its thread key: merging it with unrelated
 	// top-level pings would hand the turn one metadata whose thread
 	// pointer names only one of two reply targets.
-	inThread := chatPrompt.ConversationKey(direct(func(m map[string]string) {
+	inThread := chatPrompt.PartitionKey(direct(func(m map[string]string) {
 		m["thread_ts"] = "root-1"
 	}), "")
 	if inThread != "D1:root-1" {
@@ -202,11 +231,6 @@ func TestConversationKeysGroupATypingBurstButNotTwoAsks(t *testing.T) {
 
 	// In a SHARED channel two unrelated top-level asks must not merge, so
 	// the key stays thread-grained throughout.
-	shared := func(ts, root string) string {
-		return chatPrompt.ConversationKey(map[string]string{
-			"channel": "C1", "channel_type": "O", "ts": ts, "thread_ts": root,
-		}, "")
-	}
 	if a, b := shared("p1", ""), shared("p2", ""); a == b {
 		t.Fatalf("two unrelated channel asks share the key %q", a)
 	}
@@ -217,11 +241,118 @@ func TestConversationKeysGroupATypingBurstButNotTwoAsks(t *testing.T) {
 	}
 	// Without a channel there is no conversation identity — and a key
 	// that was just the thread would collide across channels.
-	if got := chatPrompt.ConversationKey(map[string]string{"ts": "p1"}, ""); got != "" {
+	if got := chatPrompt.PartitionKey(map[string]string{"ts": "p1"}, ""); got != "" {
 		t.Fatalf("a channel-less message keyed %q", got)
 	}
-	if got := chatPrompt.ConversationKey(map[string]string{"channel": "C1"}, ""); got != "" {
+	if got := chatPrompt.PartitionKey(map[string]string{"channel": "C1"}, ""); got != "" {
 		t.Fatalf("an anchor-less message keyed %q", got)
+	}
+}
+
+// A DIRECT CONVERSATION IS ONE CONVERSATION, thread or not — which is the
+// defect this pair was split to fix. A person's first DM and their reply in
+// the thread the agent opened are the same 1:1 line, and while both answers
+// came from one function the reply was filed under "D1:root-1" and the next
+// turn looked the history up under "D1" and found a first turn.
+func TestADirectConversationIsOneIdentityHoweverItIsThreaded(t *testing.T) {
+	top := chatPrompt.ConversationIdentity(direct(nil), "")
+	later := chatPrompt.ConversationIdentity(direct(func(m map[string]string) { m["ts"] = "p2" }), "")
+	reply := chatPrompt.ConversationIdentity(direct(func(m map[string]string) {
+		m["thread_ts"] = "root-1"
+		m["ts"] = "p3"
+	}), "")
+	if top != "D1" || later != "D1" || reply != "D1" {
+		t.Fatalf("one DM resolved to %q, %q and %q — a thread reply is not a new conversation",
+			top, later, reply)
+	}
+
+	// A SHARED CHANNEL IS THE OPPOSITE: a thread IS the conversation
+	// there, so two unrelated asks in one channel stay two identities and
+	// a reply joins the one it answers.
+	if a, b := identity("p1", ""), identity("p2", ""); a == b {
+		t.Fatalf("two unrelated channel asks share the identity %q", a)
+	}
+	if got, want := identity("p9", "p1"), identity("p1", ""); got != want {
+		t.Fatalf("a channel reply resolved to %q, want its root's %q", got, want)
+	}
+	// The same two guards the partition key has: no channel and no anchor
+	// each mean this source cannot name a conversation at all, and both
+	// keys must agree about that or [notify.Derived] gates recording under
+	// one reading and not the other.
+	if got := chatPrompt.ConversationIdentity(map[string]string{"ts": "p1"}, ""); got != "" {
+		t.Fatalf("a channel-less message resolved to %q", got)
+	}
+	if got := chatPrompt.ConversationIdentity(map[string]string{"channel": "C1"}, ""); got != "" {
+		t.Fatalf("an anchor-less shared-channel message resolved to %q", got)
+	}
+}
+
+// THE PARTITION REFINES THE IDENTITY, on every chat shape: a partition key is
+// the identity itself or the identity plus a finer anchor. That is what makes
+// one ledger entry per turn well-defined — a turn is a partition, its entry is
+// written once, and constituents disagreeing about the identity would make the
+// ledger key depend on which event sorted first.
+//
+// The DM burst is the case that decides it: its three constituents partition
+// on the bare channel while carrying three different ts values, so an identity
+// of channel+anchor would give that one partition three identities.
+func TestAPartitionKeyAlwaysRefinesTheConversationIdentity(t *testing.T) {
+	cases := map[string]map[string]string{
+		"a DM burst":                  direct(nil),
+		"a second message in that DM": direct(func(m map[string]string) { m["ts"] = "p2" }),
+		"a DM thread reply":           direct(func(m map[string]string) { m["thread_ts"] = "root-1" }),
+		"a shared-channel top-level":  {"channel": "C1", "channel_type": "O", "ts": "p1"},
+		"a shared-channel thread reply": {
+			"channel": "C1", "channel_type": "O", "ts": "p9", "thread_ts": "p1",
+		},
+	}
+	for name, meta := range cases {
+		part := chatPrompt.PartitionKey(meta, "")
+		id := chatPrompt.ConversationIdentity(meta, "")
+		if part == "" || id == "" {
+			t.Errorf("%s: partition %q, identity %q — neither may be empty here", name, part, id)
+			continue
+		}
+		if part != id && !strings.HasPrefix(part, id+":") {
+			t.Errorf("%s: partition %q does not refine the identity %q", name, part, id)
+		}
+	}
+
+	// AND THE DM CASE ACTUALLY DIVERGES, or everything above is satisfied
+	// by handing back one value twice — which is precisely the state this
+	// change removed.
+	threaded := direct(func(m map[string]string) { m["thread_ts"] = "root-1" })
+	if chatPrompt.PartitionKey(threaded, "") == chatPrompt.ConversationIdentity(threaded, "") {
+		t.Error("a DM thread reply's two keys are equal, so the split bought nothing")
+	}
+	// While a shared channel's do NOT diverge: there the thread is the
+	// conversation and a second value would be a second answer to one
+	// question.
+	top := map[string]string{"channel": "C1", "channel_type": "O", "ts": "p1"}
+	if chatPrompt.PartitionKey(top, "") != chatPrompt.ConversationIdentity(top, "") {
+		t.Error("a shared-channel message's two keys differ, so a thread is two conversations")
+	}
+}
+
+// ONE ANCHOR, THREE READERS. The working indicator raises its spinner on
+// [notify.ConversationOf]'s channel+anchor, Build tells the agent to reply
+// under that same ts, and the ledger keys on the identity — and nothing
+// compares the three derivations. Where they disagree, the spinner a person
+// watches, the thread the reply lands in and the history the seat reads name
+// different threads.
+func TestTheChatIdentityIsTheAnchorTheIndicatorAndTheReplyUse(t *testing.T) {
+	for _, meta := range []map[string]string{
+		{"channel": "C1", "channel_type": "O", "ts": "p1", "transport": "chat"},
+		{"channel": "C1", "channel_type": "O", "ts": "p9", "thread_ts": "p1", "transport": "chat"},
+	} {
+		conv, ok := notify.ConversationOf(meta, "chat")
+		if !ok {
+			t.Fatalf("%v: the indicator resolved no conversation", meta)
+		}
+		if got, want := chatPrompt.ConversationIdentity(meta, ""),
+			conv.Channel+":"+conv.Thread; got != want {
+			t.Errorf("%v: the ledger keys on %q and the indicator raises on %q", meta, got, want)
+		}
 	}
 }
 

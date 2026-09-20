@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,11 +20,15 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -73,21 +79,58 @@ func said(sender, body string, at time.Time) *events.Event {
 	}, events.TraceContext{})
 	e.Source = "notify.slack"
 	e.Timestamp = at
-	notifyStamp(e, "slack:C1")
+	notifyStamp(e, "slack:C1", "slack:C1")
 	return e
 }
 
-// notifyStamp writes a conversation key the way internal/notify does.
-func notifyStamp(e *events.Event, key string) {
+// notifyStamp writes both keys the way internal/notify does — THROUGH THE
+// CONSTANTS, never the literals they hold: with the identity read falling back
+// to the partition field for an older peer's event, a test spelling
+// "conversation_key" out keeps passing whichever field production reads, which
+// is the blind spot node/concurrency_test.go records having shipped once.
+func notifyStamp(e *events.Event, partition, conversation string) {
 	if e.Payload == nil {
 		e.Payload = map[string]any{}
 	}
-	e.Payload["conversation_key"] = key
+	e.Payload[notify.PartitionField] = partition
+	e.Payload[notify.ConversationField] = conversation
 }
 
+// inThread is an event whose two keys coincide — a shared channel, an issue,
+// a page: every source but a direct message.
 func inThread(kind, conversation string) *events.Event {
 	e := ev(kind)
-	notifyStamp(e, conversation)
+	notifyStamp(e, conversation, conversation)
+	return e
+}
+
+// headroom states what a backend says about a delivery: each message's own
+// remaining deliveries, from which the contract folds the partition's.
+//
+// Written out per event rather than as one number, because the gate under
+// test reads each message's own — see [Dispatcher.mayOfferAnswer].
+func headroom(ctx context.Context, perMessage map[*events.Event]int) context.Context {
+	hs := make([]queue.Headroom, 0, len(perMessage))
+	for ev, left := range perMessage {
+		hs = append(hs, queue.Headroom{ID: ev.ID, Left: left})
+	}
+	return queue.WithHeadroom(ctx, hs)
+}
+
+// notifyStampedIn is one notification with both keys stated outright, for the
+// cases that need two events in one partition.
+func notifyStampedIn(partition, conversation string) *events.Event {
+	e := ev("notification")
+	notifyStamp(e, partition, conversation)
+	return e
+}
+
+// inDirectThread is the one shape where they differ: a reply in the thread a
+// direct message started partitions on the thread and belongs to the whole DM
+// channel.
+func inDirectThread(kind, channel, thread string) *events.Event {
+	e := ev(kind)
+	notifyStamp(e, channel+":"+thread, channel)
 	return e
 }
 
@@ -175,7 +218,7 @@ func TestAGuardStopsTheTurnBeforeItStarts(t *testing.T) {
 		"no engine": {
 			inbox.Conditions{Owned: true}, queue.OutcomeAck, true, true, false},
 		"sandbox": {
-			inbox.Conditions{Owned: true, TurnEngineReady: true, AwaitingSandbox: true},
+			inbox.Conditions{Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true},
 			queue.OutcomeAck, true, false, false},
 		"shedding": {
 			inbox.Conditions{Owned: true, TurnEngineReady: true},
@@ -211,7 +254,7 @@ func TestAParkIsNeverAckedUntilItsRequeueLands(t *testing.T) {
 	r := &recorder{}
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions {
-		return inbox.Conditions{Owned: true, TurnEngineReady: true, AwaitingSandbox: true}
+		return inbox.Conditions{Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true}
 	}
 	d.Park = func(context.Context, string, []*events.Event) error {
 		return errors.New("broker unreachable")
@@ -246,7 +289,7 @@ func TestNoParkPathNAKsRatherThanDropping(t *testing.T) {
 	d := dispatcher(t, r)
 	d.Park = nil
 	d.Conditions = func(string) inbox.Conditions {
-		return inbox.Conditions{Owned: true, TurnEngineReady: true, AwaitingSandbox: true}
+		return inbox.Conditions{Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true}
 	}
 	if got := d.Dispatch(context.Background(), "ceo", []*events.Event{ev("notification")}); got.Outcome != queue.OutcomeNak {
 		t.Errorf("outcome = %v, want a NAK", got.Outcome)
@@ -419,9 +462,9 @@ func TestABrokenPhaseThatProvedNothingStillNAKsAndRecordsNothing(t *testing.T) {
 // "seat is not owned here" — caught a phase later, because the window is open
 // for the whole length of a turn and only one end of it was ever checked. One
 // condition, so one disposition: a deferral hands the delivery to the seat's
-// new owner at zero accrued redeliveries and quiesces this attachment, where
-// a NAK spends one of the trigger's twenty-five deliveries on a node with no
-// further claim to the seat.
+// new owner AT ONCE and quiesces this attachment, where a NAK returns it on
+// the failure path's doubling spacing and leaves this node consuming a mailbox
+// it has no further claim to. It costs the same delivery either way.
 func TestASeatThatMovedMidTurnIsDeferredToItsNewOwner(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
@@ -685,7 +728,7 @@ func TestAPanicWhileRequeuingLeavesThePublishedCopiesToRun(t *testing.T) {
 	// requeued rather than worked.
 	d.Conditions = func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
-			AwaitingSandbox: true}
+			SeatHeldBySandbox: true}
 	}
 	d.Park = func(_ context.Context, _ string, evs []*events.Event) error {
 		r.parked = append(r.parked, evs[:1])
@@ -735,7 +778,7 @@ func TestAPanicWhileRequeuingADegradedTailKeepsNoClaimOnIt(t *testing.T) {
 
 	head := said("ana", "first", clock)
 	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
-	notifyStamp(opaque, "slack:C1")
+	notifyStamp(opaque, "slack:C1", "slack:C1")
 	// Publishes the first copy, then dies — the shape [Engine.park]'s own
 	// loop has, one Publish per event.
 	d.Park = func(_ context.Context, _ string, evs []*events.Event) error {
@@ -775,7 +818,7 @@ func TestAPanicInADegradedHeadLeavesTheRequeuedTailToRun(t *testing.T) {
 
 	head := said("ana", "first", clock)
 	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
-	notifyStamp(opaque, "slack:C1")
+	notifyStamp(opaque, "slack:C1", "slack:C1")
 
 	if got := d.Dispatch(ctx, "ceo", []*events.Event{head, opaque}); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("outcome = %v, want an ACK", got.Outcome)
@@ -1135,9 +1178,10 @@ func TestOnlyLedgeredTypesAreRecorded(t *testing.T) {
 
 func TestTheConversationKeyComesFromTheFirstEventThatNamesOne(t *testing.T) {
 	t.Parallel()
-	// A partition is one conversation by construction — that is what the
-	// broker's key function guarantees — so taking the first keeps the
-	// answer stable rather than depending on which event sorts last.
+	// A partition is one conversation by construction — the broker's key
+	// function guarantees the partition key and a source's partition key
+	// refines its identity — so taking the first keeps the answer stable
+	// rather than depending on which event sorts last.
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
 	d := dispatcher(t, r)
 	d.Dispatch(context.Background(), "ceo", []*events.Event{
@@ -1228,8 +1272,12 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	if rec.Count != 2 || rec.AgentHandle != "ceo" {
 		t.Errorf("record = %+v", rec)
 	}
-	if rec.ConversationKey != "slack:C1/T1" {
-		t.Errorf("conversation = %q", rec.ConversationKey)
+	// THE PARTITION, on the field that says so. The record's subject is the
+	// batch that merged, and it rode `conversation_key` until that made the
+	// promoted tag of that name mean the identity on every other event and
+	// the batch on this one.
+	if rec.PartitionKey != "slack:C1/T1" {
+		t.Errorf("partition = %q", rec.PartitionKey)
 	}
 	// THE VENDOR, not the producer of the wake. internal/notify stamps the
 	// envelope "notify.slack"; every other notification event carries the
@@ -1245,9 +1293,6 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	if rec.FirstAt != clock.UTC().Format(time.RFC3339) ||
 		rec.LastAt != clock.Add(2*time.Minute).UTC().Format(time.RFC3339) {
 		t.Errorf("span = %s..%s", rec.FirstAt, rec.LastAt)
-	}
-	if rec.NotificationSource != "slack" {
-		t.Errorf("source = %q, want the third-party app rather than the engine", rec.NotificationSource)
 	}
 }
 
@@ -1318,17 +1363,17 @@ func TestAnAnswerToAParkedRunIsHandledRatherThanRequeued(t *testing.T) {
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
-			AdmitsTriggers: true, AwaitingSandbox: true}
+			AdmitsTriggers: true, SeatHeldBySandbox: true}
 	}
 	var asked []string
-	d.Answer = func(_ context.Context, handle, conversation, answer string,
-		trigger *events.Event,
-	) (bool, error) {
-		asked = append(asked, handle+"/"+conversation)
+	d.Answer = func(_ context.Context, handle string, conv sandbox.ConversationRef,
+		answer string, trigger *events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		asked = append(asked, handle+"/"+conv.Identity)
 		if answer == "" || trigger == nil {
 			t.Error("the answer text and its trigger did not reach the coordinator")
 		}
-		return true, nil
+		return sandbox.AnswerConsumed, nil
 	}
 
 	got := d.Dispatch(context.Background(), "swe",
@@ -1344,18 +1389,610 @@ func TestAnAnswerToAParkedRunIsHandledRatherThanRequeued(t *testing.T) {
 	}
 }
 
+// THE ANSWER ARRIVES AT A SEAT THAT LOOKS IDLE, and has to be claimed before
+// an ordinary turn eats it.
+//
+// The park above is the case where a SECOND run holds the seat. The ordinary
+// one is this: a run parked on a question gives its seat back — the reply
+// arrives on that seat's own inbox and a person can take days — so the answer
+// reaches the dispatcher through the plain proceed path, carrying nothing that
+// says what it answers. Offered only from the park, the match could run only
+// while the seat was HELD, which is the one state a parked run is never in: no
+// clarification answer ever reached the run that asked it, and every box
+// waited out its pause TTL with the reply sitting in the inbox.
+func TestAnAnswerIsClaimedBeforeItBecomesAnOrdinaryTurn(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		// FREE, with a question open on it — which is what a parked run
+		// actually leaves behind.
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	var asked []string
+	d.Answer = func(_ context.Context, handle string, conv sandbox.ConversationRef,
+		answer string, trigger *events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		asked = append(asked, handle+"/"+conv.Identity+"/"+conv.Partition)
+		if answer == "" || trigger == nil {
+			t.Error("the answer text and its trigger did not reach the coordinator")
+		}
+		return sandbox.AnswerConsumed, nil
+	}
+
+	got := d.Dispatch(context.Background(), "swe",
+		[]*events.Event{inDirectThread("notification", "chat:D1", "root-1")})
+	if got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack — the delivery was handled", got.Outcome)
+	}
+	if !slices.Equal(asked, []string{"swe/chat:D1/chat:D1:root-1"}) {
+		t.Errorf("the coordinator was asked %v, want the conversation and the "+
+			"batch the reply arrived in", asked)
+	}
+	if len(r.reqs) != 0 {
+		t.Errorf("a turn ran on the answer as well as the resume it triggered: %d", len(r.reqs))
+	}
+	if len(r.parked) != 0 {
+		t.Errorf("a seat with nothing holding it parked its mail: %v", r.parked)
+	}
+}
+
+// AND AN ANSWER THE RUN IS STILL OWED IS REQUEUED RATHER THAN RUN.
+//
+// THE DEFECT THIS WHOLE PATH EXISTS FOR. The coordinator matched a parked run
+// and could not resume it — this node has no resumer, the suspended
+// conversation was written by a build it cannot read, the seat is not in its
+// company — so it gave the claim back and the run is awaiting THIS message
+// again. Read as "not the answer", which is what an error used to mean here,
+// the delivery went on to the ordinary route and was consumed as an unrelated
+// turn: the person answered, a turn ran on their reply, and the coding run
+// that asked waited out its pause TTL for a further message that may never
+// come. It is requeued instead, so this node or the seat's next owner is
+// offered it again.
+//
+// HANDED BACK WITH A NAK rather than deferred or requeued, and each of those
+// three is a different thing. A DEFERRAL stops the seat consuming altogether,
+// and one parked run's failing resume must not wedge a whole mailbox on a seat
+// that is otherwise free — a run parked on a question holds nothing. A REQUEUE
+// is a republish: a new message, delivered again the instant it lands, so
+// nothing spaced the attempts the bound allows and all of them burned in
+// milliseconds against a transient that had had no time to clear. A NAK is the
+// one return that carries the queue's own backoff, which is exactly what a
+// completion that cannot be resumed already got.
+func TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		// FREE, with a question open on it: the shape a parked run leaves.
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+	}
+
+	answer := inThread("notification", "chat:C1")
+	got := d.Dispatch(context.Background(), "swe", []*events.Event{answer})
+
+	if got.Outcome != queue.OutcomeNak {
+		t.Errorf("outcome = %v, want a nak: that is the one return the queue "+
+			"spaces, and an ack would have to requeue the delivery itself — "+
+			"immediately, which is what burned the whole bound in milliseconds",
+			got.Outcome)
+	}
+	if !errors.Is(got.Err, sandbox.ErrResumeUnavailable) {
+		t.Errorf("the nak carried %v, want the coordinator's own failure: the "+
+			"queue logs this one and a dead-letter boundary reads it", got.Err)
+	}
+	if len(r.reqs) != 0 {
+		t.Errorf("a turn ran on an answer a parked coding run is still owed: %d", len(r.reqs))
+	}
+	if len(r.parked) != 0 {
+		t.Fatalf("the answer was republished as well as handed back (%v): a "+
+			"requeue leaves a second copy for the redelivery to meet", r.parked)
+	}
+}
+
+// THE HEADROOM IS WHAT THE MESSAGE CARRIES, not what this process remembers.
+//
+// A deferred answer goes back with a NAK and every return spends one of the
+// message's deliveries, so a route that kept offering until the last one
+// would hand the final delivery back and the broker would dead-letter a
+// person's reply. The coordinator's own ceiling cannot prevent that: it is
+// per node and per process, and it resets on exactly the events — a seat
+// handoff, a restart — that do NOT reset the count the broker enforces.
+//
+// The boundary is the assertion. One delivery either side of the reserve
+// decides whether a parked run is offered this message at all, and an
+// UNSTATED count leaves the route exactly as it was before this clause
+// existed: a node whose transport said nothing must not stop answering
+// coding runs.
+func TestADeliveryInsideTheReserveIsNotOfferedToAParkedRun(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		left      int
+		stated    bool
+		wantOffer bool
+	}{
+		"one delivery outside the reserve": {left: sandbox.AnswerDeliveryReserve + 1, stated: true, wantOffer: true},
+		"at the reserve":                   {left: sandbox.AnswerDeliveryReserve, stated: true, wantOffer: false},
+		"one delivery left":                {left: 1, stated: true, wantOffer: false},
+		"none left at all":                 {left: 0, stated: true, wantOffer: false},
+		"a full budget":                    {left: 24, stated: true, wantOffer: true},
+		"no count stated":                  {stated: false, wantOffer: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := &recorder{result: turn.Result{Decision: phase.Done}}
+			d := dispatcher(t, r)
+			d.Conditions = func(string) inbox.Conditions {
+				// FREE, with a question open on it: the shape a parked
+				// run leaves.
+				return inbox.Conditions{Owned: true, TurnEngineReady: true,
+					AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+			}
+			var offers int
+			d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+				*events.Event,
+			) (sandbox.AnswerDisposition, error) {
+				offers++
+				return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+			}
+
+			reply := inThread("notification", "chat:C1")
+			ctx := context.Background()
+			if tc.stated {
+				ctx = headroom(ctx, map[*events.Event]int{reply: tc.left})
+			}
+			got := d.Dispatch(ctx, "swe", []*events.Event{reply})
+
+			if tc.wantOffer {
+				if offers != 1 {
+					t.Fatalf("the delivery was offered %d times, want once: it has "+
+						"deliveries to spare, so a run still owed it must be asked", offers)
+				}
+				if got.Outcome != queue.OutcomeNak {
+					t.Errorf("outcome = %v, want a nak: the run is still owed this answer",
+						got.Outcome)
+				}
+				if len(r.reqs) != 0 {
+					t.Errorf("a turn ran on an answer a parked coding run is still owed")
+				}
+				return
+			}
+			if offers != 0 {
+				t.Fatalf("the delivery was offered to a parked run with %d deliveries "+
+					"left: handing it back again risks the broker dead-lettering the "+
+					"reply, which is the one ending this route must never take", tc.left)
+			}
+			if got.Outcome != queue.OutcomeAck {
+				t.Errorf("outcome = %v, want an ack: what is left of this message "+
+					"belongs to the ordinary route now", got.Outcome)
+			}
+			if len(r.reqs) != 1 {
+				t.Fatalf("the ordinary turn ran %d times, want once: the message was "+
+					"neither offered nor worked, so nothing at all happened to it",
+					len(r.reqs))
+			}
+		})
+	}
+}
+
+// AND NO NUMBER OF HANDOFFS SPENDS A REPLY'S LAST DELIVERIES.
+//
+// THE PROPERTY THE RESERVE EXISTS FOR, driven rather than reasoned: walk one
+// message down from a full budget, one hand-back per delivery, with a
+// coordinator that defers every time — which is what a resume failing the
+// same way on every node looks like, since each handoff gives it a fresh
+// per-process count. Measured before the reserve existed, three such nodes
+// handed ONE reply back 27 times and the broker dead-lettered it at 25.
+//
+// The loop must end at the reserve, with the ordinary route holding exactly
+// the deliveries it was promised.
+func TestNoNumberOfHandoffsSpendsAReplysLastDeliveries(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		// EVERY node fails the same way, and every one of them starts
+		// its own attempt count.
+		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+	}
+
+	answer := inThread("notification", "chat:C1")
+	left := 24 // a message on its first delivery of a 25-delivery budget
+	for {
+		got := d.Dispatch(headroom(context.Background(), map[*events.Event]int{answer: left}),
+			"swe", []*events.Event{answer})
+		if got.Outcome != queue.OutcomeNak {
+			break
+		}
+		// The hand-back spends one, whatever it meant.
+		left--
+		if left < 0 {
+			t.Fatal("the answer route handed one reply back through its whole " +
+				"delivery budget: the next return dead-letters the person's reply")
+		}
+	}
+	if left != sandbox.AnswerDeliveryReserve {
+		t.Errorf("the ordinary route was left %d deliveries, want the reserve of %d",
+			left, sandbox.AnswerDeliveryReserve)
+	}
+	if len(r.reqs) != 1 {
+		t.Errorf("the ordinary turn ran %d times once the offer stopped, want once",
+			len(r.reqs))
+	}
+}
+
+// AND THE PER-PROCESS CLAUSE STILL BOUNDS ONE PROCESS.
+//
+// The message-carried count is the clause that makes the headroom claim true
+// across handoffs; it is not a replacement for the ceiling inside a node. A
+// delivery with a whole budget in hand would otherwise circle one seat's inbox
+// for as long as the resume kept failing, which is what
+// [sandbox.MaxAnswerAttempts] is for — so here the coordinator spends its own
+// budget with headroom to spare, and the dispatcher lets the message go at the
+// point IT says so rather than at the point the broker would.
+func TestThePerProcessAttemptBudgetStillEndsTheHandBack(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	// The coordinator's own bound, as this seam reports it: deferred until
+	// the attempts are spent, then the ordinary message it looks like.
+	var offers int
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		offers++
+		if offers < sandbox.MaxAnswerAttempts {
+			return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+		}
+		return sandbox.AnswerNotMine, sandbox.ErrResumeUnavailable
+	}
+
+	answer := inThread("notification", "chat:C1")
+	// A full budget throughout, so nothing but the per-process clause can
+	// end this: the reserve is never approached.
+	ctx := headroom(context.Background(), map[*events.Event]int{answer: 24})
+	var got queue.Result
+	for range sandbox.MaxAnswerAttempts {
+		got = d.Dispatch(ctx, "swe", []*events.Event{answer})
+		if got.Outcome != queue.OutcomeNak {
+			break
+		}
+	}
+	if offers != sandbox.MaxAnswerAttempts {
+		t.Fatalf("the run was offered the message %d times, want %d: the "+
+			"per-process ceiling is what ends a resume that fails the same way "+
+			"on one node", offers, sandbox.MaxAnswerAttempts)
+	}
+	if got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack once the attempts are spent", got.Outcome)
+	}
+	if len(r.reqs) != 1 {
+		t.Errorf("the ordinary turn ran %d times, want once", len(r.reqs))
+	}
+}
+
+// AND A SPENT SIBLING DOES NOT SPEAK FOR A FRESH REPLY.
+//
+// THE PARTITION'S HEADROOM IS THE SMALLEST OF ITS MESSAGES', and this gate
+// must not read it. A conversation whose earlier message has been handed back
+// until it is inside the reserve keeps collecting replies, and each of those
+// arrives on its FIRST delivery with a whole budget: gated on the partition's
+// number, every one of them is refused the answer route outright, for as long
+// as the spent message stays in the partition. That is the defect this whole
+// route exists to end, arrived at from the other side — the reply consumed by
+// an ordinary turn while a run is still parked on the question it answers.
+//
+// The fresh reply is what must be offered, and one message with the
+// deliveries to spare is enough: see [sandbox.MayOfferAnswer] for why the
+// co-partitioned message is not saved by a refusal.
+func TestAFreshReplyIsOfferedBesideASpentSibling(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	var offers int
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		offers++
+		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+	}
+
+	// One conversation, two messages at very different counts: the older
+	// one has been handed back until it is inside the reserve, the reply
+	// is on its first delivery of a 25-delivery budget.
+	spent := notifyStampedIn("chat:C1", "chat:C1")
+	reply := notifyStampedIn("chat:C1", "chat:C1")
+	ctx := headroom(context.Background(), map[*events.Event]int{
+		spent: 1,
+		reply: 24,
+	})
+
+	got := d.Dispatch(ctx, "swe", []*events.Event{spent, reply})
+
+	if offers != 1 {
+		t.Fatalf("the delivery was offered %d times, want once: the reply has a "+
+			"whole budget in hand, and a parked run is still owed it however "+
+			"little the message batched beside it has left", offers)
+	}
+	if got.Outcome != queue.OutcomeNak {
+		t.Errorf("outcome = %v, want a nak: the run is still owed this answer", got.Outcome)
+	}
+	if len(r.reqs) != 0 {
+		t.Errorf("a turn ran on an answer a parked coding run is still owed: %d", len(r.reqs))
+	}
+}
+
+// AND WHEN EVERY MESSAGE IS SPENT THE ROUTE STILL LETS GO.
+//
+// The fold is "any", not "always": a partition whose messages are ALL inside
+// the reserve has nothing left to offer with, and what is left belongs to the
+// ordinary route. Without this, reading each message's own count instead of
+// the partition's would simply have removed the bound.
+func TestAPartitionWhoseMessagesAreAllSpentIsNotOffered(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	var offers int
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		offers++
+		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+	}
+
+	first := notifyStampedIn("chat:C1", "chat:C1")
+	second := notifyStampedIn("chat:C1", "chat:C1")
+	ctx := headroom(context.Background(), map[*events.Event]int{
+		first:  sandbox.AnswerDeliveryReserve,
+		second: 1,
+	})
+
+	got := d.Dispatch(ctx, "swe", []*events.Event{first, second})
+
+	if offers != 0 {
+		t.Fatalf("a delivery with nothing outside the reserve was offered %d times: "+
+			"handing it back again risks the broker dead-lettering the reply", offers)
+	}
+	if got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack: what is left of these messages belongs "+
+			"to the ordinary route now", got.Outcome)
+	}
+	if len(r.reqs) != 1 {
+		t.Errorf("the ordinary turn ran %d times, want once", len(r.reqs))
+	}
+}
+
+// AND WHAT IS OFFERED IS WHAT SURVIVED THE LEDGER.
+//
+// The offer on this path sits after the completion read, so the partition it
+// is handed is already shorter than the one that arrived: a trigger this seat
+// has already worked must never be spliced into somebody's coding run as its
+// answer as well.
+//
+// THE NAK STILL RETURNS THE WHOLE DELIVERY, because that is what a nak is, and
+// nothing is lost by it: the redelivery runs this same screening again, reads
+// the same ledger, and drops the worked trigger before the second offer is
+// made. It is the OFFER that has to be narrowed, not the hand-back.
+func TestAnAnswerIsOfferedOnlyWhatTheLedgerLeft(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	worked := inThread("notification", "chat:C1")
+	fresh := inThread("notification", "chat:C1")
+	ctx := context.Background()
+	if err := completions.Record(ctx, "swe",
+		workkey.Derive([]string{worked.ID.String()}), "", clock); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	var offered *events.Event
+	d.Answer = func(_ context.Context, _ string, _ sandbox.ConversationRef, _ string,
+		trigger *events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		offered = trigger
+		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+	}
+
+	if got := d.Dispatch(ctx, "swe", []*events.Event{worked, fresh}); got.Outcome != queue.OutcomeNak {
+		t.Errorf("outcome = %v, want a nak", got.Outcome)
+	}
+	if offered != fresh {
+		t.Fatalf("offered %v, want only the trigger the ledger had not worked", offered)
+	}
+	if len(r.parked) != 0 {
+		t.Fatalf("the delivery was republished as well as handed back (%v)", r.parked)
+	}
+}
+
+// AND A RUN THAT IS TERMINALLY GONE LETS ITS ANSWER BE A TURN.
+//
+// The other end of the same classification: the coordinator matched a run and
+// then settled it — there was no suspended conversation to resume into, or the
+// claim could not be given back and the run was ended in its place. Nothing is
+// coming back for this delivery, so requeueing it would circle a run that no
+// longer exists, and acking it would swallow the person's message on behalf of
+// a turn that is over. It runs as the ordinary message it looks like.
+//
+// A DISPOSITION THIS BUILD CANNOT READ TAKES THE SAME PATH, which is the one
+// place that fallback is visible: nothing in this build produces one, so it
+// means a seam that answered nothing, and the honest reading of that is a node
+// with no coordinator — a state the engine supports and which cannot loop. A
+// requeue would circle with nothing to bound it, because the bound lives with
+// the run the coordinator matched and an unreadable answer names no run.
+func TestAnAnswerForARunThatIsGoneRunsItsOrdinaryTurn(t *testing.T) {
+	t.Parallel()
+	for name, disposition := range map[string]sandbox.AnswerDisposition{
+		"a run that is terminally gone":          sandbox.AnswerNotMine,
+		"a disposition this build does not know": sandbox.AnswerDisposition("something else"),
+		"no disposition at all":                  sandbox.AnswerDisposition(""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := &recorder{result: turn.Result{Decision: phase.Done}}
+			d := dispatcher(t, r)
+			d.Conditions = func(string) inbox.Conditions {
+				return inbox.Conditions{Owned: true, TurnEngineReady: true,
+					AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+			}
+			d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+				*events.Event,
+			) (sandbox.AnswerDisposition, error) {
+				return disposition, nil
+			}
+
+			got := d.Dispatch(context.Background(), "swe",
+				[]*events.Event{inThread("notification", "chat:C1")})
+			if got.Outcome != queue.OutcomeAck {
+				t.Errorf("outcome = %v, want an ack for a completed turn", got.Outcome)
+			}
+			if len(r.reqs) != 1 {
+				t.Fatalf("the turn engine ran %d times, want the ordinary turn", len(r.reqs))
+			}
+			if len(r.parked) != 0 {
+				t.Errorf("the delivery was requeued with nothing to bound it: %v", r.parked)
+			}
+		})
+	}
+}
+
+// AND FALLS THROUGH TO THE TURN WHEN IT IS NOT THE ANSWER. A seat with a
+// question open is an ordinary working seat: every message on it that no
+// parked run claims is work like any other, and swallowing those would make a
+// forgotten clarification deafen the seat until its pause TTL expired.
+func TestAMessageThatAnswersNothingStillRunsItsTurn(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		return sandbox.AnswerNotMine, nil
+	}
+
+	got := d.Dispatch(context.Background(), "swe",
+		[]*events.Event{inThread("notification", "chat:C1")})
+	if got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack for a completed turn", got.Outcome)
+	}
+	if len(r.reqs) != 1 {
+		t.Fatalf("the turn engine ran %d times, want the ordinary turn", len(r.reqs))
+	}
+	if len(r.parked) != 0 {
+		t.Errorf("the delivery was parked instead: %v", r.parked)
+	}
+}
+
+// A TRIGGER THE LEDGER HAS ALREADY WORKED IS NOT OFFERED EITHER.
+//
+// The offer on this path sits AFTER the completion read, and that is the
+// ordering under test: a redelivery of a trigger that already produced a turn
+// must not be spliced into somebody's coding run as the answer to its
+// question, which is a second use of one message and the run's whole
+// disambiguation is "the next thing to arrive here".
+func TestAnAlreadyWorkedTriggerIsNotOfferedAsAnAnswer(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	worked := inThread("notification", "chat:C1")
+	ctx := context.Background()
+	if err := completions.Record(ctx, "swe",
+		workkey.Derive([]string{worked.ID.String()}), "", clock); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	called := false
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		called = true
+		return sandbox.AnswerConsumed, nil
+	}
+
+	if got := d.Dispatch(ctx, "swe", []*events.Event{worked}); got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack", got.Outcome)
+	}
+	if called {
+		t.Error("a trigger this seat had already worked was offered as a clarification answer")
+	}
+	if len(r.reqs) != 0 {
+		t.Errorf("the worked trigger ran again (%d turns)", len(r.reqs))
+	}
+}
+
 // FAIL-OPEN, in every direction. A delivery that is NOT the answer, a
 // conversation the partition cannot name, a coordinator that errored, and a
 // node with no coordinator at all must each park as before: parking is
 // recoverable, and acking a message nothing handled is not.
 func TestADeliveryThatIsNotTheAnswerStillParks(t *testing.T) {
 	t.Parallel()
-	for name, answer := range map[string]func(context.Context, string, string, string, *events.Event) (bool, error){
-		"not this run's answer": func(context.Context, string, string, string, *events.Event) (bool, error) {
-			return false, nil
+	type answerer func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event) (sandbox.AnswerDisposition, error)
+	for name, answer := range map[string]answerer{
+		"not this run's answer": func(context.Context, string, sandbox.ConversationRef,
+			string, *events.Event,
+		) (sandbox.AnswerDisposition, error) {
+			return sandbox.AnswerNotMine, nil
 		},
-		"an unreadable store": func(context.Context, string, string, string, *events.Event) (bool, error) {
-			return false, errors.New("the coordination store is unreachable")
+		"an unreadable store": func(context.Context, string, sandbox.ConversationRef,
+			string, *events.Event,
+		) (sandbox.AnswerDisposition, error) {
+			return sandbox.AnswerNotMine, errors.New("the coordination store is unreachable")
+		},
+		// A RUN THIS NODE CANNOT RESUME asks for the delivery back, and
+		// the park is exactly that: the screening was going to requeue it
+		// anyway, which is why a held seat needs no branch of its own.
+		"a run this node cannot resume": func(context.Context, string, sandbox.ConversationRef,
+			string, *events.Event,
+		) (sandbox.AnswerDisposition, error) {
+			return sandbox.AnswerDeferred, errors.New("this node cannot resume the run")
+		},
+		// AND A DISPOSITION THIS BUILD CANNOT READ falls back to what a
+		// node with no coordinator does, which is this same park.
+		"a disposition this build does not know": func(context.Context, string,
+			sandbox.ConversationRef, string, *events.Event,
+		) (sandbox.AnswerDisposition, error) {
+			return sandbox.AnswerDisposition("something else"), nil
 		},
 		"no coordinator": nil,
 	} {
@@ -1363,7 +2000,7 @@ func TestADeliveryThatIsNotTheAnswerStillParks(t *testing.T) {
 		d := dispatcher(t, r)
 		d.Conditions = func(string) inbox.Conditions {
 			return inbox.Conditions{Owned: true, TurnEngineReady: true,
-				AdmitsTriggers: true, AwaitingSandbox: true}
+				AdmitsTriggers: true, SeatHeldBySandbox: true}
 		}
 		d.Answer = answer
 
@@ -1381,6 +2018,47 @@ func TestADeliveryThatIsNotTheAnswerStillParks(t *testing.T) {
 	}
 }
 
+// AND A DISPATCH THAT COULD NOT BE MADE NAMES BOTH KEYS IT WAS CARRYING.
+//
+// The offer carries both because only the store knows which age of row it is
+// matching, so a line naming the identity alone cannot say what was compared
+// against what — and this is the shape where they differ, a top-level reply
+// on a DM line whose question was parked from a thread on it. Not parallel:
+// it swaps the process-wide logger, which this package otherwise leaves at
+// its boot default.
+func TestAFailedAnswerDispatchNamesBothKeys(t *testing.T) {
+	logs := &logBuffer{}
+	logging.Configure(slog.LevelWarn, logging.FormatJSON, logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+
+	r := &recorder{}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SeatHeldBySandbox: true}
+	}
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		return sandbox.AnswerNotMine, errors.New("the coordination store is unreachable")
+	}
+	d.Dispatch(context.Background(), "swe",
+		[]*events.Event{inThread("notification", "chat:D1")})
+
+	records := logs.records(t, "sandbox_answer_dispatch_failed")
+	if len(records) != 1 {
+		t.Fatalf("%d lines recorded the failed dispatch, want one", len(records))
+	}
+	for key, want := range map[string]any{
+		"conversation": "chat:D1", "partition": "chat:D1",
+	} {
+		if records[0][key] != want {
+			t.Errorf("%s = %v, want %v — a reader cannot tell what was "+
+				"compared against what", key, records[0][key], want)
+		}
+	}
+}
+
 // A partition with no conversation cannot be matched against a question asked
 // in one, so it parks without asking: the coordinator's own disambiguation is
 // positional within a conversation, and offering it a key-less delivery would
@@ -1391,12 +2069,14 @@ func TestADeliveryWithNoConversationIsNotOfferedAsAnAnswer(t *testing.T) {
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
-			AdmitsTriggers: true, AwaitingSandbox: true}
+			AdmitsTriggers: true, SeatHeldBySandbox: true}
 	}
 	called := false
-	d.Answer = func(context.Context, string, string, string, *events.Event) (bool, error) {
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
 		called = true
-		return true, nil
+		return sandbox.AnswerConsumed, nil
 	}
 	d.Dispatch(context.Background(), "swe", []*events.Event{ev("notification")})
 	if called {
@@ -1419,9 +2099,11 @@ func TestOnlyTheSandboxParkOffersItsDeliveryAsAnAnswer(t *testing.T) {
 		return inbox.Conditions{Owned: true, TurnEngineReady: false, AdmitsTriggers: true}
 	}
 	called := false
-	d.Answer = func(context.Context, string, string, string, *events.Event) (bool, error) {
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
 		called = true
-		return true, nil
+		return sandbox.AnswerConsumed, nil
 	}
 	d.Dispatch(context.Background(), "swe",
 		[]*events.Event{inThread("notification", "chat:C1")})
@@ -1551,10 +2233,14 @@ func TestAMergeCarriesWhatBoundsTheTurn(t *testing.T) {
 		t.Errorf("the merged ask carries %d constituents, want both — the learning "+
 			"workers observe each distinct sender", len(note.Messages))
 	}
-	// The conversation key rides the merged envelope, which is what a
-	// parked coding run matches a person's answer back on.
-	if got, _ := merged.Payload["conversation_key"].(string); got != "slack:C1" {
-		t.Errorf("the merged ask carries conversation %q", got)
+	// BOTH KEYS ride the merged envelope, because from here on this one
+	// event IS the partition and a reader handed it must be able to ask
+	// either question.
+	if got, _ := merged.Payload[notify.PartitionField].(string); got != "slack:C1" {
+		t.Errorf("the merged ask carries partition key %q", got)
+	}
+	if got, _ := merged.Payload[notify.ConversationField].(string); got != "slack:C1" {
+		t.Errorf("the merged ask carries conversation identity %q", got)
 	}
 	// And the obligation the turn engine enforces is derived from the
 	// constituents either way — including WHERE it is owed, which a merge
@@ -1578,7 +2264,7 @@ func TestAnUnmergeablePartitionDegradesToPerEventDispatch(t *testing.T) {
 	// build cannot decode looks like.
 	head := said("ana", "first", clock)
 	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
-	notifyStamp(opaque, "slack:C1")
+	notifyStamp(opaque, "slack:C1", "slack:C1")
 
 	if got := d.Dispatch(context.Background(), "ceo",
 		[]*events.Event{head, opaque}); got.Outcome != queue.OutcomeAck {
@@ -1616,7 +2302,7 @@ func TestADegradeWhoseRequeueFailsRunsNothing(t *testing.T) {
 
 	head := said("ana", "first", clock)
 	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
-	notifyStamp(opaque, "slack:C1")
+	notifyStamp(opaque, "slack:C1", "slack:C1")
 
 	if got := d.Dispatch(context.Background(), "ceo",
 		[]*events.Event{head, opaque}); got.Outcome != queue.OutcomeNak {
@@ -1759,4 +2445,281 @@ func TestARedeliveredTriggerRunsUnderItsOwnIdentity(t *testing.T) {
 		t.Errorf("both runs share the id %q — the retry would publish its phases "+
 			"under the identity the previous attempt already occupied", r.reqs[0].RunID)
 	}
+}
+
+// A DIRECT MESSAGE'S TWO TURNS SHARE ONE LEDGER, which is the defect this
+// split exists to fix and the only test that states it end to end inside the
+// dispatcher.
+//
+// Turn one is a burst of top-level DMs: one partition on the bare channel,
+// filed under the channel. Turn two is the person's reply in the thread the
+// agent opened: a DIFFERENT partition — it must not merge with unrelated
+// top-level pings — and the SAME conversation, so it reads turn one's entry
+// back. While one value answered both questions turn two looked its history up
+// under "chat:D1:root" and found a first turn, every time.
+func TestADirectMessagesThreadReplyReadsTheBurstsLedgerEntry(t *testing.T) {
+	t.Parallel()
+	conversations := ledgerstore.NewMemoryConversations()
+	ctx := context.Background()
+
+	burst := &recorder{result: turn.Result{
+		Decision: phase.Done, Delivered: true, Artifact: "answered the DM",
+	}}
+	d := dispatcher(t, burst)
+	d.Conversations = conversations
+	if got := d.Dispatch(ctx, "ceo", []*events.Event{
+		notifyStampedIn("chat:D1", "chat:D1"),
+		notifyStampedIn("chat:D1", "chat:D1"),
+	}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if len(burst.reqs) != 1 {
+		t.Fatalf("a typing burst ran %d turns, want one", len(burst.reqs))
+	}
+	if burst.reqs[0].ConversationKey != "chat:D1" {
+		t.Fatalf("the burst filed under %q", burst.reqs[0].ConversationKey)
+	}
+
+	reply := &recorder{result: turn.Result{Decision: phase.Done}}
+	d2 := dispatcher(t, reply)
+	d2.Conversations = conversations
+	if got := d2.Dispatch(ctx, "ceo", []*events.Event{
+		inDirectThread("notification", "chat:D1", "root-1"),
+	}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if len(reply.reqs) != 1 {
+		t.Fatalf("the reply ran %d turns", len(reply.reqs))
+	}
+	if reply.reqs[0].ConversationKey != "chat:D1" {
+		t.Fatalf("the reply filed under %q, want the DM line the burst used",
+			reply.reqs[0].ConversationKey)
+	}
+	if len(reply.reqs[0].History) != 1 ||
+		reply.reqs[0].History[0].Reply != "answered the DM" {
+		t.Fatalf("the reply turn read %+v as its history — the seat's own answer of a "+
+			"moment earlier is filed where it cannot see it", reply.reqs[0].History)
+	}
+}
+
+// A RUN PARKED FROM A TOP-LEVEL DM IS ANSWERED BY THE PERSON'S THREADED REPLY,
+// and the dispatcher's half of that is which conversation it offers the
+// coordinator for such a reply: the WHOLE DM LINE, because that is the value
+// the row was parked under.
+//
+// The engine's own prompt is what makes the two differ. A top-level direct
+// message partitions on the bare channel, so a run launched from that turn
+// parks under the channel — and [notify.ChatPrompt] then tells the seat to
+// reply AS A THREAD, so the person's answer arrives partitioned on the thread
+// it opened. While this offered the partition, the coordinator compared two
+// strings that could never be equal: the clarification was silently never
+// delivered and the box waited out its pause TTL.
+//
+// THE PARTITION STILL TRAVELS, and only for the rows parked before an identity
+// was ever written — see [sandbox.ConversationRef.Answers]. The ledger read
+// and the session write take the identity as they already did, which is the
+// second half asserted here: one trigger, and every reader of its conversation
+// answering the same thing.
+func TestADMThreadReplyAnswersAndFilesUnderTheWholeDMLine(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var offered sandbox.ConversationRef
+	parked := &recorder{}
+	dp := dispatcher(t, parked)
+	dp.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SeatHeldBySandbox: true}
+	}
+	dp.Answer = func(_ context.Context, _ string, conv sandbox.ConversationRef,
+		_ string, _ *events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		offered = conv
+		return sandbox.AnswerConsumed, nil
+	}
+	if got := dp.Dispatch(ctx, "swe", []*events.Event{
+		inDirectThread("notification", "chat:D1", "root-1"),
+	}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if offered.Identity != "chat:D1" {
+		t.Errorf("the parked run was offered the conversation %q, want the DM line — "+
+			"a run launched from a top-level DM is parked under it and can be "+
+			"answered by nothing else", offered.Identity)
+	}
+	if offered.Partition != "chat:D1:root-1" {
+		t.Errorf("the partition did not travel beside it (%q), so a row parked "+
+			"before the identity existed carries nothing this can match",
+			offered.Partition)
+	}
+
+	// THE SAME TRIGGER through an ordinary dispatch: the ledger keys on the
+	// DM line rather than on the thread the reply happened to land in.
+	conversations := ledgerstore.NewMemoryConversations()
+	r := &recorder{result: turn.Result{
+		Decision: phase.Done, Delivered: true, Artifact: "done",
+	}}
+	d := dispatcher(t, r)
+	d.Conversations = conversations
+	if got := d.Dispatch(ctx, "ceo", []*events.Event{
+		inDirectThread("notification", "chat:D1", "root-1"),
+	}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if len(r.reqs) != 1 || r.reqs[0].ConversationKey != "chat:D1" {
+		t.Fatalf("the turn served conversation %+v, want the whole DM line", r.reqs)
+	}
+	filed, err := conversations.History(ctx, "ceo", "chat:D1", 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(filed) != 1 {
+		t.Fatalf("the ledger holds %d entries under the DM line, want the turn's", len(filed))
+	}
+}
+
+// AN ANSWER THE STORE COULD NOT PLACE IS HANDED BACK, NOT SPENT.
+//
+// The one failure the classification stopped short on. A lookup that cannot be
+// made is precisely the state the offer's asymmetry is about — the coordinator
+// could not establish that nothing is owed the delivery — and it was answered
+// "not mine" anyway, so the person's reply was spent on an ordinary turn on
+// the one class of failure where a retry seconds later would have matched the
+// run that asked.
+//
+// AND THE FAIL-OPEN IS STILL RIGHT, which is why this is not simply inverted:
+// on a seat with no parked run at all, an unreadable store must not swallow a
+// message that has nothing to do with any coding run — which there is every
+// message the seat receives. The two resolve on the seat's own awaiting count,
+// which this node holds in memory and needs no store to read.
+//
+// Driven through the dispatcher with the REAL coordinator behind it, because
+// the fact under test is the pair: what the coordinator concludes from an
+// unreadable lookup, and what the dispatcher then does with the delivery.
+func TestAnAnswerTheStoreCouldNotPlaceIsHandedBackRatherThanRun(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		awaiting bool
+		outcome  queue.Outcome
+		turns    int
+	}{
+		// Something on this seat IS waiting for somebody's reply and only
+		// WHICH row could not be read: the delivery comes back.
+		"a run is awaiting an answer on this seat": {
+			awaiting: true, outcome: queue.OutcomeNak, turns: 0,
+		},
+		// Nothing is owed the delivery, so there is nothing for a
+		// hand-back to come back to: it is the ordinary message it looks
+		// like.
+		"no run is awaiting anything here": {
+			awaiting: false, outcome: queue.OutcomeAck, turns: 1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := &recorder{result: turn.Result{Decision: phase.Done}}
+			d := dispatcher(t, r)
+			d.Conditions = func(string) inbox.Conditions {
+				// FREE, with a question open on it: the shape a parked
+				// run leaves, and the shape this seat is screened in
+				// whether or not the store can still say which run.
+				return inbox.Conditions{Owned: true, TurnEngineReady: true,
+					AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+			}
+			d.Answer = unreadableAnswerLookup(t, tc.awaiting).TryResumeFromAnswer
+
+			got := d.Dispatch(context.Background(), "swe",
+				[]*events.Event{inThread("notification", "chat:C1")})
+
+			if got.Outcome != tc.outcome {
+				t.Errorf("outcome = %v, want %v", got.Outcome, tc.outcome)
+			}
+			if len(r.reqs) != tc.turns {
+				t.Errorf("%d turns ran, want %d: a reply a parked run is owed "+
+					"must not be worked as an unrelated message, and one no run "+
+					"is owed must not be held back for ever", len(r.reqs), tc.turns)
+			}
+		})
+	}
+}
+
+// unreadableAnswerLookup is a real coordinator whose store cannot answer which
+// of a seat's runs is awaiting a reply — optionally with one that is.
+func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
+	t.Helper()
+	ctx := context.Background()
+	store := sandbox.NewCoordStore(coordmemory.NewFleet())
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
+		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Queue: discardPublisher{}, Pending: blindLookupStore{PendingStore: store}, Manager: manager,
+		// A RESUMER THAT PANICS, because these cases never reach one:
+		// the lookup is what fails, and a resume from here would be the
+		// answer being run after the store said it could not say which
+		// run is owed it.
+		Resume: unreachedResumer{t},
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	if !awaiting {
+		return coordinator
+	}
+	run := sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
+		CodingAgent: "claude-code", ConversationKey: "chat:C1", PartitionKey: "chat:C1",
+	}
+	if err := store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{
+		Question: "which branch?", Audience: "requester",
+	}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	// The seat's counts come from the store ONCE, here, exactly as a node
+	// claiming the seat seeds them — which is the point: from now on they
+	// are this process's own memory, and that is what still answers when
+	// the lookup cannot.
+	if err := coordinator.OnStarted(ctx, types.SandboxRunStarted{
+		Agent: "a-1", AgentHandle: "swe", TurnID: "t1",
+	}); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+	if _, awaits := coordinator.SeatRuns("swe"); !awaits {
+		t.Fatal("the seat does not report the run parked on its question")
+	}
+	return coordinator
+}
+
+// blindLookupStore is a store that works except for the one read the answer
+// match turns on.
+type blindLookupStore struct{ sandbox.PendingStore }
+
+func (blindLookupStore) FindAwaitingByConversation(context.Context, string,
+	sandbox.ConversationRef,
+) (sandbox.PendingRun, bool, error) {
+	return sandbox.PendingRun{}, false, errors.New("the coordination store refused the call")
+}
+
+// discardPublisher stands in for the queue: this case publishes nothing.
+type discardPublisher struct{}
+
+func (discardPublisher) Publish(context.Context, string, *events.Event) error { return nil }
+
+// unreachedResumer stands in the seam a coordinator requires on a path that
+// must never get there — a stub that answered quietly would let a resume
+// through as a pass.
+type unreachedResumer struct{ t *testing.T }
+
+func (r unreachedResumer) Resume(context.Context, sandbox.ResumeRequest) error {
+	r.t.Helper()
+	r.t.Fatal("the answer was resumed although the lookup that matches it to a " +
+		"run could not be made")
+	return nil
 }

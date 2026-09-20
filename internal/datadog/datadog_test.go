@@ -262,8 +262,8 @@ func TestAMonitorIsTheConversation(t *testing.T) {
 	}))[0]
 
 	var prompt Prompt
-	firedKey := prompt.ConversationKey(fired.Metadata, fired.Subject)
-	recoveredKey := prompt.ConversationKey(recovered.Metadata, recovered.Subject)
+	firedKey := prompt.PartitionKey(fired.Metadata, fired.Subject)
+	recoveredKey := prompt.PartitionKey(recovered.Metadata, recovered.Subject)
 	if firedKey == "" {
 		t.Fatal("a monitor alert derived no conversation key, so it merges with nothing")
 	}
@@ -277,8 +277,18 @@ func TestAMonitorIsTheConversation(t *testing.T) {
 		"title":      "[Triggered] disk full", "tags": "crewlet:ceo",
 		"alert_transition": "Triggered",
 	}))[0]
-	if prompt.ConversationKey(other.Metadata, other.Subject) == firedKey {
+	if prompt.PartitionKey(other.Metadata, other.Subject) == firedKey {
 		t.Error("two different monitors share one conversation")
+	}
+	// AND THE TWO KEYS COINCIDE HERE, which is the whole of this source's
+	// answer to the split: a monitor has no sub-thread grain, so the merge
+	// unit and the durable thread are one object. A divergence would file
+	// an incident's history somewhere the next alert never looks.
+	for _, in := range []notify.Routed{fired, recovered, other} {
+		if got := prompt.ConversationIdentity(in.Metadata, in.Subject); got != prompt.PartitionKey(in.Metadata, in.Subject) {
+			t.Errorf("identity %q diverged from the partition key %q", got,
+				prompt.PartitionKey(in.Metadata, in.Subject))
+		}
 	}
 }
 
@@ -292,7 +302,7 @@ func TestAnAlertWithNoMonitorIDFallsBackToTheTitle(t *testing.T) {
 		"title": "[Triggered] API latency", "tags": "crewlet:ceo",
 	}))[0]
 
-	if key := (Prompt{}).ConversationKey(got.Metadata, got.Subject); key == "" {
+	if key := (Prompt{}).PartitionKey(got.Metadata, got.Subject); key == "" {
 		t.Fatal("an alert with no monitor id derived no conversation key")
 	} else if key != "[Triggered] API latency" {
 		t.Errorf("key = %q, want the title it fell back to", key)

@@ -251,6 +251,10 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		SkipNames:    MetaToolNames(),
 		Publisher:    in.Publisher,
 		Turn:         in.Turn,
+		// The working indicator's phase hook, threaded per turn like the
+		// publisher beside it: which turn's indicator a phase moves is the
+		// caller's answer, not the epoch's.
+		OnPhase: in.OnPhase,
 		Onboarding: runner.Onboarding{
 			Markers: in.Markers, Latch: in.Latch,
 			Rounds:  te.OnboardingMaxToolRounds,
@@ -317,6 +321,12 @@ type RunnerInput struct {
 	// rather than epoch configuration.
 	Publisher queue.Publisher
 	Turn      runner.Turn
+
+	// OnPhase moves the working indicator's wording as the turn changes
+	// phase. Nil is a turn nobody is watching a composer for — see
+	// [Engine.beginWorkingStatus], whose nil session's Phase is a no-op, so
+	// this is wired unconditionally rather than branched on.
+	OnPhase func(phase.Phase)
 
 	// AgentRun runs this turn's executor as a coding CLI's own agentic
 	// run. Nil is the native tool loop. Built by [Engine.agentRunFor],

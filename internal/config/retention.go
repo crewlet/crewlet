@@ -107,6 +107,23 @@ const (
 	DerivedLogMaxBytesFraction       = 4
 	DerivedLogMaxBytesFloor    int64 = 4 << 30
 	DerivedLogMaxBytesCeiling  int64 = 64 << 30
+
+	// StoreMaxBytesFloor and StoreMaxBytesCeiling bound the embedded
+	// broker's own declared store limit.
+	//
+	// THE FLOOR IS FOUR GIBIBYTES, which is the smallest limit the engine's
+	// own logs fit inside: three state-log domains, none of which may be
+	// sized below TrackerLogMaxBytesFloor, plus the mailboxes, the event
+	// stream and every coordination bucket, which reserve nothing and grow
+	// against the same number. Below it a node provisions its way to a
+	// refusal on whichever stream happens to be last.
+	//
+	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is two
+	// orders of magnitude above the largest estate the domain ceilings can
+	// describe (1 TiB of mutation log, 256 GiB of vectors), so anything
+	// past it is a unit mistake rather than a deployment.
+	StoreMaxBytesFloor   int64 = 4 << 30
+	StoreMaxBytesCeiling int64 = 64 << 40
 )
 
 // MinAge is the trim's age floor as a duration, with the default applied.

@@ -102,7 +102,7 @@ func TestASettledRunLeavesTheBoard(t *testing.T) {
 	store := seedRuns(t, sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
 	})
-	if _, err := store.Finish(t.Context(), "t1", sandbox.Fence{}); err != nil {
+	if _, _, err := store.Finish(t.Context(), "t1", sandbox.Fence{}, sandbox.Active); err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
 	if rows := askRuns(t, store); len(rows) != 0 {
@@ -170,23 +170,72 @@ func TestTheBoardIsToldWhetherABoxExistsAndWhetherItIsHeld(t *testing.T) {
 	}
 }
 
+// The pause instant is a second, warn-only write after the box is already
+// paused, so a run parked on a question can hold a snapshot nothing dated.
+// Drawing the raw stamp put that box on the board as a LIVE one — the single
+// reading that says nobody is being billed for it — while the reaper was
+// counting the same box as held.
+func TestAParkedBoxWithNoPauseStampStillReadsAsHeld(t *testing.T) {
+	store := seedRuns(t, sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
+	})
+	if err := store.AttachSandbox(t.Context(), "t1", sandbox.BoxRef{
+		SandboxID: "box-1", PauseTTLSec: 1800,
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	// The park lands; the stamp that would have dated it does not.
+	if err := store.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
+		Question: "which branch?", Audience: "requester",
+	}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+
+	rows := askRuns(t, store)
+	if rows[0]["box_exists"] != true {
+		t.Fatal("box_exists is false with a box attached")
+	}
+	if rows[0]["paused_at"] == "" {
+		t.Fatal("a box held for an open-ended human wait reads as a live one, so the board " +
+			"shows nothing being paid for")
+	}
+}
+
 // Telling somebody to "reply in the thread" when the run was started by a
-// schedule tick sends them to a thread that does not exist.
+// schedule tick sends them to a thread that does not exist — and such a run
+// stores no conversation at all, which is what the column has to read.
 func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 	store := seedRuns(t,
 		sandbox.PendingRun{TurnID: "chat", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
-			ConversationKey: "slack:C1:1699.1", CreatedAt: runBase},
-		sandbox.PendingRun{TurnID: "tick", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
-			ConversationKey: "event:018f-…", CreatedAt: runBase.Add(time.Minute)},
+			PartitionKey: "chat:D1:1699.1", ConversationKey: "chat:D1",
+			CreatedAt: runBase},
+		// THE PER-EVENT FALLBACK NAMESPACE, which this engine mints at
+		// READ time for the broker's partition function and writes onto
+		// no row — so this row shape is a peer's or a later writer's, and
+		// the column has to refuse it either way: no inbound message can
+		// reproduce a key derived from an event id.
+		sandbox.PendingRun{TurnID: "eventkey", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
+			PartitionKey: "event:018f-…", ConversationKey: "event:018f-…",
+			CreatedAt: runBase.Add(time.Minute)},
+		// WHAT A SCHEDULE TICK ACTUALLY LEAVES: nothing at all. Its
+		// trigger names neither key, so neither is stamped and neither is
+		// stored.
 		sandbox.PendingRun{TurnID: "none", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			CreatedAt: runBase.Add(2 * time.Minute)},
+		// A ROW FROM BEFORE THE SPLIT carries only the partition key, and
+		// the column is answered off the conversation — so the identity
+		// read has to fall back to it or every parked run written by an
+		// older build is reported unanswerable while a person is in fact
+		// waiting in that thread.
+		sandbox.PendingRun{TurnID: "presplit", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
+			PartitionKey: "chat:D1:1699.9", CreatedAt: runBase.Add(3 * time.Minute)},
 	)
-	for _, id := range []string{"chat", "tick", "none"} {
+	for _, id := range []string{"chat", "eventkey", "none", "presplit"} {
 		if err := store.SetStatus(t.Context(), id, sandbox.StatusAwaiting, sandbox.Fence{}); err != nil {
 			t.Fatalf("SetStatus: %v", err)
 		}
 	}
-	want := map[string]bool{"chat": true, "tick": false, "none": false}
+	want := map[string]bool{"chat": true, "eventkey": false, "none": false, "presplit": true}
 	for _, row := range askRuns(t, store) {
 		id := row["turn_id"].(string)
 		if row["answerable_in_chat"] != want[id] {

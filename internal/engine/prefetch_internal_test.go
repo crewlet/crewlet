@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -73,6 +74,80 @@ func TestANonNotificationTriggerContributesNothing(t *testing.T) {
 	}
 	if got := sendersOf(nil, []*events.Event{scheduled}); len(got) != 0 {
 		t.Fatalf("senders = %v, want none", got)
+	}
+	if got := threadOf([]*events.Event{scheduled}); got.Root != "" {
+		t.Fatalf("a scheduled fire named thread %+v", got)
+	}
+	a2a := events.New(types.ExternalNotification{
+		NotificationSource: "a2a", Sender: "lead", Body: "can you check staging",
+	}, events.NewTrace())
+	if got := threadOf([]*events.Event{a2a}); got.Root != "" {
+		t.Fatalf("an agent-to-agent ask named thread %+v", got)
+	}
+}
+
+// THE THREAD COMES OFF THE TRIGGER'S OWN METADATA, and only where there is
+// one to come off.
+//
+// A top-level chat message has no earlier conversation: reading a "thread"
+// rooted at it returns the triggering message, which the turn was already
+// handed — so every top-level message in the company would spend an HTTP
+// request at turn start to re-read its own trigger.
+func TestTheThreadComesOffTheTriggersOwnMetadata(t *testing.T) {
+	t.Parallel()
+	chat := func(over map[string]string) map[string]string {
+		m := map[string]string{
+			"transport": "slack", "channel": "C0ENG",
+			"ts": "1700000002.000100", "thread_ts": "1700000001.000100",
+		}
+		for k, v := range over {
+			if v == "" {
+				delete(m, k)
+				continue
+			}
+			m[k] = v
+		}
+		return m
+	}
+	for name, tc := range map[string]struct {
+		metadata map[string]string
+		want     notify.Thread
+	}{
+		"a thread reply": {chat(nil), notify.Thread{
+			Backend: "slack", Channel: "C0ENG", Root: "1700000001.000100"}},
+		"a top-level message": {chat(map[string]string{"thread_ts": ""}), notify.Thread{}},
+		"a webhook":           {map[string]string{"issue_key": "ENG-42"}, notify.Thread{}},
+		"nothing at all":      {nil, notify.Thread{}},
+	} {
+		got := threadOf([]*events.Event{notification("chat", "U1", tc.metadata, false)})
+		if got != tc.want {
+			t.Errorf("%s resolved to %+v, want %+v", name, got, tc.want)
+		}
+	}
+}
+
+// A COALESCED BURST IS ONE THREAD, and it is the flat metadata's.
+//
+// A chat partition is thread-grained wherever a thread exists — a direct
+// conversation partitions on the bare channel, but only for messages with no
+// thread at all — so a coalesced burst can never straddle two threads, and
+// the flat fields (which mirror the latest constituent) are the whole answer.
+func TestACoalescedChatBurstResolvesToOneThread(t *testing.T) {
+	t.Parallel()
+	meta := map[string]string{
+		"transport": "slack", "channel": "C0ENG",
+		"ts": "1700000009.000100", "thread_ts": "1700000001.000100",
+	}
+	merged := events.New(types.ExternalNotification{
+		NotificationSource: "chat", Sender: "Ana", Metadata: meta,
+		Messages: []types.CoalescedMessage{
+			{Sender: "Bo", Metadata: meta}, {Sender: "Ana", Metadata: meta},
+		},
+	}, events.NewTrace())
+
+	got := threadOf([]*events.Event{merged})
+	if got.Root != "1700000001.000100" || got.Channel != "C0ENG" || got.Backend != "slack" {
+		t.Fatalf("a coalesced burst resolved to %+v", got)
 	}
 }
 
@@ -242,8 +317,17 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 			t.Errorf("a block reported a hit with no store behind it: %+v", summary)
 		case summary.RelevantKnowledgeSelectionCount != 0:
 			t.Error("pages were reported with no knowledge backend")
+		// A WEBHOOK NAMES NO THREAD, so the seventh block reports nothing
+		// at all — not a thread it could not read, and not a read that
+		// found nothing. Those three are what tell "this seat was handed
+		// the conversation" from "it was told to go and find it" from
+		// "there was no conversation".
+		case summary.ThreadContextHit || summary.ThreadContextBytes != 0 ||
+			summary.ThreadContextPosts != 0 || summary.ThreadContextRead ||
+			summary.ThreadContextStoppedShort:
+			t.Errorf("a non-chat trigger reported a thread: %+v", summary)
 		// READ OFF THE TRIGGER, not off a model: this pointer webhook is
-		// what gates three of the six searches, and without the flag its
+		// what gates three of the seven searches, and without the flag its
 		// zeroes read as empty stores.
 		case !summary.TriggerRequiresRecon:
 			t.Error("the gate that skipped three searches was not reported")
@@ -251,6 +335,128 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 	// BOUNDED, not t.Context(): a summary that is never published must
 	// fail in a second rather than hanging until the package's own
 	// timeout, where it reads as an unrelated suite-wide stall.
+	case <-time.After(5 * time.Second):
+		t.Fatal("no prefetch summary was published")
+	}
+}
+
+// AND A CHAT THREAD REPORTS WHAT IT WAS HANDED.
+//
+// Hit, bytes, the message count and whether a backend ANSWERED are four
+// different facts, and no three of them imply the fourth: both of the block's
+// zero-message paths render a non-empty hint, so hit and bytes look identical
+// on a thread that was read and empty and on one that could not be read at
+// all. Reported as a count alone, the first was published to the dashboard as
+// the second — a healthy node claiming it could not reach its own chat
+// surface.
+func TestTheThreadBlockReportsWhatItWasHanded(t *testing.T) {
+	t.Parallel()
+	q := memory.New()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+
+	got := make(chan types.PrefetchSummary, 1)
+	if err := q.Subscribe(t.Context(), topics.Event("prefetch_summary"), "probe",
+		func(_ context.Context, ev *events.Event) queue.Result {
+			if p, ok := events.DataAs[*types.PrefetchSummary](ev); ok && p != nil {
+				got <- *p
+			}
+			return queue.Ack()
+		}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	e := &Engine{backends: &Backends{Queue: q}}
+	company := &Company{
+		Config: &config.Company{},
+		Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{
+			{Name: "Tech Lead", DeclaredHandle: "lead"}}},
+	}
+	// A node with no chat transport at all: ChatThreads is empty, the read
+	// reports false, and the block renders the unreadable hint. That is the
+	// maintenance-mode and unreachable-instance case, and it has to be
+	// VISIBLE rather than looking like a thread nobody wrote in.
+	e.prefetchFor(t.Context(), company, Request{
+		Handle:  "lead",
+		WorkKey: "work-2",
+		Events: []*events.Event{notification("chat", "U1", map[string]string{
+			"transport": "slack", "channel": "C0ENG",
+			"ts": "1700000002.000100", "thread_ts": "1700000001.000100",
+		}, true)},
+	}, "+1")
+
+	select {
+	case summary := <-got:
+		if !summary.ThreadContextHit || summary.ThreadContextBytes == 0 {
+			t.Errorf("a thread reply reported no block at all: %+v", summary)
+		}
+		if summary.ThreadContextPosts != 0 {
+			t.Errorf("a node with no chat reader reported %d messages",
+				summary.ThreadContextPosts)
+		}
+		if summary.ThreadContextRead {
+			t.Errorf("a node with no chat reader reported the thread as read: %+v",
+				summary)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no prefetch summary was published")
+	}
+}
+
+// AND A THREAD THAT WAS READ REACHES THE EVENT AS ONE.
+//
+// The block's own answer and the event's fields are two structs copied across
+// by hand, with nothing holding them together: a field left out here is a
+// block reporting correctly into a summary that does not carry it, and every
+// path above reads false — a healthy read published as a node that could not
+// reach its chat surface, and a thread truncated at the newest end published
+// as a whole one. Exercised against the mapping directly, because a node's
+// chat readers are its running transports and a fake cannot be one.
+func TestTheSummaryCarriesEveryThreadFact(t *testing.T) {
+	t.Parallel()
+	q := memory.New()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+
+	got := make(chan types.PrefetchSummary, 1)
+	if err := q.Subscribe(t.Context(), topics.Event("prefetch_summary"), "probe",
+		func(_ context.Context, ev *events.Event) queue.Result {
+			if p, ok := events.DataAs[*types.PrefetchSummary](ev); ok && p != nil {
+				got <- *p
+			}
+			return queue.Ack()
+		}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	e := &Engine{backends: &Backends{Queue: q}}
+	seat := &org.Role{Name: "Tech Lead", DeclaredHandle: "lead"}
+	e.publishPrefetchSummary(t.Context(), seat, "agent-1", "run-3", "work-3",
+		prefetch.Request{}, prefetch.Blocks{
+			ThreadContext:             "- **Ana Ruiz (ana)**: staging redirects in a loop",
+			ThreadContextPosts:        12,
+			ThreadContextRead:         true,
+			ThreadContextStoppedShort: true,
+		})
+
+	select {
+	case summary := <-got:
+		if !summary.ThreadContextHit || summary.ThreadContextBytes == 0 {
+			t.Errorf("a rendered thread reported no block: %+v", summary)
+		}
+		if summary.ThreadContextPosts != 12 {
+			t.Errorf("the message count arrived as %d", summary.ThreadContextPosts)
+		}
+		if !summary.ThreadContextRead {
+			t.Error("a thread that was read arrived as one that could not be")
+		}
+		if !summary.ThreadContextStoppedShort {
+			t.Error("a read that stopped short arrived as a complete one")
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("no prefetch summary was published")
 	}

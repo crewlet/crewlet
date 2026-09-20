@@ -402,11 +402,22 @@ func (w *Waiter) succeed(turnID string) {
 // actively being driven — a completion being collected, an Execute loop
 // resuming — and is settled by that tail within the turn. Expiring those from
 // here would kill a box out from under live work.
+//
+// WHETHER A BOX IS HELD IS THE ROW'S ANSWER, NOT A STAMP'S. A parked row
+// naming a box describes a box being paid for whether or not the pause
+// instant was ever written, so the reading is [PendingRun.HeldSince] — see
+// there for why the deadline can be dated from the park itself. Skipping an
+// unstamped row instead made a run whose pause record failed — one warn-only
+// store write — a remote box billed until a person noticed.
 func (w *Waiter) reapExpiredPauses(ctx context.Context, runs []PendingRun) int {
 	now := w.now()
 	reaped := 0
 	for _, run := range runs {
-		if run.Status != StatusAwaiting || run.SandboxID == "" || run.PausedAt.IsZero() {
+		if run.Status != StatusAwaiting {
+			continue
+		}
+		heldSince, held := run.HeldSince()
+		if !held {
 			continue
 		}
 		// A zero TTL is not a deadline to enforce here: it means "never hold
@@ -415,7 +426,7 @@ func (w *Waiter) reapExpiredPauses(ctx context.Context, runs []PendingRun) int {
 		if run.PauseTTLSeconds <= 0 {
 			continue
 		}
-		pausedFor := now.Sub(run.PausedAt)
+		pausedFor := now.Sub(heldSince)
 		if pausedFor < time.Duration(run.PauseTTLSeconds*float64(time.Second)) {
 			continue
 		}

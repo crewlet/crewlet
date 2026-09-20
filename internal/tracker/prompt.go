@@ -86,13 +86,13 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 	return Reason(n.Metadata[MetaVia]).Addressed()
 }
 
-// ConversationKey implements [notify.Prompt]: the task is the conversation.
+// PartitionKey implements [notify.Prompt]: the task is the conversation.
 //
 // THE KEY rather than the uuid, because the key is what a person pastes into
 // chat and what a seat writes in a commit message — so a chat thread about
 // ENG-42 and the tracker activity on it land in one ledger, which is the whole
 // point of a conversation key.
-func (Prompt) ConversationKey(metadata map[string]string, _ string) string {
+func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 	if key := metadata[MetaTaskKey]; key != "" {
 		return key
 	}
@@ -104,6 +104,17 @@ func (Prompt) ConversationKey(metadata map[string]string, _ string) string {
 		return metadata[MetaObject] + ":" + id
 	}
 	return ""
+}
+
+// ConversationIdentity implements [notify.Prompt]: the same task key.
+//
+// The two coincide because a task (or the object a non-task wake names) is
+// one object that is both the merge unit and the durable thread. The
+// alignment the key above is chosen for is a CONVERSATION-side claim — a chat
+// thread about ENG-42 and the tracker activity on it land in one ledger — and
+// it survives only as long as this delegation does.
+func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
+	return p.PartitionKey(metadata, subject)
 }
 
 // WakesActor implements [notify.Prompt].

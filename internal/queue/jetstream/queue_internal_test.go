@@ -1,8 +1,14 @@
 package jetstream
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // A FAILING MESSAGE BACKS OFF, and the budget outlives the outage.
@@ -126,4 +132,83 @@ func TestASettledMessageIsForgotten(t *testing.T) {
 	if len(a.failures) != 0 {
 		t.Errorf("the failure map holds %d settled message(s)", len(a.failures))
 	}
+}
+
+// AND A BATCH THAT ACKS AFTER FAILING IS FORGOTTEN TOO, or the map grows for
+// the life of the attachment on the path every seat inbox actually runs.
+//
+// [attachment.apply] settles in its ack branch for exactly this reason, and
+// the batch path did not — so a partition that failed once and succeeded on
+// its redelivery left its sequence behind for ever. It is ordinary operation
+// rather than a rarity: a coding run's answer that this node could not hand
+// over is NAKed and acked on a later pass, which is precisely the
+// NAK-then-ack shape, so every seat that ever hands an answer back leaked one
+// entry per delivery.
+//
+// Driven through a real partition rather than asserted on the verbs, because
+// the verbs were already right: what was missing was the CALL.
+func TestABatchThatAcksAfterFailingIsForgotten(t *testing.T) {
+	t.Parallel()
+	q := openForTest(t, Config{})
+	ctx := t.Context()
+	topic, group := topics.AgentInbox("erin"), topics.AgentInboxGroup("erin")
+	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
+		t.Fatalf("EnsureSubscription: %v", err)
+	}
+
+	var calls int // the consume loop is one goroutine, so this is its own
+	observed := make(chan int, 4)
+	if err := q.SubscribeBatch(ctx, topic, group,
+		func(context.Context, []*events.Event) queue.Result {
+			calls++
+			if calls == 1 {
+				return queue.Nak(errors.New("the seat is still owed this answer"))
+			}
+			// READ FROM INSIDE THE HANDLER, the one moment the order
+			// is guaranteed: the NAK has been applied and this
+			// partition's ack has not. It is what stops the case
+			// passing vacuously on a map that was never written.
+			observed <- failureEntries(q, topic, group)
+			return queue.Ack()
+		},
+		func(*events.Event) string { return "one-conversation" },
+		queue.DefaultBatchOptions(),
+	); err != nil {
+		t.Fatalf("SubscribeBatch: %v", err)
+	}
+
+	if err := q.Publish(ctx, topic, ev(1)); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	select {
+	case held := <-observed:
+		if held != 1 {
+			t.Fatalf("the failure map held %d entries when the redelivery ran, "+
+				"want the 1 its NAK recorded — this case never drove the hazard", held)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the redelivery never reached the handler")
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for failureEntries(q, topic, group) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the failure map still holds %d settled message(s) after the "+
+				"partition acked", failureEntries(q, topic, group))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// failureEntries counts what this pair's attachments remember about messages
+// that have failed.
+func failureEntries(q *Queue, topic, group string) int {
+	total := 0
+	for _, a := range q.lookup(topic, group) {
+		a.failuresMu.Lock()
+		total += len(a.failures)
+		a.failuresMu.Unlock()
+	}
+	return total
 }

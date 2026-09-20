@@ -177,11 +177,33 @@ func (t *Transport) Apps() map[string]string {
 	return out
 }
 
-// lookup implements [Seats].
-func (t *Transport) lookup(handle string) (Seat, bool) {
+// running is the ONE per-seat lookup: the identity this node resolved at
+// start and the authenticated client that resolved it, together.
+//
+// TOGETHER RATHER THAN SEPARATELY, because every caller here needs both and
+// the map is REPLACED WHOLE on an apply and on [Transport.Stop] — so two
+// lookups around one operation can straddle that swap and pair one epoch's
+// client with another's identity, or with no identity at all. That is not
+// cosmetic: [Transport.ReadThread] marks the seat's own replies from
+// [Seat.Owns], and an identity lost between the two lookups turns every one
+// of the agent's own posts into a colleague's, which is the confusion this
+// whole read exists to prevent.
+//
+// ONE CLIENT PER SEAT and never shared: a Slack app has one bot user and one
+// token, so every call made through it is made AS that agent and the
+// workspace attributes it to them. A seat whose token was refused at boot is
+// not in the map at all; see [Transport.Start] for why it is dropped rather
+// than run half-configured.
+func (t *Transport) running(handle string) (runningSeat, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	s, ok := t.seats[handle]
+	return s, ok
+}
+
+// lookup implements [Seats].
+func (t *Transport) lookup(handle string) (Seat, bool) {
+	s, ok := t.running(handle)
 	if !ok {
 		return Seat{}, false
 	}
@@ -313,6 +335,100 @@ func (t *Transport) Reregister(reg *notify.Registry) {
 	}
 }
 
+// ThreadBackend implements [notify.ThreadReader].
+func (t *Transport) ThreadBackend() string { return Backend }
+
+// ReadThread implements [notify.ThreadReader].
+//
+// It reads as the SEAT, on that app's own bot token and its own history
+// scopes, so the block matches what this agent can actually see: a channel
+// the app is not in answers `not_in_channel` and the turn gets the unreadable
+// hint rather than somebody else's conversation.
+//
+// A seat this node has no client for reports false rather than dereferencing
+// one. A token refused at boot leaves the seat out of the map deliberately,
+// and a maintenance-mode node runs no chat transport at all — both ordinary,
+// and both must render "the thread could not be read" rather than panicking a
+// turn.
+func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string) (notify.Transcript, bool) {
+	s, ok := t.running(handle)
+	if !ok || s.client == nil {
+		return notify.Transcript{}, false
+	}
+	read, err := s.client.Replies(ctx, channel, root)
+	if err != nil {
+		// DEBUG, like the indicator's: a refusal here costs the block and
+		// nothing else, the turn runs on the unreadable hint, and a
+		// workspace missing a history scope would otherwise log a warning
+		// on every chat turn of every seat.
+		log.DebugContext(ctx, "slack_thread_unreadable", "handle", handle,
+			"channel", channel, "thread", root, "error", err.Error())
+		return notify.Transcript{}, false
+	}
+	// BOTH BOUNDS TRAVEL WITH THE MESSAGES. conversations.replies pages
+	// from the oldest end, so what a bounded walk cannot reach is the
+	// NEWEST message — the one that woke this turn — and a renderer handed
+	// the messages alone would present the start of a conversation as the
+	// whole of it.
+	out := notify.Transcript{
+		Messages:     make([]notify.Message, 0, len(read.Messages)),
+		Older:        read.Older,
+		StoppedShort: read.StoppedShort,
+	}
+	var rootSeen bool
+	for _, reply := range read.Messages {
+		// THE ROOT IS KEPT WHATEVER IT SAYS, and it is recognised by its
+		// own ts rather than by its position: [notify.ThreadReader]
+		// promises the root FIRST, and dropping it for want of a body
+		// hands the renderer a transcript whose first line is the oldest
+		// surviving REPLY — which every bound then protects and the
+		// prompt then calls the thread's opening. An alert bot posting
+		// its payload in attachments or blocks alone carries no `text`
+		// and no `files`, so a thread rooted on one is not an edge case,
+		// it is the shape of an alert channel.
+		//
+		// It travels with an EMPTY body rather than an invented one: what
+		// to say in its place is the renderer's decision, and this
+		// transport rendering prose would put one backend's wording in
+		// front of a seat and the other's beside it.
+		isRoot := reply.TS != "" && reply.TS == root
+		body := ""
+		if reply.Skip() == "" {
+			body = reply.Body()
+		}
+		if body == "" && !isRoot {
+			continue
+		}
+		rootSeen = rootSeen || isRoot
+		out.Messages = append(out.Messages, notify.Message{
+			// THE SAME FALLBACK CHAIN [Sender] applies, split
+			// across the two fields: a human and a bot USER carry
+			// `user`, while a legacy bot_message — an incoming
+			// webhook, a workflow bot — carries `username` and
+			// `bot_id` instead. Either way the sender is never
+			// blank, and an unattributed line in a thread reads as
+			// the previous speaker continuing.
+			SenderID:   firstOf(reply.User, reply.BotID),
+			SenderName: reply.Username,
+			Text:       body,
+			// BOTH IDS. A bot_message echo of this seat's own post
+			// carries the app id and no user id at all, so a check
+			// on the user id alone would present the agent's own
+			// replies back to it as a colleague's.
+			Own: s.seat.Owns(reply.User, reply.AppID),
+		})
+	}
+	if len(out.Messages) > 0 && !rootSeen {
+		// A READ THAT REACHED REPLIES BUT NOT THE POST THEY HANG OFF.
+		// conversations.replies answers with the parent first, so this is
+		// the workspace behaving unexpectedly rather than a known shape —
+		// and the honest transcript is one whose first entry is still the
+		// root, empty, rather than one that silently starts at a reply.
+		out.Messages = append([]notify.Message{{}}, out.Messages...)
+	}
+	return out, true
+}
+
 // StatusBackend implements [notify.StatusPoster].
 func (t *Transport) StatusBackend() string { return Backend }
 
@@ -355,10 +471,8 @@ func (t *Transport) ClearStatus(ctx context.Context, handle, channel, thread str
 }
 
 func (t *Transport) setStatus(ctx context.Context, handle, channel, thread, status string) bool {
-	t.mu.Lock()
-	s, ok := t.seats[handle]
-	t.mu.Unlock()
-	if !ok {
+	s, ok := t.running(handle)
+	if !ok || s.client == nil {
 		return false
 	}
 	if err := s.client.SetStatus(ctx, channel, thread, status); err != nil {

@@ -478,9 +478,38 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 		return
 	}
 	a.q.beginHandler()
-	res := runHandler(ctx, a.log, ev, h)
+	res := runHandler(a.withHeadroom(ctx, delivery{msg: msg, ev: ev}), a.log, ev, h)
 	a.q.endHandler()
 	a.apply(ctx, msg, ev, res)
+}
+
+// withHeadroom states EACH message's remaining headroom on the handler's
+// context — see [queue.DeliveriesLeftFor] for the number one message
+// carries and [queue.DeliveriesLeft] for the partition's own, which the
+// contract folds from this same list so no backend decides it.
+//
+// Off THIS message's own metadata rather than off [attachment.failures],
+// which counts something else entirely: the map is one attachment's record of
+// FAILURES and resets on every re-attach, while the budget a message is
+// spending is carried by the message and survives every handoff. Confusing
+// the two is the defect the value exists to end.
+//
+// A message whose metadata will not parse is LEFT OUT rather than guessed at,
+// for the same reason [attachment.nakOrDeadLetter] still returns it: the
+// count is unreadable, not zero.
+func (a *attachment) withHeadroom(ctx context.Context, ds ...delivery) context.Context {
+	perMessage := make([]queue.Headroom, 0, len(ds))
+	for _, d := range ds {
+		md, err := d.msg.Metadata()
+		if err != nil || d.ev == nil {
+			continue
+		}
+		perMessage = append(perMessage, queue.Headroom{
+			ID:   d.ev.ID,
+			Left: budgetFor(a.q.cfg) - int(md.NumDelivered),
+		})
+	}
+	return queue.WithHeadroom(ctx, perMessage)
 }
 
 // decode parses a message, acking-and-dropping a corrupt payload.

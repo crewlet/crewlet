@@ -328,6 +328,7 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	cfg := jetstream.Config{
 		URL:              b.Stream.URL,
 		StoreDir:         b.Stream.StoreDir,
+		StoreMaxBytes:    b.Stream.StoreMaxBytes,
 		ClusterName:      b.Stream.Cluster.Name,
 		ClusterURLs:      b.Stream.Cluster.Peers,
 		ClusterPort:      b.Stream.Cluster.Port,

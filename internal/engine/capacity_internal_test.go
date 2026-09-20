@@ -3,14 +3,22 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	natsjs "github.com/nats-io/nats.go/jetstream"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // capacityFixture is one node's half of the handshake: an engine with an
@@ -686,4 +694,178 @@ func (b *blindFleet) OpenMaintenance(ctx context.Context, op coord.MaintenanceOp
 		return coord.MaintenanceOperation{}, false, errors.New("store unreachable")
 	}
 	return b.fleetStore.OpenMaintenance(ctx, op)
+}
+
+// budgetHost is a broker that answers the two capacity questions and nothing
+// else.
+//
+// The PROVISIONING half of [domainHost] is unreachable from every caller here
+// by construction — a refusal creates nothing — so those stubs panic rather
+// than pretending to work, which is what stops a later change quietly
+// depending on one.
+//
+// The embedded [queue.EventQueue] is NIL and deliberately so. It is what lets
+// this sit in the engine's own Queue slot, which is where [Engine.capacityHost]
+// reads its broker from — so these cases exercise the path production takes
+// rather than a field a test set for it, which is the arrangement under which
+// the constructor's omission was invisible. Every verb it contributes panics
+// on a nil interface, exactly as the named stubs below do on purpose.
+type budgetHost struct {
+	queue.EventQueue
+	room jetstream.StorageBudget
+	err  error
+}
+
+func (h budgetHost) GrowthBudget(context.Context) (jetstream.StorageBudget, error) {
+	return h.room, h.err
+}
+
+func (h budgetHost) StreamBudget(context.Context) (jetstream.StorageBudget, error) {
+	return h.room, h.err
+}
+
+func (budgetHost) Clustered() jsprovision.Clustered { return false }
+
+func (budgetHost) DomainStreamCeiling(context.Context, string) (int64, bool, error) {
+	panic("a capacity refusal must not read a stream's ceiling")
+}
+
+func (budgetHost) EnsureDomainStream(context.Context, jetstream.DomainStream) error {
+	panic("a capacity refusal must not provision anything")
+}
+
+func (budgetHost) DomainLog(context.Context, string) (*jetstream.DomainLog, error) {
+	panic("a capacity refusal must not open a log")
+}
+
+func (budgetHost) DomainConsumer(context.Context, string, string, uint64) (*jetstream.DomainConsumer, error) {
+	panic("a capacity refusal must not open a consumer")
+}
+
+// capacityNode is an engine holding ONE domain and a broker that answers about
+// capacity and nothing else.
+//
+// Everything the refusals below reach runs before the first broker call on the
+// log itself, which is what makes them testable without one: the target's
+// shape is decided before the exclusion is opened, and that ordering is the
+// point rather than an implementation detail.
+func capacityNode(t *testing.T, host budgetHost) (*Engine, *coordmem.Fleet, string) {
+	t.Helper()
+	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	domain := tracker.Domain{}
+	e.backends.Queue = host
+	e.native = &native{log: &stateLog{
+		order:   []string{domain.Name()},
+		domains: map[string]*runningDomain{domain.Name(): {domain: domain}},
+		volume:  t.TempDir(),
+	}}
+	return e, fleet, domain.Stream().Name
+}
+
+// A TARGET PAST int64 IS THE UNBOUNDED SETTING WEARING A LARGE NUMBER.
+//
+// A stream's ceiling is an int64 on the wire, so a target above that wraps
+// NEGATIVE — and a negative MaxBytes is how JetStream spells "unbounded". It
+// is the same stream a target of zero would have produced, which this verb
+// already refuses by name, reached from the opposite-looking input.
+func TestACapacityTargetPastInt64IsRefused(t *testing.T) {
+	ctx := context.Background()
+	e, fleet, stream := capacityNode(t, budgetHost{room: unstatedRoom})
+
+	_, err := e.SetCapacity(ctx, CapacityRequest{
+		Stream: stream, TargetMaxBytes: math.MaxUint64, By: "ops-3"})
+	if err == nil {
+		t.Fatal("a target past int64 was accepted, which sets the log " +
+			"unbounded while reporting a ceiling of eighteen exabytes")
+	}
+	if !strings.Contains(err.Error(), "unbounded") {
+		t.Errorf("the refusal does not say what the number would actually "+
+			"do:\n%v", err)
+	}
+	if _, found, ferr := fleet.Maintenance(ctx, stream); ferr != nil || found {
+		t.Errorf("an operation was opened anyway (found=%t, err=%v): the "+
+			"exclusion is the expensive half and it is taken after this check",
+			found, ferr)
+	}
+}
+
+// A REFUSED CONFIGURATION REQUEST IS NOT AN UNKNOWN ONE.
+//
+// The apply wrapped every failure as "the outcome is unknown and the operation
+// stays open", which is right for a transport error — the request may have
+// landed — and wrong for a broker that checked the ceiling against its limit
+// and declined to propose it. That one wrote nothing, and the number it
+// compared against is readable, so reporting it as an unknown costs the
+// operator both facts: what went wrong, and that waiting for the seal will not
+// tell them anything more. The journal record stays `issued` either way, which
+// is why even this half says to abandon rather than to walk away.
+func TestARefusedCeilingIsReportedAsARefusalAndNotAsAnUnknown(t *testing.T) {
+	ctx := context.Background()
+	e, _, stream := capacityNode(t, budgetHost{room: jetstream.StorageBudget{
+		Limit: 8 << 30, Committed: 7 << 30, Source: jetstream.BudgetServerStore}})
+	op := coord.MaintenanceOperation{Stream: stream, TargetMaxBytes: 7 << 30}
+
+	// THE SHAPE [jetstream.DomainLog.SetMaxBytes] PRODUCES, which names
+	// the sentinel over the broker's own numberless answer.
+	refused := e.applyFailure(ctx, op, fmt.Errorf("jetstream: set %q's ceiling "+
+		"to %d: %w: %w", stream, op.TargetMaxBytes, jetstream.ErrInsufficientStorage,
+		&natsjs.APIError{ErrorCode: 10047, Code: 500,
+			Description: "insufficient storage resources available"}))
+	if strings.Contains(refused.Error(), "the outcome is unknown") {
+		t.Errorf("a refusal the broker answered is reported as a request that "+
+			"may still be in flight:\n%v", refused)
+	}
+	// THE NUMBERS THE BROKER COMPARED, read at the refusal: what is left,
+	// what is already reserved, the limit, and the field that sets it.
+	for _, needle := range []string{
+		"REFUSED", "abandon",
+		strconv.FormatInt(1<<30, 10), // left to reserve
+		strconv.FormatInt(7<<30, 10), // already reserved
+		strconv.FormatInt(8<<30, 10), // the limit
+		"stream.store_max_bytes",     // the lever
+	} {
+		if !strings.Contains(refused.Error(), needle) {
+			t.Errorf("the refusal does not mention %q:\n%v", needle, refused)
+		}
+	}
+
+	// AND THE OTHER HALF STAYS AN UNKNOWN. A transport error says
+	// nothing about whether the request landed, and the barrier is what
+	// resolves that.
+	lost := e.applyFailure(ctx, op, errors.New("nats: timeout"))
+	if !strings.Contains(lost.Error(), "the outcome is unknown") {
+		t.Errorf("a lost request is reported as something other than an "+
+			"unknown, which is the one thing the journal record is for:\n%v", lost)
+	}
+	if strings.Contains(lost.Error(), "REFUSED") {
+		t.Errorf("a lost request is reported as a refusal:\n%v", lost)
+	}
+}
+
+// AND A NODE THAT CANNOT READ THE ROOM STILL REPORTS THE REFUSAL.
+//
+// The clause is context, not the finding: the broker already said it refused,
+// and an unreadable budget must not turn that answer back into an unknown the
+// fleet has to seal to retire. An external broker whose account states no
+// limit is the same case — "the limit is -1" is not a sentence.
+func TestARefusalWithNoReadableRoomIsStillARefusal(t *testing.T) {
+	ctx := context.Background()
+	for name, host := range map[string]budgetHost{
+		"a budget that cannot be read":  {err: errors.New("no responders")},
+		"a broker that states no limit": {room: unstatedRoom},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, _, stream := capacityNode(t, host)
+			err := e.applyFailure(ctx, coord.MaintenanceOperation{
+				Stream: stream, TargetMaxBytes: 7 << 30},
+				fmt.Errorf("%w: refused", jetstream.ErrInsufficientStorage))
+			if strings.Contains(err.Error(), "the outcome is unknown") {
+				t.Errorf("a refusal became an unknown because the clause "+
+					"beside it could not be built:\n%v", err)
+			}
+			if !strings.Contains(err.Error(), "REFUSED") {
+				t.Errorf("the refusal is no longer named:\n%v", err)
+			}
+		})
+	}
 }

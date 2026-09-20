@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/skillsync"
@@ -470,11 +471,17 @@ type Options struct {
 	// Park and still gets the real screening.
 	Dispatch *Dispatcher
 
-	// AwaitingSandbox reports whether a seat is parked on a detached coding
-	// run, whose job outlasts any broker ack window. Nil answers no, which
-	// is correct for a build with no sandbox provider wired: a seat that
-	// cannot start a detached run is never waiting on one.
-	AwaitingSandbox func(handle string) bool
+	// SandboxRuns reports what a seat's detached runs mean for its inbox:
+	// whether one HOLDS the seat — a job outlasting any broker ack window,
+	// so the seat's mail is parked — and whether one is waiting for a
+	// person's answer, which any delivery might be. Nil answers no to both,
+	// which is correct for a build with no sandbox provider wired: a seat
+	// that cannot start a detached run is never in either state.
+	//
+	// ONE SEAM FOR BOTH, because the two move together: a run that parks on
+	// a question stops holding its seat in the same moment it starts
+	// awaiting an answer, and two seams could be read either side of that.
+	SandboxRuns func(handle string) (held, awaitsAnswer bool)
 
 	// SandboxPollInterval overrides the completion poll's cadence. Zero
 	// takes the production value, which is sized against coding jobs that
@@ -954,11 +961,11 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		d = &Dispatcher{}
 	}
 	if d.Conditions == nil {
-		awaiting := opts.AwaitingSandbox
-		if awaiting == nil && e.sandboxCoordinator != nil {
-			awaiting = e.sandboxCoordinator.AwaitingSandbox
+		runs := opts.SandboxRuns
+		if runs == nil && e.sandboxCoordinator != nil {
+			runs = e.sandboxCoordinator.SeatRuns
 		}
-		d.Conditions = e.conditionsFor(awaiting)
+		d.Conditions = e.conditionsFor(runs)
 	}
 	if d.Ledgered == nil {
 		d.Ledgered = inbox.Ledgered
@@ -1330,10 +1337,18 @@ func (e *Engine) Dispatch(ctx context.Context, handle string, evs []*events.Even
 }
 
 // conditionsFor answers the ownership and posture questions for one seat.
-func (e *Engine) conditionsFor(awaiting func(string) bool) func(string) inbox.Conditions {
+func (e *Engine) conditionsFor(sandboxRuns func(string) (bool, bool)) func(string) inbox.Conditions {
 	return func(handle string) inbox.Conditions {
 		_, owned := e.node.Host().MayStart(handle)
 		company := e.Company()
+		// ONE CALL FOR BOTH SANDBOX ANSWERS: a park is a seat freed and a
+		// question opened at once, and a reader that took them apart could
+		// see the seat between the halves — free, with nothing waiting —
+		// which is the delivery this whole seam exists to catch.
+		var heldBySandbox, sandboxAwaitsAnswer bool
+		if sandboxRuns != nil {
+			heldBySandbox, sandboxAwaitsAnswer = sandboxRuns(handle)
+		}
 		return inbox.Conditions{
 			// FRESHNESS, not membership: a renew at t proves exclusivity
 			// through t+ttl, and a membership snapshot can be a full TTL
@@ -1344,8 +1359,9 @@ func (e *Engine) conditionsFor(awaiting func(string) bool) func(string) inbox.Co
 			// with no providers.llm is applied with no model registry,
 			// and every delivery to its seats is held on the inbox until
 			// an apply brings one. See nomodels.go.
-			TurnEngineReady: company != nil && company.Models != nil,
-			AwaitingSandbox: awaiting != nil && awaiting(handle),
+			TurnEngineReady:     company != nil && company.Models != nil,
+			SeatHeldBySandbox:   heldBySandbox,
+			SandboxAwaitsAnswer: sandboxAwaitsAnswer,
 			// The SAME gate the inbound edge and the scheduler read, so
 			// a shedding node refuses at every trigger admission rather
 			// than only at the one that happened to be wired. It was a
@@ -1448,6 +1464,26 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		attribute.Int("crewlet.delegation_depth", req.Depth))
 	defer span.End()
 
+	// THE WORKING INDICATOR, up before this turn does anything slow. Here
+	// rather than beside turn.Run because everything between the two is
+	// already work a person is waiting through: the prefetch reads a chat
+	// thread and searches the knowledge base over the network, and an
+	// indicator raised after that says "thinking" only once the thinking is
+	// about to start.
+	//
+	// It raises nothing at all for a trigger nobody is watching a composer
+	// for — see [chatMetadataOf] — and a nil session's every method is a
+	// no-op, so there is no branch here and none below.
+	status := e.beginWorkingStatus(ctx, req.Handle, req.WorkKey, req.Ask())
+	// ENDED ON EVERY PATH OUT OF THIS FRAME, the runner build failing below
+	// included: that path raised an indicator and never ran a turn, and
+	// nothing else would ever take it down. `working` stays false until a
+	// suspension's own ROW says a detached run is coming back, so every other
+	// path — including a redelivered trigger, which raises a fresh indicator
+	// of its own when it runs again — clears. See [endWorkingStatus].
+	var working bool
+	defer func() { endWorkingStatus(ctx, status, working) }()
+
 	// PINNED ONCE. Two reads of the epoch can straddle an apply, and a turn
 	// that built its runner from one revision and took its round caps from
 	// the next is running a company that never existed — the exact failure
@@ -1510,6 +1546,11 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// the grant THIS turn was admitted under — a fence built later
 		// would compare a re-claim against itself.
 		Fence: e.seatFence(req.Handle),
+		// The working indicator's phase updates, taken from the one frame
+		// that knows a phase has opened — the same call that publishes
+		// agent_phase_started, so the words a person reads and the event
+		// a dashboard reads can never name different phases.
+		OnPhase: func(ph phase.Phase) { status.Phase(ph.String()) },
 	})
 	if err != nil {
 		// No turn-completed event: nothing started, so nothing ended. A
@@ -1542,8 +1583,13 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// The moment the turn returns, and before its frame unwinds: the runner
 	// holds the suspended conversation only until then, and a row without
 	// one is a detached run nothing can ever resume.
+	//
+	// ITS ANSWER IS WHAT THE INDICATOR FOLLOWS, not `res.Suspended` — the
+	// intent to park and a run that can actually be resumed are different
+	// facts, and this call is where the second one is established. See
+	// [stillWorking].
 	if res.Suspended {
-		e.persistSuspension(ctx, r, req.RunID)
+		working = stillWorking(e.persistSuspension(ctx, r, req.RunID))
 	}
 	// Published on BOTH paths. An error here means a phase broke, which is
 	// precisely when a dashboard most needs the turn closed: the phase

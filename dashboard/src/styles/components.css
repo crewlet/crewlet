@@ -41,9 +41,9 @@
    `.row` is a flex line with a gap and nothing else, so a trailing figure
    after a `.spacer` lands wherever its own text ends. That is right for ONE
    figure — the spacer pushes both the header and the value to the same right
-   edge — and wrong the moment there is a second: three figures of differing
-   widths sit adjacent, and the labels above them sit adjacent at their own
-   widths, so nothing is a column.
+   edge — and wrong the moment there is a second: figures of differing widths
+   sit adjacent, and the labels above them sit adjacent at their own widths, so
+   nothing is a column.
 
    7rem BECAUSE OF THE HEADING, not the figure. A fixed column wraps its own
    heading rather than growing for it, and the widest one these blocks carry
@@ -60,18 +60,22 @@
   text-align: right;
 }
 
-/* AND THE BLOCK THEY ARE COLUMNS OF SCROLLS, because three of them at 5.5rem
-   plus a phase tag is 370px and a phone is 390 with the card's own padding
-   taken out of it — measured at 332px of room, so the tokens column was cut
-   off, and `.num-col` exists precisely to make these three line up.
+/* AND THE BLOCK THEY ARE COLUMNS OF SCROLLS, because the widest of these
+   blocks is the prompt-weights table, and its FIVE columns at 5.5rem plus a
+   phase tag come to about 570px against the 332px of room a 390px phone has
+   once the card's padding is taken out — so it overflows by a wide margin, and
+   `.num-col` exists precisely to make those five line up while it does. (It
+   already overflowed at three, at 370px, which is what this was measured on
+   before a term the engine had never counted — the tool-definition array —
+   and a resumed phase's own conversation each earned a column.)
 
    SIDEWAYS HERE, where a grid gets a card instead (see frame.css). The two
    shapes take opposite answers for a reason: a grid's flexible tracks resolve
    to ZERO the moment its wrap becomes a scroller, and its cells are prose. A
    fixed 5.5rem figure column has no such collapse and no prose in it, and the
-   whole value of the block is that the three figures sit under their own
-   headings — which wrapping them would destroy, since the header row and each
-   value row would break at different points.
+   whole value of the block is that the figures sit under their own headings —
+   which wrapping them would destroy, since the header row and each value row
+   would break at different points.
 
    `max-content` ON THE ROWS' OWN BOX is the half that makes it work: without
    it a flex line inside a scrollport is still sized to the port, its items

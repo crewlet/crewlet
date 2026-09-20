@@ -10,6 +10,7 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
 	qmem "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -112,7 +113,10 @@ func within(t *testing.T, what string, cond func() bool) {
 func (g *gatedNode) send(handle, work string) {
 	g.t.Helper()
 	ev := events.New(trigger{Work: work}, events.TraceContext{})
-	ev.Payload = map[string]any{"conversation_key": "c/" + handle}
+	// THROUGH THE CONSTANT. Spelled as a literal this line keeps passing
+	// whichever field the node's partition function reads, which is the
+	// blind spot the comment on TestMessagesPilingUpOnOneThread… records.
+	ev.Payload = map[string]any{notify.PartitionField: "c/" + handle}
 	ctx := context.WithoutCancel(g.t.Context())
 	go func() {
 		if err := g.q.Publish(ctx, topics.AgentInbox(handle), ev); err != nil {
@@ -283,11 +287,21 @@ func TestAnAbsentCeilingLeavesTheNumberInOnePlace(t *testing.T) {
 
 // sendTo publishes one event on a NAMED conversation, so a test can put
 // several messages on one thread and one on another.
-func (g *gatedNode) sendTo(handle, conversation, work string) *events.Event {
+func (g *gatedNode) sendTo(handle, partition, work string) *events.Event {
 	g.t.Helper()
 	ev := events.New(trigger{Work: work}, events.TraceContext{})
-	if conversation != "" {
-		ev.Payload = map[string]any{"conversation_key": conversation}
+	if partition != "" {
+		// BOTH KEYS, AND DELIBERATELY DIFFERENT: every message here shares
+		// one conversation identity while its partition key names the
+		// thread. That is a direct message's own shape — two threads on
+		// one DM line — and it is what lets these cases FAIL. Stamped with
+		// the partition alone, the identity read falls back to it and a
+		// node that partitioned on the wrong one of the two would group
+		// identically and go green.
+		ev.Payload = map[string]any{
+			notify.PartitionField:    partition,
+			notify.ConversationField: "chat:D1",
+		}
 	}
 	ctx := context.WithoutCancel(g.t.Context())
 	go func() {
@@ -304,8 +318,8 @@ func (g *gatedNode) sendTo(handle, conversation, work string) *events.Event {
 // Nothing asserted this at any layer. The queue's own conformance suite
 // partitions by a key function the SUITE supplies, and the JetStream smoke
 // test hands it a constant — so both certify the machinery while nothing
-// certified that the node feeds it a conversation key at all. Measured:
-// replacing node.conversationKey with the per-event fallback, which deletes
+// certified that the node feeds it a partition key at all. Measured:
+// replacing node.partitionKey with the per-event fallback, which deletes
 // conversation coalescing outright, left `go test ./...` completely green.
 //
 // The shape is the user-visible one: a seat is mid-turn on a thread, three

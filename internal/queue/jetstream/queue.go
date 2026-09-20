@@ -46,6 +46,29 @@ type Config struct {
 	// what no node serving a company should run: see config.Stream.
 	StoreDir string
 
+	// StoreMaxBytes is how much of StoreDir's volume an EMBEDDED server
+	// may hold. Zero lets it size itself from that volume's free space
+	// when its JetStream comes up, which is nats-server's own derivation.
+	//
+	// IT IS THE NUMBER EVERY STREAM CEILING IS COMPARED AGAINST, which is
+	// why [Queue.StreamBudget] READS IT BACK — declared or derived,
+	// whichever is in force — rather than modelling it. It is the lever
+	// for the one shape that arithmetic cannot reach: the volume's free
+	// space bounds the SUM of every engine sharing it and not each of
+	// them, so two nodes on one filesystem each sizing from what they can
+	// see over-commit it, and the broker's refusal names whichever stream
+	// happened to be provisioned last rather than the disk. An operator
+	// running N engines against one filesystem divides it between them.
+	//
+	// Read by the embedded branch only. An external cluster's account
+	// limits belong to its own operator, and Tier A refuses this field
+	// against one. It is also IGNORED without a StoreDir: that server's
+	// streams are memory-backed, so a file-store limit would bound none of
+	// them — Tier A warns on that pair rather than refusing it, because it
+	// is a test's shape rather than a node serving a company, which
+	// provisions the streams its company lives on whatever else it does.
+	StoreMaxBytes int64
+
 	// ClusterName, ClusterURLs and ClusterPort configure an embedded
 	// server that joins peers, which is the fleet topology: every node
 	// embeds a member of one cluster and streams replicate between them.
@@ -639,6 +662,23 @@ func (q *Queue) createOrObserveStream(
 		// later, once per refused log.
 		return fmt.Errorf("ensure stream %s: %w", spec.name, createErr)
 	}
+	if jsprovision.NoApplicableLimit(createErr) {
+		// NO LIMIT APPLIES TO THIS STREAM AT ALL, which is a different
+		// fact from "it does not fit" and has a different lever: the
+		// account's limits are tiered and it carries none for the class
+		// `stream.replicas` puts this node in, so the broker refuses
+		// the create before comparing a byte and no smaller ceiling
+		// would be accepted either.
+		//
+		// TERMINAL AND NOT READ BACK, for the arm above's reason:
+		// nothing was placed. Unclassified it fell through to the
+		// read-back below and came back as `(and it is not there:
+		// stream not found)` appended to the one sentence that said
+		// what was wrong — a missing stream on a cluster whose account
+		// never had a limit for it.
+		return fmt.Errorf("ensure stream %s: %w%s", spec.name, createErr,
+			jsprovision.NoApplicableLimitDetail(q.cfg.Replicas))
+	}
 	// A PEER MAY HAVE WON THE RACE, and it announces that in two shapes
 	// rather than one.
 	//
@@ -1185,6 +1225,17 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 		// placed and there is nothing to read back — the same gate the
 		// stream and bucket creates take.
 		return nil, false, createErr
+	}
+	if jsprovision.NoApplicableLimit(createErr) {
+		// NO LIMIT APPLIES TO THIS CONSUMER EITHER. A consumer is
+		// resolved through the same table as a stream
+		// (server/consumer.go, acc.selectLimits), so an account with no
+		// tier for this node's class refuses one for the same reason —
+		// and unclassified it came back as a consumer that is "not
+		// there", which is the one reading that sends an operator
+		// looking for a seat's mailbox instead of at the account.
+		return nil, false, fmt.Errorf("%w%s", createErr,
+			jsprovision.NoApplicableLimitDetail(q.cfg.Replicas))
 	}
 	// RE-ASKED, like the stream and bucket read-backs: a peer's create is
 	// visible to this member only on its next metadata update, so one

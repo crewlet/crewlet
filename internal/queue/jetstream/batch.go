@@ -21,9 +21,10 @@ func eventOf(d delivery) *events.Event { return d.ev }
 // SubscribeBatch attaches with batched, key-partitioned delivery.
 //
 // The cycle: drain what is locally available (plus a linger window),
-// partition by conversation key, dispatch one handler call per partition
-// oldest-conversation-first, and ack per partition. A failing partition
-// never blocks or replays a different one from the same drain.
+// partition by the key [queue.BatchKeyFunc] derives, dispatch one handler
+// call per partition oldest-partition-first, and ack per partition. A
+// failing partition never blocks or replays a different one from the same
+// drain.
 //
 // This is what makes ten comments on one issue cost ONE agent turn instead
 // of ten. It is also why an agent that was busy does not wake to a thundering
@@ -158,7 +159,7 @@ func (a *attachment) toDelivery(msg jetstream.Msg) (delivery, bool) {
 	return delivery{msg: msg, ev: ev}, true
 }
 
-// dispatchBatch partitions a drain and runs one handler per conversation.
+// dispatchBatch partitions a drain and runs one handler per partition.
 func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queue.BatchHandler, key queue.BatchKeyFunc) {
 	parts := queue.OrderForDispatch(queue.PartitionByKey(batch, key, eventOf), eventOf)
 
@@ -168,6 +169,15 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		// equally lost the right to run. They go back unhandled so the
 		// successor gets them, rather than being run by a consumer that
 		// has just admitted it should not.
+		//
+		// UNHANDLED IS NOT UNCHARGED. These messages were FETCHED, which
+		// is where this broker's counter moves, so their delivery is
+		// already spent by the time the loop gets here — nakAll only
+		// decides whether the last one dead-letters with a copy or is
+		// discarded by MaxDeliver in silence. That is the contract's rule
+		// and not this backend's shape: see [queue.DeliveriesLeft], and
+		// internal/queue/memory, whose mailbox is a slice and therefore
+		// has to charge a take deliberately.
 		if a.blocked() {
 			a.nakAll(ctx, part.Items)
 			continue
@@ -179,7 +189,15 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		}
 
 		a.q.beginHandler()
-		res := runBatchHandler(ctx, a.log, evs, h)
+		// EACH MESSAGE'S OWN HEADROOM, and the partition's folded from
+		// them by the contract. Both, because they answer different
+		// questions: one outcome covers the whole partition, so a
+		// hand-back spends a delivery of every message in it and the
+		// nearest its budget is the one that dead-letters first — while
+		// a handler deciding what to do with ONE of these events has to
+		// ask what THAT message has left. See [queue.DeliveriesLeft] and
+		// [queue.DeliveriesLeftFor].
+		res := runBatchHandler(a.withHeadroom(ctx, part.Items...), a.log, evs, h)
 		a.q.endHandler()
 
 		a.applyPartition(ctx, part.Key, part.Items, evs, res)
@@ -188,15 +206,26 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 
 // applyPartition applies one outcome to every message in a partition.
 //
-// Per-partition rather than per-message: the handler saw the conversation as
-// a unit and its verdict covers all of it. Acking some and NAKing others
-// would deliver a partial conversation to the successor.
+// Per-partition rather than per-message: the handler saw the partition as a
+// unit and its verdict covers all of it. Acking some and NAKing others would
+// deliver a partial one to the successor.
 func (a *attachment) applyPartition(ctx context.Context, batchKey string, items []delivery, evs []*events.Event, res queue.Result) {
 	queue.LogBatchResult(a.log, a.key.topic, a.key.group, batchKey, evs, res)
 
 	switch res.Outcome {
 	case queue.OutcomeAck:
 		for _, d := range items {
+			// FORGOTTEN FIRST, for the reason [attachment.apply]
+			// gives on the single-message path: a partition that
+			// succeeded after failing must not carry those failures
+			// into a later redelivery of the same sequences, and the
+			// map would otherwise hold every sequence this seat ever
+			// failed for the life of the attachment. That is
+			// ordinary operation here — an answer a parked coding
+			// run is still owed is NAKed and acked on a later pass.
+			if md, err := d.msg.Metadata(); err == nil {
+				a.settled(md.Sequence.Stream)
+			}
 			if err := d.msg.Ack(); err != nil {
 				a.log.Warn("ack_failed", "error", err.Error())
 			}
