@@ -1,6 +1,7 @@
 package pages_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/pages"
@@ -424,5 +425,80 @@ func TestEnsuringAnUnchangedContainerWritesNothing(t *testing.T) {
 	// same container rather than a second one.
 	if ensure("eng", "Platform", "Build it") {
 		t.Error("the lower-cased key wrote a record — want the same container")
+	}
+}
+
+// A FULL PAGE OF PAGES SAYS IT IS A PAGE.
+//
+// `Listing.Complete` covers ONE kind of incompleteness — a deferred record's
+// scope meeting the read — and nothing covered the other: the listing filled
+// its limit and the container holds more. The tool built on this goes out of
+// its way to surface Complete, on the reasoning that "a model that reads a
+// short list as the whole truth writes the duplicate"; a full page it cannot
+// tell is full is that same mistake with nothing to check.
+func TestAFullPageOfPagesSaysSo(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, title := range []string{"Alpha", "Beta", "Gamma"} {
+		r.write(author("jane"), pages.NewPage{Title: title, Body: "prose"})
+	}
+
+	full := r.list(pages.Filter{Container: "ENG", Limit: 2})
+	if len(full.Pages) != 2 {
+		t.Fatalf("the page holds %d, want the limit of 2", len(full.Pages))
+	}
+	if !full.Truncated {
+		t.Error("a full page does not say so, so three pages and two read alike")
+	}
+
+	// THE LAST PAGE CLAIMS NOTHING. The probe row is evidence, so a page
+	// that exactly empties the container must not report more behind it.
+	last := r.list(pages.Filter{Container: "ENG", Limit: 2, Offset: 2})
+	if len(last.Pages) != 1 || last.Truncated {
+		t.Errorf("the final page holds %d rows and reports truncated=%v",
+			len(last.Pages), last.Truncated)
+	}
+	// AND A LIMIT THAT EXACTLY FITS is not a cut either, which is the
+	// off-by-one that would make every complete listing claim more.
+	if exact := r.list(pages.Filter{Container: "ENG", Limit: 3}); exact.Truncated ||
+		len(exact.Pages) != 3 {
+		t.Errorf("a limit equal to the container reports %d rows, truncated=%v",
+			len(exact.Pages), exact.Truncated)
+	}
+}
+
+// A PAGE WITH MORE CHILDREN THAN THE READ CARRIES SAYS SO.
+//
+// A detail read has NO paging parameter, so the flag is the whole of what a
+// caller gets — without it the child past the engine's own window was
+// unreachable through the read that claims to answer a page in full, and
+// invisible to whoever asked.
+func TestAPageWithMoreChildrenThanItCarriesSaysSo(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	parent := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	for i := range pages.DefaultLimit + 1 {
+		r.write(author("jane"), pages.NewPage{
+			Title: fmt.Sprintf("Step %03d", i), Body: "prose",
+			ParentID: parent.Page.ID,
+		})
+	}
+
+	detail := r.get(parent.Page.ID)
+	if len(detail.Children) != pages.DefaultLimit {
+		t.Fatalf("the read carries %d children, want the window of %d",
+			len(detail.Children), pages.DefaultLimit)
+	}
+	if !detail.ChildrenTruncated {
+		t.Error("the page has more children than it carries and does not say so")
+	}
+
+	// AND A PAGE INSIDE THE WINDOW CLAIMS NOTHING.
+	few := r.write(author("jane"), pages.NewPage{Title: "Small", Body: "prose"})
+	r.write(author("jane"), pages.NewPage{
+		Title: "One", Body: "prose", ParentID: few.Page.ID,
+	})
+	if got := r.get(few.Page.ID); got.ChildrenTruncated {
+		t.Error("a page with one child reports its children cut")
 	}
 }

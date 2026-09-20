@@ -515,6 +515,11 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	}
 	return map[string]any{
 		"pages": list.Pages, "limit": f.Limit, "offset": f.Offset,
+		// TWO KINDS OF INCOMPLETE, and `complete` only ever covered one.
+		// It is about a deferred record's scope meeting the read;
+		// `truncated` is about the page filling, which `offset` is how a
+		// caller gets past.
+		"truncated":  list.Truncated,
 		"read_level": list.Level, "complete": list.Complete,
 		"position": list.Position, "log_lag": list.LogLag,
 	}, nil
