@@ -1189,8 +1189,8 @@ one list differently:
 
 ```json
 {
-  "id": "…", "type": "chat_message_received", "source": "mattermost",
-  "timestamp": "2026-08-25T12:00:00Z", "category": "chat",
+  "id": "…", "type": "external_notification", "source": "mattermost",
+  "timestamp": "2026-08-25T12:00:00Z", "category": "notification",
   "summary": "…", "actor": "…",
   "trace_id": "…", "span_id": "…", "parent_span_id": "…",
   "failed": false,

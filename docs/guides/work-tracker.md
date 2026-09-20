@@ -557,11 +557,12 @@ Neither is `purge`, which destroys every row on every node and has no inverse.
 That one is `crewlet work purge`, with a typed confirmation and a required
 reason, and it is deliberately not a tool at all.
 
-Three of those count as a **delivery**: create, update and comment. A turn
-woken by an assignment answers by moving the task, commenting on it, or filing
-the follow-up — and the delivery gate knows that, so such a turn is not
-corrected and looped for "having done nothing". Reading is not delivering,
-which is exactly the turn the gate exists to catch.
+Four of those count as a **delivery**: create, update, comment and merge. A
+turn woken by an assignment answers by moving the task, commenting on it,
+filing the follow-up, or merging it into the item it duplicates — and the
+delivery gate knows that, so such a turn is not corrected and looped for
+"having done nothing". Reading is not delivering, which is exactly the turn the
+gate exists to catch.
 
 Seat tools read at the **`linearizable`** level: a seat that files a task and
 then lists its project sees the task it just filed, because every read
