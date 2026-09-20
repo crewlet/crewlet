@@ -148,20 +148,29 @@ type CoordinatorOptions struct {
 	// not finished, and its box will resume into the same session.
 	Ended func(runID string)
 
-	// Stopped is called once for every way a run stops with a turn still
-	// suspended into it, and it is the ONE report above this package of a
-	// fact this package alone can see.
+	// Stopped is called once for every way a run's engine-side life ENDS,
+	// and for the one way it stops without ending — a park. It is the ONE
+	// report above this package of a fact this package alone can see: that
+	// nothing is working behind this seat and turn any more.
 	//
-	// THREE WAYS, ONE FACT. A run parks on a question and waits for a
-	// person; a run is destroyed and its turn is never resumed; or a claim
-	// this node took cannot be given back, which is the second of those
-	// wearing the first's clothes. In every one of them the frame that
-	// raised whatever the engine holds up "while the agent works" has
-	// already returned — it returned when the turn suspended — so nothing
-	// above this package can learn that the agent stopped unless this call
-	// makes it. The working indicator is the caller it exists for: an "is
-	// thinking…" that outlives the thinking tells the one person who could
-	// move the work that nobody is waiting on them.
+	// THE CASES IT EXISTS FOR are the ones where a turn was still SUSPENDED
+	// into the run — it parks on a question and waits for a person, it is
+	// destroyed and never resumed, or a claim this node took cannot be given
+	// back, which is the second wearing the first's clothes. In every one of
+	// them the frame that raised whatever the engine holds up "while the
+	// agent works" has already returned — it returned when the turn
+	// suspended — so nothing above this package can learn that the agent
+	// stopped unless this call makes it. The working indicator is the caller
+	// it was added for: an "is thinking…" that outlives the thinking tells
+	// the one person who could move the work that nobody is waiting on them.
+	//
+	// IT FIRES ON THE ORDINARY ENDINGS TOO, where a turn came back and took
+	// its own hold down before the run was settled. The sentence is true
+	// there as well, the report finds nothing to drop, and the alternative —
+	// a gate asking whether this particular ending had a suspended turn
+	// behind it — is a second opinion about what the store has already
+	// answered and a fifth chance to get the enumeration wrong. See
+	// [Coordinator.finish].
 	//
 	// ONE OPTION RATHER THAN ONE PER REASON, because three rounds of
 	// hand-enumerating the ways a run stops each missed one, and a second
