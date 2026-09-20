@@ -476,49 +476,106 @@
 
 /* ---- The page column ---------------------------------------------------- */
 
+/* AND IT IS THE PAGE BAR'S MEASURING STICK. Every rule that decides whether
+   the bar's contents still fit was written against the WINDOW, and the window
+   is not what they overflow: the rail is 96px and an open workspace sidebar is
+   another 234, so a 1919px window gives the bar 1587 and a 1440px window with
+   the sidebar shut gives it 1344. A media query cannot tell those apart, which
+   is why `@media (max-width: 860px)` was still the only place the controls
+   were allowed their own line while the bar was breaking at 1587.
+
+   `inline-size` rather than `size`: the bar's height is its content's, and a
+   container that contains block size would have to be told one. */
 .page {
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  container: page / inline-size;
 }
 
-/* THE BAR WRAPS AT EVERY WIDTH, because what overflows it is CONTENT rather
-   than a viewport. It used to wrap only under 860, and the failure the phone
-   block below describes — the star, Copy link, the viewer chip and the SEARCH
-   TRIGGER, which is the command palette's only pointer affordance, all shoved
-   past the right edge of a bar whose `overflow` is `visible`, so off the edge
-   meant UNREACHABLE — turned out to have a whole second band. A screen's own
-   control group is `flex: 0 0 auto` and the turns list's is 478px: measured at
-   1180px with the rail and the sidebar open, the search trigger was past the
-   edge on the turns list and the event log, and the turns page took the whole
-   DOCUMENT to 1263 so the heading scrolled sideways with it. A 1000px window —
-   a laptop, or half a wide screen — was worse.
+/* THE BAR SHRINKS, AND ONLY THE CONTAINER QUERY BELOW BREAKS IT.
+   `flex-wrap: wrap` used to be on this rule at every width, and it was the
+   wrong instrument for what it was aimed at. What it was aimed at is real and
+   is still answered: a screen's control group is portalled in and is as wide
+   as that screen needs, and a bar whose `overflow` is `visible` puts the tail
+   of an overfull one PAST THE EDGE, where off the edge means unreachable
+   rather than merely out of sight — the star, Copy link, the viewer chip and
+   the SEARCH TRIGGER, which is the command palette's only pointer
+   affordance.
 
-   `wrap` costs nothing on a line that fits: a flex container only breaks a
-   line it cannot hold. What stays behind the phone breakpoint is the
-   `flex: 0 0 100%` that forces the controls onto their OWN line unconditionally
-   — that one is a phone decision, not an overflow. A FLOOR RATHER THAN A
-   HEIGHT for the same reason it is one down there: a fixed height clips the
-   second row, and an unwrapped bar is exactly the height it always was. */
+   But a flex container assigns items to lines by their HYPOTHETICAL main size
+   — the base size, BEFORE any shrinking — and only shrinks what is already on
+   a line. So `wrap` does not mean "shrink until it fits, then break": it means
+   "never shrink, always break". Every ellipsis rule in this block was
+   unreachable under it, and the break landed wherever the running total first
+   overflowed, which on a turn page is AFTER the screen's own controls. That
+   left the viewer chip and the search trigger alone at the left of a second
+   line under the trail — with a hundred visible pixels of slack on the first,
+   because `.spacer` grew into what the break had freed. Measured on
+   `#/activity/turns/<id>` at a 1919px window with the rail and the sidebar
+   open: a 1587px bar, 52px tall everywhere else, 69px here.
+
+   So this rule does not wrap, and three others make that safe:
+
+     - the TRAIL gives way first and stops at a floor (`.crumbs` below), which
+       is what makes the ellipsis machinery reachable. It also grows into the
+       free space, which retires the `.spacer` that used to sit between it and
+       the controls.
+     - the CONTROLS shrink and wrap INSIDE themselves (`.page-controls`
+       below), so a group wider than the bar stacks at the right rather than
+       pushing the globals off the end.
+     - and below the width where a floored trail cannot sit beside them at
+       all, the controls take a line of their own — `@container page` further
+       down, where the phone block used to hold that rule alone.
+
+   A FLOOR RATHER THAN A HEIGHT, because all three of those can make the bar
+   taller than one row and a fixed height would clip it. An unwrapped bar is
+   exactly the height it always was. */
 .page-bar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-2);
   height: auto;
   min-height: var(--page-bar-h);
-  padding: 0 var(--space-4);
+  padding: var(--space-1) var(--space-4);
   border-bottom: 1px solid var(--border);
   background: var(--surface-1);
   flex: 0 0 auto;
 }
 
+/* THE TRAIL IS WHAT GIVES WAY, AND IT IS WHAT TAKES THE SLACK.
+
+   `flex-grow: 1` is the `.spacer` this replaces: the trail absorbs the free
+   space, so the controls, the viewer chip and the search trigger stay in the
+   right-hand corner without a blank element between them and the breadcrumb.
+   A second grower beside it would only halve what it gets.
+
+   `flex-shrink: 100` is the ordering, against the viewer chip and the search
+   trigger, which are the only other items here that can give. It is uilet's
+   own idiom for the same problem: `.crewlet-card__subtitle` takes
+   `flex-shrink: 100` so a card's title never gives way first. The control
+   group is out of that arithmetic entirely — see `.page-controls` below for
+   why it may not shrink by so much as a fraction of a pixel.
+
+   AND IT STOPS AT 20ch, which is the correction to the obvious `min-width: 0`.
+   At zero the trail is clipped as a BOX — `overflow: hidden`, with no
+   ellipsis, because the clip happens outside the text — and what is clipped
+   is its right-hand end, so a 1200px bar rendered the way back out as
+   "Activit". The last part already floors at `5ch` (see below), so the
+   remainder is the ancestors, and those are the one thing on this bar the
+   reader cannot reconstruct from anywhere else. Measured at `--fs-sm`:
+   "Activity / Turns /" is 15ch and "Admin / Infrastructure /" is 19ch, the
+   deepest fixed ancestry the route table can produce, and 20ch holds either
+   beside the stub. Below that the container query gives the controls a line
+   of their own and the trail has the bar to itself. */
 .crumbs {
   display: flex;
   align-items: center;
   gap: 2px;
-  min-width: 0;
+  flex: 1 100 auto;
+  min-width: 20ch;
   overflow: hidden;
   font-size: var(--fs-sm);
 }
@@ -576,19 +633,110 @@
 }
 
 /* WHAT THIS PAGE CAN DO, in one element — the portalled slot and the frame's
-   own actions together, so the narrow breakpoint below can move both onto a
-   line of their own with one rule. On a wide bar it is a plain row and changes
-   nothing. */
+   own actions together, so the container query below can move both onto a
+   line of their own with one rule.
+
+   IT WRAPS INSIDE ITSELF, which is what makes a bar that does not wrap safe:
+   a group wider than the bar stacks its own rows at the right-hand end rather
+   than running past the edge, and past the edge is unreachable here because
+   `.page-bar` has no scroller of its own above the container query below.
+   `justify-content: flex-end` keeps a stacked row under the cluster it
+   belongs to rather than orphaned at the group's left, and the row gap is the
+   tighter rung because two rows of controls 8px apart read as two groups.
+
+   AND IT MAY NOT SHRINK AT ALL — `flex-shrink: 0`, which is the one number in
+   this block that had to be measured rather than reasoned about. A group that
+   WRAPS does not absorb a shrink by giving up a few pixels of label: it drops
+   its last control onto a second row. The group is exactly its own content
+   wide, so ANY shrink at all crosses that threshold — and flexbox distributes
+   shrinkage in a single pass proportional to each item's factor times its
+   base size, with no way to say "empty that one first". At a 1250px bar the
+   trail still had 250px to give and the controls' proportional share of the
+   99px overflow was 0.13 of a pixel; "Copy link" was on a row of its own.
+   Raising the trail's factor does not fix it, it only makes the fraction
+   smaller, and there is no factor at which a fraction is zero.
+
+   `max-width: 100%` is the valve that `flex-shrink: 0` would otherwise
+   remove: a group wider than the WHOLE bar is clamped to it and wraps, which
+   is the case the shrink was there for. Between the two — a group that fits
+   the bar but not beside a floored trail — the container query below has
+   already given it a line of its own. */
 .page-controls {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1) var(--space-2);
   flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* THE SCREEN'S OWN HALF SHRINKS TOO, or the group above can only wrap at the
+   one seam between the portalled slot and the frame's star and Copy link —
+   which on a screen with six controls of its own is no seam at all. `.wrap`
+   is already on the slot in the markup; this is what lets it reach a width
+   narrow enough to use it. */
+.page-actions {
+  flex: 0 1 auto;
   min-width: 0;
 }
 
-.page-actions {
-  flex: 0 0 auto;
+/* ---- The page bar, once its own width runs out --------------------------
+   THE BAR'S WIDTH, NOT THE WINDOW'S, which is the whole reason this is a
+   container query. Measured on the turn page, the busiest bar in the product,
+   with its state chips where they belong (the object header) rather than
+   here: a screen's control group is 545px, the viewer chip 93, the search
+   trigger 220, four gaps 40. That is 898 before the trail has a pixel, so
+   below about 1100 the trail is at or under the 20ch floor `.crumbs` sets and
+   the line has to break somewhere.
+
+   It breaks HERE, and that is the correction. Left to the wrap alone the
+   break lands in source order — after the controls — so the viewer chip and
+   the search trigger, the command palette's only pointer affordance, ended up
+   alone at the left of a second line under the trail. The division the file
+   already argues for is the other one: the way in and out stays on the first
+   line, and what this page can do takes the second.
+
+   `flex-basis: 100%` is what breaks it and `order` is what puts it after the
+   globals rather than before them: in document order the controls sit between
+   the trail and the viewer chip, and a line break there would push the chip
+   and the search trigger down with them. */
+@container page (max-width: 1100px) {
+  /* THE ONE PLACE THE BAR BREAKS A LINE. The base rule does not wrap at all
+     (see its own note), so the break below is a layout decision taken at a
+     known width rather than whatever the widest control group happened to
+     cause. */
+  .page-bar {
+    flex-wrap: wrap;
+  }
+
+  .page-controls {
+    order: 9;
+    flex: 0 0 100%;
+    min-width: 0;
+    /* AND THE GROUP ITSELF STOPS WRAPPING, for the reason the slot inside it
+       does below: on its own line it has the bar's whole width, so wrapping
+       would stack rows inside a scroller instead of scrolling. */
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    /* AND THEY SCROLL rather than overflow. A screen's control group is as
+       wide as that screen needs — five window buttons and an export on the
+       audit — and at 390px some of them are past the edge whatever the bar
+       does. Scrolling keeps every one of them reachable, which overflowing
+       does not. */
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  /* THE GROUP DOES NOT WRAP INSIDE ITS OWN SCROLLER. `.wrap` is on the slot
+     for the wide bar, where wrapping is what keeps a long group inside the
+     page; inside a horizontal scroller it wraps to the scroller's own width
+     instead of scrolling, which is the one thing that would hide the tail
+     again. */
+  .page-controls .page-actions {
+    flex-wrap: nowrap;
+  }
 }
 
 /* ---- The state bar ------------------------------------------------------ */
@@ -652,6 +800,15 @@
 
 .object-head.peek .object-title {
   font-size: var(--fs-lg);
+}
+
+/* THE OBJECT'S STATE, BESIDE ITS NAME — and it keeps its width. These are
+   pills carrying a word each: "13 problems" squeezed to "13 pro…" is a mark
+   that says something else, and "middle not shown" cut anywhere is a mark
+   that says nothing. The HEADING is what gives way in this row, which is what
+   `.object-title` wears `.clamp` for. */
+.object-status {
+  flex: 0 0 auto;
 }
 
 .fact-line {
@@ -1538,38 +1695,14 @@ button.histogram-bar[data-empty]:hover {
      the way in and out stays on the first line, and what this page can do
      takes the second. That is the shape the file already argues for one rule
      up — "THE OBJECT'S OWN NAME TAKES THE CUT, never the way back out". */
-  /* The wrap, the floor and the auto height are the BASE rule's now — see the
-     comment on `.page-bar` above, which is where the band this used to miss is
-     written down. What is left here is the phone's own tightening. */
+  /* The wrap, the floor, the auto height and the second line are all
+     elsewhere now — the first three on the BASE rule and the last in the
+     `@container page` block above it, which is where the band a viewport
+     query could not see is written down. What is left here is the phone's own
+     tightening. */
   .page-bar {
     padding: 0 var(--space-2);
     gap: var(--space-1);
-  }
-
-  /* THE SECOND LINE. `flex-basis: 100%` is what breaks it, and `order` is what
-     puts it after the globals rather than before them: in document order the
-     controls sit between the trail and the viewer chip, and a line break there
-     would push the chip and the search trigger down with them. */
-  .page-controls {
-    order: 9;
-    flex: 0 0 100%;
-    min-width: 0;
-    /* AND THEY SCROLL rather than overflow. A screen's control group is as
-       wide as that screen needs — five window buttons and an export on the
-       audit — and at 390px some of them are past the edge whatever the bar
-       does. Scrolling keeps every one of them reachable, which overflowing
-       does not. */
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-  }
-
-  /* THE GROUP DOES NOT WRAP INSIDE ITS OWN SCROLLER. `.wrap` is on the slot
-     for the wide bar, where wrapping is what keeps a long group inside the
-     page; inside a horizontal scroller it wraps to the scroller's own width
-     instead of scrolling, which is the one thing that would hide the tail
-     again. */
-  .page-controls .page-actions {
-    flex-wrap: nowrap;
   }
 
   /* THE VIEWER IS ITS MARK HERE. The chip is 117px of a 390px bar for a name

@@ -579,42 +579,79 @@ describe("the frame's layout", () => {
     expect(block(narrow, ".table tr + tr")).toMatch(/border-top:/);
   });
 
-  test("the page bar wraps rather than pushing the chrome off a phone", () => {
+  test("the page bar shrinks, and breaks only where it was told to", () => {
     const css = sheet("frame.css");
     const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
     expect(narrow, "the narrow breakpoint is gone").toContain(".page-bar");
 
-    // THE BAR WRAPS AT EVERY WIDTH, because what overflows it is CONTENT.
-    // Behind the phone breakpoint this missed a whole second band: a screen's
-    // own control group is `flex: 0 0 auto` and the turns list's is 478px, so
-    // at 1180px with the rail and the sidebar open the SEARCH TRIGGER — the
-    // command palette's only pointer affordance — was past the right edge on
-    // the turns list and the event log, and the turns page took the whole
-    // document to 1263 so the heading scrolled sideways with it.
+    // THE BASE BAR DOES NOT WRAP. `flex-wrap: wrap` was on it at every width
+    // and it is the wrong instrument: a flex container assigns items to lines
+    // by their size BEFORE any shrinking, so `wrap` means "never shrink,
+    // always break" — and the break lands in source order, which on a turn
+    // page is after the screen's own controls. Measured on
+    // `#/activity/turns/<id>` at a 1919px window with the rail and the
+    // sidebar open: a 1587px bar, and the viewer chip and the SEARCH TRIGGER
+    // — the command palette's only pointer affordance — alone at the left of
+    // a second line under the trail, with a hundred pixels spare on the
+    // first.
     //
-    // A FLOOR RATHER THAN A HEIGHT, so a wrapped bar is not clipped and an
-    // unwrapped one is exactly the height it always was.
+    // A FLOOR RATHER THAN A HEIGHT, so the two rows the container query and
+    // the control group's own wrap can create are not clipped, and a bar that
+    // needs neither is exactly the height it always was.
     const base = css.slice(0, css.indexOf("@media (max-width: 860px)"));
     const wide = block(base, ".page-bar");
-    expect(wide).toMatch(/flex-wrap:\s*wrap/);
+    expect(wide).toMatch(/flex-wrap:\s*nowrap/);
     expect(wide).toMatch(/min-height:\s*var\(--page-bar-h\)/);
     expect(wide).toMatch(/height:\s*auto/);
     // AND NOT A FIXED HEIGHT ANYWHERE ELSE, which is the declaration that
     // would silently undo it.
     expect(
       rules(css, ".page-bar").join(" "),
-      "a fixed height clips the second line the wrap creates",
+      "a fixed height clips the second row the container query creates",
     ).not.toMatch(/(^|[;\s])height:\s*var\(--page-bar-h\)/);
 
-    // AND THE SECOND LINE IS THE PAGE'S OWN CONTROLS: a full basis is what
+    // THE TRAIL IS THE ONE THING THAT GIVES WAY, and it stops before the way
+    // back out is gone. `flex-grow` is the `.spacer` this replaced; the large
+    // shrink factor is the ordering against the viewer chip and the search
+    // trigger; and the floor is what keeps `overflow: hidden` from clipping
+    // the ancestors, which at `min-width: 0` rendered the trail as "Activit".
+    const crumbs = block(base, ".crumbs");
+    expect(crumbs).toMatch(/flex:\s*1 100 auto/);
+    expect(crumbs).toMatch(/min-width:\s*20ch/);
+
+    // AND THE CONTROL GROUP DOES NOT SHRINK BY SO MUCH AS A FRACTION. It
+    // wraps, so a shrink does not shave a label, it drops the last control
+    // onto a row of its own — measured at a 1250px bar, a 0.13px share of the
+    // overflow put "Copy link" on a second row while the trail still had
+    // 250px to give. `max-width` is the valve `flex-shrink: 0` would
+    // otherwise remove: a group wider than the whole bar still wraps.
+    const controls = block(base, ".page-controls");
+    expect(controls).toMatch(/flex:\s*0 0 auto/);
+    expect(controls).toMatch(/max-width:\s*100%/);
+    expect(controls).toMatch(/flex-wrap:\s*wrap/);
+    expect(controls).toMatch(/justify-content:\s*flex-end/);
+
+    // THE BREAK IS A CONTAINER QUERY, because what overflows is the BAR and
+    // a viewport query cannot see it: the rail and an open workspace sidebar
+    // take 330px, so a 1919px window and a 1440px window with the sidebar
+    // shut give the same bar. `.page` is the container that measures it.
+    expect(block(base, ".page"), "the page is no longer a container").toMatch(
+      /container:\s*page \/ inline-size/,
+    );
+    const atBreak = css.slice(css.indexOf("@container page (max-width:"));
+    expect(atBreak, "the page bar's own break is gone").toContain(".page-controls");
+    // AND THE SECOND ROW IS THE PAGE'S OWN CONTROLS: a full basis is what
     // breaks the line, an order past the globals is what keeps the viewer
     // chip and the search trigger on the first one, and the scroll is what
-    // makes a group wider than the phone reachable rather than merely
-    // out of sight.
-    const controls = block(narrow, ".page-controls");
-    expect(controls).toMatch(/flex:\s*0 0 100%/);
-    expect(controls).toMatch(/order:\s*\d/);
-    expect(controls).toMatch(/overflow-x:\s*auto/);
+    // makes a group wider than the bar reachable rather than merely out of
+    // sight.
+    const broken = block(atBreak, ".page-controls");
+    expect(broken).toMatch(/flex:\s*0 0 100%/);
+    expect(broken).toMatch(/order:\s*\d/);
+    expect(broken).toMatch(/overflow-x:\s*auto/);
+    // …and the bar has to be told to wrap again, since the base rule no
+    // longer does.
+    expect(block(atBreak, ".page-bar")).toMatch(/flex-wrap:\s*wrap/);
 
     // AND THE BOTTOM BAR IS NAVIGATION. Its foot carried the engine pill, the
     // theme switch and the density switch — 250px of 390, leaving about two

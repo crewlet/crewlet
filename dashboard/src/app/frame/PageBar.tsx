@@ -193,8 +193,16 @@ export function PageBar({
           />
         </span>
       )}
+      {/* AND IT IS WHAT PUSHES EVERYTHING ELSE RIGHT. A `.spacer` used to sit
+          between the trail and the controls doing that job, which was fine
+          while the trail was rigid — and the trail being rigid is exactly
+          what broke the bar: a flex container assigns items to lines by their
+          UNSHRUNK size, so a 427px trail forced a second line that a trail
+          willing to give up 250px would not have. `.crumbs` is the bar's one
+          flexible item now (see frame.css), so it both absorbs the free space
+          and yields it, and a second grower beside it would halve what it
+          gets for nothing. */}
       <Breadcrumb crumbs={crumbs} />
-      <span className="spacer" />
       {/* WHAT THIS PAGE CAN DO, IN ONE ELEMENT.
           The portalled slot and the frame's own actions were two siblings of
           the bar, which is fine until the bar has to fit a phone: there they
