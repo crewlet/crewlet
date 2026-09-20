@@ -144,6 +144,16 @@ type FanQuery struct {
 	Dim    int
 
 	// Limit caps the fused answer. Zero takes [ReturnDepth].
+	//
+	// BOUNDED ABOVE BY WHAT A PARTICIPANT SENDS, which is a property of
+	// the protocol rather than a policy: each returns its top-[FuseN] per
+	// method, so the fusion sees at most FuseN of each however many the
+	// caller asks for, and a Limit past that is answered short with
+	// nothing on the answer saying so. Every caller in this tree sits
+	// under it — the tracker's own ceiling is fifty and the knowledge
+	// seam's largest ask is twenty-four — and that agreement is held by a
+	// test in internal/engine, where the two are wired together, rather
+	// than by two constants in two packages happening to match.
 	Limit int
 }
 
@@ -502,6 +512,12 @@ func fuseSlices(answers []Slice, table []Assigned, limit int) Answer {
 		}
 		return ids
 	}
+	// THE MERGE DEPTH IS [FuseN] RATHER THAN THE ASK, and it does not
+	// narrow with it. Reciprocal rank fusion ranks on a document's place
+	// in BOTH lists, so a document ranked thirtieth lexically and fifth
+	// semantically outranks one ranked ninth in a single half — and it can
+	// only do so if the merge kept thirty. A depth cut to the caller's
+	// limit would be cheaper and would answer a different, worse question.
 	fused := Fuse(
 		keys(MergeByScore(lexical, FuseN)),
 		keys(MergeByScore(semantic, FuseN)),

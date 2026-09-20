@@ -160,7 +160,7 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 		// ranking: asking for exactly the limit and then removing three
 		// skill pages would return five results where eight were
 		// available.
-		Limit: q.Hits() * searchOverfetch,
+		Limit: q.Hits() * SearchOverfetch,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
@@ -205,12 +205,18 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 	return out
 }
 
-// searchOverfetch is how many times the limit is asked for before exclusions.
+// SearchOverfetch is how many times the limit is asked for before exclusions.
 //
 // Three. The exclusions drop a bounded fraction — tool-skill pages in one
 // reserved container — so a wider factor buys nothing and a narrower one
 // returns short result sets on a company with many skills.
-const searchOverfetch = 3
+//
+// EXPORTED BECAUSE IT IS HALF OF AN INVARIANT NOTHING ELSE CAN SEE: it
+// multiplies the caller's limit into what the fan-out is asked for, and a
+// fan-out answers at most [github.com/crewlet/crewlet/internal/search.FuseN]
+// per method. internal/engine, where the two are wired, is what holds the
+// product under that ceiling — which it can only do if it can name this.
+const SearchOverfetch = 3
 
 // isExcluded reports a container a search never returns.
 func (s *Searcher) isExcluded(container string) bool {
