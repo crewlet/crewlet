@@ -440,7 +440,13 @@ func messageErased(ctx context.Context, tx *sql.Tx, messageID, opID string) (boo
 		return false, fmt.Errorf("chat: read the erase marker for message "+
 			"%s: %w", messageID, err)
 	}
-	return !(author.Valid && author.String == opID && opID != ""), nil
+	// THE MARKER'S OWN AUTHOR is the one record that may still act: the
+	// erase that wrote the marker has to be able to remove the rows it
+	// is erasing. Named rather than negated inline, because the De
+	// Morgan form of this reads as three unrelated refusals instead of
+	// one exception.
+	ownMarker := author.Valid && opID != "" && author.String == opID
+	return !ownMarker, nil
 }
 
 // nullInstant is a nullable time column's value: NULL for an absent one.

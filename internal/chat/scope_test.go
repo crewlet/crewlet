@@ -5,9 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/google/uuid"
 )
 
 // onePath is the single path a scope must resolve to, or the test fails

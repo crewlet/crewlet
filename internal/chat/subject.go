@@ -7,8 +7,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // Chat as a state-log DOMAIN: what a record is, and what the subject is for.

@@ -5,9 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/google/uuid"
 )
 
 // classification is what every closed set on [chat.ObjectKind] must answer for

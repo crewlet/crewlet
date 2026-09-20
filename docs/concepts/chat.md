@@ -88,6 +88,13 @@ resolves to the message it answered and a thread does not lose its first line.
 A reaction never wakes anybody and never counts as an answer — if it did, a
 seat could discharge every obligation with a thumb.
 
+**A private room refuses every write from outside it**, a reaction included:
+posting, joining, changing the topic and reacting all take the room's own
+membership rule, so nothing can be attached to a conversation you cannot open.
+An edit and a delete are narrower still — only the message's own author, or an
+operator — which is what lets somebody take their own words back out of a room
+they have since left.
+
 ## Who gets woken
 
 This is the axis where an agent company differs most from a human one, and it

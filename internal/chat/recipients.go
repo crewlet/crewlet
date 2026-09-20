@@ -124,6 +124,28 @@ func Resolve(r Routing) ([]Candidate, bool) {
 	return c.out, c.truncated
 }
 
+// ResolveMentions is the MENTION ARM ALONE, which is the whole of what an EDIT
+// may honestly wake.
+//
+// An edit is not a second message. Raising the room's standing arms again
+// would page a thread, a room's followers and a direct conversation's other
+// side every time somebody fixed a typo — while a colleague the edit NOW NAMES
+// has been addressed by it and has heard nothing about it at all. So the
+// caller passes the handles the edit added and this raises exactly those,
+// under the same privacy rule and the same cap the mention arm has when a
+// message is first posted.
+//
+// A SEPARATE ENTRY POINT rather than a [Routing] with its other fields left
+// empty, because two of the arms cannot be silenced that way: a direct
+// conversation's arm is keyed on the room's KIND, and the follow-all arm on a
+// flag the membership carries — and a caller that zeroed either to suppress
+// them would be lying about the room in order to get the routing it wanted.
+func ResolveMentions(r Routing) ([]Candidate, bool) {
+	c := &collector{}
+	c.add(ReasonMention, limitFor(ReasonMention), r.mentioned())
+	return c.out, c.truncated
+}
+
 // Candidates is every handle a record says its message concerned, in
 // precedence order.
 //
@@ -157,7 +179,7 @@ func Candidates(n *Notify) []Candidate {
 			// unknown reason — which is the conservative half: a
 			// seat may absorb it rather than having to answer a
 			// question this build cannot read.
-			unknown = append(unknown, Candidate{Handle: r.Handle, Reason: r.Reason})
+			unknown = append(unknown, Candidate(r))
 			continue
 		}
 		byReason[r.Reason] = append(byReason[r.Reason], r.Handle)
@@ -247,7 +269,13 @@ func RecipientsOf(candidates []Candidate) []Recipient {
 	}
 	out := make([]Recipient, 0, len(candidates))
 	for _, c := range candidates {
-		out = append(out, Recipient{Handle: c.Handle, Reason: c.Reason})
+		// A CONVERSION RATHER THAN A FIELD-BY-FIELD LITERAL, and the
+		// reason is the failure mode rather than the line count: the
+		// two types differ only in [Recipient]'s wire tags, which a
+		// conversion ignores — so a field added to one and not the
+		// other stops COMPILING here, where a literal would silently
+		// drop it out of every record this engine publishes.
+		out = append(out, Recipient(c))
 	}
 	return out
 }

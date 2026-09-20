@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/google/uuid"
 )
 
 // handlesOf is n DISTINCT handles, for the cases that are about a COUNT.
