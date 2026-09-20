@@ -10,13 +10,12 @@ import "github.com/crewlet/crewlet/internal/notify"
 // is written and read.
 func Prompt() notify.ChatPrompt {
 	return notify.ChatPrompt{
-		Backend:     Backend,
-		Label:       "Mattermost",
-		DirectKinds: DirectKinds,
-		// NO channel-id prefix. Mattermost ids are 26 opaque lowercase
-		// alphanumerics, so a prefix test would mark arbitrary public
-		// channels as direct messages — see [notify.Addressed].
-		DMPrefix: "",
+		Backend: Backend,
+		Label:   "Mattermost",
+		// The backend's own rule, and the same value its transport
+		// hands the working indicator — see [AddressRule], which is
+		// also where the missing channel-id prefix is explained.
+		Address: AddressRule(),
 		// @all and @channel are synonyms for everyone in the channel;
 		// @here narrows to whoever is online.
 		Collectives:   "`@all` / `@channel` / `@here`",

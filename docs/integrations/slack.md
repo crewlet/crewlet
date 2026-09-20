@@ -440,7 +440,7 @@ integrations:
 | Mode | Shows the status when… |
 |---|---|
 | `always` *(default)* | every Slack-triggered turn, including passive top-level channel messages and `@here` / `@channel` broadcasts |
-| `addressed` | a human is plausibly waiting on **this** agent: a DM or group DM, a direct `@mention` (including `app_mention`), or a thread the agent already follows |
+| `addressed` | a human is plausibly waiting on **this** agent: a DM or group DM, a direct `@mention` (including `app_mention`), or a thread the agent is in **because it was named there** or was subscribed to it explicitly |
 
 > **There is no `off`.** What it bought was a company whose agents think in
 > silence for minutes at a time, which is the state this feature exists to
@@ -448,8 +448,10 @@ integrations:
 > `addressed`, which is the same judgement made per message rather than once
 > for the deployment.
 
-`addressed` deliberately excludes passive channel traffic and collective
-addresses. Every bot in a channel is woken by a top-level message, and the
+`addressed` deliberately excludes passive channel traffic, collective
+addresses, and a thread the agent merely spoke in once — being in a
+conversation is not being asked something in it, and the reason the agent
+follows a thread is what decides which it is. Every bot in a channel is woken by a top-level message, and the
 [triage prompt](../concepts/turn-engine.md) tells most of them to stay
 silent — so `always` in a shared channel with five agents lights up five
 indicators for a message none of them will answer. Use `always` in a

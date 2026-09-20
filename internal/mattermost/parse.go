@@ -192,12 +192,6 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	}}, nil
 }
 
-// metadata is what every downstream consumer reads off a chat notification.
-//
-// The KEY NAMES are backend-neutral even where the values are not:
-// `thread_ts` carries a Mattermost root-post id, because the coalescer, the
-// working-status resolver and the sandbox round trip all read that one name
-// across every chat backend. Only the value is backend-shaped.
 // canonicalKind maps Mattermost's single-letter channel type onto the shape
 // every backend describes a surface with.
 //
@@ -218,48 +212,61 @@ func canonicalKind(raw string) types.ChannelKind {
 	}
 }
 
+// metadata is what every downstream consumer reads off a chat notification.
+//
+// The KEY NAMES are the spine's, not this backend's, even where the values
+// are not: [notify.ThreadField] carries a Mattermost root-post id, because
+// the coalescer, the working-status resolver and the sandbox round trip all
+// read that one name across every chat backend. Only the value is
+// backend-shaped.
 func metadata(body map[string]any, seat Seat, post map[string]any, reach notify.Delivery, channelKind string) map[string]string {
 	root := str(post, "root_id")
 	m := map[string]string{
-		"transport": Backend,
-		"channel":   str(post, "channel_id"),
+		notify.TransportField: Backend,
+		notify.ChannelField:   str(post, "channel_id"),
 		// Mattermost's single-letter channel type: O(pen), P(rivate),
 		// D(irect), G(roup DM). Server-stamped and always present, which
 		// is why this backend needs no channel-id-prefix heuristic — and
 		// must not have one, since its ids are opaque alphanumerics that
 		// would mark arbitrary public channels as direct messages.
-		"channel_type": channelKind,
+		notify.ChannelTypeField: channelKind,
 		// The canonical shape beside the raw letter. Both, because the
 		// raw one is what a prompt and an operator recognise and the
 		// canonical one is what the learning workers read — and the
 		// mapping belongs here, in the only code that knows what "G"
 		// means (see notify.ChannelKindField).
 		notify.ChannelKindField: string(canonicalKind(channelKind)),
-		"channel_name":          str(body, "channel_name"),
-		"ts":                    str(post, "id"),
-		"thread_ts":             root,
-		"user":                  str(post, "user_id"),
+		notify.ChannelNameField: str(body, "channel_name"),
+		notify.MessageIDField:   str(post, "id"),
+		notify.ThreadField:      root,
+		notify.UserField:        str(post, "user_id"),
 		"bot_user_id":           seat.UserID,
 		// Mattermost addresses a bot by NAME, so a prompt needs both:
 		// the id to recognise its own posts, the username to write a
 		// mention that renders.
-		"bot_username":         seat.Username,
-		"actor_external_id":    str(post, "user_id"),
-		"thread_follow_reason": string(reach.Reason),
+		"bot_username":    seat.Username,
+		notify.ActorField: str(post, "user_id"),
+		// WHY THIS MESSAGE reached the seat, which for a top-level
+		// mention is the only answer there is: it rode no follow.
+		notify.FollowReasonField: string(reach.Reason),
 	}
-	// thread_anchor is where a reply goes: the thread if there is one,
-	// otherwise this post, which becomes the thread the moment anybody
-	// answers under it.
-	m["thread_anchor"] = strOr(root, str(post, "id"))
-	if root != "" && reach.Deliver {
-		m["thread_following"] = "true"
+	// Where a reply GOES, which is a different question — [notify.Anchor]
+	// is the one derivation, and it reads the two keys above.
+	m[notify.ThreadAnchorField] = notify.Anchor(m)
+	if root != "" && reach.Deliver && reach.Reason != "" {
+		// WHY THE SEAT IS IN THIS THREAD, which is the only answer a
+		// later reply has once the message that named it has scrolled
+		// away. The REASON, never a bare "true": a follow is not an
+		// ask, and which follow decides whether this reply obliges an
+		// answer — see [notify.FollowReason.Addresses].
+		m[notify.FollowingField] = string(reach.Reason)
 	}
 	if replayed, _ := body["replayed"].(bool); replayed {
 		// A message re-read over REST across a reconnect gap rather than
 		// delivered live. The prompt says so, because "this arrived
 		// while I was disconnected" changes how stale the seat should
 		// assume the conversation is.
-		m["replayed"] = strconv.FormatBool(true)
+		m[notify.ReplayedField] = strconv.FormatBool(true)
 	}
 	return m
 }
@@ -301,6 +308,23 @@ func targeting(body map[string]any, channelKind, ownID string) notify.Targeting 
 // DirectKinds are Mattermost's channel types for a private conversation:
 // D(irect) and G(roup DM), against O(pen) and P(rivate) for rooms.
 var DirectKinds = []string{"D", "G"}
+
+// AddressRule is how this backend decides a message was addressed to a seat.
+//
+// ONE DECLARATION, read by both doors: the prompt that tells an agent it was
+// asked, and the working indicator that tells a person the agent is working.
+// The two answering differently raises a spinner over a turn that may end in
+// silence, or ends one in silence after raising a spinner.
+//
+// NO channel-id prefix, deliberately — see [notify.AddressRule.DMPrefix].
+// Mattermost ids are 26 opaque lowercase alphanumerics, so a prefix test
+// would mark arbitrary public channels as direct messages.
+func AddressRule() notify.AddressRule {
+	return notify.AddressRule{
+		DirectKinds: DirectKinds,
+		Follows:     notify.AddressingFollows(),
+	}
+}
 
 func isDirect(kind string) bool { return slices.Contains(DirectKinds, kind) }
 

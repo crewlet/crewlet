@@ -545,10 +545,6 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		TraceID: ev.TraceID, ParentSpanID: ev.SpanID,
 	})
 	// A DERIVED ID WHERE THE PRODUCER HAD ONE — see [Routed.WakeID]. It
-	// replaces the random one events.New minted rather than being carried
-	// beside it, because the id is what the inbox and the ledger key on
-	// and a second field would be a second thing to remember to check.
-	// A DERIVED ID WHERE THE PRODUCER HAD ONE — see [Routed.WakeID]. It
 	// REPLACES the random one events.New minted rather than riding beside
 	// it, because the id is what the inbox and the fleet completion ledger
 	// key on, and a second field would be a second thing to remember to

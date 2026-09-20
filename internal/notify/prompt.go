@@ -245,9 +245,6 @@ func (r Prompts) With(p Prompt) Prompts {
 	if next.bySource == nil {
 		next.bySource = map[string]Prompt{}
 	}
-	if next.fallback == nil {
-		next.fallback = Generic{}
-	}
 	next.bySource[p.Source()] = p
 	return next
 }
@@ -257,9 +254,22 @@ func (r Prompts) With(p Prompt) Prompts {
 // NEVER NIL. Every caller would otherwise need the same nil check, and the one
 // that forgot it would panic on an event from a source somebody added to
 // config that afternoon.
+//
+// THE ZERO VALUE ANSWERS TOO, which is what makes that promise true rather
+// than a convention [NewPrompts] keeps: a service built with no prompts at
+// all is an ordinary configuration — every node has one before an
+// integration is wired — and its registry carried a nil fallback, so the
+// first delivery of ANY source panicked inside the prompt call. The
+// fallback is resolved on the read rather than normalised into the value,
+// because a value that must be constructed to be usable is a zero value the
+// type should have refused, and [Prompts] is copied and passed by value on
+// every inbound event.
 func (r Prompts) For(source string) Prompt {
 	if p, ok := r.bySource[source]; ok {
 		return p
+	}
+	if r.fallback == nil {
+		return Generic{}
 	}
 	return r.fallback
 }

@@ -712,7 +712,7 @@ slower leaves a visible gap. Tune the server setting and the engine follows.
 | Mode | Shows the status when… |
 |---|---|
 | `always` *(default)* | every Mattermost-triggered turn |
-| `addressed` | a DM, a direct mention, or a thread the agent already follows |
+| `addressed` | a DM, a direct mention, or a thread the agent is in **because it was named there** or was subscribed to it explicitly — a thread it merely spoke in once does not count |
 
 > **There is no `off`.** What it bought was a company whose agents think in
 > silence for minutes at a time, which is the state this feature exists to
