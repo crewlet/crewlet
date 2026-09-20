@@ -169,10 +169,10 @@ func writeVector(t *testing.T, db *store.DB, source, id string, rev int64) {
 	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(context.WithoutCancel(t.Context()), `
 			INSERT INTO kb_vectors
-				(source, source_id, source_rev, model, dim, search_shard,
-				 text_sha, embedding, embedded_at, version)
-			VALUES (?, ?, ?, 'm', 8, 0, 'sha', x'', 0, 1)
-			ON CONFLICT (source, source_id) DO UPDATE SET
+				(source, source_id, chunk, source_rev, model, dim,
+				 search_shard, text_sha, embedding, embedded_at, version)
+			VALUES (?, ?, 0, ?, 'm', 8, 0, 'sha', x'', 0, 1)
+			ON CONFLICT (source, source_id, chunk) DO UPDATE SET
 				source_rev = excluded.source_rev`,
 			source, id, rev)
 		return err

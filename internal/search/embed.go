@@ -12,11 +12,11 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The embedding duty: ONE fleet singleton, one provider bill, N copies.
@@ -85,15 +85,47 @@ const (
 	// raising the provider's, which is the half that is actually slow.
 	EmbedInterval = time.Minute
 
-	// EmbedInputBytes caps what ONE source contributes to a request.
+	// EmbedChunkBytes is the window one vector represents.
 	//
-	// 8 KiB. Past it the text is CUT rather than refused, and that is the
-	// deliberate opposite of what this engine does with a vendor-limited
-	// field elsewhere: a page's first eight kibibytes are what a semantic
-	// search is about, so cutting keeps the document findable where
-	// refusing would remove it from the corpus entirely with nothing to
-	// say so.
-	EmbedInputBytes = 8 << 10
+	// A DOCUMENT IS EMBEDDED WHOLE, IN WINDOWS. It used to be cut at its
+	// first 8 KiB, defended on the grounds that refusing the document
+	// outright would be worse — true, and the wrong comparison: the third
+	// option is to embed all of it and keep a vector per window, which is
+	// what this is. On a page longer than the old cut the tail was never
+	// sent to the provider, so it was not in the vector, so no query could
+	// reach it: a handbook whose rate-limit section is on its fourth page
+	// answered nothing to "how do we handle rate limits", from a corpus
+	// that holds the answer.
+	//
+	// FOUR KIBIBYTES, and the two directions bound it from both sides. A
+	// window is one vector, and a vector represents its window's SUBJECT —
+	// so a window holding four unrelated sections represents none of them,
+	// which is the failure a bigger one has. A smaller one costs vectors:
+	// the median page is well under this and stays exactly one, so the
+	// provider bill and the stream rise only for the long documents that
+	// were not indexed at all before. It is also far inside every
+	// embedding model's own input limit — roughly a thousand tokens of
+	// English against the eight thousand the narrowest takes — so nothing
+	// here has to know which model a company wired.
+	//
+	// THERE IS NO CEILING ON THE NUMBER OF WINDOWS, and that is the point:
+	// both corpora are already bounded where a bound belongs, at the write
+	// that refuses an over-long body — 512 KiB for a page, 32 KiB for a
+	// task, each REFUSED naming the field rather than stored short. So the
+	// worst document this duty can be handed is ~147 windows, and adding a
+	// cap here would reintroduce the silent cut this replaced, one
+	// magnitude further out where nobody would find it.
+	EmbedChunkBytes = 4 << 10
+
+	// EmbedChunkOverlap is how much of the previous window each one repeats.
+	//
+	// A section boundary does not fall where a byte count says. Without an
+	// overlap a paragraph straddling two windows is represented well by
+	// neither — half a thought in each vector — and a query about it
+	// matches neither well. 512 bytes is about a long paragraph, and an
+	// eighth of the window is the proportion that costs one extra window
+	// per 8 KiB of document rather than a meaningful share of the bill.
+	EmbedChunkOverlap = 512
 )
 
 // THERE IS NO STALL WINDOW HERE, deliberately, and the constant that used to
@@ -210,23 +242,124 @@ type Document struct {
 	Body  string
 }
 
-// text is what is actually sent, cut to the per-source ceiling.
+// text is the whole document as the provider sees it.
 //
-// Through [textcut.Bytes], like every other cut in this package: unmarked,
-// because what the provider receives is embedding INPUT and an appended
-// character would be a token in the vector rather than a note about one.
+// NOTHING IS CUT HERE ANY MORE. It is split into windows by [Document.chunks]
+// and every one of them is sent; see [EmbedChunkBytes] for why a bound at this
+// layer would be the silent cut it replaced.
 func (d Document) text() string {
 	joined := strings.TrimSpace(d.Title) + "\n\n" + strings.TrimSpace(d.Body)
-	return textcut.Bytes(strings.TrimSpace(joined), EmbedInputBytes)
+	return strings.TrimSpace(joined)
 }
 
-// sha is the digest of the exact text that was embedded.
+// chunks splits the document into the windows one vector each represents.
 //
-// OF THE CUT TEXT, not of the source, and that is what makes it able to answer
-// the question it exists for: a source rewritten into the same words — a
-// re-file, a label, a parent move — produces the same digest and is not paid
-// for again. A digest of the whole body would differ whenever anything below
-// the cut moved, which is text the provider never saw.
+// THE TITLE LEADS EVERY WINDOW, which is the one thing a naive split loses: a
+// vector for page four of a runbook, with no idea which runbook, matches a
+// query about its subject no better than a vector for anybody's page four.
+// Repeating the title costs a couple of hundred bytes per window and is what
+// makes a deep window still about the document it is in.
+//
+// CUT ON A WORD BOUNDARY where one is near, and always on a RUNE boundary: a
+// plain slice splits a multi-byte rune, and the invalid UTF-8 that produces is
+// substituted by the JSON encoder and reaches the provider as a replacement
+// character in the text it is representing.
+//
+// A document that fits is ONE window with no title repetition and no overlap,
+// which is byte-for-byte what this duty sent before chunking existed — so the
+// short documents that are most of any corpus are unchanged.
+func (d Document) chunks() []string {
+	text := d.text()
+	if text == "" {
+		return nil
+	}
+	if len(text) <= EmbedChunkBytes {
+		return []string{text}
+	}
+	title := strings.TrimSpace(d.Title)
+	lead := ""
+	if title != "" {
+		lead = title + "\n\n"
+	}
+	// The window the BODY gets, once the repeated title has taken its
+	// share. A title long enough to crowd out the text would make every
+	// window mostly heading, so it is bounded by the same rule the rest
+	// of this package uses for a lead-in: at most a third.
+	room := EmbedChunkBytes - len(lead)
+	if room < EmbedChunkBytes/3 {
+		lead = ""
+		room = EmbedChunkBytes
+	}
+	stride := room - EmbedChunkOverlap
+	if stride <= 0 {
+		stride = room
+	}
+
+	var out []string
+	for at := 0; at < len(text); {
+		end := min(at+room, len(text))
+		end = wordEdge(text, at, end)
+		window := strings.TrimSpace(text[at:end])
+		if window != "" {
+			// The first window already opens with the title, so
+			// repeating it there would send it twice.
+			if len(out) == 0 {
+				out = append(out, window)
+			} else {
+				out = append(out, lead+window)
+			}
+		}
+		if end >= len(text) {
+			break
+		}
+		next := at + stride
+		// NEVER STANDS STILL. A word edge that walked the end back
+		// below the stride would otherwise re-emit the same window for
+		// ever on a document with no whitespace in it.
+		if next <= at {
+			next = end
+		}
+		at = next
+	}
+	return out
+}
+
+// wordEdge walks a cut back to the nearest space, and never past a rune.
+//
+// The lookback is bounded so a window with no whitespace in it — a base64
+// blob, a minified line — is cut where it was asked to be rather than
+// collapsing to nothing.
+func wordEdge(text string, from, to int) int {
+	if to >= len(text) {
+		return len(text)
+	}
+	limit := max(from+1, to-EmbedChunkOverlap)
+	for at := to; at > limit; at-- {
+		if text[at] == ' ' || text[at] == '\n' {
+			return at
+		}
+	}
+	// No word boundary in reach: back up to a rune boundary, which is not
+	// optional — invalid UTF-8 reaches the provider as a replacement
+	// character inside the text it is meant to represent.
+	for to > from && !utf8.RuneStart(text[to]) {
+		to--
+	}
+	return to
+}
+
+// sha is the digest of the whole text this document's windows cover.
+//
+// OF THE WHOLE TEXT, which it can be now that the whole text is embedded. It
+// answers the question it exists for — a source rewritten into the same words,
+// a re-file, a label, a parent move, produces the same digest and is not paid
+// for again — and it used to be a digest of the CUT text, which was the only
+// honest choice while everything past the cut was text the provider never saw:
+// a change below it moved nothing that was embedded.
+//
+// PER DOCUMENT rather than per window, because that is the granularity the
+// duty re-embeds at: every window of a document is recomputed together or none
+// is, so a digest per window would be several answers to one question.
 func (d Document) sha() string {
 	sum := sha256.Sum256([]byte(d.text()))
 	return hex.EncodeToString(sum[:])
@@ -488,24 +621,45 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 }
 
 // embed sends one batch and publishes a record per vector it got back.
+//
+// THE UNIT ON THE WIRE IS A WINDOW, not a document: a document is split by
+// [Document.chunks] and every window is its own item in the provider's batch
+// and its own record on the stream. A batch of 128 documents whose bodies are
+// mostly short is still about 128 items — the median document is one window —
+// and a batch holding a runbook is larger by that runbook's windows alone.
 func (e *Embedder) embed(ctx context.Context, source Source, dim int, batch []Document) (int, error) {
-	texts := make([]string, len(batch))
-	for i, doc := range batch {
-		texts[i] = doc.text()
+	// where[i] is which document and which of its windows texts[i] is.
+	// Carried rather than recomputed because the provider answers
+	// POSITIONALLY, so the mapping back has to be the one that was sent.
+	type slot struct{ doc, chunk int }
+	var texts []string
+	var where []slot
+	chunksOf := make([]int, len(batch))
+	for d, doc := range batch {
+		windows := doc.chunks()
+		chunksOf[d] = len(windows)
+		for c, window := range windows {
+			texts = append(texts, window)
+			where = append(where, slot{doc: d, chunk: c})
+		}
+	}
+	if len(texts) == 0 {
+		return 0, nil
 	}
 	vectors, err := e.deps.Embedder.EmbedBatch(ctx, texts)
 	if err != nil {
 		return 0, err
 	}
-	if len(vectors) != len(batch) {
+	if len(vectors) != len(texts) {
 		return 0, fmt.Errorf("search: the provider returned %d vectors for %d "+
-			"documents — they are matched positionally, so a short answer is a "+
-			"re-filing rather than a partial result", len(vectors), len(batch))
+			"windows — they are matched positionally, so a short answer is a "+
+			"re-filing rather than a partial result", len(vectors), len(texts))
 	}
 	published := 0
 	for i, vector := range vectors {
+		at := where[i]
 		if len(vector) == 0 {
-			// A DOCUMENT WITH NOTHING TO EMBED, which is a real state
+			// A WINDOW WITH NOTHING TO EMBED, which is a real state
 			// — an empty page, a task that is a title somebody
 			// deleted — and not a failure. It keeps no vector and is
 			// selected again next pass, which costs one slot in a
@@ -513,19 +667,20 @@ func (e *Embedder) embed(ctx context.Context, source Source, dim int, batch []Do
 			// input is not sent.
 			continue
 		}
-		if err := e.publish(ctx, source, dim, batch[i], vector); err != nil {
-			// A VECTOR THIS DUTY REFUSES COSTS ITS OWN DOCUMENT AND
+		if err := e.publish(ctx, source, dim, batch[at.doc], at.chunk,
+			chunksOf[at.doc], vector); err != nil {
+			// A VECTOR THIS DUTY REFUSES COSTS ITS OWN WINDOW AND
 			// NOT THE BATCH, which is the same rule one level down
 			// from the tick's: the refusal is about one vector, and
-			// dropping the other 127 would make one poisoned
-			// component cost a hundred provider calls' worth of
-			// work. It is not silent — the log names the document —
-			// and it is not lost, because the selection is over the
-			// rows and picks it up again.
+			// dropping the rest would make one poisoned component
+			// cost a hundred provider calls' worth of work. It is
+			// not silent — the log names the document and the
+			// window — and it is not lost, because the selection is
+			// over the rows and picks it up again.
 			if errors.Is(err, errUnusableVector) {
 				e.deps.Logger.WarnContext(ctx, "search_embed_vector_refused",
-					"source", string(source), "id", batch[i].ID,
-					"error", err.Error())
+					"source", string(source), "id", batch[at.doc].ID,
+					"chunk", at.chunk, "error", err.Error())
 				continue
 			}
 			return published, err
@@ -535,9 +690,11 @@ func (e *Embedder) embed(ctx context.Context, source Source, dim int, batch []Do
 	return published, nil
 }
 
-// publish writes one embed record.
-func (e *Embedder) publish(ctx context.Context, source Source, dim int, doc Document, vector []float32) error {
-	subject := Subject{Source: source, ID: doc.ID}
+// publish writes one embed record, for one window.
+func (e *Embedder) publish(ctx context.Context, source Source, dim int,
+	doc Document, chunk, chunks int, vector []float32) error {
+
+	subject := Subject{Source: source, ID: doc.ID, Chunk: chunk}
 	packed, err := pack(vector, dim)
 	if err != nil {
 		return fmt.Errorf("search: %s: %w: %w", subject, errUnusableVector, err)
@@ -556,6 +713,7 @@ func (e *Embedder) publish(ctx context.Context, source Source, dim int, doc Docu
 		Dim:       dim,
 		SourceRev: doc.Version,
 		TextSHA:   doc.sha(),
+		Chunks:    chunks,
 		Embedding: packed,
 	}
 	return e.append(ctx, subject, rec)
@@ -698,6 +856,12 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			FROM tracker_tasks t
 			LEFT JOIN kb_vectors v
 			  ON v.source = 'task' AND v.source_id = t.id
+			 AND v.chunk = 0
+			  -- CHUNK 0, because this join asks about DOCUMENTS and a
+			  -- document is several windows: without it a page with
+			  -- twelve windows is selected twelve times, and the
+			  -- forget arm below would name it twelve times over.
+			  -- Every embedded document has a chunk 0.
 			WHERE t.removed_at IS NULL
 			  AND (v.source_id IS NULL
 			       OR v.source_rev <> t.version
@@ -733,7 +897,7 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			FROM kb_vectors v
 			LEFT JOIN tracker_tasks t
 			  ON t.id = v.source_id AND t.removed_at IS NULL
-			WHERE v.source = 'task' AND t.id IS NULL
+			WHERE v.source = 'task' AND v.chunk = 0 AND t.id IS NULL
 			LIMIT ?`, limit)
 		if err != nil {
 			return err
@@ -776,6 +940,7 @@ func (c TaskCorpus) Coverage(ctx context.Context, model string, dim int) (int, i
 			FROM tracker_tasks t
 			LEFT JOIN kb_vectors v
 			  ON v.source = 'task' AND v.source_id = t.id
+			 AND v.chunk = 0
 			WHERE t.removed_at IS NULL`, model, dim).Scan(&total, &current)
 	})
 	if err != nil {

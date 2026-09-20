@@ -87,6 +87,25 @@ stages**, which is the shape every production vector engine uses anyway:
 2. **Stage two** reranks exactly those candidates against their full vectors,
    by primary key, and returns 150.
 
+**A document is embedded in windows, and scores as its best one.** A single
+vector can only represent a few thousand words, so a long page used to be cut
+at its first 8 KB and everything after that reached no vector at all — a
+handbook whose rate-limit section is on page four answered nothing to "how do
+we handle rate limits", from a corpus that holds the answer. It is now split
+into overlapping 4 KB windows with the title repeated on each (a window that
+does not say which document it is from matches a query about that document's
+subject no better than anybody else's page four), and each window gets its own
+vector.
+
+Both stages then **group by document**, so the 1 200 and the 150 above count
+documents rather than windows and one long page cannot fill an answer with
+itself. A document's score is its **nearest** window, not the average: a
+document is relevant because one of its sections is about the query, and
+averaging would rank a short note that is entirely on topic above a manual with
+a perfect chapter. Most documents are under one window and are unaffected —
+the extra vectors, and the extra provider spend, are for the long documents
+that were previously not searchable past their opening.
+
 The narrow *sibling table* is the load-bearing part rather than a compression
 detail. A row is stored contiguously, so reading any column of a 12 KB row
 costs traversing that row's overflow pages: the identical 1-bit column

@@ -215,7 +215,12 @@ func largestSpace(ctx context.Context, tx *sql.Tx) (string, int, int, error) {
 	err := tx.QueryRowContext(ctx, `
 		SELECT model, dim, COUNT(*) AS n
 		FROM kb_vectors
-		WHERE embedding IS NOT NULL
+		-- CHUNK 0 counts DOCUMENTS, which is what "the corpus" means to
+		-- everything downstream: the recall floor is a curve per corpus
+		-- SIZE, and counting windows would read a corpus of long pages
+		-- as several times larger than it is and hold it to a floor
+		-- meant for a corpus it is not.
+		WHERE embedding IS NOT NULL AND chunk = 0
 		GROUP BY model, dim
 		ORDER BY n DESC, model
 		LIMIT 1`).Scan(&model, &dim, &n)
@@ -232,7 +237,7 @@ func countSpace(ctx context.Context, tx *sql.Tx, model string, dim int) (int, er
 	var n int
 	err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM kb_vectors
-		WHERE model = ? AND dim = ? AND embedding IS NOT NULL`,
+		WHERE model = ? AND dim = ? AND embedding IS NOT NULL AND chunk = 0`,
 		model, dim).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("search: count the corpus: %w", err)
@@ -252,7 +257,12 @@ func sampleVectors(ctx context.Context, tx *sql.Tx, model string, dim, n int) ([
 			SELECT embedding, ROW_NUMBER() OVER (ORDER BY source, source_id) AS rn,
 			       COUNT(*) OVER () AS total
 			FROM kb_vectors
-			WHERE model = ? AND dim = ? AND embedding IS NOT NULL
+			-- ONE WINDOW PER DOCUMENT, which is both halves of this
+			-- sample: a query vector taken from a document's fourth
+			-- window asks about that section rather than about the
+			-- document, and the total this stride is computed against
+			-- has to be the one countSpace reports.
+			WHERE model = ? AND dim = ? AND embedding IS NOT NULL AND chunk = 0
 		)
 		WHERE rn % MAX(total / ?, 1) = 0
 		LIMIT ?`, model, dim, n, n)
@@ -274,11 +284,16 @@ func sampleVectors(ctx context.Context, tx *sql.Tx, model string, dim, n int) ([
 // exactTop is the ground truth: one full scan of the wide table, no candidate
 // pool at all.
 func exactTop(ctx context.Context, tx *sql.Tx, query []byte, model string, dim, limit int) ([]string, error) {
+	// A DOCUMENT SCORES AS ITS BEST WINDOW, exactly as the two-stage scan
+	// it is the ground truth FOR does. Left ungrouped this would rank
+	// windows, so a recall measured against it would compare a list of
+	// documents to a list of sections and report a number about neither.
 	rows, err := tx.QueryContext(ctx, `
 		SELECT source, source_id
 		FROM kb_vectors
 		WHERE model = ? AND dim = ? AND length(embedding) = ?
-		ORDER BY vector_distance_cos(embedding, ?), source, source_id
+		GROUP BY source, source_id
+		ORDER BY MIN(vector_distance_cos(embedding, ?)), source, source_id
 		LIMIT ?`, model, dim, 4*dim, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search: the exact scan: %w", err)
@@ -315,6 +330,7 @@ func meanPairCosine(ctx context.Context, tx *sql.Tx, model string, dim int, quer
 			SELECT vector_distance_cos(embedding, ?)
 			FROM kb_vectors
 			WHERE model = ? AND dim = ? AND length(embedding) = ?
+			  AND chunk = 0
 			ORDER BY source, source_id
 			LIMIT ?`, query, model, dim, 4*dim, against)
 		if err != nil {
@@ -352,7 +368,7 @@ func meanPairCosine(ctx context.Context, tx *sql.Tx, model string, dim int, quer
 func SpacesIn(ctx context.Context, tx *sql.Tx) ([]Space, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT model, dim, COUNT(*) FROM kb_vectors
-		WHERE embedding IS NOT NULL
+		WHERE embedding IS NOT NULL AND chunk = 0
 		GROUP BY model, dim`)
 	if err != nil {
 		return nil, fmt.Errorf("search: list the corpus's embedding spaces: %w", err)

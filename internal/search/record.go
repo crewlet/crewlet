@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,14 +92,29 @@ var Ops = []Op{OpEmbed, OpForget}
 // Valid reports whether an operation off the wire is one this build knows.
 func (o Op) Valid() bool { return slices.Contains(Ops, o) }
 
-// Subject is the object a vector record is about: one source document.
+// Subject is the object a vector record is about: one CHUNK of one source
+// document.
 //
-// ONE SUBJECT PER SOURCE, which is what makes the compaction do the right
-// thing — the stream keeps the newest vector for each document and nothing
-// else, which is exactly the state the table holds.
+// ONE SUBJECT PER CHUNK, which is what makes the compaction do the right
+// thing — the stream keeps the newest vector for each window and nothing else,
+// which is exactly the state the table holds. Keying it on the document alone
+// would retain one message per document, so a document embedded in five
+// windows would keep whichever window was published last and lose four.
+//
+// THE ORDINAL IS ON THE SUBJECT rather than in the payload for that reason and
+// no other: a field the broker cannot see is a field the compaction cannot key
+// on. It also makes a shrink expressible — a document that drops from five
+// windows to two gets a forget on each of the three subjects it no longer
+// fills, so the record the stream retains there is a removal rather than a
+// stale insert a replay from zero would resurrect.
 type Subject struct {
 	Source Source `json:"source"`
 	ID     string `json:"id"`
+
+	// Chunk is the window's ordinal, 0 upward. Zero is the one every
+	// embedded document has, which is what every reader counting DOCUMENTS
+	// rather than vectors filters on.
+	Chunk int `json:"chunk,omitempty"`
 }
 
 // Validate refuses a subject that cannot address a row.
@@ -106,16 +122,41 @@ func (s Subject) Validate() error {
 	if !s.Source.Valid() {
 		return fmt.Errorf("search: %q is not a source this build embeds", s.Source)
 	}
-	if strings.TrimSpace(s.ID) == "" || strings.ContainsAny(s.ID, " \t\n*>") {
+	if strings.TrimSpace(s.ID) == "" || strings.ContainsAny(s.ID, " \t\n*>.") {
 		return fmt.Errorf("search: %q is not a source id — it is a subject "+
-			"token on the wire, so it can be neither empty nor a wildcard",
-			s.ID)
+			"token on the wire, so it can be neither empty, a wildcard, nor "+
+			"carry the separator the chunk ordinal is appended after", s.ID)
+	}
+	// A NEGATIVE ORDINAL IS NOT A WINDOW, and it renders into the subject
+	// token as a `-`, which addresses a row no writer will ever fill and
+	// no forget will ever find.
+	if s.Chunk < 0 {
+		return fmt.Errorf("search: chunk %d is not a window ordinal — they "+
+			"run from 0 upward", s.Chunk)
 	}
 	return nil
 }
 
 // String renders a subject for a log line and for the wire.
-func (s Subject) String() string { return string(s.Source) + "." + s.ID }
+//
+// THE ORDINAL IS ALWAYS PRESENT, including on chunk 0, because the broker
+// compares subject tokens and two spellings of one subject are two retained
+// messages for one window.
+func (s Subject) String() string {
+	return string(s.Source) + "." + s.Token()
+}
+
+// Token is the identity WITHIN the source kind, which is what the framework
+// carries as [statelog.Subject.ID] and therefore what the broker's subject
+// token and its per-subject retention are keyed on.
+//
+// THE ORDINAL IS IN IT, and that is the whole reason this exists rather than
+// the framework being handed the bare id. The stream retains ONE message per
+// subject: with the document as the subject, a page embedded in four windows
+// published four records to one subject and the broker kept the last, so three
+// windows were dropped before any applier saw them — a document silently
+// findable only by whichever quarter of it was published last.
+func (s Subject) Token() string { return s.ID + "." + strconv.Itoa(s.Chunk) }
 
 // ScopePath is the one path a vector record's apply touches.
 //
@@ -214,6 +255,27 @@ type VectorRecord struct {
 	// is what this stops the duty paying for.
 	TextSHA string `json:"text_sha,omitempty"`
 
+	// Chunks is how many windows the document has AS OF THIS RECORD, and
+	// it is what makes a document that SHRANK converge.
+	//
+	// The apply deletes every window of this document at or above it, in
+	// the same transaction and under the same position guard as the write.
+	// Without it a page cut from five windows to two would keep three rows
+	// holding text it no longer contains, findable by meaning for ever,
+	// selected by nothing — the anti-join is driven by the source rows,
+	// which say only that the document is current.
+	//
+	// ON EVERY EMBED RECORD rather than on one of them, because a replay
+	// from zero delivers the retained records in POSITION order and the
+	// stale high-ordinal ones come first: whichever window of the new
+	// version is applied first is the one that has to clear them, and
+	// which that is depends on the order the broker hands them over.
+	//
+	// A ZERO MEANS A BUILD THAT DID NOT WRITE IT, so it deletes nothing —
+	// the one reading under which an older peer's record cannot silently
+	// erase a newer build's windows.
+	Chunks int `json:"chunks,omitempty"`
+
 	// Embedding is the vector as PACKED LITTLE-ENDIAN FLOAT32, which is
 	// byte-for-byte what the column holds and what `vector1bit(?)`
 	// consumes.
@@ -238,7 +300,8 @@ type VectorRecord struct {
 // well as in its field, and re-encoded twice.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"container", "model", "dim", "source_rev", "text_sha", "embedding",
+	"container", "model", "dim", "source_rev", "text_sha", "chunks",
+	"embedding",
 }
 
 // DecodeEnvelope is the FIRST pass, and it never fails on version.

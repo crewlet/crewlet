@@ -209,19 +209,42 @@ func Semantic(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]SemanticHit, 
 	// and without a declared tie break the candidate pool depends on the
 	// scan's own row order, so two nodes rerank different pools and a
 	// paged answer can repeat or skip a document.
+	// A DOCUMENT SCORES AS ITS BEST WINDOW, at BOTH stages, which is what
+	// keeps the two depths meaning what their arithmetic says.
+	//
+	// A document is embedded in chunks, so both tables hold several rows
+	// for it. Left ungrouped, stage one's LIMIT counts WINDOWS — so a
+	// candidate pool sized for 1 200 documents would hold a few hundred on
+	// a corpus of long pages, quietly undoing the over-sample
+	// [BinaryOversample] exists to buy — and the rerank would return one
+	// hit per window, so a single long handbook could fill the answer with
+	// itself.
+	//
+	// MIN rather than a sum or a mean: these are cosine DISTANCES, and a
+	// document is relevant because one of its sections is about the query,
+	// not because all of them are. Averaging would rank a short note that
+	// is entirely on topic above a manual with a perfect chapter, which is
+	// the opposite of what chunking is for.
 	statement := `
 		SELECT c.source, c.source_id, c.container,
-		       vector_distance_cos(v.embedding, ?) AS distance
+		       MIN(vector_distance_cos(v.embedding, ?)) AS distance
 		FROM (
 			SELECT b.source, b.source_id, b.container
 			FROM kb_vectors_bin b
 			WHERE ` + strings.Join(where, " AND ") + `
-			ORDER BY vector_distance_cos(b.bits, vector1bit(?)),
+			GROUP BY b.source, b.source_id, b.container
+			-- THE AGGREGATE IS IN THE ORDER BY rather than the select
+			-- list, which is not a style choice: the arguments are
+			-- bound POSITIONALLY in statement order, and a placeholder
+			-- moved above the WHERE clause would silently re-pair every
+			-- predicate with the wrong value.
+			ORDER BY MIN(vector_distance_cos(b.bits, vector1bit(?))),
 			         b.source, b.source_id
 			LIMIT ?
 		) AS c
 		JOIN kb_vectors v ON v.source = c.source AND v.source_id = c.source_id
 		WHERE length(v.embedding) = ?
+		GROUP BY c.source, c.source_id, c.container
 		ORDER BY distance, c.source, c.source_id
 		LIMIT ?`
 

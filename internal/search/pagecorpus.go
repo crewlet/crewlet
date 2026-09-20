@@ -50,6 +50,12 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			FROM pages_heads p
 			LEFT JOIN kb_vectors v
 			  ON v.source = 'page' AND v.source_id = p.id
+			 AND v.chunk = 0
+			  -- CHUNK 0, because this join asks about DOCUMENTS and a
+			  -- document is several windows: without it a page with
+			  -- twelve windows is selected twelve times, and the
+			  -- forget arm below would name it twelve times over.
+			  -- Every embedded document has a chunk 0.
 			WHERE p.status = 'published' AND p.trashed_at IS NULL
 			  AND (v.source_id IS NULL
 			       OR v.source_rev <> p.edit_version
@@ -87,7 +93,7 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			LEFT JOIN pages_heads p
 			  ON p.id = v.source_id AND p.status = 'published'
 			 AND p.trashed_at IS NULL
-			WHERE v.source = 'page' AND p.id IS NULL
+			WHERE v.source = 'page' AND v.chunk = 0 AND p.id IS NULL
 			LIMIT ?`, limit)
 		if err != nil {
 			return err
@@ -126,6 +132,7 @@ func (c PageCorpus) Coverage(ctx context.Context, model string, dim int) (int, i
 			FROM pages_heads p
 			LEFT JOIN kb_vectors v
 			  ON v.source = 'page' AND v.source_id = p.id
+			 AND v.chunk = 0
 			WHERE p.status = 'published' AND p.trashed_at IS NULL`,
 			model, dim).Scan(&total, &current)
 	})
