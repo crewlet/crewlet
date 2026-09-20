@@ -523,6 +523,55 @@ func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
 	}
 }
 
+// A DRAIN REFUSES THE NEXT APPLY, and it is the drain rather than the teardown
+// that refuses it.
+//
+// The gate is one lock and a flag, so what a test can pin is WHERE it sits: an
+// apply attempted after Drain has returned, with every backend still open and
+// Stop not yet called, must already be refused. The reconcile tick is
+// synchronous and can be mid-apply when a signal lands, and an apply admitted
+// during a drain re-arms the scheduler, the background passes and a first
+// company's inbound edge on a node that is handing its seats back. It is also
+// the only gate that sees an apply arriving over the STREAM from a peer, which
+// the API's own drain gate never does.
+func TestADrainRefusesAnApplyBeforeTheTeardownDoes(t *testing.T) {
+	t.Parallel()
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: b, Company: parsedCompany(t, companyDoc),
+		Dispatch: &engine.Dispatcher{},
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// SERVING FIRST, so the refusal below is the drain's and not a node
+	// that was never able to apply.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+		t.Fatalf("an apply on a serving node was refused: %v", err)
+	}
+
+	e.Drain(context.Background())
+
+	// DRAINED, NOT STOPPED: teardown has not run, the broker is open, and
+	// the apply must already be refused.
+	if err := e.Backends().Queue.Publish(context.Background(), "t.after",
+		ev("external_notification")); err != nil {
+		t.Fatalf("the drain closed the broker, so this case is not testing "+
+			"what it claims: %v", err)
+	}
+	if _, _, err := e.Apply(context.Background(), parsedCompany(t, companyDoc)); err == nil {
+		t.Error("a drained node applied a revision: the apply gate is on the " +
+			"teardown rather than on the drain, so the reconcile tick can " +
+			"re-arm everything the drain is handing back")
+	}
+}
+
 // turnLength is how long the in-flight turn above takes.
 //
 // Comfortably longer than the queue's own stop grace, which is a quarter of a
