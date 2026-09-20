@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -90,6 +91,79 @@ func TestMyWorkKeepsThePriorityOrder(t *testing.T) {
 	if held := r.person("ana"); len(held.Priorities) != 3 {
 		t.Errorf("the stored list is now %v — a READ rewrote somebody's own "+
 			"object", held.Priorities)
+	}
+}
+
+// A PRIORITY LIST IS FILTERED BEFORE IT IS CUT, AND CUT IN ITS OWN ORDER.
+//
+// Two bugs in one read, and both made the highest-signal block in the answer
+// silently wrong. MaxPriorities is 32 and MyWorkRows is 20, so a list longer
+// than twenty is ordinary.
+//
+//   - The cut ran BEFORE the open/removed filter, so a list whose first twenty
+//     entries were all finished rendered EMPTY while live work sat at 21-32.
+//     "You have nothing prioritised" is the one thing this block must not say
+//     falsely.
+//   - The SQL LIMIT was twenty over rows ordered by `t.id`, and the stored
+//     order is re-applied in Go afterwards — so it kept the twenty lowest ids
+//     and threw away whatever the person had actually put first.
+func TestAPriorityListIsFilteredBeforeItIsCut(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// Thirty tasks, ids chosen so the stored order is the REVERSE of id
+	// order: the id-limited read would keep p00..p19 and the honest one
+	// keeps p29..p10.
+	ids := make([]string, 0, 30)
+	for i := range 30 {
+		id := fmt.Sprintf("p%02d", i)
+		assign(t, r, id, "ana")
+		ids = append(ids, id)
+	}
+	stored := make([]string, len(ids))
+	for i, id := range ids {
+		stored[len(ids)-1-i] = id
+	}
+	if _, err := r.writer.WritePriorities(t.Context(), "op-prio", "ana",
+		stored, tracker.PersonAuthority{}); err != nil {
+		t.Fatalf("WritePriorities: %v", err)
+	}
+	r.drain()
+
+	got := r.myWork("ana")
+	if len(got.Priorities) != tracker.MyWorkRows {
+		t.Fatalf("the block holds %d rows, want %d", len(got.Priorities),
+			tracker.MyWorkRows)
+	}
+	// THE TOP OF THE PERSON'S OWN ORDER, not the top of an id order.
+	for i := range tracker.MyWorkRows {
+		if want := stored[i]; got.Priorities[i].ID != want {
+			t.Fatalf("row %d is %q, want %q — the cut is taking the lowest ids "+
+				"rather than the front of somebody's own list",
+				i, got.Priorities[i].ID, want)
+		}
+	}
+
+	// NOW FINISH EVERY ONE OF THE FIRST TWENTY. What is left is live work
+	// the person deliberately ranked, and it must still be there.
+	done := tracker.StatusDone
+	for i := range tracker.MyWorkRows {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-done-"+stored[i],
+			stored[i], "ENG", tracker.NoIfMatch,
+			tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
+			t.Fatalf("finish %s: %v", stored[i], err)
+		}
+		r.drain()
+	}
+
+	after := r.myWork("ana")
+	if len(after.Priorities) == 0 {
+		t.Fatal("the block came back EMPTY while ten ranked, open tasks are " +
+			"below the cut — the filter is running on the wrong set")
+	}
+	if after.Priorities[0].ID != stored[tracker.MyWorkRows] {
+		t.Errorf("the first live row is %q, want %q",
+			after.Priorities[0].ID, stored[tracker.MyWorkRows])
 	}
 }
 

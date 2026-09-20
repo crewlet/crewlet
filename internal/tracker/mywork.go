@@ -315,20 +315,38 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 		// absent rather than throwing on its own length.
 		return []TaskRow{}, nil
 	}
+	// EVERY STORED ID GOES TO THE FILTER, and the cut comes after it.
+	//
+	// This took the first twenty ids and then asked SQL which of THOSE are
+	// open and not removed — so a list whose first twenty entries had all
+	// been finished rendered EMPTY while positions 21 to [MaxPriorities]
+	// held live work somebody had deliberately put there. The block that
+	// can silently come back blank is the highest-signal one in the whole
+	// answer: it is a person's own ordering, and "you have nothing
+	// prioritised" is the one thing it must not say falsely.
+	//
+	// The doc four lines above already states the rule this broke — a
+	// finished task is filtered out HERE rather than rewritten out of the
+	// list — and a cut before the filter is that rule applied to the wrong
+	// set. [MaxPriorities] is 32 against [MyWorkRows]' 20, so the widest
+	// read this can make is twelve ids more than it used to.
 	ids := person.Priorities
-	if len(ids) > MyWorkRows {
-		ids = ids[:MyWorkRows]
-	}
 	open := openGroups()
 	args := make([]any, 0, len(ids)+len(open))
 	for _, id := range ids {
 		args = append(args, id)
 	}
 	args = append(args, open...)
+	// AND THE ROW LIMIT IS THE ID COUNT, not [MyWorkRows], for the same
+	// reason one clause up. These rows come back ordered by `t.id` — the
+	// stored order is re-applied below, because SQL cannot express it — so
+	// a SQL LIMIT of twenty over thirty-two ids kept the twenty lowest
+	// UUIDs and threw away whatever the person had actually put first.
+	// [MaxPriorities] bounds the set, so this is bounded too.
 	rows, _, err := readTasks(ctx, tx,
 		"t.removed_at IS NULL AND t.id IN ("+placeholders(len(ids))+
 			") AND t.status_group IN ("+placeholders(len(open))+")",
-		args, []sortTerm{{Column: "t.id"}}, MyWorkRows, dayStart)
+		args, []sortTerm{{Column: "t.id"}}, len(ids), dayStart)
 	if err != nil {
 		return nil, err
 	}
@@ -341,6 +359,11 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 		if row, live := byID[id]; live {
 			out = append(out, row)
 		}
+	}
+	// THE CUT IS LAST, so what survives is the top of the person's own
+	// order rather than the top of an order nothing here meant.
+	if len(out) > MyWorkRows {
+		out = out[:MyWorkRows]
 	}
 	return out, nil
 }
