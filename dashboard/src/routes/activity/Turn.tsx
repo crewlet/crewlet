@@ -107,12 +107,14 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import {
+  absorbedGroups,
   prefetchBlocks,
   promptWeights,
   collapseRuns,
   isFailed,
   tellStory,
   TURN_STOP,
+  type AbsorbedGroup,
   type PrefetchBlock,
   type PromptWeight,
   type Run,
@@ -998,12 +1000,19 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  * reasons in", and that is a per-phase question. It is also ROUND ONE's tool
  * array: a phase that promotes an MCP tool mid-way sends more than its row says.
  *
- * AND ONE ROW PER PHASE KEY, which is the same rule one step further:
- * [promptWeights] collapses a phase key measured more than once — a turn
- * re-delivered and re-run under its work key — into the run that stands, and
- * the row says how many there were. A turn that ran five times drew ten
- * byte-identical rows before that, which is the flat-list failure this whole
- * screen was rebuilt to stop repeating.
+ * AND ONE ROW PER MEASUREMENT, never one per phase key. This panel used to
+ * collapse a repeated `phase|iteration` into a single row with an `×N` chip,
+ * on the reading that a repeat meant the turn's dispatch had been re-delivered
+ * and re-run. It cannot mean that — a re-delivery mints a new run id
+ * (`adr/0017`) and lands on a different Turn screen, which is what the attempt
+ * banner above is for. What it actually means is a SUSPEND: an executor that
+ * parked on a detached coding run publishes its opening frame, and the resume
+ * re-enters that same phase at that same iteration and publishes the parked
+ * conversation it sends instead. Merged, one real suspend drew `EXECUTE ×2`
+ * with System 0 B and User 0 B over a phase whose opening carried 3,166 bytes
+ * of system prompt, and offered the two prompts as a token "range" — see
+ * [promptWeights], which has the measured pair. They are two prompts, so they
+ * are two rows, and the second says it is a re-entry.
  */
 function PromptWeights({ rows }: { rows: PromptWeight[] }) {
   return (
@@ -1024,20 +1033,28 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
             <span className="t-label num-col">Approx. tokens</span>
           </div>
           {rows.map((w) => (
-            <div key={`${w.phase}|${w.iteration}`} className="row gap-2">
+            /* KEYED ON THE EVENT, not on the phase key: a suspended executor
+               publishes two measurements under one `phase|iteration`, so that
+               pair is a duplicate React key that reconciles the re-entry's
+               figures onto the opening's row. */
+            <div key={w.id} className="row gap-2">
               <PhaseTag phase={w.phase} />
               {w.iteration > 1 && (
                 <span className="t-caption" title="self-iterate round">
                   iter {w.iteration}
                 </span>
               )}
-              {/* THE COUNT IS THE NEWS. Everything else on this row is the
-                  last run's, so without it five identical rows said one thing
-                  five times and a reader had no way to tell a re-run turn
-                  from a repeating panel. */}
-              {w.runs > 1 && (
-                <span className="count-chip" title={runsTitle(w)}>
-                  &times;{w.runs}
+              {/* WHICH OF THE TWO THIS IS. Two rows under one phase tag and
+                  one iteration read as a repeating panel unless the second
+                  says why it is there — and it is the row whose System and
+                  User columns are legitimately 0, because a re-entered phase
+                  opens no conversation. */}
+              {w.resumed && (
+                <span
+                  className="t-caption"
+                  title="the phase was re-entered with the conversation it parked on a coding run"
+                >
+                  resumed
                 </span>
               )}
               <span className="spacer" />
@@ -1067,23 +1084,6 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
         </div>
       </div>
     </div>
-  );
-}
-
-/**
- * What a run count means, said in full where the chip cannot.
- *
- * It names the RANGE rather than only the count when the runs disagreed,
- * because that is the one thing the rows this collapses still had to say: the
- * figures on the row are the last run's, and "they were all the same" and
- * "the first four were bigger" are different facts about the same turn.
- */
-function runsTitle(w: PromptWeight): string {
-  const ran = `this phase ran ${w.runs} times in this turn`;
-  if (w.minTokens === w.maxTokens) return `${ran} — every run measured the same`;
-  return (
-    `${ran} — the last is shown; they ranged ` +
-    `~${fmtCount(w.minTokens)}–${fmtCount(w.maxTokens)} tokens`
   );
 }
 
@@ -1203,6 +1203,66 @@ function EventList({ events, actor }: { events: EventRecord[]; actor: string }) 
   );
 }
 
+/**
+ * THE ROWS THAT ARE NOT LISTED, and where each kind of them went instead.
+ *
+ * Every panel above this one draws a SUBSET of the turn's answer, and on an
+ * ordinary turn the rows left over are most of it: a phase start and a phase
+ * record per phase, plus both halves of the turn's own record. `ABSORBED` in
+ * ./lib/turnstory.ts has named a destination per type all along — "the phase
+ * card it opens", "the turn's header and record" — and `Story.absorbed` said
+ * in as many words that it was counted "so the screen can say where they
+ * went". No screen said. The rows simply stopped at the band, which is the
+ * one shape this page was rebuilt to stop repeating: a row the query returned
+ * and the page silently dropped is indistinguishable from a row the store
+ * never held, and it is the reader counting a `cut` turn's stated event total
+ * against the panels who finds out.
+ *
+ * FOLDED, because it is bookkeeping about rows already drawn rather than news
+ * — the trigger alone answers "is that everything?" and the panel answers
+ * "where did it go?", which is a question a reader asks once.
+ *
+ * NOT INSIDE "Also published". That card is for rows this build has no place
+ * for, and these have a very particular one; it is also absent on the many
+ * turns whose residual band is empty, which is exactly when this statement
+ * still has something to say.
+ */
+function Absorbed({ groups }: { groups: AbsorbedGroup[] }) {
+  if (groups.length === 0) return null;
+  // THE SUM OF THE ROWS, never a second count beside them. `story.absorbed`
+  // holds the same number and handing both in was two ways to say one thing,
+  // which is the shape a heading that disagrees with its own list comes from.
+  const total = groups.reduce((n, g) => n + g.count, 0);
+  return (
+    <Disclosure title="Already on this page" count={total} headingLevel="none">
+      <div className="col gap-1">
+        {groups.map((g) => (
+          /* THE CAPTION REGISTER, ON THE ROW. Measured at the default it
+             inherits, the wire type rendered at 14px — larger than the 12px
+             trigger that introduces this block and than the 13px sentences in
+             every band above it, so the quietest thing on the page was set in
+             its loudest type. `.run-count` keeps its own colour, which is what
+             leaves the ×N as the one bright mark in the row. */
+          <div key={g.type} className="row gap-2 t-caption">
+            <span className="mono truncate">{g.type}</span>
+            {/* ABSENT AT ONE, for the reason [TurnEventRow]'s own count is:
+                "×1" on every line is a column that says nothing. */}
+            {g.count > 1 && (
+              <span className="t-num run-count" title={`${g.count} of these in this turn`}>
+                &times;{g.count}
+              </span>
+            )}
+            <span className="spacer" />
+            <span className="truncate" title={g.destination}>
+              {g.destination}
+            </span>
+          </div>
+        ))}
+      </div>
+    </Disclosure>
+  );
+}
+
 export function TurnScreen({ turnId }: { turnId: string }) {
   const nav = useNavigator();
   // ONE DERIVATION FOR THE PAGE AND THE RAIL — see [useTurnView]. What stays
@@ -1219,6 +1279,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   );
   // The other half of the `given` band, and until now the half nothing read.
   const weights = useMemo(() => promptWeights(story.given), [story]);
+  // WHAT IS NOT LISTED, so the page can account for its whole answer — see
+  // [Absorbed] below, and `Story.absorbed` for what this used to be instead.
+  const absorbed = useMemo(() => absorbedGroups(story.absorbed), [story]);
 
   // THE BREADCRUMB, THE BROWSER TAB AND THE PALETTE'S RECENTS, which all read
   // the one label a screen publishes and otherwise fall back to the raw path
@@ -1486,7 +1549,14 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             <Card.Header
               icon={<BoltGlyph size="sm" />}
               count={story.did.length}
-              subtitle="work outside the tool loop: coding runs, delegations, colleagues"
+              // NOT "colleagues" any more. The band listed the three A2A
+              // audit records and this line advertised them, and none of the
+              // three carries a `turn_id` — so the turn query, which is
+              // `WHERE turn_id = ?`, has never returned one and this heading
+              // has never once drawn an ask. A subtitle naming a row the wire
+              // cannot deliver fails EMPTY, which reads as "this turn talked
+              // to nobody" rather than as a broken panel. See ./lib/turnstory.
+              subtitle="work outside the tool loop: coding runs, delegations, skills"
             >
               <Card.Title>What else it did</Card.Title>
             </Card.Header>
@@ -1535,6 +1605,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             <EventList events={story.rest} actor={role} />
           </Card>
         )}
+
+        <Absorbed groups={absorbed} />
 
         {(rec.summary || rec.learning) && (
           <Card padding="sm">

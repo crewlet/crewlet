@@ -12,9 +12,10 @@
  * the rows it holds do not support.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TurnScreen } from "./Turn.tsx";
+import { ABSORBED } from "~/lib/turnstory.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -229,35 +230,45 @@ test("each phase's prompt size is rendered rather than banded and dropped", asyn
   expect(screen.getByTitle("bytes of conversation a resumed phase re-entered")).toBeTruthy();
 });
 
-// A PHASE THAT RAN TWICE IS ONE ROW AND A COUNT.
+// A SUSPENDED PHASE DRAWS BOTH OF ITS PROMPTS.
 //
-// `turn_id|phase|iteration` is the phase key, so a second measurement under
-// one key means the turn's dispatch was re-delivered and that phase ran again
-// — not that there were two phases. Drawn flat, a turn that ran five times
-// put ten byte-identical rows on the page for two facts, which reads as a
-// repeating panel rather than as news about the turn.
-test("a phase measured more than once collapses to one row that says how many", async () => {
+// The panel used to collapse a repeated `phase|iteration` into one row with an
+// `×N` chip, reading a repeat as the turn's dispatch having been re-delivered.
+// A redelivery mints a new run id (`adr/0017`) and the turn query is
+// `WHERE turn_id = ?`, so the attempts never share a page — the repeat is a
+// SUSPEND. `internal/agent/runner/resume.go` re-enters the parked phase at the
+// parked iteration, and the two measurements are two prompts: the opening
+// system and user text, then the conversation the resume sends instead. Merged
+// into one, the row asserted System 0 B over a 24,000-byte system prompt and
+// called two different prompts a token range.
+test("a phase that suspended draws its opening and its re-entry, not one merged row", async () => {
   mount({
     events: [
       phase("2026-09-13T10:01:30Z", 90_000),
-      promptSize({ approximate_tokens: 6807, system_chars: 24000, user_chars: 2800 }),
-      promptSize({ approximate_tokens: 6807, system_chars: 24000, user_chars: 2800 }),
-      promptSize({ approximate_tokens: 6616, system_chars: 23000, user_chars: 2800 }),
+      promptSize({
+        approximate_tokens: 1753,
+        system_chars: 24000,
+        user_chars: 2800,
+        message_chars: 0,
+      }),
+      promptSize({
+        approximate_tokens: 1814,
+        system_chars: 0,
+        user_chars: 0,
+        message_chars: 3329,
+      }),
     ],
   });
   await screen.findByText("Prompt sent");
-  // ONE token cell, not three — the row is the phase, and the count is the
-  // only thing the collapsed ones still say.
   const tokens = screen.getAllByTitle("the engine's own approximation");
-  expect(tokens).toHaveLength(1);
-  // The LAST run's figures: the two before it measured a prompt this turn
-  // then threw away.
-  expect(tokens[0]!.textContent).toBe("6,616");
-  // And the range rides along on the count, because "they were all the same"
-  // and "the first two were bigger" are different facts about one turn.
-  const count = screen.getByText("×3");
-  expect(count.getAttribute("title")).toContain("ran 3 times");
-  expect(count.getAttribute("title")).toContain("6,616–6,807");
+  expect(tokens.map((t) => t.textContent)).toEqual(["1,753", "1,814"]);
+  // THE OPENING FRAME IS STILL ON THE PAGE. This is the figure the merge
+  // destroyed — the re-entry's 0 replaced it, and the panel reported a phase
+  // that opened with no prompt at all.
+  const systems = screen.getAllByTitle("bytes in the system prompt");
+  expect(systems.map((s) => s.textContent)).toEqual(["23 KB", "0 B"]);
+  // And exactly the second row says why its opening is empty.
+  expect(screen.getAllByText("resumed")).toHaveLength(1);
 });
 
 // EVERY FIGURE COLUMN SHARES ONE BOX WITH THE ROWS AROUND IT.
@@ -623,4 +634,73 @@ test("a failure carried only on the payload is still drawn as one", async () => 
     link!.className,
     "the panel filed it as a failure and the row drew it as ordinary work",
   ).toContain("failed");
+});
+
+/**
+ * THE PAGE ACCOUNTS FOR ITS WHOLE ANSWER.
+ *
+ * Every panel on this screen draws a subset of the turn's rows, and on an
+ * ordinary turn most of the answer is absorbed: a start and a record per
+ * phase, plus both halves of the turn's own record. `ABSORBED` has named a
+ * destination per type all along and `Story.absorbed` said it was counted "so
+ * the screen can say where they went" — and no screen said, so the rows
+ * stopped at the band. A row the query returned and the page silently dropped
+ * is indistinguishable from a row the store never held, which is the one
+ * shape this page was rebuilt to stop repeating.
+ */
+test("the rows it does not list are accounted for, by where each went", async () => {
+  // A SELF-ITERATING TURN, so the rows and the kinds of row are different
+  // numbers: five absorbed rows of three types. A note counting its own lines
+  // would read "3" here and be wrong about the only thing it is for.
+  mount({
+    events: [
+      event({
+        type: "agent_phase_started",
+        timestamp: "2026-09-13T10:00:01Z",
+        payload: { turn_id: TURN, phase: "execute", iteration: 1 },
+      }),
+      phase("2026-09-13T10:00:02Z", 1000),
+      event({
+        type: "agent_phase_started",
+        timestamp: "2026-09-13T10:00:03Z",
+        payload: { turn_id: TURN, phase: "execute", iteration: 2 },
+      }),
+      phase("2026-09-13T10:00:04Z", 1000, { iteration: 2 }),
+      event({
+        type: "turn_completed",
+        timestamp: "2026-09-13T10:00:05Z",
+        payload: { turn_id: TURN, duration_ms: 2000 },
+      }),
+    ],
+  });
+  // THE COUNT IS THE ANSWER TO "is that everything?", and it is on the
+  // trigger, so a reader gets it without opening anything.
+  const trigger = await screen.findByRole("button", { name: /Already on this page/ });
+  expect(trigger.textContent, "the trigger does not count the rows it stands for").toContain("5");
+  // WHERE EACH WENT is the answer to the next question, and it is the map's
+  // own words rather than a paraphrase of them beside it.
+  fireEvent.click(trigger);
+  const row = screen.getByText("agent_phase_started").parentElement!;
+  expect(row.textContent, "a repeated type does not say how many it stands for").toContain("2");
+  expect(screen.getByText(ABSORBED.agent_phase_started!)).toBeTruthy();
+  expect(screen.getByText(ABSORBED.agent_phase_completed!)).toBeTruthy();
+  expect(screen.getByText(ABSORBED.turn_completed!)).toBeTruthy();
+});
+
+/** A turn whose every row is a row of its own has nothing to account for, and
+ *  a panel that is always present is a panel nobody reads — the same reason
+ *  "What went wrong" is absent on a healthy turn. */
+test("a turn with nothing absorbed draws no such note", async () => {
+  mount({
+    events: [
+      event({
+        type: "provider_fallback",
+        timestamp: "2026-09-13T10:00:03Z",
+        summary: "default failed (auth) — no provider left in the chain",
+        payload: { turn_id: TURN, failed: true },
+      }),
+    ],
+  });
+  await screen.findByText(/no provider left in the chain/);
+  expect(screen.queryByRole("button", { name: /Already on this page/ })).toBeNull();
 });

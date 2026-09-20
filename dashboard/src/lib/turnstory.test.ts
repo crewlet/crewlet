@@ -10,6 +10,7 @@
 import { describe, expect, test } from "vitest";
 import {
   ABSORBED,
+  absorbedGroups,
   bandOf,
   collapseRuns,
   prefetchBlocks,
@@ -64,6 +65,100 @@ describe("what is not 'else'", () => {
     for (const [type, destination] of Object.entries(ABSORBED)) {
       expect(destination, type).toBeTruthy();
     }
+  });
+
+  test("both readers of the rule put an absorbed row in the same band", () => {
+    // THE CASE NOTHING HELD, which is how the two drifted apart: `bandOf`
+    // answered `rest` for all five of these while `tellStory` filed every one
+    // of them under `absorbed` before the call, and no case compared the two
+    // answers — so the screen and the function disagreed about every type in
+    // the map and the suite stayed green.
+    for (const type of Object.keys(ABSORBED)) {
+      expect(bandOf(event(type)), type).toBe("absorbed");
+      const story = tellStory([event(type)]);
+      expect(story.absorbed, type).toHaveLength(1);
+      expect(story.rest, type).toHaveLength(0);
+    }
+  });
+
+  test("a phase record that failed is still its own phase card's", () => {
+    // ABSORPTION OUTRANKS THE FAILURE TAXONOMY, which is the one precedence
+    // that looks like an exception: the destination draws the failure itself
+    // — the phase card carries the error kind and the error text — so banding
+    // it `went_wrong` too would put a red row above the card that already
+    // says so, and add one to a count of problems that gained no problem.
+    expect(bandOf(event("agent_phase_completed", { failed: true }))).toBe("absorbed");
+  });
+
+  test("a type that merely collides with Object.prototype is not absorbed", () => {
+    // `"toString" in ABSORBED` is TRUE on an object literal, so the `in` this
+    // rule used to be written with would absorb such a type to a destination
+    // that does not exist and drop it off the screen — the one thing the
+    // residual band is here to stop. No type in `internal/events/types`
+    // collides today; the point is that the check cannot be what decides it.
+    expect(bandOf(event("toString"))).toBe("rest");
+    expect(tellStory([event("toString")]).rest).toHaveLength(1);
+  });
+});
+
+describe("where the absorbed rows went", () => {
+  test("grouped by type, counted, and each carrying its destination", () => {
+    // BY TYPE, because the destination is the claim and the type is what
+    // makes it checkable: `agent_turn_completed` and `turn_completed` share
+    // one destination, and merged into a single line a reader cannot tell
+    // which pair of records it stands for.
+    const groups = absorbedGroups([
+      event("agent_phase_started", { timestamp: "1" }),
+      event("agent_phase_completed", { timestamp: "2" }),
+      event("agent_phase_started", { timestamp: "3" }),
+      event("agent_phase_completed", { timestamp: "4" }),
+      event("agent_turn_completed", { timestamp: "5" }),
+      event("turn_completed", { timestamp: "6" }),
+    ]);
+    expect(groups.map((g) => [g.type, g.count])).toEqual([
+      ["agent_phase_started", 2],
+      ["agent_phase_completed", 2],
+      ["agent_turn_completed", 1],
+      ["turn_completed", 1],
+    ]);
+    // The words are the map's own, so the screen states the claim this file
+    // makes rather than a second paraphrase of it.
+    expect(groups.map((g) => g.destination)).toEqual([
+      ABSORBED.agent_phase_started,
+      ABSORBED.agent_phase_completed,
+      ABSORBED.agent_turn_completed,
+      ABSORBED.turn_completed,
+    ]);
+  });
+
+  test("across the whole turn, not only where the repeats are adjacent", () => {
+    // The opposite of `collapseRuns`, and deliberately: the axis of a BAND is
+    // time and nothing here prints an instant. A turn's starts and records
+    // interleave one for one, so a consecutive-only rule would report a group
+    // per row and say nothing at all — which is what the case above would
+    // read as if this rule were borrowed from that one.
+    const groups = absorbedGroups([
+      event("agent_phase_started", { timestamp: "1" }),
+      event("agent_phase_completed", { timestamp: "2" }),
+      event("agent_phase_started", { timestamp: "3" }),
+    ]);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]!.count).toBe(2);
+  });
+
+  test("a row that is a row is not in it", () => {
+    // Handed a whole turn or handed `Story.absorbed`, it answers the same,
+    // because it files on the map rather than on where the caller got the
+    // rows.
+    const turn = [
+      event("agent_phase_started", { timestamp: "1" }),
+      event("provider_fallback", { timestamp: "2" }),
+      event("episode_written", { timestamp: "3" }),
+    ];
+    expect(absorbedGroups(turn).map((g) => g.type)).toEqual(["agent_phase_started"]);
+    expect(absorbedGroups(tellStory(turn).absorbed).map((g) => g.type)).toEqual([
+      "agent_phase_started",
+    ]);
   });
 });
 
@@ -136,6 +231,57 @@ describe("a type this build has never seen", () => {
 
   test("and is still loud if it is marked failed", () => {
     expect(bandOf(event("something.a_later_build_publishes", { failed: true }))).toBe("went_wrong");
+  });
+});
+
+describe("a band entry is a query predicate", () => {
+  // Every row these sets sort came from `EventLog.Turn`, which is
+  // `WHERE turn_id = ?`. Eight types were banded whose payloads declare no
+  // `turn_id` key at all, so they could never be in the answer and each band
+  // failed EMPTY — the one way a panel cannot say it is broken.
+  //
+  // These cases pin what the screen does with them NOW, and the wire half is
+  // held by `internal/events/types/turnbands_client_test.go`: this file cannot
+  // read a Go struct tag, so it asserts the banding and the engine asserts the
+  // key. Neither half is the whole claim on its own.
+
+  test("an A2A ask is not claimed by 'What else it did'", () => {
+    // The band advertised "colleagues" for these three and an ask has never
+    // been drawn under that heading on any turn this engine has run: none of
+    // the three carries a turn id, so the query never returns one. Banding
+    // them again is a promise the wire cannot keep — until the engine stamps
+    // the id, which the Go gate's roster is what announces.
+    for (const type of ["a2a_channel_opened", "a2a_message_sent", "a2a_channel_closed"]) {
+      expect(bandOf(event(type)), type).toBe("rest");
+    }
+  });
+
+  test("the scheduler's cron fire is the trigger, not work the turn did", () => {
+    // `task_assigned` is published by internal/schedule to WAKE a seat, so it
+    // precedes every turn id there could be. It is already on the screen as
+    // the brief.
+    expect(bandOf(event("task_assigned"))).toBe("rest");
+  });
+
+  test("a record that no turn ran is not this turn's failure", () => {
+    // Both say a delivery was never worked — one at the dispatcher, one at
+    // the notification gate — so neither names a turn, and both sat in
+    // "What went wrong" contributing nothing to a count the header prints.
+    expect(bandOf(event("turn_trigger_skipped"))).toBe("rest");
+    expect(bandOf(event("notification_skipped"))).toBe("rest");
+  });
+
+  test("work spanning many turns is not what THIS turn left behind", () => {
+    // The curator duty promotes a unit's skill off a cluster of many seats'
+    // turns, so there is no single right turn to name.
+    expect(bandOf(event("skill_promoted"))).toBe("rest");
+  });
+
+  test("but a failed one is still loud, exactly as an unknown type is", () => {
+    // Falling through to `rest` is about the BAND, never about the weight: the
+    // failure taxonomy is the engine's and outranks every set in this file, so
+    // a de-banded type that comes back failed is still what went wrong.
+    expect(bandOf(event("skill_telemetry_write_failed", { failed: true }))).toBe("went_wrong");
   });
 });
 
@@ -265,13 +411,19 @@ describe("the prefetch", () => {
 });
 
 describe("what each phase's prompt weighed", () => {
+  // A DISTINCT id PER EVENT, because the rows are keyed on it now and a
+  // shared id would make the uniqueness case below pass on a build that
+  // hands every row the same one.
+  let seq = 0;
   function size(
     phase: string,
     iteration: number,
     tokens: number,
     over: Record<string, unknown> = {},
   ): EventRecord {
+    seq++;
     return event("prompt.size", {
+      id: `ev-size-${seq}`,
       payload: {
         turn_id: "t-1",
         phase,
@@ -287,8 +439,18 @@ describe("what each phase's prompt weighed", () => {
     });
   }
 
+  /** The re-entry half of a suspended executor: no opening, a parked
+      conversation instead. The shape `Runner.Resume` publishes. */
+  function reentry(phase: string, iteration: number, tokens: number): EventRecord {
+    return size(phase, iteration, tokens, {
+      system_chars: 0,
+      user_chars: 0,
+      message_chars: 3_329,
+    });
+  }
+
   test("a turn that ran once gets one row per phase, in the order it published", () => {
-    // The control. Without it the collapse below passes on a build that
+    // The control. Without it every case below passes on a build that
     // returns nothing at all.
     const rows = promptWeights([
       size("onboarding", 0, 3_046),
@@ -302,63 +464,66 @@ describe("what each phase's prompt weighed", () => {
       "review|1",
       "execute|2",
     ]);
-    expect(rows.every((r) => r.runs === 1)).toBe(true);
+    expect(rows.every((r) => !r.resumed)).toBe(true);
   });
 
-  test("a phase key measured twice is one row that says so", () => {
-    // `turn_id|phase|iteration` IS the phase key, so a second measurement
-    // under one key is that phase RUNNING AGAIN — the turn's whole dispatch
-    // re-delivered and re-run under its work key. Listed flat it drew two
-    // byte-identical rows, which reads as a repeating panel rather than as
-    // news about the turn.
-    const rows = promptWeights([
-      size("execute", 1, 6_807),
-      size("execute", 1, 6_807),
-      size("execute", 1, 6_807),
-    ]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.runs).toBe(3);
-    expect(rows[0]!.minTokens).toBe(6_807);
-    expect(rows[0]!.maxTokens).toBe(6_807);
-  });
-
-  test("the row carries the LAST run's figures and the range of the others", () => {
-    // The run that stands is the one whose frame the phase actually reasoned
-    // in; the earlier ones measured a prompt the turn then threw away. The
-    // range is the only thing those discarded rows still had to say.
-    const rows = promptWeights([
-      size("execute", 1, 6_807, { system_chars: 24_000 }),
-      size("execute", 1, 6_807, { system_chars: 24_000 }),
-      size("execute", 1, 6_616, { system_chars: 23_000 }),
-    ]);
-    expect(rows[0]!.approximateTokens).toBe(6_616);
-    expect(rows[0]!.systemBytes).toBe(23_000);
-    expect(rows[0]!.minTokens).toBe(6_616);
-    expect(rows[0]!.maxTokens).toBe(6_807);
-  });
-
-  test("a re-run turn keeps its phases in first-seen order, not re-run order", () => {
-    // The screenshot this was rebuilt against interleaved five onboarding and
-    // five executor passes. Collapsed naively by deleting and re-inserting,
-    // ONBOARDING would have jumped below EXECUTE on the second pass and the
-    // page would read as though the executor went first.
-    const rows = promptWeights([
-      size("onboarding", 0, 3_046),
-      size("execute", 1, 6_807),
-      size("onboarding", 0, 3_046),
-      size("execute", 1, 6_616),
-    ]);
-    expect(rows.map((r) => r.phase)).toEqual(["onboarding", "execute"]);
-    expect(rows.map((r) => r.runs)).toEqual([2, 2]);
-  });
-
-  test("a self-iterate round is its own phase key, never a re-run", () => {
-    // Same phase, different iteration: two frames the model genuinely
-    // reasoned in, and collapsing them would hide the growth this panel
-    // exists to make visible.
-    const rows = promptWeights([size("execute", 1, 6_807), size("execute", 2, 7_646)]);
+  test("a suspended executor's two measurements are two rows, not one with a count", () => {
+    // THE CASE THE COLLAPSE GOT WRONG. A repeated `phase|iteration` inside
+    // ONE turn is never a re-run — a redelivered trigger runs under a new
+    // run id (`adr/0017`) and the turn query is `WHERE turn_id = ?`, so the
+    // attempts never meet here. It is a SUSPEND: the executor's opening
+    // frame, then the parked conversation the resume re-enters with. The
+    // figures below are the pair a real suspend and resume published.
+    const rows = promptWeights([size("execute", 1, 1_753), reentry("execute", 1, 1_814)]);
     expect(rows).toHaveLength(2);
-    expect(rows.map((r) => r.runs)).toEqual([1, 1]);
+    // The opening frame SURVIVES. Collapsed, this row was the one that
+    // vanished, and with it the only evidence the phase opened at all: the
+    // panel showed System 0 B over a 24,000-byte system prompt.
+    expect(rows[0]!.systemBytes).toBe(24_000);
+    expect(rows[0]!.messageBytes).toBe(0);
+    expect(rows[0]!.resumed).toBe(false);
+    // And the re-entry says what it is, which is what makes its 0/0 read as
+    // a fact about a re-entered phase rather than as a failed render.
+    expect(rows[1]!.resumed).toBe(true);
+    expect(rows[1]!.systemBytes).toBe(0);
+    expect(rows[1]!.messageBytes).toBe(3_329);
+  });
+
+  test("every row carries its own event id, because the phase key is not unique", () => {
+    // The renderer keys on this. Keyed on `phase|iteration` instead, the two
+    // rows above are one duplicate React key and the re-entry's figures
+    // reconcile onto the opening's row — the collapse back, by accident.
+    const rows = promptWeights([size("execute", 1, 1_753), reentry("execute", 1, 1_814)]);
+    expect(new Set(rows.map((r) => r.id)).size).toBe(2);
+    expect(rows.every((r) => r.id !== "")).toBe(true);
+  });
+
+  test("rows come back in publish order, so they read down the page as the turn ran", () => {
+    // A resumed turn re-enters its parked phase and then carries on, so the
+    // executor's two halves are not adjacent to the rounds around them by
+    // accident — the order they were published in is the order they ran.
+    const rows = promptWeights([
+      size("execute", 1, 6_807),
+      size("review", 1, 2_071),
+      size("execute", 2, 7_646),
+      reentry("execute", 2, 9_100),
+      size("review", 2, 2_400),
+    ]);
+    expect(rows.map((r) => `${r.phase}|${r.iteration}${r.resumed ? "+resumed" : ""}`)).toEqual([
+      "execute|1",
+      "review|1",
+      "execute|2",
+      "execute|2+resumed",
+      "review|2",
+    ]);
+  });
+
+  test("a self-iterate round is its own row, and so is every round before it", () => {
+    // Same phase, different iteration: two frames the model genuinely
+    // reasoned in, and folding them would hide the growth this panel exists
+    // to make visible.
+    const rows = promptWeights([size("execute", 1, 6_807), size("execute", 2, 7_646)]);
+    expect(rows.map((r) => r.approximateTokens)).toEqual([6_807, 7_646]);
   });
 
   test("an event with no payload is skipped rather than counted as a zero row", () => {
@@ -421,6 +586,10 @@ describe("what each phase's prompt weighed", () => {
     expect(w.messageBytes).toBe(48_000);
     expect(w.systemBytes).toBe(0);
     expect(w.userBytes).toBe(0);
+    // And that term is ALSO what marks the row a re-entry: the engine ships
+    // no flag for it, because a phase that opens its own conversation reports
+    // this at 0 by construction.
+    expect(w.resumed).toBe(true);
   });
 
   test("an older engine's row reads as zero rather than NaN", () => {
@@ -436,6 +605,11 @@ describe("what each phase's prompt weighed", () => {
     expect(w.toolCount).toBe(0);
     expect(w.messageBytes).toBe(0);
     expect(Number.isNaN(w.toolBytes)).toBe(false);
+    // And it reads as an OPENING, which is the safe direction: an absent
+    // message term is a build that measured none, so there is no re-entry to
+    // claim — and claiming one would label a row "resumed" on the strength of
+    // a key the writer never wrote.
+    expect(w.resumed).toBe(false);
   });
 });
 

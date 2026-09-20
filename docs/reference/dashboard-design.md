@@ -1786,6 +1786,19 @@ Four rules replace it, and each one names what it fixes.
    a coding CLI's own loop in another process, and that run's wall clock is on
    `sandbox_run_started` / `sandbox_run_completed` instead.
 
+   **And the page says where each one went.** *Relocated* is only better than
+   *dropped* if the page says so: a row that reaches the browser and is drawn
+   by no panel is indistinguishable from a row the store never returned, and
+   the reader most likely to meet that is the one checking a **cut** turn's
+   stated event total against the panels below it. So every absorbed type
+   names its destination — "the phase card it opens", "the turn's header and
+   record" — and the page prints those under the bands as a folded **Already
+   on this page** note: how many of the turn's rows are not listed, what they
+   were, and where each kind is drawn instead. Absent when nothing was
+   absorbed, like every other section here. Until that note existed the count
+   was assembled on every frame and read by no screen, and the destinations
+   were prose written for a reader who was never shown them.
+
 2. **Weight is meaning.** `reflection_completed` is a sentinel whose own
    payload doc says it deliberately carries no outcome; a guard breach is a
    turn the engine stopped. As two identical feed rows an operator scanning
@@ -1795,6 +1808,26 @@ Four rules replace it, and each one names what it fixes.
    — and anything this build has no opinion about falls through to a residual
    list rather than being dropped. The event registry is additive-only; a type
    a newer node publishes has to still render.
+
+   **A band entry is a query predicate, not a wish.** Every row these panels
+   sort came from one read — "this turn's events", which is `WHERE turn_id = ?`
+   — and that column is filled from the event's own `turn_id` *field*. So an
+   event type whose payload does not carry one can never be in the answer, and
+   naming it in a band is a promise the wire cannot keep. It fails **empty**,
+   which is the one way a panel cannot say it is broken: a turn that asked
+   three colleagues renders exactly like a turn that spoke to nobody. Eight
+   types were banded that way. The loudest were the three A2A audit records —
+   *What else it did* advertised "colleagues" on their behalf, and an ask has
+   never once been drawn under that heading — and the rest were quieter
+   versions of the same thing: the scheduler's cron fire (the *trigger* of a
+   turn, already on the screen as the brief), the two records that say **no**
+   turn ran at all, the curator promoting a skill off a cluster of many turns,
+   and one reflection worker that holds the turn id and does not stamp it. The
+   bands name only turn-scoped types now, and the engine holds them there:
+   `internal/events/types/turnbands_client_test.go` reads the dashboard's own
+   declarations and fails the build both ways — on a band entry that can never
+   fill, and on a kept-out type that has since *gained* a `turn_id` and is
+   therefore ready to come back.
 
    A band is not a rendering, though, and *What the turn was given* was
    rendering half of its own. `prompt.size` — a row of integers per phase,
@@ -1821,19 +1854,33 @@ Four rules replace it, and each one names what it fixes.
    its own. Five fixed columns overflow a phone, which is what the sideways
    scroll on `.num-block` is for.
 
-   And then that half grew rule 1's own failure back. `turn_id|phase|iteration`
-   is the phase key, and the turn id **is** the work key, so a dispatch that is
-   re-delivered and re-run publishes a second measurement under a key that
-   already has one. Listed flat, a turn that ran five times drew ten
-   byte-identical rows — ONBOARDING, EXECUTE, ONBOARDING, EXECUTE — for two
-   facts and a count, and a repeated row with nothing to explain it reads as a
-   rendering fault rather than as news about the turn. One row per phase key
-   now, carrying the **last** run's figures with an `×N` beside the phase: a
-   mean is a prompt that was never sent, and the run that stands is the one
-   whose frame the phase actually reasoned in. The count's title names the
-   token range when the runs disagreed, because "they all measured the same"
-   and "the first four were bigger" are different facts about one turn, and
-   the range is the only thing the collapsed rows still had to say.
+   **One row per measurement**, and the phase key is deliberately not the
+   row's identity. This half used to collapse a repeated
+   `turn_id|phase|iteration` into one row with an `×N` chip, on the reading
+   that the turn id *was* the work key so a repeat meant the dispatch had been
+   re-delivered and that phase had run again. That has not been true since
+   [ADR-0017](https://github.com/crewlet/crewlet/blob/main/adr/0017-a-turn-id-names-one-run.md):
+   a run id is minted per dispatch, a redelivered trigger therefore runs under
+   a *different* turn id, and the turn query is `WHERE turn_id = ?` — so two
+   attempts land on two Turn screens, which is what the attempt banner at the
+   top of the page is for. A re-run cannot put two rows in this table at all.
+
+   What can is a **suspend**, which that ADR excludes by name: a detached
+   coding run re-enters the run that parked it. The executor publishes its
+   opening frame, parks mid-loop, and the resume re-enters the *same* phase at
+   the *same* iteration and publishes the parked conversation it sends
+   instead. Measured on a real suspend and resume, that pair is
+   `system=3,166 user=31 message=0 ~1,753 tokens` and
+   `system=0 user=0 message=3,329 ~1,814 tokens`. Collapsed it drew one row
+   reading `EXECUTE ×2`, System 0 B, User 0 B, over a tooltip saying the phase
+   "ran 2 times" and "ranged ~1,753–1,814 tokens" — and every clause of that
+   is false. The phase ran once; its opening carried 3,166 bytes of system
+   prompt, not zero; and the two figures are not a range of one quantity but
+   two different prompts, both sent and both billed, which is the whole of
+   what this panel is for. So both are drawn, in publish order, and the second
+   is marked **resumed** — which is also what makes its empty System and User
+   columns read as a fact about a re-entered phase rather than as a failed
+   render.
 
    The figures are **bytes**, and they said characters while carrying `len()`
    of a Go string. Nothing rounded it back — a byte formatter printed `24 KB`
