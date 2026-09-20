@@ -2803,7 +2803,7 @@ a.work-cal-chip {
    permanent underline base.css describes — through hover too, which the
    selector has to say now that the reset reaches `a:hover`. (0,2,1) already
    outranks it, but a rule that survives on arithmetic nobody restates is one
-   the next split of this selector breaks silently.) */
+   the next split of this selector breaks silently. */
 .prose.md a,
 .prose.md a:hover {
   text-decoration: underline;

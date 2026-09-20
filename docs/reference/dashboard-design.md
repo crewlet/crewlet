@@ -1684,6 +1684,20 @@ suppression had already spread to fifteen rules across four stylesheets, each
 undoing the same inherited declaration one class at a time, which is what a
 wrong default looks like from the inside: the exceptions outnumber it.
 
+**A reset has to reach the declaration it undoes, and for a while this one did
+not.** The paragraph above was true as a decision and false as a description:
+dropping the repeat left `a { text-decoration: none }` against the baseline's
+`a:hover { text-decoration: underline }` — (0,0,1) against (0,1,1) — so the
+package won the only state a reader can see it in, and every link in the
+dashboard underlined under the pointer, the app rail's own rows included.
+Nothing failed: an outranked declaration is not an error, not a warning and not
+a build failure, and an unhovered screenshot looks exactly right. So the reset
+is written at `a:hover` as well, and `styles/baseline.test.ts` holds it
+selector for selector against the *installed* package — two-sided, so a bump
+that decorates `a:focus-visible` fails there rather than in somebody's browser,
+and a reset for a declaration the package has dropped fails too, because at
+(0,1,1) it would go on suppressing the one underline this product keeps.
+
 So the frame's own hover vocabulary carries it. `.rail-row`, `.side-link`,
 `.rail-engine` and `.crumb-link` already answer a pointer by moving to
 `--text`, and a link does the same — in dark the accent ink (#8b9ff5) brightens
@@ -1697,8 +1711,19 @@ obvious alternative: the accent family publishes exactly one text step, and
 **Where an underline is the only honest mark it is permanent, not a hover.** A
 link inside running prose is distinguished from the text around it by colour
 alone otherwise, which is WCAG 1.4.1. `.prose.md a` (rendered Markdown) and
-`.int-form-note a` (the sentence under a setup form) carry it at rest, and they
-are the only two registers in this tree that are genuinely a phrase.
+`.int-form-note a` (the sentence under a setup form) carry it at rest, and
+`.prose-link` is the third register: an anchor anywhere else that *is* a word
+in a line, which is the correction *A link inside a sentence says so* above
+records — "the only two registers in this tree" was written here as well, and
+seven anchors in five other files were already outside it.
+
+All three state their hover, because the reset now reaches one. `.prose-link`
+is (0,1,0) against `a:hover`'s (0,1,1), so a class alone would put the mark
+back everywhere except under a pointer — the one place a permanent mark must
+not go missing, since it is where a reader is deciding whether the word is a
+link. `.prose.md a` outranks the reset on arithmetic and `.int-form-note a`
+ties with it and wins on import order; both say it anyway, so neither depends
+on a fact stated somewhere else.
 
 ### A row is not a row
 
