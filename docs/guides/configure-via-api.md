@@ -270,8 +270,7 @@ classified, beside the `detail` that renders them.
 | `409` | `revision_advanced` | Stale `If-Match`, a concurrent writer won the race, or the write was built on an empty store while the fleet is running a company |
 | `412` | `no_active_revision` | `If-Match: <revision>` sent while the node has no active revision; retry without `If-Match`, or send `If-None-Match: *` |
 | `412` | `already_configured` | `If-None-Match: *` sent while a revision is active on this node or anywhere in the fleet |
-| `503` | `draining` | The node has been told to stop. Nothing was written; `Retry-After` says when to try again, against a peer or against this node once it has restarted — see [During a drain](../reference/api-endpoints.md#during-a-drain) |
 | `415` | `unsupported_patch_media_type` | A `PATCH` in a patch format other than a JSON Merge Patch, such as `application/json-patch+json` |
-| `503` | `no_control_plane` | The process has no coordination store, so it cannot activate a revision; a dry run is refused the same way |
+| `503` | `draining` | The node has been told to stop. Nothing was written; `Retry-After` says when to try again, against a peer or against this node once it has restarted — see [During a drain](../reference/api-endpoints.md#during-a-drain) |
 
 The full reference is in [API endpoints](../reference/api-endpoints.md).

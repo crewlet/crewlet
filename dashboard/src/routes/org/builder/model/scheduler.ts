@@ -23,14 +23,15 @@
  * `clean` and `problems` for a validated draft; `conflict` when the engine
  * holds a newer revision than the draft's base (a 409, a 412, or a dry run
  * reporting a different base); `guarded` when it refused the token (401 or
- * 403); `readonly` when this process has no coordination store and cannot
- * write at all (503 `no_control_plane`); `unreachable` when the request was
- * never answered or the engine failed (status 0, or another 5xx).
+ * 403); `unreachable` when the request was never answered or the engine
+ * failed (status 0, or a 5xx). A draining node's `503 draining` is one of
+ * those, deliberately: the drain ends, so the retry reaches a peer behind a
+ * load balancer, or this node once it has restarted.
  *
- * THREE OF THEM HALT. `conflict`, `guarded` and `readonly` do not change by
- * asking again: the answer to the next check is the same refusal. So a
- * change to the draft in one of them sends nothing, and checking resumes only
- * on a reset (a load, an updated draft, a token change).
+ * TWO OF THEM HALT. `conflict` and `guarded` do not change by asking again:
+ * the answer to the next check is the same refusal. So a change to the draft
+ * in one of them sends nothing, and checking resumes only on a reset (a load,
+ * an updated draft, a token change).
  *
  * `unreachable` BACKS OFF. Asking again at every keystroke would hammer an
  * engine that is restarting, or a network that is down, with requests that
@@ -87,7 +88,7 @@ export function backoffDelay(failures: number): number {
 }
 
 export type CheckStatus =
-  "checking" | "clean" | "problems" | "conflict" | "guarded" | "readonly" | "unreachable";
+  "checking" | "clean" | "problems" | "conflict" | "guarded" | "unreachable";
 
 /** Why the engine holds a revision the draft was not built on. */
 export type ConflictReason =
@@ -121,7 +122,6 @@ export type CheckOutcome =
       readonly currentRevisionId: string | null;
     }
   | { readonly status: "guarded" }
-  | { readonly status: "readonly" }
   | { readonly status: "unreachable"; readonly detail: string };
 
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
@@ -163,7 +163,6 @@ export function classifyCheck(
     };
   }
   if (answer.status === 401 || answer.status === 403) return { status: "guarded" };
-  if (answer.status === 503 && code === "no_control_plane") return { status: "readonly" };
   if (answer.status === 409 || answer.status === 412) {
     const reason: ConflictReason =
       code === "no_active_revision"
@@ -265,7 +264,7 @@ export const INITIAL_CHECK: CheckState = {
   halted: false,
 };
 
-const HALTING: ReadonlySet<CheckStatus> = new Set(["conflict", "guarded", "readonly"]);
+const HALTING: ReadonlySet<CheckStatus> = new Set(["conflict", "guarded"]);
 
 /** The next state of the check, and what to do about it. */
 export function transition(state: CheckState, event: CheckEvent): Transition {
@@ -412,13 +411,6 @@ export function saveRules(status: CheckStatus, hasChanges: boolean): SaveRules {
         save: false,
         waiting: false,
         reason: "Saving needs an operator token the engine accepts.",
-      };
-    case "readonly":
-      return {
-        review: false,
-        save: false,
-        waiting: false,
-        reason: "This process cannot write the configuration.",
       };
     case "problems":
       return { review: true, save: false, waiting: false, reason: "Fix the problems above first." };

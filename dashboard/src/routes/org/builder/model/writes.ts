@@ -7,8 +7,8 @@
  * waiting (502, 504) says nothing about the engine behind it, and the engine
  * itself stores the revision before it activates it, so a failure reported
  * after that point leaves a revision that may be active. The one 5xx that is
- * certain is `503 no_control_plane`, refused before anything is stored.
- * Pressing Save again then meets the
+ * certain is `503 draining`, which the drain gate refuses before the handler
+ * runs. Pressing Save again then meets the
  * operator's OWN revision as a 409, and a builder that took every 409 as
  * "somebody else saved" would rebase the draft onto its own save and replay
  * every operation a second time, producing duplicate seats or dropping the
@@ -148,7 +148,11 @@ export function classifySave(
       : typeof body.error === "string"
         ? body.error
         : "";
-  const refusedBeforeStoring = answer.status === 503 && body.error === "no_control_plane";
+  // THE ONE 5xx THAT IS CERTAIN. The drain gate refuses a write before the
+  // handler runs (internal/api's drainGate wraps the mux), so a `503
+  // draining` stored nothing and needs no settling read — where every other
+  // 5xx may have been raised after the revision was stored.
+  const refusedBeforeStoring = answer.status === 503 && body.error === "draining";
   if (answer.status === 0 || (answer.status >= 500 && !refusedBeforeStoring)) {
     return { kind: "unknown", currentRevisionId: null, detail };
   }

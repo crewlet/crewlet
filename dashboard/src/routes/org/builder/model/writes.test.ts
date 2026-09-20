@@ -165,9 +165,19 @@ describe("classifySave", () => {
         true,
       ),
     ).toMatchObject({ kind: "unknown", currentRevisionId: "mine" });
-    expect(classifySave({ status: 503, body: { error: "no_control_plane" } }, EDIT, false)).toEqual(
-      { kind: "refused", outcome: { status: "readonly" } },
-    );
+    // A DRAIN IS THE ONE CERTAIN 5xx, so it is NOT unknown: the drain gate
+    // refuses a write before the handler runs, so nothing was stored and
+    // there is nothing to settle. Classifying it unknown locked the builder
+    // into "the outcome of the last save is not known" and sent it reading
+    // the revision chain back for a write that never happened.
+    expect(
+      classifySave({ status: 503, body: { error: "draining", detail: "restarting" } }, EDIT, false),
+    ).toMatchObject({ kind: "refused" });
+    // Every other 5xx stays unknown: the engine stores the revision before it
+    // activates it, so a failure after that point may have landed.
+    expect(
+      classifySave({ status: 500, body: { error: "internal_error" } }, EDIT, false),
+    ).toMatchObject({ kind: "unknown" });
   });
 
   test("a 409 on a first attempt is a conflict, and a refused document its problems", () => {

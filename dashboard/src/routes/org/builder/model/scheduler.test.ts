@@ -135,7 +135,6 @@ describe("classifyCheck", () => {
     const cases: [HttpAnswer, unknown][] = [
       [{ status: 401, body: { error: "unauthorized" } }, { status: "guarded" }],
       [{ status: 403, body: {} }, { status: "guarded" }],
-      [{ status: 503, body: { error: "no_control_plane" } }, { status: "readonly" }],
       [
         { status: 503, body: { error: "draining", detail: "restarting" } },
         { status: "unreachable", detail: "restarting" },
@@ -328,8 +327,8 @@ describe("transition", () => {
     expect(recovered.state.failures).toBe(0);
   });
 
-  test("a conflict, a refused token and a read-only process halt checking until a reset", () => {
-    for (const status of ["conflict", "guarded", "readonly"] as const) {
+  test("a conflict and a refused token halt checking until a reset", () => {
+    for (const status of ["conflict", "guarded"] as const) {
       const halted = transition(loaded.state, { type: "settled", request: 1, status, now: T0 });
       expect(halted.state.halted, status).toBe(true);
       const changed = transition(halted.state, { type: "changed", generation: 2, now: T0 + 1 });
@@ -374,7 +373,7 @@ describe("saveRules", () => {
       waiting: false,
       reason: "Fix the problems above first.",
     });
-    for (const status of ["conflict", "guarded", "readonly"] as const) {
+    for (const status of ["conflict", "guarded"] as const) {
       expect(saveRules(status, true), status).toMatchObject({ review: false, save: false });
     }
     expect(saveRules("clean", false)).toMatchObject({ review: false, save: false });

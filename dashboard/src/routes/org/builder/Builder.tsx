@@ -16,11 +16,9 @@
  * | a plain 404, or a body that is not JSON          | this process does not serve the configuration |
  * | nothing (status 0)                               | the engine could not be reached |
  *
- * A first dry run answering 503 `no_control_plane` makes the lens read-only:
- * the process can read the configuration and cannot write it. A token change
- * mid-edit re-reads without discarding the draft: the draft and its log stay
- * on screen, the check runs again under the new token, and a refusal pauses
- * editing rather than throwing the work away.
+ * A token change mid-edit re-reads without discarding the draft: the draft
+ * and its log stay on screen, the check runs again under the new token, and a
+ * refusal pauses editing rather than throwing the work away.
  *
  * WHAT THIS COMPONENT OWNS is everything with a lifetime: the reducer, the
  * dry-run check (`useCheck.ts`), the live region, the shortcuts, the
@@ -128,7 +126,6 @@ import {
   RemoveGlyph,
   SaveGlyph,
   UndoGlyph,
-  VisibilityGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
@@ -336,8 +333,6 @@ function statusLook(status: CheckStatus, problems: number, tokenStored: boolean)
       return { label: plural(problems, "problem"), tone: "danger", icon: ErrorGlyph };
     case "unreachable":
       return { label: "Could not reach the engine to check", tone: "warning", icon: CableGlyph };
-    case "readonly":
-      return { label: "Read-only here", tone: "neutral", icon: VisibilityGlyph };
     case "conflict":
       return { label: "The configuration changed", tone: "warning", icon: WarningGlyph };
     case "guarded":
@@ -738,7 +733,6 @@ function Lens({
     if (posture.kind === "guarded" || status === "guarded") {
       return tokenStored ? "the engine refused this browser's token" : "no operator token is set";
     }
-    if (status === "readonly") return "this process cannot write the configuration";
     if (status === "conflict") return "the configuration changed since this draft was started";
     if (loaded && !isBaseKeyed(state)) return "the engine has not described this company yet";
     return null;
@@ -1481,11 +1475,6 @@ function Lens({
           >
             The configuration could not be read again, so this draft stands on the revision it was
             started from.
-          </Callout>
-        )}
-        {status === "readonly" && (
-          <Callout variant="neutral" icon={<VisibilityGlyph />}>
-            This process cannot write the configuration because it has no coordination store.
           </Callout>
         )}
         {/* KEPT TO READ, NEVER TO SAVE. Every check and save of this draft is
