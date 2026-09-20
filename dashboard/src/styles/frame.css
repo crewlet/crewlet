@@ -160,6 +160,7 @@
    `all: unset` that is not named here fails the build. */
 .rail-collapse:focus-visible,
 .side-twist:focus-visible,
+.side-section-label.foldable:focus-visible,
 .grid-th:focus-visible,
 .grid-cols-reset:focus-visible,
 .histogram-bar:focus-visible {
@@ -396,6 +397,34 @@
   letter-spacing: 0.06em;
   color: var(--text-muted);
   padding: var(--space-1) var(--space-2);
+}
+
+/* THE SAME HEADING, PRESSABLE. It is a `<button>` where the section folds, so
+   the reset is the one this file already uses for the tree's own twist — and
+   the ring it takes away is restored by the `:focus-visible` list at the top
+   of this file, which names `.side-section-label` beside `.side-twist` for
+   exactly that reason.
+
+   FULL WIDTH AND LEFT-ALIGNED: `all: unset` leaves a button centring its
+   text, so without these the two foldable headings would sit in the middle of
+   the rail while every fixed one sits at its left edge. */
+.side-section-label.foldable {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  cursor: pointer;
+  font-size: var(--fs-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding: var(--space-1) var(--space-2);
+}
+
+.side-section-label.foldable:hover {
+  color: var(--text);
 }
 
 .side-row {
