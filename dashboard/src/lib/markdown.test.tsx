@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
-import { parseBlocks, plainText, renderMarkdown, safeHref } from "./markdown.ts";
+import {
+  nestSections,
+  parseBlocks,
+  plainText,
+  renderMarkdown,
+  safeHref,
+  splitSections,
+} from "./markdown.ts";
 // THE FIXTURES ARE REAL FILES, imported verbatim rather than inlined as
 // template literals: a document written in a `.md` file is a document
 // somebody can read and edit as markdown, and a fixture that only exists
@@ -239,6 +246,135 @@ describe("the block parser", () => {
   it("answers an empty document with nothing rather than throwing", () => {
     expect(parseBlocks("")).toEqual([]);
     expect(renderMarkdown("")).toEqual([]);
+  });
+});
+
+/**
+ * SECTIONING IS THE OPPOSITE WALK: the source back, grouped, unchanged.
+ *
+ * Its one caller renders a phase prompt, which is a RECORD — an operator
+ * reproduces a turn from it and diffs it when a model starts behaving
+ * differently — so the property that matters is not what a section LOOKS like
+ * but that the split loses nothing and invents nothing.
+ */
+describe("sectioning", () => {
+  it("splits on ATX headings and keeps the run before the first one", () => {
+    const sections = splitSections("lead line\n\n# One\nunder one\n\n## Two\nunder two");
+    expect(sections).toEqual([
+      { level: 0, title: "", body: "lead line" },
+      { level: 1, title: "One", body: "under one" },
+      { level: 2, title: "Two", body: "under two" },
+    ]);
+  });
+
+  it("does not read a heading inside a fenced block", () => {
+    // The drift this walk exists to avoid. A tool catalogue and a skill body
+    // both carry shell samples, and `# install deps` is a comment — a split
+    // that took it for a heading would cut a document where nobody wrote one.
+    const sections = splitSections("## Setup\n```sh\n# install deps\nnpm ci\n```\ndone");
+    expect(sections).toHaveLength(1);
+    expect(sections[0]?.title).toBe("Setup");
+    expect(sections[0]?.body).toBe("```sh\n# install deps\nnpm ci\n```\ndone");
+  });
+
+  it("loses no line of the document and reorders none", () => {
+    // THE CLAIM THE SCREEN RESTS ON, over a real document rather than a case
+    // somebody thought of: every non-blank line that is not a heading appears
+    // in exactly one section, verbatim, in source order.
+    const sections = splitSections(pageFixture);
+    const kept = sections.flatMap((s) => s.body.split("\n"));
+    const expected = pageFixture
+      .split("\n")
+      .filter((line) => line.trim() !== "" && !/^#{1,6}\s/.test(line));
+    // Blank lines INSIDE a section are kept; only the ones bounding a run go.
+    expect(kept.filter((line) => line.trim() !== "")).toEqual(expected);
+    // And the headings are the sections, in order.
+    expect(sections.filter((s) => s.level > 0).map((s) => s.title)).toEqual(
+      pageFixture
+        .split("\n")
+        .filter((line) => /^#{1,6}\s/.test(line))
+        .map((line) => line.replace(/^#{1,6}\s+/, "").trim()),
+    );
+  });
+
+  it("answers a document with no headings as one untitled run", () => {
+    // Which is how the caller knows there is no outline to draw — not by
+    // counting sections, which would read a one-heading document as none.
+    expect(splitSections("just prose\nover two lines")).toEqual([
+      { level: 0, title: "", body: "just prose\nover two lines" },
+    ]);
+  });
+
+  it("keeps a heading that has nothing under it", () => {
+    // A fact about the document, so it is reported rather than swallowed.
+    expect(splitSections("## Empty\n\n## Next\nbody")).toEqual([
+      { level: 2, title: "Empty", body: "" },
+      { level: 2, title: "Next", body: "body" },
+    ]);
+  });
+
+  it("drops a heading's decoration but never its words", () => {
+    expect(splitSections("## Closing hashes ##\nbody")[0]?.title).toBe("Closing hashes");
+    // Inline markup is the author's, and a title is shown as written.
+    expect(splitSections("## **Bold** heading\nbody")[0]?.title).toBe("**Bold** heading");
+  });
+
+  it("answers an empty document with nothing rather than throwing", () => {
+    expect(splitSections("")).toEqual([]);
+    expect(splitSections("   \n\n  ")).toEqual([]);
+  });
+});
+
+/**
+ * AN OUTLINE IS THE DOCUMENT'S SHAPE, NOT A LIST OF ITS HEADINGS.
+ *
+ * The executor's user message is the case: its conversation ledger writes one
+ * `###` per prior turn INSIDE `## Earlier in this conversation`, and flattened
+ * those read as blocks of the message in their own right, sitting between it
+ * and the ask.
+ */
+describe("nesting", () => {
+  /** An outline as `title(child, child)`, which is the shape under test. */
+  function shape(source: string): string {
+    const render = (nodes: ReturnType<typeof nestSections>): string =>
+      nodes
+        .map((n) => {
+          const name = n.level === 0 ? "(lead)" : n.title;
+          return n.children.length ? `${name}(${render(n.children)})` : name;
+        })
+        .join(", ");
+    return render(nestSections(splitSections(source)));
+  }
+
+  it("puts a heading under the nearest shallower one", () => {
+    expect(
+      shape("## Ledger\nrules\n\n### Turn one\na\n\n### Turn two\nb\n\n## Task\nthe ask"),
+    ).toBe("Ledger(Turn one, Turn two), Task");
+  });
+
+  it("keeps a run of peers flat", () => {
+    // Which is every prompt this engine builds: the company's policies are not
+    // part of the turn contract, they are the next thing the model reads.
+    expect(shape("## One\na\n\n## Two\nb\n\n## Three\nc")).toBe("One, Two, Three");
+  });
+
+  it("never nests a document inside its opening lines", () => {
+    // The lead run has no heading, so it contains nothing. At level 0 it would
+    // otherwise be shallower than everything and swallow the whole document.
+    expect(shape("an identity line\n\n## One\na\n\n## Two\nb")).toBe("(lead), One, Two");
+  });
+
+  it("carries a deeper heading with no parent as a section in its own right", () => {
+    // A malformed document is still a document: the alternative is dropping it.
+    expect(shape("### Deep\na\n\n## Shallow\nb")).toBe("Deep, Shallow");
+  });
+
+  it("closes a level when a shallower heading arrives", () => {
+    expect(shape("## A\n\n### A1\n\n#### A1a\n\n### A2\n\n## B")).toBe("A(A1(A1a), A2), B");
+  });
+
+  it("answers an empty list with an empty outline", () => {
+    expect(nestSections([])).toEqual([]);
   });
 });
 
