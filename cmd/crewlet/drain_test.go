@@ -72,8 +72,45 @@ const (
 	drainProbeBudget = 90 * time.Second
 )
 
+// parentDeathFD is the pipe the parent holds the write end of, inherited by
+// the child as its first extra descriptor.
+//
+// THE CHILD'S LIFETIME IS THE PARENT'S, and it has to be enforced by the
+// kernel rather than by the parent's good manners. Everything that reaps this
+// child — the command's context, the cleanup — runs only when the test binary
+// unwinds, and the two ways it does not unwind are ordinary: `go test
+// -timeout` firing, and a panic in any other case in package main. The child
+// is `crewlet run`: it has installed a signal handler and blocks for ever, so
+// a leak holds the API port, a Turso database and an embedded NATS server
+// until somebody notices.
+//
+// A pipe rather than syscall.SysProcAttr's Pdeathsig, which is linux-only:
+// the release matrix is linux AND darwin, and a guard that covers half of it
+// is the asymmetry internal/procgroup exists so that nobody writes twice. The
+// kernel closes the write end when the parent dies however it dies, and the
+// read below returns EOF.
+const parentDeathFD = 3
+
+// exitWithTheParent ends this process the moment the parent's pipe closes.
+func exitWithTheParent() {
+	pipe := os.NewFile(parentDeathFD, "parent-death")
+	if pipe == nil {
+		fmt.Fprintln(os.Stderr, "probe: no parent-death pipe on fd", parentDeathFD)
+		os.Exit(5)
+	}
+	go func() {
+		// EOF, or any error: either way the parent is gone or the pipe
+		// is unusable, and a child that cannot tell must not be the one
+		// that outlives it.
+		_, _ = io.Copy(io.Discard, pipe)
+		fmt.Fprintln(os.Stderr, "probe: the parent went away")
+		os.Exit(6)
+	}()
+}
+
 // runDrainProbe is the child. It never returns.
 func runDrainProbe() {
+	exitWithTheParent()
 	// THE PROCESS'S OWN SINK, on stderr, because the parent reads the order
 	// of the shutdown from it. JSON is set by the flag as well, below: run
 	// applies the flags over whatever is installed.
@@ -152,9 +189,26 @@ turn_engine:
 		"CREWLET_DRAIN_PROBE_KEY="+drainProbeKey)
 	var output lockedBuffer
 	child.Stdout, child.Stderr = &output, &output
+	// THE PARENT-DEATH PIPE. See [parentDeathFD]: the child reads this end
+	// and exits on EOF, which the kernel produces the moment this process
+	// dies, including the ways that run no cleanup.
+	death, hold, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("parent-death pipe: %v", err)
+	}
+	child.ExtraFiles = []*os.File{death}
+	// A BOUND ON Wait, so a grandchild holding the inherited output pipe
+	// cannot make the reaping goroutine block for ever.
+	child.WaitDelay = 5 * time.Second
 	if err := child.Start(); err != nil {
+		_ = death.Close()
+		_ = hold.Close()
 		t.Fatalf("starting the node: %v", err)
 	}
+	// THIS COPY IS THE CHILD'S NOW. The write end stays open for as long as
+	// this process lives, which is the whole mechanism.
+	_ = death.Close()
+	t.Cleanup(func() { _ = hold.Close() })
 	exited := make(chan struct{})
 	var waitErr error
 	go func() {
