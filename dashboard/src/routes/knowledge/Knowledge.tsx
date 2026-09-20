@@ -484,10 +484,13 @@ export function ContainerPeek({ id }: { id: string }) {
     () => [...(list.data?.pages ?? [])].sort((a, b) => tsKey(b.updated_at) - tsKey(a.updated_at)),
     [list.data],
   );
-  // WHETHER THAT READ SAW THE WHOLE CONTAINER, off the answer's OWN limit
-  // rather than a number written here — and false until there IS an answer,
-  // since with no data `0 >= 0` would qualify a fact nothing has read yet.
-  const capped = Boolean(list.data && recent.length >= list.data.limit);
+  // WHETHER THAT READ SAW THE WHOLE CONTAINER, ASKED rather than inferred:
+  // the engine takes one row past the limit as evidence and answers
+  // `truncated`, so a container holding exactly the limit reports itself
+  // whole. `recent.length >= list.data.limit` was the inference, and it put
+  // "there may be more behind this" on every container that happened to hold
+  // a round number of pages.
+  const capped = Boolean(list.data?.truncated);
   // WHO FILES HERE IS GUARDED. A unit's `space:` is the knowledge container
   // it owns, and `internal/api/orgprojection_test.go` classifies it as guarded
   // ("a knowledge container key: where this unit's pages are written"), so the

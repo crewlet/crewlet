@@ -2511,6 +2511,11 @@ export interface PagesAnswer {
   pages: PageSummary[];
   limit: number;
   offset: number;
+  /** The page FILLED and the container holds more — `offset` is how to get
+   *  past it. ASKED, NOT INFERRED: the engine takes one row past the limit as
+   *  evidence, so a container holding exactly `limit` pages reports itself
+   *  whole, where `pages.length >= limit` on the client called it cut. */
+  truncated?: boolean;
   /** THE COVERAGE HALF, which `Sources.pageList` returns and this type dropped
    *  — so a page list served far behind the log was pixel-identical to a
    *  complete one. Same envelope as every other state-log answer. */
@@ -2608,6 +2613,10 @@ export interface PageDetail {
   comments?: PageComment[];
   history?: PageRevision[];
   children?: PageSummary[];
+  /** `children` is the first window of them and this says there are more. A
+   *  detail read takes no paging parameter, so the flag is the whole of what
+   *  a caller gets; `pages` with `parent` is where the rest is. */
+  children_truncated?: boolean;
   /** The parent chain, outermost first — the breadcrumb. */
   ancestors?: PageSummary[];
 }

@@ -38,7 +38,7 @@
  * draws is the window the next click narrows to.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Button, Card, Skeleton, Tag } from "@crewlethq/ui";
@@ -100,6 +100,16 @@ const MAX_DAYS = 30;
  * over promoted columns — so two hundred of them is a narrow answer.
  */
 const PAGE = 200;
+
+/**
+ * How many seat chips the filter row opens with.
+ *
+ * EIGHT, which is one line of them above the chart on an ordinary window, and
+ * the row is expandable rather than fixed: a picker that showed eight of
+ * twenty and said nothing made the other twelve reachable only by typing
+ * `?role=` into the address bar.
+ */
+const SEAT_CHIPS = 8;
 
 export function Turns() {
   // TWO LENSES ON ONE PATH, which is what a `view=` is for: turns are what
@@ -260,6 +270,15 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
     useMemo(() => rows.map((t) => ({ kind: "turn" as const, id: t.turn_id })), [rows]),
   );
   const seats = (org?.roles ?? []).filter((r) => r.kind !== "human");
+  // THE CHIP ROW IS A PICKER, AND A PICKER THAT HIDES ITS OPTIONS IS A LIE.
+  // Eight chips with nothing after them read as the whole roster, so on a
+  // company with more seats than that the rest were unreachable from this
+  // screen — reachable only by typing `?role=` into the address bar, which is
+  // not a filter anybody finds. The row still opens at eight, because a wall
+  // of chips above a chart is its own kind of unusable, and says how many it
+  // is holding back.
+  const [allSeats, setAllSeats] = useState(false);
+  const shown = allSeats ? seats : seats.slice(0, SEAT_CHIPS);
 
   return (
     <>
@@ -307,7 +326,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
         >
           {role || "every seat"}
         </Button>
-        {seats.slice(0, 8).map((seat) => (
+        {shown.map((seat) => (
           <Button
             key={seat.name}
             size="small"
@@ -317,6 +336,11 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
             {seat.name}
           </Button>
         ))}
+        {seats.length > shown.length && (
+          <Button size="small" variant="secondary" onClick={() => setAllSeats(true)}>
+            {plural(seats.length - shown.length, "more seat")}
+          </Button>
+        )}
         <span className="spacer" />
         <Segmented
           ariaLabel="Which turns"
