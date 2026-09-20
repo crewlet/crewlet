@@ -80,21 +80,44 @@ const KEY = "crewlet_recents";
  */
 export const MaxRecents = 8;
 
+/**
+ * WHAT THIS TAB IS PAINTING, and nothing else.
+ *
+ * It exists for one reason: `useSyncExternalStore` requires a snapshot that is
+ * REFERENTIALLY STABLE between renders, and a fresh parse of localStorage
+ * returns a new array every time, which makes React loop. It is a render
+ * snapshot, so it may be stale — another tab's writes do not reach it until a
+ * `storage` event or a reload.
+ *
+ * SO IT IS NEVER THE BASE OF A WRITE. That is `stored()` below, and the
+ * separation is what stops one tab destroying another's list: `write`
+ * replaces the WHOLE key, so a mutation built on a snapshot taken before the
+ * other tab wrote hands back a list missing everything it did. Reproduced
+ * over one origin: with a second tab open, three places visited in the first
+ * were gone at the second tab's next click. `lib/starred.ts` had the same
+ * shape and it was worse there, because a star is a decision somebody made.
+ */
 let cache: Recent[] | null = null;
 const listeners = new Set<() => void>();
 
-function read(): Recent[] {
-  if (cache) return cache;
+/** What is STORED, parsed fresh. The base of every write. */
+function stored(): Recent[] {
   try {
     const raw = localStorage.getItem(KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
-    cache = Array.isArray(parsed) ? parsed.filter(valid).slice(0, MaxRecents) : [];
+    return Array.isArray(parsed) ? parsed.filter(valid).slice(0, MaxRecents) : [];
   } catch {
     // A private window, blocked site data, or a value somebody's other tab
     // wrote in a shape this build does not have. None of them is a reason
     // for a palette not to open.
-    cache = [];
+    return [];
   }
+}
+
+/** The snapshot this tab renders. See [cache]. */
+function read(): Recent[] {
+  if (cache) return cache;
+  cache = stored();
   return cache;
 }
 
@@ -150,7 +173,10 @@ export function remember(entry: Omit<Recent, "at">): void {
   if (entry.path.length === 0) return;
   const key = entry.path.join("/");
   const at = Date.now();
-  const held = read();
+  // STORED, NOT THE RENDER SNAPSHOT — see [cache]. A write replaces the whole
+  // key, so building it on what this tab last painted hands back a list
+  // missing everything another tab has done since.
+  const held = stored();
   const found = held.findIndex((r) => r.path.join("/") === key);
   if (found >= 0) {
     const next = held.slice();
@@ -174,9 +200,32 @@ export function forgetAll(): void {
   write([]);
 }
 
+/**
+ * Subscribe, and follow ANOTHER TAB while anybody is.
+ *
+ * `storage` fires in every OTHER document of the origin, so this is what
+ * lets a second tab's recent reach this one's rail rather than waiting for a
+ * reload. Installed on the first subscriber and removed with the last: the
+ * event only matters to a surface that is drawing the list, and every WRITE
+ * reads storage for itself (see [cache]), so correctness does not depend on
+ * having heard it.
+ *
+ * `e.key === null` is a `localStorage.clear()`, which names no key and
+ * invalidates everything.
+ */
 function subscribe(fn: () => void): () => void {
+  if (listeners.size === 0) window.addEventListener("storage", follow);
   listeners.add(fn);
-  return () => listeners.delete(fn);
+  return () => {
+    listeners.delete(fn);
+    if (listeners.size === 0) window.removeEventListener("storage", follow);
+  };
+}
+
+function follow(e: StorageEvent): void {
+  if (e.key !== null && e.key !== KEY) return;
+  cache = null;
+  for (const fn of listeners) fn();
 }
 
 /**

@@ -150,3 +150,31 @@ describe("a store that will not cooperate", () => {
     expect(stored().map((r) => r.label)).toEqual(["ENG-1"]);
   });
 });
+
+/**
+ * A SECOND TAB IS THE SAME STORAGE, and a write replaces the whole key.
+ *
+ * The module holds a render snapshot for `useSyncExternalStore`, which must
+ * be referentially stable. Built a mutation on it, this list handed back
+ * whatever the tab last painted — so with two tabs open, everywhere the
+ * first one had been since the second one's last click was gone at that
+ * click. See `lib/starred.ts`, where the same shape cost decisions rather
+ * than a reading habit.
+ */
+describe("two tabs on one origin", () => {
+  it("keeps where another tab has been while this one was painting", () => {
+    remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" });
+    // This tab paints, so the snapshot is taken.
+    expect(stored().map((r) => r.label)).toEqual(["ENG-1"]);
+    // The other tab goes somewhere. No event is delivered here.
+    localStorage.setItem(
+      "crewlet_recents",
+      JSON.stringify([
+        { path: ["work", "ENG-2"], label: "ENG-2", workspace: "work", at: 2 },
+        { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work", at: 1 },
+      ]),
+    );
+    remember({ path: ["work", "ENG-3"], label: "ENG-3", workspace: "work" });
+    expect(stored().map((r) => r.label)).toEqual(["ENG-3", "ENG-2", "ENG-1"]);
+  });
+});
