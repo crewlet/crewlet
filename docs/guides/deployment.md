@@ -493,31 +493,44 @@ states one limit per replica class (`R1`, `R3`, `R5`, …), already counting
 replication, so the engine takes the tier for `stream.replicas` whole.
 
 A tiered account that has **no tier for the class you asked for** — `R1` and
-`R5` declared while `stream.replicas: 3` — is neither. The server refuses every
-stream and bucket create on such an account with `no JetStream default or
-applicable tiered limit present`, before it compares a single byte, so the
-engine reports a budget of **zero** and says on the `statelog_ceilings` line
-that it came from `account_no_tier` rather than from an account that is merely
-full. The two report the same number and mean opposite things — one clears by
-waiting for room, the other only by a change of setting — so the refusal names
-this case for what it is. Set `stream.replicas` to a class the account
-declares, or have the cluster's operator declare that tier.
-
-The same is true of a class the account **lists without a limit**: it reports
+`R5` declared while `stream.replicas: 3` — is neither, and neither is a tier
+that *is* declared but carries no storage limit: the account's report lists
 every class it holds objects in, whether or not a limit was ever set for one,
-so `R3` being present is not `R3` being declared. That reports as
-`account_tier_no_limit` and its remedy is the other one — declare a limit on
-the tier that is already there. A tier declared **unlimited** is neither: it
+so `R3` being present is not `R3` being declared, and the broker resolves both
+through the same table. It refuses every stream, consumer and bucket create on
+such an account with `no JetStream default or applicable tiered limit present`,
+before it compares a single byte. The engine reports a budget of **zero** under
+its own source — `account_no_tier` or `account_tier_no_limit` — rather than as
+an account that is merely full: the two carry the same number and the opposite
+instruction, since one clears by somebody freeing room and these only by a
+change of configuration. A tier declared **unlimited** is neither again: it
 states its limit as a negative, the broker creates against it, and the engine
 sizes from its own free disk as it does for any broker that states no limit.
 
-Every create the broker refuses that way **names the class and the levers
-too**. The engine classifies that refusal rather than reading it as the stream,
-consumer or bucket having failed to appear, so what a stalled boot says is the
-class the account carries no limit for and what to move — not `(and it is not
-there: stream not found)` appended to the broker's bare text. Both shapes read
-the same way there, because the broker resolves them through the same table and
-refuses both before it compares a byte.
+What that does to a node depends on **whether its objects already exist**, and
+the two cases look nothing alike.
+
+*A node that has not provisioned them does not start.* `crewlet run` creates
+its streams while it is opening its broker client, and its coordination buckets
+straight after — all of it before anything sizes a ceiling — so the first
+create is refused and the process exits. The refusal names the class the
+account carries no limit for and the two levers that move it: the engine
+classifies it rather than reading it as the object having failed to appear, so
+what you get is `R3` and `stream.replicas` and not `(and it is not there:
+stream not found)` appended to the broker's bare text.
+
+*A node whose objects are all already there boots, on numbers the broker never
+agreed to.* Nothing is created, so nothing is refused. The
+`statelog_broker_states_no_limit` warning says which shape it is and which
+lever to move, and the `statelog_ceilings` line below it carries
+`broker_source=account_no_tier` (or `account_tier_no_limit`) with
+`broker_limit=0` — so the logs are sized against nothing but what they already
+hold between them, floored at a gibibyte each. It keeps working until it has to
+make something new: a state-log stream a new version adds, the mailbox for a
+seat you just added, a coordination bucket. That create is refused as above.
+
+Either way: set `stream.replicas` to a class the account carries a limit for,
+or have the cluster's operator declare one for the class you asked for.
 
 ---
 

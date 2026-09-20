@@ -140,7 +140,7 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 				"set stream.tracker_log_max_bytes, stream.tracker_vectors_max_bytes "+
 				"and stream.pages_log_max_bytes to choose them")
 	}
-	return sizeCeilings(ctx, host, boot.Stream, free)
+	return sizeCeilings(ctx, host, boot.Stream, free, volume)
 }
 
 // sizeCeilings is [ceilingsFor] on a volume already measured.
@@ -160,7 +160,7 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 // read their caps; the volume this node measured is the one figure it has, so
 // the same share of that bounds it.
 func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
-	free int64) (map[string]domainCeiling, error) {
+	free int64, volume string) (map[string]domainCeiling, error) {
 
 	asked := map[string]domainCeiling{}
 	var held int64
@@ -194,6 +194,25 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 	}
 	if err != nil || available < 0 {
 		available = free
+	}
+	// A LIMIT OF ZERO FROM AN ACCOUNT THAT DECLARES NONE FOR THIS NODE IS
+	// SAID OUT LOUD, because the boot that follows does not say it.
+	//
+	// It is the ONE reading that is a misconfiguration rather than a
+	// condition: the broker refuses every create on such an account before
+	// it compares a byte, so a node whose objects all already exist starts
+	// and works, sized against a pool of nothing but what those logs
+	// already hold, until the first time it has to make something new.
+	// Then a create is refused and the operator meets a fact that has been
+	// true since this line. Every other zero is a full broker, which the
+	// refusal itself explains when it arrives.
+	if err == nil && noApplicableLimit(budget.Source) {
+		log.WarnContext(ctx, "statelog_broker_states_no_limit",
+			"broker_source", string(budget.Source),
+			"detail", limitSource(budget.Source, volume)+
+				". This node will start if every stream, consumer and bucket it "+
+				"needs already exists, and the first create it has to make will "+
+				"be refused")
 	}
 	pool := int64(float64(available+held) * StreamBudgetShare)
 	sized := fitCeilings(asked, pool)
@@ -400,6 +419,20 @@ func roomLeft(budget jetstream.StorageBudget, readErr error, volume string) stri
 	return fmt.Sprintf("the broker had %d bytes left to reserve (%d of its "+
 		"%d-byte limit already reserved), and %s", budget.Available(),
 		budget.Committed, budget.Limit, limitSource(budget.Source, volume))
+}
+
+// noApplicableLimit reports a budget whose zero means the account declares no
+// limit that applies to this node at all, rather than a limit that is spent.
+//
+// TWO SOURCES AND NOT A ZERO TEST, because the two are the same number and the
+// opposite instruction: a spent limit clears by somebody freeing room, and
+// these clear only by a change of configuration.
+func noApplicableLimit(source jetstream.BudgetSource) bool {
+	switch source {
+	case jetstream.BudgetAccountNoTier, jetstream.BudgetAccountTierNoLimit:
+		return true
+	}
+	return false
 }
 
 // limitSource says who sets a broker's limit, in the terms an operator

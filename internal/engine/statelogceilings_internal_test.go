@@ -189,7 +189,7 @@ func brokerWithHeadroom(t *testing.T, headroom int64) *jetstream.Queue {
 // and provisions each against q, as a boot does.
 func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, free int64) error {
 	t.Helper()
-	ceilings, err := sizeCeilings(t.Context(), q, stream, free)
+	ceilings, err := sizeCeilings(t.Context(), q, stream, free, "/var/lib/crewlet/stream")
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 	t.Parallel()
 	const free = 64 * gib
 	q := brokerWithHeadroom(t, 12*gib)
-	first, err := sizeCeilings(t.Context(), q, config.Stream{}, free)
+	first, err := sizeCeilings(t.Context(), q, config.Stream{}, free, "/var/lib/crewlet/stream")
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 	if _, err := s.provisionAll(t.Context(), q); err != nil {
 		t.Fatalf("provision: %v", err)
 	}
-	again, err := sizeCeilings(t.Context(), q, config.Stream{}, free)
+	again, err := sizeCeilings(t.Context(), q, config.Stream{}, free, "/var/lib/crewlet/stream")
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
