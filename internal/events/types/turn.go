@@ -276,8 +276,8 @@ func (e PromptSize) SummaryFor(actor string) string {
 }
 
 // TurnGuardBreach fires whenever a runtime-invariant guard trips during a turn,
-// so every breach reaches the events table and not just the log. Its type is in
-// a failure BY TYPE: a breached guard is a failed turn however the payload
+// so every breach reaches the events table and not just the log. Its type is a
+// failure BY TYPE: a breached guard is a failed turn however the payload
 // reads.
 type TurnGuardBreach struct {
 	Agent    string    `json:"agent_id"`
