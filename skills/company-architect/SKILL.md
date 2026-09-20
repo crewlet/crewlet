@@ -118,7 +118,7 @@ live-editable, so the first version does not need to be the last.
    reason is usually about their people — a team already living in Jira
    should not be asked to watch a second board — and never about the
    agents, who cannot tell the difference. Say so, then point them at
-   [Choosing your stack](https://docs.crewlet.ai/getting-started/choosing-your-stack)
+   [Choosing your stack](https://docs.crewlet.ai/getting-started/choosing-your-stack/)
    rather than re-deriving the trade-offs. **Do not wire integrations in
    the first pass** — see the sequencing rule below.
 
@@ -163,7 +163,7 @@ integrations one at a time, validating after each.
 Full worked examples to model the shape on — read them, don't
 reinvent them:
 
-- [Quickstart](https://docs.crewlet.ai/getting-started/quickstart) — four seats,
+- [Quickstart](https://docs.crewlet.ai/getting-started/quickstart/) — four seats,
   zero integrations, the minimal end-to-end config.
 - [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) —
   a complete seven-seat company with Jira + Confluence + GitLab + Mattermost
@@ -261,17 +261,17 @@ roles:
 inbox, no LLM. They require at least one `contact` identity and reject
 the runtime-only fields. Scope their `manages` to the top roles — a
 founder managing every seat floods them. See
-[Humans in the org chart](https://docs.crewlet.ai/concepts/humans-in-the-org).
+[Humans in the org chart](https://docs.crewlet.ai/concepts/humans-in-the-org/).
 
 **Agents do not get code-authoring tools by default.** Reading and
 reviewing code is MCP; *writing* it is the sandbox (`role.sandbox`),
 which needs `providers.sandbox` configured. See
-[Code sandbox](https://docs.crewlet.ai/concepts/code-sandbox).
+[Code sandbox](https://docs.crewlet.ai/concepts/code-sandbox/).
 
 **The engine ships no tool-skill prose.** If they want agents to know
 *how* to use a tool, that is a knowledge-base page published with
 `crewlet confluence import`, not prompt text in
-the config. See [Tool skills](https://docs.crewlet.ai/concepts/tool-skills).
+the config. See [Tool skills](https://docs.crewlet.ai/concepts/tool-skills/).
 
 **`workers:` are helpers, not seats.** A worker template is a
 short-lived delegate a seat's executor hands narrowly-scoped work to
@@ -309,7 +309,7 @@ a template can never hand a seat a tool the seat does not already have.
 Declare `output` where the parent will *act* on the answer — fields it
 can index beat prose it has to re-read. Leave `roles[].workers` off
 unless a seat should see a narrower set; empty means every template. See
-[Turn engine — workers](https://docs.crewlet.ai/concepts/turn-engine#workers).
+[Turn engine — workers](https://docs.crewlet.ai/concepts/turn-engine/#workers).
 
 ## Writing style for the fields that become prompts
 
@@ -352,9 +352,9 @@ crewlet run crewlet.yaml -company company.yaml
 ```
 
 Full field reference:
-[Configuration](https://docs.crewlet.ai/getting-started/configuration). Two-tier
+[Configuration](https://docs.crewlet.ai/getting-started/configuration/). Two-tier
 design, live reload, and secrets-at-rest:
-[Configuration concepts](https://docs.crewlet.ai/concepts/configuration).
+[Configuration concepts](https://docs.crewlet.ai/concepts/configuration/).
 
 Add this line at the top of each file so their editor autocompletes and
 flags typos as they type:
