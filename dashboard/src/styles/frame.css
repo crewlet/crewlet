@@ -53,12 +53,22 @@
      and a reader moving between an old bookmark and a new one should not see
      the content jump. */
   --page-bar-h: var(--topbar-h);
-  /* Below this the detail rail becomes a drawer. Measured with the sidebar
-     OPEN: 80 rail + 236 sidebar + 420 peek leaves 444px of list, which is
-     under the width a work row needs for a key, a title and an assignee.
-     With the sidebar collapsed the same layout works at 980, which is why the
-     drawer threshold is not simply "small screen" — it is this sum. */
-  --peek-drawer-max: 1180px;
+  /* Below this the detail rail becomes a drawer. The measured quantity is the
+     LIST FLOOR: 444px is under the width a work row needs for a key, a title
+     and an assignee. The threshold is that floor plus the chrome in front of
+     it, with the sidebar OPEN — 97 rail + 236 sidebar + 420 peek = 753, so
+     444px of list wants 1197. Narrower chrome reaches the same floor at a
+     narrower window, which is why the drawer threshold is not simply "small
+     screen" — it is this sum.
+
+     IT WAS 1180, DERIVED WHEN `--rail-w` WAS A FLAT 80px. The rail became
+     `--rail-foot-w + 2 * --space-2 + 1px` above — 97px — and this sum was not
+     re-derived, so between 1181 and 1197 the peek stayed a column over a list
+     of 427–443px: below the floor this number exists to hold, at seventeen
+     widths of window, with nothing to report it. The floor is what was
+     measured; the threshold is arithmetic over it and the chrome, and it has
+     to be redone whenever either moves. */
+  --peek-drawer-max: 1197px;
 }
 
 /* ---- The application grid ------------------------------------------------
@@ -109,10 +119,10 @@
    explicitly sized track — so an unconditional fourth track reserved 420px
    of empty page at exactly the widths the drawer exists to rescue, and at
    ≤960 it also out-specified the two-column reset and kept the empty sidebar
-   track as well. 1181 rather than a `calc()` off the token because a custom
+   track as well. 1198 rather than a `calc()` off the token because a custom
    property cannot be read in a media query; `frame.test.ts` holds the two
    numbers against each other so they move together. */
-@media (min-width: 1181px) {
+@media (min-width: 1198px) {
   .app[data-peek="true"] {
     grid-template-columns:
       var(--rail-w) var(--sidebar-w) minmax(0, 1fr)
@@ -544,11 +554,19 @@
 
 /* AND IT IS THE PAGE BAR'S MEASURING STICK. Every rule that decides whether
    the bar's contents still fit was written against the WINDOW, and the window
-   is not what they overflow: the rail is 96px and an open workspace sidebar is
-   another 234, so a 1919px window gives the bar 1587 and a 1440px window with
-   the sidebar shut gives it 1344. A media query cannot tell those apart, which
-   is why `@media (max-width: 860px)` was still the only place the controls
-   were allowed their own line while the bar was breaking at 1587.
+   is not what they overflow: `--rail-w` composes to 97px and an open workspace
+   sidebar is another 236, so a 1919px window gives the bar 1586 and a 1440px
+   window with the sidebar shut gives it 1343. A media query cannot tell those
+   apart, which is why `@media (max-width: 860px)` was still the only place the
+   controls were allowed their own line while the bar was breaking at 1586.
+
+   READ THE TOKENS, NEVER A REMEMBERED LITERAL. This paragraph said 96 and 234
+   because both were true when it was written: the rail was a flat `--rail-w`
+   before it became `--rail-foot-w + 2 * --space-2 + 1px` above, and the extra
+   pixel is the border the composition exists to account for. A width quoted
+   here is a copy of a value that lives somewhere else, and this one was two
+   changes stale with nothing to say so — the same failure `.num-block`'s
+   invented ceiling had in components.css.
 
    `inline-size` rather than `size`: the bar's height is its content's, and a
    container that contains block size would have to be told one. */
@@ -997,7 +1015,13 @@
   padding: 0 var(--space-4) var(--space-6);
 }
 
-@media (max-width: 1180px) {
+/* THE DRAWER SIDE OF THE SAME THRESHOLD, and it must tile exactly with the
+   `min-width` guard above: one pixel of daylight between them is a band of
+   widths with no peek column AND no drawer. Three numbers say one thing —
+   `--peek-drawer-max`, that guard, and this — so `frame.test.ts` holds all
+   three against each other. It held only two when the threshold moved from
+   1180 to 1197, which would have left 1181–1197 with neither. */
+@media (max-width: 1197px) {
   .peek-veil {
     display: block;
     position: fixed;

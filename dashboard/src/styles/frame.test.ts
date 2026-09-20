@@ -174,6 +174,20 @@ describe("the frame's layout", () => {
     expect(guard, "the peek tracks are not behind a min-width guard").not.toBeNull();
     expect(Number(guard![1])).toBe(Number(drawerMax![1]) + 1);
 
+    // AND THE DRAWER SIDE, which is the third number saying the one thing and
+    // was held by nothing. The `min-width` guard above turns the peek into a
+    // COLUMN; this `max-width` block is what makes it a drawer below that, and
+    // the two have to tile exactly — a pixel of daylight is a band of widths
+    // with neither. Moving `--peek-drawer-max` from 1180 to 1197 (the rail
+    // grew from a flat 80px to a composed 97 and the sum was never redone)
+    // moved two of the three, and 1181–1197 would have had no peek column and
+    // no drawer, with every test green.
+    const drawer = /@media \(max-width:\s*(\d+)px\)\s*\{\s*\.peek-veil/.exec(css);
+    expect(drawer, "the peek drawer is not behind a max-width block").not.toBeNull();
+    expect(Number(drawer![1]), "the drawer and the column must tile at the threshold").toBe(
+      Number(drawerMax![1]),
+    );
+
     // And every peek template is inside it: one left outside would out-specify
     // the narrow two-column reset and keep both empty tracks on its own.
     const guarded = css.slice(guard!.index, css.indexOf("\n}", guard!.index));
@@ -870,8 +884,9 @@ describe("the frame's layout", () => {
 
     // THE BREAK IS A CONTAINER QUERY, because what overflows is the BAR and
     // a viewport query cannot see it: the rail and an open workspace sidebar
-    // take 330px, so a 1919px window and a 1440px window with the sidebar
-    // shut give the same bar. `.page` is the container that measures it.
+    // take 333px (97 + 236), so a 1919px window and a 1443px window with the
+    // sidebar shut give the same bar. `.page` is the container that measures
+    // it.
     expect(block(base, ".page"), "the page is no longer a container").toMatch(
       /container:\s*page \/ inline-size/,
     );
@@ -884,7 +899,28 @@ describe("the frame's layout", () => {
     // sight.
     const broken = block(atBreak, ".page-controls");
     expect(broken).toMatch(/flex:\s*0 0 100%/);
-    expect(broken).toMatch(/order:\s*\d/);
+    // PAST THE GLOBALS, WHICH IS A COMPARISON AND NOT A SHAPE. `/order:\s*\d/`
+    // matches `order: 0` — the INITIAL value — so the whole content of the
+    // assertion was "is there an order at all", and `order: 0` puts the
+    // controls back exactly where document order already had them: between
+    // the trail and the viewer chip, so the line breaks there and pushes the
+    // chip and the search trigger down with them. That is the failure this
+    // clause names, passing its own gate.
+    const order = /order:\s*(-?\d+)/.exec(broken);
+    expect(order, "the controls carry no order, so they break where they sit").not.toBeNull();
+    expect(Number(order![1]), "order 0 is where document order already put them").toBeGreaterThan(
+      0,
+    );
+    // And nothing else in the broken bar may claim an order of its own, or
+    // "past the globals" stops being true of the value above without this
+    // file changing.
+    const others = [...atBreak.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(
+      (m) => /(^|[\s;])order\s*:/.test(m[2]!) && !/\.page-controls/.test(m[1]!),
+    );
+    expect(
+      others.map((m) => m[1]!.trim()),
+      "a second order in the broken bar makes the comparison above meaningless",
+    ).toEqual([]);
     expect(broken).toMatch(/overflow-x:\s*auto/);
     // …and the bar has to be told to wrap again, since the base rule no
     // longer does.
