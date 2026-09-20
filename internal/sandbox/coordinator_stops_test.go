@@ -220,24 +220,28 @@ var coordinatorEntries = map[string][]entryDrive{
 	}},
 }
 
-// place puts this rig's run in one status, by the route the engine takes to it,
-// and counts the seat as the engine would.
+// placements is how a run REACHES each status a record can hold, by the route
+// the engine takes to it.
 //
-// A STATUS IT DOES NOT KNOW FAILS RATHER THAN SKIPS. The matrix drives every
-// status in [Active], so one added to the state machine has to say how a run
-// reaches it before anything here can certify what happens from there — the
-// same roster rule [TestEveryCoordinatorEntryPointIsDriven] applies to the
-// methods, on the other dimension.
-func place(t *testing.T, rig *coordRig, status string) {
-	t.Helper()
-	switch status {
-	case StatusLaunching:
+// A ROSTER RATHER THAN A SWITCH, held to [Active] in BOTH DIRECTIONS by
+// [TestEveryStatusHasAPlacement] — the same rule
+// [TestEveryCoordinatorEntryPointIsDriven] applies to the methods, and the
+// same both-ways, which is what a switch could not be. One direction is half a
+// guard either way round: a status added to the state machine has to say how a
+// run reaches it before anything here can certify what happens from there, and
+// an arrangement for a status later dropped from [Active] is an arm nothing
+// runs while looking exactly like coverage — these statuses are string
+// constants, so the compiler never sees it go dead.
+var placements = map[string]func(t *testing.T, rig *coordRig){
+	StatusLaunching: func(_ *testing.T, rig *coordRig) {
 		// The job is started and its box attached; the conversation a
 		// resume re-enters is not on the row yet.
 		rig.launching("t1")
-	case StatusRunning:
+	},
+	StatusRunning: func(_ *testing.T, rig *coordRig) {
 		rig.launch("t1")
-	case StatusResumed:
+	},
+	StatusResumed: func(t *testing.T, rig *coordRig) {
 		rig.launch("t1")
 		// THROUGH THE COMPLETION'S OWN TAIL, because a claim is scoped
 		// to the launch it is taken for and the status it comes out of
@@ -248,10 +252,12 @@ func place(t *testing.T, rig *coordRig, status string) {
 			CompletionTail(run.LaunchID)); err != nil || !won {
 			t.Fatalf("ClaimForResume = %v, %v", won, err)
 		}
-	case StatusAwaiting:
+	},
+	StatusAwaiting: func(_ *testing.T, rig *coordRig) {
 		rig.launch("t1")
 		rig.park("t1")
-	case StatusReseed:
+	},
+	StatusReseed: func(t *testing.T, rig *coordRig) {
 		rig.launch("t1")
 		rig.park("t1")
 		// The pause reaper took the box; the run is not over, because the
@@ -259,12 +265,48 @@ func place(t *testing.T, rig *coordRig, status string) {
 		if won, err := rig.pending.ExpirePause(t.Context(), "t1"); err != nil || !won {
 			t.Fatalf("ExpirePause = %v, %v", won, err)
 		}
-	default:
+	},
+}
+
+// place puts this rig's run in one status and counts the seat as the engine
+// would.
+//
+// A STATUS IT DOES NOT KNOW FAILS RATHER THAN SKIPS, which is the roster's
+// first direction reaching the one caller: the matrix drives every status in
+// [Active], so one added to the state machine has to say how a run reaches it
+// before anything here can certify what happens from there.
+func place(t *testing.T, rig *coordRig, status string) {
+	t.Helper()
+	arrange, known := placements[status]
+	if !known {
 		t.Fatalf("no arrangement for status %q: this matrix drives every status in Active, "+
 			"so a new one has to say how a run reaches it before anything can certify "+
 			"what happens to a turn suspended into it", status)
 	}
+	arrange(t, rig)
 	rig.coordinator.countRun("swe", status)
+}
+
+// Every status a run can hold is placed, and every placement names one.
+//
+// THE SECOND DIRECTION, which [place] cannot reach: it fails on a status it
+// does not know, and nothing at all happens to a placement for a status that
+// has left [Active]. That arm would simply stop running, silently, and read as
+// a status this matrix still covers.
+func TestEveryStatusHasAPlacement(t *testing.T) {
+	t.Parallel()
+	for _, status := range Active {
+		if placements[status] == nil {
+			t.Errorf("no placement for %q: this matrix drives every status in Active, so a "+
+				"status added to the state machine has to say how a run reaches it", status)
+		}
+	}
+	for status := range placements {
+		if !slices.Contains(Active, status) {
+			t.Errorf("placements arranges %q, which is not in Active any more: the arm is "+
+				"never driven and certifies nothing", status)
+		}
+	}
 }
 
 // jobFinished queues the result a finished coding job comes back with, so a
@@ -337,6 +379,23 @@ func completes(t *testing.T, rig *coordRig) {
 //
 // Its own drive rather than a refusal of the matrix's, because the refusal
 // dimension refuses a call for the whole drive and the claim reads the row too.
+//
+// WHAT THE MATRIX DOES NOT ASSERT HERE IS THE REPORT, and that is written down
+// rather than left to be discovered, because a drive presenting itself as
+// coverage it lacks is the defect this file exists to end and not an instance
+// of it. The settle this reaches ([Coordinator.settleClaimed]) has two call
+// sites and both sit behind a resume that returned nil or [ErrResumeActed] —
+// every other resume failure gives the claim back instead, which is
+// [Coordinator.revertClaim]'s path and not this one. Both of those count as an
+// OWNED re-entry, so from the three statuses whose claim is won
+// ([StatusRunning], [StatusAwaiting], [StatusReseed]) [entryDrive.run] takes
+// the turn-ended-its-own-hold exemption before it asks whether a stop was
+// reported; from [StatusLaunching] and [StatusResumed] the claim is refused
+// and the earlier skip fires. So what this drive certifies is that the path
+// RUNS from every status with that read refused, and nothing about what it
+// says. That the settle REPORTS is held by
+// [TestASettleWhoseRecordCannotBeReadEndsTheRunAnyway], which drives both
+// resume outcomes by name.
 func completesUnreadable(t *testing.T, rig *coordRig) {
 	t.Helper()
 	rig.coordinator.pending = &refusingStore{
