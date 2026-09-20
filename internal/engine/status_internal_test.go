@@ -171,6 +171,24 @@ func (w *workspace) await(t *testing.T, want string, done func([]string) bool) [
 	}
 }
 
+// firstOf reports where the first of these lines sits in what the workspace
+// was shown, or -1.
+//
+// A POSITION rather than a membership test, and that is the whole of it:
+// [workspace.awaitAnyOf] returns only once one of its lines is present, so a
+// case that then checks for their presence restates the wait and cannot fail.
+// WHERE a line sits relative to the raise is what the wait does not promise,
+// and it is what says the phase seam moved the words rather than that the
+// indicator merely reached the workspace at all.
+func firstOf(shown, want []string) int {
+	for i, line := range shown {
+		if slices.Contains(want, line) {
+			return i
+		}
+	}
+	return -1
+}
+
 // raisedNothing asserts the deterministic half of "no indicator": a session is
 // created by Begin itself, so a driver holding none can never post — where an
 // empty request log alone could be a post still in flight.
@@ -338,8 +356,16 @@ func TestAChatTriggeredTurnRaisesTheIndicatorAndClearsIt(t *testing.T) {
 		t.Fatalf("runTurn: %v", err)
 	}
 
-	if len(raised) == 0 || raised[0] == "" {
-		t.Errorf("the running turn showed %v, want the indicator raised", raised)
+	// TWO CHECKS, not one compound. awaitShown returns at least one status or
+	// fails, so an empty record here means the wait itself did not survive —
+	// which is a different report from the one below, where the workspace was
+	// told something and the something was a clear.
+	if len(raised) == 0 {
+		t.Fatal("the raise the turn waited for never reached the workspace")
+	}
+	if raised[0] == "" {
+		t.Errorf("the running turn first showed %v, want the indicator raised "+
+			"rather than cleared", raised)
 	}
 	shown := ws.shown()
 	if last := shown[len(shown)-1]; last != "" {
@@ -401,9 +427,18 @@ func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 	)
 	e, ws = indicatingWith(t, notify.StatusAlways, scripted{
 		waiting: func(reviewing bool) {
-			if reviewing {
-				moved = ws.awaitAnyOf(t, reviews)
+			if !reviewing {
+				// THE RAISE HAS TO HAVE LANDED FIRST, or there is no
+				// order to assert: the session's own goroutine makes
+				// every post, so a phase change that beats it to the
+				// first one leaves the raise never separately shown and
+				// the reviewer's line sitting at index 0. The executor's
+				// own call is where that can be waited for from inside
+				// the turn.
+				ws.awaitShown(t, 1)
+				return
 			}
+			moved = ws.awaitAnyOf(t, reviews)
 		},
 	})
 
@@ -418,13 +453,17 @@ func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 		t.Fatalf("the turn ran %d rounds, so this case did not exercise its "+
 			"phases: %+v", res.Rounds, res)
 	}
-	var seen bool
-	for _, shown := range moved {
-		seen = seen || slices.Contains(reviews, shown)
+	// WHERE THE REVIEWER'S LINE SITS, not that it is there: the wait above
+	// returned because it is there, so asserting that again asserts nothing.
+	// What the seam has to do is MOVE the words, from the executor's opening
+	// raise to the reviewer's line and in that order.
+	if len(moved) == 0 || !slices.Contains(notify.PhasePhrases[phase.Execute.String()], moved[0]) {
+		t.Fatalf("the workspace first heard %v, want the executor's opening raise", moved)
 	}
-	if !seen {
-		t.Errorf("the indicator showed %v, none of it the reviewer's wording — "+
-			"the turn's phases never reached the person watching", moved)
+	if at := firstOf(moved, reviews); at != 1 {
+		t.Errorf("the reviewer's wording sits at %d in %v, want it second — "+
+			"straight after the raise, because the executor's own report names "+
+			"the phase the raise already showed and costs no request", at, moved)
 	}
 }
 
@@ -515,7 +554,7 @@ func TestAnIndicatorSurvivesOnlyWhatIsStillWorking(t *testing.T) {
 	ending := raise("wk-end", "D0END")
 	ws.awaitShown(t, before+1)
 	endWorkingStatus(t.Context(), ending, false)
-	if shown := ws.shown(); len(shown) <= before || shown[len(shown)-1] != "" {
+	if shown := ws.shown(); shown[len(shown)-1] != "" {
 		t.Fatalf("a turn that ended did not clear: %v", shown[before:])
 	}
 	if live := e.notify.slack.Status().Live(); len(live) != 1 {
@@ -920,12 +959,18 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	// And its phases moved the words, which is the resume path's own OnPhase
 	// wiring: without it a resumed turn shows whatever the suspended half
 	// last said, for however long the box's answer takes to work through.
-	var seen bool
-	for _, shown := range moved {
-		seen = seen || slices.Contains(reviews, shown)
+	//
+	// ASSERTED AS A POSITION, for the reason [TestTheIndicatorFollowsTheTurnsPhases]
+	// gives: the wait returned because a reviewer line is present, so where it
+	// sits is the only thing left that the wait did not already answer. Second,
+	// straight after the line the suspension left standing — which is also what
+	// says the rejoin did not redraw that line on its way back in.
+	if len(moved) == 0 || !slices.Contains(notify.PhasePhrases[phase.Execute.String()], moved[0]) {
+		t.Fatalf("the workspace first heard %v, want the line the suspended half left up", moved)
 	}
-	if !seen {
-		t.Errorf("the resumed turn's phases reached nobody: %v", moved)
+	if at := firstOf(moved, reviews); at != 1 {
+		t.Errorf("the resumed turn's reviewer wording sits at %d in %v, want it "+
+			"second — straight after the hold it took back", at, moved)
 	}
 	if shown := ws.shown(); shown[len(shown)-1] != "" {
 		t.Errorf("the resumed turn ended without clearing: %v", shown)
