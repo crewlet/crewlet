@@ -134,6 +134,65 @@ That is why the trim refuses to advance past a floor no backup has reached.
 The backup schedule is a **correctness input**, not hygiene. See
 [Retention](retention.md).
 
+## Adopting a peer's copy
+
+A node below the floor has nothing left to replay and no amount of waiting
+produces it. What it does instead is ask the fleet for a **snapshot** — one
+member's replicated database file — and install it wholesale before anything
+reads from it. That happens at boot, and again without one: a node that falls
+below the floor while running pauses its appliers, joins the same way, and
+starts them again over the installed file. The transfer is verified against a
+checksum and against the positions the file itself keeps, because a checkpoint
+commits in the same transaction as the rows and a manifest claiming a position
+the file does not hold is describing a different artefact.
+
+The donor and the recipient do not have to run the same set of
+[state-log domains](satellite-nodes.md#which-state-log-domains-the-node-runs),
+and the rule is asymmetric. An artefact that names **no** position for a
+domain the recipient runs is refused outright, from the manifest, before
+anything is transferred. An artefact that names a domain the recipient **does
+not** run is adopted — and that domain is **stripped** out of the staged copy
+before the file is installed:
+
+```mermaid
+flowchart TB
+    F["<b>Fetch</b><br/>beside the live file, so the install is a rename"]
+    V["<b>Verify</b><br/>checksum · the positions the file keeps ·<br/>the donor's own scrub claim"]
+    S["<b>Strip</b> what this node does not run<br/>its rows AND its checkpoint"]
+    I["<b>Install</b><br/>both databases closed, then one rename"]
+    F --> V --> S --> I
+```
+
+Three things about that step decide whether it is safe, and each one is the
+answer to a way of getting it wrong:
+
+- **It strips both halves, or neither.** Rows left without a checkpoint are
+  merely slow — an applier rewrites them from the beginning of the log. A
+  *checkpoint left without rows* is the dangerous residue: it says this node
+  applied up to a position, so the day it is given the role its applier would
+  resume above every record whose rows had been deleted and never read them
+  again.
+- **It deletes the rows and keeps the tables.** Dropping the tables is the
+  obvious reading of "this node does not have that domain" and it is wrong,
+  for a reason the schema decides rather than the snapshot: migrations key on
+  their **filename**, so a table dropped out of a file is a table no migration
+  will ever recreate. A node that later gained the role would find the
+  migration already applied and the table gone, permanently. What the strip
+  leaves behind is exactly what a fresh node has — the tables, empty — so
+  adding the role later is an ordinary catch-up.
+- **It happens on the staged file, before the rename, and after the
+  verification.** Before the rename, because the install closes both databases
+  precisely so nothing holds the path while it moves, and the appliers are
+  relaunched onto the new file the instant it lands. After the verification,
+  because the checksum and the scrub check are claims about what the *donor*
+  sent, and a file the recipient has already edited hashes to something the
+  manifest never claimed.
+
+A node that stripped anything says so once, as `statelog_artefact_stripped`,
+naming the donor and the domains it removed. The refusal in the other
+direction, and what it means for keeping a full-set donor in the fleet, is in
+[Running a fleet](fleet.md#who-can-donate-to-whom).
+
 ## Replication lag is two positions
 
 Not one number. Every node publishes both:
@@ -269,12 +328,13 @@ from the work tracker, are the first retired kind.
    held N times.
 5. **Applier occupancy** — the 16 seconds above.
 6. **The snapshot repository** — one artefact per node, sized in
-   [Retention](retention.md). An artefact is adopted **wholesale**: its
-   manifest names a position per domain, and a joiner refuses one that names
-   no position for a domain its own build registers, because a checkpoint for
-   a domain the file has no rows for is worse than no artefact at all. That is
-   why adding a domain is a coordinated upgrade — see
-   [Running a fleet](fleet.md#draining-and-rolling-upgrades).
+   [Retention](retention.md). An artefact's manifest names a position per
+   domain, and a joiner refuses one that names no position for a domain **it
+   runs**, because a checkpoint for a domain the file has no rows for is worse
+   than no artefact at all. That is why adding a domain is a coordinated
+   upgrade — see [Running a fleet](fleet.md#draining-and-rolling-upgrades),
+   and [above](#adopting-a-peers-copy) for what happens in the other
+   direction.
 
 ### How the byte ceilings are sized
 

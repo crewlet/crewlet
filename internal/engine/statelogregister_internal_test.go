@@ -1,12 +1,14 @@
 package engine
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -209,3 +211,101 @@ func (unregisteredDomain) OpsTable() string { return "" }
 func (unregisteredDomain) ReadinessInput() bool { return false }
 
 func (unregisteredDomain) ClaimsIdentity() bool { return false }
+
+// TestEveryRegisteredDomainSaysWhichNodesRunIt, because a nil predicate is
+// read as running NOWHERE and nothing else in the boot would notice: every
+// node would strip that domain's rows out of an artefact it adopted and apply
+// none of its records, on a company whose board simply stayed empty.
+func TestEveryRegisteredDomainSaysWhichNodesRunIt(t *testing.T) {
+	for _, entry := range register() {
+		if entry.Participates == nil {
+			t.Errorf("%s declares no participation", entry.Domain.Name())
+		}
+	}
+
+	// THE CONTROL: an entry that omits it fails the boot check, and the
+	// refusal names the domain rather than the field.
+	entries := register()
+	entries[0].Participates = nil
+	err := checkRegister(entries)
+	if err == nil {
+		t.Fatal("an entry that says nothing about which nodes run it passed the " +
+			"boot check")
+	}
+	if !strings.Contains(err.Error(), entries[0].Domain.Name()) {
+		t.Errorf("the refusal does not name the domain: %v", err)
+	}
+}
+
+// TestEveryRoleCombinationRunsEveryShippedDomain.
+//
+// All three shipped domains run everywhere, and that is a DECISION rather than
+// an absence — an ingress node serves all three over the API, a seats node
+// reads and writes all three inside a turn, and a workers node sweeps them and
+// runs the embedding duty. This is what says the decision is still the one in
+// the register, over every role set the parser accepts, so a fourth domain
+// that narrows it has to change this case on purpose.
+func TestEveryRoleCombinationRunsEveryShippedDomain(t *testing.T) {
+	all := []string{string(placement.RoleIngress), string(placement.RoleSeats),
+		string(placement.RoleWorkers)}
+	for _, combo := range subsetsOf(all) {
+		roles, err := placement.ParseRoles(combo)
+		if err != nil {
+			t.Fatalf("ParseRoles(%v): %v", combo, err)
+		}
+		part := participationOf(roles)
+		if len(part.Unrun) != 0 {
+			t.Errorf("roles %v decline %v — no shipped domain narrows on roles, so "+
+				"this is a register entry that changed without this case",
+				combo, domainNames(part.Unrun))
+		}
+		if len(part.Run) != len(register()) {
+			t.Errorf("roles %v run %d of %d domains", combo, len(part.Run), len(register()))
+		}
+	}
+}
+
+// TestADeclinedDomainIsUnrunAndNeverBoth, which is the property every reader
+// of the split rests on: the applier set and the strip set partition the
+// register, so no domain is applied and stripped, and none is neither.
+func TestADeclinedDomainIsUnrunAndNeverBoth(t *testing.T) {
+	roles, err := placement.ParseRoles([]string{string(placement.RoleSeats)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := participationOf(roles)
+	seen := map[string]int{}
+	for _, entry := range part.Run {
+		seen[entry.Domain.Name()]++
+	}
+	for _, domain := range part.Unrun {
+		seen[domain.Name()]++
+	}
+	for _, domain := range registeredDomains() {
+		if seen[domain.Name()] != 1 {
+			t.Errorf("%s appears %d times across the run and unrun sets, want once "+
+				"— a domain in both is stripped out of the artefact its own "+
+				"applier is about to read", domain.Name(), seen[domain.Name()])
+		}
+		if part.Runs(domain.Name()) == slices.ContainsFunc(part.Unrun,
+			func(d statelog.Domain) bool { return d.Name() == domain.Name() }) {
+
+			t.Errorf("Runs(%q) and the unrun set disagree", domain.Name())
+		}
+	}
+}
+
+// subsetsOf is every non-empty combination of the roles the parser accepts.
+func subsetsOf(all []string) [][]string {
+	var out [][]string
+	for mask := 1; mask < 1<<len(all); mask++ {
+		var combo []string
+		for i, role := range all {
+			if mask&(1<<i) != 0 {
+				combo = append(combo, role)
+			}
+		}
+		out = append(out, combo)
+	}
+	return out
+}

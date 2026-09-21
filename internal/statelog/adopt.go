@@ -25,10 +25,29 @@ const AdoptPartSuffix = ".adopt.part"
 
 // AdoptDeps is everything the join needs that it does not own.
 type AdoptDeps struct {
-	// Domains are every domain this build registers, by name. An artefact
-	// names all of them or it is refused: adopted wholesale means a domain
-	// it does not name is one this node would believe it was caught up on.
+	// Domains are every domain this node RUNS, by name. An artefact names
+	// all of them or it is refused: adopted wholesale means a domain it
+	// does not name is one this node would believe it was caught up on.
 	Domains map[string]Registered
+
+	// Unrun is every domain this BUILD registers and this NODE does not,
+	// which is the other direction of the same fact and has the opposite
+	// disposition: an artefact naming one of these is adopted, and the
+	// domain is STRIPPED OUT of the staged file before it is installed.
+	//
+	// Refusing such an artefact instead would make a snapshot useless in
+	// exactly the topology this exists for — a node that runs every domain
+	// is the one with an artefact to give, and a satellite running a
+	// subset is the one that needs it. Adopting it whole is the other
+	// failure: the satellite would hold, on its own disk, every row of a
+	// domain it was deliberately not given, which for a directory of
+	// people is the entire point of not running it.
+	//
+	// The rows AND the checkpoint both go. A checkpoint left behind says
+	// this node applied up to a position in a file whose rows are gone, so
+	// the day an operator adds the role the applier resumes above every
+	// record it needed and never sees them again.
+	Unrun []Domain
 
 	// LivePath is the replicated estate this node is running, which the
 	// artefact replaces.
@@ -127,6 +146,19 @@ func NewAdopter(d AdoptDeps) (*Adopter, error) {
 		return nil, fmt.Errorf("statelog: a join cannot record itself, so a crash " +
 			"mid-adoption would be indistinguishable from a node that is caught up")
 	}
+	// A DOMAIN CANNOT BE BOTH, and the two answers are opposite: one makes
+	// an artefact that omits it unusable, the other strips it out of one
+	// that carries it. A register that said both would scrub a domain this
+	// node is about to start an applier for, which is the worst reachable
+	// outcome here and is silent — the node comes up on an empty table at
+	// position zero and looks merely new.
+	for _, domain := range d.Unrun {
+		if _, both := d.Domains[domain.Name()]; both {
+			return nil, fmt.Errorf("statelog: %q is declared both run and not run "+
+				"on this node — an artefact carrying it would be stripped of the "+
+				"rows an applier is about to start reading", domain.Name())
+		}
+	}
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -182,6 +214,23 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	for _, offer := range offers {
 		if err := offer.Usable(req, a.deps.Domains); err != nil {
 			refusals = append(refusals, fmt.Errorf("%s: %w", offer.Manifest.NodeID, err))
+			// LOGGED HERE TOO, not only below. A manifest-level
+			// refusal is the CHEAP one — decided from what the peer
+			// said about itself, before a byte moves — and it was the
+			// one nobody could see: the reason went into the joined
+			// error, and the engine's no-offer branch reports that a
+			// join found nothing without saying what it turned down.
+			//
+			// It is also the refusal a fleet reaches by design rather
+			// than by accident, now that a node's roles decide which
+			// domains it runs: a donor running fewer than this node
+			// is refused on every tick, for ever, and an operator
+			// with no line naming the peer and the domain has nothing
+			// to act on.
+			a.log.WarnContext(ctx, "statelog_adoption_refused",
+				"node", a.deps.NodeID, "donor", offer.Manifest.NodeID,
+				"error", err.Error(), "stage", "manifest",
+				"detail", "refused from the manifest alone, before any transfer")
 			continue
 		}
 		m, err := a.adopt(ctx, offer)
@@ -190,7 +239,9 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 		}
 		refusals = append(refusals, fmt.Errorf("%s: %w", offer.Manifest.NodeID, err))
 		a.log.WarnContext(ctx, "statelog_adoption_refused",
-			"node", a.deps.NodeID, "donor", offer.Manifest.NodeID, "error", err.Error())
+			"node", a.deps.NodeID, "donor", offer.Manifest.NodeID, "error", err.Error(),
+			"stage", "transfer",
+			"detail", "the artefact was fetched or inspected and did not survive it")
 	}
 	if len(refusals) == 0 {
 		return Manifest{}, fmt.Errorf("%w: nobody answered", ErrNoOffer)
@@ -290,6 +341,29 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("statelog: record the adoption: %w", err)
 	}
 
+	// 6b. STRIP WHAT THIS NODE DOES NOT RUN, on the staged file, BEFORE
+	// the rename — which is the whole reason this step sits here rather
+	// than after the install. The install closes both databases precisely
+	// because nothing may hold the path while it moves, and the appliers
+	// are relaunched onto the new file the moment it does; a delete issued
+	// after that is a write into a file a loop is already reading.
+	//
+	// It is also after the digest and the scrub check deliberately: those
+	// verify what the DONOR sent, and a file this node has already edited
+	// hashes to something the manifest never claimed.
+	stripped, err := a.stripUnrun(ctx, part)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if len(stripped) > 0 {
+		a.log.InfoContext(ctx, "statelog_artefact_stripped",
+			"node", a.deps.NodeID, "donor", offer.Manifest.NodeID,
+			"domains", stripped,
+			"detail", "the donor runs domains this node does not, so their rows "+
+				"and their checkpoints were removed from the copy before it was "+
+				"installed")
+	}
+
 	// 7. RE-CHECK. The hold makes this a belt rather than the mechanism,
 	// and a fleet that trimmed past the artefact anyway is one this node
 	// must not follow into a hole.
@@ -328,6 +402,56 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 		"node", a.deps.NodeID, "donor", offer.Manifest.NodeID,
 		"bytes", offer.Manifest.Bytes, "domains", len(offer.Manifest.Domains))
 	return offer.Manifest, nil
+}
+
+// stripUnrun removes every domain this node does not run from a staged
+// artefact: its rows, and its row in the shared checkpoint table.
+//
+// BOTH HALVES OR NEITHER. Rows without a checkpoint are rows an applier will
+// rewrite from the beginning of the log, which is merely slow. A CHECKPOINT
+// WITHOUT ROWS is the dangerous residue: it says this node applied up to a
+// position, so the day an operator gives the node that role its applier
+// resumes above every record whose rows were just deleted and never reads them
+// again. The tables go first for that reason — a crash between the two leaves
+// the recoverable order.
+//
+// The rows are DELETED and the tables are KEPT. Dropping them would be the
+// obvious reading of "this node does not have that domain", and it is wrong
+// here for a reason the schema decides rather than this package: migrations
+// key on their FILENAME, so a table dropped out of a file is a table no
+// migration will ever recreate — the node that later declares the role would
+// find the migration already applied and the table gone, for good. What a
+// fresh node has is the tables, empty, and that is what this leaves.
+func (a *Adopter) stripUnrun(ctx context.Context, path string) ([]string, error) {
+	if len(a.deps.Unrun) == 0 {
+		return nil, nil
+	}
+	var tables, streams, names []string
+	for _, domain := range a.deps.Unrun {
+		// EVERY TABLE THE DOMAIN DECLARES, whatever its class. Its
+		// local ones are already empty — the donor scrubbed them and
+		// step 6 checked that — so the delete is a no-op, and naming
+		// them anyway means a class that is later reclassified cannot
+		// quietly start travelling.
+		for table := range domain.Tables() {
+			tables = append(tables, table)
+		}
+		streams = append(streams, domain.Stream().Name)
+		names = append(names, domain.Name())
+	}
+	slices.Sort(tables)
+	slices.Sort(names)
+	if _, err := store.ScrubFile(ctx, path, tables); err != nil {
+		return nil, fmt.Errorf("statelog: strip %v from the artefact: %w", names, err)
+	}
+	// `statelog_cursor` spelled here as it is in every query that reads it:
+	// a constant naming it would be one reference against four literals,
+	// and a grep finds all five either way.
+	if _, err := store.ScrubRowsIn(ctx, path, "statelog_cursor", "stream", streams); err != nil {
+		return nil, fmt.Errorf("statelog: strip %v's checkpoints from the "+
+			"artefact: %w", names, err)
+	}
+	return names, nil
 }
 
 // verifyPositions re-reads every checkpoint FROM THE FILE and compares it with

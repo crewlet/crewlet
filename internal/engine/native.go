@@ -530,14 +530,26 @@ func (e *Engine) NativeStatus(ctx context.Context) []ReplicationStatus {
 	return out
 }
 
-// Domains is every state-log domain this build runs, in the fixed order
-// [registeredDomains] declares.
+// Domains is every state-log domain THIS NODE runs, in the fixed order the
+// register declares.
 //
 // EXPOSED SO A CALLER DOES NOT WRITE THE LIST AGAIN. A second copy is what
 // makes a fourth domain silently absent from whatever walks it — the shape
 // that keeps a fleet comparison, an operator listing or a report certifying
 // two domains after somebody added a third.
-func (e *Engine) Domains() []statelog.Domain { return registeredDomains() }
+//
+// THIS NODE'S, not this build's: every caller is asking what to render, what
+// to compare or what to report ABOUT THIS PROCESS, and a listing that named a
+// domain the node declined would show it permanently at position zero with no
+// applier behind it — which is what a broken node looks like. Before the state
+// log is up it is the whole register, because that is the most honest answer
+// available: the node has not yet decided.
+func (e *Engine) Domains() []statelog.Domain {
+	if e.native == nil || e.native.log == nil {
+		return registeredDomains()
+	}
+	return e.native.log.part.Domains()
+}
 
 // Tracker is this node's tracker read side, or nil.
 func (e *Engine) Tracker() *tracker.Reader {

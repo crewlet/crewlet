@@ -151,6 +151,18 @@ type runningDomain struct {
 type stateLog struct {
 	domains map[string]*runningDomain
 
+	// part is which registered domains this NODE runs and which it does
+	// not, derived once from node.roles at boot.
+	//
+	// HELD RATHER THAN RE-DERIVED, because five surfaces read it and they
+	// must agree: what starts an applier, what a snapshot may claim, what
+	// an artefact must name, what a trim hold pins, and what an adopted
+	// artefact is stripped of. Re-deriving it per caller is how one of
+	// them ends up asking a different question — and a node that applies
+	// one set while claiming another in its manifest offers peers an
+	// artefact whose positions describe rows it does not have.
+	part participation
+
 	// order is the register's own order, so every surface that walks the
 	// domains renders them the same way. A map's iteration order would
 	// make one screen's rows move between refreshes.
@@ -363,9 +375,27 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	if _, err := statelog.NewSigner(registeredDomains()[0].Name(), recordKeyring(boot)); err != nil {
 		return nil, err
 	}
+	// WHICH DOMAINS THIS NODE RUNS, decided once and held, because five
+	// surfaces read it and a node that applied one set while claiming
+	// another would offer peers an artefact whose positions describe rows
+	// it does not have. It is derived from node.roles — Tier A validated
+	// them before anything reached here, so a parse failure at this point
+	// is a build fault rather than an operator's.
+	roles, err := boot.Node.RoleSet()
+	if err != nil {
+		return nil, fmt.Errorf("engine: read this node's roles to decide which "+
+			"state-log domains it runs: %w", err)
+	}
+	part := participationOf(roles)
+	if len(part.Run) == 0 {
+		return nil, fmt.Errorf("engine: node.roles %v leave this node running no "+
+			"state-log domain at all, so it would serve no work item, no page "+
+			"and no search — name at least one role that does", boot.Node.Roles)
+	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &stateLog{
 		domains: map[string]*runningDomain{},
+		part:    part,
 		ring:    recordKeyring(boot),
 		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
 		metrics: e.metrics,
@@ -423,13 +453,17 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	consumerCtx, cancelConsumers := context.WithTimeout(ctx, host.Clustered().SequenceBudget())
 	defer cancelConsumers()
 
-	for _, domain := range registeredDomains() {
+	for _, domain := range s.part.Domains() {
 		running, err := s.start(ctx, consumerCtx, host, domain, logs[domain.Name()], epoch)
 		if err != nil {
-			// EVERY DOMAIN OR NONE. A node running half its register
-			// serves rows derived from one log while another's records
-			// pile up unapplied, and nothing above it can tell that
-			// from a node that is merely behind.
+			// EVERY DOMAIN THIS NODE DECLARES, OR NONE. A node
+			// running half of what it declared serves rows derived
+			// from one log while another's records pile up
+			// unapplied, and nothing above it can tell that from a
+			// node that is merely behind. What it does NOT have to
+			// run is a domain its roles exclude — that is a
+			// declaration rather than a shortfall, and the artefact
+			// it adopts is stripped of it rather than short of it.
 			s.Stop()
 			return nil, err
 		}
@@ -1183,7 +1217,14 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 
 	startedAt := time.Now().UTC()
 	adopter, err := statelog.NewAdopter(statelog.AdoptDeps{
-		Domains:  s.registered(),
+		Domains: s.registered(),
+		// AND WHAT THIS NODE DOES NOT RUN, which is the other half of
+		// the same fact: a donor that runs more than this node has an
+		// artefact carrying domains it declined, and the rows and the
+		// checkpoint of each are stripped out of the staged file before
+		// it is installed. Refusing such an artefact instead would make
+		// a snapshot useless in exactly the topology roles create.
+		Unrun:    s.part.Unrun,
 		LivePath: e.backends.Store.ReplicatedPath(),
 		NodeID:   s.nodeID,
 		Conn:     conn.Conn(),
@@ -1214,6 +1255,12 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		// it has and its coverage says what it cannot account for.
 		log.WarnContext(ctx, "statelog_no_snapshot_offered",
 			"node", s.nodeID, "domains", behind,
+			// AND WHY EACH PEER WAS TURNED DOWN. Without it this line
+			// says a join found nothing and nothing else, and the
+			// commonest cause is now a standing property of the fleet
+			// rather than a transient: a donor that runs fewer domains
+			// than this node is refused on every tick, for ever.
+			"refusals", err.Error(),
 			"detail", "no peer could donate a usable snapshot, so this node "+
 				"comes up on the history it has; reads report the coverage "+
 				"they could not account for, the domains that gate seat "+
@@ -1349,7 +1396,7 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		Generations:     map[string]uint32{},
 		StreamCreatedAt: map[string]time.Time{},
 	}
-	for _, domain := range registeredDomains() {
+	for _, domain := range s.part.Domains() {
 		name := domain.Name()
 		appendTo, held := logs[name]
 		if !held {
@@ -1489,7 +1536,7 @@ func (s *stateLog) fleetGeneration(ctx context.Context, domain string) (uint32, 
 func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.DomainLog,
 	m statelog.Manifest) error {
 
-	for _, domain := range registeredDomains() {
+	for _, domain := range s.part.Domains() {
 		name := domain.Name()
 		at, named := m.Domains[name]
 		if !named {
@@ -1547,7 +1594,7 @@ func (s *stateLog) holdTail(ctx context.Context, at map[string]uint64) (func(), 
 	// `statelog_cursor`, which is keyed on the stream — has to land in the
 	// same key space or the trim reads one of the two as pinning nothing.
 	streams := make(map[string]coord.Position, len(at))
-	for _, domain := range registeredDomains() {
+	for _, domain := range s.part.Domains() {
 		name := domain.Name()
 		seq, held := at[name]
 		if !held {
@@ -1595,7 +1642,7 @@ func (s *stateLog) holdTail(ctx context.Context, at map[string]uint64) (func(), 
 // the other.
 func (s *stateLog) registered() map[string]statelog.Registered {
 	out := map[string]statelog.Registered{}
-	for _, domain := range registeredDomains() {
+	for _, domain := range s.part.Domains() {
 		name := domain.Name()
 		entry := statelog.Registered{Domain: domain}
 		if running, held := s.domains[name]; held {

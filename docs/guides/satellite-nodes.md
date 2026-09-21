@@ -45,6 +45,13 @@ inbox topic, and the node holding that seat's lease is the one consuming
 it — so nothing that publishes has to know where the agent is, and a
 Slack message routed to that agent works exactly as before.
 
+A satellite is also a full **replica**, not just an agent host: it applies
+the company's shared state logs — the work tracker, the knowledge base and
+the search vectors — into its own database, exactly as a core node does.
+Which of those it applies follows from the roles you gave it, and nothing
+else; see
+[which state-log domains the node runs](#which-state-log-domains-the-node-runs).
+
 ```mermaid
 flowchart LR
     subgraph core["Core network"]
@@ -183,6 +190,124 @@ Two failures to know by sight:
 - **The label change did not take.** Labels are advertised on the node's
   presence lease, so a change takes effect one heartbeat after the
   **restart** that made it — editing the file is not enough.
+
+---
+
+## Which state-log domains the node runs
+
+The work tracker, the knowledge base and the search vectors are
+[replicated state machines](replication.md). Each is one ordered log the
+whole fleet shares, and a node that **runs** a domain applies that log
+into its own copy of the rows — so it can answer questions about it
+locally, and so it can donate a snapshot of it to a member that fell
+behind.
+
+Which domains a node runs is **derived from `node.roles`**. There is no
+separate key for it, no per-domain switch, and nothing to keep in step
+with the roles you already wrote: subtract a role and you subtract
+whatever that role was the only reason for.
+
+Today every role needs all three, so every node — satellite included —
+runs all three:
+
+| Role | Domains it runs | Why it needs them |
+|---|---|---|
+| `ingress` | `tracker`, `vectors`, `pages` | It serves the board, the knowledge base and search over the REST API and the dashboard |
+| `seats` | `tracker`, `vectors`, `pages` | A turn reads and writes all three |
+| `workers` | `tracker`, `vectors`, `pages` | The retention sweep runs over each one's ledger, and the embedding duty is what fills the vectors |
+
+Every cell being the same is a **decision, not an absence**: each domain
+states in its own right that every role needs it, and a node running no
+domain at all refuses to boot rather than coming up as a member that
+serves no work item, no page and no search. So narrowing a satellite to
+`roles: [seats]` changes nothing about what it applies today. What the
+derivation buys is that a domain added later can narrow — and on the day
+one does, the roles already in your Tier A files are what decides, rather
+than a new key you have to add to every node.
+
+Two rules follow from it, and both are worth knowing before you need
+them:
+
+- **Every domain a node declares, or none.** A node that could not start
+  one of the domains its roles say it runs refuses to start at all. It
+  does not come up serving the ones that did start: a node applying half
+  of what it declared serves rows derived from one log while another
+  log's records pile up unapplied, and nothing above it can tell that
+  apart from a node that is merely behind.
+- **A domain a node's roles exclude is a declaration, not a shortfall.**
+  Such a node publishes no position for that domain, and it is *not
+  counted* for that domain's trim — peers read its roles off its presence
+  lease and derive the same answer this node did. Counted at zero it
+  would instead pin that log's floor for as long as the node lived, and
+  the log would grow without bound on any fleet with one satellite in it.
+  (See the counted set in [Retention](retention.md#the-six-terms).)
+
+### Reading it before the node boots
+
+The consequence is otherwise invisible until start-up, so `crewlet
+validate` answers it from the Tier A document alone — no broker, no
+store, nothing running:
+
+```bash
+crewlet validate crewlet.yaml -json
+```
+
+```json
+{
+  "valid": true,
+  "tier": "bootstrap",
+  "file": "crewlet.yaml",
+  "problems": [],
+  "warnings": [],
+  "summary": {
+    "roles": ["seats"],
+    "domains": ["tracker", "vectors", "pages"],
+    "stream": "nats",
+    "coordination": "embedded-kv",
+    "store": "/var/lib/crewlet/sat-eu-1.db"
+  }
+}
+```
+
+`summary.domains` is what the roles beside it resolve to. Every form of
+the command carries it — the JSON payload above, the one-line prose
+summary, and the two-file `crewlet validate -config … -company …` a
+pipeline runs:
+
+```
+crewlet.yaml: stream "nats", coordination "embedded-kv", store "…", roles [seats], domains [tracker vectors pages]
+```
+
+### Reading it off a running node
+
+At boot, every node logs what it started, whether or not it serves HTTP —
+which on a `roles: [seats]` satellite is the one place to look, because
+such a node [binds no listener](#1-give-the-satellite-a-tier-a-config):
+
+```
+statelog_started  node=sat-eu-1 domains="[tracker vectors pages]"
+```
+
+On a node that **does** run `ingress`, `GET /health` carries the same
+list:
+
+```bash
+curl -s http://node-a:8000/health | python3 -m json.tool
+```
+
+```json
+{
+  "node": "node-a",
+  "status": "ok",
+  "seats": ["ceo", "eng"],
+  "domains": ["tracker", "vectors", "pages"]
+}
+```
+
+A fleet's members may legitimately differ here, so read it per node
+rather than assuming the one you reached speaks for the rest. It is also
+what to check after *adding* a role: the domain appears once the node is
+really applying it, not when you edited the file.
 
 ---
 

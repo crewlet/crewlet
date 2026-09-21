@@ -421,8 +421,9 @@ consumer churn is what produces a steady stream of `JetStream connection
 closed: Client Closed` lines — see `stream.debug`, which is off by default for
 exactly this reason.
 
-**A clustered node is given longer to create them than a solo one.** Every
-one of those creates is a local file-store setup on a solo node and a raft
+#### A clustered node is given longer to create them
+
+Every one of those creates is a local file-store setup on a solo node and a raft
 round trip on a member of a cluster, against a metadata group whose peers are
 themselves still booting — so the budget branches: **30 seconds** per create
 solo, **2 minutes** clustered, with the whole coordination bring-up bounded at

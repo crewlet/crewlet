@@ -624,6 +624,12 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		res.Summary = map[string]any{
 			"stream": boot.Stream.Type, "coordination": boot.Coordination.Type,
 			"store": boot.Store.Path, "roles": boot.Node.Roles,
+			// AND WHAT THOSE ROLES MEAN THIS NODE APPLIES, which is
+			// otherwise invisible until the node boots. Narrowing
+			// node.roles narrows the state-log domains a node runs,
+			// and the only other symptom is a peer's board answering
+			// a question this node's copy cannot.
+			"domains": validatedDomains(boot),
 		}
 		return report(stdout, res, asJSON)
 	}
@@ -731,6 +737,11 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 		"company": company.Name, "seats": len(company.epoch.Seats()),
 		"llm_providers": len(company.epoch.Models.Keys()),
 		"stream":        boot.Stream.Type, "coordination": boot.Coordination.Type,
+		// AND HERE TOO, not only on the one-file report. This is the
+		// invocation a pipeline runs — both tiers, by the flags — so a
+		// field only the single-file path carried is a field the place
+		// it matters never shows.
+		"domains": validatedDomains(boot),
 	}
 	return report(stdout, res, asJSON)
 }
@@ -850,14 +861,19 @@ func summaryLine(res validation) string {
 		line := fmt.Sprintf("%s: %d agent seats, %d LLM providers",
 			name, res.Summary["seats"], res.Summary["llm_providers"])
 		if stream, both := res.Summary["stream"]; both {
-			line += fmt.Sprintf(", stream %q, coordination %q",
-				stream, res.Summary["coordination"])
+			line += fmt.Sprintf(", stream %q, coordination %q, domains %v",
+				stream, res.Summary["coordination"], res.Summary["domains"])
 		}
 		return line
 	}
-	return fmt.Sprintf("%s: stream %q, coordination %q, store %q, roles %v",
+	// THE PROSE LINE CARRIES EVERY FIELD THE JSON DOES. Most people run
+	// this without `-json`, so a summary key only the machine-readable
+	// shape prints is one almost nobody reads — and which domains these
+	// roles make a node apply is the one consequence of `node.roles` that
+	// is otherwise invisible until the node boots.
+	return fmt.Sprintf("%s: stream %q, coordination %q, store %q, roles %v, domains %v",
 		res.File, res.Summary["stream"], res.Summary["coordination"],
-		res.Summary["store"], res.Summary["roles"])
+		res.Summary["store"], res.Summary["roles"], res.Summary["domains"])
 }
 
 // errSilent asks the caller to exit non-zero without printing anything more.
@@ -2697,4 +2713,18 @@ func nativeWorkSearch(e *engine.Engine) queries.WorkSearcher {
 		return s
 	}
 	return nil
+}
+
+// validatedDomains is the state-log domain set this Tier A produces.
+//
+// A ROLE LIST THE VALIDATOR ALREADY REFUSED reaches here as an error, and the
+// summary says so rather than omitting the key: an absent field reads as a
+// build that does not report this, and the problem list beside it already
+// names the field to fix.
+func validatedDomains(boot *config.Bootstrap) any {
+	roles, err := boot.Node.RoleSet()
+	if err != nil {
+		return "unknown: " + err.Error()
+	}
+	return engine.DomainsForRoles(roles)
 }

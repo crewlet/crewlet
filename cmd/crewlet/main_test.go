@@ -33,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"gopkg.in/yaml.v3"
 )
 
 const companyYAML = `
@@ -84,7 +85,14 @@ func TestValidateReportsWhatTheConfigDescribes(t *testing.T) {
 		t.Fatalf("validate: %v (stderr %s)", err, errOut.String())
 	}
 	got := out.String()
-	for _, want := range []string{"Acme", "2 agent seats", "1 LLM providers", "embedded", "local"} {
+	// INCLUDING THE DOMAIN SET, on the prose line rather than only in
+	// `-json`: most people run this without the flag, and which state-log
+	// domains `node.roles` makes a node apply is the one consequence of
+	// that setting which is otherwise invisible until the node boots.
+	for _, want := range []string{
+		"Acme", "2 agent seats", "1 LLM providers", "embedded", "local",
+		"domains [tracker vectors pages]",
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary %q does not mention %q", got, want)
 		}
@@ -1496,4 +1504,81 @@ func TestTheConfigWriterIsInstalledOutsideTheHTTPSurface(t *testing.T) {
 			"early for api.port 0 — a worker-only node would run the reconcile " +
 			"loop with no way to write the company document")
 	}
+}
+
+// TestValidatePrintsWhichDomainsTheseRolesRun.
+//
+// Narrowing `node.roles` narrows the state-log domains that node applies, and
+// until it boots the only other symptom is a peer's board answering a question
+// this node's copy cannot — which reads as a broken node rather than as the
+// declaration it is. So validate says it, from the document alone, over every
+// role set the parser accepts.
+func TestValidatePrintsWhichDomainsTheseRolesRun(t *testing.T) {
+	t.Parallel()
+	for name, roles := range map[string][]string{
+		"every role, by omission": nil,
+		"ingress only":            {"ingress"},
+		"a seats-only satellite":  {"seats"},
+		"seats and workers":       {"seats", "workers"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			boot := bootstrapFor(t, 0)
+			boot.Node.Roles = roles
+			parsed, err := placement.ParseRoles(roles)
+			if err != nil {
+				t.Fatalf("ParseRoles(%v): %v", roles, err)
+			}
+			want := engine.DomainsForRoles(parsed)
+			if len(want) == 0 {
+				t.Fatalf("roles %v run no domain at all, which the engine refuses "+
+					"to start on — validate would be reporting a node that "+
+					"cannot boot as valid", roles)
+			}
+
+			// BOTH SHAPES: the one-file report and the two-tier one a
+			// pipeline runs. A field only one of them carried is a
+			// field the place it matters never shows.
+			path := writeBootstrap(t, boot)
+			company := writeFile(t, filepath.Dir(path), "company.yaml", companyYAML)
+			for name, args := range map[string][]string{
+				"one file":  {"validate", "-json", path},
+				"two tiers": {"validate", "-json", "-config", path, "-company", company},
+			} {
+				t.Run(name, func(t *testing.T) {
+					var out, errOut bytes.Buffer
+					if err := run(args, &out, &errOut); err != nil {
+						t.Fatalf("validate: %v (stderr %s)", err, errOut.String())
+					}
+					var res struct {
+						Summary struct {
+							Domains []string `json:"domains"`
+						} `json:"summary"`
+					}
+					if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+						t.Fatalf("decode the report: %v\n%s", err, out.String())
+					}
+					if !slices.Equal(res.Summary.Domains, want) {
+						t.Errorf("validate reports %v for roles %v, want %v — the "+
+							"summary and the engine must derive this from the "+
+							"same place", res.Summary.Domains, roles, want)
+					}
+				})
+			}
+		})
+	}
+}
+
+// writeBootstrap writes a Tier A document to a temp file and returns its path.
+func writeBootstrap(t *testing.T, boot *config.Bootstrap) string {
+	t.Helper()
+	raw, err := yaml.Marshal(boot)
+	if err != nil {
+		t.Fatalf("encode the bootstrap: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "crewlet.yaml")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write the bootstrap: %v", err)
+	}
+	return path
 }

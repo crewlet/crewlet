@@ -102,6 +102,91 @@ func ScrubFile(ctx context.Context, path string, tables []string) ([]string, err
 	return scrubbed, nil
 }
 
+// ScrubRowsIn deletes every row of one table whose key column holds one of
+// the given values, in a database file this process does not otherwise hold
+// open.
+//
+// It is [ScrubFile]'s other half, and it exists for the one thing a
+// whole-table delete cannot express: a table the artefact must KEEP, holding
+// rows for something the recipient does not run. The state log's checkpoint
+// table is exactly that — one row per domain, in a table every domain shares —
+// and a node that does not run a domain must not inherit the position its
+// donor was at on it, or its applier would resume from a checkpoint describing
+// rows this file no longer has.
+//
+// THE VALUES ARE BOUND AND THE IDENTIFIERS ARE NOT, so both are guarded the
+// way [ScrubFile] guards a table name: a column and a table are interpolated
+// and therefore refused unless they are plain identifiers, and everything a
+// caller actually got from somewhere else is a parameter.
+//
+// Unlike [ScrubFile] a value that matches no row is NOT refused. The two are
+// different claims: a table nobody can find means the list has drifted from
+// the schema, while a key with no rows means the donor had nothing for that
+// domain, which is the ordinary state of a fleet where one member joined
+// yesterday.
+func ScrubRowsIn(ctx context.Context, path, table, column string, values []string) (int64, error) {
+	switch {
+	case path == "":
+		return 0, errors.New("store: scrub rows: no path")
+	case !plainIdentifier(table):
+		return 0, fmt.Errorf("%w: %q is not a plain table name, and a scrub "+
+			"interpolates it into a statement rather than binding it",
+			ErrScrubTable, table)
+	case !plainIdentifier(column):
+		return 0, fmt.Errorf("%w: %q is not a plain column name, and a scrub "+
+			"interpolates it into a statement rather than binding it",
+			ErrScrubTable, column)
+	case len(values) == 0:
+		// NOTHING TO DELETE IS NOT AN EMPTY PREDICATE. Built from an
+		// empty list the `IN ()` would be a syntax error, and built as
+		// "no clause at all" it would empty the table — which is the
+		// one outcome a caller asking for some rows never meant.
+		return 0, nil
+	}
+	pool, err := openPrepared(ctx, path, Options{})
+	if err != nil {
+		return 0, fmt.Errorf("store: scrub rows: open %s: %w", path, err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	present, err := tableNames(ctx, pool)
+	if err != nil {
+		return 0, err
+	}
+	if !slices.Contains(present, table) {
+		return 0, fmt.Errorf("%w: %s names %q, which this database does not have",
+			ErrScrubTable, path, table)
+	}
+	args := make([]any, len(values))
+	for i, v := range values {
+		args[i] = v
+	}
+	res, err := pool.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+column+` IN (`+
+		strings.TrimSuffix(strings.Repeat("?,", len(values)), ",")+`)`, args...)
+	if err != nil {
+		return 0, fmt.Errorf("store: scrub rows in %s of %s: %w", table, path, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: scrub rows in %s of %s: %w", table, path, err)
+	}
+
+	// THE SAME CLOSING DISCIPLINE [ScrubFile] TAKES, and for the same
+	// reason: the next thing that happens to this path is a rename or a
+	// checksum, and a deletion left in a sidecar does not travel with the
+	// file it describes.
+	if _, err := pool.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return 0, fmt.Errorf("store: scrub rows: checkpoint %s: %w", path, err)
+	}
+	if err := pool.Close(); err != nil {
+		return 0, fmt.Errorf("store: scrub rows: close %s: %w", path, err)
+	}
+	if err := removeSidecars(path); err != nil {
+		return 0, fmt.Errorf("store: scrub rows: %w", err)
+	}
+	return n, nil
+}
+
 // EmptyTables reports which of the named tables hold no rows, so a recipient
 // can VERIFY a donor's claim rather than trust it.
 //

@@ -632,7 +632,10 @@ func (in ReportInputs) nodes() []NodeReport {
 		flat = append(flat, NodePosition{NodeID: id, At: row.At})
 	}
 	counted := make(map[string]bool)
-	for _, n := range CountedSet(in.At, flat, in.Live, in.Tombstones) {
+	// NO DOMAIN NAME, because this block is per NODE: it answers who the
+	// trim is waiting for across the fleet, and a node is counted here if
+	// it is counted for anything.
+	for _, n := range CountedSet(in.At, "", flat, in.Live, in.Tombstones) {
 		counted[n.NodeID] = true
 	}
 

@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -106,6 +107,23 @@ type registration struct {
 	//
 	// Zero takes [statelog.OpsRetention].
 	OpsRetention time.Duration
+
+	// Participates reports whether a node with these roles runs this
+	// domain. Required, and stated per domain rather than defaulted,
+	// because "every node runs everything" is an answer rather than an
+	// absence: a domain whose rows only an ingress node reads still costs
+	// every seats-only satellite its disk, its applier and its share of
+	// the stream budget, and a satellite that holds a directory of people
+	// it authenticates nobody against is the specific thing this exists to
+	// prevent.
+	//
+	// EVERY DOMAIN A NODE DECLARES OR NONE. The set is one fact with five
+	// readers — the applier set, the snapshot manifest, an offer's
+	// usability, the trim's counted set and the store's pinned writers —
+	// and a node running half of what it declared serves rows derived from
+	// one log while another's records pile up unapplied, which nothing
+	// above it can tell from a node that is merely behind.
+	Participates func(placement.RoleSet) bool
 }
 
 // writeSeams is what one domain's write authority is built from: the three
@@ -146,6 +164,7 @@ func register() []registration {
 			},
 			Barrier:      tracker.EncodeBarrier,
 			OpsRetention: statelog.OpsRetention,
+			Participates: everyNode,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.LogMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
@@ -171,6 +190,7 @@ func register() []registration {
 			// and there is nothing a barrier could prove.
 			NoBarrier:    true,
 			OpsRetention: statelog.OpsRetention,
+			Participates: everyNode,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, _ := stream.VectorsMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
@@ -203,6 +223,7 @@ func register() []registration {
 			},
 			Barrier:      pages.EncodeBarrier,
 			OpsRetention: statelog.OpsRetention,
+			Participates: everyNode,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.PagesMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
@@ -253,6 +274,13 @@ func checkRegister(entries []registration) error {
 				"the client has not had a chance to re-ask with",
 				name, entry.OpsRetention)
 		}
+		if entry.Participates == nil {
+			return fmt.Errorf("engine: the state-log register's entry for %q says "+
+				"nothing about which nodes run it, and an absent predicate is "+
+				"read as running NOWHERE — every node would strip its rows out "+
+				"of an adopted artefact and apply none of its records, silently. "+
+				"Declare everyNode, or the roles it needs", name)
+		}
 		if (entry.Barrier == nil) == !entry.NoBarrier {
 			return fmt.Errorf("engine: the state-log register's entry for %q must state "+
 				"either a barrier encoder or NoBarrier, and states %s — a domain "+
@@ -289,11 +317,20 @@ func registrationFor(name string) (registration, bool) {
 	return registration{}, false
 }
 
-// registeredDomains is every domain this build runs, in the register's order.
+// registeredDomains is every domain this BUILD knows, in the register's order,
+// whatever this node runs.
 //
 // Kept as a derivation rather than folded into every caller, because most of
 // them want exactly this — the list — and reading it off the table is what
 // makes the table the single place a domain is declared.
+//
+// NOT THE SET A NODE APPLIES. That is [participationOf], and the difference
+// matters wherever the answer is about this process rather than about this
+// binary: what to start an applier for, what a snapshot may claim, what a
+// pinned writer is reserved for. What stays on this list is everything a
+// domain's EXISTENCE decides — the streams a maintenance window excludes, the
+// ceilings the broker is sized to — because a stream belongs to the fleet
+// whether or not the node reading this line applies it.
 func registeredDomains() []statelog.Domain {
 	entries := register()
 	domains := make([]statelog.Domain, 0, len(entries))
@@ -301,6 +338,95 @@ func registeredDomains() []statelog.Domain {
 		domains = append(domains, entry.Domain)
 	}
 	return domains
+}
+
+// participation is which registered domains a node runs and which it does not.
+//
+// BOTH HALVES, because the two have opposite dispositions everywhere they are
+// read and a caller holding one cannot derive the other without the register.
+// The run set decides what starts an applier, what a snapshot claims and what
+// an artefact must name; the unrun set decides what is STRIPPED out of an
+// artefact that carries it.
+type participation struct {
+	// Run is this node's own set, in the register's order.
+	Run []registration
+
+	// Unrun is the rest, as bare declarations: nothing here has an
+	// applier, a publisher or a ceiling on this node, and the only thing
+	// asked of it is what tables and which stream to scrub.
+	Unrun []statelog.Domain
+}
+
+// Domains is the run set as a plain list, for the callers that want the
+// declarations rather than the registrations.
+func (p participation) Domains() []statelog.Domain {
+	out := make([]statelog.Domain, 0, len(p.Run))
+	for _, entry := range p.Run {
+		out = append(out, entry.Domain)
+	}
+	return out
+}
+
+// Runs reports whether this node applies the named domain.
+func (p participation) Runs(name string) bool {
+	for _, entry := range p.Run {
+		if entry.Domain.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+// DomainsForRoles is which state-log domains a node with these roles would
+// run, by name, in the register's order.
+//
+// EXPORTED FOR `crewlet validate`, which is the one surface that answers this
+// question about a configuration NOBODY IS RUNNING. Everything else reads it
+// off a live engine, and must: the engine decides it once at boot and a
+// second derivation is how a screen comes to name a set the appliers do not
+// match. This one has no engine to ask.
+//
+// It exists because the consequence is otherwise invisible until boot. An
+// operator narrowing node.roles narrows what that node applies, and the only
+// other symptom is a peer answering a question this node's copy cannot.
+func DomainsForRoles(roles placement.RoleSet) []string {
+	return domainNames(participationOf(roles).Domains())
+}
+
+// domainNames is a list of declarations as their names, which is the form
+// everything crossing a package boundary takes: a peer's participation
+// travels as strings, because the far side holds declarations of its own and
+// comparing two builds' Domain values would compare two different types.
+func domainNames(domains []statelog.Domain) []string {
+	out := make([]string, 0, len(domains))
+	for _, domain := range domains {
+		out = append(out, domain.Name())
+	}
+	return out
+}
+
+// participationOf divides the register by what a node with these roles runs.
+//
+// DERIVED FROM THE ROLES rather than configured beside them, so there is one
+// place an operator states it and no second list to keep in step. A node that
+// declares no roles runs every role, which [placement.RoleSet] already reads
+// an empty set as — so the default deployment is unchanged, and it is the
+// operator who narrowed the roles who narrows the domains.
+func participationOf(roles placement.RoleSet) participation {
+	var out participation
+	for _, entry := range register() {
+		// A NIL PREDICATE READS AS "NOWHERE", and [checkRegister]
+		// refuses one at boot for that reason: the safe-looking
+		// default, running everywhere, would make a domain nobody
+		// declared a participation for indistinguishable from one
+		// somebody decided runs on every node.
+		if entry.Participates != nil && entry.Participates(roles) {
+			out.Run = append(out.Run, entry)
+			continue
+		}
+		out.Unrun = append(out.Unrun, entry.Domain)
+	}
+	return out
 }
 
 // signerFor and verifierFor are one domain's halves of the record signature.
@@ -342,3 +468,16 @@ func recordKeyring(boot *config.Bootstrap) statelog.Keyring {
 	}
 	return ring
 }
+
+// everyNode is the participation of a domain every role needs.
+//
+// All three shipped domains take it, and each for the same reason: an ingress
+// node serves the board, the knowledge base and search over the API; a seats
+// node reads and writes all three inside a turn; and a workers node sweeps
+// them and runs the embedding duty. There is no role that can do its job
+// without them, so filtering would only mean a node refusing its own work.
+//
+// It is a named function rather than a nil check because a domain that runs
+// everywhere is a DECISION, and the next domain's entry is where somebody
+// decides differently.
+func everyNode(placement.RoleSet) bool { return true }

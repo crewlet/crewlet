@@ -1484,6 +1484,7 @@ that needs the rest of the envelope asks the `stream` query for it.
   "posture": "serve",
   "applied_epoch": 41,
   "seats": ["ceo", "cto"],
+  "domains": ["tracker", "vectors", "pages"],
   "unproven_seconds": {"eng": 312.5}
 }
 ```
@@ -1501,6 +1502,7 @@ that needs the rest of the envelope asks the `stream` query for it.
 | `in_flight` | Turns running on this node. Always present, and a `0` is a real zero: every process that serves the API runs the engine beside it. |
 | `shutting_down` | `true` from the first moment of a drain, so a dashboard shows the drain while it happens: the listener keeps serving until the drain has completed. See [During a drain](#during-a-drain). |
 | `posture` | The node's [config posture](../concepts/control-plane.md#posture-what-a-lagging-node-does): `serve`, `wait`, `shed`, `isolated` or `stuck`. The only place an operator can see *why* a node left rotation, since `/ready` answers a bare `503` either way. |
+| `domains` | The state-log domains **this node** applies, derived from `node.roles`. A fleet's members may legitimately run different sets, so this is how you read off which node is applying what — and the only other symptom of a node that declines a domain is a peer's board answering a question this node's copy cannot. Always a list: a node that runs no domain at all refuses to start, so this is never `null`. `crewlet validate` reports the same set from a Tier A document, before the node boots. |
 | `applied_epoch` | The activation epoch this node last applied. |
 | `seats` | The handles of the seats this node holds, `[]` on a node holding none. |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |

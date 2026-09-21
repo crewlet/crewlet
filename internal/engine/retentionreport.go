@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -55,9 +56,19 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	if r.leases != nil {
 		if leases, err := r.leases.ListLive(ctx, coord.ClassNode); err == nil {
 			for _, lease := range leases {
-				if id, ok := coord.NodeID(lease.Resource); ok {
-					in.Live = append(in.Live, statelog.Presence{NodeID: id})
+				// THE SAME PRESENCE THE TRIM READS, built the
+				// same way: this block renders who the trim is
+				// waiting for, and a screen assembling the set
+				// differently from the gate is how the two come
+				// to disagree about a peer.
+				profile, ok := placement.FromLease(lease)
+				if !ok {
+					continue
 				}
+				in.Live = append(in.Live, statelog.Presence{
+					NodeID:  profile.ID,
+					Domains: domainNames(participationOf(profile.Roles).Domains()),
+				})
 			}
 		}
 	}

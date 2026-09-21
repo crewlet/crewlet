@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -333,9 +334,23 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 			return in, fmt.Errorf("list the live nodes: %w", err)
 		}
 		for _, lease := range leases {
-			if id, ok := coord.NodeID(lease.Resource); ok {
-				in.live = append(in.live, statelog.Presence{NodeID: id})
+			// THE PEER'S OWN ROLES, off the presence lease it
+			// already publishes them on, run through the SAME
+			// predicate this node uses on its own. A peer that
+			// declines a domain publishes no position for it, and
+			// counted at zero it would block that domain's trim for
+			// as long as it lives — so the set it runs has to be
+			// readable from here, and deriving it from the roles
+			// means there is one fact rather than a second thing to
+			// publish and keep in step.
+			profile, ok := placement.FromLease(lease)
+			if !ok {
+				continue
 			}
+			in.live = append(in.live, statelog.Presence{
+				NodeID:  profile.ID,
+				Domains: domainNames(participationOf(profile.Roles).Domains()),
+			})
 		}
 	}
 	return in, nil
@@ -367,7 +382,7 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 		BackupMaxAge:    r.cfg.BackupMaxAge(),
 		HoldStale:       statelog.TrimHoldStale,
 	}
-	in.Counted = statelog.CountedSet(shared.at,
+	in.Counted = statelog.CountedSet(shared.at, name,
 		reportedPositions(shared.positions, name),
 		shared.live, r.tombstones(ctx, running, generation))
 	in.Holds = holdsFor(shared.holds, running.domain.Stream().Name)

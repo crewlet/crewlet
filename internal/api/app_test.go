@@ -692,3 +692,49 @@ func TestAPreflightToAGuardedRouteIsAnswered(t *testing.T) {
 		t.Errorf("the app reports %d permitted origin(s), want 1", n)
 	}
 }
+
+// A PROBE SAYS WHICH STATE-LOG DOMAINS THIS NODE APPLIES.
+//
+// A fleet's members legitimately differ — participation is derived from
+// node.roles — and this is the only place an operator can read it off a
+// running node. Without it, narrowing a node's roles has exactly one other
+// symptom: a peer's board answers a question this node's copy cannot, which
+// reads as a broken node rather than as the declaration it is.
+func TestHealthNamesTheDomainsThisNodeRuns(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{
+		Runtime: &fakeRuntime{state: api.RuntimeState{
+			Posture: "serve", Domains: []string{"tracker", "pages"},
+		}},
+		Sources: queries.Sources{Company: active()},
+	})
+	_, body := get(t, a, "/health")
+	got, ok := body["domains"].([]any)
+	if !ok {
+		t.Fatalf("domains = %#v, want a list", body["domains"])
+	}
+	if len(got) != 2 || got[0] != "tracker" || got[1] != "pages" {
+		t.Errorf("domains = %v, want the node's own set in the register's order", got)
+	}
+}
+
+// AND A NODE THAT REPORTS NONE STILL SENDS A LIST, never null. Every node that
+// is up runs at least one domain or it would have refused to start, so a null
+// here would be a claim this body can never honestly make — and a client
+// reading it as "cannot say" would hide the one field that says which node it
+// reached.
+func TestHealthSendsAnEmptyDomainListRatherThanNull(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{
+		Runtime: &fakeRuntime{state: api.RuntimeState{Posture: "serve"}},
+		Sources: queries.Sources{Company: active()},
+	})
+	_, body := get(t, a, "/health")
+	got, ok := body["domains"].([]any)
+	if !ok {
+		t.Fatalf("domains = %#v, want a list rather than null", body["domains"])
+	}
+	if len(got) != 0 {
+		t.Errorf("domains = %v, want an empty list", got)
+	}
+}

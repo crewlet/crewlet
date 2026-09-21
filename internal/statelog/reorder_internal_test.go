@@ -19,7 +19,8 @@ func TestTheReorderBufferNeverAdmitsPastAHoleAfterARedelivery(t *testing.T) {
 	t.Parallel()
 	cursor := Position{Stream: "s", Generation: 1, Seq: 10}
 	rec := func(seq uint64) Record {
-		return Record{Position: Position{Stream: "s", Generation: 1, Seq: seq}, Payload: []byte("x")}
+		return Record{Position: Position{Stream: "s", Generation: 1, Seq: seq},
+			Payload: []byte("x"), framed: []byte("x")}
 	}
 	seqs := func(rs []Record) []uint64 {
 		out := make([]uint64, 0, len(rs))
@@ -106,7 +107,14 @@ func TestTheReorderBufferStopsWhenAHoleWillNotClose(t *testing.T) {
 	var b reorderBuffer
 	big := make([]byte, ReorderBufferBytes/2+1)
 	above := func(seq uint64) Record {
-		return Record{Position: Position{Stream: "s", Generation: 1, Seq: seq}, Payload: big}
+		// THE FRAMED BYTES ARE WHAT THE BUFFER HOLDS, and what it is
+		// measured in: [Record.Payload] is a subslice of them, so
+		// counting both would double a number that has one allocation
+		// behind it.
+		return Record{
+			Position: Position{Stream: "s", Generation: 1, Seq: seq},
+			Payload:  big, framed: big,
+		}
 	}
 	if _, err := b.admit([]Record{above(2)}, cursor, ReplayStrict, nil); err != nil {
 		t.Fatalf("the first record above a hole fits: %v", err)

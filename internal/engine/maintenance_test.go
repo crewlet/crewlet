@@ -70,6 +70,14 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// the rows record what THIS applier wrote, so under the fleet
 		// singleton they would be tidied on one node and grow for ever
 		// on the others.
+		//
+		// AND EACH DOMAIN'S ANCHOR TABLE BESIDE IT, for the same
+		// reason and with the same shape: an arbitration anchor is a
+		// row per subject that the framework writes and nothing ever
+		// removed, so a company's anchor table grew one row per object
+		// it has ever written to and kept every one past the trim that
+		// retired the records behind them.
+		"pages_anchors",
 		"pages_ops",
 		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of
 		// their entries is the point. The knowledge base had three —
@@ -96,6 +104,7 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// all, and a job nobody registered is a re-spread that never
 		// runs and a board that stays wrong.
 		"tracker_abandoned_merges",
+		"tracker_anchors",
 		"tracker_duplicate_ranks",
 		// AND A PERSON'S INBOX, which IS a range delete and is the one
 		// entry on this list that deletes something a person reads. The
@@ -126,6 +135,7 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"tracker_ops",
 		"tracker_respread",
 		"tracker_unblocked",
+		"vectors_anchors",
 		"vectors_ops",
 	}
 	if !slices.Equal(got, want) {

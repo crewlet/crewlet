@@ -134,6 +134,14 @@ node:
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
 | `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
+Roles decide one more thing, and it is not in the table because it is not a
+job somebody does: which
+[state-log domains this node applies](satellite-nodes.md#which-state-log-domains-the-node-runs).
+All three domains this engine ships are needed by every role, so today every
+node applies all three whatever its roles — but the answer is *derived* from
+the roles rather than configured beside them, which is what `/health` reports
+and what decides whose snapshot this node can adopt.
+
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
 done by nobody while no single node's config is wrong — and every symptom
@@ -328,12 +336,11 @@ Two consequences worth stating plainly:
 seat-protocol rule for the same reason: the fleet is briefly running two
 builds that disagree about what a node must hold.
 
-A snapshot artefact is adopted **wholesale**. Its manifest names a position per
-domain, and a joiner refuses one that names no position for a domain its own
-build registers — there is no partial adoption, because a checkpoint for a
-domain the file has no rows for is worse than no artefact at all. So on the day
-a domain is added, every artefact already on disk was taken by the build before
-it and is unadoptable by the new build.
+A snapshot artefact's manifest names a position per domain, and a joiner
+refuses one that names no position for a domain **it runs** — a checkpoint for
+a domain the file has no rows for is worse than no artefact at all. So on the
+day a domain is added, every artefact already on disk was taken by the build
+before it and is unadoptable by the new build.
 
 The engine handles that rather than waiting it out. A node whose newest
 artefact is short of a domain it runs takes a complete one immediately instead
@@ -399,6 +406,45 @@ Three things make that work, and all three are per node:
   and retries shortly rather than waiting out the interval.
 - **Every node serves them.** There is no designated donor: a fleet whose
   only donor was down would have nothing to give.
+
+### Who can donate to whom
+
+Which [state-log domains a node runs](satellite-nodes.md#which-state-log-domains-the-node-runs)
+is derived from its `node.roles`, so the members of one fleet can legitimately
+run different sets — and a donor's artefact covers exactly the domains that
+donor runs. The rule is **asymmetric**, and it is the asymmetry that makes
+snapshots work at all in a mixed fleet:
+
+- **A donor that runs more than the recipient is fine.** The recipient adopts
+  the artefact and **strips** the domains it does not run out of the staged
+  copy — their rows *and* their checkpoints — before the file is installed. It
+  says so once, as `statelog_artefact_stripped`, naming the donor and the
+  domains it removed. Refusing such an artefact instead would break snapshots
+  in exactly the topology this exists for: the node with the most to give is
+  the one running everything, and the node most likely to need it is the
+  narrow one.
+- **A donor that runs fewer is refused**, from its manifest alone, before a
+  single byte is transferred. An artefact that names no position for a domain
+  the recipient runs is one the recipient would come up believing it was
+  caught up on — with a checkpoint and no rows behind it. The joiner moves on
+  to the next offer, and only if **every** offer was unusable does it say so,
+  with `statelog_no_snapshot_offered`.
+
+```mermaid
+flowchart LR
+    D1["<b>core node</b><br/>runs tracker · vectors · pages"]
+    D2["<b>narrow node</b><br/>runs tracker only"]
+    R["<b>joining node</b><br/>runs tracker · pages"]
+    D1 -->|"adopted, then<br/>vectors stripped"| R
+    D2 -->|"refused: names no<br/>position for pages"| R
+```
+
+The practical consequence for an operator: **keep at least one node that runs
+every domain**, so that there is always a member whose artefact any other
+member can use. A node that found no usable offer does not stop — it comes up
+on the history it has, its reads report the coverage they could not account
+for, the domains that gate seat admission keep it from claiming work it cannot
+answer for, and it asks again on a widening interval.
 
 **A fleet with no successful backups eventually stops trimming**, which is
 deliberate — see [Backup and restore](backup.md). Until it trims, nothing can

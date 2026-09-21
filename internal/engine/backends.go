@@ -253,6 +253,16 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 
 // openStore opens this node's local database.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
+	// Tier A validated the roles before anything reached here, so a parse
+	// failure at this point is a build fault rather than an operator's —
+	// and it is still an error rather than a default, because silently
+	// reading it as "every role" would size the pool for domains this node
+	// may not run.
+	roles, err := b.Node.RoleSet()
+	if err != nil {
+		return nil, fmt.Errorf("engine: read this node's roles to size the "+
+			"store's pinned writers: %w", err)
+	}
 	opts := store.Options{
 		MaxOpenConns:   b.Store.MaxOpenConns,
 		ReplicatedPath: b.Store.ReplicatedPath,
@@ -278,7 +288,13 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 		// Neither sweep is a long-lived writer, so neither wants a pin:
 		// both take a pooled write transaction now, which reaches the
 		// same lock through the same queue.
-		PinnedWriters: len(registeredDomains()),
+		//
+		// THE DOMAINS THIS NODE RUNS, not every domain this build
+		// registers. A satellite whose roles exclude a domain starts no
+		// applier for it, so a pin reserved for one is a connection the
+		// pool holds and nothing ever takes — which is a reader's
+		// connection, permanently.
+		PinnedWriters: len(participationOf(roles).Run),
 	}
 	// Nil embeddings means no vector recall is configured, which the store
 	// reads as width 0: no DECLARED width, so it checks nothing against it

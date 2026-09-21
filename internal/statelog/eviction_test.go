@@ -22,7 +22,7 @@ func TestEvictionFenceHoldsTheTrimUntilTheNodeCanNotice(t *testing.T) {
 		{NodeID: "b", Generation: 1, Seq: 100},
 	}
 
-	fresh := statelog.CountedSet(now, reported, nil, []statelog.Tombstone{
+	fresh := statelog.CountedSet(now, "tracker", reported, nil, []statelog.Tombstone{
 		{NodeID: "b", At: now.Add(-time.Second), By: "operator"},
 	})
 	if len(fresh) != 2 {
@@ -31,7 +31,7 @@ func TestEvictionFenceHoldsTheTrimUntilTheNodeCanNotice(t *testing.T) {
 			"and until it does it is still writing", len(fresh))
 	}
 
-	settled := statelog.CountedSet(now, reported, nil, []statelog.Tombstone{
+	settled := statelog.CountedSet(now, "tracker", reported, nil, []statelog.Tombstone{
 		{NodeID: "b", At: now.Add(-statelog.EvictionFenceWindow - time.Second), By: "operator"},
 	})
 	if len(settled) != 1 || settled[0].NodeID != "a" {
@@ -48,7 +48,7 @@ func TestEvictionFenceHoldsTheTrimUntilTheNodeCanNotice(t *testing.T) {
 func TestANodeWithNoPositionYetIsCountedAtZero(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	counted := statelog.CountedSet(now,
+	counted := statelog.CountedSet(now, "tracker",
 		[]statelog.NodePosition{{NodeID: "a", Generation: 1, Seq: 9_000}},
 		[]statelog.Presence{{NodeID: "joiner"}}, nil)
 
@@ -107,5 +107,48 @@ func TestAnEvictionIsRefusedWhileTheTargetIsStillTalking(t *testing.T) {
 	// lease does not say.
 	if err := statelog.PermitEviction("b", live, true); err != nil {
 		t.Fatalf("a forced eviction was refused: %v", err)
+	}
+}
+
+// A LIVE NODE THAT DOES NOT RUN THIS DOMAIN IS NOT COUNTED FOR IT, which is
+// the opposite disposition from the joiner above and turns on the same
+// silence.
+//
+// A node publishes a position for every domain it applies and none for the
+// rest. Read as a joiner, a satellite whose roles exclude a domain would be
+// unioned in at zero on every tick for as long as it lives — so that domain's
+// log would never trim and would grow without bound on any fleet with one.
+func TestALiveNodeThatDoesNotRunADomainIsNotCountedForIt(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	reported := []statelog.NodePosition{{NodeID: "ingress", Generation: 1, Seq: 9_000}}
+	satellite := statelog.Presence{NodeID: "satellite", Domains: []string{"tracker"}}
+
+	counted := statelog.CountedSet(now, "people", reported,
+		[]statelog.Presence{satellite}, nil)
+	if len(counted) != 1 || counted[0].NodeID != "ingress" {
+		t.Errorf("counted %v for a domain the satellite does not run, want only "+
+			"the node that does — counted at zero it pins this log's floor for "+
+			"as long as it lives", counted)
+	}
+
+	// THE SAME NODE IS COUNTED FOR A DOMAIN IT DOES RUN, which is what
+	// says the clause above is a filter rather than a node being dropped.
+	counted = statelog.CountedSet(now, "tracker", reported,
+		[]statelog.Presence{satellite}, nil)
+	if len(counted) != 2 {
+		t.Errorf("counted %v for a domain the satellite runs, want both", counted)
+	}
+
+	// AND A PEER THAT NAMES NO DOMAINS IS COUNTED FOR EVERY ONE. That row
+	// is what a build predating the field writes, and it is exactly what a
+	// rolling upgrade puts in front of the new nodes; reading it as "runs
+	// nothing" would trim past a peer that is still applying.
+	counted = statelog.CountedSet(now, "people", reported,
+		[]statelog.Presence{{NodeID: "older-build"}}, nil)
+	if len(counted) != 2 {
+		t.Errorf("counted %v for a peer that names no domains, want both — a "+
+			"presence row with no domain list is a build that predates the "+
+			"field, not a node that applies nothing", counted)
 	}
 }

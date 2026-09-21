@@ -118,6 +118,11 @@ func (b *reorderBuffer) checked(ready []Record, next uint64) ([]Record, error) {
 
 // payloadBytes is what the buffer is measured in: the records themselves,
 // which is the memory a hole actually costs.
+//
+// THE FRAMED BYTES, not the body, and not both. The body is a SUBSLICE of the
+// frame rather than a copy of it, so one allocation is behind the two fields
+// and adding them would report a buffer at twice its real size — which would
+// stop an applier on a hole it had the room for.
 func payloadBytes(held []Record) int {
 	n := 0
 	for _, rec := range held {

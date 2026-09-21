@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -169,4 +170,113 @@ func count(t *testing.T, path, table string) int64 {
 		t.Fatalf("count %s: %v", table, err)
 	}
 	return n
+}
+
+// A KEYED SCRUB REMOVES THE ROWS IT NAMES AND LEAVES THE TABLE, which is the
+// half [store.ScrubFile] cannot express: a table the artefact must keep, whose
+// rows belong partly to something the recipient does not run.
+func TestAKeyedScrubRemovesOnlyTheKeysItNames(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "artefact.db")
+	seed(t, path, `
+		CREATE TABLE checkpoints (stream TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+		INSERT INTO checkpoints (stream, seq) VALUES ('A', 1), ('B', 2), ('C', 3);`)
+
+	n, err := store.ScrubRowsIn(t.Context(), path, "checkpoints", "stream", []string{"A", "C"})
+	if err != nil {
+		t.Fatalf("ScrubRowsIn: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("deleted %d rows, want 2", n)
+	}
+	if got := streamsIn(t, path); !slices.Equal(got, []string{"B"}) {
+		t.Errorf("checkpoints = %v, want only the key that was not named", got)
+	}
+}
+
+// AN EMPTY LIST DELETES NOTHING, and this is the case that has to be written
+// down: built as `IN ()` it is a syntax error, and built as "no clause at all"
+// it empties the table — which is the one outcome a caller asking for some
+// rows never meant, and the caller asking for none is the ORDINARY case (a
+// node that runs every domain has nothing to strip).
+func TestAKeyedScrubWithNoKeysEmptiesNothing(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "artefact.db")
+	seed(t, path, `
+		CREATE TABLE checkpoints (stream TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+		INSERT INTO checkpoints (stream, seq) VALUES ('A', 1), ('B', 2);`)
+
+	n, err := store.ScrubRowsIn(t.Context(), path, "checkpoints", "stream", nil)
+	if err != nil {
+		t.Fatalf("ScrubRowsIn with no keys: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("deleted %d rows for an empty key list", n)
+	}
+	if got := streamsIn(t, path); !slices.Equal(got, []string{"A", "B"}) {
+		t.Errorf("checkpoints = %v, want every row still there", got)
+	}
+}
+
+// A KEYED SCRUB REFUSES AN IDENTIFIER IT WOULD INTERPOLATE, because the table
+// and the column go into the statement as text while the keys are bound.
+func TestAKeyedScrubRefusesAnIdentifierItWouldInterpolate(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "artefact.db")
+	seed(t, path, `CREATE TABLE checkpoints (stream TEXT PRIMARY KEY);`)
+
+	for name, tc := range map[string]struct{ table, column string }{
+		"a table that is a statement":  {"checkpoints; DROP TABLE checkpoints", "stream"},
+		"a column that is a statement": {"checkpoints", "stream = '' OR 1=1 --"},
+		"a table nothing can find":     {"no_such_table", "stream"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := store.ScrubRowsIn(t.Context(), path, tc.table, tc.column,
+				[]string{"A"})
+			if err == nil {
+				t.Fatal("a keyed scrub accepted an identifier it interpolates")
+			}
+			if !errors.Is(err, store.ErrScrubTable) {
+				t.Errorf("error = %v, want one wrapping ErrScrubTable", err)
+			}
+		})
+	}
+
+	// THE CONTROL: the same call with plain identifiers is accepted, so
+	// the cases above are refusals rather than a function that never works.
+	if _, err := store.ScrubRowsIn(t.Context(), path, "checkpoints", "stream",
+		[]string{"A"}); err != nil {
+
+		t.Errorf("a plain table and column were refused: %v", err)
+	}
+}
+
+func streamsIn(t *testing.T, path string) []string {
+	t.Helper()
+	db, err := store.OpenEstate(t.Context(), store.EstateReplicated, path, store.Options{})
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() { _ = db.Close() }()
+	var out []string
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(),
+			`SELECT stream FROM checkpoints ORDER BY stream`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var s string
+			if err := rows.Scan(&s); err != nil {
+				return err
+			}
+			out = append(out, s)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("read the checkpoints: %v", err)
+	}
+	return out
 }
