@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"maps"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,10 +120,10 @@ func Determinism(t *testing.T, new Factory) error {
 	if maps.Equal(first, second) {
 		return nil
 	}
-	return fmt.Errorf("two estates at one checkpoint hold different rows:\n"+
-		"  %v\n  %v\n"+
+	return fmt.Errorf("two estates at one checkpoint hold different rows:\n%s\n"+
 		"An apply that reads a clock, a config, a node identity or an unsorted "+
-		"map is a fleet whose nodes disagree about the same log", first, second)
+		"map is a fleet whose nodes disagree about the same log",
+		diffTables(first, second))
 }
 
 // Idempotency applies one set of records twice and reports what the second
@@ -134,18 +136,30 @@ func Idempotency(t *testing.T, new Factory) error {
 	if maps.Equal(once, twice) {
 		return nil
 	}
-	return fmt.Errorf("applying the same records twice produced different rows:\n"+
-		"  once:  %v\n  twice: %v\n"+
+	return fmt.Errorf("applying the same records twice produced different rows:\n%s\n"+
 		"A redelivery is not an exceptional case — the checkpoint drops one that "+
 		"arrives below it, and the applier's own guards have to drop one that "+
-		"does not", once, twice)
+		"does not", diffTables(once, twice))
 }
 
-// suiteRecord is one record the suite publishes.
+// suiteRecord is one record the suite publishes, at a stated position.
+//
+// THE POSITION IS PART OF THE FIXTURE rather than the loop's index, because
+// the idempotency case replays records and a replay is a REDELIVERY: the
+// broker hands back the message it already handed over, at the sequence it
+// already had. Numbered by the loop instead, a replayed record arrives at a
+// sequence the broker never issued, and every domain that records the position
+// it applied at then looks non-idempotent for a case the suite invented.
+//
+// Re-publication under a NEW sequence — the same operation id appended again
+// by a publisher that never learned the first one landed — is a real case, and
+// it is the FRAMEWORK's: the operation ledger drops it, which this harness does
+// not run. It is certified in internal/statelog against the loop that owns it.
 type suiteRecord struct {
 	kind string
 	id   string
 	op   string
+	seq  uint64
 }
 
 // suiteRecords is the fixed set every apply case runs, which is what makes
@@ -157,8 +171,10 @@ func suiteRecords(t *testing.T, new Factory) []suiteRecord {
 	var out []suiteRecord
 	for i, kind := range c.Kinds {
 		out = append(out,
-			suiteRecord{kind: kind, id: "suite-a", op: "suite-op-a-" + kind},
-			suiteRecord{kind: kind, id: "suite-b", op: "suite-op-b-" + kind},
+			suiteRecord{kind: kind, id: "suite-a", op: "suite-op-a-" + kind,
+				seq: uint64(len(out) + 1)},
+			suiteRecord{kind: kind, id: "suite-b", op: "suite-op-b-" + kind,
+				seq: uint64(len(out) + 2)},
 		)
 		if i >= 2 {
 			break
@@ -169,7 +185,7 @@ func suiteRecords(t *testing.T, new Factory) []suiteRecord {
 
 // applyInto runs records into a fresh estate and returns what every declared
 // table holds.
-func applyInto(t *testing.T, new Factory, records []suiteRecord) map[string]int {
+func applyInto(t *testing.T, new Factory, records []suiteRecord) map[string]string {
 	t.Helper()
 	c := new(t)
 	db := openEstate(t, c)
@@ -195,7 +211,7 @@ func applyInto(t *testing.T, new Factory, records []suiteRecord) map[string]int 
 		MaxVariables: db.Caps().MaxVariables,
 	}
 
-	for i, r := range records {
+	for _, r := range records {
 		body, err := c.Encode(r.kind, r.id, r.op, c.Domain.RecordVersion())
 		if err != nil {
 			t.Fatalf("encode %s/%s: %v", r.kind, r.id, err)
@@ -209,7 +225,7 @@ func applyInto(t *testing.T, new Factory, records []suiteRecord) map[string]int 
 			Position: statelog.Position{
 				Stream:     c.Domain.Stream().Name,
 				Generation: 1,
-				Seq:        uint64(i + 1),
+				Seq:        r.seq,
 			},
 			Payload:  body,
 			StoredAt: opts.StoredAt,
@@ -248,4 +264,43 @@ func requireKinds(t *testing.T, c Candidate) {
 			"to publish and cannot certify its apply path; Kinds is what a " +
 			"domain states it writes")
 	}
+}
+
+// diffTables names the tables that differ and shows what each side holds.
+//
+// NAMED RATHER THAN DUMPED. Two whole estates rendered side by side is
+// unreadable at any real corpus, and the failure it reports is usually one
+// column of one table — a clock, a node id, an unsorted map. So the message
+// carries only the tables that actually differ.
+func diffTables(a, b map[string]string) string {
+	names := make([]string, 0, len(a))
+	for name := range a {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	var out strings.Builder
+	for _, name := range names {
+		if a[name] == b[name] {
+			continue
+		}
+		fmt.Fprintf(&out, "  %s:\n    one:   %s\n    other: %s\n",
+			name, oneLine(a[name]), oneLine(b[name]))
+	}
+	if out.Len() == 0 {
+		// Only reachable when one side holds a table the other does
+		// not, which a shared migration makes impossible — so it is
+		// reported rather than silently rendering nothing.
+		return "  the two sides declare different tables"
+	}
+	return strings.TrimRight(out.String(), "\n")
+}
+
+// oneLine keeps a difference readable when a table holds many rows.
+func oneLine(rendered string) string {
+	const cap = 400
+	flat := strings.ReplaceAll(rendered, "\n", " | ")
+	if len(flat) <= cap {
+		return flat
+	}
+	return flat[:cap] + "… (truncated)"
 }

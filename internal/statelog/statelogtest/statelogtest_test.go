@@ -272,11 +272,11 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		t.Parallel()
 		err := statelogtest.Idempotency(t, func(*testing.T) statelogtest.Candidate {
 			c := control()
-			c.Applier = appendOnly{}
+			c.Applier = countingApplier{}
 			return c
 		})
 		if err == nil {
-			t.Fatal("the suite passed an applier that writes a new row per delivery")
+			t.Fatal("the suite passed an applier that counts its deliveries into a row")
 		}
 	})
 }
@@ -300,11 +300,22 @@ func (nothingReplicated) Tables() map[string]statelog.TableClass {
 }
 
 // appendOnly writes a new row per delivery, so a redelivery is visible.
-type appendOnly struct{ controlApplier }
+// countingApplier is the liar: it writes the right ROW for every delivery and
+// the wrong VALUE, incrementing a column each time it sees one.
+//
+// THAT IS THE SHAPE A REAL NON-IDEMPOTENT APPLIER TAKES. An applier that
+// inserted a new row per delivery would be caught by counting rows, which the
+// suite did until this commit; the failure a content comparison exists to
+// catch is the one where the shape is right and the values are not — a
+// redelivery that increments, a clock that is read, a node id that is stamped.
+// Two nodes then hold the same number of rows and disagree about what is in
+// them, which is precisely what nobody notices.
+type countingApplier struct{ controlApplier }
 
-func (appendOnly) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, _ statelog.ApplyOptions) (int, error) {
-	_, err := tx.ExecContext(ctx,
-		`INSERT INTO control_widgets (id, version) VALUES (?, ?)`,
-		fmt.Sprintf("%s-%d", rec.Subject.ID, rec.Position.Seq), rec.Position.Packed())
+func (countingApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, _ statelog.ApplyOptions) (int, error) {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO control_widgets (id, version) VALUES (?, 1)
+		ON CONFLICT (id) DO UPDATE SET version = version + 1`,
+		rec.Subject.ID)
 	return 1, err
 }
