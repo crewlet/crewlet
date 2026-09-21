@@ -10,7 +10,9 @@ import (
 )
 
 // SeatEnv is the mcp_env server whose credentials belong to Datadog.
-const SeatEnv = "datadog"
+//
+// FROM THE ORG MODEL'S OWN TABLE: see [org.EngineReadMCPEnv].
+const SeatEnv = org.MCPEnvDatadog
 
 // CredentialKeys are the spellings a seat's application key arrives under.
 //

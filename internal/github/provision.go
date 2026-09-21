@@ -27,7 +27,11 @@ import (
 // none.
 
 // SeatEnv is the mcp_env server whose credentials belong to the code host.
-const SeatEnv = "github"
+//
+// FROM THE ORG MODEL'S OWN TABLE, which is what every reader of a vendor
+// block shares: see [org.EngineReadMCPEnv] for why a second spelling here
+// would be a silent drift rather than a duplicate.
+const SeatEnv = org.MCPEnvGitHub
 
 // CredentialKeys are the spellings a seat's token arrives under, in the
 // order they are tried.

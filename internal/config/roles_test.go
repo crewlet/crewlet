@@ -288,9 +288,17 @@ units:
 // A dangling reference is not a validation failure: live config management
 // bootstraps an org in pieces, so a unit can land before the seat that
 // leads it, and refusing the revision would make that state unreachable.
+//
+// THE REFERENCE IS A WELL-FORMED HANDLE, which is the whole fixture. What
+// this protects is the leniency of RESOLUTION, and the two are separate
+// rules: a `lead:` that is shaped like a handle and names nobody is a seat
+// somebody is about to hire, while one shaped like a display name can never
+// resolve under any chart and is refused by
+// [Company.validateReferenceShapes]. A fixture written in the second shape
+// would pass this test for the wrong reason the day the leniency was lost.
 func TestDanglingReferencesAreReportedNotRejected(t *testing.T) {
 	t.Parallel()
-	cfg := mustCompany(t, "name: Acme\nunits:\n  - {name: Core, lead: NotYetHired}\n")
+	cfg := mustCompany(t, "name: Acme\nunits:\n  - {name: Core, id: core, lead: not-yet-hired}\n")
 	if len(cfg.DanglingRefs()) == 0 {
 		t.Fatal("a dangling lead should be reported")
 	}

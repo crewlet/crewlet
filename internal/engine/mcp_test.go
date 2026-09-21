@@ -419,10 +419,20 @@ func TestASharedServerARevisionRemovedIsStopped(t *testing.T) {
 		t.Fatal("the boot epoch never started the shared server")
 	}
 
-	// The same document with the whole mcp_servers block gone — the
-	// gesture an operator makes to take a leaking integration offline.
+	// The same document with the whole mcp_servers block gone, AND the
+	// seats' credentials for it — which is the gesture an operator makes
+	// to take a leaking integration offline, both halves of it.
+	//
+	// BOTH HALVES BECAUSE THE DOCUMENT RULES SAY SO: an `mcp_env` block
+	// keyed on a server nothing declares is never read by anything, so a
+	// document leaving one behind is refused naming the path. Removing
+	// only the servers would test this rule rather than the retirement
+	// this case is about.
 	without := with[:strings.Index(with, "mcp_servers:")] +
-		with[strings.Index(with, "roles:"):]
+		strings.NewReplacer(
+			"    mcp_env:\n      tracker:\n        SEAT_TOKEN: \"ceo-secret\"\n", "",
+			"    mcp_env:\n      tracker:\n        SEAT_TOKEN: \"cto-secret\"\n", "",
+		).Replace(with[strings.Index(with, "roles:"):])
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, without)); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

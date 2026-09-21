@@ -251,6 +251,57 @@ func (t Toggle) MarshalJSON() ([]byte, error) {
 // seat rather than once per company.
 type MCPEnv map[string]map[string]string
 
+// THE BLOCKS THE ENGINE READS BY NAME, which is the one thing about this map
+// that is not keyed on `mcp_servers`.
+//
+// Almost every block here is named after a server the company declares, and
+// nothing reads a block whose key names no server: the MCP layer walks
+// `mcp_servers` and looks each seat's credentials up per server
+// (internal/engine/mcp.go), so an undeclared key is inert.
+//
+// These six are the exception. Each is a VENDOR block the engine itself
+// reads, directly, whether or not a tool server of that name exists — a
+// GitHub App's per-seat token, a GitLab account's, a Datadog application
+// key, an Atlassian account's API token under the shared block or under
+// either product's own. A company can legitimately hold every one of them
+// with an empty `mcp_servers:`.
+//
+// ONE TABLE, and each vendor's own `SeatEnv` is defined from it rather than
+// beside it. That is the lesson the Atlassian reader already carries in its
+// own doc: three packages each kept a private list of the blocks and key
+// spellings that identify one account, the lists drifted, and a seat holding
+// `mcp_env.atlassian.JIRA_API_TOKEN` read as configured under Jira and as
+// having no credential at all under Confluence — permanently, silently, on
+// one account in one block. A validator with a seventh private copy would
+// fail the other way round and refuse a document the engine runs perfectly.
+const (
+	// MCPEnvAtlassian is the SHARED Atlassian block: one account, two
+	// products, and where a provisioned seat's credential lands.
+	MCPEnvAtlassian = "atlassian"
+
+	// MCPEnvJira and MCPEnvConfluence are the product-specific blocks,
+	// which exist only where somebody deliberately made one.
+	MCPEnvJira       = "jira"
+	MCPEnvConfluence = "confluence"
+
+	MCPEnvGitHub  = "github"
+	MCPEnvGitLab  = "gitlab"
+	MCPEnvDatadog = "datadog"
+)
+
+// EngineReadMCPEnv is every block above, sorted, for a caller that has to
+// decide whether a key names anything at all.
+//
+// SORTED AND COPIED ON EVERY CALL rather than exported as a variable: a
+// package-level slice is writable by every importer, and the one caller that
+// appended to it in place would corrupt the table for the whole process.
+func EngineReadMCPEnv() []string {
+	return []string{
+		MCPEnvAtlassian, MCPEnvConfluence, MCPEnvDatadog,
+		MCPEnvGitHub, MCPEnvGitLab, MCPEnvJira,
+	}
+}
+
 // Clone returns a deep copy. The org model is mutated during normalisation
 // and read concurrently afterwards, so inheritance never aliases a map two
 // seats can both reach.

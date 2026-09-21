@@ -208,8 +208,11 @@ func (c *Company) ValidateRunnable() error {
 // Today they are the org's duplicate seat names, duplicate seat ids,
 // duplicate unit keys and a unit reference on a seat declared inside a unit
 // of a different key (see [org.Organization.ValidateAdmission]), a unit with
-// no id, duplicate sandbox setup step names within one list, and a GitHub App
-// on a human seat.
+// no id, duplicate sandbox setup step names within one list, a GitHub App
+// on a human seat, and the three WHOLE-DOCUMENT rules in
+// [Company.validateFileRules] — an `mcp_env` key naming no server, two seats
+// declaring one email, and a reference that is shaped like neither a handle
+// nor a key.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -219,7 +222,8 @@ func (c *Company) ValidateAdmission() error {
 // caller already built.
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
-		c.validateSetupStepNames(), c.validateHumanSeatApps())
+		c.validateSetupStepNames(), c.validateHumanSeatApps(),
+		c.validateFileRules())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See

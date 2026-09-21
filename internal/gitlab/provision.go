@@ -36,7 +36,9 @@ var CredentialKeys = []string{
 }
 
 // SeatEnv is the mcp_env server whose credentials belong to the code host.
-const SeatEnv = "gitlab"
+//
+// FROM THE ORG MODEL'S OWN TABLE: see [org.EngineReadMCPEnv].
+const SeatEnv = org.MCPEnvGitLab
 
 // PlanFor walks the org for seats that need a GitLab account.
 //

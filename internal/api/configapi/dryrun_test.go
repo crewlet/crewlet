@@ -187,9 +187,13 @@ func TestADryRunAnswersTheBaseTheWarningsAndTheDerivedHierarchy(t *testing.T) {
 	base := s.seed(t, companyDoc, nil)
 
 	// `manages` carries a seat's HANDLE or a unit's KEY, so the live entry
-	// is `cto` and the dangling one is a string nothing answers to.
+	// is `cto` and the dangling one is a well-formed handle nothing answers
+	// to. WELL-FORMED MATTERS: a value shaped like a display name can never
+	// resolve under any chart and is refused outright, so a fixture written
+	// that way would be a 400 rather than the dangling-reference warning
+	// this case is about.
 	res := s.do(t, http.MethodPatch, "/config?dry_run=true",
-		`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu", "manages": ["cto", "Ghost"]},
+		`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu", "manages": ["cto", "ghost"]},
 		            {"name": "CTO", "handle": "cto", "llm": "zulu"}]}`, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("dry run = %d, want 200: %s", res.Code, res.Body)

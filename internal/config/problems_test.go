@@ -445,7 +445,11 @@ units:
 // its references alone.
 func TestAnAdmittedCompanyHasNoAdmissionWarnings(t *testing.T) {
 	t.Parallel()
-	cfg := parsed(t, "name: Acme\nroles:\n  - name: CEO\n    manages: [Ghost]\n")
+	// A WELL-FORMED HANDLE THAT NAMES NOBODY, for the reason
+	// TestDanglingReferencesAreReportedNotRejected states: a display name
+	// in a reference is refused by its own admission rule, so a fixture
+	// written that way would break this one's premise rather than test it.
+	cfg := parsed(t, "name: Acme\nroles:\n  - name: CEO\n    manages: [ghost]\n")
 	if err := cfg.ValidateAdmission(); err != nil {
 		t.Fatalf("the fixture breaks an admission rule: %v", err)
 	}
