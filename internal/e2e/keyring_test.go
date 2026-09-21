@@ -1,11 +1,10 @@
 package e2e
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // EVERY NODE IN THIS SUITE CARRIES A KEYRING, because every record on every
@@ -29,11 +28,15 @@ func fleetKeyring(t *testing.T) (string, string) {
 	return "e2e", testKeyMaterial(t)
 }
 
+// testKeyMaterial mints one THROUGH THE MINTER `crewlet secrets keygen` uses,
+// so a suite's key is a key rather than a fixture's idea of one: the size, the
+// randomness and the encoding are all read off the production definition, and
+// a change to any of them reaches this suite in the same commit.
 func testKeyMaterial(t *testing.T) string {
 	t.Helper()
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
+	key, err := secrets.GenerateKey()
+	if err != nil {
 		t.Fatalf("no randomness for the test keyring: %v", err)
 	}
-	return base64.StdEncoding.EncodeToString(key)
+	return secrets.EncodeKey(key)
 }

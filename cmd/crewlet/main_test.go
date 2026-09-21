@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 const companyYAML = `
@@ -244,6 +245,12 @@ func TestRunRefusesABadConfigBeforeStartingAnything(t *testing.T) {
 }
 
 // bootstrapFor writes a Tier A pointing at a temp directory.
+//
+// WITH A KEYRING, because every record on every state log is signed under one
+// and a node that has none refuses to start. It is not in
+// [config.DefaultBootstrap] and must not be: a default key is a key every
+// deployment in the world shares, which is the opposite of what signing a
+// record buys.
 func bootstrapFor(t *testing.T, port int) *config.Bootstrap {
 	t.Helper()
 	dir := t.TempDir()
@@ -252,7 +259,23 @@ func bootstrapFor(t *testing.T, port int) *config.Bootstrap {
 	b.Stream.StoreDir = filepath.Join(dir, "stream")
 	b.API.Host = "127.0.0.1"
 	b.API.Port = port
+	b.Secrets.ActiveKeyID = "test"
+	b.Secrets.Keys = []config.SecretKey{{ID: "test", Material: testKeyMaterial(t)}}
 	return &b
+}
+
+// testKeyMaterial mints one THROUGH THE MINTER `crewlet secrets keygen` uses,
+// so the size, the randomness and the encoding are read off the production
+// definition rather than restated here. Per call rather than a constant: two
+// cases running in parallel share no key, and neither does a case that goes on
+// to write one down.
+func testKeyMaterial(t *testing.T) string {
+	t.Helper()
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatalf("no randomness for the test keyring: %v", err)
+	}
+	return secrets.EncodeKey(key)
 }
 
 func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {

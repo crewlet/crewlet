@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -29,10 +30,30 @@ func bootstrap(t *testing.T, mutate func(*config.Bootstrap)) *config.Bootstrap {
 	// create a database in the package directory and share it with every
 	// other test in the run. One process owns a store file exclusively.
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	// AND A KEYRING, because every record on every state log is signed
+	// under one and a node that has none refuses to start. It is not in
+	// [config.DefaultBootstrap] and must not be: a default key is a key
+	// every deployment in the world shares, which is the opposite of what
+	// signing a record buys.
+	b.Secrets.ActiveKeyID = "test"
+	b.Secrets.Keys = []config.SecretKey{{ID: "test", Material: testKeyMaterial(t)}}
 	if mutate != nil {
 		mutate(&b)
 	}
 	return &b
+}
+
+// testKeyMaterial mints one THROUGH THE MINTER `crewlet secrets keygen` uses,
+// so the size, the randomness and the encoding are read off the production
+// definition rather than restated here. Per call rather than a constant: two
+// cases running in parallel share no key.
+func testKeyMaterial(t *testing.T) string {
+	t.Helper()
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatalf("no randomness for the test keyring: %v", err)
+	}
+	return secrets.EncodeKey(key)
 }
 
 // parsedCompany is the Tier B half OpenBackends needs, for the one field it

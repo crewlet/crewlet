@@ -138,12 +138,22 @@ func TestASignalledNodeDrainsWithItsProbesUp(t *testing.T) {
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 
 	dir := t.TempDir()
+	// THE KEYRING IS PART OF A RUNNABLE TIER A, and this case is the only
+	// one in the tree that starts a node from a real file in a real
+	// process: every record on every state log is signed under it, so a
+	// document without one is a node that refuses to boot rather than a
+	// node with one feature off.
 	boot := writeFile(t, dir, "crewlet.yaml", fmt.Sprintf(`node:
   id: drain-probe
 store:
   path: %s
 stream:
   store_dir: %s
+secrets:
+  active_key_id: drain-probe
+  keys:
+    - id: drain-probe
+      material: %s
 api:
   host: 127.0.0.1
   port: %d
@@ -151,7 +161,8 @@ api:
     tokens:
       - id: founder
         token: %s
-`, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"), port, drainProbeToken))
+`, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"),
+		testKeyMaterial(t), port, drainProbeToken))
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
   llm:
