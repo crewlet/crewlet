@@ -173,15 +173,39 @@ func TestAMessageOnOneNodeWakesASeatOnAnotherAndBothNodesAgree(t *testing.T) {
 	// is a greedy claim, so the holder is whichever member got there
 	// first — and the whole point of the first arm is to post somewhere
 	// else, which means finding out rather than assuming.
+	// A STABLE HOLDER, not the first one seen. Placement claims greedily
+	// and converges, so a single poll can catch the seat mid-move: the
+	// member holding it when this line runs is not always the member
+	// holding it a second later, and everything below pins to whichever
+	// one this picks.
+	//
+	// Getting that wrong does not look like a placement bug. The wake
+	// crosses correctly to wherever the seat actually went, that member
+	// runs the turn, and the case sits out its whole 90s budget watching
+	// the member the seat LEFT — reporting "the seat on the other member
+	// never ran a turn" while the diagnostic shows the other member's
+	// model running phases. Measured: `holder=node-1 saw []; writer=node-2
+	// saw [aux:persist aux:profile]`, which is that exactly.
+	//
+	// SAME HOLDER ON CONSECUTIVE POLLS is what "settled" means here. The
+	// policy converges in both directions and has no completion signal to
+	// wait on, so agreement across a span is the only evidence available.
 	var holder, writer *node
-	waitFor(t, "a member of the fleet to claim the ceo seat", func() bool {
+	stableFor := 0
+	waitFor(t, "the ceo seat to settle on one member of the fleet", func() bool {
+		var now *node
 		for _, n := range c.nodes {
 			if slices.Contains(n.engine.Node().Host().Held(), "ceo") {
-				holder = n
-				return true
+				now = n
+				break
 			}
 		}
-		return false
+		if now == nil || now != holder {
+			holder, stableFor = now, 0
+			return false
+		}
+		stableFor++
+		return stableFor >= chatSeatSettled
 	})
 	for _, n := range c.nodes {
 		if n != holder {
@@ -230,8 +254,13 @@ func TestAMessageOnOneNodeWakesASeatOnAnotherAndBothNodesAgree(t *testing.T) {
 	waitFor(t, "the seat on the other member to run a turn", func() bool {
 		return slices.Contains(holder.model.seen(), "execute")
 	}, func() string {
-		return fmt.Sprintf("holder=%s saw %v; writer=%s saw %v",
-			holder.id, holder.model.seen(), writer.id, writer.model.seen())
+		// WHO HOLDS IT NOW, beside who held it at setup. If those differ
+		// the seat moved after this case pinned to it, and the turn ran
+		// somewhere neither of these two is watching — which reads
+		// identically to a wake that never crossed.
+		return fmt.Sprintf("holder=%s saw %v; writer=%s saw %v; ceo is now on %s",
+			holder.id, holder.model.seen(), writer.id, writer.model.seen(),
+			chatSeatHolder(c))
 	})
 
 	// (2) AND BOTH MEMBERS HOLD THE SAME TRANSCRIPT, sequence included.
@@ -924,4 +953,25 @@ func TestACommittedMessageReachesAWatchingSocket(t *testing.T) {
 		}
 		return
 	}
+}
+
+// chatSeatSettled is how many consecutive polls must agree before this case
+// treats placement as converged.
+//
+// THREE, at [waitFor]'s own 20ms cadence, so roughly 60ms of agreement. It is
+// deliberately small: the question is whether the seat is mid-MOVE, and a move
+// takes a lease round trip rather than microseconds — so a handful of polls
+// separates "settled" from "in flight" without adding a wait to the common
+// case, where it is already stable on the first three.
+const chatSeatSettled = 3
+
+// chatSeatHolder is the member holding the ceo seat right now, for a
+// diagnostic, or "nobody".
+func chatSeatHolder(c *cluster) string {
+	for _, n := range c.nodes {
+		if slices.Contains(n.engine.Node().Host().Held(), "ceo") {
+			return n.id
+		}
+	}
+	return "nobody"
 }
