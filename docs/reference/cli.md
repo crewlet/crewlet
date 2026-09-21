@@ -25,6 +25,12 @@ subcommand below is served by it.
 | `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream: declare every position below the next generation comparable and safely stale |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet chat channels` | The rooms this credential's seat is in, most recently active first, each with the id every other chat verb takes. `-archived` includes the rooms that take no new messages and stay readable |
+| `crewlet chat read <id>` | One room's transcript, oldest first, with `-limit N` and the `-before` cursor each page prints to walk back to the one before it. A reply is shown against the root it hangs under |
+| `crewlet chat post <id> -body TEXT` | Say something in a room, as the seat this token is bound to. `-link URL` repeats for what the message points at — there are no attachments — and `-op-id` retries an `unknown` outcome without saying it twice |
+| `crewlet chat search <text>` | Rank every room this seat may read, narrowed with `-channel`, `-author` and `-limit` |
+| `crewlet chat prune <id> -cutoff RFC3339 -confirm RFC3339` | Destroy everything a room said before an instant, on every node, now rather than at the [retention](../concepts/chat.md#retention) horizon. It has no inverse, so the cutoff is typed twice |
+| `crewlet chat import <dir>` | Replay a Slack or Mattermost export into rooms that already exist — threads, authors resolved to handles, original timestamps. Wakes nobody, and writes nothing the second time. `-map`, `-limit`, `-check` |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -650,6 +656,164 @@ second record.
 What it does **not** reach: a node that is offline or evicted keeps its copy
 until it replays, adopts a snapshot, is replaced or is destroyed. There is no
 duration to state, and `crewlet retention status` names which nodes those are.
+
+## `crewlet chat`
+
+```
+crewlet chat channels|read|post|search|prune|import
+    [<config.yaml>] [-url URL] [-token TOKEN]
+```
+
+The operator's half of the company's own chat — the [`chat.backend: native`](../concepts/chat.md)
+axis. On a `vendor` or `none` company these routes are never registered at
+all, so every verb here answers **404** — an honest "this company has no such
+surface" rather than an empty room that reads like a company with nothing in
+it.
+
+**Every verb talks to a running node**, for the reason `crewlet budgets` and
+`crewlet work purge` do and one more of chat's own: the rooms and the messages
+are the state log's, so a write is a record the broker arbitrates and every
+node applies — and on the default topology that broker is inside the engine's
+own process with no listener at all. A command that opened the store instead
+would find a database locked to a live engine, or write rows the log never
+carried.
+
+**No verb here names an author.** The node resolves the bearer token to the
+`kind: human` seat whose `contact.crewlet_operator_id` matches it, on every
+call, and there is nowhere in this CLI to write a handle: `chat post` says
+something as whoever holds the token, and `chat prune` destroys messages as
+that same person, recorded as an **operator**. A token bound to no seat is
+refused every room, reads included — a transcript is the most sensitive thing
+a deployment holds and a pipeline's credential is not a person. See
+[Chat § People](../concepts/chat.md#people).
+
+Every read prints the [level it was served at](../guides/consistency.md), the
+position it answered at and how far behind the log this node is; a node that
+could not present every row says `incomplete` rather than silently answering
+short. Every write is three-valued: `applied` is on this node's rows, `pending`
+is durable on the log and not yet applied here — **do not run it again** — and
+`unknown` is the one to retry, under the `-op-id` it printed so the retry
+cannot append a second record.
+
+### `crewlet chat channels`
+
+```
+crewlet chat channels [-archived]
+```
+
+The rooms this seat is in, most recently active first, as `ID  NAME  KIND
+UNREAD  LAST`. The **id** is the value `read`, `post`, `search` and `prune` all
+take. A direct conversation has no name — its identity is its participants —
+so its row carries the handles instead. An unread count that hit its ceiling
+prints as `N+`.
+
+`-archived` adds the rooms that take no new messages and stay readable. A seat
+in more rooms than one rail carries says `truncated`, and a room this build
+cannot present is **counted rather than dropped**.
+
+### `crewlet chat read`
+
+```
+crewlet chat read <channel-id> [-limit N] [-before CURSOR]
+```
+
+One room's transcript. `-limit` defaults to 50; `-before` takes the cursor the
+previous page printed, which is how you walk backwards through a long room.
+
+**A page prints oldest first**, although the route answers newest first — that
+ordering is what a screen renders and pages back from, and a terminal
+transcript is *read*. An imported message renders at the instant it was
+**said**, not at the instant it was replayed; the order stays the log's, since
+the per-channel sequence is what every node agrees on. A deleted message keeps
+its line as `(deleted)`, because its thread still hangs off it.
+Replies are shown against the root they hang under — [threads are one level
+deep](../concepts/chat.md#what-a-company-gets), so "this thread" is a range
+rather than a walk.
+
+### `crewlet chat post`
+
+```
+crewlet chat post <channel-id> -body TEXT [-link URL]... [-op-id ID]
+```
+
+Say something in a room, as the seat the token is bound to. `-link` repeats for
+the URLs a message points at; the engine stores **no file bytes**, so links are
+the whole of what a message can carry besides its text.
+
+A post carries no expectation at the broker — two people talking in one room
+are not racing for anything — so there is nothing for a retry to fail against.
+That is why the operation id is minted here and carried: it is the only thing
+that can tell a resubmission from a second remark, and it is what `-op-id`
+hands back after an `unknown`.
+
+### `crewlet chat search`
+
+```
+crewlet chat search <text> [-channel ID] [-author HANDLE] [-limit N]
+```
+
+Rank every room this seat may read, over chat's [own keyword
+index](../concepts/chat.md#search) — which is separate from the knowledge
+base's, and has no semantic half. `-channel` narrows to one room, `-author` to
+one handle.
+
+### `crewlet chat prune`
+
+```
+crewlet chat prune <channel-id> -cutoff RFC3339 -confirm RFC3339
+```
+
+Destroys everything the room said before that instant, on **every** node, now
+rather than at the [message horizon](../concepts/chat.md#retention). Like
+`retention set-capacity`, the value that decides how much disappears is typed
+twice and the route refuses the pair if they differ: it is not a number to
+inherit from a shell history, and there is no inverse.
+
+The sweep the retention duty runs is the same gesture on a schedule. This verb
+is what an erasure request or a credential pasted into a room needs, where
+waiting out `message_retention_days` is not an answer.
+
+### `crewlet chat import`
+
+```
+crewlet chat import <export-dir> [-map map.yaml] [-limit N] [-check]
+```
+
+Replays a Slack or Mattermost export into native rooms, preserving threads,
+resolving authors to seat handles and keeping the original timestamps. Imported
+history **wakes nobody** — a year of mentions arriving as live wakes would be
+tens of thousands of turns — and each message carries where it came from, so
+importing one archive twice writes nothing the second time.
+
+**It never creates a room.** The archive's channels are resolved against the
+rooms the operator's own seat is in, so what gets written is bounded by what
+that person can already reach.
+
+**An unmapped author stops the run before anything is written**, and every one
+of them is listed at once with the vendor's display *and* real name, plus the
+`authors:` lines to paste. The alternatives are all worse in the one store
+where "who said this" is the point: dropping the message takes a thread's shape
+with it, a placeholder handle makes the question unanswerable, and attributing
+to the migrating credential has one person saying everything. A mapped handle
+that is no longer a seat **is** accepted — somebody who left still said what
+they said.
+
+`-map` is a YAML document with exactly two keys, parsed strictly so a typo is
+refused rather than silently mapping nothing:
+
+```yaml
+channels:
+  engineering: c-eng        # archive channel name -> this company's room, by id or name
+authors:
+  U0FOUNDER: ada            # vendor user id -> seat handle
+```
+
+`-check` reads the archive, resolves everything and reports the plan without
+writing. `-limit` stops after N messages, and a slice is re-runnable like any
+other run.
+
+See [Chat § Migrating](../concepts/chat.md#migrating) for what the cutover
+looks like.
 
 ## `crewlet retention`
 

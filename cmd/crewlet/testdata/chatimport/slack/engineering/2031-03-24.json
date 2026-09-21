@@ -1,0 +1,29 @@
+[
+  {
+    "type": "message",
+    "subtype": "channel_join",
+    "user": "U0FOUNDER",
+    "text": "<@U0FOUNDER> has joined the channel",
+    "ts": "1932093240.000100"
+  },
+  {
+    "type": "message",
+    "user": "U0FOUNDER",
+    "text": "Morning <@U0ENGINEER> — the plan is at <https://example.com/plan|the plan>",
+    "ts": "1932093300.000200"
+  },
+  {
+    "type": "message",
+    "user": "U0ENGINEER",
+    "text": "On it. Ship &amp; measure.",
+    "ts": "1932093360.000300",
+    "thread_ts": "1932093300.000200"
+  },
+  {
+    "type": "message",
+    "subtype": "file_share",
+    "user": "U0ENGINEER",
+    "text": "",
+    "ts": "1932093420.000400"
+  }
+]

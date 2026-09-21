@@ -182,6 +182,14 @@ The number is an operational decision as much as a compliance one. Keeping
 everything is supported and costs disk on every node, in every backup, and in
 the time it takes a new node to join.
 
+When waiting out the horizon is not an answer — an erasure request, a
+credential pasted into a room — [`crewlet chat
+prune`](../reference/cli.md#crewlet-chat-prune) publishes that same cutoff now,
+for one room. It is the same gesture the duty runs on a schedule, and it has no
+inverse. That command is part of the operator's own chat surface: reading a
+room, posting as yourself, searching and importing are the rest of it, and all
+of them are in the [CLI reference](../reference/cli.md#crewlet-chat).
+
 ## What is not here
 
 Three gaps, stated rather than discovered:
@@ -201,7 +209,7 @@ choose the axis.
 
 ## Migrating
 
-`crewlet chat import` reads a Slack or Mattermost export into native channels,
+[`crewlet chat import`](../reference/cli.md#crewlet-chat-import) reads a Slack or Mattermost export into native channels,
 preserving threads, resolving authors to handles and keeping the original
 timestamps. Imported history **wakes nobody** — a year of mentions arriving as
 live wakes would be tens of thousands of turns — and it carries where it came
