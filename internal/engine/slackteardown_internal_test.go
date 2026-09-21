@@ -103,7 +103,7 @@ func slackEngine(t *testing.T) (*Engine, *seatWriter) {
 func seatWriterFor(t *testing.T, cfg *config.Company) *seatWriter {
 	t.Helper()
 	w := &seatWriter{seats: map[string]map[string]any{}}
-	for role := range cfg.EachRole() {
+	eachAuthoredSeat(cfg, func(role *config.Role) {
 		body, err := json.Marshal(role)
 		if err != nil {
 			t.Fatalf("marshal %s: %v", role.Name, err)
@@ -113,7 +113,7 @@ func seatWriterFor(t *testing.T, cfg *config.Company) *seatWriter {
 			t.Fatalf("decode %s: %v", role.Name, err)
 		}
 		w.seats[role.Seat().Handle()] = seat
-	}
+	})
 	return w
 }
 

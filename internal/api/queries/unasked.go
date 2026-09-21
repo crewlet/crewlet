@@ -224,7 +224,7 @@ func (s Sources) inboxRetention() time.Duration {
 	if s.Company == nil {
 		return 0
 	}
-	company := s.Company()
+	company, _ := s.Company()
 	if company == nil {
 		return 0
 	}

@@ -300,7 +300,7 @@ func TestAnAgentModeSeatNeedsNoSandboxBlock(t *testing.T) {
 func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 	t.Parallel()
 	never := 0.0
-	c := &Company{Config: &config.Company{
+	c := composed(t, &config.Company{
 		Roles: []config.Role{{Name: "CEO"}},
 		Units: []config.Unit{{
 			Name:  "Platform",
@@ -312,7 +312,7 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 				}}},
 			}},
 		}},
-	}}
+	})
 	// ADDRESSED BY HANDLE, derived from the name where the seat declares
 	// none — the same value every other surface addresses a seat by.
 	for _, handle := range []string{"nested", "deep"} {
@@ -338,14 +338,14 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 	// before it runs with duplicates — and a walk matching on the name
 	// handed whichever came first. A seat that turned code work off would
 	// be given its namesake's setup steps, credentials and box.
-	namesakes := &Company{Config: &config.Company{
+	namesakes := composed(t, &config.Company{
 		Roles: []config.Role{{Name: "Engineer", Handle: "plat-eng"}},
 		Units: []config.Unit{{
 			Name: "Product",
 			Roles: []config.Role{{Name: "Engineer", Handle: "prod-eng",
 				Sandbox: &config.RoleSandbox{Enabled: true}}},
 		}},
-	}}
+	})
 	if got := seatSandbox(namesakes, "plat-eng"); got != nil {
 		t.Errorf("the seat that wrote no block was handed %+v — its namesake's", got)
 	}
@@ -353,21 +353,46 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 		t.Errorf("the seat that wrote a block found %+v", got)
 	}
 
-	// THE FIRST MATCH IS THE ANSWER, even when it wrote no block. Using the
-	// nil block as the "still looking" sentinel cannot tell a seat that
-	// declared none from a name nobody holds, so the walk ran on past its
-	// own answer and handed back a LATER seat's block for this one — a
-	// seat that turned code work off getting somebody else's.
-	shadowed := &Company{Config: &config.Company{
+	// AND A COMPANY THAT COULD BE AMBIGUOUS IS REFUSED BEFORE IT RUNS.
+	//
+	// Two seats named Twin derive one handle, and the walk this lookup
+	// replaced had to reason about which of them it had found: using the
+	// nil block as its "still looking" sentinel, it could not tell a seat
+	// that declared no block from a name nobody holds, so it ran past its
+	// own answer and handed back a LATER seat's block — a seat that turned
+	// code work off getting somebody else's.
+	//
+	// An INDEX cannot be ambiguous, because a handle is the seat's identity
+	// in it. What makes that safe rather than merely convenient is the
+	// refusal here: a company carrying two seats of one handle never
+	// becomes an organization at all, so no lookup is ever handed one.
+	ambiguous := &config.Company{
 		Roles: []config.Role{{Name: "Twin"}},
 		Units: []config.Unit{{
 			Name:  "Platform",
 			Roles: []config.Role{{Name: "Twin", Sandbox: &config.RoleSandbox{Enabled: true}}},
 		}},
-	}}
-	if got := seatSandbox(shadowed, "twin"); got != nil {
-		t.Errorf("the first seat named Twin wrote no block and was handed %+v", got)
 	}
+	if _, err := ambiguous.Organization(); err == nil {
+		t.Error("a company with two seats of one handle built an organization, " +
+			"so a per-handle lookup could be handed either of them")
+	}
+}
+
+// composed is the runtime company a document describes: its settings and the
+// org derived from them.
+//
+// A RUNNING NODE derives its org from the chart's own rows; a fixture holds a
+// document, so this is what its seats are. A document that will not build is
+// a fixture with no seats, and a case about a seat would then pass over an
+// empty company — so it fails loudly here instead.
+func composed(t *testing.T, cfg *config.Company) *Company {
+	t.Helper()
+	o, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("this fixture's company does not build an org: %v", err)
+	}
+	return &Company{Config: cfg, Org: o}
 }
 
 // launchReadyEngine is an engine that can take an agent-mode launch all the

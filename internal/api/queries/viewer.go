@@ -70,18 +70,21 @@ func (s Sources) seatForOperator(operatorID string) *org.Role {
 	if operatorID == "" || s.Company == nil {
 		return nil
 	}
-	company := s.Company()
+	company, roster := s.Company()
 	if company == nil {
 		return nil
 	}
-	organization, err := company.Organization()
-	if err != nil {
+	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
+	// than re-resolved from the document: a stored revision carries no
+	// seats at all, so the derivation this replaced answered an EMPTY
+	// organization for every running company.
+	if roster == nil {
 		return nil
 	}
 	// NIL LOOKUP, so the reference resolves against this process's own
 	// environment — which is where Tier B's `${VAR}` pointers are resolved
 	// everywhere else in the engine.
-	return organization.SeatByOperatorID(operatorID, nil)
+	return roster.SeatByOperatorID(operatorID, nil)
 }
 
 // viewerHandle is the handle a personal question answers for when the caller

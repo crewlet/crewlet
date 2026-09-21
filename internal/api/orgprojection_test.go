@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The org projection is ANONYMOUSLY READABLE, so what it carries is a security
@@ -172,7 +173,7 @@ func TestTheOrgProjectionCarriesNothingGuarded(t *testing.T) {
 			f := &filler{mode: mode}
 			company := f.company()
 			a := newApp(t, api.Options{
-				Sources: queries.Sources{Company: func() *config.Company { return company }},
+				Sources: queries.Sources{Company: companySource(t, company)},
 			})
 
 			res := fetch(t, a, "/org", nil)
@@ -348,23 +349,79 @@ func (f *filler) company() *config.Company {
 			f.guarded(v.Field(i), 0)
 		}
 	}
-	c.Roles = []config.Role{f.role()}
+	c.Roles = f.seats()
 	c.Units = []config.Unit{f.unit(2)}
 	return c
 }
 
-func (f *filler) role() config.Role {
+// agentOnlyRoleFields are refused on a HUMAN seat, and humanOnlyRoleFields on
+// an agent one.
+//
+// TWO SEATS, NOT ONE, is what these force, and it is the fixture telling the
+// truth rather than a concession: a company cannot have a seat carrying both
+// sets, so a single filled seat could never have built an org at all. It did
+// not have to while the projection was copied out of the document; it does
+// now that the projection is DERIVED from the company the node runs.
+var agentOnlyRoleFields = map[string]bool{
+	"LLM": true, "LLMReview": true, "LLMSubagent": true, "LLMAuxiliary": true,
+	"LLMJudge": true, "LLMSandbox": true, "Sandbox": true, "TokenBudget": true,
+	"Workers": true, "LearningEnabled": true, "Schedules": true,
+	"MCPEnv": true, "BehavioralGuidelines": true,
+	// The per-seat vendor blocks and the two keys that ARE a vendor
+	// identity — a person acts at a third-party app as themselves, so an
+	// app or a project created for one would be a second identity for
+	// somebody who already has one.
+	"Integrations": true, "Project": true, "Space": true,
+}
+
+var humanOnlyRoleFields = map[string]bool{"Contact": true, "Availability": true}
+
+// role fills one seat of the given kind, leaving out the fields the other
+// kind owns.
+func (f *filler) role(kind org.RoleKind) config.Role {
 	var r config.Role
 	v := reflect.ValueOf(&r).Elem()
 	for field := range fieldsOf(v.Type()) {
 		target := v.FieldByIndex(field.Index)
-		if roleFields[field.Name].exposure == exposurePublic {
+		switch {
+		case field.Name == "Kind":
+			// A CLOSED SET, not prose. `kind:` is public and it is an
+			// enum, so the value that has to reach the projection is a
+			// value the org model ACCEPTS — filled with prose, the org
+			// refused to build and every seat vanished from /org with
+			// nothing in the response to say why.
+			target.SetString(string(kind))
+		case kind == org.KindHuman && agentOnlyRoleFields[field.Name],
+			kind == org.KindAgent && humanOnlyRoleFields[field.Name]:
+			// Not this seat's to carry; the other kind's seat has it.
+		case roleFields[field.Name].exposure == exposurePublic:
 			f.public(target)
-		} else {
+		default:
 			f.guarded(target, 0)
 		}
 	}
+	// AND THE GUARDED FIELDS THE ORG MODEL PARSES. A schedule's cron is a
+	// five-field expression, its timezone an IANA name and its target a
+	// closed set — none of them free text — so prose in any of them
+	// refuses the whole company, and the projection is derived from the
+	// company now. The schedule's own NAME and TASK stay guarded prose,
+	// which is what this case is about; these three are the values it
+	// stops asserting are hidden, because a valid cron has to be a valid
+	// cron.
+	for i := range r.Schedules {
+		r.Schedules[i].Cron = "0 9 * * 1"
+		r.Schedules[i].Timezone = "UTC"
+		r.Schedules[i].Target = org.TargetEach
+	}
 	return r
+}
+
+// seats is one seat of each kind, so every public field of either reaches the
+// projection and is asserted there.
+func (f *filler) seats() []config.Role {
+	f.publicValues = append(f.publicValues,
+		string(org.KindAgent), string(org.KindHuman))
+	return []config.Role{f.role(org.KindAgent), f.role(org.KindHuman)}
 }
 
 // unit fills one unit, with a seat and, above depth zero, a child unit.
@@ -382,7 +439,15 @@ func (f *filler) unit(depth int) config.Unit {
 			f.guarded(target, 0)
 		}
 	}
-	u.Roles = []config.Role{f.role()}
+	// THE PARSED FIELDS, on [filler.role]'s own reasoning: a unit carries
+	// schedules too, and prose in a cron, a timezone or a target refuses
+	// the whole company.
+	for i := range u.Schedules {
+		u.Schedules[i].Cron = "0 9 * * 1"
+		u.Schedules[i].Timezone = "UTC"
+		u.Schedules[i].Target = org.TargetEach
+	}
+	u.Roles = f.seats()
 	if depth > 0 {
 		u.Children = []config.Unit{f.unit(depth - 1)}
 	}
@@ -477,7 +542,7 @@ func TestTheOrgProjectionDoesNotAliasTheCompany(t *testing.T) {
 	}
 	company := fresh()
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: func() *config.Company { return company }},
+		Sources: queries.Sources{Company: companySource(t, company)},
 	})
 
 	projection, ok := a.Stream().Org().(api.OrgProjection)

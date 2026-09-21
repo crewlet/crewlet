@@ -64,11 +64,19 @@ type Sources struct {
 	// travelling to know what it means.
 	Health func(ctx context.Context) any
 
-	// Company reads the CURRENT epoch, for the questions answered from
-	// configuration rather than from a store. A function, not a value: an
-	// apply replaces the epoch, and an answer bound to the one this
-	// process booted on would describe a company that is no longer running.
-	Company func() *config.Company
+	// Company reads the CURRENT company, for the questions answered from
+	// the company rather than from a store: the SETTINGS a revision stores
+	// and the ORG this node derives from the chart's own log.
+	//
+	// A function, not a value: a company is republished by an activation
+	// AND by a chart write, and an answer bound to the one this process
+	// booted on would describe a company that is no longer running.
+	//
+	// ONE FUNCTION RETURNING BOTH HALVES, never two accessors. They move on
+	// different rhythms, so two reads can straddle a publish — and a screen
+	// that took the integrations from one and the roster from the next
+	// would describe a company that never existed.
+	Company func() (*config.Company, *org.Organization)
 
 	// Coord is the lease table: the fleet's one shared answer to "which
 	// node holds what". Nil leaves the fleet question unregistered.
@@ -634,15 +642,18 @@ func (s Sources) roleOf(id string) string {
 	if id == "" || s.Company == nil {
 		return id
 	}
-	company := s.Company()
+	company, roster := s.Company()
 	if company == nil {
 		return id
 	}
-	organization, err := company.Organization()
-	if err != nil {
+	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
+	// than re-resolved from the document: a stored revision carries no
+	// seats at all, so the derivation this replaced answered an EMPTY
+	// organization for every running company.
+	if roster == nil {
 		return id
 	}
-	if role := organization.AgentSeatByHandle(id); role != nil {
+	if role := roster.AgentSeatByHandle(id); role != nil {
 		return role.Name
 	}
 	return id
@@ -732,22 +743,24 @@ func (s Sources) RoleHandles() map[string]string {
 	if s.Company == nil {
 		return out
 	}
-	company := s.Company()
-	if company == nil {
+	_, roster := s.Company()
+	if roster == nil {
 		return out
 	}
-	for _, role := range company.Roles {
+	// EVERY SEAT THE COMPANY RUNS. This walked `company.Roles` — the
+	// document's TOP-LEVEL list — so a seat inside a unit had no
+	// cross-link in the rollup at all, which in a company with an org
+	// chart is most of them; and once a stored revision stopped carrying
+	// seats the map was empty for every company, so every per-agent row
+	// linked nowhere.
+	for role := range roster.AllRoles() {
 		if role.Name == "" {
 			continue
 		}
-		// The SAME derivation the org uses, not a re-spelling of it: a
+		// THE SEAT'S OWN HANDLE, not a re-spelling of the derivation: a
 		// handle that differs from the seat's real one is a cross-link
 		// to a page that does not exist.
-		handle := role.Handle
-		if handle == "" {
-			handle = org.Slugify(role.Name)
-		}
-		out[role.Name] = handle
+		out[role.Name] = role.Handle()
 	}
 	return out
 }

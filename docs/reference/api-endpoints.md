@@ -2027,7 +2027,7 @@ response.
   "derived": {
     "seats": [
       {
-        "handle": "cto", "name": "CTO", "kind": "agent", "placed_by_ref": false,
+        "handle": "cto", "name": "CTO", "kind": "agent",
         "manager": "founder", "managers": ["founder"],
         "reports": ["platform-engineer"], "auto_reports": ["platform-engineer"],
         "onboarding_chain": ["Engineering"]
@@ -2046,23 +2046,32 @@ response.
 
 In that document `manages: ["cto"]` is a seat **handle** and `manages: ["Platform"]` is a unit **key** — the unit declares no `id`, so its name is its key. A seat is always named by its handle and a unit always by its key; neither is ever named by a display name.
 
-**`derived` is the hierarchy the engine derives from that document**, so a
-client draws a chart rather than deriving one. Each rule in it is one a second
-implementation gets wrong: a handle is a slug with Go's own case mapping, a
-root seat carrying `unit:` moves into the unit that key names, a lead and a
-channel cascade to child units that set none, a `manages` entry keying a unit
-stands for the seats in its subtree, a unit's lead manages the members nobody
-else manages,
-and the primary manager is the first seat in the engine's own order that
-manages a seat. The dashboard derived these in TypeScript and had already
-diverged on three of them.
+**`derived` is the hierarchy the engine derives from the company it is
+RUNNING**, so a client draws a chart rather than deriving one. Each rule in it
+is one a second implementation gets wrong: a handle is a slug with Go's own
+case mapping, a lead and a channel cascade to child units that set none, a
+`manages` entry keying a unit stands for the seats in its subtree, a unit's
+lead manages the members nobody else manages, and the primary manager is the
+first seat in the engine's own order that manages a seat. The dashboard derived
+these in TypeScript and had already diverged on three of them.
+
+**From the org chart, not from the revision.** The seats and units are the
+[chart's own log](../concepts/chart-domain.md) and a stored revision carries
+neither, so this whole answer — the `roles:` and `units:` above it as well as
+`derived` — is cut from the company this node composed. Only the company's
+`name`, `mission`, `vision` and `policies` come from the revision, because
+those are the settings it does still hold.
 
 The fields above it stay as WRITTEN, so a reader can still tell a declared lead
 from an inherited one. Every list here may arrive as `null` (Go marshals a nil
-slice that way); a reader treats `null` as empty. The authored `path` and
-`unit_path` of each entry are omitted, because an anonymous reader is given no
-document to point into, and membership is each unit's `seats`; the same block
-with paths comes back from [a configuration write or dry run](#what-a-write-answers).
+slice that way); a reader treats `null` as empty. The authored `path`,
+`unit_path` and `placed_by_ref` of each entry are omitted, because they say
+where a seat was WRITTEN — a fact about a document an anonymous reader is given
+no way to point into, and one a company composed from chart rows cannot answer
+at all, since each row states its unit directly and nothing was moved by a
+reference. Membership is each unit's `seats`; the same block with paths comes
+back from [a configuration write or dry run](#what-a-write-answers), which
+reads an authored document.
 
 **What it carries, and nothing else.** The company's `name`, `mission`,
 `vision`, `policies` and `derived`; for each seat its `name`, `kind`, `handle`, `goal`,
@@ -2885,9 +2894,10 @@ screen's seat roster](#per-seat-setup), which is where a seat is acted on.
 
 `seats` lists the agents carrying their **own** identity on that surface: a
 Slack app, a Mattermost bot, a per-seat project or space, wherever they sit in
-the hierarchy. A seat in a unit is a seat: the list walks the whole tree, not
-just the top-level `roles:` block, which is by definition the seats belonging to
-no unit.
+the hierarchy. A seat in a unit is a seat: the list is read from the company's
+own [org chart](../concepts/chart-domain.md), not from the stored revision's
+`roles:` — a revision carries no seats at all, and the top-level block was by
+definition only the seats belonging to no unit.
 
 `routes` is the third of the same family: whether a **verified** delivery
 would wake a seat. The three fail independently, and an operator staring at a

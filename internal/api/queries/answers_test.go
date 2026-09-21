@@ -620,7 +620,7 @@ token_budget: 10000
 
 	r := registryOver(t, queries.Sources{
 		State:   livestate.New(),
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Budget:  budgets,
 	})
 	got := ask(t, r, "budgets", nil)
@@ -666,7 +666,7 @@ roles:
 token_budget: 10000
 `)
 	r := registryOver(t, queries.Sources{
-		State: livestate.New(), Company: func() *config.Company { return cfg },
+		State: livestate.New(), Company: companySource(t, cfg),
 	})
 	got := ask(t, r, "budgets", nil)
 	if got["durable"] != false {
@@ -716,7 +716,7 @@ token_budget: 10000
 
 	r := registryOver(t, queries.Sources{
 		State:   livestate.New(),
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Budget:  budgets,
 	})
 	got := ask(t, r, "budgets", nil)

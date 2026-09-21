@@ -50,7 +50,19 @@ type DerivedSeat struct {
 	UnitPath string `json:"unit_path,omitempty"`
 	// PlacedByRef is a seat written at the root that its `unit:` reference
 	// moved into a unit.
-	PlacedByRef bool `json:"placed_by_ref"`
+	//
+	// A FACT ABOUT A DOCUMENT, and therefore ABSENT rather than false for
+	// a company that has none. It says where a seat was WRITTEN versus
+	// where it ended up, and a company composed from the org chart's own
+	// rows was written nowhere: each row states its unit directly, so
+	// nothing was moved by a reference at all.
+	//
+	// A POINTER for exactly that reason. "This seat was not moved" and
+	// "there is no document to have moved it in" are different answers,
+	// and a plain bool collapses the second into the first — which is the
+	// shape that lets a reader act on a claim nothing made. See
+	// [DeriveFrom], which sets it on nothing, and [Derived.WithoutPaths].
+	PlacedByRef *bool `json:"placed_by_ref,omitempty"`
 	// Manager is the handle of the primary manager, the first seat in
 	// engine order whose manages lists this one ([org.Organization.Manager]),
 	// and empty for a seat nobody manages.
@@ -125,7 +137,48 @@ type DerivedUnit struct {
 // person fixing those problems needs to see it.
 func Derive(c *Company) Derived {
 	o, x := c.organization()
+	return deriveFrom(o, x)
+}
+
+// DeriveFrom is [Derive] over an organization that is already built — the
+// company VIEW a node composes from its chart rows.
+//
+// # Why the derivation has two entry points
+//
+// [Derive] answers about a DOCUMENT and can therefore say where each seat was
+// written; that is what `crewlet validate` and the guarded config reads use
+// the paths for. A running company's seats are rows on the chart's own log and
+// were written at no path at all, so this is the same derivation with the one
+// thing it cannot honestly answer left out — exactly what [Derived.WithoutPaths]
+// produces, and it is the form every live reader already asked for.
+//
+// It exists because the projection the dashboard renders went through the
+// document, and a stored revision carries no seats: every open screen was
+// shown a company with no org chart in it, derived cleanly from bytes that
+// were correct.
+func DeriveFrom(o *org.Organization) Derived {
+	if o == nil {
+		return Derived{}
+	}
+	return deriveFrom(o, nil)
+}
+
+// deriveFrom is the one derivation. `paths` is the document index, or nil for
+// an organization nobody authored a path for.
+func deriveFrom(o *org.Organization, paths *identityIndex) Derived {
 	var out Derived
+	at := func(seat *org.Role) Path {
+		if paths == nil {
+			return nil
+		}
+		return paths.seats[seat]
+	}
+	unitAt := func(u *org.Unit) Path {
+		if paths == nil {
+			return nil
+		}
+		return paths.units[u]
+	}
 
 	homes := make(map[*org.Role]*org.Unit)
 	for u := range o.AllUnits() {
@@ -136,7 +189,7 @@ func Derive(c *Company) Derived {
 
 	for r := range o.AllRoles() {
 		seat := DerivedSeat{
-			Path:   x.seats[r].String(),
+			Path:   at(r).String(),
 			Handle: r.Handle(),
 			Name:   r.Name,
 			Kind:   string(org.KindAgent),
@@ -144,11 +197,18 @@ func Derive(c *Company) Derived {
 		if r.IsHuman() {
 			seat.Kind = string(org.KindHuman)
 		}
-		if home := homes[r]; home != nil {
-			seat.UnitPath = x.units[home].String()
-			// Written at the root, sitting in a unit: only a unit
-			// reference moves a seat.
-			seat.PlacedByRef = len(x.seats[r]) > 0 && x.seats[r][0] == "roles"
+		home := homes[r]
+		if home != nil {
+			seat.UnitPath = unitAt(home).String()
+		}
+		if paths != nil {
+			// Written at the root and sitting in a unit: only a unit
+			// reference moves a seat. STATED FOR EVERY SEAT, including
+			// a genuine "no" for one that was not moved — and only
+			// where there is a document to have written it in, because
+			// absent is the answer for a company that has none.
+			moved := home != nil && len(at(r)) > 0 && at(r)[0] == "roles"
+			seat.PlacedByRef = &moved
 		}
 		if manager := o.Manager(r); manager != nil {
 			seat.Manager = manager.Handle()
@@ -177,7 +237,7 @@ func Derive(c *Company) Derived {
 
 	for u := range o.AllUnits() {
 		unit := DerivedUnit{
-			Path:             x.units[u].String(),
+			Path:             unitAt(u).String(),
 			ID:               u.Key(),
 			Name:             u.Name,
 			Type:             string(u.Type),

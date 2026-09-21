@@ -89,7 +89,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	setup := manager.DefaultSetup()
 	var servers map[string]sandbox.MCPServer
 	if gate != nil {
-		setup = append(setup, setupSteps(gate.Setup)...)
+		setup = append(setup, seatSetupSteps(gate.Setup)...)
 		servers = sandboxMCP(e.resolver(), company, l.seat, gate)
 	}
 	// THE SEAT'S OWN SERVERS PLUS THE BRIDGE. Both, because they answer
@@ -234,7 +234,7 @@ func agentPlacement(c *Company, key string) config.Placement {
 // maxTurnsFor is a seat's coding-round cap, nil-safe on a seat with no
 // sandbox block at all — which an agent-mode seat legitimately is: its
 // executor runs in a box whether or not it was ever offered run_sandbox.
-func maxTurnsFor(gate *config.RoleSandbox) *int {
+func maxTurnsFor(gate *org.RoleSandbox) *int {
 	if gate == nil {
 		return nil
 	}

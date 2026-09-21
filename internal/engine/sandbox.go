@@ -199,6 +199,8 @@ func resolvedOr(env *config.Resolver, value string) string {
 	return strings.TrimSpace(env.Value(value))
 }
 
+// setupSteps converts the PROVIDER-WIDE steps a `providers.sandbox` block
+// declares, which are settings and therefore config's.
 func setupSteps(steps []config.SandboxSetupStep) []sandbox.SetupStep {
 	if len(steps) == 0 {
 		return nil
@@ -208,6 +210,27 @@ func setupSteps(steps []config.SandboxSetupStep) []sandbox.SetupStep {
 		out = append(out, sandbox.SetupStep{
 			Name: s.Name, Files: s.Files, Commands: s.Commands,
 			Env: s.Env, Brief: s.Brief, TimeoutSeconds: s.Timeout(),
+		})
+	}
+	return out
+}
+
+// seatSetupSteps converts a SEAT's own steps, which ride the org chart.
+//
+// TWO CONVERTERS BECAUSE THERE ARE TWO SOURCES, and only one thing about them
+// could drift — what an unset timeout means — which is why that rule is
+// [org.SetupTimeout] and neither of these states it. Everything else here is
+// field-for-field and the compiler checks it.
+func seatSetupSteps(steps []org.SandboxSetupStep) []sandbox.SetupStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]sandbox.SetupStep, 0, len(steps))
+	for _, s := range steps {
+		out = append(out, sandbox.SetupStep{
+			Name: s.Name, Files: s.Files, Commands: s.Commands,
+			Env: s.Env, Brief: s.Brief,
+			TimeoutSeconds: org.SetupTimeout(s.TimeoutSeconds),
 		})
 	}
 	return out
@@ -873,7 +896,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		// lose its gate across an apply mid-turn.
 		return sandbox.LaunchResult{}, fmt.Errorf("this seat's sandbox is not enabled")
 	}
-	if gate.RunIn == config.PlacementSelf {
+	if config.Placement(gate.RunIn) == config.PlacementSelf {
 		// `self` means this seat's code work rides its own executor run,
 		// which is a coding CLI in agent mode and already holds a shell,
 		// an editor and a checkout. A second box beside it would give the
@@ -911,7 +934,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		reuse = existing.SandboxID
 	}
 
-	setup := append(manager.DefaultSetup(), setupSteps(gate.Setup)...)
+	setup := append(manager.DefaultSetup(), seatSetupSteps(gate.Setup)...)
 	servers := sandboxMCP(l.engine.resolver(), company, seat, gate)
 	// The seat's own model and login, resolved from llm_sandbox — which
 	// falls back to `llm`, because sandboxed work IS this seat's own work
@@ -1043,7 +1066,7 @@ func sandboxHeadroom(ctx context.Context, remaining runner.Remaining, floor int)
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
-func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.RoleSandbox) map[string]sandbox.MCPServer {
+func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *org.RoleSandbox) map[string]sandbox.MCPServer {
 	if len(gate.MCP.Servers) == 0 {
 		return nil
 	}
@@ -1082,7 +1105,7 @@ func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.R
 // role.sandbox was ever written, and reading the override off a block that
 // does not exist panicked that seat's first launch — after the bridge session
 // was opened and before anything would have closed it.
-func pauseTTL(gate *config.RoleSandbox) *time.Duration {
+func pauseTTL(gate *org.RoleSandbox) *time.Duration {
 	if gate == nil || gate.PauseTTLSeconds == nil || *gate.PauseTTLSeconds < 0 {
 		return nil
 	}
@@ -1101,34 +1124,29 @@ func pauseTTL(gate *config.RoleSandbox) *time.Duration {
 //
 // A handle is unique by a RUNNABLE rule instead: a company carrying two is
 // refused outright, so there is no document on which this can be ambiguous.
-func seatSandbox(c *Company, handle string) *config.RoleSandbox {
-	if c == nil || c.Config == nil {
+// AN INDEX, NOT A WALK, because the seat is what carries the block now.
+//
+// It used to walk the company DOCUMENT — first only the top-level `roles:`,
+// which answered nil for every seat in a unit and refused each of them with
+// "this seat's sandbox is not enabled" on a seat whose block said otherwise;
+// then every seat at any depth, breaking at the first match. Both were
+// walking the wrong thing: a stored revision carries no seats at all, so the
+// walk returned nil for EVERY seat and code work became silently unavailable
+// to the whole company.
+//
+// The seat's own [org.Role] holds it, so this is a map lookup on the org the
+// company is running — and the "two seats with one handle" hazard the walk
+// had to reason about cannot arise, because a handle is the seat's identity
+// in that index.
+func seatSandbox(c *Company, handle string) *org.RoleSandbox {
+	if c == nil || c.Org == nil {
 		return nil
 	}
-	// EVERY SEAT, AT ANY DEPTH. This walked only the top-level `roles:`,
-	// so a seat declared under `units:` — which, in a company with an org
-	// chart, is most of them — always answered nil. The tool then refused
-	// it with "this seat's sandbox is not enabled" on a seat whose block
-	// says otherwise: code work was silently unavailable to every unit
-	// member, and the message pointed at the one thing that was correct.
-	//
-	// A SEPARATE found FLAG, not the block itself as a sentinel: a seat
-	// that exists and wrote no `sandbox:` block is a nil block, which is
-	// the same value a name nobody holds returns. Overloading the two
-	// meant the walk kept looking after it had its answer, and would have
-	// returned a LATER seat's block for an earlier one of the same name.
-	// THE FIRST MATCH, AND THEN STOP. The walk is an iterator precisely so
-	// this can break: a callback had no way to say "found it", so every
-	// launch ran the whole org chart to the end — and the only way to
-	// track the answer was the nil block itself, which cannot tell a seat
-	// that wrote none from a name nobody holds, so a later seat of the
-	// same name would have had its block returned for this one.
-	for role := range c.Config.EachRole() {
-		if role.Seat().Handle() == handle {
-			return role.Sandbox
-		}
+	seat := c.Org.Role(handle)
+	if seat == nil {
+		return nil
 	}
-	return nil
+	return seat.Sandbox
 }
 
 // sandboxEnv assembles the run environment.
@@ -1143,7 +1161,7 @@ func seatSandbox(c *Company, handle string) *config.RoleSandbox {
 // Precedence, later winning: identity, then the setup steps' contributions,
 // then the seat's own env — so an operator's explicit value always beats a
 // step's default.
-func (e *Engine) sandboxEnv(seat *org.Role, gate *config.RoleSandbox, setup []sandbox.SetupStep) map[string]string {
+func (e *Engine) sandboxEnv(seat *org.Role, gate *org.RoleSandbox, setup []sandbox.SetupStep) map[string]string {
 	env := map[string]string{}
 	if handle := seat.Handle(); handle != "" {
 		env["CREWLET_AGENT_HANDLE"] = handle

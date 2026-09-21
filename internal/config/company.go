@@ -253,7 +253,7 @@ func (c *Company) validateUnitIDs() error {
 // runs exactly as it did.
 func (c *Company) validateHumanSeatApps() error {
 	var p problems
-	for role, path := range c.EachRole() {
+	for role, path := range c.eachRole() {
 		if role.Kind != org.KindHuman || role.Integrations.GitHub == nil {
 			continue
 		}
@@ -286,7 +286,7 @@ func (c *Company) validateSetupStepNames() error {
 	if c.Providers.Sandbox != nil {
 		p.wrap(uniqueSetupStepNames(at(at(field("providers"), "sandbox"), "setup"), c.Providers.Sandbox.Setup))
 	}
-	for role, path := range c.EachRole() {
+	for role, path := range c.eachRole() {
 		if role.Sandbox != nil {
 			p.wrap(uniqueSetupStepNames(at(at(path, "sandbox"), "setup"), role.Sandbox.Setup))
 		}
@@ -393,7 +393,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	}
 	agents, handles := 0, make([]string, 0, 8)
 	routed := false
-	for role, path := range c.EachRole() {
+	for role, path := range c.eachRole() {
 		seat := role.Seat()
 		if seat.Handle() == DatadogIgnore {
 			p.add(at(path, "handle"), ErrUnknownValue,
@@ -949,7 +949,7 @@ func (c *Company) VectorsEnabled() bool {
 // Applied to EVERY seat in the document, at any depth. Nearly all of a real
 // company's roles live inside units, which nest arbitrarily — so a rule that
 // walked the root `roles:` list alone left the typo invisible exactly where
-// it is most likely to be written. The walk is [Company.EachRole] rather than
+// it is most likely to be written. The walk is [Company.eachRole] rather than
 // a loop here, so the next whole-document rule about seats inherits it.
 //
 // Skipped entirely when providers.llm is empty. A company with no models is a
@@ -966,7 +966,7 @@ func (c *Company) validateProviderKeys() error {
 	}
 	known := slices.Sorted(maps.Keys(c.Providers.LLM))
 
-	for role, path := range c.EachRole() {
+	for role, path := range c.eachRole() {
 		// Both written surfaces are checked, and each is reported at the
 		// path the operator typed. Validating the RESOLVED chain instead
 		// would hide half of them: the flat field wins over the mapping,
@@ -1078,8 +1078,8 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 	}
 }
 
-// EachRole yields EVERY seat in the company, with the path an operator typed:
-// the top-level `roles:` and every seat inside `units:`, to any depth.
+// eachRole yields EVERY seat this DOCUMENT declares, with the path an operator
+// typed: the top-level `roles:` and every seat inside `units:`, to any depth.
 //
 // It exists because the walk was written inline once and covered only the
 // top-level list, so a cross-field rule silently exempted every seat that
@@ -1089,15 +1089,26 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 // mistakes have no run-time symptom to find them by.
 //
 // AN ITERATOR rather than a callback, so a caller looking for ONE seat can
-// stop at it: the engine's per-seat sandbox lookup ran the whole org chart to
-// the end on every launch because a callback has no way to say "found it".
+// stop at it.
 //
-// EXPORTED because the ENGINE needs the same walk: a seat's sandbox block is
-// looked up by name at launch, and a lookup that stopped at the top level
-// answered nil for every seat in a unit — so run_sandbox refused each of them
-// with "this seat's sandbox is not enabled" on a seat whose block said
-// otherwise. One walker, so the two can never disagree about which seats exist.
-func (c *Company) EachRole() iter.Seq2[*Role, Path] {
+// # Why it is UNEXPORTED, and what that is protecting
+//
+// This walks the FILE. A company's seats are the org chart's own log now, and
+// a stored revision carries no `roles:` and no `units:` at all — so outside
+// this package the walk answers an EMPTY list for every running company, with
+// no error and no symptom: the party registry, the seat tool surfaces, the
+// per-seat webhook secrets, the code host's bot logins and the setup roster
+// each read a company with nobody in it and reported exactly that.
+//
+// The callers that remain are this package's own validators, and they are
+// correct: `crewlet validate` reads an authored file whole, and what they are
+// checking IS the document. Everything that needs the seats a company RUNS
+// reads [org.Organization] instead — the composed view, derived from the chart
+// rows this node has applied.
+//
+// So the unexport is the enforcement. Exported, "walk the document" and "walk
+// the company" were one call that meant two things, and the wrong one compiled.
+func (c *Company) eachRole() iter.Seq2[*Role, Path] {
 	return func(yield func(*Role, Path) bool) {
 		for i := range c.Roles {
 			if !yield(&c.Roles[i], idx(field("roles"), i)) {
@@ -1154,7 +1165,7 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 		}
 		reached[run] = where
 	}
-	for role, path := range c.EachRole() {
+	for role, path := range c.eachRole() {
 		gate := role.Sandbox
 		if gate == nil || !gate.Enabled || gate.RunIn == "" || !gate.RunIn.NeedsBackend() {
 			continue
@@ -1198,7 +1209,7 @@ func (c *Company) agentModeExecutorKeys() []string {
 		return nil
 	}
 	seen := map[string]struct{}{}
-	for role := range c.EachRole() {
+	for role := range c.eachRole() {
 		key, entry, resolved := c.executorProvider(role, fallback)
 		if !resolved || !entry.CLI.AgentMode() {
 			continue
@@ -1289,7 +1300,7 @@ func (c *Company) validateSandboxPlacement() error {
 	var p problems
 	catalogue := c.Providers.Sandbox
 
-	for role, path := range c.EachRole() {
+	for role, path := range c.eachRole() {
 		gate := role.Sandbox
 		if gate == nil || !gate.Enabled {
 			continue

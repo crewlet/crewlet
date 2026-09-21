@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -25,3 +26,26 @@ func RefreshChartForTest(ctx context.Context, e *Engine) (org.ViewPosition, erro
 // makes the activation stamp mean something: a case asserting the recorded
 // position against a constant would pass for a stamp that wrote any number.
 func (e *Engine) ViewPosition() (org.ViewPosition, bool) { return e.epoch.viewAt() }
+
+// eachAuthoredSeat walks every seat a DOCUMENT declares, at any depth.
+//
+// A fixture that edits a company file wants the FILE's walk, and config's own
+// is unexported for the reason this comment exists: outside that package,
+// "walk the document" and "walk the company" are different questions, and
+// only one of them is answered by `roles:` and `units:`. A test about the
+// running company reads [Company.Org] instead.
+func eachAuthoredSeat(c *config.Company, visit func(*config.Role)) {
+	for i := range c.Roles {
+		visit(&c.Roles[i])
+	}
+	var walk func([]config.Unit)
+	walk = func(units []config.Unit) {
+		for i := range units {
+			for j := range units[i].Roles {
+				visit(&units[i].Roles[j])
+			}
+			walk(units[i].Children)
+		}
+	}
+	walk(c.Units)
+}

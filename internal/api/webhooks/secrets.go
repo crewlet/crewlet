@@ -202,29 +202,6 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		if in.Datadog != nil && in.Datadog.Enabled {
 			s.Datadog = resolve(in.Datadog.WebhookToken)
 		}
-		// PER SEAT, READ FROM THE CONFIG rather than from the org model
-		// the way Slack's is, because a seat's GitHub App has no runtime
-		// identity to carry: it is written by the engine at conversion
-		// time and read back by the reconcile pass from this same
-		// document. Adding a second home for it would give the two
-		// readers something to disagree about.
-		//
-		// NOT GATED ON in.GitHub.Enabled. That switch turns off the
-		// ORGANIZATION's app and route; an agent's app is its own, and a
-		// company that only ever created per-agent ones has no
-		// `integrations.github` block to enable at all.
-		for role := range c.EachRole() {
-			app := role.Integrations.GitHub
-			if app == nil || !role.Seat().IsAgent() {
-				continue
-			}
-			if secret := resolve(app.WebhookSecret); secret != "" {
-				if s.GitHubSeat == nil {
-					s.GitHubSeat = map[string]string{}
-				}
-				s.GitHubSeat[role.Seat().Handle()] = secret
-			}
-		}
 	}
 	if o == nil {
 		return s
@@ -236,6 +213,30 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		// open a route that can only ever be a dead end.
 		if !role.IsAgent() {
 			continue
+		}
+		// THE SEAT'S OWN GITHUB APP, on the same walk as its Slack one
+		// and for the same reason: both are the seat's own credential
+		// for its own identity at a third-party app, and the seat is
+		// what the org model holds.
+		//
+		// It used to be read off the company DOCUMENT instead, on the
+		// reasoning that an app has no runtime identity to carry — and
+		// when a stored revision stopped carrying seats at all, that walk
+		// became a walk of nothing and every agent's deliveries were
+		// refused with no secret to verify against. The app rides the
+		// seat now (see [org.GitHubApp]).
+		//
+		// NOT GATED ON integrations.github.enabled. That switch turns off
+		// the ORGANIZATION's app and route; an agent's app is its own,
+		// and a company that only ever created per-agent ones has no
+		// `integrations.github` block to enable at all.
+		if app := role.GitHub; app != nil {
+			if secret := resolve(app.WebhookSecret); secret != "" {
+				if s.GitHubSeat == nil {
+					s.GitHubSeat = map[string]string{}
+				}
+				s.GitHubSeat[role.Handle()] = secret
+			}
 		}
 		secret := resolve(role.Slack.SigningSecret)
 		if secret == "" {

@@ -46,7 +46,7 @@ func restApp(t *testing.T) *api.App {
 	}
 	return newApp(t, api.Options{
 		Runtime: &fakeRuntime{},
-		Sources: queries.Sources{Company: func() *config.Company { return c }},
+		Sources: queries.Sources{Company: companySource(t, c)},
 	})
 }
 

@@ -37,7 +37,7 @@ func viewerSources(t *testing.T, work *stubWork) queries.Sources {
 		t.Fatalf("parse: %v", err)
 	}
 	return queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Work:    work,
 	}
 }

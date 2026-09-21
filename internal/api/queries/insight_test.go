@@ -397,7 +397,7 @@ func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 	// configured, so "none is" is a fact the company establishes on its own —
 	// and it is a far more useful answer than an unknown query.
 	none := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return &config.Company{Name: "Acme"} },
+		Company: companySource(t, &config.Company{Name: "Acme"}),
 	}, "knowledge", map[string]any{"q": "anything"}))
 	if none["available"] != false {
 		t.Errorf("no backend, yet the search reports itself available: %v", none)
@@ -414,7 +414,7 @@ func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 	// rather than answering an empty search as though it had run.
 	gated := asMap(t, answer(t, queries.Sources{
 		Knowledge: func() knowledge.Searcher { return stubSearcher{} },
-		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
+		Company:   companySource(t, &config.Company{Name: "Acme"}),
 	}, "knowledge", map[string]any{"q": "anything"}))
 	if gated["available"] != false || gated["note"] == "" {
 		t.Errorf("a gated search does not explain itself: %v", gated)
@@ -433,7 +433,7 @@ func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 	// And with no company at all, the answer names THAT rather than blaming
 	// the backend.
 	unconfigured := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return nil },
+		Company: companySource(t, nil),
 	}, "knowledge", map[string]any{"q": "anything"}))
 	if unconfigured["available"] != false {
 		t.Errorf("no company, yet the search reports itself available: %v", unconfigured)

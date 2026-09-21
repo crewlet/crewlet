@@ -36,7 +36,7 @@ func drainingApp(t *testing.T, draining bool) *api.App {
 			Secrets:   func() webhooks.Secrets { return webhooks.Secrets{GitHub: "gh-secret"} },
 			Publisher: memory.New(),
 		},
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 	})
 	return a
 }

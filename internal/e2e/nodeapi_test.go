@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // serveAPI is the API half of a node, wired to the engine beside it the way
@@ -74,11 +75,11 @@ func wireAPI(
 	// as cmd/crewlet reads them: an apply replaces the epoch, so a document
 	// captured here would describe a company the node no longer runs.
 	nodeID := e.Node().ID()
-	company := func() *config.Company {
+	company := func() (*config.Company, *org.Organization) {
 		if current := e.Company(); current != nil {
-			return current.Config
+			return current.Config, current.Org
 		}
-		return nil
+		return nil, nil
 	}
 	// THE RECONCILER, because the health surface reports this node's config
 	// posture and its applied epoch, and the reconciler is what knows both.

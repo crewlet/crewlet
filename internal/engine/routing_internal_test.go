@@ -117,9 +117,9 @@ func TestASeatWithNoCredentialIsNotReportedAsUnresolved(t *testing.T) {
 	e, company := routingEngine(t, srv.URL)
 	// Drop the one credentialled seat's token, leaving a company whose
 	// seats simply do not use the tracker.
-	for role := range company.Config.EachRole() {
+	eachAuthoredSeat(company.Config, func(role *config.Role) {
 		delete(role.MCPEnv, "jira")
-	}
+	})
 	rebuilt, err := NewCompanyWith(company.Config, e.resolver())
 	if err != nil {
 		t.Fatalf("company: %v", err)

@@ -113,7 +113,7 @@ func TestSchedulesProjectsWhatIsConfigured(t *testing.T) {
 	// just added shows immediately rather than after its first fire.
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "schedules", nil))
 
 	rows, _ := body["schedules"].([]any)
@@ -174,7 +174,7 @@ func TestSchedulesCarriesTheDispatchHistory(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Runs: &fakeRuns{runs: []schedule.Run{{
 			FireKey: schedule.FireKey{
 				Scope: "role", ScopeID: "ceo", ScheduleName: "standup",
@@ -205,7 +205,7 @@ func TestAnUnreadableHistoryDoesNotBlankTheSchedules(t *testing.T) {
 	// blank the page over its least important part.
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Runs:    &fakeRuns{err: context.DeadlineExceeded},
 	}, "schedules", nil))
 
@@ -223,7 +223,7 @@ func TestIntegrationsSaysHowEachSurfaceIsWired(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -258,7 +258,7 @@ func TestAMissingSecretIsReportedAsFalseNotAsAbsent(t *testing.T) {
 	cfg := company(t)
 	cfg.Integrations.GitLab.SigningSecret = ""
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -293,7 +293,7 @@ func TestASurfaceWithNoSecretReportsNull(t *testing.T) {
 	// the field got there.
 	cfg.Integrations.ForgeAppID = "app-123"
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 
 	want := map[string]bool{"forge": false, "mattermost": false}
@@ -347,7 +347,7 @@ func TestFleetReadsTheLeaseTable(t *testing.T) {
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	nodes, _ := body["nodes"].([]any)
@@ -393,7 +393,7 @@ func TestFleetNamesTheSeatsNoNodeCanRun(t *testing.T) {
 
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	unplaceable, _ := body["unplaceable"].([]any)
@@ -422,7 +422,7 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	unmanned, _ := body["unmanned_roles"].([]any)
@@ -459,7 +459,7 @@ func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
 	queries.Register(r, queries.Sources{
 		Coord:   coordmemory.New(),
 		NodeID:  "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	})
 	for _, what := range []string{"fleet", "integrations"} {
 		// REGISTERED AT ALL, first. A question this registry does not
@@ -726,7 +726,7 @@ func TestASeatOnAnIngressOnlyNodeIsStillUnplaceable(t *testing.T) {
 
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "edge",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	unplaceable, _ := body["unplaceable"].([]any)
@@ -759,7 +759,7 @@ func TestASeatThatIsHeldIsNotReportedUnplaceable(t *testing.T) {
 
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	for _, entry := range body["unplaceable"].([]any) {
@@ -798,7 +798,7 @@ func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "fleet", nil))
 
 	nodes, _ := body["nodes"].([]any)
@@ -837,7 +837,7 @@ func TestIntegrationsTellsRoutedFromMerelyConfigured(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		// The engine names gitlab and nothing else, so mattermost is the
 		// configured-but-unrouted side of the comparison.
 		Routed: func(context.Context) []string { return []string{"gitlab"} },
@@ -881,7 +881,7 @@ integrations:
 		t.Fatalf("parse: %v", err)
 	}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		// The engine resolved gitlab's secret and not jira's — which is
 		// exactly what an unset ${VAR} on one of them looks like.
 		Verifiable: func(context.Context) []string { return []string{"gitlab"} },
@@ -917,7 +917,7 @@ func TestANodeThatCannotSayWhatResolvedAnswersNull(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		// No Verifiable: the shape of a node whose engine has not started
 		// its notification service yet.
 	}, "integrations", nil))
@@ -948,7 +948,7 @@ func TestANodeThatCannotSayWhatRoutesAnswersNull(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		// No Routed: nothing has registered a parser yet.
 	}, "integrations", nil))
 
@@ -976,7 +976,7 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Routed:  func(context.Context) []string { return []string{} },
 	}, "integrations", nil))
 
@@ -1043,7 +1043,7 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 		URL: "https://jira.example.com", Token: "t", WebhookSecret: "jr",
 	}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Routed:  func(context.Context) []string { return []string{"gitlab"} },
 	}, "integrations", nil))
 
@@ -1194,7 +1194,7 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: log,
+		Company: companySource(t, cfg), Events: log,
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	byKind := map[string]map[string]any{}
@@ -1224,7 +1224,7 @@ func TestUncountedOutcomesAreNullRatherThanZero(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	for _, row := range rows {
@@ -1257,7 +1257,7 @@ func TestAnUnreadableEventLogReportsNullOutcomes(t *testing.T) {
 	}
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: log,
+		Company: companySource(t, cfg), Events: log,
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	if len(rows) == 0 {
@@ -1289,7 +1289,7 @@ func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 	t.Run("cannot say", func(t *testing.T) {
 		t.Parallel()
 		rows := integrationRows(t, queries.Sources{
-			Company: func() *config.Company { return cfg },
+			Company: companySource(t, cfg),
 		})
 		for kind, row := range rows {
 			if got, present := row["reconcile"]; !present || got != nil {
@@ -1302,7 +1302,7 @@ func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 	t.Run("a finding", func(t *testing.T) {
 		t.Parallel()
 		rows := integrationRows(t, queries.Sources{
-			Company: func() *config.Company { return cfg },
+			Company: companySource(t, cfg),
 			Reconciles: func(context.Context) []integration.State {
 				return []integration.State{{
 					Kind: integration.KindGitLab,
@@ -1394,9 +1394,12 @@ func integrationRows(t *testing.T, sources queries.Sources) map[string]map[strin
 // answered an empty seat list, and a zero count, for every one of them: the
 // Slack row then reported no per-seat app on a company running seven, and its
 // secret_present was computed from a count that was always zero while the
-// routes verified fine. The walk is company.EachRole, which is exported for
-// exactly this and whose own doc records the first time a top-level-only
-// lookup shipped.
+// routes verified fine.
+//
+// The walk is the COMPANY'S OWN ORG now, which is the same rule one step
+// further on: a stored revision carries no `roles:` and no `units:` at all,
+// so even the whole-document walk that fixed this answers nothing for a
+// running company. What a seat carries is on the seat.
 func TestSeatsInUnitsAreReported(t *testing.T) {
 	t.Parallel()
 	const doc = `
@@ -1441,7 +1444,7 @@ units:
 		t.Fatalf("parse: %v", err)
 	}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -1484,7 +1487,7 @@ func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
 	// comparison is the only thing that can say the address moved.
 	cfg.Integrations.Slack = &config.Slack{}
 	body := asMap(t, answer(t, queries.Sources{
-		Company:    func() *config.Company { return cfg },
+		Company:    companySource(t, cfg),
 		PublicBase: func() string { return "https://now.example.com" },
 		Reconciles: func(context.Context) []integration.State {
 			return []integration.State{
@@ -1531,7 +1534,7 @@ func TestAReferencePublicBaseIsComparedResolved(t *testing.T) {
 	cfg.Integrations.PublicBaseURL = "${PUBLIC_URL}"
 	cfg.Integrations.Slack = &config.Slack{}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		// What the node's own chain reads the reference as, which is what
 		// the passes registered with.
 		PublicBase: func() string { return "https://now.example.com" },
@@ -1569,7 +1572,7 @@ func TestAnUnknowablePublicBaseLeavesTheAnswerNull(t *testing.T) {
 	cfg.Integrations.PublicBaseURL = "https://now.example.com"
 	cfg.Integrations.Slack = &config.Slack{}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		// PublicBase deliberately unset: this process cannot say.
 		Reconciles: func(context.Context) []integration.State {
 			return []integration.State{
@@ -1606,7 +1609,7 @@ func TestAnUnrecordedEndpointIsNullRatherThanMoved(t *testing.T) {
 	cfg := company(t)
 	cfg.Integrations.PublicBaseURL = "https://now.example.com"
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Reconciles: func(context.Context) []integration.State {
 			return []integration.State{{Kind: integration.KindGitLab}}
 		},
@@ -1648,7 +1651,7 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 	cfg.Integrations.Atlassian = &config.Atlassian{OrgID: "acme"}
 
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -1689,7 +1692,7 @@ func TestTheAtlassianOrganizationClaimsNoIngress(t *testing.T) {
 		OrgID: "f1240761-c455-41b5-a7f5-4a64f9c6e729", APIKey: "${ATLASSIAN_API_KEY}",
 	}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		// BOTH KNOWN, so a null here is this surface's own answer rather
 		// than a process that could not say: with these nil every row
 		// reports null and the test would pass over the old code too.
@@ -1742,7 +1745,7 @@ func TestTheForgeRelayRoutesAsTheProductItRelays(t *testing.T) {
 		cfg := company(t)
 		cfg.Integrations.ForgeAppID = "ari:cloud:ecosystem::app/a1b2"
 		body := asMap(t, answer(t, queries.Sources{
-			Company: func() *config.Company { return cfg },
+			Company: companySource(t, cfg),
 			Routed:  func(context.Context) []string { return routed },
 		}, "integrations", nil))
 		rows, _ := body["integrations"].([]any)
@@ -1786,7 +1789,7 @@ func TestMattermostStillReportsWhetherItRoutes(t *testing.T) {
 	cfg := company(t)
 	cfg.Integrations.Mattermost = &config.Mattermost{URL: "https://chat.example.com", Team: "acme"}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Routed:  func(context.Context) []string { return []string{"mattermost"} },
 	}, "integrations", nil))
 
@@ -1828,7 +1831,7 @@ func TestARowNeedsTheBlockThatRoutesItRatherThanALeftoverSecret(t *testing.T) {
 	rowFor := func(t *testing.T, cfg *config.Company, kind string) map[string]any {
 		t.Helper()
 		body := asMap(t, answer(t, queries.Sources{
-			Company: func() *config.Company { return cfg },
+			Company: companySource(t, cfg),
 		}, "integrations", nil))
 		rows, _ := body["integrations"].([]any)
 		for _, row := range rows {
@@ -1843,13 +1846,16 @@ func TestARowNeedsTheBlockThatRoutesItRatherThanALeftoverSecret(t *testing.T) {
 	// as the one fact it is about.
 	firstAgent := func(t *testing.T, cfg *config.Company) *config.Role {
 		t.Helper()
-		for role := range cfg.EachRole() {
-			if role.Seat().IsAgent() {
-				return role
+		var found *config.Role
+		eachAuthoredSeat(cfg, func(role *config.Role) {
+			if found == nil && role.Seat().IsAgent() {
+				found = role
 			}
+		})
+		if found == nil {
+			t.Fatal("the fixture has no agent seat")
 		}
-		t.Fatal("the fixture has no agent seat")
-		return nil
+		return found
 	}
 
 	t.Run("github keeps its row while the block enables it", func(t *testing.T) {
@@ -1948,9 +1954,9 @@ func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
 	cfg.Integrations.GitHub = nil
 	cfg.Integrations.GitLab = nil
 	cfg.Integrations.Datadog = nil
-	for role := range cfg.EachRole() {
+	eachAuthoredSeat(cfg, func(role *config.Role) {
 		if !role.Seat().IsAgent() {
-			continue
+			return
 		}
 		role.Integrations.Slack = &config.RoleSlack{
 			BotToken: "${BOT}", SigningSecret: "${SIG}",
@@ -1959,9 +1965,9 @@ func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
 			AppID: 7, AppSlug: "acme-ceo", InstallationID: 9,
 			PrivateKey: "${PEM}", WebhookSecret: "${HOOK}",
 		}
-	}
+	})
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	for _, row := range rows {

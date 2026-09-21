@@ -90,14 +90,14 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		})
 		return
 	}
-	company := s.company()
+	company, roster := s.company()
 	if company == nil {
 		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
-	state, ok := s.state(company, kind)
+	state, ok := s.state(company, roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
@@ -440,7 +440,7 @@ func (s *Service) record(ctx context.Context, kind integration.Kind, run *setup.
 	// keeps that address current — the same three-way rule the loop applies,
 	// through the same helper, so a row cannot mean one thing when a tick
 	// wrote it and another when a button did.
-	if company := s.company(); company != nil {
+	if company, _ := s.company(); company != nil {
 		integration.StampEndpoint(&next, kind, company.Integrations.WebhookBase(s.resolve))
 	}
 	if forget {

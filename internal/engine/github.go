@@ -93,9 +93,8 @@ func (g *githubIdentities) register(reg *notify.Registry, c *Company, env *confi
 	// `[bot]`. Nothing relates them, and the registry is a bijection per
 	// namespace, so the bot login goes in the companion namespace that
 	// exists for exactly this — the same shape Slack and Mattermost use.
-	for role := range c.Config.EachRole() {
-		seat := role.Seat()
-		app := role.Integrations.GitHub
+	for seat := range c.Org.AllRoles() {
+		app := seat.GitHub
 		if !seat.IsAgent() || app == nil {
 			continue
 		}
@@ -293,18 +292,22 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 	if company == nil {
 		return out
 	}
-	for role := range company.Config.EachRole() {
-		seat := role.Seat()
+	for seat := range company.Org.AllRoles() {
 		if !seat.IsAgent() {
 			continue
 		}
-		app := role.Integrations.GitHub
+		app := seat.GitHub
 		if app == nil {
 			continue
 		}
-		tier, _ := github.ParseTier(app.TierOrDefault())
+		// PARSED FROM THE RAW VALUE, not through a "or default" helper:
+		// [github.ParseTier] already answers the default for an empty
+		// string and for a typo, and it is the package that OWNS the
+		// closed set — so there is one place that decides what an
+		// unrecognised tier runs at.
+		tier, _ := github.ParseTier(app.Tier)
 		out = append(out, github.SeatApp{
-			Handle: seat.Handle(), Name: role.Name, Tier: tier, Repos: app.Repos,
+			Handle: seat.Handle(), Name: seat.Name, Tier: tier, Repos: app.Repos,
 			AppID: app.AppID, Slug: app.AppSlug,
 			InstallationID: app.InstallationID,
 			Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
@@ -349,9 +352,8 @@ func (g *githubIdentities) unresolved(c *Company, env *config.Resolver) []string
 	known := g.snapshot()
 
 	byApp := map[string]bool{}
-	for role := range c.Config.EachRole() {
-		seat := role.Seat()
-		if app := role.Integrations.GitHub; seat.IsAgent() && app != nil &&
+	for seat := range c.Org.AllRoles() {
+		if app := seat.GitHub; seat.IsAgent() && app != nil &&
 			github.NormalizeLogin(app.AppSlug) != "" {
 			byApp[seat.Handle()] = true
 		}

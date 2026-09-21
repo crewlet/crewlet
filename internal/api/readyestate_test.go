@@ -25,7 +25,7 @@ func TestReadyIs503WhileTheEstateCannotAnswerAtTheFloor(t *testing.T) {
 	t.Parallel()
 	var established atomic.Bool
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 		Estate: func(context.Context) (bool, string) {
 			if established.Load() {
 				return true, ""
@@ -67,7 +67,7 @@ func TestReadyIs503WhileTheEstateCannotAnswerAtTheFloor(t *testing.T) {
 // "assume the worst" — such a node would never be ready at all.
 func TestANodeWithNoReplicatedEstateIsReady(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{Sources: queries.Sources{Company: active()}})
+	a := newApp(t, api.Options{Sources: queries.Sources{Company: active(t)}})
 	if status, body := get(t, a, "/ready"); status != http.StatusOK {
 		t.Errorf("/ready = %d %v with no estate seam, want 200", status, body)
 	}
@@ -82,7 +82,7 @@ func TestANodeWithNoReplicatedEstateIsReady(t *testing.T) {
 func TestTheEstateNeverOutranksADrain(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			Posture: "serve", ShuttingDown: true,
 		}},

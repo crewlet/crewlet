@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/store"
@@ -85,7 +86,7 @@ type App struct {
 
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
-	company func() *config.Company
+	company func() (*config.Company, *org.Organization)
 
 	// estate answers whether the replicated estate can be read at the
 	// log's floor, for /ready. See [EstateFloor].
@@ -574,7 +575,10 @@ func (a *App) CORS() *auth.CORS { return a.cors }
 // shipped binary. Load-bearing on readiness: an unconfigured node cannot
 // verify a webhook signature, so it must leave rotation rather than answer
 // deliveries it would only reject.
-func (a *App) Configured() bool { return a.company() != nil }
+func (a *App) Configured() bool {
+	settings, _ := a.company()
+	return settings != nil
+}
 
 // Start brings up the shared health tick.
 //

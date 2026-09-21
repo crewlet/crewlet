@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -154,7 +153,7 @@ func everySeam(t *testing.T) queries.Sources {
 		State:    &livestate.LiveState{},
 		Events:   &store.EventLog{},
 		Health:   func(context.Context) any { return nil },
-		Company:  func() *config.Company { return cfg },
+		Company:  companySource(t, cfg),
 		Coord:    coordmemory.New(),
 		Plane:    coordmemory.NewFleet(),
 		Runs:     &fakeRuns{},

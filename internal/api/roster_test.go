@@ -54,7 +54,7 @@ func rosterApp(t *testing.T, runtime api.NodeRuntime) *api.App {
 	}
 	return newApp(t, api.Options{
 		Runtime: runtime,
-		Sources: queries.Sources{Company: func() *config.Company { return c }},
+		Sources: queries.Sources{Company: companySource(t, c)},
 	})
 }
 

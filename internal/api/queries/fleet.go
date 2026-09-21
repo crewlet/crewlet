@@ -226,13 +226,15 @@ func (s Sources) unplaceable(nodes, seats []map[string]any) []map[string]any {
 	if s.Company == nil {
 		return []map[string]any{}
 	}
-	company := s.Company()
+	company, roster := s.Company()
 	if company == nil {
 		return []map[string]any{}
 	}
-	organization, err := company.Organization()
-	if err != nil {
-		log.Warn("fleet_unplaceable_failed", "error", err)
+	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
+	// than re-resolved from the document: a stored revision carries no
+	// seats at all, so the derivation this replaced answered an EMPTY
+	// organization for every running company.
+	if roster == nil {
 		return []map[string]any{}
 	}
 	claimed := make(map[string]bool, len(seats))
@@ -257,7 +259,7 @@ func (s Sources) unplaceable(nodes, seats []map[string]any) []map[string]any {
 	}
 
 	out := []map[string]any{}
-	for role := range organization.AllRoles() {
+	for role := range roster.AllRoles() {
 		if !role.IsAgent() {
 			continue
 		}

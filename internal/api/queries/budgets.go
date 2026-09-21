@@ -36,14 +36,17 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 		"seats":   []any{},
 		"durable": false,
 	}
-	company := s.Company()
+	company, roster := s.Company()
 	if company == nil {
 		// No epoch: the caps are unknown, so nothing on this screen can be
 		// stated. Returning zeros with `durable: false` says exactly that.
 		return out, nil
 	}
-	organization, err := company.Organization()
-	if err != nil {
+	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
+	// than re-resolved from the document: a stored revision carries no
+	// seats at all, so the derivation this replaced answered an EMPTY
+	// organization for every running company.
+	if roster == nil {
 		//nolint:nilerr // An unbuildable org means nothing on this screen can
 		// be stated; zeros with durable:false say exactly that.
 		return out, nil
@@ -74,8 +77,8 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 	}
 
 	seats := []any{}
-	for role := range organization.AllRoles() {
-		id, ok := organization.AgentIDFor(role)
+	for role := range roster.AllRoles() {
+		id, ok := roster.AgentIDFor(role)
 		if !ok {
 			// A human seat spends nothing: it is addressable and never
 			// spawned, so a row for it would be a permanent zero a reader

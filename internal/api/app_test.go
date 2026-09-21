@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -84,9 +85,9 @@ func (noAppFlow) InstallURL(string) string                                 { ret
 
 // active is a company revision that is active, for the cases about a
 // configured node.
-func active() func() *config.Company {
-	company := &config.Company{Name: "Acme"}
-	return func() *config.Company { return company }
+func active(t *testing.T) func() (*config.Company, *org.Organization) {
+	t.Helper()
+	return companySource(t, &config.Company{Name: "Acme"})
 }
 
 // newApp builds the app over whatever a case names, filling each required
@@ -116,7 +117,7 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 		opts.Runtime = &fakeRuntime{state: api.RuntimeState{Posture: "serve"}}
 	}
 	if opts.Sources.Company == nil {
-		opts.Sources.Company = func() *config.Company { return nil }
+		opts.Sources.Company = companySource(t, nil)
 	}
 	if opts.Sources.Events == nil {
 		opts.Sources.Events = sharedEvents
@@ -247,7 +248,7 @@ func TestHealthCarriesTheEventPagingFloor(t *testing.T) {
 
 func TestAConfiguredNodeSaysSo(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{Sources: queries.Sources{Company: active()}})
+	a := newApp(t, api.Options{Sources: queries.Sources{Company: active(t)}})
 	_, body := get(t, a, "/health")
 	if body["status"] != api.StatusOK || body["configured"] != true {
 		t.Errorf("body = %v, want ok and configured", body)
@@ -261,7 +262,7 @@ func TestConfiguredFollowsTheLiveEpoch(t *testing.T) {
 	t.Parallel()
 	var current *config.Company
 	a := newApp(t, api.Options{Sources: queries.Sources{
-		Company: func() *config.Company { return current },
+		Company: liveCompanySource(t, func() *config.Company { return current }),
 	}})
 	if a.Configured() {
 		t.Fatal("a node with no active revision reported configured")
@@ -303,7 +304,7 @@ func TestAnIdleNodeReportsItsZerosRatherThanOmittingThem(t *testing.T) {
 func TestANodeReportsWhatOnlyTheEngineCanKnow(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			InFlight: 3, Posture: "serve", AppliedEpoch: 41,
 			StartedAt: "2026-06-14T11:00:00Z", Seats: []string{"ceo", "cto"},
@@ -337,7 +338,7 @@ func TestAStrandedSeatIsReportedWithHowLongItHasBeenStranded(t *testing.T) {
 			Posture: "serve", Seats: []string{"ceo"},
 			Unproven: map[string]time.Duration{"ceo": 90 * time.Second},
 		}},
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 	})
 	_, body := get(t, a, "/health")
 
@@ -358,7 +359,7 @@ func TestAHealthyNodeReportsNoStrandedSeats(t *testing.T) {
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			Posture: "serve", Seats: []string{"ceo"},
 		}},
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 	})
 	_, body := get(t, a, "/health")
 	if _, present := body["unproven_seconds"]; present {
@@ -371,7 +372,7 @@ func TestHealthStaysOKThroughADrain(t *testing.T) {
 	// An orchestrator watching liveness must not SIGKILL a node that is
 	// finishing its in-flight turns.
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			InFlight: 2, ShuttingDown: true, Posture: "serve",
 		}},
@@ -421,7 +422,7 @@ func TestADivergedPostureBecomesTheStatus(t *testing.T) {
 	// and "cannot apply epoch 41" call for opposite responses.
 	for _, posture := range []string{"shed", "stuck", "isolated"} {
 		a := newApp(t, api.Options{
-			Sources: queries.Sources{Company: active()},
+			Sources: queries.Sources{Company: active(t)},
 			Runtime: &fakeRuntime{state: api.RuntimeState{Posture: posture}},
 		})
 		if _, body := get(t, a, "/health"); body["status"] != posture {
@@ -431,7 +432,7 @@ func TestADivergedPostureBecomesTheStatus(t *testing.T) {
 	// And the two that are ordinary do NOT become a status.
 	for _, posture := range []string{"serve", "wait"} {
 		a := newApp(t, api.Options{
-			Sources: queries.Sources{Company: active()},
+			Sources: queries.Sources{Company: active(t)},
 			Runtime: &fakeRuntime{state: api.RuntimeState{Posture: posture}},
 		})
 		if _, body := get(t, a, "/health"); body["status"] != api.StatusOK {
@@ -471,7 +472,7 @@ func TestReadinessNeedsAConfiguredNode(t *testing.T) {
 	// would only reject the delivery.
 	var current *config.Company
 	a := newApp(t, api.Options{Sources: queries.Sources{
-		Company: func() *config.Company { return current },
+		Company: liveCompanySource(t, func() *config.Company { return current }),
 	}})
 	if status, body := get(t, a, "/ready"); status != http.StatusServiceUnavailable || body["ready"] != false {
 		t.Errorf("status = %d body = %v, want 503", status, body)
@@ -488,7 +489,7 @@ func TestADrainLeavesRotationImmediately(t *testing.T) {
 	// a drain starts while still reporting itself alive for the minutes
 	// its turns need to finish.
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 		Runtime: &fakeRuntime{state: api.RuntimeState{ShuttingDown: true, Posture: "serve"}},
 	})
 	status, body := get(t, a, "/ready")
@@ -525,9 +526,9 @@ func TestARefusedReadinessNamesItsReason(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			sources := queries.Sources{Company: func() *config.Company { return nil }}
+			sources := queries.Sources{Company: companySource(t, nil)}
 			if tc.configured {
-				sources.Company = active()
+				sources.Company = active(t)
 			}
 			a := newApp(t, api.Options{
 				Runtime: &fakeRuntime{state: tc.state}, Sources: sources,
@@ -559,7 +560,7 @@ func TestOnlyShedAndStuckTakeANodeOutOfRotation(t *testing.T) {
 		"shed": false, "stuck": false,
 	} {
 		a := newApp(t, api.Options{
-			Sources: queries.Sources{Company: active()},
+			Sources: queries.Sources{Company: active(t)},
 			Runtime: &fakeRuntime{state: api.RuntimeState{Posture: posture}},
 		})
 		status, body := get(t, a, "/ready")
@@ -585,7 +586,7 @@ func TestTheProbesAreReachableWithoutAToken(t *testing.T) {
 	b := config.DefaultBootstrap()
 	b.API.Auth.AllowAnonymousRead = false
 	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	a := newApp(t, api.Options{Bootstrap: &b, Sources: queries.Sources{Company: active()}})
+	a := newApp(t, api.Options{Bootstrap: &b, Sources: queries.Sources{Company: active(t)}})
 
 	for _, path := range []string{"/health", "/ready"} {
 		rec := httptest.NewRecorder()
@@ -706,7 +707,7 @@ func TestHealthNamesTheDomainsThisNodeRuns(t *testing.T) {
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			Posture: "serve", Domains: []string{"tracker", "pages"},
 		}},
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 	})
 	_, body := get(t, a, "/health")
 	got, ok := body["domains"].([]any)
@@ -727,7 +728,7 @@ func TestHealthSendsAnEmptyDomainListRatherThanNull(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
 		Runtime: &fakeRuntime{state: api.RuntimeState{Posture: "serve"}},
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 	})
 	_, body := get(t, a, "/health")
 	got, ok := body["domains"].([]any)

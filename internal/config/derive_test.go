@@ -96,7 +96,12 @@ func TestTheDerivedHierarchyWithoutPaths(t *testing.T) {
 	if full.Seats[0].Path != "roles[0]" || full.Seats[0].UnitPath != "units[0]" || full.Units[0].Path != "units[0]" {
 		t.Errorf("stripping the copy changed the original: %+v", full)
 	}
-	if !public.Seats[0].PlacedByRef || !reflect.DeepEqual(public.Units[0].Seats, []string{"designer"}) {
+	// PlacedByRef SURVIVES the strip, because the document it is a fact
+	// about is the one this derivation read: what goes is the path a
+	// reader has no way to point into, not the placement itself.
+	if placed := public.Seats[0].PlacedByRef; placed == nil || !*placed ||
+		!reflect.DeepEqual(public.Units[0].Seats, []string{"designer"}) {
+
 		t.Errorf("the anonymous form lost what it is for: %+v", public)
 	}
 	var empty config.Derived

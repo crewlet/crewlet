@@ -783,7 +783,7 @@ units:
 // seatTokens reads each seat's tracker token by handle, wherever it sits.
 func seatTokens(c *Company) map[string]string {
 	out := map[string]string{}
-	for role := range c.EachRole() {
+	for role := range c.eachRole() {
 		out[role.IdentityKey()] = role.MCPEnv["tracker"]["TOKEN"]
 	}
 	return out

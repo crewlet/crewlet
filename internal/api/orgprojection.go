@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The org projection: the company's identity and its seat and unit tree, as
@@ -126,37 +127,67 @@ type OrgUnit struct {
 // while the applied company is shared by every reader of the epoch, so an
 // aliased slice would make the projection only as immutable as every one of
 // those readers is careful.
-func orgProjection(company func() *config.Company) OrgProjection {
+func orgProjection(company func() (*config.Company, *org.Organization)) OrgProjection {
 	if company == nil {
 		return OrgProjection{}
 	}
-	c := company()
+	c, roster := company()
 	if c == nil {
 		return OrgProjection{}
 	}
-	derived := config.Derive(c).WithoutPaths()
+	// THE ROSTER, NOT THE DOCUMENT. The seats and units are the chart's own
+	// log now, and a stored revision carries neither — so a projection cut
+	// from `c.Roles` and `c.Units` showed every open screen a company with
+	// nobody in it, derived cleanly from bytes that were perfectly correct.
+	//
+	// The company's NAME, mission, vision and policies stay on the left:
+	// those are settings, and they are what a revision does still hold.
+	derived := config.DeriveFrom(roster)
 	return OrgProjection{
 		Name:     c.Name,
 		Mission:  c.Mission,
 		Vision:   c.Vision,
 		Policies: slices.Clone(c.Policies),
-		Roles:    orgSeats(c.Roles),
-		Units:    orgUnits(c.Units),
+		Roles:    orgSeats(rootSeats(roster)),
+		Units:    orgUnits(topUnits(roster)),
 		Derived:  &derived,
 	}
 }
 
-func orgSeats(roles []config.Role) []OrgSeat {
+// rootSeats is the seats that belong to no unit, which is what the `roles:`
+// half of this projection has always been.
+func rootSeats(o *org.Organization) []*org.Role {
+	if o == nil {
+		return nil
+	}
+	return o.Roles
+}
+
+// topUnits is the units at the top of the tree; each carries its own children.
+func topUnits(o *org.Organization) []*org.Unit {
+	if o == nil {
+		return nil
+	}
+	return o.Units
+}
+
+// orgSeats is the public half of a list of seats.
+//
+// THE DECLARED HANDLE rather than the derived one, because these fields are
+// the AS-WRITTEN half of the projection: `derived` beside them is where a
+// reader finds what the engine resolved, and a left-hand side that quietly
+// answered the resolved value would leave a client unable to tell a seat that
+// declared a handle from one whose handle came from its name.
+func orgSeats(roles []*org.Role) []OrgSeat {
 	if len(roles) == 0 {
 		return nil
 	}
 	out := make([]OrgSeat, 0, len(roles))
-	for i := range roles {
-		r := &roles[i]
+	for _, r := range roles {
 		out = append(out, OrgSeat{
 			Name:                 r.Name,
 			Kind:                 string(r.Kind),
-			Handle:               r.Handle,
+			Handle:               r.DeclaredHandle,
 			Goal:                 r.Goal,
 			Backstory:            r.Backstory,
 			Responsibilities:     slices.Clone(r.Responsibilities),
@@ -168,22 +199,27 @@ func orgSeats(roles []config.Role) []OrgSeat {
 	return out
 }
 
-func orgUnits(units []config.Unit) []OrgUnit {
+// orgUnits is the public half of a list of units, nesting to any depth.
+//
+// THE DECLARED LEAD AND CHANNEL, on [orgSeats]'s own reasoning: the cascade's
+// answers are in `derived`, which reports whether each was inherited, and a
+// left-hand side carrying the inherited value would make the two halves say
+// the same thing and lose the distinction.
+func orgUnits(units []*org.Unit) []OrgUnit {
 	if len(units) == 0 {
 		return nil
 	}
 	out := make([]OrgUnit, 0, len(units))
-	for i := range units {
-		u := &units[i]
+	for _, u := range units {
 		out = append(out, OrgUnit{
-			ID:        u.IdentityKey(),
+			ID:        u.Key(),
 			Name:      u.Name,
 			Type:      string(u.Type),
 			Purpose:   u.Purpose,
-			Lead:      u.Lead,
+			Lead:      u.DeclaredLead,
 			Goals:     slices.Clone(u.Goals),
-			Channel:   u.Channel,
-			Knowledge: slices.Clone(u.Knowledge),
+			Channel:   u.DeclaredChannel,
+			Knowledge: slices.Clone(u.KnowledgeRefs),
 			Roles:     orgSeats(u.Roles),
 			Children:  orgUnits(u.Children),
 		})

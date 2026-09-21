@@ -1,6 +1,7 @@
 package config
 
 import (
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -592,6 +593,21 @@ func (r *Role) Seat() *org.Role {
 			Channel:  m.Channel,
 		}
 	}
+	// AND THE CODE HOST'S, which this conversion used to DROP. Everything
+	// that needed a seat's app read it off the company document instead —
+	// and a stored revision carries no seats at all, so each of those walks
+	// silently became a walk of nothing. A seat is its chart rows plus this
+	// runtime document now, so a fact about a seat that is in neither is a
+	// fact the running company cannot see.
+	if g := r.Integrations.GitHub; g != nil {
+		seat.GitHub = &org.GitHubApp{
+			Tier: g.Tier, Repos: append([]string(nil), g.Repos...),
+			AppID: g.AppID, AppSlug: g.AppSlug,
+			InstallationID: g.InstallationID,
+			PrivateKey:     g.PrivateKey,
+			WebhookSecret:  g.WebhookSecret,
+		}
+	}
 	seat.Project = strings.TrimSpace(r.Project)
 	seat.Space = strings.TrimSpace(r.Space)
 
@@ -608,6 +624,8 @@ func (r *Role) Seat() *org.Role {
 			RunIn:           string(s.RunIn),
 			CodingAgent:     string(s.CodingAgent),
 			PauseTTLSeconds: s.PauseTTLSeconds,
+			MaxTurns:        s.MaxTurns,
+			Setup:           seatSetupSteps(s.Setup),
 			MCP:             org.RoleSandboxMCP{Servers: append([]string(nil), s.MCP.Servers...)},
 			Env:             env,
 		}
@@ -872,4 +890,28 @@ func (u *Unit) Unit() *org.Unit {
 		unit.Children = append(unit.Children, u.Children[i].Unit())
 	}
 	return unit
+}
+
+// seatSetupSteps converts this seat's own provisioning into the runtime shape.
+//
+// THE VALUES TRAVEL VERBATIM, `${VAR}` references included, because they are
+// resolved exactly once — with the rest of the sandbox environment, at launch.
+// Resolving here as well would double-resolve and silently mangle any secret
+// whose real value contains a literal `${...}`.
+func seatSetupSteps(in []SandboxSetupStep) []org.SandboxSetupStep {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]org.SandboxSetupStep, 0, len(in))
+	for _, step := range in {
+		out = append(out, org.SandboxSetupStep{
+			Name:           step.Name,
+			Files:          maps.Clone(step.Files),
+			Commands:       append([]string(nil), step.Commands...),
+			Env:            maps.Clone(step.Env),
+			Brief:          step.Brief,
+			TimeoutSeconds: step.TimeoutSeconds,
+		})
+	}
+	return out
 }

@@ -93,7 +93,7 @@ func TestTwoNodesWithTheSameKeyringAgreeOnAState(t *testing.T) {
 func TestTheServiceAlwaysHasAClock(t *testing.T) {
 	t.Parallel()
 	s := newService(t, setupapi.Options{
-		Company:   func() *config.Company { return &config.Company{} },
+		Company:   companySource(t, &config.Company{}),
 		StateKeys: runtoken.OneKey("k1", "material"),
 	})
 	// The flow mints a state, which reads the clock. A nil one panics

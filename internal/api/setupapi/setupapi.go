@@ -46,6 +46,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mattermost"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -100,9 +101,16 @@ const (
 // `resolved: null`, every disconnect or GitHub App refused) would present the
 // mistake as a deliberate answer.
 type Options struct {
-	// Company reads the ACTIVE document. It returns nil while no revision
-	// is active, which every route answers as such.
-	Company func() *config.Company
+	// Company reads the ACTIVE company: the SETTINGS a revision stores, and
+	// the ORG this node derives from the chart's own log. Both are nil
+	// while no revision is active, which every route answers as such.
+	//
+	// ONE FUNCTION RETURNING BOTH, never two accessors. A company is two
+	// halves that move on different rhythms — a revision is activated, a
+	// seat is hired — so two reads can straddle a publish, and a screen
+	// that took the integrations from one and the roster from the next
+	// would describe a company that never existed.
+	Company func() (*config.Company, *org.Organization)
 
 	// Config is the write path, the same one PATCH /config drives.
 	Config *configapi.Service
@@ -165,7 +173,7 @@ type Options struct {
 
 // Service serves /setup.
 type Service struct {
-	company func() *config.Company
+	company func() (*config.Company, *org.Organization)
 	config  *configapi.Service
 	writer  setup.Writer
 	resolve func(string) (string, bool)
@@ -525,7 +533,7 @@ const (
 
 // list serves GET /setup/integrations.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
-	company := s.company()
+	company, roster := s.company()
 	if company == nil {
 		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active; import one before connecting an integration",
@@ -534,7 +542,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	}
 	tools := make([]ToolState, 0, len(integration.Kinds))
 	for _, kind := range integration.Kinds {
-		state, ok := s.state(company, kind)
+		state, ok := s.state(company, roster, kind)
 		if !ok {
 			continue
 		}
@@ -612,14 +620,14 @@ func (s *Service) activeRevision(ctx context.Context) string {
 // one serves GET /setup/integrations/{kind}.
 func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company := s.company()
+	company, roster := s.company()
 	if company == nil {
 		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
-	state, ok := s.stateFor(r.Context(), company, kind)
+	state, ok := s.stateFor(r.Context(), company, roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
 			"detail": "this build serves no setup for " + string(kind),
@@ -636,7 +644,9 @@ func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 // AN EXPLICIT ABSENCE rather than an empty requirement list: a third-party app whose
 // requirements nobody has written down would otherwise answer "nothing is
 // missing" and the screen would show a Connect button that collects nothing.
-func (s *Service) state(company *config.Company, kind integration.Kind) (ToolState, bool) {
+func (s *Service) state(company *config.Company, roster *org.Organization,
+	kind integration.Kind,
+) (ToolState, bool) {
 	var reqs []setup.Requirement
 	var seats []SeatState
 	var configured, enabled bool
@@ -654,7 +664,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 			return datadog.AccountEmail(block.Provisioning, handle)
 		})
 		at.Configured = block != nil
-		seats = credentialSeats(company, s.resolve, at, "Datadog",
+		seats = credentialSeats(roster, s.resolve, at, "Datadog",
 			s.passes.Serves(kind), datadogAccess(block))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -665,7 +675,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// NOT credentialSeats. What a GitHub seat holds is an APP rather
 		// than a credential somebody pasted, so the question that roster
 		// answers is the wrong one here: see [githubSeats].
-		seats = githubSeats(company, s.resolve)
+		seats = githubSeats(company, roster, s.resolve)
 		managePath = github.ManagePath()
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -690,7 +700,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		at := atlassianAt(atlassian.ProductJira)
 		at.Identity = atlassianIdentity(s.resolve)
 		at.Configured = block != nil
-		seats = credentialSeats(company, s.resolve, at, "Jira", false)
+		seats = credentialSeats(roster, s.resolve, at, "Jira", false)
 		// THE ATLASSIAN BLOCKS HAVE NO `enabled` FIELD. Their presence IS
 		// the switch, which is why a disconnect removes the block rather
 		// than flipping a flag, and why enabled tracks configured here
@@ -703,7 +713,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		at := atlassianAt(atlassian.ProductConfluence)
 		at.Identity = atlassianIdentity(s.resolve)
 		at.Configured = block != nil
-		seats = credentialSeats(company, s.resolve, at, "Confluence", false)
+		seats = credentialSeats(roster, s.resolve, at, "Confluence", false)
 		configured, enabled = block != nil, block != nil
 	case integration.KindAtlassian:
 		block := company.Integrations.Atlassian
@@ -712,7 +722,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		at := atlassianAt(atlassian.ProductAny)
 		at.Identity = atlassianIdentity(s.resolve)
 		at.Configured = block != nil
-		seats = credentialSeats(company, s.resolve, at, "Atlassian",
+		seats = credentialSeats(roster, s.resolve, at, "Atlassian",
 			s.passes.Serves(kind))
 		configured, enabled = block != nil, block != nil
 	case integration.KindGitLab:
@@ -727,7 +737,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 			return gitlab.Username(block.Provisioning, handle)
 		})
 		at.Configured = block != nil
-		seats = credentialSeats(company, s.resolve, at, "GitLab",
+		seats = credentialSeats(roster, s.resolve, at, "GitLab",
 			s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -748,7 +758,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 			return "@" + mattermost.BotUsername(block.Provisioning, handle)
 		})
 		at.Configured = block != nil
-		seats = credentialSeats(company, s.resolve, at, "Mattermost",
+		seats = credentialSeats(roster, s.resolve, at, "Mattermost",
 			s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -759,7 +769,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		block := company.Integrations.Slack
 		summary = slack.Summary()
 		reqs = slack.CompanyRequirements(block)
-		seats = slackSeats(company, s.resolve, s.apps())
+		seats = slackSeats(company, roster, s.resolve, s.apps())
 		managePath = slack.ManagePath()
 		// CONFIGURED WHEN ANY SEAT IS, not when the company block exists:
 		// the block is optional settings, and a company with seven working
@@ -780,7 +790,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	// could not be chosen when it was not, and the field is required. The
 	// roster is the engine's own — deriving it in each app would be the same
 	// list written six times.
-	seatChoices(company, reqs)
+	seatChoices(roster, reqs)
 	// WHAT A REFERENCE CURRENTLY READS AS, for the links a form draws out of
 	// these values. Credentials are skipped inside. See [setup.FillEffective].
 	setup.FillEffective(reqs, s.resolve)
@@ -887,15 +897,15 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 // integrations. A card that says Connected over no agents is telling an
 // operator the half that cannot be acted on: the question is which of their
 // people can work in this app, and only a per-seat answer has it.
-func credentialSeats(company *config.Company, resolve func(string) (string, bool),
+func credentialSeats(roster *org.Organization, resolve func(string) (string, bool),
 	at seatCredentialAt, app string, provisions bool, access ...seatAccess,
 ) []SeatState {
 	out := []SeatState{}
-	for role := range company.EachRole() {
+	for role := range roster.AllRoles() {
 		// THROUGH THE SEAT, the same derivation slackSeats uses: a handle
 		// defaults from the name, and "is this a person" is the org model's
 		// question rather than the config's.
-		seat := role.Seat()
+		seat := role
 		if !seat.IsAgent() {
 			continue
 		}
@@ -980,7 +990,7 @@ func credentialSeats(company *config.Company, resolve func(string) (string, bool
 // seatAccess says how much one seat may do at an app, in the three values a
 // roster renders: the tier this engine speaks, its name, and the line saying
 // what it grants. Empty where the app grades nobody.
-type seatAccess func(role *config.Role) (tier, label, hint string)
+type seatAccess func(role *org.Role) (tier, label, hint string)
 
 // datadogAccess is the role a company's Datadog accounts are created holding.
 //
@@ -993,7 +1003,7 @@ func datadogAccess(cfg *config.Datadog) seatAccess {
 	if cfg != nil {
 		role = datadog.RoleName(cfg.Provisioning)
 	}
-	return func(*config.Role) (string, string, string) {
+	return func(*org.Role) (string, string, string) {
 		return datadog.TierOf(role), datadog.RoleLabel(role), datadog.RoleHint(role)
 	}
 }
@@ -1081,7 +1091,7 @@ func (s *Service) loopFindings(ctx context.Context, kind integration.Kind) []int
 type seatCredentialAt struct {
 	// Find reports the value this seat holds for the app and the address it
 	// sits at, both empty when the seat holds none.
-	Find func(role *config.Role) (stored, where string)
+	Find func(role *org.Role) (stored, where string)
 	// Address is where a seat holding nothing writes one. It is what the
 	// sentence telling an operator how to opt in names, so it is the
 	// address they edit rather than one a value was found at.
@@ -1095,7 +1105,7 @@ type seatCredentialAt struct {
 	//
 	// Nil derives the list from Find, which is right for every app that
 	// seals one value per seat.
-	Vars func(role *config.Role) []string
+	Vars func(role *org.Role) []string
 
 	// Configured reports whether the company declares this app at all.
 	//
@@ -1125,14 +1135,14 @@ type seatCredentialAt struct {
 	// ONLY OVER A WORKING SEAT, because a derived name is what the engine
 	// WOULD create rather than proof it did. Shown next to a seat with
 	// nothing sealed, it would name an account that may not exist.
-	Identity func(role *config.Role) string
+	Identity func(role *org.Role) string
 }
 
 // mcpEnvAt is the seat credential of an app whose token reaches a child MCP
 // server through the environment.
 func mcpEnvAt(envs, keys []string) seatCredentialAt {
 	return seatCredentialAt{
-		Find: func(role *config.Role) (string, string) {
+		Find: func(role *org.Role) (string, string) {
 			return seatCredential(role.MCPEnv, envs, keys)
 		},
 		Address: "mcp_env." + envs[0],
@@ -1187,13 +1197,14 @@ func mcpEnvAt(envs, keys []string) seatCredentialAt {
 // costs them the product.
 func (s *Service) stillUsedBySibling(
 	ctx context.Context, kind integration.Kind, company *config.Company,
+	roster *org.Organization,
 ) func(string) bool {
 	keep := map[string]bool{}
 	for _, sibling := range atlassianSiblings[kind] {
 		if !s.surfaceStaying(ctx, sibling, company) {
 			continue
 		}
-		for _, name := range atlassianSeatVars(company, sibling) {
+		for _, name := range atlassianSeatVars(roster, sibling) {
 			keep[name] = true
 		}
 	}
@@ -1256,7 +1267,7 @@ func (s *Service) surfaceStaying(
 
 // atlassianSeatVars is every `${VAR}` one Atlassian surface reads a seat's
 // credential out of, across every seat.
-func atlassianSeatVars(company *config.Company, kind integration.Kind) []string {
+func atlassianSeatVars(roster *org.Organization, kind integration.Kind) []string {
 	product := atlassian.ProductAny
 	switch kind {
 	case integration.KindJira:
@@ -1266,7 +1277,7 @@ func atlassianSeatVars(company *config.Company, kind integration.Kind) []string 
 	}
 	at := atlassianAt(product)
 	var out []string
-	for role := range company.EachRole() {
+	for role := range roster.AllRoles() {
 		out = append(out, seatSecretNames(at, role, "")...)
 	}
 	slices.Sort(out)
@@ -1301,7 +1312,7 @@ func orphanedSecrets(kind integration.Kind, state ToolState) []string {
 // THROUGH provision.SoleVar, so a slot holding a literal rather than a whole
 // `${VAR}` names nothing: there is no row in the store for it, and an orphan
 // list has to be a list of things that are there.
-func seatSecretNames(at seatCredentialAt, role *config.Role, stored string) []string {
+func seatSecretNames(at seatCredentialAt, role *org.Role, stored string) []string {
 	var raw []string
 	if at.Vars != nil {
 		raw = at.Vars(role)
@@ -1331,7 +1342,7 @@ func seatSecretNames(at seatCredentialAt, role *config.Role, stored string) []st
 // function here passes values through rather than expanding them.
 func atlassianAt(product atlassian.Product) seatCredentialAt {
 	return seatCredentialAt{
-		Find: func(role *config.Role) (stored, where string) {
+		Find: func(role *org.Role) (stored, where string) {
 			cred, at := atlassian.CredentialAt(product, role.MCPEnv, verbatim)
 			if at == "" {
 				return "", ""
@@ -1345,7 +1356,7 @@ func atlassianAt(product atlassian.Product) seatCredentialAt {
 		// TWO SLOTS PER SEAT. Atlassian assigns the account's address at
 		// creation and its products authenticate base64(address:token), so
 		// the pass seals both and a disconnect orphans both.
-		Vars: func(role *config.Role) []string {
+		Vars: func(role *org.Role) []string {
 			cred, _ := atlassian.CredentialAt(product, role.MCPEnv, verbatim)
 			return []string{cred.Token, atlassian.SeatEmail(role.MCPEnv)}
 		},
@@ -1362,8 +1373,8 @@ func verbatim(v string) string { return v }
 // address when it creates a service account, so the pass writes it onto the
 // seat and this reads it back. Read through the resolver, because the
 // document holds a reference and a roster wants the account.
-func atlassianIdentity(resolve func(string) (string, bool)) func(*config.Role) string {
-	return func(role *config.Role) string {
+func atlassianIdentity(resolve func(string) (string, bool)) func(*org.Role) string {
+	return func(role *org.Role) string {
 		return setup.Deref(atlassian.SeatEmail(role.MCPEnv), resolve)
 	}
 }
@@ -1380,21 +1391,17 @@ func atlassianIdentity(resolve func(string) (string, bool)) func(*config.Role) s
 // answer: a second rule here would name the wrong account the day either
 // changed, and the failure is an operator hunting a user list for a name
 // nothing created.
-func derivedIdentity(name func(handle string) string) func(*config.Role) string {
-	return func(role *config.Role) string {
-		return name(role.Seat().Handle())
+func derivedIdentity(name func(handle string) string) func(*org.Role) string {
+	return func(role *org.Role) string {
+		return name(role.Handle())
 	}
 }
 
 // mattermostAt is the seat credential of a Mattermost bot, which lives on the
 // seat's own block rather than in mcp_env: see [config.RoleMattermost].
 var mattermostAt = seatCredentialAt{
-	Find: func(role *config.Role) (string, string) {
-		block := role.Integrations.Mattermost
-		if block == nil {
-			return "", ""
-		}
-		value := strings.TrimSpace(block.BotToken)
+	Find: func(role *org.Role) (string, string) {
+		value := strings.TrimSpace(role.Mattermost.BotToken)
 		if value == "" {
 			return "", ""
 		}
@@ -1501,13 +1508,13 @@ func named(values map[string]string, reqs []setup.Requirement) bool {
 //
 // An app that already named its own choices keeps them; nothing does today,
 // and one that does knows something this does not.
-func seatChoices(company *config.Company, reqs []setup.Requirement) {
+func seatChoices(roster *org.Organization, reqs []setup.Requirement) {
 	var choices []setup.Choice
-	for role := range company.EachRole() {
+	for role := range roster.AllRoles() {
 		// THROUGH THE SEAT, the same derivation slackSeats uses: a handle
 		// defaults from the name, and "is this a person" is the org model's
 		// question. A second implementation here would eventually disagree.
-		seat := role.Seat()
+		seat := role
 		if !seat.IsAgent() {
 			continue
 		}
@@ -1542,7 +1549,8 @@ func seatChoices(company *config.Company, reqs []setup.Requirement) {
 // transport is running.
 func (s *Service) apps() map[string]string { return s.slackApps() }
 
-func slackSeats(company *config.Company, resolve func(string) (string, bool),
+func slackSeats(company *config.Company, roster *org.Organization,
+	resolve func(string) (string, bool),
 	apps map[string]string,
 ) []SeatState {
 	// THROUGH THE RESOLVER, because what is built from this is COPIED INTO
@@ -1554,12 +1562,12 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool),
 	// pass, which sent the literal `${ATLASSIAN_ORG_ID}` to Atlassian.
 	base := company.Integrations.WebhookBase(resolve)
 	out := []SeatState{}
-	for role := range company.EachRole() {
+	for role := range roster.AllRoles() {
 		// THROUGH THE SEAT, which is where the derivation lives: a handle
 		// defaults from the name, and "is this a person" is the org
 		// model's question rather than the config's. Deriving either here
 		// would be a second implementation of an identity rule.
-		seat := role.Seat()
+		seat := role
 		if !seat.IsAgent() {
 			continue
 		}
@@ -1628,7 +1636,7 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool),
 // deliveries are signed with. Both are per-seat, both survive a disconnect,
 // and neither is typed in by anybody — so this list is the only way an
 // operator learns they exist.
-func githubSeatSecrets(app *config.RoleGitHub) []string {
+func githubSeatSecrets(app *org.GitHubApp) []string {
 	if app == nil {
 		return nil
 	}
@@ -1672,14 +1680,16 @@ func repoScope(repos []string) string {
 // them all: this is where an operator starts the flow, so the seat with no app
 // yet is precisely the row that has to be there. Human seats are excluded,
 // because a person's GitHub account is not something this engine creates.
-func githubSeats(company *config.Company, resolve func(string) (string, bool)) []SeatState {
+func githubSeats(company *config.Company, roster *org.Organization,
+	resolve func(string) (string, bool),
+) []SeatState {
 	_, webBase := company.Integrations.GitHub.Bases(resolve)
 	out := []SeatState{}
-	for role := range company.EachRole() {
+	for role := range roster.AllRoles() {
 		// THROUGH THE SEAT, the same derivation every other roster uses: a
 		// handle defaults from the name, and "is this a person" is the org
 		// model's question rather than the config's.
-		seat := role.Seat()
+		seat := role
 		if !seat.IsAgent() {
 			continue
 		}
@@ -1687,7 +1697,7 @@ func githubSeats(company *config.Company, resolve func(string) (string, bool)) [
 		// functions the begin route reads it through. A second reading here
 		// would be free to disagree with the app that actually gets created.
 		tier, _ := github.ParseTier(seatTier(role))
-		app := role.Integrations.GitHub
+		app := role.GitHub
 		state := SeatState{
 			Handle: seat.Handle(), Name: role.Name,
 			Tier:      string(tier),
@@ -1843,14 +1853,14 @@ func kindList() string {
 // inputs serves POST /setup/integrations/{kind}/inputs.
 func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company := s.company()
+	company, roster := s.company()
 	if company == nil {
 		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
-	state, ok := s.stateFor(r.Context(), company, kind)
+	state, ok := s.stateFor(r.Context(), company, roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
@@ -1970,7 +1980,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		"secrets", strings.Join(result.Secrets, ","), "reloaded", result.Reloaded,
 		"operator", operatorOf(r))
 
-	after := s.company()
+	after, afterRoster := s.company()
 	// THE ADDRESS THIS SURFACE WAS SET UP AGAINST, for the surfaces whose
 	// address only a person can move.
 	//
@@ -1994,7 +2004,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	}
 	fresh := state
 	if after != nil {
-		if refreshed, ok := s.state(after, kind); ok {
+		if refreshed, ok := s.state(after, afterRoster, kind); ok {
 			fresh = withLoopFindings(refreshed, s.loopFindings(r.Context(), kind))
 		}
 	}
@@ -2014,14 +2024,14 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 // unset` is the deliberate path, and the setup answer names what is orphaned.
 func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company := s.company()
+	company, roster := s.company()
 	if company == nil {
 		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
-	state, ok := s.stateFor(r.Context(), company, kind)
+	state, ok := s.stateFor(r.Context(), company, roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
@@ -2054,7 +2064,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// request, the 202 path minutes later when the teardown finishes. See
 	// [Service.orphanedSecrets].
 	orphaned := orphanedSecrets(kind, state)
-	orphaned = slices.DeleteFunc(orphaned, s.stillUsedBySibling(r.Context(), kind, company))
+	orphaned = slices.DeleteFunc(orphaned, s.stillUsedBySibling(r.Context(), kind, company, roster))
 
 	// ASKED FOR, NOT DONE HERE. The block stays in the document until the
 	// third-party app teardown has run, because that block carries the credential
@@ -2354,9 +2364,10 @@ func githubOrgOf(company *config.Company) string {
 // [withLoopFindings] for why the document and the store are not enough on
 // their own.
 func (s *Service) stateFor(
-	ctx context.Context, company *config.Company, kind integration.Kind,
+	ctx context.Context, company *config.Company, roster *org.Organization,
+	kind integration.Kind,
 ) (ToolState, bool) {
-	state, ok := s.state(company, kind)
+	state, ok := s.state(company, roster, kind)
 	if !ok {
 		return state, false
 	}

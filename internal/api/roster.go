@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The three surfaces the dashboard renders from CONFIGURATION rather than from
@@ -33,21 +34,24 @@ import (
 // Human seats are left out. They have no turn, no phase and no spend, and the
 // agent screen is about what is running; the org tree below carries them, which
 // is where a reader looks for who to talk to.
-func roster(ctx context.Context, company func() *config.Company, runtime NodeRuntime) []map[string]any {
+func roster(ctx context.Context, company func() (*config.Company, *org.Organization), runtime NodeRuntime) []map[string]any {
 	if company == nil {
 		return nil
 	}
-	c := company()
+	c, roster := company()
 	if c == nil {
 		return nil
 	}
-	organization, err := c.Organization()
-	if err != nil {
-		// A company that will not resolve into an org is one the engine
-		// refused to apply, so this is a config no node is running. An
-		// empty roster is the honest answer and the screen says so.
+	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
+	// than re-resolved from the document: a stored revision carries no
+	// seats at all, so the derivation this replaced answered an EMPTY
+	// roster for every running company.
+	if roster == nil {
+		// A node with no chart view has no seats to report. An empty
+		// roster is the honest answer and the screen says so.
 		return nil
 	}
+	organization := roster
 	// WHICH SEATS THIS NODE IS ACTUALLY SERVING. A held seat is attached,
 	// its mailbox is open and it is waiting for work — which is "idle",
 	// not "offline", and the difference is the whole first impression a
@@ -159,7 +163,7 @@ func toolRows(runtime NodeRuntime) []map[string]any {
 // to run, but a closure built inside a constructor reads to contextcheck as
 // the constructor's own body — a background context created where the caller
 // had one to pass. streamHealth is a method for the same reason.
-func rosterTick(company func() *config.Company, runtime NodeRuntime) []map[string]any {
+func rosterTick(company func() (*config.Company, *org.Organization), runtime NodeRuntime) []map[string]any {
 	ctx, cancel := context.WithTimeout(context.Background(), tickReadBudget)
 	defer cancel()
 	return roster(ctx, company, runtime)

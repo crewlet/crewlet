@@ -1374,11 +1374,19 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 const apiShutdownGrace = 5 * time.Second
 
 // companyConfig is the engine's CURRENT company document, or nil.
-func companyConfig(e *engine.Engine) *config.Company {
+// companyConfig is the company this node is serving: the SETTINGS a revision
+// stores and the ORG it composed from its chart rows.
+//
+// ONE READ OF THE EPOCH giving BOTH halves, which is the whole reason it is a
+// pair rather than two accessors: a company is republished by an activation
+// AND by a chart write, so two reads can straddle a publish and a screen that
+// took the integrations from one and the roster from the next would describe a
+// company that never existed.
+func companyConfig(e *engine.Engine) (*config.Company, *org.Organization) {
 	if company := e.Company(); company != nil {
-		return company.Config
+		return company.Config, company.Org
 	}
-	return nil
+	return nil, nil
 }
 
 // companySecrets reads the verification material out of the engine's CURRENT
@@ -1460,7 +1468,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// and the pointer to it lands through the same merge, validation and
 	// activation PATCH /config performs.
 	setupSurface, err := setupapi.New(setupapi.Options{
-		Company: func() *config.Company { return companyConfig(e) },
+		Company: func() (*config.Company, *org.Organization) { return companyConfig(e) },
 		Config:  configSurface,
 		// The fleet's own store, sealed with the same keyring. A node with
 		// no secrets.keys still gets one, and every secret write through
@@ -1576,7 +1584,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// company: an apply replaces it, and a screen bound to the
 			// one this process booted on would describe a company that
 			// is no longer running.
-			Company:  func() *config.Company { return companyConfig(e) },
+			Company:  func() (*config.Company, *org.Organization) { return companyConfig(e) },
 			Coord:    e.Backends().Coord,
 			Plane:    e.Backends().Fleet,
 			Runs:     sqlledger.New(e.Backends().Store.SQL()),
@@ -1612,7 +1620,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// like with like or report every such company as moved.
 			PublicBase: func() string {
 				//nolint:govet // shadow: scoped to this block; see .golangci.yml
-				company := companyConfig(e)
+				company, _ := companyConfig(e)
 				if company == nil {
 					return ""
 				}

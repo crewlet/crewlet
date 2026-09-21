@@ -877,8 +877,14 @@ export interface DerivedSeat {
    * [DerivedUnit.seats].
    */
   unit_path?: string;
-  /** A root seat the engine moved into a unit because of its `unit:` reference. */
-  placed_by_ref: boolean;
+  /**
+   * A root seat the engine moved into a unit because of its `unit:` reference.
+   *
+   * Absent wherever `path` is: a company composed from the org chart's rows
+   * was written nowhere, so nothing was moved by a reference and "not moved"
+   * would be an answer rather than an absence. Read it as false.
+   */
+  placed_by_ref?: boolean;
   /** Handle of the primary manager, by the engine's own rule. "" when none. */
   manager: string;
   /** Handles of every seat that manages this one, in engine order. */

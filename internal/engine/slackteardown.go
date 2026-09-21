@@ -76,15 +76,15 @@ func (e *Engine) tearDownSlack(
 	// token rather than the other way round. Empty where no seat came up,
 	// which is a report without the app ids rather than no report.
 	apps := e.SlackApps()
-	for role := range company.Config.EachRole() {
-		block := role.Integrations.Slack
-		if block == nil {
+	for seat := range company.Org.AllRoles() {
+		if seat.Slack.IsZero() {
 			continue
 		}
-		handle := role.Seat().Handle()
+		block := seat.Slack
+		handle := seat.Handle()
 		removal := provision.Removal{
 			Handle: handle,
-			Role:   role.Name,
+			Role:   seat.Name,
 			// THE APP ID, because it is the only thing that identifies one
 			// agent's app: two agents may carry the same display name, and
 			// nothing on the seat names the app at all. It is also what the

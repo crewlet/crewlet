@@ -377,6 +377,58 @@ type SlackIdentity struct {
 // IsZero reports an unconfigured Slack identity.
 func (s SlackIdentity) IsZero() bool { return s == SlackIdentity{} }
 
+// GitHubApp is a seat's own GitHub App, as the running company holds it.
+//
+// ONE APP PER AGENT, and there is no other way to have one: a GitHub App has
+// exactly one bot identity, derived from its slug, and no token, header or
+// manifest field varies the author. So agents sharing an app would all act as
+// the same account, and two seats resolving to one login means an @mention can
+// no longer say which agent is meant.
+//
+// EVERYTHING HERE EXCEPT THE TIER AND THE REPOSITORIES IS WRITTEN BY THE
+// ENGINE. An app is created from a manifest the engine builds, and GitHub
+// returns its id, slug, key and webhook secret exactly once, at conversion
+// time. What a person does is click through the creation and the install.
+type GitHubApp struct {
+	// Tier is how much of a repository this seat may do. Empty is the
+	// least this engine hands out, which is the right answer for a seat
+	// nobody has thought about yet.
+	Tier string `yaml:"tier,omitempty" json:"tier,omitempty"`
+
+	// Repos are the repositories this seat works in, as owner/name. Empty
+	// means every repository the installation covers, which is what the
+	// operator chose when they installed the app.
+	Repos []string `yaml:"repos,omitempty" json:"repos,omitempty"`
+
+	// AppID and AppSlug are the app GitHub created. The SLUG is what the
+	// bot's login derives from, so it is what an @mention resolves through.
+	AppID   int64  `yaml:"app_id,omitempty" json:"app_id,omitempty"`
+	AppSlug string `yaml:"app_slug,omitempty" json:"app_slug,omitempty"`
+
+	// InstallationID is the installation of that app on the organization.
+	// SEPARATE FROM THE APP, because creating one and installing it are two
+	// acts by a person and the second can be a day after the first.
+	InstallationID int64 `yaml:"installation_id,omitempty" json:"installation_id,omitempty"`
+
+	// PrivateKey and WebhookSecret are `${VAR}` POINTERS at the sealed
+	// store, never values. GitHub returns each once and reissues neither.
+	//
+	// THE WEBHOOK SECRET IS THE APP'S OWN, which is why it is here rather
+	// than read off `integrations.github`: that one belongs to a different
+	// app, or to no app at all in a company that only ever created
+	// per-agent ones, and verifying against it refused every delivery from
+	// every agent while GitHub's own hook page showed the app healthy.
+	PrivateKey    string `yaml:"private_key,omitempty" json:"private_key,omitempty"`
+	WebhookSecret string `yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty"`
+}
+
+// Held reports a seat whose app exists and is installed, which is the only
+// state its credentials can be minted from.
+func (g *GitHubApp) Held() bool {
+	return g != nil && g.AppID != 0 && g.InstallationID != 0 &&
+		strings.TrimSpace(g.PrivateKey) != ""
+}
+
 // MattermostIdentity is a seat's Mattermost bot. One credential covers
 // everything on this backend: the inbound websocket, the outbound REST
 // calls, and — named again under mcp_env.mattermost — the MCP tool server.
@@ -402,6 +454,62 @@ func (m MattermostIdentity) IsZero() bool { return m == MattermostIdentity{} }
 // given.
 type RoleSandboxMCP struct {
 	Servers []string `yaml:"servers,omitempty" json:"servers,omitempty"`
+}
+
+// SandboxSetupStep is one provisioning step as the running seat holds it.
+//
+// THE VALUES ARE VERBATIM, `${VAR}` references included: they are resolved
+// once, with the rest of the sandbox environment, at LAUNCH. Resolving them
+// here as well would double-resolve and silently mangle any secret whose real
+// value contains a literal `${...}`. The exception is Brief, which is never
+// resolved at all — it is agent-facing prose, and substituting engine-host
+// environment into it would be surprising at best.
+type SandboxSetupStep struct {
+	// Name identifies the step in logs and in setup-failure errors.
+	Name string `yaml:"name" json:"name"`
+
+	// Files are written into the box before Commands run.
+	Files map[string]string `yaml:"files,omitempty" json:"files,omitempty"`
+
+	// Commands run in order after the files land. A non-zero exit fails
+	// the whole acquisition — the coding agent's brief promises this
+	// environment, so a partially provisioned box must never reach a run.
+	Commands []string `yaml:"commands,omitempty" json:"commands,omitempty"`
+
+	// Env is merged into the coding agent's run environment.
+	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+
+	// Brief is the paragraph handed to the coding agent: what this step
+	// made TRUE about its box.
+	Brief string `yaml:"brief,omitempty" json:"brief,omitempty"`
+
+	// TimeoutSeconds is how long each of this step's commands may run.
+	// Provisioning is not a control-plane call: without its own budget
+	// these inherit a timeout sized for a mkdir, and any real step is
+	// killed and fails the acquisition. Unset takes
+	// [DefaultSetupTimeoutSeconds] — see [SetupTimeout].
+	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
+}
+
+// DefaultSetupTimeoutSeconds gives a provisioning command room for a
+// dependency install or a cold image pull, which is what these steps
+// actually do.
+const DefaultSetupTimeoutSeconds = 300.0
+
+// SetupTimeout is how long a provisioning command may run, given what the
+// document said.
+//
+// ONE HOME FOR THE RULE, here rather than on either step type, because BOTH
+// kinds of setup step answer it — the provider-wide ones a `providers.sandbox`
+// block declares and the per-seat ones that ride the chart — and the
+// validator that refuses a negative value quotes the same number. Written
+// once per type it is three copies of "unset means five minutes", which is
+// exactly the shape that drifts.
+func SetupTimeout(declared float64) float64 {
+	if declared <= 0 {
+		return DefaultSetupTimeoutSeconds
+	}
+	return declared
 }
 
 // RoleSandbox is the per-seat code-runtime gate. Absent means the seat
@@ -435,6 +543,32 @@ type RoleSandbox struct {
 	// seat that said nothing would lose its checkout the moment a coding
 	// agent asked a question.
 	PauseTTLSeconds *float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty"`
+
+	// Setup is this seat's OWN provisioning, applied after the engine-wide
+	// steps: files written into the box, commands run over them, the env
+	// they contribute and the paragraph the coding agent is told about
+	// what they made true.
+	//
+	// HERE FOR THE REASON MaxTurns IS: the engine read it off the company
+	// document, which carries no seats, so a seat's own provisioning
+	// stopped running the moment the chart became a log — and a box that
+	// silently skipped its setup is one whose coding agent was promised an
+	// environment it does not have.
+	Setup []SandboxSetupStep `yaml:"setup,omitempty" json:"setup,omitempty"`
+
+	// MaxTurns caps the agentic ROUNDS one of this seat's coding runs may
+	// take. Unset inherits the provider default; ZERO IS UNCAPPED, which
+	// is why it is a pointer — a seat that deliberately runs without a
+	// round cap and a seat that said nothing are different settings, and
+	// a plain int cannot tell them apart.
+	//
+	// It was in NEITHER half until this conversion carried it: the config
+	// type declared it, the runtime seat did not, and the engine read it
+	// off the document — so the moment a stored revision stopped carrying
+	// seats, every seat's cap silently became the provider default. That
+	// is the exact failure the seat partition gate exists to make loud,
+	// one layer up from where the gate can see.
+	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
 
 	MCP RoleSandboxMCP `yaml:"mcp,omitempty" json:"mcp,omitzero"`
 
@@ -575,6 +709,26 @@ type Role struct {
 
 	Slack      SlackIdentity      `yaml:"slack,omitempty" json:"slack,omitzero"`
 	Mattermost MattermostIdentity `yaml:"mattermost,omitempty" json:"mattermost,omitzero"`
+
+	// GitHub is this seat's own GitHub App, beside the two chat
+	// identities and for the same reason: an agent acts as ITSELF at the
+	// code host, and which account that is comes from the app.
+	//
+	// # Why it is on the runtime seat at all
+	//
+	// It was not, and the walks that needed it read the company DOCUMENT
+	// instead — which stopped carrying seats at all when the org chart
+	// became a log. A seat is rows plus this document now, so a fact about
+	// a seat that lives anywhere else is a fact the running company cannot
+	// see: the bot-login registry, the missing-app report and the webhook
+	// secret index each walked an empty list and reported a company with
+	// no apps in it.
+	//
+	// A POINTER, because an absent block and a block holding nothing are
+	// different states an operator can be in: a seat nobody has created an
+	// app for yet is nil, and a seat whose app exists but is not installed
+	// is a real, reportable half-built record. See [GitHubApp.Held].
+	GitHub *GitHubApp `yaml:"github,omitempty" json:"github,omitempty"`
 
 	// Project and Space are this seat's integration
 	// IDENTITY: where inbound activity with no better recipient routes, and

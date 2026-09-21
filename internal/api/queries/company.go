@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -57,17 +58,20 @@ func (s Sources) ConfiguredSchedules() []schedule.Row {
 	// one, and the schedules question is registered only beside it), so
 	// the func is never nil. What it returns is, before a node's first
 	// revision activates.
-	company := s.Company()
+	company, roster := s.Company()
 	if company == nil {
 		return []schedule.Row{}
 	}
-	organization, err := company.Organization()
-	if err != nil {
-		// A company that will not resolve into an org is one no node is
-		// running. Empty is the honest answer and the screen says so.
+	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
+	// than re-resolved from the document: a stored revision carries no
+	// seats at all, so the derivation this replaced answered an EMPTY
+	// organization for every running company.
+	if roster == nil {
+		// A node with no chart view has no seats to describe. Empty is
+		// the honest answer and the screen says so.
 		return []schedule.Row{}
 	}
-	rows := schedule.Describe(organization, schedule.DescribeOptions{
+	rows := schedule.Describe(roster, schedule.DescribeOptions{
 		DefaultTimezone: company.Scheduling.DefaultTimezone,
 		Now:             s.clock(),
 	})
@@ -133,7 +137,7 @@ func (s Sources) recentRuns(ctx context.Context) []map[string]any {
 // node cannot say", which is what a node whose notification service has not
 // started honestly answers, and is not the same claim as false.
 func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
-	company := s.Company()
+	company, roster := s.Company()
 	if company == nil {
 		return map[string]any{"integrations": []any{}}, nil
 	}
@@ -285,7 +289,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// Every row carries seats, so the view never reads undefined.
 		// An empty list is a real answer — nobody holds credentials of
 		// their own for this surface — and it is not the same as absent.
-		row["seats"] = seatsFor(company, kind)
+		row["seats"] = seatsFor(roster, kind)
 		for key, value := range detail {
 			row[key] = value
 		}
@@ -304,7 +308,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	// draws as Paused, a word for a state an operator chose, over the residue
 	// of a disconnect that had removed the block and left the seats.
 	if in.Slack != nil {
-		add("slack", true, boolPtr(seatSecrets(company, "slack") > 0), nil)
+		add("slack", true, boolPtr(seatSecrets(company, roster, "slack") > 0), nil)
 	}
 	if in.Mattermost != nil {
 		add("mattermost", true, nil, map[string]any{"url": in.Mattermost.URL})
@@ -323,7 +327,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	// removed every installation, and the card sat on Paused.
 	if in.GitHub != nil {
 		add("github", in.GitHub.Enabled,
-			boolPtr(seatSecrets(company, "github") > 0 || in.GitHub.WebhookSecret != ""), nil)
+			boolPtr(seatSecrets(company, roster, "github") > 0 || in.GitHub.WebhookSecret != ""), nil)
 	}
 	if in.GitLab != nil {
 		add("gitlab", in.GitLab.Enabled, boolPtr(in.GitLab.SigningSecret != ""),
@@ -587,20 +591,23 @@ func integrationOf(row store.EventRecord) string {
 // app, a Mattermost identity, a per-seat project or space. A seat with none
 // of them is served by the company-wide account, not by one of its own.
 //
-// THE WALK IS company.EachRole, not a loop over company.Roles: that field is
-// the seats belonging to NO unit, and a company whose agents all sit in units
-// answered an empty list from every caller here. EachRole is exported for
-// this exact reason, and its own doc records the first time a top-level-only
-// lookup shipped.
-func seatsFor(company *config.Company, kind string) []string {
+// THE WALK IS THE COMPANY'S OWN ORG, not the document's `roles:`. That field
+// is the seats belonging to NO unit, so a company whose agents all sit in
+// units answered an empty list from every caller here — and once a stored
+// revision stopped carrying seats at all, so did every company. What a seat
+// carries is on the seat, and the seat is what the org model holds.
+func seatsFor(roster *org.Organization, kind string) []string {
 	out := []string{}
-	for r := range company.EachRole() {
+	if roster == nil {
+		return out
+	}
+	for r := range roster.AllRoles() {
 		var carries bool
 		switch kind {
 		case "slack":
-			carries = r.Integrations.Slack != nil
+			carries = !r.Slack.IsZero()
 		case "mattermost":
-			carries = r.Integrations.Mattermost != nil
+			carries = !r.Mattermost.IsZero()
 		case "jira":
 			// A seat's own PROJECT, which is vendor-neutral now: the same
 			// key names a native project and a Jira one, and this answer
@@ -613,7 +620,7 @@ func seatsFor(company *config.Company, kind string) []string {
 			// Confluence one.
 			carries = r.Space != ""
 		case "github":
-			carries = r.Integrations.GitHub != nil
+			carries = r.GitHub != nil
 		}
 		if carries {
 			out = append(out, r.Name)
@@ -643,9 +650,12 @@ func seatsFor(company *config.Company, kind string) []string {
 // half-finished teardown is reported by the SETUP screen's seat roster, which
 // is where an operator acts on a seat, and — with what only a person can
 // finish — by the disconnect itself.
-func seatSecrets(company *config.Company, kind string) int {
+func seatSecrets(company *config.Company, roster *org.Organization, kind string) int {
 	n := 0
-	for r := range company.EachRole() {
+	if company == nil || roster == nil {
+		return n
+	}
+	for r := range roster.AllRoles() {
 		var secret string
 		switch kind {
 		case "slack":
@@ -657,8 +667,8 @@ func seatSecrets(company *config.Company, kind string) int {
 			//
 			// Counted without it, a disconnect that dropped the block and
 			// left the seats kept the surface alive on two sealed values.
-			if slack := r.Integrations.Slack; slack != nil && company.Integrations.Slack != nil {
-				secret = slack.SigningSecret
+			if !r.Slack.IsZero() && company.Integrations.Slack != nil {
+				secret = r.Slack.SigningSecret
 			}
 		case "github":
 			// AN INSTALLATION, and the organization block that enables
@@ -680,9 +690,9 @@ func seatSecrets(company *config.Company, kind string) int {
 			// company has no enabled block delivers to a route that
 			// verifies it and routes it nowhere — which a disconnect with
 			// the installations left in place produces exactly.
-			org := company.Integrations.GitHub
-			if app := r.Integrations.GitHub; app != nil && app.InstallationID != 0 &&
-				org != nil && org.Enabled {
+			block := company.Integrations.GitHub
+			if app := r.GitHub; app != nil && app.InstallationID != 0 &&
+				block != nil && block.Enabled {
 				secret = app.WebhookSecret
 			}
 		}
@@ -707,19 +717,22 @@ func (s Sources) agentIDOf(handle string) string {
 	if handle == "" || s.Company == nil {
 		return handle
 	}
-	company := s.Company()
+	company, roster := s.Company()
 	if company == nil {
 		return handle
 	}
-	organization, err := company.Organization()
-	if err != nil {
+	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
+	// than re-resolved from the document: a stored revision carries no
+	// seats at all, so the derivation this replaced answered an EMPTY
+	// organization for every running company.
+	if roster == nil {
 		return handle
 	}
-	role := organization.AgentSeatByHandle(handle)
+	role := roster.AgentSeatByHandle(handle)
 	if role == nil {
 		return handle
 	}
-	if id, ok := organization.AgentIDFor(role); ok {
+	if id, ok := roster.AgentIDFor(role); ok {
 		return id.String()
 	}
 	return handle

@@ -1201,7 +1201,7 @@ func (p *githubPass) forgetApp(in setup.PassInput) func(context.Context, string)
 // seatsWithoutApps is the finding for this company's agents that have no
 // GitHub App recorded, or nil when every one of them has.
 //
-// READ OFF THE ORG MODEL rather than off [Engine.githubSeatApps], which
+// READ OFF THE COMPANY'S OWN ORG rather than off [Engine.githubSeatApps], which
 // answers the other question: which seats this pass has an app to RECONCILE.
 // A seat with no app is exactly the one that list cannot carry.
 func (p *githubPass) seatsWithoutApps(company *Company) *integration.Finding {
@@ -1209,15 +1209,14 @@ func (p *githubPass) seatsWithoutApps(company *Company) *integration.Finding {
 		return nil
 	}
 	var missing []string
-	for role := range company.Config.EachRole() {
-		seat := role.Seat()
+	for seat := range company.Org.AllRoles() {
 		if !seat.IsAgent() {
 			// A HUMAN SEAT HAS ITS OWN GITHUB ACCOUNT. Creating an app
 			// for a person would be a second identity for somebody who
 			// already has one.
 			continue
 		}
-		if app := role.Integrations.GitHub; app != nil && app.AppID != 0 {
+		if app := seat.GitHub; app != nil && app.AppID != 0 {
 			continue
 		}
 		missing = append(missing, seat.Handle())

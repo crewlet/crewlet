@@ -579,15 +579,18 @@ func (s Sources) organization() *org.Organization {
 	if s.Company == nil {
 		return nil
 	}
-	company := s.Company()
+	company, roster := s.Company()
 	if company == nil {
 		return nil
 	}
-	organization, err := company.Organization()
-	if err != nil {
+	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
+	// than re-resolved from the document: a stored revision carries no
+	// seats at all, so the derivation this replaced answered an EMPTY
+	// organization for every running company.
+	if roster == nil {
 		return nil
 	}
-	return organization
+	return roster
 }
 
 // --- memory projections -------------------------------------------------- //

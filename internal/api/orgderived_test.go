@@ -94,7 +94,7 @@ func TestTheOrgProjectionCarriesTheDerivedHierarchy(t *testing.T) {
 	t.Parallel()
 	company := derivedCompany()
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: func() *config.Company { return company }},
+		Sources: queries.Sources{Company: companySource(t, company)},
 	})
 
 	derived := orgOf(t, a).Derived
@@ -103,8 +103,19 @@ func TestTheOrgProjectionCarriesTheDerivedHierarchy(t *testing.T) {
 	}
 
 	cto := seatIn(t, derived, "cto")
-	if !cto.PlacedByRef || cto.Manager != "chief-executive" {
-		t.Errorf("the CTO = %+v, want it placed by its unit reference and managed by the CEO", cto)
+	if cto.Manager != "chief-executive" {
+		t.Errorf("the CTO = %+v, want it managed by the CEO", cto)
+	}
+	// AND NOT WHERE IT WAS WRITTEN. `placed_by_ref` says a seat was
+	// authored at the root and moved into a unit by its `unit:` reference,
+	// which is a fact about a DOCUMENT — and this projection is derived
+	// from the company the node RUNS, whose seats are rows that state
+	// their unit directly. ABSENT rather than false, because "this seat
+	// was not moved" and "there is no document to have moved it in" are
+	// different answers.
+	if cto.PlacedByRef != nil || cto.Path != "" || cto.UnitPath != "" {
+		t.Errorf("the CTO = %+v, want no authored position on a projection "+
+			"derived from the chart", cto)
 	}
 	if !slices.Contains(cto.OnboardingChain, "Engineering") {
 		t.Errorf("the CTO's onboarding chain = %v, want the unit it was placed in", cto.OnboardingChain)
@@ -166,7 +177,7 @@ func TestTheOrgProjectionOfAnUnconfiguredNodeStaysEmpty(t *testing.T) {
 	// source that answers none (a node before its first revision).
 	for name, sources := range map[string]queries.Sources{
 		"no source":                {},
-		"a source with no company": {Company: func() *config.Company { return nil }},
+		"a source with no company": {Company: companySource(t, nil)},
 	} {
 		a := newApp(t, api.Options{Sources: sources})
 		res := fetch(t, a, "/org", nil)

@@ -527,12 +527,37 @@ func (e *Engine) RouteInbound(_ context.Context, parsers []notify.Parser, prompt
 // meant one line deciding a security property, and the mistake it invites —
 // passing the config through unresolved — leaves six routes verifying
 // against the literal "${GITLAB_SIGNING_SECRET}".
+// BUILT ONCE PER PUBLISHED COMPANY, not once per delivery.
+//
+// Assembling it walks every seat in the org and resolves each `${VAR}` it
+// finds through the secret store — and this is on the path of EVERY inbound
+// webhook, which for a busy code host is the engine's highest-rate request.
+// Per request that is a full roster walk plus one store lookup per credential,
+// for an answer that cannot have changed: the material is a function of the
+// company and of the resolver snapshot, and both move only when a company is
+// published. A rotation is no exception — it is the re-activation gesture,
+// which publishes one.
+//
+// So the cache is keyed on the company's IDENTITY, the same comparison
+// [Engine.indexes] makes and for the same reason: a company equal in every
+// field is still a different publish with its own derived state.
+//
+// LAZY rather than built in the convergence, so a node serving no webhooks
+// never assembles it at all, and the map it returns is shared with every
+// other caller — readers only.
 func (e *Engine) WebhookSecrets() webhooks.Secrets {
 	company := e.Company()
 	if company == nil {
 		return webhooks.Secrets{}
 	}
-	return webhooks.SecretsOf(company.Config, company.Org, e.Resolve)
+	e.hooks.mu.Lock()
+	defer e.hooks.mu.Unlock()
+	if e.hooks.built == company {
+		return e.hooks.material
+	}
+	e.hooks.material = webhooks.SecretsOf(company.Config, company.Org, e.Resolve)
+	e.hooks.built = company
+	return e.hooks.material
 }
 
 // VerifiableSources lists the integrations whose RESOLVED material can

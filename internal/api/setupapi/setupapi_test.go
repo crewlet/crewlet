@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -84,7 +85,7 @@ type surface struct {
 	mux     *http.ServeMux
 	config  *configapi.Service
 	vault   *vault
-	company func() *config.Company
+	company func() (*config.Company, *org.Organization)
 	configs *store.Configs
 	// status is the fleet row every write on this surface records to.
 	status *statusStore
@@ -120,7 +121,7 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	t.Helper()
 	v := &vault{}
 	if opts.Company == nil {
-		opts.Company = func() *config.Company { return nil }
+		opts.Company = companySource(t, nil)
 	}
 	if opts.Config == nil {
 		opts.Config, _ = newConfigSurface(t)
@@ -168,7 +169,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	v := &vault{}
 	complete := func() setupapi.Options {
 		return setupapi.Options{
-			Company:     func() *config.Company { return nil },
+			Company:     companySource(t, nil),
 			Config:      cfg,
 			Secrets:     v,
 			Resolve:     v.get,
@@ -220,12 +221,19 @@ func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
 	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
 	// engine hands it over: a screen bound to the company this process
 	// booted on would describe one that is no longer running.
-	s.company = func() *config.Company {
+	s.company = func() (*config.Company, *org.Organization) {
 		doc, err := cfg.Document(t.Context())
 		if err != nil {
-			return nil
+			return nil, nil
 		}
-		return doc
+		// THE ORG THE DOCUMENT DESCRIBES. A running node composes its
+		// own from the chart's rows; this harness holds a stored
+		// document, so this is what its seats are.
+		o, err := doc.Organization()
+		if err != nil {
+			return doc, nil
+		}
+		return doc, o
 	}
 	s.setup = newService(t, setupapi.Options{
 		Company: s.company, Config: cfg, Secrets: v,

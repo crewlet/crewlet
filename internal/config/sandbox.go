@@ -3,6 +3,8 @@ package config
 import (
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // Placement is WHERE a seat's code work runs.
@@ -584,11 +586,6 @@ type SandboxSetupStep struct {
 	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Per-command wall-clock cap for this step."`
 }
 
-// defaultSetupTimeoutSeconds gives a provisioning command room for a
-// dependency install or a cold image pull, which is what these steps
-// actually do.
-const defaultSetupTimeoutSeconds = 300.0
-
 // IdentityKey is the step's name: the handle a failure message and a log line
 // already use for it, and now what its masked credentials are restored by.
 //
@@ -601,12 +598,7 @@ const defaultSetupTimeoutSeconds = 300.0
 func (s SandboxSetupStep) IdentityKey() string { return s.Name }
 
 // Timeout is the per-command cap, applying the default.
-func (s *SandboxSetupStep) Timeout() float64 {
-	if s.TimeoutSeconds <= 0 {
-		return defaultSetupTimeoutSeconds
-	}
-	return s.TimeoutSeconds
-}
+func (s *SandboxSetupStep) Timeout() float64 { return org.SetupTimeout(s.TimeoutSeconds) }
 
 func (s *SandboxSetupStep) validate(path Path) error {
 	var p problems
@@ -624,7 +616,7 @@ func (s *SandboxSetupStep) validate(path Path) error {
 	if s.TimeoutSeconds < 0 {
 		p.add(at(path, "timeout_seconds"), ErrOutOfRange,
 			"must be 0 (the %v s default) or positive, got %v",
-			defaultSetupTimeoutSeconds, s.TimeoutSeconds)
+			org.DefaultSetupTimeoutSeconds, s.TimeoutSeconds)
 	}
 	for file := range s.Files {
 		if strings.TrimSpace(file) == "" {

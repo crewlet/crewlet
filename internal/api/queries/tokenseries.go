@@ -112,16 +112,19 @@ func (s Sources) RoleUnits() map[string]string {
 	if s.Company == nil {
 		return out
 	}
-	company := s.Company()
+	company, roster := s.Company()
 	if company == nil {
 		return out
 	}
-	organization, err := company.Organization()
-	if err != nil {
+	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
+	// than re-resolved from the document: a stored revision carries no
+	// seats at all, so the derivation this replaced answered an EMPTY
+	// organization for every running company.
+	if roster == nil {
 		return out
 	}
-	for role := range organization.AllRoles() {
-		if unit := organization.UnitFor(role); unit != nil {
+	for role := range roster.AllRoles() {
+		if unit := roster.UnitFor(role); unit != nil {
 			out[role.Name] = unit.Name
 		}
 	}

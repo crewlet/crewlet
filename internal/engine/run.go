@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skillsync"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -343,6 +344,15 @@ type Engine struct {
 	mcpMu     sync.Mutex
 	seatMCP   map[string]*mcp.Bridge
 	seatTools map[string]*tools.Registry
+
+	// hooks caches the webhook verification material for the company it
+	// was assembled from. See [Engine.WebhookSecrets] for why it is keyed
+	// on the company's identity and why it is lazy.
+	hooks struct {
+		mu       sync.Mutex
+		built    *Company
+		material webhooks.Secrets
+	}
 
 	// converging serializes [Engine.convergeOn] and remembers the company
 	// it last ran for.

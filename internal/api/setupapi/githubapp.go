@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -191,14 +192,14 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	company := s.company()
+	company, roster := s.company()
 	if company == nil {
 		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
-	seat := seatByHandle(company, handle)
+	seat := seatByHandle(roster, handle)
 	if seat == nil {
 		httpjson.FailWith(w, http.StatusNotFound, codeNoSuchSeat, map[string]string{
 			"hint": fmt.Sprintf("this company has no agent seat %q", handle),
@@ -271,8 +272,8 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 		return handle, err
 	}
 	s := f.service
-	company := s.company()
-	if company == nil || seatByHandle(company, handle) == nil {
+	company, roster := s.company()
+	if company == nil || seatByHandle(roster, handle) == nil {
 		return handle, fmt.Errorf("setupapi: this company has no agent seat %q", handle)
 	}
 
@@ -387,15 +388,15 @@ func (s *Service) recordSeatApp(
 // for: GitHub slugifies a name and disambiguates a collision, so the app that
 // exists may not be the one whose name was requested.
 func (f *AppFlow) InstallURL(handle string) string {
-	company := f.service.company()
+	company, roster := f.service.company()
 	if company == nil {
 		return ""
 	}
-	seat := seatByHandle(company, handle)
-	if seat == nil || seat.Integrations.GitHub == nil {
+	seat := seatByHandle(roster, handle)
+	if seat == nil || seat.GitHub == nil {
 		return ""
 	}
-	slug := strings.TrimSpace(seat.Integrations.GitHub.AppSlug)
+	slug := strings.TrimSpace(seat.GitHub.AppSlug)
 	if slug == "" {
 		return ""
 	}
@@ -425,22 +426,32 @@ func secretNameFor(handle, field string) string {
 	})
 }
 
-// seatByHandle finds one agent seat.
-func seatByHandle(company *config.Company, handle string) *config.Role {
-	for role := range company.EachRole() {
-		if role.Seat().Handle() == handle && role.Seat().IsAgent() {
-			return role
-		}
+// seatByHandle finds one agent seat in the company this node is running.
+//
+// AN INDEX ON THE ORG, not a walk of the document: a stored revision carries
+// no seats at all, so the walk this replaced answered "no such seat" for every
+// agent — which this route reports as a handle nobody holds.
+func seatByHandle(roster *org.Organization, handle string) *org.Role {
+	if roster == nil {
+		return nil
+	}
+	if role := roster.Role(handle); role != nil && role.IsAgent() {
+		return role
 	}
 	return nil
 }
 
 // seatTier is the access tier this seat runs at, as written down.
-func seatTier(seat *config.Role) string {
-	if seat.Integrations.GitHub == nil {
+//
+// THE RAW VALUE, unparsed. Every caller passes it to [github.ParseTier], which
+// already answers the default for an empty string and for a typo and is the
+// package that owns the closed set — so a second "or default" here would be a
+// place for the two to disagree about what an unrecognised tier runs at.
+func seatTier(seat *org.Role) string {
+	if seat == nil || seat.GitHub == nil {
 		return ""
 	}
-	return seat.Integrations.GitHub.TierOrDefault()
+	return seat.GitHub.Tier
 }
 
 // orgOf is the organization whose repositories these agents work in.
@@ -478,7 +489,7 @@ func (s *Service) apiBaseOf(company *config.Company) string {
 // person can change those afterwards. A `${PUBLIC_URL}` copied in literally
 // creates an app nothing can ever deliver to.
 func (s *Service) publicBase() string {
-	company := s.company()
+	company, _ := s.company()
 	if company == nil {
 		return ""
 	}
