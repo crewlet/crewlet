@@ -802,7 +802,8 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 					Generation: uint32(row.position / GenerationStride),
 					Seq:        uint64(row.position % GenerationStride),
 				},
-				Payload:  row.payload,
+				Payload:  body,
+				framed:   row.payload,
 				StoredAt: row.storedAt,
 			}
 			landed, err := r.reprocessOne(ctx, w, rec)
@@ -1016,11 +1017,13 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 		out = append(out, Record{
 			Envelope: env,
 			Position: Position{Stream: r.spec.Name, Generation: r.gen, Seq: m.Seq},
-			// THE FRAMED BYTES, not the body: lossless means what was
-			// published, so a record retained here is re-verified by
-			// the build that can finally read it rather than trusted
-			// because an earlier build once looked at it.
-			Payload:  m.Payload,
+			// THE BODY TO THE APPLIER, THE FRAME TO THE TABLE. The
+			// domain decodes what it published; the deferred table
+			// keeps what the broker held, so a record retained here
+			// is re-verified by the build that can finally read it
+			// rather than trusted because an earlier build looked.
+			Payload:  body,
+			framed:   m.Payload,
 			StoredAt: m.StoredAt,
 			verdict:  verdict,
 			ack:      m.Ack,

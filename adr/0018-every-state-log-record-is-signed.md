@@ -2,8 +2,8 @@
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/statelog.TestATamperedRecordIsRefusedPermanently`, `internal/statelog.TestAKeyringThatCannotSignIsRefusedAtConstruction`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`
-- **Cost-when-tried:** the change feed shipped as the second reader of a signed log without the frame, for one commit. Every record in the company came back `invalid character 'c' looking for beginning of value`, the feed's own rule acknowledged and skipped each one, and every notification stopped while the applier beside it verified and applied the same bytes.
+- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/statelog.TestATamperedRecordIsRefusedPermanently`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`
+- **Cost-when-tried:** both readers shipped handing the frame on, and neither failed as a signature bug. The applier put the framed bytes on `Record.Payload`, which every domain decodes, so every record came back `invalid character 'c' looking for beginning of value` from inside the apply transaction — the position never moved, health read the node as BEHIND rather than broken, and it shed its seats to a peer that would have done the same. The change feed read the same bytes and acknowledged each one under its own rule for a record it cannot decode, so every notification in the company stopped.
 - **Tag-status:** unreleased
 
 ## The decision
@@ -26,6 +26,14 @@ clause the tree keeps needing: the applier is not the only one. The change feed
 is a second consumer over the same stream, and anything that later reads those
 bytes is a third. Each opens the frame first, and what travels onward is the
 BODY.
+
+That has a shape in the types, and it is where both failures landed.
+`Record.Payload` is the BODY, because every applier decodes it; the framed form
+is a private field the framework keeps, because a retained record is
+re-verified by the build that can finally read it rather than trusted because
+an earlier build once looked at it. A reader handed one where it wanted the
+other does not fail as a signature problem — it fails as its own decoder
+rejecting every record in the company.
 
 Two failures, and only one is recoverable. A key this node does not hold is a
 fact about THIS NODE and changes when an operator adds the key, so the record

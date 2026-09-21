@@ -121,7 +121,7 @@ func (b *reorderBuffer) checked(ready []Record, next uint64) ([]Record, error) {
 func payloadBytes(held []Record) int {
 	n := 0
 	for _, rec := range held {
-		n += len(rec.Payload)
+		n += len(rec.framed)
 	}
 	return n
 }

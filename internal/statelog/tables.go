@@ -365,7 +365,7 @@ func (t tables) retain(ctx context.Context, tx *sql.Tx, rec Record, compacted bo
 			(position, subject, subject_kind, subject_id, version, payload, stored_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (position) DO NOTHING`,
-		key, subject, rec.Subject.Kind, rec.Subject.ID, rec.V, rec.Payload,
+		key, subject, rec.Subject.Kind, rec.Subject.ID, rec.V, rec.framed,
 		store.EncodeTime(rec.StoredAt)); err != nil {
 		return fmt.Errorf("statelog: retain the record at %s: %w", rec.Position, err)
 	}

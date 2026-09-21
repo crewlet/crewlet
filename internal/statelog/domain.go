@@ -429,12 +429,29 @@ type Record struct {
 	// the broker's sequence and the writer's own generation.
 	Position Position
 
-	// Payload is the record as published. The framework never decodes it,
-	// and a record this build cannot read is retained as exactly these
-	// bytes — LOSSLESS MEANS THE BYTES, so a later build reprocesses what
-	// was published rather than what an intermediate build understood of
-	// it.
+	// Payload is the record's BODY: what the domain published, with the
+	// framework's signature frame already opened and checked. An applier
+	// decodes this and never sees the frame, which is ADR-0018's rule
+	// stated at the one field every applier reads — the alternative is
+	// every domain unwrapping for itself, and the one that forgot would
+	// fail on every record in the company while its neighbour worked.
+	//
+	// It is NOT what a retained record is stored as. That is the framed
+	// form, which the framework keeps privately, because LOSSLESS MEANS
+	// THE BYTES: a record filed under a key this node does not hold is
+	// re-opened and re-verified by the build that can finally read it,
+	// rather than trusted because an earlier build once looked at it.
 	Payload []byte
+
+	// framed is the record exactly as it was published, frame and all.
+	//
+	// UNEXPORTED, for [Record.verdict]'s reason: it is the framework's own
+	// copy and only the framework may write it down or open it. An applier
+	// that could reach it could decode bytes the framework has not
+	// authenticated, which is the one thing the frame exists to prevent.
+	// It is what the deferred table stores and what [Runner] re-verifies
+	// on a reprocess.
+	framed []byte
 
 	// StoredAt is the broker's own timestamp for this record, which is
 	// what makes it byte-identical on every node rather than a clock each
