@@ -248,3 +248,20 @@ func TestAWideArgumentIDSurvivesTheEnvelope(t *testing.T) {
 		}
 	}
 }
+
+// A TAIL IS NOT A DOCUMENT, on the one path where a model's raw text reaches
+// the decoder whole: the STRING form of an argument list, which is what a
+// model that learned OpenAI's wire format reproduces. A Decoder reads one
+// value and stops, so `{"a":1}garbage` would decode clean and the suffix be
+// dropped in silence — where the `json.Unmarshal` this replaced refused it and
+// the call fell back to no arguments. Refusing is the honest answer: half a
+// model's arguments is not its request.
+func TestAnArgumentListWithATailIsRefused(t *testing.T) {
+	env := ParseEnvelope(`{"tool_calls": [{"name": "get_issue", "arguments": "{\"id\": 1}garbage"}]}`)
+	if len(env.ToolCalls) != 1 {
+		t.Fatalf("ParseEnvelope gave %d calls, want 1", len(env.ToolCalls))
+	}
+	if got := env.ToolCalls[0].Arguments; len(got) != 0 {
+		t.Errorf("Arguments = %v, want none — the text had a tail", got)
+	}
+}

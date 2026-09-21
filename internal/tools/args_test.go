@@ -97,9 +97,30 @@ func TestReadArgsKeepsAWideIDExact(t *testing.T) {
 // NIL AND EMPTY ARE DIFFERENT CLAIMS on a ledger line: nil renders as "no
 // arguments shown", an empty map as "called with none".
 func TestReadArgsAnswersNilForWhatItCannotRead(t *testing.T) {
-	for _, raw := range []string{"", "not json", `{"a":1`, `["a"]`, "null"} {
+	for _, raw := range []string{
+		"", "not json", `{"a":1`, `["a"]`, "null",
+		// A TAIL IS NOT A DOCUMENT. A Decoder reads one value and stops,
+		// so both of these decode clean unless the whole text is
+		// checked — and a record that is two documents, or one with a
+		// suffix, is a record something truncated or spliced.
+		`{"a":1}garbage`,
+		`{"a":1}{"b":2}`,
+	} {
 		if got := tools.ReadArgs(raw); got != nil {
 			t.Errorf("ReadArgs(%q) = %v, want nil", raw, got)
+		}
+	}
+}
+
+// TRAILING WHITESPACE IS NOT A TAIL, and the check above must not start
+// refusing over one: `RecordArgs` writes through an Encoder, whose document
+// ends with a newline it trims — a reader that treated one as a splice would
+// refuse the very records this pair is written to round-trip.
+func TestReadArgsTakesADocumentWithTrailingSpace(t *testing.T) {
+	for _, raw := range []string{"{\"a\":1}\n", `{"a":1}  `} {
+		got := tools.ReadArgs(raw)
+		if got == nil || got["a"] == nil {
+			t.Errorf("ReadArgs(%q) = %v, want the document", raw, got)
 		}
 	}
 }

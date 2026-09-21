@@ -2,7 +2,9 @@ package cliagent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -92,6 +94,15 @@ func decodeEnvelopeObject(text string) (map[string]any, bool) {
 	dec.UseNumber()
 	var doc map[string]any
 	if err := dec.Decode(&doc); err != nil {
+		return nil, false
+	}
+	// EXACTLY ONE DOCUMENT. A Decoder reads one value and stops, so
+	// `{"message":"hi"}and then some prose` would decode clean where the
+	// `json.Unmarshal` this replaced refused it — and refusing it is what
+	// makes the candidate order mean anything: a prefix that happens to
+	// parse must not win over the fenced block further down that IS the
+	// answer. Trailing whitespace is not a tail.
+	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
 		return nil, false
 	}
 	return doc, doc != nil

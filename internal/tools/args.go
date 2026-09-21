@@ -3,6 +3,8 @@ package tools
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 )
 
@@ -79,6 +81,18 @@ func ReadArgs(raw string) map[string]any {
 	dec.UseNumber()
 	var args map[string]any
 	if err := dec.Decode(&args); err != nil {
+		return nil
+	}
+	// EXACTLY ONE DOCUMENT, which a Decoder does not otherwise insist on:
+	// it reads one value and stops, so `{"channel":"C"}garbage` decodes
+	// clean and the suffix is dropped in silence — where the `json.Unmarshal`
+	// this replaced refused the whole thing. A record that is two documents,
+	// or one with a tail, is a record something truncated or spliced, and
+	// "nil on anything it cannot read" is what the callers are promised.
+	// Trailing whitespace is not a tail: the encoder that writes these ends
+	// its document with a newline, which the writer trims and a reader must
+	// not start refusing over.
+	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
 		return nil
 	}
 	return args
