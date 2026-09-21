@@ -839,7 +839,7 @@ type Stream struct {
 	// EMBEDDED ONLY, for the reason `store_dir` and `debug` are: it is
 	// handed to the server this process STARTS. An external cluster's
 	// account limits are its own operator's to set.
-	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=4294967296;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
+	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=5368709120;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
 
 	// Cluster makes the embedded server join peers, which is the fleet
 	// topology: every node embeds a member of one cluster.
@@ -978,6 +978,28 @@ type Stream struct {
 	// fit the broker and a set one is not, and crossing it refuses the
 	// append rather than shedding history.
 	PagesLogMaxBytes int64 `yaml:"pages_log_max_bytes,omitempty" json:"pages_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's derived value, 1 GiB..16 GiB."`
+
+	// ChartLogMaxBytes is the byte ceiling on the org chart's log, the
+	// ordered stream every change to the company's own structure goes
+	// through.
+	//
+	// UNSET TAKES A FLAT GIBIBYTE, which is the framework's own minimum
+	// domain ceiling, and it is the only state log here that is NOT derived
+	// from the disk. The reason is that the other three grow with a corpus
+	// the operator's volume has something to say about, and this one does
+	// not: a chart is hundreds of objects, it changes when somebody is
+	// hired, moved or promoted, and a COMPLETELY BLOCKED trim reaches a
+	// gibibyte in well over a century at the modelled rate. A quarter of a
+	// storage array would be disk reserved for records no company will ever
+	// write, and a quarter of a laptop would be the same number by
+	// coincidence.
+	//
+	// It shares the state logs' one budget, and what the mutation log's
+	// field says about it holds here unchanged: the value is the one the
+	// stream is CREATED with, a derived value is scaled with the others to
+	// fit the broker and a set one is not, and crossing it refuses the
+	// append rather than shedding history.
+	ChartLogMaxBytes int64 `yaml:"chart_log_max_bytes,omitempty" json:"chart_log_max_bytes,omitempty" js:"min=1073741824;max=17179869184" desc:"Byte ceiling on the org chart's log; unset takes a flat 1 GiB, 1 GiB..16 GiB."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -1250,6 +1272,8 @@ func (s *Stream) validate(path Path) error {
 		TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling)
 	bytesInRange(&p, path, "pages_log_max_bytes", s.PagesLogMaxBytes,
 		PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling)
+	bytesInRange(&p, path, "chart_log_max_bytes", s.ChartLogMaxBytes,
+		ChartLogMaxBytesFloor, ChartLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -1273,18 +1297,20 @@ func (s *Stream) validate(path Path) error {
 	// these ceilings exactly fill still fails at boot; what covers that is
 	// the refusal itself, which names this limit, what was already spoken
 	// for, and the field the ceiling came from.
-	declared := s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes
+	declared := s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes +
+		s.PagesLogMaxBytes + s.ChartLogMaxBytes
 	if s.StoreMaxBytes > 0 && declared > s.StoreMaxBytes {
 		p.add(at(path, "store_max_bytes"), ErrConflict,
 			"%d bytes is smaller than the stream ceilings declared inside it "+
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
-				"pages_log_max_bytes %d = %d): the broker refuses a stream whose "+
-				"ceiling it cannot back, so this node would fail to provision one "+
-				"of them. Raise store_max_bytes, or lower the ceilings — and leave "+
-				"headroom, because the state logs reserve only a share of this "+
-				"limit and every other stream on the broker grows inside it",
+				"pages_log_max_bytes %d + chart_log_max_bytes %d = %d): the broker "+
+				"refuses a stream whose ceiling it cannot back, so this node would "+
+				"fail to provision one of them. Raise store_max_bytes, or lower the "+
+				"ceilings — and leave headroom, because the state logs reserve only "+
+				"a share of this limit and every other stream on the broker grows "+
+				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
-			s.PagesLogMaxBytes, declared)
+			s.PagesLogMaxBytes, s.ChartLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an

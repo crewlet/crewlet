@@ -528,17 +528,17 @@ stream:
                                     #   stream, so a full log drops no history —
                                     #   the append is refused, loudly, naming
                                     #   whatever is blocking the trim. ONE
-                                    #   BUDGET FOR ALL THREE LOGS: the broker
+                                    #   BUDGET FOR ALL FOUR LOGS: the broker
                                     #   reserves each ceiling in full when it
                                     #   creates the stream, so the derived
-                                    #   ceilings of this field and the two below
+                                    #   ceilings of this field and the three below
                                     #   are scaled down together to fit half of
                                     #   what the broker can grant them (never
                                     #   below 1 GiB each). A value you set is
                                     #   never scaled, and a boot that cannot
                                     #   reserve it fails naming the field, the
                                     #   bytes it needed and the bytes the broker
-                                    #   had. Every one of the three is the value
+                                    #   had. Every one of the four is the value
                                     #   a stream is CREATED with: editing it
                                     #   later changes nothing until
                                     #   `crewlet retention set-capacity` does.
@@ -568,6 +568,20 @@ stream:
                                     #   and a blocked trim fills either one in
                                     #   the same time. Crossing it refuses the
                                     #   append, like the mutation log's
+  # chart_log_max_bytes: 1073741824 #   the org chart's log, the ordered stream
+                                    #   every change to the company's own
+                                    #   structure goes through (1..16 GiB).
+                                    #   THE ONE CEILING THAT IS NOT DERIVED FROM
+                                    #   THE DISK: unset takes a flat 1 GiB. The
+                                    #   other three grow with a corpus your
+                                    #   volume has something to say about, and a
+                                    #   chart does not — it is hundreds of
+                                    #   objects and it changes when somebody is
+                                    #   hired, moved or promoted, so a blocked
+                                    #   trim reaches a gibibyte in well over a
+                                    #   century. Raise it only if you are
+                                    #   reorganising continuously and the trim
+                                    #   is stopped
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,

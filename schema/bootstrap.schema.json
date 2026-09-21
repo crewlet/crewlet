@@ -282,6 +282,12 @@
     "Stream": {
       "additionalProperties": false,
       "properties": {
+        "chart_log_max_bytes": {
+          "description": "Byte ceiling on the org chart's log; unset takes a flat 1 GiB, 1 GiB..16 GiB.",
+          "maximum": 17179869184,
+          "minimum": 1073741824,
+          "type": "integer"
+        },
         "cluster": {
           "$ref": "#/$defs/StreamCluster"
         },
@@ -316,7 +322,7 @@
         "store_max_bytes": {
           "description": "How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem.",
           "maximum": 70368744177664,
-          "minimum": 4294967296,
+          "minimum": 5368709120,
           "type": "integer"
         },
         "sync": {

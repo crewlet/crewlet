@@ -86,6 +86,31 @@ const (
 	PagesLogMaxBytesFloor   int64 = 1 << 30
 	PagesLogMaxBytesCeiling int64 = 256 << 30
 
+	// ChartLogMaxBytesFloor and ChartLogMaxBytesCeiling bound the org
+	// chart's log, and DefaultChartLogMaxBytes is what an unset value takes.
+	//
+	// THE DEFAULT IS THE FLOOR, and this is the one state log whose ceiling
+	// is not derived from the disk. The other three grow with a corpus the
+	// operator's volume has something to say about; a chart does not. It is
+	// hundreds of objects — a company's units and its seats — and it changes
+	// when somebody is hired, moved or promoted rather than on every comment
+	// or every save. At the reference company's rate, a few hundred
+	// structural records and a few thousand content records a year at a few
+	// kilobytes each, a COMPLETELY BLOCKED trim reaches a gibibyte in well
+	// over a century. There is no smaller number worth having — a gibibyte
+	// is already the framework's own minimum domain ceiling, below which the
+	// engine's scaling will not take a log — so the honest default is the
+	// floor rather than a fraction of a disk that would reserve a quarter of
+	// a storage array for records no company will ever write.
+	//
+	// THE CEILING IS A TYPO GUARD rather than a policy, like the store
+	// limit's: 16 GiB is four orders of magnitude past the modelled
+	// year-five volume, so anything beyond it is a unit mistake and not a
+	// deployment.
+	DefaultChartLogMaxBytes int64 = 1 << 30
+	ChartLogMaxBytesFloor   int64 = 1 << 30
+	ChartLogMaxBytesCeiling int64 = 16 << 30
+
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
 	// is than the mutation log's derived ceiling.
 	//
@@ -111,18 +136,25 @@ const (
 	// StoreMaxBytesFloor and StoreMaxBytesCeiling bound the embedded
 	// broker's own declared store limit.
 	//
-	// THE FLOOR IS FOUR GIBIBYTES, which is the smallest limit the engine's
-	// own logs fit inside: three state-log domains, none of which may be
+	// THE FLOOR IS FIVE GIBIBYTES, which is the smallest limit the engine's
+	// own logs fit inside: FOUR state-log domains, none of which may be
 	// sized below TrackerLogMaxBytesFloor, plus the mailboxes, the event
 	// stream and every coordination bucket, which reserve nothing and grow
 	// against the same number. Below it a node provisions its way to a
 	// refusal on whichever stream happens to be last.
 	//
+	// IT MOVED WITH THE FOURTH DOMAIN. At four gibibytes the org chart's
+	// log was the one that did not fit: four explicit floors exactly fill
+	// the old limit, so the cross-field check above passes — it refuses
+	// only a sum GREATER than the limit — and the node then fails at boot
+	// on whichever stream the broker reached last, which is the failure
+	// that check exists to move forward to `crewlet validate`.
+	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is two
 	// orders of magnitude above the largest estate the domain ceilings can
 	// describe (1 TiB of mutation log, 256 GiB of vectors), so anything
 	// past it is a unit mistake rather than a deployment.
-	StoreMaxBytesFloor   int64 = 4 << 30
+	StoreMaxBytesFloor   int64 = 5 << 30
 	StoreMaxBytesCeiling int64 = 64 << 40
 )
 
@@ -290,6 +322,23 @@ func (s Stream) PagesMaxBytes(free int64) (int64, bool) {
 		return s.PagesLogMaxBytes, false
 	}
 	return DerivedLogMaxBytes(free) / DerivedPagesLogDivisor, true
+}
+
+// ChartMaxBytes is the org chart's log ceiling, and whether it was derived.
+//
+// IT TAKES NO FREE-SPACE ARGUMENT, unlike every other ceiling here, and the
+// absence is the statement: this default is a property of the CORPUS and not of
+// the disk — see [DefaultChartLogMaxBytes] — so a parameter it ignored would be
+// a signature claiming a relationship that does not exist.
+//
+// The second return is still what the engine logs when it sizes the stream, and
+// it still reports `true` for the default: a value nobody wrote is one the
+// shared-budget scaling may lower, and one an operator wrote is not.
+func (s Stream) ChartMaxBytes() (int64, bool) {
+	if s.ChartLogMaxBytes > 0 {
+		return s.ChartLogMaxBytes, false
+	}
+	return DefaultChartLogMaxBytes, true
 }
 
 // VectorsMaxBytes is the vector changelog's ceiling, and whether it was

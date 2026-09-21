@@ -212,6 +212,45 @@ func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 	}
 }
 
+// THE ORG CHART'S LOG IS THE ONE THAT IS NOT DERIVED FROM THE DISK.
+//
+// Every other state log grows with a corpus the operator's volume has something
+// to say about. A chart is hundreds of objects and changes when somebody is
+// hired, moved or promoted, so a fraction of a storage array would reserve disk
+// for records no company will ever write and a fraction of a laptop would land
+// on the same number by coincidence. The default is therefore the framework's
+// own minimum domain ceiling, flat — and the accessor takes no free-space
+// argument at all, because a parameter it ignored would be a signature claiming
+// a relationship that does not exist.
+func TestTheChartCeilingIsFlatAndNotDerivedFromTheDisk(t *testing.T) {
+	t.Parallel()
+	const gib = int64(1) << 30
+
+	got, derived := config.Stream{}.ChartMaxBytes()
+	if got != config.DefaultChartLogMaxBytes || !derived {
+		t.Errorf("unset = (%d, derived %v), want (%d, true)",
+			got, derived, config.DefaultChartLogMaxBytes)
+	}
+	// NEVER BELOW WHAT TIER A WOULD ACCEPT AS A VALUE, or a node could
+	// derive a ceiling its own validation refuses to be told.
+	if got < config.ChartLogMaxBytesFloor {
+		t.Errorf("the default %d is under the floor %d", got, config.ChartLogMaxBytesFloor)
+	}
+	// AND IT IS THE FRAMEWORK'S FLOOR, which is what the constant's own
+	// reasoning rests on: below a gibibyte the engine's shared-budget
+	// scaling will not take a log at all, so there is no smaller number
+	// worth having.
+	if got != gib {
+		t.Errorf("the default is %d, want a gibibyte — the framework's minimum "+
+			"domain ceiling is what the reasoning at the constant rests on", got)
+	}
+
+	s := config.Stream{ChartLogMaxBytes: 3 * gib}
+	if got, derived := s.ChartMaxBytes(); got != 3*gib || derived {
+		t.Errorf("set = (%d, derived %v), want the configured value", got, derived)
+	}
+}
+
 // THE VECTOR CHANGELOG IS SIZED FOR THE PEAK, and the peak is a model change
 // republishing every source at once — 93× the steady state. A default sized
 // from the steady state would refuse the one operation it exists to survive.
@@ -272,17 +311,21 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		accept bool
 		says   string
 	}{
-		"a log below a gibibyte":   {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = gib - 1 }, false, "tracker_log_max_bytes"},
-		"a log at a gibibyte":      {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = gib }, true, ""},
-		"a log at a tebibyte":      {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = 1024 * gib }, true, ""},
-		"a log past a tebibyte":    {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = 1024*gib + 1 }, false, "tracker_log_max_bytes"},
-		"vectors below a gibibyte": {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = gib - 1 }, false, "tracker_vectors_max_bytes"},
-		"vectors at 256 GiB":       {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 256 * gib }, true, ""},
-		"vectors past 256 GiB":     {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 257 * gib }, false, "tracker_vectors_max_bytes"},
-		"pages below a gibibyte":   {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib - 1 }, false, "pages_log_max_bytes"},
-		"pages at a gibibyte":      {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib }, true, ""},
-		"pages at 256 GiB":         {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256 * gib }, true, ""},
-		"pages past 256 GiB":       {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256*gib + 1 }, false, "pages_log_max_bytes"},
+		"a log below a gibibyte":     {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = gib - 1 }, false, "tracker_log_max_bytes"},
+		"a log at a gibibyte":        {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = gib }, true, ""},
+		"a log at a tebibyte":        {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = 1024 * gib }, true, ""},
+		"a log past a tebibyte":      {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = 1024*gib + 1 }, false, "tracker_log_max_bytes"},
+		"vectors below a gibibyte":   {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = gib - 1 }, false, "tracker_vectors_max_bytes"},
+		"vectors at 256 GiB":         {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 256 * gib }, true, ""},
+		"vectors past 256 GiB":       {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 257 * gib }, false, "tracker_vectors_max_bytes"},
+		"pages below a gibibyte":     {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib - 1 }, false, "pages_log_max_bytes"},
+		"pages at a gibibyte":        {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib }, true, ""},
+		"pages at 256 GiB":           {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256 * gib }, true, ""},
+		"pages past 256 GiB":         {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256*gib + 1 }, false, "pages_log_max_bytes"},
+		"the chart below a gibibyte": {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = gib - 1 }, false, "chart_log_max_bytes"},
+		"the chart at a gibibyte":    {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = gib }, true, ""},
+		"the chart at 16 GiB":        {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = 16 * gib }, true, ""},
+		"the chart past 16 GiB":      {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = 16*gib + 1 }, false, "chart_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()
@@ -351,10 +394,32 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 		says   string
 	}{
 		"unset":                {func(*config.Bootstrap) {}, true, ""},
-		"below four gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 4*gib - 1 }, false, "store_max_bytes"},
-		"at four gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 4 * gib }, true, ""},
+		"below five gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 5*gib - 1 }, false, "store_max_bytes"},
+		"at five gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 5 * gib }, true, ""},
 		"at 64 TiB":            {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
 		"past 64 TiB":          {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
+		// THE FLOOR IS WHY THE FLOOR MOVED. Four state-log domains at
+		// their own floors are four gibibytes, which is what the limit
+		// used to be — and the cross-field rule below refuses only a sum
+		// GREATER than the limit, so at four this document validated and
+		// the node then failed at boot on whichever stream the broker
+		// reached last. The floor is what moves that refusal forward to
+		// `crewlet validate`.
+		"every domain at its own floor": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 5 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
+			b.Stream.PagesLogMaxBytes, b.Stream.ChartLogMaxBytes = gib, gib
+		}, true, ""},
+		"four domain floors inside the old limit": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 4 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
+			b.Stream.PagesLogMaxBytes, b.Stream.ChartLogMaxBytes = gib, gib
+		}, false, "store_max_bytes"},
+		"the chart's ceiling counts against the limit": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 16 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 8*gib, 4*gib
+			b.Stream.PagesLogMaxBytes, b.Stream.ChartLogMaxBytes = 4*gib, 4*gib
+		}, false, "chart_log_max_bytes"},
 		// OTHERWISE A VALID EXTERNAL DOCUMENT, coordination included: a
 		// case whose document has a second problem passes on whichever
 		// of the two fires, which would leave this rule uncovered.
