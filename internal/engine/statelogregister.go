@@ -413,8 +413,32 @@ func domainNames(domains []statelog.Domain) []string {
 // an empty set as — so the default deployment is unchanged, and it is the
 // operator who narrowed the roles who narrows the domains.
 func participationOf(roles placement.RoleSet) participation {
+	return participationIn(register(), roles)
+}
+
+// participationIn is participationOf over a given register, which is what
+// lets a test hand it a NARROWING predicate. Every shipped domain runs
+// everywhere, so the rules below are unreachable through [register] alone and
+// a case that could only call that would be asserting nothing.
+func participationIn(entries []registration, roles placement.RoleSet) participation {
+	// AN EMPTY SET IS EVERY ROLE, resolved HERE rather than left to each
+	// predicate. [placement.RoleSet] settles that convention — "declared
+	// nothing" and "does nothing" must never be the same answer — and a
+	// predicate is exactly where it would be forgotten: a rolling upgrade
+	// puts a peer's presence row with no roles on it in front of this
+	// node, and a predicate reading that as "no roles" would leave the
+	// peer out of every domain it narrows on. It would then not be counted
+	// for that domain's trim, and the fleet would trim past a node that is
+	// still applying.
+	//
+	// It costs nothing today, because every shipped domain runs
+	// everywhere. It is here now because the first domain that narrows is
+	// the one that would have found out.
+	if len(roles) == 0 {
+		roles = placement.DefaultRoles()
+	}
 	var out participation
-	for _, entry := range register() {
+	for _, entry := range entries {
 		// A NIL PREDICATE READS AS "NOWHERE", and [checkRegister]
 		// refuses one at boot for that reason: the safe-looking
 		// default, running everywhere, would make a domain nobody

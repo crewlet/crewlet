@@ -309,3 +309,50 @@ func subsetsOf(all []string) [][]string {
 	}
 	return out
 }
+
+// A PEER THAT DECLARES NO ROLES RUNS EVERY DOMAIN.
+//
+// A presence row with no roles on it is what a build predating the field
+// writes, and it is exactly what a rolling upgrade puts in front of the new
+// nodes. [placement.RoleSet] settles that "declared nothing" and "does
+// nothing" must never be the same answer, and a domain's own predicate is
+// where that would be forgotten: a peer read as running nothing is a peer left
+// out of that domain's counted set, so the fleet trims past a node that is
+// still applying.
+//
+// IT IS EXERCISED THROUGH A NARROWING PREDICATE, because every shipped domain
+// runs everywhere and a case over the real register could not tell the
+// resolution from the answer.
+func TestAPeerThatDeclaresNoRolesRunsEveryDomain(t *testing.T) {
+	onlyIngress := register()
+	onlyIngress[0].Participates = func(r placement.RoleSet) bool {
+		_, holds := r[placement.RoleIngress]
+		return holds
+	}
+	narrowed := onlyIngress[0].Domain.Name()
+
+	for name, roles := range map[string]placement.RoleSet{
+		"a nil set":            nil,
+		"an empty non-nil set": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := participationIn(onlyIngress, roles); !got.Runs(narrowed) {
+				t.Errorf("a peer declaring no roles declines %q — it would be left "+
+					"out of that domain's counted set, and the fleet would trim "+
+					"past a node that is still applying", narrowed)
+			}
+		})
+	}
+
+	// THE CONTROL: the predicate really does narrow, so the assertions
+	// above are the resolution working rather than a predicate that says
+	// yes to everything.
+	seatsOnly, err := placement.ParseRoles([]string{string(placement.RoleSeats)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if participationIn(onlyIngress, seatsOnly).Runs(narrowed) {
+		t.Fatalf("the fixture predicate admits %q on a seats-only node, so the "+
+			"cases above prove nothing", narrowed)
+	}
+}
