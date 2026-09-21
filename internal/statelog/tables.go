@@ -465,16 +465,42 @@ func (t tables) deferredBelow(ctx context.Context, tx *sql.Tx, s ScopeSet, below
 		return Deferral{}, false, nil
 	}
 
+	// THE ROOTS ARE A ROW SET, NEVER A CHAIN OF `OR`s.
+	//
+	// A scope's roots are one per OBJECT the operation writes, so an import
+	// carries as many as the batch has members — five hundred, where the org
+	// chart caps one. Written as
+	// `... OR s.path = ? OR s.path LIKE ? ...` that is two chained terms per
+	// root, and a chained `OR` parses LEFT-DEEP: the expression tree's depth
+	// grows with the list. Turso refuses one past a hundred with
+	// `Parse error: Expression tree is too large (maximum depth 100)`, so a
+	// company file with fifty-odd seats failed its own boot seed — measured,
+	// with the whole chart lost and the node serving a company of nobody.
+	//
+	// A CTE of `SELECT ? UNION ALL …` is a compound SELECT rather than one
+	// expression, so its depth does not grow with the list: probed clean at
+	// a thousand prefixes, twice the largest batch this engine accepts.
+	//
+	// The EXACT match stays an `IN` list, which is flat for the same reason
+	// and which the roots join: a root is both a path the query is about and
+	// a prefix of the paths beneath it.
 	args := make([]any, 0, len(closure)+len(roots)*2+1)
-	for _, p := range closure {
+	exact := make([]string, 0, len(closure)+len(roots))
+	exact = append(exact, closure...)
+	exact = append(exact, roots...)
+	for _, p := range exact {
 		args = append(args, p)
 	}
 	q := `SELECT d.position, d.version FROM ` + t.scope + ` s
 	      JOIN ` + t.deferred + ` d ON d.position = s.position
-	      WHERE (s.path IN (` + placeholders(len(closure)) + `)`
-	for _, r := range roots {
-		q += ` OR s.path = ? OR s.path LIKE ? ESCAPE '\'`
-		args = append(args, r, store.LikePrefix(r+ScopeSeparator))
+	      WHERE (s.path IN (` + placeholders(len(exact)) + `)`
+	if len(roots) > 0 {
+		q = `WITH beneath(prefix) AS (` + unionOfPlaceholders(len(roots)) + `) ` + q +
+			` OR EXISTS (SELECT 1 FROM beneath
+			             WHERE s.path LIKE beneath.prefix ESCAPE '\')`
+		for _, r := range roots {
+			args = append(args, store.LikePrefix(r+ScopeSeparator))
+		}
 	}
 	q += `)`
 	if below != nil {
@@ -561,4 +587,25 @@ func placeholders(n int) string {
 // and therefore whether an anchor is written for it.
 func arbitrates(kinds []string, kind string) bool {
 	return slices.Contains(kinds, kind)
+}
+
+// unionOfPlaceholders is n bound values as a one-column row set.
+//
+// `SELECT ? UNION ALL SELECT ? …`, which is a COMPOUND SELECT: its depth does
+// not grow with n the way a chained `OR` or `IN (SELECT …)` expression does.
+// See [tables.deferredBelow] for the parse-depth refusal this shape exists to
+// stay under.
+func unionOfPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(n * len("SELECT ? UNION ALL "))
+	for i := range n {
+		if i > 0 {
+			b.WriteString(" UNION ALL ")
+		}
+		b.WriteString("SELECT ?")
+	}
+	return b.String()
 }
