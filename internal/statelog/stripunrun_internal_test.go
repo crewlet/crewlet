@@ -219,3 +219,81 @@ func (unrunDomain) ScopeIndex() string    { return "pages_log_deferred_scope" }
 func (unrunDomain) OpsTable() string      { return "pages_ops" }
 func (unrunDomain) ReadinessInput() bool  { return true }
 func (unrunDomain) ClaimsIdentity() bool  { return true }
+
+// AN ARTEFACT FROM A BUILD THAT PREDATES A DOMAIN IS STILL ADOPTED.
+//
+// Its file has no tables for that domain at all, and refusing it would mean
+// this node declined a snapshot over rows for a domain IT DOES NOT EVEN RUN.
+// The donor-side scrub refuses a table it cannot find, deliberately — a
+// drifted list there means private rows travel under a claim they were
+// removed — and this is the one caller for which that is the wrong answer.
+func TestAnArtefactWithoutTheDeclinedDomainsTablesIsStillAdopted(t *testing.T) {
+	t.Parallel()
+	path := donorFile(t)
+	dropPagesTables(t, path)
+
+	a := &Adopter{
+		deps: AdoptDeps{Unrun: []Domain{unrunDomain{}}},
+		log:  slog.New(slog.DiscardHandler),
+	}
+	stripped, err := a.stripUnrun(t.Context(), path)
+	if err != nil {
+		t.Fatalf("an artefact with no tables for the declined domain was refused: %v", err)
+	}
+	if !slices.Equal(stripped, []string{"pages"}) {
+		t.Errorf("stripped = %v, want the declined domain named anyway — its "+
+			"checkpoint was there even though its tables were not", stripped)
+	}
+	if _, ok := cursorRow(t, path, "CREWLET_PAGES_LOG"); ok {
+		t.Error("the checkpoint survived, so an applier started later would resume " +
+			"above records whose rows this file never had")
+	}
+	if got := rowsIn(t, path, "tracker_history"); got != 1 {
+		t.Errorf("tracker_history holds %d rows, want the row this node DOES run", got)
+	}
+}
+
+// TestStrippingTwiceIsStrippingOnce, because the step runs between a crash and
+// a retry like every other one in the join: the second pass finds the tables
+// already empty, and a refusal there would leave a node unable to adopt
+// anything for as long as that artefact was the best on offer.
+func TestStrippingTwiceIsStrippingOnce(t *testing.T) {
+	t.Parallel()
+	path := donorFile(t)
+	a := &Adopter{
+		deps: AdoptDeps{Unrun: []Domain{unrunDomain{}}},
+		log:  slog.New(slog.DiscardHandler),
+	}
+	if _, err := a.stripUnrun(t.Context(), path); err != nil {
+		t.Fatalf("first strip: %v", err)
+	}
+	if _, err := a.stripUnrun(t.Context(), path); err != nil {
+		t.Fatalf("a second strip of the same file was refused: %v", err)
+	}
+	if got := rowsIn(t, path, "pages_titles"); got != 0 {
+		t.Errorf("pages_titles holds %d rows after two strips", got)
+	}
+}
+
+// dropPagesTables makes the file look like one a build predating the domain
+// wrote: the tables are simply not there.
+func dropPagesTables(t *testing.T, path string) {
+	t.Helper()
+	db, err := store.OpenEstate(t.Context(), store.EstateReplicated, path, store.Options{})
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
+		for table := range (unrunDomain{}).Tables() {
+			if _, err := tx.ExecContext(t.Context(), `DROP TABLE `+table); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("drop the declined domain's tables: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}

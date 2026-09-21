@@ -441,7 +441,33 @@ func (a *Adopter) stripUnrun(ctx context.Context, path string) ([]string, error)
 	}
 	slices.Sort(tables)
 	slices.Sort(names)
-	if _, err := store.ScrubFile(ctx, path, tables); err != nil {
+
+	// ONLY THE TABLES THAT ARE THERE AND HOLD SOMETHING, which is not a
+	// tidy-up: [store.ScrubFile] REFUSES a name the file does not have,
+	// and that refusal is right for the DONOR it was written for — a
+	// drifted list there means private rows travel under a claim they
+	// were removed. Here it is the opposite. A donor on an older build
+	// has no tables for a domain that build predates, and its artefact is
+	// perfectly good; refusing it would mean this node declined a
+	// snapshot over rows for a domain IT DOES NOT EVEN RUN.
+	//
+	// [store.EmptyTables] answers both cases at once — it reports a table
+	// the file does not have as empty, in its own words, "in every sense
+	// the recipient cares about" — so what is left to scrub is exactly the
+	// present, non-empty ones, and a second strip of the same file is a
+	// no-op rather than a refusal.
+	empty, err := store.EmptyTables(ctx, path, tables)
+	if err != nil {
+		return nil, fmt.Errorf("statelog: read what the artefact holds for %v: %w",
+			names, err)
+	}
+	var holding []string
+	for _, table := range tables {
+		if !slices.Contains(empty, table) {
+			holding = append(holding, table)
+		}
+	}
+	if _, err := store.ScrubFile(ctx, path, holding); err != nil {
 		return nil, fmt.Errorf("statelog: strip %v from the artefact: %w", names, err)
 	}
 	// `statelog_cursor` spelled here as it is in every query that reads it:
