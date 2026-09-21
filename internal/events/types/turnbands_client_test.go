@@ -362,7 +362,17 @@ func absorbedKeys(body string) []string {
 
 // A key at the start of a line, which is what prettier guarantees for this
 // map and what keeps a colon inside a comment or a value from reading as one.
-var absorbedKey = regexp.MustCompile(`(?m)^\s*([a-z][a-z0-9_.]*):`)
+//
+// THE QUOTES ARE OPTIONAL BECAUSE TYPESCRIPT MAKES THEM SO, and reading only
+// the bare form is how this gate would stop covering exactly the entries most
+// likely to need it. An object key holding a dot cannot be written bare —
+// `turn.guard_breach`, `phase.tool_skill_blocked` and `prompt.size` are all
+// band members today — so the first one absorbed arrives quoted, matches
+// nothing here, and is checked by nobody. The `len(names) == 0` guard does not
+// notice, because the four unquoted keys beside it still match: the map would
+// report five entries and certify four of them, which is the silent skip this
+// whole file exists to make impossible.
+var absorbedKey = regexp.MustCompile(`(?m)^\s*"?([a-z][a-z0-9_.]*)"?:`)
 
 func sortedKeys(set map[string]bool) []string {
 	out := make([]string, 0, len(set))
