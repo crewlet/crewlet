@@ -152,7 +152,7 @@ func TestExecutorPromptInlinesFullPolicies(t *testing.T) {
 		"and meeting notes — search it before creating new docs."
 	o := acme()
 	o.Policies = []string{long}
-	contains(t, BuildExecutor(seatIn(o, "Engineer"), ExecutorInput{}), long)
+	contains(t, BuildExecutor(seatIn(o, "eng"), ExecutorInput{}), long)
 }
 
 func TestExecutorPromptRostersOnlyForLeads(t *testing.T) {
@@ -177,8 +177,8 @@ func TestExecutorPromptSandboxSectionIsGatedOnTheRole(t *testing.T) {
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}), "Sandbox code work", "run_sandbox")
 
 	o := acme()
-	o.Role("Engineer").Sandbox = &org.RoleSandbox{Enabled: true, CodingAgent: "claude-code"}
-	p := BuildExecutor(seatIn(o, "Engineer"), ExecutorInput{})
+	o.Role("eng").Sandbox = &org.RoleSandbox{Enabled: true, CodingAgent: "claude-code"}
+	p := BuildExecutor(seatIn(o, "eng"), ExecutorInput{})
 	// The run is detached and the SAME turn resumes with the result, which
 	// is what stops the model ending the turn to "report later".
 	contains(t, p, "run_sandbox", "resumes", "SAME turn")
@@ -213,11 +213,11 @@ func TestExecutorPromptDropsEmptySections(t *testing.T) {
 	t.Parallel()
 	o := acme()
 	o.Mission, o.Vision = "", ""
-	role := o.Role("Engineer")
+	role := o.Role("eng")
 	role.Backstory = ""
 	role.Responsibilities = nil
 	role.BehavioralGuidelines = nil
-	p := BuildExecutor(seatIn(o, "Engineer"), ExecutorInput{})
+	p := BuildExecutor(seatIn(o, "eng"), ExecutorInput{})
 	// Empty bullet lists are visual noise; a section with nothing in it is
 	// dropped whole.
 	excludes(t, p, "## Company Context", "## Your Background",
@@ -313,7 +313,7 @@ func TestIdentityLineAndSectionAgreeOnATopLevelSeat(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Acme", Roles: []*org.Role{{Name: "Engineer", Goal: "Ship."}}}
 	o.Normalize()
-	s := seatIn(o, "Engineer")
+	s := seatIn(o, "engineer")
 	contains(t, BuildExecutor(s, ExecutorInput{}), "None (top-level)")
 	contains(t, BuildReview(s, ReviewInput{}), "None (top-level)")
 }

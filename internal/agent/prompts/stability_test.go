@@ -161,11 +161,11 @@ func TestAssemblyIsDeterministic(t *testing.T) {
 	t.Parallel()
 	// A wide MCP surface, so a map-order leak has plenty of room to show.
 	o := acme()
-	o.Role("Engineer").MCPEnv = map[string]map[string]string{
+	o.Role("eng").MCPEnv = map[string]map[string]string{
 		"atlassian": {}, "github": {}, "gitlab": {},
 		"slack": {}, "mattermost": {}, "custom-a": {}, "custom-b": {},
 	}
-	seat := seatIn(o, "Engineer")
+	seat := seatIn(o, "eng")
 	cat := &fakeCatalogue{skills: []fakeSkill{
 		{key: "mcp:slack", mcpServer: "slack", summary: "S"},
 		{key: "mcp:github", mcpServer: "github", summary: "G"},

@@ -21,7 +21,7 @@ func describeOrg() *org.Organization {
 			Schedules: []org.Schedule{{Name: "nightly", Cron: "0 2 * * *", Task: "rotate"}},
 		}},
 		Units: []*org.Unit{{
-			Name: "Quality", Type: org.UnitTypeTeam, Lead: "QA Lead",
+			Name: "Quality", Type: org.UnitTypeTeam, Lead: "qa-lead",
 			Roles: []*org.Role{
 				{Name: "QA Lead", DeclaredHandle: "qa-lead"},
 				{Name: "QA Dev", DeclaredHandle: "qa-dev"},
@@ -195,7 +195,7 @@ func TestDescribeAndTheTickResolveRunnersIdentically(t *testing.T) {
 func TestEachRunnersExcludeHumanSeats(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
-		Name: "Quality", Type: org.UnitTypeTeam, Lead: "QA Lead",
+		Name: "Quality", Type: org.UnitTypeTeam, Lead: "qa-lead",
 		Roles: []*org.Role{
 			{Name: "QA Lead", DeclaredHandle: "qa-lead"},
 			{Name: "Sarah Chen", Kind: org.KindHuman, Contact: &org.HumanContact{SlackUserID: "U0HUMAN"}},
@@ -217,7 +217,7 @@ func TestLeadRunnerIsEmptyWhenTheEffectiveLeadIsHuman(t *testing.T) {
 	// filter is what keeps a fire from being addressed to an inbox nothing
 	// consumes.
 	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
-		Name: "Quality", Type: org.UnitTypeTeam, Lead: "Sarah Chen",
+		Name: "Quality", Type: org.UnitTypeTeam, Lead: "sarah-chen",
 		Roles: []*org.Role{
 			{Name: "Sarah Chen", Kind: org.KindHuman, Contact: &org.HumanContact{SlackUserID: "U0HUMAN"}},
 			{Name: "QA Dev", DeclaredHandle: "qa-dev"},
@@ -241,7 +241,7 @@ func TestALeadInheritedFromAnAncestorStillResolves(t *testing.T) {
 	// The reason `lead` survives as a target at all: it is DYNAMIC, and an
 	// inherited lead lives outside the unit's own subtree.
 	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
-		Name: "Engineering", Type: org.UnitTypeDepartment, Lead: "VP Eng",
+		Name: "Engineering", Type: org.UnitTypeDepartment, Lead: "vp-eng",
 		Roles: []*org.Role{{Name: "VP Eng", DeclaredHandle: "vp-eng"}},
 		Children: []*org.Unit{{
 			Name:  "Quality",
@@ -269,7 +269,7 @@ func TestEachResolvesDirectMembersOnly(t *testing.T) {
 	// the whole company. Schedules are not inherited downward either, which
 	// is the same rule seen from the other end.
 	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
-		Name: "Engineering", Type: org.UnitTypeDepartment, Lead: "VP Eng",
+		Name: "Engineering", Type: org.UnitTypeDepartment, Lead: "vp-eng",
 		Roles: []*org.Role{{Name: "VP Eng", DeclaredHandle: "vp-eng"}},
 		Schedules: []org.Schedule{{
 			Name: "sync", Cron: "0 9 * * *", Task: "sync", Target: org.TargetEach,

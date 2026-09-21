@@ -356,7 +356,7 @@ func namesUnderTheirOwnCap(seat Seat, tokens int) string {
 func TestCappingTheRosterDoesNotCapManages(t *testing.T) {
 	t.Parallel()
 	o := profiledReports(500)
-	seat := seatIn(o, "Engineering Lead")
+	seat := seatIn(o, "lead")
 	p := BuildExecutor(seat, ExecutorInput{ToolCatalogue: bigCatalogue()})
 
 	if got := len(seat.Role.Manages); got != 500 {

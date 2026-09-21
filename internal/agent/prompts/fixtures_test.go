@@ -22,7 +22,7 @@ func acme() *org.Organization {
 			Name:    "Eng Team",
 			Type:    org.UnitTypeTeam,
 			Purpose: "Build the thing.",
-			Lead:    "Engineering Lead",
+			Lead:    "lead",
 			Goals:   []string{"Ship v1.0."},
 			Channel: "C_ENG",
 			Roles: []*org.Role{
@@ -31,7 +31,7 @@ func acme() *org.Organization {
 					DeclaredHandle:   "lead",
 					Goal:             "Lead the engineering team.",
 					Responsibilities: []string{"Guide the team."},
-					Manages:          []string{"Engineer"},
+					Manages:          []string{"eng"},
 				},
 				{
 					Name:                 "Engineer",
@@ -51,20 +51,24 @@ func acme() *org.Organization {
 	return o
 }
 
-// seatIn is the seat named in org o. It panics on a missing name because a
-// fixture that names a seat the chart does not have is a broken test, not a
-// case worth branching on.
-func seatIn(o *org.Organization, name string) Seat {
-	role := o.Role(name)
+// seatIn is the seat with this HANDLE in org o. It panics on a missing one
+// because a fixture that names a seat the chart does not have is a broken
+// test, not a case worth branching on.
+//
+// THE HANDLE rather than the display name, which is what
+// [org.Organization.Role] resolves: a name is prose that gets renamed, and a
+// lookup by one goes dark the moment somebody does.
+func seatIn(o *org.Organization, handle string) Seat {
+	role := o.Role(handle)
 	if role == nil {
-		panic("no such seat: " + name)
+		panic("no such seat: " + handle)
 	}
 	return Seat{Org: o, Role: role, Env: noEnv}
 }
 
-func engineer() Seat { return seatIn(acme(), "Engineer") }
+func engineer() Seat { return seatIn(acme(), "eng") }
 
-func lead() Seat { return seatIn(acme(), "Engineering Lead") }
+func lead() Seat { return seatIn(acme(), "lead") }
 
 // noEnv resolves nothing. Every fixture uses it so a roster's contact
 // identities never depend on the process environment the whole test binary
@@ -79,7 +83,7 @@ func mixedAcme() *org.Organization {
 		Units: []*org.Unit{{
 			Name: "Eng Team",
 			Type: org.UnitTypeTeam,
-			Lead: "Sarah Chen",
+			Lead: "sarah-chen",
 			Roles: []*org.Role{
 				{
 					Name: "Sarah Chen",
@@ -90,7 +94,7 @@ func mixedAcme() *org.Organization {
 					},
 					Availability: "CET business hours; replies within ~4h",
 					Backstory:    "20 years in infrastructure.",
-					Manages:      []string{"Engineer"},
+					Manages:      []string{"eng"},
 				},
 				{Name: "Engineer", DeclaredHandle: "eng", Goal: "Ship quality code."},
 			},
@@ -188,7 +192,10 @@ func profiledReports(n int) *org.Organization {
 		} else {
 			report.DeclaredHandle = fmt.Sprintf("report-%03d", i)
 		}
-		lead.Manages = append(lead.Manages, name)
+		// THE HANDLE, which is what a manages entry resolves. A human
+		// report declares none, so it takes the slug of its own name —
+		// the same value org.Role.Handle derives.
+		lead.Manages = append(lead.Manages, report.Handle())
 		roles = append(roles, report)
 	}
 	o := &org.Organization{
@@ -196,7 +203,7 @@ func profiledReports(n int) *org.Organization {
 		Units: []*org.Unit{{
 			Name:  "Eng Team",
 			Type:  org.UnitTypeTeam,
-			Lead:  "Engineering Lead",
+			Lead:  "lead",
 			Roles: roles,
 		}},
 	}
@@ -207,4 +214,4 @@ func profiledReports(n int) *org.Organization {
 // bigLead is the seat every roster-allowance case is written against: a lead
 // whose team cannot possibly fit, so all three rungs of the ladder are
 // reachable and none of them is reached by accident.
-func bigLead(n int) Seat { return seatIn(profiledReports(n), "Engineering Lead") }
+func bigLead(n int) Seat { return seatIn(profiledReports(n), "lead") }

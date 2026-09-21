@@ -146,7 +146,7 @@ func unitOrg(target org.ScheduleTarget) *org.Organization {
 		Units: []*org.Unit{{
 			Name: "Quality",
 			Type: org.UnitTypeTeam,
-			Lead: "QA Lead",
+			Lead: "qa-lead",
 			Roles: []*org.Role{
 				{Name: "QA Lead", DeclaredHandle: "qa-lead"},
 				{Name: "QA Dev", DeclaredHandle: "qa-dev"},
@@ -504,7 +504,7 @@ func TestAHumanSeatIsNeverARunner(t *testing.T) {
 		Contact: &org.HumanContact{SlackUserID: "U0HUMAN"},
 	}
 	each := &org.Organization{Name: "Acme", Units: []*org.Unit{{
-		Name: "Quality", Type: org.UnitTypeTeam, Lead: "QA Lead",
+		Name: "Quality", Type: org.UnitTypeTeam, Lead: "qa-lead",
 		Roles: []*org.Role{{Name: "QA Lead", DeclaredHandle: "qa-lead"}, human},
 		Schedules: []org.Schedule{{
 			Name: "standup", Cron: "0 9 * * *", Task: "standup", Target: org.TargetEach,
@@ -518,7 +518,7 @@ func TestAHumanSeatIsNeverARunner(t *testing.T) {
 	requireTopics(t, h.q.inboxTopics(), "crewlet.agent.qa-lead.inbox")
 
 	lead := &org.Organization{Name: "Acme", Units: []*org.Unit{{
-		Name: "Quality", Type: org.UnitTypeTeam, Lead: "Sarah Chen",
+		Name: "Quality", Type: org.UnitTypeTeam, Lead: "sarah-chen",
 		Roles: []*org.Role{human, {Name: "QA Dev", DeclaredHandle: "qa-dev"}},
 		Schedules: []org.Schedule{{
 			Name: "report", Cron: "0 9 * * *", Task: "report", Target: org.TargetLead,

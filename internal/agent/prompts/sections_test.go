@@ -13,14 +13,14 @@ import (
 // running a turn.
 func TestHumanSeatsAreMarkedInBothIdentityRenderings(t *testing.T) {
 	t.Parallel()
-	s := seatIn(mixedAcme(), "Engineer")
+	s := seatIn(mixedAcme(), "eng")
 	contains(t, BuildExecutor(s, ExecutorInput{}), "**Reports to:** Sarah Chen (human)")
 	contains(t, BuildIdentityLine(s), "Sarah Chen (human)")
 }
 
 func TestHumanColleaguesNoteAppearsOnlyInMixedOrgs(t *testing.T) {
 	t.Parallel()
-	mixed := BuildExecutor(seatIn(mixedAcme(), "Engineer"), ExecutorInput{})
+	mixed := BuildExecutor(seatIn(mixedAcme(), "eng"), ExecutorInput{})
 	contains(t, mixed, "## Human colleagues", "NOT on A2A", "asynchronously")
 
 	// A pure-agent company's prompts are unchanged by the feature existing.
@@ -36,7 +36,7 @@ func TestRosterRendersHumanMemberBlock(t *testing.T) {
 		Units: []*org.Unit{{
 			Name: "Eng Team",
 			Type: org.UnitTypeTeam,
-			Lead: "Lead",
+			Lead: "lead",
 			Roles: []*org.Role{
 				{Name: "Lead", DeclaredHandle: "lead"},
 				{
@@ -54,7 +54,7 @@ func TestRosterRendersHumanMemberBlock(t *testing.T) {
 	}
 	o.Name = "Acme"
 	o.Normalize()
-	p := BuildExecutor(seatIn(o, "Lead"), ExecutorInput{})
+	p := BuildExecutor(seatIn(o, "lead"), ExecutorInput{})
 
 	contains(t, p, "**Sarah Chen** (sarah-chen) — **human teammate**")
 	// Identities render generically, labelled by transport. The shared
@@ -79,7 +79,7 @@ func TestRosterOmitsUnresolvedContactReferences(t *testing.T) {
 		Units: []*org.Unit{{
 			Name: "Eng Team",
 			Type: org.UnitTypeTeam,
-			Lead: "Lead",
+			Lead: "lead",
 			Roles: []*org.Role{
 				{Name: "Lead", DeclaredHandle: "lead"},
 				{
@@ -91,7 +91,7 @@ func TestRosterOmitsUnresolvedContactReferences(t *testing.T) {
 		}},
 	}
 	o.Normalize()
-	seat := seatIn(o, "Lead")
+	seat := seatIn(o, "lead")
 
 	excludes(t, BuildExecutor(seat, ExecutorInput{}), "${SARAH_SLACK_ID}", "Slack ID:")
 
@@ -143,7 +143,7 @@ func TestRosterDoesNotOfferAnOperatorIDAsAnAddress(t *testing.T) {
 		Units: []*org.Unit{{
 			Name: "Eng Team",
 			Type: org.UnitTypeTeam,
-			Lead: "Lead",
+			Lead: "lead",
 			Roles: []*org.Role{
 				{Name: "Lead", DeclaredHandle: "lead"},
 				{
@@ -155,7 +155,7 @@ func TestRosterDoesNotOfferAnOperatorIDAsAnAddress(t *testing.T) {
 		}},
 	}
 	o.Normalize()
-	p := BuildExecutor(seatIn(o, "Lead"), ExecutorInput{})
+	p := BuildExecutor(seatIn(o, "lead"), ExecutorInput{})
 
 	contains(t, p, "**Jane Founder** (jane-founder) — **human teammate**")
 	excludes(t, p, "Crewlet ID:", "crewlet")
@@ -165,7 +165,7 @@ func TestRosterDoesNotOfferAnOperatorIDAsAnAddress(t *testing.T) {
 	// A colleague WITH a reachable account keeps the mention instruction.
 	o.Units[0].Roles[1].Contact.SlackUserID = "U0FOUNDER"
 	o.Normalize()
-	with := BuildExecutor(seatIn(o, "Lead"), ExecutorInput{})
+	with := BuildExecutor(seatIn(o, "lead"), ExecutorInput{})
 	contains(t, with, "Slack ID: U0FOUNDER", "@-mention them on their team's chat")
 	excludes(t, with, "nobody to @-mention")
 }

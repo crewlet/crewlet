@@ -209,11 +209,11 @@ func (s *searcher) asked() []knowledge.Query {
 func company(t *testing.T) (*org.Organization, *org.Role) {
 	t.Helper()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
-		Name: "Engineering", Lead: "Tech Lead",
+		Name: "Engineering", Lead: "lead",
 		Roles: []*org.Role{{Name: "Tech Lead", DeclaredHandle: "lead"}},
 	}}}
 	o.Normalize()
-	return o, o.Role("Tech Lead")
+	return o, o.Role("lead")
 }
 
 func request(t *testing.T) prefetch.Request {
