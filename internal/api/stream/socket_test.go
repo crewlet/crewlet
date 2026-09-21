@@ -28,12 +28,21 @@ type socketFixture struct {
 
 func newSocket(t *testing.T, authOpts func(*config.APIAuth), query stream.Query) *socketFixture {
 	t.Helper()
+	return newSocketWith(t, authOpts, query, stream.Options{})
+}
+
+// newSocketWith is newSocket for a case whose subject is the SERVICE — its
+// posture, its tick — rather than the handshake.
+func newSocketWith(t *testing.T, authOpts func(*config.APIAuth), query stream.Query,
+	opts stream.Options,
+) *socketFixture {
+	t.Helper()
 	b := config.DefaultBootstrap()
 	if authOpts != nil {
 		authOpts(&b.API.Auth)
 	}
 	guard := auth.New(&b)
-	svc := buildService(t, stream.Options{})
+	svc := buildService(t, opts)
 
 	srv := httptest.NewServer(stream.Handler(guard, svc, query))
 	t.Cleanup(srv.Close)
@@ -71,6 +80,43 @@ func next(t *testing.T, conn *websocket.Conn) map[string]any {
 		t.Fatalf("decode %s: %v", raw, err)
 	}
 	return got
+}
+
+// closeCode reads until the socket closes and reports the code it closed with.
+//
+// Frames that arrive first are discarded: a close is the END of a
+// conversation, and a test that read exactly one frame would be asserting
+// about whatever the engine happened to have queued rather than about the
+// close.
+func closeCode(t *testing.T, conn *websocket.Conn) websocket.StatusCode {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	for {
+		if _, _, err := conn.Read(ctx); err != nil {
+			status := websocket.CloseStatus(err)
+			if status == -1 {
+				t.Fatalf("the socket ended without a close frame: %v", err)
+			}
+			return status
+		}
+	}
+}
+
+// waitFor polls until cond holds, or fails with why.
+//
+// The engine's own goroutine acts on a frame this test wrote, so there is no
+// moment the test can synchronise on other than the effect itself.
+func waitFor(t *testing.T, cond func() bool, why string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal(why)
 }
 
 func write(t *testing.T, conn *websocket.Conn, frame map[string]any) {
@@ -443,13 +489,23 @@ func TestAFrameTokenUpgradesOneQueryOnly(t *testing.T) {
 	}
 }
 
-func TestAWrongFrameTokenDoesNotUpgrade(t *testing.T) {
+// TestAWrongFrameTokenClosesAnAnonymousSocket pins the handshake's own rule on
+// the one credential channel the handshake cannot see.
+//
+// A credential that is PRESENT and wrong is refused, because a client that
+// sent one meant to be somebody. On an anonymous socket the frame token is the
+// only identity offered, so running the query anonymously — which is what
+// happened — hands a reader holding a stale token an ordinary answer to every
+// anonymous-readable question and never tells them their credential is wrong.
+// There is no correlation id on a socket-level refusal, so the close IS the
+// refusal.
+func TestAWrongFrameTokenClosesAnAnonymousSocket(t *testing.T) {
 	t.Parallel()
-	seen := make(chan string, 1)
+	ran := make(chan string, 1)
 	f := newSocket(t, func(a *config.APIAuth) {
 		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
 	}, func(_ context.Context, _ string, _ map[string]any, operatorID string) (any, error) {
-		seen <- operatorID
+		ran <- operatorID
 		return nil, nil
 	})
 	conn, _, err := f.dial(t, "")
@@ -459,9 +515,57 @@ func TestAWrongFrameTokenDoesNotUpgrade(t *testing.T) {
 	next(t, conn)
 
 	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "config", "token": "wrong"})
-	if got := <-seen; got != "" {
-		t.Errorf("a wrong frame token authenticated as %q", got)
+	if got := closeCode(t, conn); got != stream.CloseUnauthorized {
+		t.Errorf("close = %d, want %d: a refused frame credential on a socket "+
+			"with no identity of its own has to reach the client",
+			got, stream.CloseUnauthorized)
 	}
+	select {
+	case id := <-ran:
+		t.Errorf("the query ran as %q; a refused credential must not be "+
+			"silently demoted to anonymous", id)
+	default:
+	}
+}
+
+// TestAWatchNeedsAnOperator pins that a subscription is a WRITE.
+//
+// `allow_anonymous_read` opens reads and only reads. A watch installs a row in
+// this node's routing index on behalf of a caller and leaves it there for the
+// life of the socket, so an unauthenticated client that could install one
+// would be writing server state through a surface documented as read-only.
+func TestAWatchNeedsAnOperator(t *testing.T) {
+	t.Parallel()
+	f := newSocket(t, func(a *config.APIAuth) {
+		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	}, nil)
+
+	anon, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, anon)
+	write(t, anon, map[string]any{"kind": "watch", "seat": "lead"})
+	if got := closeCode(t, anon); got != stream.CloseUnauthenticated {
+		t.Errorf("close = %d, want %d", got, stream.CloseUnauthenticated)
+	}
+	if got := f.svc.Hub().Watchers("lead"); got != 0 {
+		t.Errorf("watchers = %d: an unauthenticated client wrote the index", got)
+	}
+
+	// The counterfactual: an operator's watch takes, and clearing it
+	// releases the bucket.
+	held, _, err := f.dial(t, "secret")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, held)
+	write(t, held, map[string]any{"kind": "watch", "seat": "lead"})
+	waitFor(t, func() bool { return f.svc.Hub().Watchers("lead") == 1 },
+		"an operator's watch never reached the index")
+	write(t, held, map[string]any{"kind": "watch", "seat": ""})
+	waitFor(t, func() bool { return f.svc.Hub().Watchers("lead") == 0 },
+		"clearing a watch left the client in the index")
 }
 
 func TestABadFrameTokenDoesNotDowngradeAnAuthenticatedSocket(t *testing.T) {

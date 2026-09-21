@@ -1683,12 +1683,14 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
 | `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, or a coordination store it could not reach — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
 | `pong`     | Reply to a client `ping`. | `null` |
+| `inbox_changed` | One watched seat's inbox moved. | `{ seat, … }`, and the frame itself carries `seat`. **Routed by seat**: it reaches only the clients that sent a `watch` for that seat, never every tab. **Nothing publishes it yet** — the route, the index and the `watch` frame ship now, the publisher lands with the change that derives an inbox movement from the durable record. |
 
 **Client → server kinds**
 
 | `kind` | Purpose |
 |--------|---------|
 | `ping` | Keepalive; server replies with `pong`. |
+| `watch` | Become a recipient for one seat's seat-routed frames: `{ kind: "watch", seat }`. An empty `seat` clears it, and one socket watches one seat at a time — a tab is looking at one screen. **It needs an operator credential**, on the handshake or on the frame's own `token`: `allow_anonymous_read` opens reads and only reads, and a watch writes a row into this node's routing index. A watch with no operator behind it closes the socket with **4401**. |
 | `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params, token? }` — `id` is any client-chosen value echoed back on the reply, and `token` carries the operator bearer token that the `config`-family queries require (validated with the same constant-time comparison the `/config` middleware performs). Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows. |
 
 **Queries** (`what`), each answered by the *same* function the matching
@@ -1821,6 +1823,82 @@ These were registered **operator-only** until recently, which made the one
 screen a human teammate lives on unreachable to them — and, for an operator,
 a stranger's day: the dashboard had no viewer at all, so "my work" fell back
 to the alphabetically first seat in the chart.
+
+### One frame per posture, and how a frame is routed
+
+Two facts decide what a connected client receives, and both are properties of
+the *client* rather than of the push.
+
+**Its posture decides the bytes.** A socket is served `live` or `degraded`, and
+two sockets in the same posture receive the byte-identical frame produced by a
+single encode. The engine marshals one push **once per posture present**, never
+once per connection: with sixteen tabs open, one event used to be sixteen
+marshals of identical JSON on sixteen goroutines, and the cost of a push grew
+with how many people happened to be watching.
+
+**Its route decides the audience.** Every kind in the table above is one of
+three:
+
+| Route | Kinds | Reaches |
+|---|---|---|
+| broadcast | `event`, `agents`, `seats`, `sandboxes`, `tokens`, `budget`, `schedules`, `org`, `tools`, `health` | Every connected client whose posture takes the kind. |
+| seat | `inbox_changed` | Only the clients that sent a `watch` for the seat the frame names in its own `seat` field. |
+| direct | `snapshot`, `result`, `error`, `pong` | The one client it answers. |
+
+A seat-routed frame that lost its `seat` is **dropped**, never fanned out: a
+result carries one client's correlation id and a per-seat frame carries one
+seat's audience, so the unsafe default in both cases is "everybody".
+
+### A degraded node keeps the socket open
+
+When a node's own posture leaves rotation for a reason that means its copy of
+the company is **wrong rather than behind** — `shed` or `stuck`, the same set
+[`/ready`](#routes) refuses on — its sockets move to the `degraded` posture
+instead of closing. A dashboard whose socket closes reconnects on a backoff for
+as long as the node is degraded, learns nothing from any attempt, and shows
+"retrying"; one that stays open is told.
+
+In that posture:
+
+- **Keepalives continue.** `ping` is answered with `pong`, and the 5-second
+  `health` frame still arrives — it is both the keepalive and the explanation,
+  because its `status` names the posture.
+- **Pushes stop.** Every other broadcast kind is withheld, because all of them
+  are derived from the copy the fleet has abandoned.
+- **Queries are refused** with `unavailable`, and the query surface is never
+  reached. `unavailable` is the one code that must never be flattened into an
+  empty result: "this company has no work" is an answer a person acts on.
+- **`snapshot` still arrives** on connect. It is a direct frame and it carries
+  the node's own health, so the one frame a degraded client is handed is the
+  one that says why the rest stopped.
+
+`wait` and `isolated` stay **live**, for the reason `/ready` stays ready on
+them: `wait` is ordinary propagation during a rollout, and `isolated` means no
+node applied the revision — blinding every operator there would be an outage
+caused by one bad revision.
+
+### Close codes
+
+A refused handshake **cannot** carry a close code: a close code rides a close
+frame, and a connection that never opened has none. That case is answered `401`
+before the upgrade and is covered under [`GET /ws/stream`](#ws-wsstream) above.
+These two are for a socket that is already open, whose client then offers or
+omits a credential on a frame — the only channel through which an open socket's
+identity is ever asserted, because a browser cannot set a header on a WebSocket
+constructor.
+
+| Code | Means | What a client does |
+|---|---|---|
+| `4401` | A frame needed an operator credential and none was offered. | Ask for a token and re-dial. |
+| `4403` | The credential on a frame is not one this node accepts, on a socket with no identity of its own. | Forget that token, ask for another, re-dial. |
+
+Both sit in the 4000–4999 range the standard reserves for applications, and
+both deliberately echo the HTTP status they mean. A socket that **is**
+authenticated keeps its own operator and ignores a bad frame token rather than
+being dropped: it has an identity to fall back on, and demoting it silently
+answered an operator's question as anonymous.
+
+Nothing else closes this socket for a fault.
 
 ### Wiring
 

@@ -269,6 +269,9 @@ func New(opts Options) (*App, error) {
 	var err error
 	a.stream, err = stream.NewService(state, stream.Options{
 		Health: a.streamHealth,
+		// The SAME set /ready refuses on, read from the one place it is
+		// declared — see [framePosture].
+		Posture: framePosture,
 		// Read through the SOURCES rather than captured, for the same
 		// reason every other read here is: a config apply replaces the
 		// company, and a map captured at boot would keep cross-linking a
@@ -546,6 +549,35 @@ func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	// finishing its in-flight turns. /ready is what steers traffic. That
 	// only holds because the listener outlives the drain; see drain.go.
 	writeJSON(w, http.StatusOK, a.health(r.Context()))
+}
+
+// framePosture maps this node's own posture onto the one its sockets are
+// served in.
+//
+// THREE DIFFERENT THINGS ARE CALLED A POSTURE and this function is the
+// boundary between two of them: [Health.Status] carries the NODE posture — the
+// config plane's conclusion about this node's config lag — and
+// [stream.FramePosture] is how ONE SOCKET is being served. The third, a
+// principal's enrolment stage, belongs to the identity work and never reaches
+// here; see stream.FramePosture's own doc for why that type is not called
+// `Posture`.
+//
+// The set is [divergedPostures], read rather than restated, because it is the
+// same set /ready refuses on: a node whose copy of the company is wrong takes
+// itself out of rotation AND stops pushing that copy at the tabs still
+// watching. Written twice, a node could leave rotation while its dashboards
+// carried on rendering what it held — which is the exact pair of facts an
+// operator is trying to reconcile when they look.
+//
+// `isolated` and `wait` stay LIVE, for the reason /ready stays ready on them:
+// wait is ordinary propagation during a rollout, and isolated means NO node
+// applied the revision — degrading the socket there would blind every operator
+// at the moment the fleet most needs watching.
+func framePosture(h stream.Health) stream.FramePosture {
+	if _, diverged := divergedPostures[h.Status]; diverged {
+		return stream.FrameDegraded
+	}
+	return stream.FrameLive
 }
 
 func (a *App) serveReady(w http.ResponseWriter, r *http.Request) {

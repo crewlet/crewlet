@@ -7,10 +7,18 @@
 // loses its oldest envelope rather than stalling every other tab" is a property
 // a test can assert directly, instead of one inferred from a socket that
 // happened not to fall over.
+//
+// # What a client is, and what decides its bytes
+//
+// A [Client] carries two things beyond its queue: the [FramePosture] it is
+// being served in, and the seat it has asked to be a recipient for. The
+// posture decides the BYTES — one encode serves every client in the same
+// posture — and the seat decides the AUDIENCE for the kinds routed by seat.
+// Everything else about the fan-out follows from those two and from the total
+// route table below.
 package stream
 
 import (
-	"encoding/json"
 	"maps"
 	"slices"
 	"sync"
@@ -36,7 +44,7 @@ var log = logging.Get("api.stream")
 // mid-snapshot and contradict that decision.
 const writeTimeout = 30 * time.Second
 
-// QueueDepth is how many envelopes one client may have waiting.
+// QueueDepth is how many frames one client may have waiting.
 //
 // Drop-OLDEST past it, never block. A slow tab must not stall the publish path
 // or any other tab, and it must not be disconnected either: the reconnect flow
@@ -44,14 +52,15 @@ const writeTimeout = 30 * time.Second
 // visible failure for a reader who did nothing wrong.
 //
 // Oldest rather than newest, because what a dashboard shows is the CURRENT
-// state: the newest envelope is the one that makes the screen right, and
+// state: the newest frame is the one that makes the screen right, and
 // dropping it to keep an older one would leave the tab further behind than
 // doing nothing.
 const QueueDepth = 512
 
 // The push kinds. Frozen — the dashboard ships unchanged and is the
 // compatibility reference, so a renamed kind is a broken client, not a
-// refactor.
+// refactor. Every one of them has an entry on [routes]; see
+// TestEveryPushKindHasARoute.
 const (
 	KindSnapshot  = "snapshot"
 	KindEvent     = "event"
@@ -65,6 +74,20 @@ const (
 	KindTools     = "tools"
 	KindHealth    = "health"
 
+	// KindInboxChanged says one seat's inbox moved, and it is the first
+	// kind routed to an AUDIENCE rather than to everyone: it carries the
+	// seat in [Envelope.Seat] and reaches only the clients that asked to
+	// watch that seat (see [Hub.Watch]).
+	//
+	// NOTHING PUBLISHES IT YET. It is a declared contract, not a kind
+	// somebody forgot to wire: the seat routing, the index behind it and
+	// the `watch` request frame that fills the index all ship here, and
+	// the change that derives an inbox movement from the durable record
+	// and publishes it lands separately. Until then the route exists, the
+	// index exists, and no frame of this kind is ever built — which is why
+	// a grep for a publisher comes up empty and must.
+	KindInboxChanged = "inbox_changed"
+
 	// KindResult and KindError answer one query, correlated by the
 	// client-minted id it was asked under.
 	KindResult = "result"
@@ -72,6 +95,34 @@ const (
 
 	KindPong = "pong"
 )
+
+// routes is how each kind reaches the clients it is for. See [Route].
+//
+// BESIDE THE KINDS, and total over them: a kind declared above with no entry
+// here has no route at all, which [RouteOf] answers as the invalid zero Route
+// and TestEveryPushKindHasARoute fails the build over.
+var routes = map[string]Route{
+	// The company's own state. What one tab sees, every tab sees.
+	KindSnapshot:  RouteDirect,
+	KindEvent:     RouteBroadcast,
+	KindAgents:    RouteBroadcast,
+	KindSeats:     RouteBroadcast,
+	KindSandboxes: RouteBroadcast,
+	KindTokens:    RouteBroadcast,
+	KindBudget:    RouteBroadcast,
+	KindSchedules: RouteBroadcast,
+	KindOrg:       RouteBroadcast,
+	KindTools:     RouteBroadcast,
+	KindHealth:    RouteBroadcast,
+
+	// One seat's audience.
+	KindInboxChanged: RouteSeat,
+
+	// The answers, to the one client that asked.
+	KindResult: RouteDirect,
+	KindError:  RouteDirect,
+	KindPong:   RouteDirect,
+}
 
 // Envelope is one server-to-client frame.
 //
@@ -91,6 +142,16 @@ type Envelope struct {
 	ID    int64         `json:"id,omitempty"`
 	What  string        `json:"what,omitempty"`
 	Error httpjson.Code `json:"error,omitempty"`
+
+	// Seat names which seat a [RouteSeat] frame is about, and is the
+	// address the fan-out routes on rather than a label beside it.
+	//
+	// ON THE WIRE, because a client watching a seat has to be able to tell
+	// two seats' frames apart if it ever watches more than one — and a
+	// routing key the receiver cannot read is a key only the sender can
+	// debug. Omitted on every other kind, so no existing frame changes
+	// shape.
+	Seat string `json:"seat,omitempty"`
 }
 
 // Push builds a broadcast envelope stamped now.
@@ -98,26 +159,96 @@ func Push(kind string, data any, now time.Time) Envelope {
 	return Envelope{Kind: kind, Data: data, TS: now.UTC().Format(time.RFC3339Nano)}
 }
 
+// PushSeat builds an envelope addressed to one seat's watchers.
+//
+// Its own constructor rather than a field a caller sets on [Push]'s result,
+// because the seat is the ADDRESS for a [RouteSeat] kind: a frame of such a
+// kind that reached [Hub.Broadcast] without one would be dropped, and a
+// constructor that cannot produce one is how that stops being a runtime
+// discovery.
+func PushSeat(kind, seat string, data any, now time.Time) Envelope {
+	env := Push(kind, data, now)
+	env.Seat = seat
+	return env
+}
+
 // Client is one connected dashboard.
 type Client struct {
-	// out carries envelopes to the socket's own writer goroutine. Buffered
-	// to QueueDepth; a send that would block drops the oldest instead.
-	out chan Envelope
+	// out carries encoded frames to the socket's own writer goroutine.
+	// Buffered to QueueDepth; a send that would block drops the oldest
+	// instead.
+	//
+	// FRAMES RATHER THAN ENVELOPES, which is the whole of the fan-out
+	// rewrite: the bytes are marshalled once per posture by the
+	// broadcaster and shared, where every writer used to marshal the same
+	// envelope again for itself.
+	out chan *Frame
 
 	mu      sync.Mutex
 	closed  bool
 	dropped int
+
+	// posture is how this client is being served. Set at [NewClient] and
+	// moved by [Client.SetPosture]; read under the lock because the hub
+	// writes it (a node changing posture) while a broadcast reads it.
+	posture FramePosture
+
+	// seat is the seat this client asked to be a recipient for, empty
+	// while it has asked for none. The hub's index is the authority on
+	// which bucket the client is in; this is the same fact kept beside the
+	// client so a broadcast can report it and an unregister can find the
+	// bucket to leave.
+	seat string
 }
 
-// NewClient builds a client with an empty queue.
+// NewClient builds a client with an empty queue, served LIVE.
+//
+// Live rather than the zero posture, which is invalid by construction (see
+// [FramePosture]): a client is a tab somebody just opened, and the node it
+// reached is serving it unless something says otherwise. [Hub.Register] then
+// moves it to the hub's current posture, which is the authority.
 func NewClient() *Client {
-	return &Client{out: make(chan Envelope, QueueDepth)}
+	return &Client{out: make(chan *Frame, QueueDepth), posture: FrameLive}
 }
 
-// Out is the channel a transport reads envelopes from. Closed by [Client.Close].
-func (c *Client) Out() <-chan Envelope { return c.out }
+// Out is the channel a transport reads frames from. Closed by [Client.Close].
+func (c *Client) Out() <-chan *Frame { return c.out }
 
-// Dropped reports how many envelopes this client has lost to backpressure.
+// Posture is how this client is currently being served.
+func (c *Client) Posture() FramePosture {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.posture
+}
+
+// SetPosture moves this client to p, reporting whether it took.
+//
+// AN INVALID POSTURE IS REFUSED AND THE CURRENT ONE KEPT. The zero value is
+// the one a caller reaches by forgetting to decide, and the two ways to serve
+// it are opposite — everything, or nothing — so taking it would either leak a
+// degraded node's state or blank a healthy dashboard, with nothing on either
+// path to say which happened.
+func (c *Client) SetPosture(p FramePosture) bool {
+	if !p.Valid() {
+		log.Warn("stream_invalid_frame_posture", "posture", string(p),
+			"hint", "the client keeps the posture it had; a frame posture is "+
+				"live or degraded, and the zero value is not a posture")
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.posture = p
+	return true
+}
+
+// Seat is the seat this client is a recipient for, or empty.
+func (c *Client) Seat() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.seat
+}
+
+// Dropped reports how many frames this client has lost to backpressure.
 //
 // Reported rather than merely counted: a tab that is behind is a tab showing
 // something other than the truth, and the number is the only evidence of it
@@ -128,7 +259,29 @@ func (c *Client) Dropped() int {
 	return c.dropped
 }
 
-// send queues an envelope, dropping the oldest if the queue is full.
+// Reply encodes an envelope for THIS client alone and queues it.
+//
+// The [RouteDirect] path: a snapshot, a pong, a query's result or refusal.
+// One client, so one encode, and nothing is shared — which is exactly why it
+// is a different method from the broadcast path rather than a one-client call
+// into it.
+func (c *Client) Reply(env Envelope) {
+	if !c.Posture().Delivers(env.Kind) {
+		return
+	}
+	frame, err := EncodeFrame(env)
+	if err != nil {
+		// A frame that cannot be encoded is this server's bug, not the
+		// client's. Dropping it keeps the socket alive for every other
+		// kind rather than tearing down a working dashboard over one
+		// malformed answer.
+		log.Error("stream_encode_failed", "kind", env.Kind, "error", err)
+		return
+	}
+	c.send(frame)
+}
+
+// send queues a frame, dropping the oldest if the queue is full.
 //
 // Never blocks. The caller is the ingest path, shared by every client, so one
 // slow reader blocking here would stop the whole fan-out.
@@ -139,7 +292,10 @@ func (c *Client) Dropped() int {
 // broadcast with it. The two ends genuinely race: the transport closes when its
 // socket dies while the ingest path is fanning out. Holding it is cheap because
 // nothing here blocks: every operation is a select with a default.
-func (c *Client) send(env Envelope) {
+func (c *Client) send(frame *Frame) {
+	if frame == nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -147,15 +303,15 @@ func (c *Client) send(env Envelope) {
 	}
 	for {
 		select {
-		case c.out <- env:
+		case c.out <- frame:
 			return
 		default:
 		}
 		// Full. Take one off the front and try again. The take can only
 		// fail if the transport's reader emptied the queue in between,
 		// and then the next send succeeds — so the loop always makes
-		// progress. Looping rather than dropping the NEW envelope is
-		// what keeps the newest state on screen.
+		// progress. Looping rather than dropping the NEW frame is what
+		// keeps the newest state on screen.
 		select {
 		case <-c.out:
 			c.dropped++
@@ -178,26 +334,55 @@ func (c *Client) Close() {
 	close(c.out)
 }
 
-// Hub is the set of connected clients.
+// Hub is the set of connected clients, and the index that routes a frame to
+// the ones it is for.
 type Hub struct {
 	mu      sync.RWMutex
 	clients map[*Client]struct{}
+
+	// bySeat is the routing index: which clients asked to be recipients
+	// for which seat. A SECOND MAP rather than a filter over clients,
+	// because a per-seat frame on a company with fifty tabs open would
+	// otherwise walk fifty clients to find the one watching, on every
+	// inbox movement — and the walk's cost is paid by the publish path.
+	//
+	// A seat with no watchers holds NO entry: an empty bucket left behind
+	// by the last watcher leaving is a map that grows with the number of
+	// seats anyone has ever looked at.
+	bySeat map[string]map[*Client]struct{}
+
+	// posture is the node's current frame posture, applied to every client
+	// registered from now on and to every client already registered when
+	// it moves. The node is what is degraded, not the tab — but the value
+	// is carried per client all the same, because a client registers at an
+	// arbitrary moment (including during a change) and a frame has to be
+	// decided by one value read once, not by a second read that can move
+	// between a fan-out's start and one client's send.
+	posture FramePosture
 }
 
-// NewHub builds an empty hub.
-func NewHub() *Hub { return &Hub{clients: map[*Client]struct{}{}} }
+// NewHub builds an empty hub, serving LIVE until told otherwise.
+func NewHub() *Hub {
+	return &Hub{
+		clients: map[*Client]struct{}{},
+		bySeat:  map[string]map[*Client]struct{}{},
+		posture: FrameLive,
+	}
+}
 
-// Register adds a client to the fan-out.
+// Register adds a client to the fan-out, at the hub's current posture.
 //
 // BEFORE its snapshot is sent, deliberately. The window between registering and
-// snapshotting delivers envelopes describing state the snapshot also carries —
+// snapshotting delivers frames describing state the snapshot also carries —
 // which is harmless, because the client dedupes streamed envelopes against the
 // snapshot by event id. Registering AFTER would instead lose everything
 // published in that window, which nothing recovers.
 func (h *Hub) Register(c *Client) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	posture := h.posture
 	h.clients[c] = struct{}{}
+	h.mu.Unlock()
+	c.SetPosture(posture)
 }
 
 // Unregister removes a client and closes it.
@@ -205,15 +390,100 @@ func (h *Hub) Unregister(c *Client) {
 	h.mu.Lock()
 	_, present := h.clients[c]
 	delete(h.clients, c)
+	h.unwatchLocked(c)
 	h.mu.Unlock()
 	if present {
 		if dropped := c.Dropped(); dropped > 0 {
 			log.Info("stream_client_left_behind", "dropped", dropped,
-				"hint", "the tab could not keep up and lost envelopes; its "+
+				"hint", "the tab could not keep up and lost frames; its "+
 					"reconnect refetches a snapshot")
 		}
 	}
 	c.Close()
+}
+
+// Watch makes c a recipient for seat, replacing whatever it watched before.
+//
+// ONE SEAT AT A TIME, because one screen is open at a time: a dashboard
+// showing a seat's inbox has navigated to that seat, and a client that
+// accumulated every seat it ever visited would keep receiving frames for
+// screens nobody is looking at. An empty seat clears the subscription, which
+// is what navigating away asks for.
+//
+// A client that is not registered is not indexed: the index is a subset of the
+// fan-out, and a bucket holding a client the hub has already let go of would
+// keep it alive and keep sending to its closed queue.
+func (h *Hub) Watch(c *Client, seat string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, present := h.clients[c]; !present {
+		return
+	}
+	h.unwatchLocked(c)
+	if seat == "" {
+		return
+	}
+	c.mu.Lock()
+	c.seat = seat
+	c.mu.Unlock()
+	watchers, ok := h.bySeat[seat]
+	if !ok {
+		watchers = map[*Client]struct{}{}
+		h.bySeat[seat] = watchers
+	}
+	watchers[c] = struct{}{}
+}
+
+// unwatchLocked drops c from whatever seat bucket it is in. Caller holds the
+// write lock.
+func (h *Hub) unwatchLocked(c *Client) {
+	c.mu.Lock()
+	seat := c.seat
+	c.seat = ""
+	c.mu.Unlock()
+	if seat == "" {
+		return
+	}
+	watchers := h.bySeat[seat]
+	delete(watchers, c)
+	if len(watchers) == 0 {
+		delete(h.bySeat, seat)
+	}
+}
+
+// Watchers reports how many clients are recipients for one seat.
+func (h *Hub) Watchers(seat string) int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.bySeat[seat])
+}
+
+// SetPosture moves the hub and every client on it to p.
+//
+// The NODE is what changes posture, so this is where a change lands: one call
+// per health tick rather than a read per client per frame, which would put a
+// coordination round trip on the publish path.
+func (h *Hub) SetPosture(p FramePosture) {
+	if !p.Valid() {
+		log.Warn("stream_invalid_frame_posture", "posture", string(p),
+			"hint", "the hub keeps the posture it had")
+		return
+	}
+	h.mu.Lock()
+	h.posture = p
+	targets := slices.Collect(maps.Keys(h.clients))
+	h.mu.Unlock()
+
+	for _, c := range targets {
+		c.SetPosture(p)
+	}
+}
+
+// Posture is the posture the hub is serving new clients at.
+func (h *Hub) Posture() FramePosture {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.posture
 }
 
 // Clients reports how many are connected.
@@ -223,18 +493,81 @@ func (h *Hub) Clients() int {
 	return len(h.clients)
 }
 
-// Broadcast queues an envelope for every client.
+// Broadcast encodes an envelope ONCE PER POSTURE and hands the bytes to every
+// client the kind's route names.
 //
-// Never blocks on any of them: each client's own queue absorbs the difference,
-// and one that has fallen behind loses its oldest envelope rather than holding
-// up the publish path.
+// # Once per posture, not once per client
+//
+// A client's posture is the only thing that decides its bytes, so two clients
+// in the same posture must receive the byte-identical frame from one encode.
+// With N dashboards open this used to be N marshals of identical JSON — on N
+// goroutines, for every push — because the envelope travelled to each writer
+// and each writer encoded it. The cache below is an ARRAY indexed by
+// [FramePosture.index], filled lazily, so a company with every tab in one
+// posture pays exactly one encode and the second slot is never touched.
+//
+// # The route decides the audience
+//
+// [RouteBroadcast] is every client; [RouteSeat] is the clients watching
+// [Envelope.Seat] and nobody else. [RouteDirect] is REFUSED here: a result
+// carries the correlation id of one client's question, and fanning it out
+// would answer every other tab's question with it. A kind with no route at all
+// is refused for the same reason — there is no safe default, and "everyone" is
+// the unsafe one.
+//
+// Never blocks on any client: each client's own queue absorbs the difference,
+// and one that has fallen behind loses its oldest frame rather than holding up
+// the publish path.
 func (h *Hub) Broadcast(env Envelope) {
+	route := RouteOf(env.Kind)
+	switch {
+	case !route.Valid():
+		log.Error("stream_unrouted_kind", "kind", env.Kind,
+			"hint", "add the kind to internal/api/stream's route table; a push "+
+				"with no route is dropped rather than sent to every client")
+		return
+	case route == RouteDirect:
+		log.Error("stream_direct_kind_broadcast", "kind", env.Kind,
+			"hint", "an answer belongs to the client that asked; use Client.Reply")
+		return
+	case route == RouteSeat && env.Seat == "":
+		log.Error("stream_seat_frame_without_a_seat", "kind", env.Kind,
+			"hint", "build it with PushSeat; a seat-routed frame with no seat "+
+				"has no audience and is never fanned out to everyone")
+		return
+	}
+
 	h.mu.RLock()
-	targets := slices.Collect(maps.Keys(h.clients))
+	var targets []*Client
+	if route == RouteSeat {
+		targets = slices.Collect(maps.Keys(h.bySeat[env.Seat]))
+	} else {
+		targets = slices.Collect(maps.Keys(h.clients))
+	}
 	h.mu.RUnlock()
 
+	var cache [framePostures]*Frame
+	var encoded [framePostures]bool
 	for _, c := range targets {
-		c.send(env)
+		posture := c.Posture()
+		slot := posture.index()
+		if slot < 0 || !posture.Delivers(env.Kind) {
+			continue
+		}
+		if !encoded[slot] {
+			// MARKED BEFORE THE RESULT IS STORED, so an envelope that
+			// cannot be encoded costs one failed marshal for the whole
+			// posture rather than one per client. A nil frame is then
+			// the posture's answer and [Client.send] ignores it.
+			encoded[slot] = true
+			frame, err := EncodeFrame(env)
+			if err != nil {
+				log.Error("stream_encode_failed", "kind", env.Kind, "error", err)
+			} else {
+				cache[slot] = frame
+			}
+		}
+		c.send(cache[slot])
 	}
 }
 
@@ -243,15 +576,10 @@ func (h *Hub) Close() {
 	h.mu.Lock()
 	targets := slices.Collect(maps.Keys(h.clients))
 	h.clients = map[*Client]struct{}{}
+	h.bySeat = map[string]map[*Client]struct{}{}
 	h.mu.Unlock()
 
 	for _, c := range targets {
 		c.Close()
 	}
 }
-
-// Encode serializes an envelope for the wire.
-//
-// Here rather than at the transport so the frame a test asserts about is the
-// frame a browser receives, byte for byte.
-func Encode(env Envelope) ([]byte, error) { return json.Marshal(env) }

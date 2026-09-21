@@ -30,6 +30,9 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 	if opts.Health == nil {
 		opts.Health = func() stream.Health { return stream.Health{Status: "ok"} }
 	}
+	if opts.Posture == nil {
+		opts.Posture = func(stream.Health) stream.FramePosture { return stream.FrameLive }
+	}
 	if opts.Handles == nil {
 		opts.Handles = func() map[string]string { return map[string]string{} }
 	}
@@ -65,7 +68,9 @@ func TestNewServiceRefusesEveryMissingFunctionByName(t *testing.T) {
 	if err == nil {
 		t.Fatal("a service with no surface functions was built")
 	}
-	for _, field := range []string{"Health", "Handles", "Roster", "Org", "Tools", "Schedules"} {
+	for _, field := range []string{
+		"Health", "Posture", "Handles", "Roster", "Org", "Tools", "Schedules",
+	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
 		}
@@ -82,8 +87,8 @@ func envelope(etype string, payload map[string]any) livestate.Envelope {
 // kindsOf lists the push kinds a client received, in order.
 func kindsOf(c *stream.Client) []string {
 	var out []string
-	for _, env := range drain(c) {
-		out = append(out, env.Kind)
+	for _, frame := range drain(c) {
+		out = append(out, frame.Kind())
 	}
 	return out
 }
@@ -97,10 +102,10 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
 
 	got := drain(c)
-	var agents *stream.Envelope
+	var agents *stream.Frame
 	for i := range got {
-		if got[i].Kind == stream.KindAgents {
-			agents = &got[i]
+		if got[i].Kind() == stream.KindAgents {
+			agents = got[i]
 		}
 	}
 	if agents == nil {
@@ -112,12 +117,11 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	// turn ran with the seat rendered idle from start to finish. The
 	// client is the compatibility reference, so
 	// the assertion is written the way the client reads the frame.
-	rows, ok := agents.Data.([]map[string]any)
-	if !ok {
-		t.Fatalf("agents data is %T, not the row list the client requires; "+
-			"anything else fails its Array.isArray guard and is dropped",
-			agents.Data)
-	}
+	// DECODED FROM THE BYTES, which is what the guard actually sees: the
+	// frame is encoded once for a whole posture now, so there is no Go
+	// value left on the way to a client to assert about instead.
+	var rows []map[string]any
+	decodeData(t, agents, &rows)
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want the one seat that moved", len(rows))
 	}
@@ -224,14 +228,10 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	var rollup *tokens.Rollup
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) && rollup == nil {
-		for _, env := range drain(c) {
-			if env.Kind == stream.KindTokens {
-				got, ok := env.Data.(tokens.Rollup)
-				if !ok {
-					t.Fatalf("tokens data is %T, not the rollup the client "+
-						"reads; store.js takes `.totals` off it and the spend "+
-						"view takes `.since_days`", env.Data)
-				}
+		for _, frame := range drain(c) {
+			if frame.Kind() == stream.KindTokens {
+				var got tokens.Rollup
+				decodeData(t, frame, &got)
 				rollup = &got
 			}
 		}
@@ -310,13 +310,14 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 
 	for name, c := range map[string]*stream.Client{"a": a, "b": b} {
 		select {
-		case env := <-c.Out():
-			if env.Kind != stream.KindHealth {
-				t.Errorf("%s received %q, want a health tick", name, env.Kind)
+		case frame := <-c.Out():
+			if frame.Kind() != stream.KindHealth {
+				t.Errorf("%s received %q, want a health tick", name, frame.Kind())
 			}
-			health, ok := env.Data.(stream.Health)
-			if !ok || health.InFlight != 3 {
-				t.Errorf("%s health = %#v", name, env.Data)
+			var health stream.Health
+			decodeData(t, frame, &health)
+			if health.InFlight != 3 {
+				t.Errorf("%s health = %#v", name, health)
 			}
 		case <-time.After(3 * stream.HealthInterval):
 			t.Fatalf("%s never received a health tick", name)

@@ -23,6 +23,44 @@ import (
 // queue rather than pile up.
 const MaxInFlightQueries = 4
 
+// The close codes this socket ends a connection with, on top of the ones the
+// WebSocket standard already defines.
+//
+// # Why a close code at all, when the handshake already answers 401
+//
+// It cannot. A close code rides a close FRAME, so a handshake that never
+// completed has none — see [Handler], where a refused credential is answered
+// 401 BEFORE the upgrade and the browser reports 1006. These two are for the
+// opposite case: a socket that is OPEN, whose client then offers or omits a
+// credential on a frame. That channel exists because a browser cannot set a
+// header on a WebSocket constructor, so it is the only way an open socket's
+// identity is ever asserted — and it is the only place a close is the right
+// answer.
+//
+// TWO CODES RATHER THAN ONE, because they call for different repairs and the
+// dashboard's own recovery branches on exactly that difference: 4401 means
+// "become somebody" (a credential is needed and none was offered), 4403 means
+// "that credential is not one this node knows" (forget it and ask for
+// another). Collapsed into one, a reader who has never been asked for a token
+// and a reader holding a revoked one get the same dead end.
+//
+// In the 4000–4999 range, which the standard reserves for an application and
+// which no intermediary rewrites. They deliberately ECHO the HTTP statuses
+// they mean, so an operator reading a close code and an operator reading a
+// REST refusal are reading one number.
+//
+// NOTHING ELSE CLOSES THIS SOCKET FOR A FAULT. A node that cannot serve keeps
+// its socket open and degrades it instead — see [FrameDegraded].
+const (
+	// CloseUnauthenticated is a client frame that requires an operator on
+	// a socket that has none and offered none.
+	CloseUnauthenticated websocket.StatusCode = 4401
+
+	// CloseUnauthorized is a credential this node REFUSES, offered on a
+	// frame by a socket with no identity of its own.
+	CloseUnauthorized websocket.StatusCode = 4403
+)
+
 // The error codes a query answer can carry — THE SOCKET'S SUBSET OF
 // [httpjson.Code], which is the engine's one refusal vocabulary.
 //
@@ -109,6 +147,10 @@ type request struct {
 	ID     int64          `json:"id"`
 	What   string         `json:"what"`
 	Params map[string]any `json:"params"`
+
+	// Seat is which seat a `watch` frame asks to be a recipient for, and
+	// empty clears the subscription. See [Hub.Watch].
+	Seat string `json:"seat"`
 
 	// Token rides the FRAME rather than the handshake for the
 	// operator-only queries. A browser cannot set a header on a WebSocket
@@ -197,7 +239,12 @@ func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 	client := NewClient()
 	// REGISTERED BEFORE THE SNAPSHOT. See Hub.Register: the overlap is
 	// deduped by the client, and the gap the other order leaves is not.
-	svc.Hub().Register(client)
+	//
+	// THROUGH THE SERVICE rather than the hub directly, because the node's
+	// posture is what this client must be registered AT: a tab that
+	// connects to a shedding node between two health ticks would otherwise
+	// be served live for the rest of the interval. See [Service.Join].
+	svc.Join(client)
 	defer svc.Hub().Unregister(client)
 
 	var writer sync.WaitGroup
@@ -206,13 +253,13 @@ func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 		writeLoop(ctx, conn, client)
 	})
 
-	client.send(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
-	readLoop(ctx, conn, guard, client, query, operatorID)
+	client.Reply(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
+	code, reason := readLoop(ctx, conn, guard, svc.Hub(), client, query, operatorID)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
 	writer.Wait()
-	_ = conn.Close(websocket.StatusNormalClosure, "")
+	_ = conn.Close(code, reason)
 }
 
 // writeLoop drains this client's queue onto the socket.
@@ -225,19 +272,17 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 		select {
 		case <-ctx.Done():
 			return
-		case env, open := <-client.Out():
+		case frame, open := <-client.Out():
 			if !open {
 				return
 			}
-			raw, err := Encode(env)
-			if err != nil {
-				// A frame that cannot be encoded is this server's bug,
-				// not the client's. Dropping it keeps the socket alive
-				// for every other kind rather than tearing down a
-				// working dashboard over one malformed push.
-				log.ErrorContext(ctx, "stream_encode_failed", "kind", env.Kind, "error", err)
-				continue
-			}
+			// ALREADY ENCODED, and that is the point of [Frame]: the
+			// bytes were marshalled once for this client's whole
+			// posture (see [Hub.Broadcast]) and every writer in that
+			// posture writes the same slice. This loop used to marshal
+			// the envelope again for itself, so one push on a company
+			// with N tabs open cost N encodes of identical JSON.
+			raw := frame.Raw()
 			// A DEADLINE PER WRITE. A TCP peer that has vanished
 			// without a FIN — a laptop lid closed, a NAT entry
 			// dropped, a mobile network handing off — leaves this
@@ -254,7 +299,7 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 			// SLOW and nothing else. A tighter one would sever a
 			// mobile tab mid-snapshot and contradict that decision.
 			writeCtx, cancelWrite := context.WithTimeout(ctx, writeTimeout)
-			err = conn.Write(writeCtx, websocket.MessageText, raw)
+			err := conn.Write(writeCtx, websocket.MessageText, raw)
 			cancelWrite()
 			if err != nil {
 				return
@@ -263,10 +308,17 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 	}
 }
 
-// readLoop handles client frames until the socket closes.
+// readLoop handles client frames until the socket closes, and reports the
+// close code the connection should end with.
+//
+// [websocket.StatusNormalClosure] is the ordinary answer — the client went
+// away, or this process is stopping. The two auth codes are the only faults
+// that end a socket at all; everything else this loop can go wrong about is
+// answered ON the socket and the socket stays open. See [CloseUnauthenticated]
+// and [FrameDegraded].
 func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
-	client *Client, query Query, operatorID string,
-) {
+	hub *Hub, client *Client, query Query, operatorID string,
+) (websocket.StatusCode, string) {
 	// The concurrency bound, as a token pool. Queries run on their own
 	// goroutines so a store scan cannot stall the live feed, and a burst
 	// past the bound queues here rather than piling into the engine's
@@ -278,7 +330,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 	for {
 		_, raw, err := conn.Read(ctx)
 		if err != nil {
-			return
+			return websocket.StatusNormalClosure, ""
 		}
 		var req request
 		if err := decodeRequest(raw, &req); err != nil {
@@ -289,11 +341,31 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 		}
 		switch req.Kind {
 		case "ping":
-			client.send(Envelope{Kind: KindPong})
+			// THE KEEPALIVE, and it is answered in EVERY posture — a
+			// degraded socket is the one that most needs to stay up,
+			// because the health frame beside this is how the tab
+			// learns why its pushes stopped.
+			client.Reply(Envelope{Kind: KindPong})
+		case "watch":
+			if code, reason := watch(ctx, guard, hub, client, req, operatorID); code != 0 {
+				return code, reason
+			}
 		case "query":
-			if query == nil {
-				client.send(queryError(req, CodeUnknownQuery))
+			// A DEGRADED NODE REFUSES rather than answers. Its copy of
+			// the company is wrong rather than behind, and an answer
+			// out of it — "there is no such work item" — is something a
+			// person acts on. The refusal is a DIRECT frame, so it
+			// reaches the client whatever the posture.
+			if !client.Posture().ServesQueries() {
+				client.Reply(queryError(req, CodeUnavailable))
 				continue
+			}
+			if query == nil {
+				client.Reply(queryError(req, CodeUnknownQuery))
+				continue
+			}
+			if code, reason := frameCredential(guard, req, operatorID); code != 0 {
+				return code, reason
 			}
 			// NOT running.Go: the semaphore acquire has to happen on
 			// THIS goroutine, the reader. Moving it inside the spawned
@@ -314,6 +386,77 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 	}
 }
 
+// frameCredential checks a credential offered on a frame, and reports the
+// close code the socket must end with when this node refuses it.
+//
+// # Why a refused frame token closes the socket, and only sometimes
+//
+// The handshake's rule is that a credential which is PRESENT and wrong is
+// refused, because a client that sent one meant to be somebody. The frame
+// channel is the same credential arriving where the handshake cannot see it,
+// so it gets the same rule — with one exception, which is the whole of the
+// asymmetry:
+//
+//   - A socket that has NO operator of its own has nothing to fall back to.
+//     The refused token is the only identity it offered, so the socket is
+//     closed with [CloseUnauthorized] and the client is told. Left running
+//     anonymously — which it was — a reader holding a stale token gets
+//     ordinary answers to every anonymous-readable question and never learns
+//     the credential it typed is wrong.
+//   - A socket that IS authenticated keeps its own operator and the bad frame
+//     token is ignored. It must NEVER be demoted, let alone dropped: a
+//     garbled token on one frame silently answered an operator's question as
+//     anonymous, and an operator-only query came back unauthorized on a
+//     socket with every right to ask it.
+//
+// A zero status means "carry on"; there is no valid close code of 0.
+func frameCredential(guard *auth.Guard, req request, operatorID string) (websocket.StatusCode, string) {
+	if req.Token == "" || operatorID != "" {
+		return 0, ""
+	}
+	if _, ok := guard.Operator(req.Token); ok {
+		return 0, ""
+	}
+	return CloseUnauthorized, "the credential on that frame is not one this node accepts"
+}
+
+// watch makes this client a recipient for one seat, or reports the close code
+// that refuses it.
+//
+// # A subscription is a WRITE, so it needs a credential
+//
+// `allow_anonymous_read` opens reads and only reads — the rule the auth
+// package states and the whole of what the anonymous posture means. A watch is
+// not a read: it installs a row in the hub's routing index, on this node, on
+// behalf of a caller, and it stays there until the socket goes away. An
+// unauthenticated client that could install one would be writing server state
+// through a surface documented as read-only.
+//
+// So a watch from a socket with no operator, and with no usable credential on
+// the frame, is [CloseUnauthenticated] — and a close rather than an error
+// frame because a watch carries no correlation id, so the socket itself is the
+// only channel the refusal has.
+func watch(ctx context.Context, guard *auth.Guard, hub *Hub, client *Client,
+	req request, operatorID string,
+) (websocket.StatusCode, string) {
+	if code, reason := frameCredential(guard, req, operatorID); code != 0 {
+		return code, reason
+	}
+	id := operatorID
+	if req.Token != "" {
+		if resolved, ok := guard.Operator(req.Token); ok {
+			id = resolved
+		}
+	}
+	if id == "" {
+		return CloseUnauthenticated,
+			"watching a seat needs an operator credential"
+	}
+	hub.Watch(client, req.Seat)
+	log.DebugContext(ctx, "stream_watch", "operator", id, "seat", req.Seat)
+	return 0, ""
+}
+
 // runQuery answers one question onto the client's own queue.
 func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Query,
 	req request, operatorID string,
@@ -330,13 +473,13 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 	data, err := query(ctx, req.What, req.Params, id)
 	switch {
 	case err == nil:
-		client.send(Envelope{Kind: KindResult, ID: req.ID, What: req.What, Data: data})
+		client.Reply(Envelope{Kind: KindResult, ID: req.ID, What: req.What, Data: data})
 	case errors.Is(err, ErrUnknownQuery):
-		client.send(queryError(req, CodeUnknownQuery))
+		client.Reply(queryError(req, CodeUnknownQuery))
 	case errors.Is(err, ErrUnauthorized):
-		client.send(queryError(req, CodeUnauthorized))
+		client.Reply(queryError(req, CodeUnauthorized))
 	case errors.Is(err, ErrNotFound):
-		client.send(queryError(req, CodeNotFound))
+		client.Reply(queryError(req, CodeNotFound))
 	case errors.Is(err, ErrBadParams):
 		// DEBUG, NOT WARN: it is not this node's failure, and a poll
 		// behind a bad request writes a line per tick for as long as the
@@ -344,15 +487,15 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 		// field the caller got wrong, which is the whole of the fix —
 		// but only to somebody who turned debug on to look for it.
 		log.DebugContext(ctx, "stream_query_refused", "what", req.What, "error", err)
-		client.send(queryError(req, CodeBadParams))
+		client.Reply(queryError(req, CodeBadParams))
 	case errors.Is(err, ErrUnavailable):
-		client.send(queryError(req, CodeUnavailable))
+		client.Reply(queryError(req, CodeUnavailable))
 	default:
 		// The reason reaches the LOG, not the client. A query failure can
 		// carry a database path or a driver's own message, and the socket
 		// is the one surface an unauthenticated reader may be holding.
 		log.WarnContext(ctx, "stream_query_failed", "what", req.What, "error", err)
-		client.send(queryError(req, CodeQueryFailed))
+		client.Reply(queryError(req, CodeQueryFailed))
 	}
 }
 

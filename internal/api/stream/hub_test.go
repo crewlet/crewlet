@@ -13,19 +13,45 @@ import (
 var clock = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 
 // drain reads everything currently queued for a client.
-func drain(c *stream.Client) []stream.Envelope {
-	var out []stream.Envelope
+func drain(c *stream.Client) []*stream.Frame {
+	var out []*stream.Frame
 	for {
 		select {
-		case env, ok := <-c.Out():
+		case frame, ok := <-c.Out():
 			if !ok {
 				return out
 			}
-			out = append(out, env)
+			out = append(out, frame)
 		default:
 			return out
 		}
 	}
+}
+
+// decodeData unmarshals a frame's `data` member into v.
+//
+// THE BYTES, not a Go value: a client now receives what one encode produced
+// for its whole posture, so a test that reached into an Envelope would be
+// asserting about something no browser ever sees.
+func decodeData(t *testing.T, frame *stream.Frame, v any) {
+	t.Helper()
+	var outer struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(frame.Raw(), &outer); err != nil {
+		t.Fatalf("decode %s: %v", frame.Raw(), err)
+	}
+	if err := json.Unmarshal(outer.Data, v); err != nil {
+		t.Fatalf("decode the %s frame's data %s: %v", frame.Kind(), outer.Data, err)
+	}
+}
+
+// dataOf is a frame's `data` member as an object.
+func dataOf(t *testing.T, frame *stream.Frame) map[string]any {
+	t.Helper()
+	var out map[string]any
+	decodeData(t, frame, &out)
+	return out
 }
 
 func TestABroadcastReachesEveryClient(t *testing.T) {
@@ -42,7 +68,7 @@ func TestABroadcastReachesEveryClient(t *testing.T) {
 
 	for name, c := range map[string]*stream.Client{"a": a, "b": b} {
 		got := drain(c)
-		if len(got) != 1 || got[0].Kind != stream.KindEvent {
+		if len(got) != 1 || got[0].Kind() != stream.KindEvent {
 			t.Errorf("%s received %+v", name, got)
 		}
 	}
@@ -84,13 +110,13 @@ func TestASlowClientLosesItsOldestEnvelope(t *testing.T) {
 		t.Fatalf("queued = %d, want the depth of %d", len(got), stream.QueueDepth)
 	}
 	// The NEWEST survived.
-	last, _ := got[len(got)-1].Data.(map[string]any)
-	if last["n"] != overflow-1 {
+	last := dataOf(t, got[len(got)-1])
+	if last["n"] != float64(overflow-1) {
 		t.Errorf("newest queued = %v, want %d", last["n"], overflow-1)
 	}
 	// The OLDEST went.
-	first, _ := got[0].Data.(map[string]any)
-	if first["n"] == 0 {
+	first := dataOf(t, got[0])
+	if first["n"] == float64(0) {
 		t.Error("the oldest envelope survived an overflow")
 	}
 	if c.Dropped() != overflow-stream.QueueDepth {
@@ -250,7 +276,7 @@ func TestAPushEncodesAsTheClientExpects(t *testing.T) {
 	if got["ts"] != "2026-06-14T12:00:00Z" {
 		t.Errorf("ts = %v", got["ts"])
 	}
-	for _, absent := range []string{"id", "what", "error"} {
+	for _, absent := range []string{"id", "what", "error", "seat"} {
 		if _, present := got[absent]; present {
 			t.Errorf("a push carried the query-answer field %q", absent)
 		}

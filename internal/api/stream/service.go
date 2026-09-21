@@ -43,6 +43,21 @@ type Health struct {
 // HealthFunc reports the current health, for the shared tick.
 type HealthFunc func() Health
 
+// PostureFunc maps this node's own health onto the posture its sockets are
+// served in.
+//
+// IT TAKES THE HEALTH IT IS DECIDED FROM rather than reading the node again:
+// the health read reaches the coordination plane, the tick already does one
+// per interval, and a second read would describe a different instant — so a
+// tab could be told "shed" in its health frame while its pushes kept arriving
+// as though the node were serving.
+//
+// The MAPPING lives with the caller (internal/api), not here, because the set
+// of node postures that take a node out of service is already declared there
+// and read by /ready. Two declarations of one set is how the probe and the
+// socket come to disagree about whether this node is serving.
+type PostureFunc func(Health) FramePosture
+
 // Service turns the engine's event stream into the pushes a dashboard mirrors.
 //
 // It is the only thing that applies an event to the projection AND fans out the
@@ -55,6 +70,10 @@ type Service struct {
 
 	// health is consulted by the shared tick.
 	health HealthFunc
+
+	// posture derives a socket's delivery mode from that health. See
+	// [PostureFunc].
+	posture PostureFunc
 
 	// handles maps a role to its agent handle, for the per-agent rollup's
 	// cross-links. It answers an empty map while no company is active,
@@ -92,6 +111,10 @@ type HandleFunc func() map[string]string
 // health frame reading "ok", an empty catalogue, an organization with no seats.
 type Options struct {
 	Health HealthFunc
+
+	// Posture decides whether a socket is served live or degraded, from
+	// the same Health the tick just read. See [PostureFunc].
+	Posture PostureFunc
 
 	// Handles supplies the role-to-handle map. An empty map leaves each
 	// row's handle blank rather than guessing one: a wrong link is worse
@@ -142,6 +165,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		absent bool
 	}{
 		{"Health", opts.Health == nil},
+		{"Posture", opts.Posture == nil},
 		{"Handles", opts.Handles == nil},
 		{"Roster", opts.Roster == nil},
 		{"Org", opts.Org == nil},
@@ -161,6 +185,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		hub:       NewHub(),
 		state:     state,
 		health:    opts.Health,
+		posture:   opts.Posture,
 		handles:   opts.Handles,
 		roster:    opts.Roster,
 		org:       opts.Org,
@@ -180,6 +205,19 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 
 // Hub exposes the client registry, for a transport to join and leave.
 func (s *Service) Hub() *Hub { return s.hub }
+
+// Join registers a client at the posture this node is serving RIGHT NOW.
+//
+// The tick refreshes the hub's posture every interval, which is what moves
+// every open socket when a node sheds. That leaves one window a tick cannot
+// cover: a tab that connects between two ticks, to a node that changed posture
+// since the last one. So a connect reads the posture once, for itself — a
+// coordination round trip per connect, which is what the health body already
+// costs on every probe, and orders of magnitude rarer than a push.
+func (s *Service) Join(c *Client) {
+	s.hub.SetPosture(s.posture(s.currentHealth()))
+	s.hub.Register(c)
+}
 
 // State exposes the projection, for the snapshot and the query surface.
 func (s *Service) State() *livestate.LiveState { return s.state }
@@ -330,7 +368,14 @@ func (s *Service) StartHealthTicks(ctx context.Context) {
 			case <-stop:
 				return
 			case <-ticker.C:
-				s.hub.Broadcast(Push(KindHealth, s.currentHealth(), s.now()))
+				// ONE HEALTH READ PER TICK, feeding both the frame
+				// and the posture derived from it. Read twice, a tab
+				// could be told "shed" in the frame it is handed
+				// while the posture that decided whether to hand it
+				// anything came from a different instant.
+				health := s.currentHealth()
+				s.hub.SetPosture(s.posture(health))
+				s.hub.Broadcast(Push(KindHealth, health, s.now()))
 				s.flushTokens()
 			}
 		}

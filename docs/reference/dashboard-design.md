@@ -2610,6 +2610,33 @@ rendered idle from the first phase to the last.
   an engine that is simply down. A plain `GET /ws/stream` runs the same guard
   and stops one line short of the upgrade: 401 is a refused credential, 426
   means it was accepted.
+- **A frame arrives already encoded, and two tabs in the same posture get the
+  byte-identical one.** The engine marshals a push once per POSTURE present on
+  the node, not once per connection: what a client receives is decided by the
+  posture its socket is being served in (`live` or `degraded`) and by the kind's
+  own route (every client, one seat's watchers, or the one client that asked).
+  A tab therefore cannot see a frame differ from another tab's in the same
+  posture — which is the property the transcript, the activity feed and the
+  agent overlays are all compared against.
+- **A degraded node's socket stays open, and says so.** When this node's own
+  posture is `shed` or `stuck` its copy of the company is wrong rather than
+  behind, so pushes stop, queries come back `unavailable`, and the `ping`/`pong`
+  keepalive and the 5-second `health` frame carry on. The page must render that
+  as a stated condition rather than as a stall: a socket that closed instead
+  would reconnect on a backoff, learn nothing from any attempt, and show
+  "retrying" for as long as the node stayed degraded. `unavailable` is never
+  flattened into an empty result — "this company has no work" is something a
+  reader acts on.
+- **Two close codes, and what each one asks of the reader.** A refused
+  handshake cannot carry one (see the HTTP diagnosis above); these are for a
+  socket that is already open and whose client then offers or omits a credential
+  on a frame. `4401` means a frame needed an operator credential and none was
+  offered — collect a token and re-dial. `4403` means the credential on a frame
+  is not one this node accepts, on a socket with no identity of its own — forget
+  that token, ask for another, re-dial. An authenticated socket is never dropped
+  for a bad frame token: it has an identity to fall back on, and demoting it
+  silently answered an operator's question as anonymous. Nothing else closes
+  this socket for a fault.
 - **One clock.** Every relative time on screen advances together and none of
   them is baked at render.
 
