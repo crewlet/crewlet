@@ -778,11 +778,7 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 			// arrives — and one that verifies now is applied by a
 			// build that authenticated it, not by one that
 			// remembered an earlier build had looked at it.
-			body, verdict, err := r.verifier.Open(row.payload)
-			if err != nil {
-				return fmt.Errorf("statelog: verify %s's retained record at packed "+
-					"position %d: %w", r.domain.Name(), row.position, err)
-			}
+			body, verdict := r.verifier.Open(row.payload)
 			switch verdict {
 			case KeyUnknown:
 				kept++
@@ -984,11 +980,7 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 		// it came from this fleet, and handing an unauthenticated
 		// payload to a domain's decoder is handing it to the one place
 		// that parses attacker-controlled bytes.
-		body, verdict, err := r.verifier.Open(m.Payload)
-		if err != nil {
-			return nil, fmt.Errorf("statelog: verify %s's record at sequence %d: %w",
-				r.domain.Name(), m.Seq, err)
-		}
+		body, verdict := r.verifier.Open(m.Payload)
 		if verdict == Tampered {
 			// PERMANENT, and it stops the loop. A record whose MAC
 			// fails under a key this fleet holds was written by

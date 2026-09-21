@@ -232,7 +232,14 @@ func (s *Signer) Seal(body []byte) []byte {
 //
 // [Tampered] bytes are not from this fleet, so no domain decoder is handed
 // them at all.
-func (v *Verifier) Open(framed []byte) ([]byte, Verdict, error) {
+//
+// TWO RESULTS AND NO ERROR, because there is no fourth answer and never can
+// be: the keys were derived when this verifier was built, and every way a
+// record can fail to open — a frame that is not one, a truncated one, an id
+// this node does not hold, a MAC that does not match — is one of the three
+// verdicts. An error channel here would be nil at every call site, and a
+// reader would have to write a branch that cannot be reached to satisfy it.
+func (v *Verifier) Open(framed []byte) ([]byte, Verdict) {
 	id, mac, body, ok := splitFrame(framed)
 	if !ok {
 		// NOT A FRAME AT ALL is [Tampered] rather than a third answer.
@@ -241,16 +248,16 @@ func (v *Verifier) Open(framed []byte) ([]byte, Verdict, error) {
 		// on a log written before this rule existed, a deployment whose
 		// upgrade path is stated in the release notes rather than
 		// guessed at by an applier.
-		return nil, Tampered, nil
+		return nil, Tampered
 	}
 	key, held := v.keys[id]
 	if !held {
-		return body, KeyUnknown, nil
+		return body, KeyUnknown
 	}
 	if !hmac.Equal(mac, recordMAC(key, v.domain, id, body)) {
-		return nil, Tampered, nil
+		return nil, Tampered
 	}
-	return body, Verified, nil
+	return body, Verified
 }
 
 // KeyIDs is every id this verifier holds, sorted, for the log line that says

@@ -128,6 +128,14 @@ type runningDomain struct {
 	// [statelog.Health].
 	progress progress
 
+	// verifier opens a record's frame, and it is on the running domain
+	// because the applier is not the only reader of this log: the change
+	// feed is a SECOND consumer over the same bytes, and a reader that
+	// skipped the frame would hand a domain's decoder the signature rather
+	// than the record. One verifier for both, so neither can be the one
+	// that forgot.
+	verifier *statelog.Verifier
+
 	// reader is this domain's READ authority — the four levels, the
 	// refusal ladder, the coverage probe and the barrier wait — and it is
 	// what a domain's own reader answers through.
@@ -651,7 +659,7 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	running := &runningDomain{
 		domain: domain, runner: runner, publisher: publisher,
 		log: appendTo, consumer: consumer, createdAt: created,
-		evicted: evicted,
+		evicted: evicted, verifier: verifier,
 	}
 	// AFTER the struct exists, because the health closure the reader
 	// holds reads through it — a reader built first would capture a

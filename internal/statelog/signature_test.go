@@ -49,10 +49,7 @@ func TestASignedRecordOpensToTheBodyItCarries(t *testing.T) {
 	if bytes.Equal(framed, body) {
 		t.Fatal("the frame added nothing, so nothing was signed")
 	}
-	got, verdict, err := mustVerify(t, "tracker", ring("k1", key1)).Open(framed)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	got, verdict := mustVerify(t, "tracker", ring("k1", key1)).Open(framed)
 	if verdict != statelog.Verified {
 		t.Fatalf("verdict = %q, want %q", verdict, statelog.Verified)
 	}
@@ -86,10 +83,7 @@ func TestATamperedRecordIsRefusedPermanently(t *testing.T) {
 		"the magic only":    func(b []byte) []byte { return b[:4] },
 	} {
 		t.Run(name, func(t *testing.T) {
-			body, verdict, err := verifier.Open(mutate(framed))
-			if err != nil {
-				t.Fatalf("Open: %v", err)
-			}
+			body, verdict := verifier.Open(mutate(framed))
 			if verdict != statelog.Tampered {
 				t.Errorf("verdict = %q, want %q", verdict, statelog.Tampered)
 			}
@@ -111,10 +105,7 @@ func TestAnUnknownKeyIsRecoverableAndKeepsTheBody(t *testing.T) {
 	framed := mustSign(t, "tracker", ring("k2", key2)).Seal(body)
 
 	// A node that does not hold k2 yet.
-	got, verdict, err := mustVerify(t, "tracker", ring("k1", key1)).Open(framed)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	got, verdict := mustVerify(t, "tracker", ring("k1", key1)).Open(framed)
 	if verdict != statelog.KeyUnknown {
 		t.Fatalf("verdict = %q, want %q", verdict, statelog.KeyUnknown)
 	}
@@ -125,10 +116,7 @@ func TestAnUnknownKeyIsRecoverableAndKeepsTheBody(t *testing.T) {
 
 	// The operator adds k2. The SAME bytes now verify — that is what
 	// makes this disposition recoverable.
-	got, verdict, err = mustVerify(t, "tracker", ring("k1", key1, key2)).Open(framed)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	got, verdict = mustVerify(t, "tracker", ring("k1", key1, key2)).Open(framed)
 	if verdict != statelog.Verified {
 		t.Errorf("verdict = %q after the key arrived, want %q", verdict, statelog.Verified)
 	}
@@ -155,10 +143,7 @@ func TestARotationVerifiesInBothDirections(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			framed := mustSign(t, "tracker", tc.signer).Seal(body)
-			_, verdict, err := mustVerify(t, "tracker", tc.verifier).Open(framed)
-			if err != nil {
-				t.Fatalf("Open: %v", err)
-			}
+			_, verdict := mustVerify(t, "tracker", tc.verifier).Open(framed)
 			if verdict != statelog.Verified {
 				t.Errorf("verdict = %q, want %q — a rotation must not split the fleet",
 					verdict, statelog.Verified)
@@ -169,10 +154,7 @@ func TestARotationVerifiesInBothDirections(t *testing.T) {
 	// AND THE ONE DIRECTION THAT MUST NOT WORK: a node that dropped k1
 	// refuses a record signed under it, which is what the drop is for.
 	framed := mustSign(t, "tracker", oldNode).Seal(body)
-	_, verdict, err := mustVerify(t, "tracker", statelog.OneKey("k2", key2.Material)).Open(framed)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	_, verdict := mustVerify(t, "tracker", statelog.OneKey("k2", key2.Material)).Open(framed)
 	if verdict != statelog.KeyUnknown {
 		t.Errorf("verdict = %q after the key was dropped, want %q", verdict, statelog.KeyUnknown)
 	}
@@ -186,10 +168,7 @@ func TestOneDomainsRecordNeverVerifiesOnAnothersLog(t *testing.T) {
 	t.Parallel()
 	r := ring("k1", key1)
 	framed := mustSign(t, "tracker", r).Seal([]byte(`{"kind":"task.create"}`))
-	_, verdict, err := mustVerify(t, "pages", r).Open(framed)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	_, verdict := mustVerify(t, "pages", r).Open(framed)
 	if verdict != statelog.Tampered {
 		t.Errorf("verdict = %q on another domain's log, want %q", verdict, statelog.Tampered)
 	}
@@ -206,10 +185,7 @@ func TestARewrittenKeyIdDoesNotVerify(t *testing.T) {
 	if bytes.Equal(rewritten, framed) {
 		t.Fatal("the fixture did not rewrite the id")
 	}
-	_, verdict, err := mustVerify(t, "tracker", both).Open(rewritten)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	_, verdict := mustVerify(t, "tracker", both).Open(rewritten)
 	if verdict != statelog.Tampered {
 		t.Errorf("verdict = %q for a rewritten key id, want %q", verdict, statelog.Tampered)
 	}
