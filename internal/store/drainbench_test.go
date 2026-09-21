@@ -820,12 +820,36 @@ func benchNodeT(t *testing.T) (*store.DB, *store.Writer) {
 	return db, w
 }
 
+// benchBusyTimeout is how long a writer in these benches waits for the file
+// lock, and it is deliberately far past the production default.
+//
+// THE SCENARIO IS THE HANDOFF, NOT THE TIMEOUT. What these cases observe is
+// what the write queue does with a writer that arrives behind a long apply:
+// it waits and is handed the lock, rather than being refused. The busy
+// timeout is a different knob entirely — it bounds how long ANY writer waits
+// — and at the 5s production default it was the thing deciding the outcome,
+// because a 4 000-record apply is not bounded by 5s on a contended machine.
+//
+// Measured: that apply takes about 1.3s on an idle runner and took 12.5s
+// under `make test`, which runs this package beside a dozen others under the
+// detector. The writer beside it was then refused once — correctly, by its own
+// configured rule — and the case reported the queue as broken over a machine
+// that was merely busy. 60s is five times that worst measurement and two
+// orders below the suite's own 30m bound, so a refusal here now means the
+// queue refused rather than that this runner was slow.
+//
+// It is the FIXTURE's value and not the engine's: nothing in production writes
+// the replicated estate except a state log's applier, which this same queue
+// serialises, so the default is not what this measurement is about.
+const benchBusyTimeout = 60 * time.Second
+
 // openApplierStore opens a node with one declared pin and the applier-shaped
 // tables in its REPLICATED estate, which is where an applier writes.
 func openApplierStore(tb testing.TB, path string) (*store.DB, *store.Writer) {
 	tb.Helper()
 	ctx := tb.Context()
-	db, err := store.Open(ctx, path, store.Options{PinnedWriters: 1})
+	db, err := store.Open(ctx, path, store.Options{
+		PinnedWriters: 1, BusyTimeout: benchBusyTimeout})
 	if err != nil {
 		tb.Fatalf("open: %v", err)
 	}
