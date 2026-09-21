@@ -3,9 +3,11 @@ package statelog_test
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +29,12 @@ type transferHarness struct {
 }
 
 func newTransferHarness(t *testing.T, bytes int) *transferHarness {
+	return newTransferHarnessWith(t, bytes, 0)
+}
+
+// newTransferHarnessWith is newTransferHarness with a stated admission bound,
+// for the case about a donor that is already full.
+func newTransferHarnessWith(t *testing.T, bytes, maxTransfers int) *transferHarness {
 	t.Helper()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
 	if err != nil {
@@ -73,10 +81,11 @@ func newTransferHarness(t *testing.T, bytes int) *transferHarness {
 		},
 	}
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "donor",
-		Dial:   func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
-		Newest: func() (statelog.Manifest, bool) { return h.manifest, true },
-		Path:   func(statelog.Manifest) string { return h.artefact },
+		NodeID:       "donor",
+		Dial:         func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
+		Newest:       func() (statelog.Manifest, bool) { return h.manifest, true },
+		Path:         func(statelog.Manifest) string { return h.artefact },
+		MaxTransfers: maxTransfers,
 	})
 	if err != nil {
 		t.Fatalf("NewDonor: %v", err)
@@ -286,5 +295,114 @@ func TestOffersAreRankedNewestFirst(t *testing.T) {
 	}
 	if at(9_000).Newest() <= at(4_200).Newest() {
 		t.Fatal("a newer artefact does not rank above an older one")
+	}
+}
+
+// TestNothingBelowTheFloorOutranksAnythingAboveIt, and among equals the choice
+// is this joiner's own.
+//
+// Ordering by the artefact alone makes every joiner in a fleet rank the same
+// offers the same way, so a fleet that restarts together sends every one of
+// them at whichever node happens to hold the newest artefact. That node then
+// refuses all but a few, and the rest spend a collection window asking again.
+// Shuffling the EQUALS before the ordering keeps "best artefact first" exact
+// and makes the choice among the best differ per joiner.
+func TestNothingBelowTheFloorOutranksAnythingAboveIt(t *testing.T) {
+	t.Parallel()
+	offer := func(node string, seq uint64) statelog.Offer {
+		return statelog.Offer{Fetch: node, Manifest: statelog.Manifest{
+			V:       statelog.ManifestVersion,
+			Domains: map[string]statelog.DomainPosition{"probe": {Seq: seq}},
+		}}
+	}
+	// Four donors at one position and one that is strictly better.
+	equal := []statelog.Offer{
+		offer("a", 9_000), offer("b", 9_000), offer("c", 9_000), offer("d", 9_000),
+	}
+	best := offer("e", 9_500)
+
+	firsts := map[string]int{}
+	for seed := range uint64(64) {
+		ranked := statelog.RankOffersForTest(append([]statelog.Offer{best}, equal...), seed)
+		if ranked[0].Fetch != "e" {
+			t.Fatalf("seed %d ranked %q first; a strictly newer artefact must always "+
+				"come first, or the shuffle is choosing the replay length",
+				seed, ranked[0].Fetch)
+		}
+		firsts[ranked[1].Fetch]++
+	}
+	if len(firsts) < 2 {
+		t.Errorf("across 64 seeds the same donor was always chosen among the equals "+
+			"(%v) — every joiner in a fleet would then ask one node", firsts)
+	}
+}
+
+// TestADonorAdmitsAtMostNTransfers, and tells the rest so at once.
+//
+// Every fetch is a goroutine holding an open file and a credit window of chunks
+// in flight, on a subject every joiner in the fleet can reach. Unbounded, a
+// fleet that restarts together spawns one per joiner on whichever node answered
+// first — and since the offers were ranked identically everywhere, that is one
+// node.
+//
+// WHAT IS OVER THE BOUND IS TERMINATED WITH A REASON rather than queued. A
+// joiner told no immediately asks the next donor; one left waiting on a queue
+// it cannot see spends its whole collection window on a node that was never
+// going to answer it.
+func TestADonorAdmitsAtMostNTransfers(t *testing.T) {
+	t.Parallel()
+	// One admission, against an artefact big enough that a transfer is
+	// several credit windows long rather than one round trip.
+	h := newTransferHarnessWith(t, statelog.SnapshotChunkBytes*statelog.SnapshotTransferWindow*8, 1)
+
+	offers, err := statelog.CollectOffers(t.Context(), h.nc, statelog.OfferRequest{
+		NodeID: "joiner",
+	}, statelog.OfferWindow)
+	if err != nil {
+		t.Fatalf("CollectOffers: %v", err)
+	}
+	if len(offers) != 1 {
+		t.Fatalf("collected %d offer(s), want 1", len(offers))
+	}
+
+	// EIGHT JOINERS AT ONCE, which is the shape this bounds: a fleet
+	// restarting together, every node ranking the same offer first.
+	const joiners = 8
+	results := make(chan error, joiners)
+	var start sync.WaitGroup
+	start.Add(1)
+	for i := range joiners {
+		go func() {
+			start.Wait()
+			_, err := statelog.FetchArtefact(t.Context(), h.nc, offers[0],
+				filepath.Join(t.TempDir(), fmt.Sprintf("joiner-%d.db", i)))
+			results <- err
+		}()
+	}
+	start.Done()
+
+	var admitted, refused int
+	var refusal string
+	for range joiners {
+		switch err := <-results; {
+		case err == nil:
+			admitted++
+		case strings.Contains(err.Error(), "ask another node"):
+			refused++
+			refusal = err.Error()
+		default:
+			t.Errorf("a transfer failed for an unexpected reason: %v", err)
+		}
+	}
+	if refused == 0 {
+		t.Fatalf("all %d concurrent joiners were admitted against a bound of 1, so a "+
+			"fleet restarting together would spawn one goroutine per joiner here",
+			joiners)
+	}
+	if admitted == 0 {
+		t.Error("no joiner was admitted at all, so the bound refuses rather than bounds")
+	}
+	if !strings.Contains(refusal, "which is its limit") {
+		t.Errorf("the refusal does not say why: %q", refusal)
 	}
 }

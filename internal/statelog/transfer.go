@@ -1,13 +1,16 @@
 package statelog
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 
@@ -184,13 +187,41 @@ type DonorDeps struct {
 	// Path answers where an artefact's bytes are, given its manifest.
 	Path func(Manifest) string
 
+	// MaxTransfers bounds how many fetches this node streams at once.
+	// Zero takes [DefaultMaxTransfers].
+	//
+	// A BOUND RATHER THAN A QUEUE. Each transfer is a goroutine holding an
+	// open file and a credit window of chunks in flight, and the fetch
+	// subject is a fan-in every joiner in the fleet can reach at once — so
+	// with no bound, a fleet that restarts together spawns one goroutine
+	// per joiner on whichever node answered first. What is over the bound
+	// is TERMINATED with a reason rather than queued, because a joiner
+	// that is told no immediately asks the next donor, and one left
+	// waiting on a queue it cannot see spends its whole window on a node
+	// that was never going to answer.
+	MaxTransfers int
+
 	Logger *slog.Logger
 }
+
+// DefaultMaxTransfers is how many artefacts one node streams at once.
+//
+// FOUR, which is a disk rather than a network number: a transfer is a
+// sequential read of one large file, and a node serving four is already
+// seeking between four. It is deliberately not derived from GOMAXPROCS — the
+// cost being bounded here is the donor's disk and the joiners' patience, and
+// neither scales with this node's cores.
+const DefaultMaxTransfers = 4
 
 // Donor answers offer requests and streams its artefact.
 type Donor struct {
 	deps DonorDeps
 	log  *slog.Logger
+
+	// transfers admits at most [DonorDeps.MaxTransfers] concurrent
+	// streams. Buffered, and a send that cannot proceed is refused rather
+	// than waited on — see [DonorDeps.MaxTransfers].
+	transfers chan struct{}
 }
 
 // NewDonor builds the donor half.
@@ -207,7 +238,33 @@ func NewDonor(d DonorDeps) (*Donor, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Donor{deps: d, log: logger}, nil
+	limit := d.MaxTransfers
+	if limit <= 0 {
+		limit = DefaultMaxTransfers
+	}
+	return &Donor{deps: d, log: logger, transfers: make(chan struct{}, limit)}, nil
+}
+
+// admissionRefused tells a joiner this donor is full, so it asks the next one.
+func (d *Donor) admissionRefused(nc *nats.Conn, msg *nats.Msg) {
+	deliver := string(msg.Data)
+	if deliver == "" {
+		// Nowhere to answer, as [Donor.stream] has nowhere either.
+		return
+	}
+	d.log.Info("statelog_donation_refused",
+		"node", d.deps.NodeID, "limit", cap(d.transfers),
+		"detail", "this node is already streaming as many artefacts as it will "+
+			"at once; the joiner was told so rather than queued, so it can ask "+
+			"another donor inside its own collection window")
+	// 429 AND NOT 503. A 503 status header is what the broker itself sends
+	// for "no responders", and the client turns one into [nats.ErrNoResponders]
+	// before a subscriber ever sees the description — so a donor refusing
+	// with 503 would reach the joiner as "nobody is listening", which is a
+	// different fact with a different remedy.
+	d.terminate(nc, deliver, 429,
+		fmt.Sprintf("this donor is streaming %d artefact(s) already, which is its "+
+			"limit; ask another node", cap(d.transfers)))
 }
 
 // FetchSubject is where this donor streams from.
@@ -230,7 +287,19 @@ func (d *Donor) Serve(ctx context.Context) error {
 	defer func() { _ = offers.Unsubscribe() }()
 
 	fetches, err := nc.Subscribe(d.FetchSubject(), func(msg *nats.Msg) {
-		go d.stream(ctx, nc, msg)
+		select {
+		case d.transfers <- struct{}{}:
+			go func() {
+				defer func() { <-d.transfers }()
+				d.stream(ctx, nc, msg)
+			}()
+		default:
+			// REFUSED NOW, NAMING THE REASON. A joiner told no asks
+			// the next donor; one left on a queue it cannot see
+			// spends its whole collection window on a node that was
+			// never going to answer it.
+			d.admissionRefused(nc, msg)
+		}
 	})
 	if err != nil {
 		return fmt.Errorf("statelog: listen for fetches: %w", err)
@@ -370,7 +439,22 @@ func (d *Donor) terminate(nc *nats.Conn, deliver string, status int, detail stri
 // It collects for a WINDOW rather than taking the first reply, because the
 // first reply is the fastest peer rather than the best artefact — and newer is
 // strictly better, since the only thing an older one buys is a longer replay.
+// SPREAD ACROSS EQUALLY GOOD DONORS. Ordering by the artefact alone makes
+// every joiner in a fleet rank the same offers the same way, so a fleet that
+// restarts together sends every one of them at the same node — which then
+// refuses all but a few, and the rest spend a round asking again. Offers that
+// are equally good are shuffled among themselves first, so the ordering is
+// still "best artefact first" and the choice among the best is this joiner's
+// own.
+//
+// The seed is injected so the case can assert the spread rather than observe
+// it: a shuffle nobody can reproduce is a shuffle nobody can test.
 func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window time.Duration) ([]Offer, error) {
+	return collectOffers(ctx, nc, req, window, rand.Uint64())
+}
+
+func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest,
+	window time.Duration, seed uint64) ([]Offer, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("statelog: encode an offer request: %w", err)
@@ -402,16 +486,7 @@ func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 		}
 		out = append(out, o)
 	}
-	// NEWEST FIRST, so a caller's own refusals run against the best
-	// artefact before the worse ones.
-	for i := range out {
-		for j := i + 1; j < len(out); j++ {
-			if out[j].Newest() > out[i].Newest() {
-				out[i], out[j] = out[j], out[i]
-			}
-		}
-	}
-	return out, nil
+	return rankOffers(out, seed), nil
 }
 
 // FetchArtefact streams an offer's bytes to dest and returns what it wrote.
@@ -529,4 +604,18 @@ func transferVerdict(msg *nats.Msg) error {
 	}
 	return fmt.Errorf("statelog: the donor abandoned the transfer (%s): %s",
 		status, detail)
+}
+
+// rankOffers puts the best artefact first and spreads the choice among equals.
+//
+// The shuffle runs BEFORE the sort and the sort is stable, so the order among
+// offers at one position is this joiner's own while the order between
+// positions is exact. Sorting first and shuffling after would undo the sort.
+func rankOffers(offers []Offer, seed uint64) []Offer {
+	spread := rand.New(rand.NewPCG(seed, 0))
+	spread.Shuffle(len(offers), func(i, j int) { offers[i], offers[j] = offers[j], offers[i] })
+	slices.SortStableFunc(offers, func(a, b Offer) int {
+		return cmp.Compare(b.Newest(), a.Newest())
+	})
+	return offers
 }

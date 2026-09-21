@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -107,6 +108,18 @@ func classify(err error) (fault, string) {
 		// knows how to act on either, so it is reported rather than
 		// retried.
 		return faultFull, apiErr.Description
+	}
+	// TOO LARGE IS A DECISION THE CLIENT MADE, before the append ever
+	// reached the broker, so it is not ambiguous and it must not be
+	// retried. Without this arm it fell through to the unknown answer
+	// below and the publisher re-decided the whole write for all sixteen
+	// rounds — then reported "the rows kept changing under this write",
+	// which is a sentence about contention and sends a reader looking for
+	// a peer that is not there. Nothing about the record changes between
+	// rounds; it is too big now and it will be too big in a millisecond.
+	if errors.Is(err, nats.ErrMaxPayload) {
+		return faultFull, "the record is larger than the broker's maximum payload, " +
+			"so no retry can place it: " + err.Error()
 	}
 	// NO ANSWER IS THE THIRD VALUE. The client retries a no-responder
 	// twice on its own before giving up, so reaching here means the

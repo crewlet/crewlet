@@ -162,6 +162,18 @@ disk question, and it is the one you ask when a join has failed.
 node across at least two nodes — and a recipient that fails a verification asks
 the next donor.
 
+**A donor streams at most four artefacts at once, and refuses the rest at
+once.** Every transfer is a sequential read of one large file with a credit
+window of chunks in flight, and the fetch subject is a fan-in every joiner can
+reach — so a fleet restarting together would otherwise spawn one goroutine per
+joiner on whichever node holds the newest artefact. What is over the bound is
+*terminated with a reason* rather than queued, because a joiner told no asks
+the next donor immediately, while one waiting on a queue it cannot see spends
+its whole collection window on a node that was never going to answer. For the
+same reason a joiner shuffles the offers that are *equally* good before ranking
+them: the best artefact still comes first, but which of several equally good
+donors it asks is that joiner's own choice rather than the same on every node.
+
 **The manifest names the position the file keeps.** The checkpoint commits with
 the rows, so the position inside the copy is the only one that describes it,
 and the donor reads it back out of the copy after the scrub rather than from
