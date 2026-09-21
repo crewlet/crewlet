@@ -93,7 +93,7 @@ func (q *servedQueue) Serve(ctx context.Context, subject string,
 
 func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	cfg, err := config.ParseCompany([]byte(bootCleanupCompany))

@@ -32,7 +32,7 @@ import (
 // below rather than as a decision.
 func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))

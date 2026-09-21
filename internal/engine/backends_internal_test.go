@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 )
@@ -31,7 +30,7 @@ func (b ttlBackend) TTL() time.Duration { return b.ttl }
 // node would renew on a cadence the bucket outlives.
 func TestTheLeaseTTLInForceBeatsThisNodesOwnConfig(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Coordination.LeaseTTLSeconds = 90
 	configured := 90 * time.Second
 

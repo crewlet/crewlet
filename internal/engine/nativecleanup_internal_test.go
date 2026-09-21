@@ -119,7 +119,7 @@ func awaitDial(t *testing.T, q *dialQueue) []*nats.Conn {
 
 func TestAFailedNativeStartStopsTheStateLogItStarted(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))

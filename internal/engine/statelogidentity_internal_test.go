@@ -34,7 +34,7 @@ import (
 // one, so this boots the engine over its own broker and checks both halves.
 func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
@@ -170,7 +170,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 // stream's bounds; it was being thrown away.
 func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))

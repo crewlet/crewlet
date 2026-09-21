@@ -82,6 +82,19 @@
 // the same retry is refused instead. Layer 2 is therefore an optimisation and
 // never a mechanism.
 //
+// # Every record is SIGNED, and no domain is handed an unverified byte
+//
+// This is ADR-0018. The broker has no authentication of its own and a record
+// is what the next node APPLIES, so the framework frames and signs on the way
+// to the appender and verifies before any domain decodes. The key is Tier A's
+// keyring (ADR-0011), and a node with no keyring refuses to start.
+//
+// The rule is stated for READERS rather than for appliers, and the clause
+// earns its place: the applier is not the only one. The change feed is a
+// second consumer over the same bytes, and what travels onward from either is
+// the BODY. [Verifier.Open] is that one reading; `signature.go` is where the
+// whole argument lives, including why the answer is three-valued.
+//
 // # A record this build cannot decode is RETAINED, with one exception
 //
 // It is kept at its position, never skipped and never stopped on, and

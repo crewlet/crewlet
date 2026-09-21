@@ -58,7 +58,7 @@ func TestTheFloorIsReadFromThePublishedTrimDecision(t *testing.T) {
 // floor the way the trim does and requires the node to notice.
 func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
