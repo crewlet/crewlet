@@ -389,6 +389,15 @@ type Engine struct {
 	// tick instead, so a model change lands without a restart.
 	embedding *embedDuty
 
+	// chatPrune is the chat domain's retention duty: the fleet singleton
+	// that publishes the cutoff every node deletes below. On the ENGINE
+	// for the reason the trim and the embedding pass are — it is a loop
+	// this process runs, and rebuilding it on an apply would leave two
+	// loops publishing one company's ladder of cutoffs. It reads the
+	// current epoch's horizon per tick instead, so a retention change
+	// lands without a restart.
+	chatPrune *chatPrune
+
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
 	// runs, and rebuilding it on an apply would leave two loops racing for
@@ -899,6 +908,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// corpus — which reports as a healthy domain rather than as a
 		// missing one.
 		e.startEmbedding(ctx, e.native.log)
+		// AND THE CHAT DOMAIN'S HORIZON. Chat's retention is the one
+		// that cannot be a sweep: a message is replicated content, so
+		// "older than a year" read off each node's own clock deletes a
+		// different set on every node for ever. Without this duty
+		// nothing ever publishes the cutoff, and a company's rooms grow
+		// without bound while `message_retention_days` says otherwise
+		// in its config, its schema and its dashboard.
+		e.startChatRetention(ctx)
 	}
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
@@ -1225,6 +1242,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRetention()
 	e.stopBudgetReports()
 	e.stopEmbedding()
+	e.stopChatRetention()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator
