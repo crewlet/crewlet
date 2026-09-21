@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -43,15 +42,13 @@ func bridgedCalls(logged []sandbox.BridgeCall) []ledger.Call {
 }
 
 // decodeBridgeArgs reads the JSON text a bridged call was recorded with.
+//
+// [tools.ReadArgs] rather than a bare unmarshal, because this is the SECOND
+// decode of the id the row went out of its way to keep exact: a bridged call
+// naming a 19-digit issue id would otherwise reach the resumed turn's ledger
+// as a rounded one.
 func decodeBridgeArgs(raw string) map[string]any {
-	if raw == "" {
-		return nil
-	}
-	var args map[string]any
-	if err := json.Unmarshal([]byte(raw), &args); err != nil {
-		return nil
-	}
-	return args
+	return tools.ReadArgs(raw)
 }
 
 // bridgeLedger appends a bridged run's calls to its pending-run row.
@@ -83,14 +80,19 @@ func (l bridgeLedger) Append(ctx context.Context, runID string, call tools.Call)
 // An UNENCODABLE argument is not an error worth failing a log append over: the
 // call already ran. It records as empty, with the name and outcome intact,
 // which is still the fact a reviewer needs.
+//
+// The encoding itself is [tools.RecordArgs], shared with the phase event's
+// own log because the two are one rule; what stays here is the EMPTY
+// spelling, and it differs on purpose — a bridged row carries "" so the screen
+// can say "(none)", where a phase event carries `{}`.
 func encodeArgs(args map[string]any) string {
 	if len(args) == 0 {
 		return ""
 	}
-	blob, err := json.Marshal(args)
+	blob, err := tools.RecordArgs(args)
 	if err != nil {
 		log.Warn("bridge_ledger_args_unencodable", "error", err)
 		return ""
 	}
-	return string(blob)
+	return blob
 }

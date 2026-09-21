@@ -29,6 +29,7 @@
 package ledger
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"fmt"
@@ -150,12 +151,29 @@ func fitArguments(args map[string]any, blobLimit int) string {
 // than to an error: a ledger line is evidence, and evidence that vanished
 // because one argument held an unmarshalable value is the worst outcome
 // available.
+//
+// WITHOUT HTML ESCAPING, which `json.Marshal` does by default. A ledger line
+// has two audiences and the escaping is wrong for both: a model re-reads it
+// every round, where `\u0026` costs six bytes of a budget this package
+// spends its whole design on and `\u003c` reads as noise; and a person reads
+// it on the seat screen, where the line is rendered as the conversation
+// ledger's `tool_calls`. Neither is an HTML document.
+//
+// This package imports nothing from crewlet, so the rule is spelled here
+// rather than shared with `tools.RecordArgs`, which states the same one for
+// the records a transcript renders. That is the boundary working, not a copy
+// nobody noticed: an encoder is two lines and the import would drag the whole
+// tool layer behind a type the turn context, the prompt builder and the API
+// all hold.
 func marshal(v map[string]any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
 		return goString(v)
 	}
-	return string(b)
+	// Encode writes a trailing newline; a ledger line is one line.
+	return strings.TrimSuffix(buf.String(), "\n")
 }
 
 // goString renders a value that JSON refuses. Only reached for arguments a

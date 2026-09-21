@@ -527,7 +527,7 @@ const (
 	// buffers needs FIVE publishes inside one window, which is 10ms each on
 	// a backend where a publish is a network round trip. That dependency is
 	// real: the case publishes in a bare loop, unlike the deferral cases,
-	// which go through fillOneBatch's pause/publish/resume and do not race
+	// which go through holdForOneBatch's hold/publish/resume and do not race
 	// the window at all.
 	//
 	// The value stands on a NARROWER base than "no backend has reported a
