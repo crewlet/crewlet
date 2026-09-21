@@ -98,6 +98,15 @@ const absorbedBand = "ABSORBED"
 // is not in the store to begin with". An entry here is permanent by
 // construction rather than by judgement — a stream-only event has no row for a
 // query to return however its payload is shaped.
+//
+// AND IT IS CHECKED AGAINST THE ENGINE, in both directions, because a roster
+// nothing contradicts is a comment. The classification asks whether the type
+// is appended at all BEFORE it asks about the turn id — see [turnScopedTypes]
+// — so an entry here is the only thing standing between a live-only absorbed
+// type and a silent pass, and an entry whose type gained a category is stale
+// the day it did. Asked in the other order the clause was unreachable: its one
+// member declares `turn_id` like every other phase event, so the turn-id
+// branch answered first and emptying this map left the gate green.
 var notPersisted = map[string]string{
 	"agent_turn_progress": "stream-only — published to the live socket and " +
 		"never appended to crewlet_events, so it is in no turn's answer by " +
@@ -141,7 +150,7 @@ var keptOutOfTurnBands = map[string]string{
 // against the `turn_id` key, both ways.
 func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 	t.Parallel()
-	scoped, known := turnScopedTypes(t)
+	stamped, persisted, known := turnScopedTypes(t)
 
 	for _, band := range turnBands {
 		// `internal/events/types` is one level deeper than the package
@@ -166,7 +175,14 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 					"registers no payload for — a misspelled type is a band "+
 					"entry that matches nothing, and it fails EMPTY. The "+
 					"catalogue is %v", band, name, sortedKeys(known))
-			case !scoped[name]:
+			case !persisted[name]:
+				t.Errorf("the Turn screen's %s band names %q, which this build "+
+					"never APPENDS: it carries no category, so observe.Record "+
+					"refuses it and it drives the live projection alone. A row "+
+					"that was never written cannot be in `WHERE turn_id = ?`'s "+
+					"answer however its payload is shaped, so the band fails "+
+					"EMPTY exactly as a missing turn id does", band, name)
+			case !stamped[name]:
 				reason, roster := keptOutOfTurnBands[name]
 				if !roster {
 					reason = "it is not on the kept-out roster in this file, so " +
@@ -207,31 +223,49 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 				t.Errorf("the Turn screen's %s map names %q, which this build "+
 					"registers no payload for. The catalogue is %v",
 					absorbedBand, name, sortedKeys(known))
-			case scoped[name]:
-				// Carries a turn id: it is in the answer, and the screen
-				// draws it wherever the map says. Nothing to check.
-			case notPersisted[name] != "":
-				// In no answer because it is in no table. Declared.
+			case !persisted[name]:
+				// In no answer because it is in no table. Declared, or
+				// this is the first anyone has said so.
+				if notPersisted[name] == "" {
+					t.Errorf("the Turn screen's %s map names %q, which this "+
+						"build never APPENDS: it carries no category, so "+
+						"observe.Record refuses it. The screen's \"Already on "+
+						"this page\" inventory therefore omits it silently, "+
+						"which is the same EMPTY failure a band has one "+
+						"classification back. Add it to notPersisted with the "+
+						"reason it has no row, or give it a category",
+						absorbedBand, name)
+				}
+			case stamped[name]:
+				// Appended, and carrying a turn id: it is in the answer, and
+				// the screen draws it wherever the map says.
 			default:
 				t.Errorf("the Turn screen's %s map names %q, whose payload "+
-					"declares no `turn_id` key and which is not on the "+
-					"not-persisted roster in this file. The turn query is "+
+					"declares no `turn_id` key. The turn query is "+
 					"`WHERE turn_id = ?` (internal/store/eventlog.go), so the "+
 					"row can never be in the answer and the screen's "+
 					"\"Already on this page\" inventory omits it silently — "+
 					"the same EMPTY failure a band has, one classification "+
-					"further along. Give the payload a turn id, or add it to "+
-					"notPersisted with the reason it has no row",
+					"further along. Give the payload a turn id",
 					absorbedBand, name)
 			}
 		}
-		// And the roster stops describing the build if an entry leaves the map.
+		// And the roster stops describing the build in either of two ways:
+		// the type leaves the map, or it starts being written.
 		for name, reason := range notPersisted {
-			if !slices.Contains(names, name) {
+			switch {
+			case !slices.Contains(names, name):
 				t.Errorf("the not-persisted roster names %q, which the %s map "+
 					"no longer carries — a stale entry is how a roster stops "+
 					"describing the build. It was listed because: %s",
 					name, absorbedBand, reason)
+			case persisted[name]:
+				t.Errorf("the not-persisted roster names %q, which this build "+
+					"DOES append — it carries a category, so observe.Record "+
+					"writes a row for it and the turn query can return one. "+
+					"The excuse no longer applies: drop the entry and let the "+
+					"turn-id question decide, or say here what still keeps the "+
+					"row out. It was listed because: %s", name, reason)
 			}
 		}
 	}
@@ -246,7 +280,7 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 				"describing the build. It was kept out because: %s", name, reason)
 			continue
 		}
-		if scoped[name] {
+		if stamped[name] && persisted[name] {
 			t.Errorf("%q now declares a `turn_id` key, so the Turn screen CAN "+
 				"draw it and this roster entry is stale. Put the type back in "+
 				"its band in dashboard/src/lib/turnstory.ts and drop the entry, "+
@@ -256,20 +290,41 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 	}
 }
 
-// turnScopedTypes reports which registered payloads publish a `turn_id` key,
-// and the whole set of registered types beside it.
+// turnScopedTypes reports the two conditions a row has to meet to be in a
+// turn's answer, and the whole set of registered types beside them.
 //
-// OFF THE MARSHALLED PAYLOAD, through the same `filled` the wire-contract test
-// uses, rather than off a struct field name or off [wireTags]. The key is what
-// `store.ExtractTags` reads and what the column is filled from, so the key is
-// what decides this — a field named TurnID under a different tag would answer
-// the Go question and the wrong one.
-func turnScopedTypes(t *testing.T) (scoped, known map[string]bool) {
+// TWO, BECAUSE THE QUERY HAS TWO. `EventLog.Turn` is `WHERE turn_id = ?` over
+// `crewlet_events`, so a row reaches the Turn screen only if it was written at
+// all and carries the key the predicate reads. A gate that asked the second
+// question alone passes a LIVE-ONLY type — and `agent_turn_progress` is
+// exactly one: it stamps `turn_id` like every other phase event and
+// `observe.Record` still refuses it, so the absorbed map's roster clause for
+// it sat behind a branch that answered first and never ran. Asked apart, each
+// failure names its own repair: give the payload a turn id, or say why the
+// type has no row.
+//
+// `stamped` is OFF THE MARSHALLED PAYLOAD, through the same `filled` the
+// wire-contract test uses, rather than off a struct field name or off
+// [wireTags]. The key is what `store.ExtractTags` reads and what the column is
+// filled from, so the key is what decides it — a field named TurnID under a
+// different tag would answer the Go question and the wrong one.
+//
+// `persisted` is the CATEGORY, which is the same value [observe.Record]
+// branches on when it decides whether an event becomes a row at all. Asked of
+// internal/events rather than restated here, for the reason that package's own
+// doc gives about a second copy of a placement map: two lists of which types
+// are stored disagree silently, and the half a test exercises is never the
+// half production writes through.
+func turnScopedTypes(t *testing.T) (stamped, persisted, known map[string]bool) {
 	t.Helper()
-	scoped = map[string]bool{}
+	stamped = map[string]bool{}
+	persisted = map[string]bool{}
 	known = map[string]bool{}
 	for _, prototype := range catalogue() {
 		known[prototype.EventType()] = true
+		if category, _ := events.Category(prototype.EventType()); category != "" {
+			persisted[prototype.EventType()] = true
+		}
 		raw, err := json.Marshal(filled(prototype))
 		if err != nil {
 			t.Fatalf("marshal %s: %v", prototype.EventType(), err)
@@ -279,7 +334,7 @@ func turnScopedTypes(t *testing.T) (scoped, known map[string]bool) {
 			t.Fatalf("remap %s: %v", prototype.EventType(), err)
 		}
 		if _, ok := keys["turn_id"]; ok {
-			scoped[prototype.EventType()] = true
+			stamped[prototype.EventType()] = true
 		}
 	}
 	// The catalogue is checked against the registry by
@@ -292,7 +347,7 @@ func turnScopedTypes(t *testing.T) (scoped, known map[string]bool) {
 			"gate cannot tell a misspelled band entry from a real type — fix "+
 			"TestCatalogueCoversRegistry first", len(known), len(registered))
 	}
-	return scoped, known
+	return stamped, persisted, known
 }
 
 // absorbedKeys reads the TYPE names out of an object-literal body — the token

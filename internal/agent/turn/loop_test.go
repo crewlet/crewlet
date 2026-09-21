@@ -870,6 +870,50 @@ func TestAResumedTurnsFirstRoundOutrunsTheWallClockCap(t *testing.T) {
 	}
 }
 
+// AND WHAT THE BREACH SAYS IT SPENT IS THIS RUN'S SHARE, not the turn's. The
+// cap bounds the clock THIS process started, so the figure beside it has to be
+// counted from the same place: a resumed turn that reports the rounds since
+// round one names time it never spent, and sends whoever reads it looking for
+// a cap three times too small. The exemption above and this number are two
+// different reads of `first`, and only one of them fails when it is wrong.
+func TestAResumedTurnsWallClockBreachCountsOnlyItsOwnRounds(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(0, 0)
+	f := &fake{
+		works:    []turn.Work{delivered("back from the box")},
+		surfaces: []turn.Surface{slackSurface()},
+		// One entry, read by every round: the re-entry has to close for the
+		// loop to reach a second round boundary, which is the only place the
+		// cap can fire.
+		reviews: []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{
+		MaxIterations: 5,
+		MaxWallClock:  30 * time.Second,
+		// One minute per read, and Run reads once to start the clock and once
+		// per round boundary — so the cap is already past when the re-entered
+		// round is exempted, and fires at the next boundary.
+		Now: func() time.Time { now = now.Add(time.Minute); return now },
+	}, turn.Input{
+		RunID: "t1", Reply: turn.ToolReply(""),
+		Resume: true, Round: 3,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Breach == nil || res.Breach.Kind != types.GuardScheduledTimeout {
+		t.Fatalf("breach = %+v, want a scheduled_timeout", res.Breach)
+	}
+	// ONE round ran here — the re-entry — however far into the turn it was.
+	if !strings.Contains(res.Breach.Detail, "across 1 round(s)") {
+		t.Errorf("the breach detail is %q, want it to count the one round this "+
+			"run took rather than the turn's three", res.Breach.Detail)
+	}
+	if res.Rounds != 3 {
+		t.Errorf("rounds = %d, want the round the turn reached", res.Rounds)
+	}
+}
+
 // assertOneEntryPerIteration is the invariant the restarting counter broke:
 // the ledger a turn hands on carries one entry per round it closed, and a
 // resumed turn that re-numbered from one appended a second entry under a
