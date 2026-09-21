@@ -103,7 +103,7 @@ type Config struct {
 	// holds, and names what stopped it when the answer is no. Nil keeps
 	// them. It is the opposite direction from SeatsAdmitted and fires on a
 	// different class of fault — see [seat.Config.Serviceable].
-	SeatsServiceable func() (bool, string)
+	SeatsServiceable func(ctx context.Context) (bool, string)
 
 	// SeatDone runs after the mailbox is detached. It never fails a
 	// release: the seat is already gone from this node, and its durable

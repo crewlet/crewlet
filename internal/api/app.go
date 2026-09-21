@@ -87,8 +87,44 @@ type App struct {
 	// [App.Configured] asks.
 	company func() *config.Company
 
+	// estate answers whether the replicated estate can be read at the
+	// log's floor, for /ready. See [EstateFloor].
+	estate EstateFloor
+
 	handler http.Handler
 }
+
+// EstateFloor reports whether this node's REPLICATED estate can answer at the
+// state log's floor, and names the term that says it cannot.
+//
+// # Why /ready turns on it
+//
+// A node's SQL copy is derived from an ordered log, and the log is trimmed. A
+// consumer whose position falls below the stream's first sequence is clamped
+// UPWARD with no error at all and then reports itself caught up over a hole —
+// so a node below the floor answers every question confidently, out of rows
+// with records missing from them for good. That is not "briefly behind": it is
+// a copy the fleet has abandoned, and a load balancer sending a webhook, a
+// dashboard query or a seat's tool read to it gets an answer somebody acts on.
+// "There is no such work item" is how a duplicate gets filed.
+//
+// The engine already decides this, twice and for two purposes — seat admission
+// (`engine.Engine.NativeHydrated`, which is the strict form of
+// `statelog.Health.Established`) and whether the seats it holds may STAY
+// (`engine.Engine.SeatsServiceable`). This seam is the same question asked for
+// TRAFFIC, so the node that will not admit a seat also stops being sent work
+// to do with one.
+//
+// A CONTEXT, because the answer is read live: the terms it rests on — the
+// published floor, the stream's own first and last sequence — move while the
+// process runs, and a cached answer is a node that reports ready through the
+// whole window in which it stopped being so.
+//
+// THE REFUSAL IS NAMED, not merely counted: "below the floor" and "the broker
+// could not be reached" call for opposite responses, and a bare false is the
+// three-valued answer collapsed into a bool that this codebase refuses
+// everywhere else.
+type EstateFloor func(ctx context.Context) (ok bool, refusal string)
 
 // routeMounter is what the API needs of a surface it mounts and never calls
 // otherwise: its routes.
@@ -226,6 +262,16 @@ type Options struct {
 	// names.
 	Backup backupTaker
 
+	// Estate answers whether this node's replicated estate can be read at
+	// the log's floor, for /ready. See [EstateFloor].
+	//
+	// Optional, and nil is a real configuration rather than a missing
+	// wire: a company on Jira and Confluence runs no state-log domain
+	// whose health gates anything, which the engine itself reports as
+	// trivially established. What nil must NOT be read as is "assume the
+	// worst" — a node with nothing replicated would then never be ready.
+	Estate EstateFloor
+
 	// Assets overrides the embedded dashboard tree. Nil serves the one
 	// compiled into the binary, which is what every deployment does; a
 	// test supplies its own to assert about serving rather than about the
@@ -265,6 +311,7 @@ func New(opts Options) (*App, error) {
 		// Sources.Company reads the CURRENT epoch, and "is there one" is
 		// the whole question [App.Configured] asks.
 		company: opts.Sources.Company,
+		estate:  opts.Estate,
 	}
 	var err error
 	a.stream, err = stream.NewService(state, stream.Options{
@@ -551,6 +598,18 @@ func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.health(r.Context()))
 }
 
+// ReasonEstateBehind is what a refused /ready names when this node's
+// replicated estate cannot be read at the log's floor.
+//
+// One code rather than the term that decided it, for the same reason
+// [Readiness.Reason] carries a code at all: it is recorded by a load balancer
+// on every failed probe, and a reason that changes as a node catches up
+// (below_floor, then behind, then ready) makes one outage look like three.
+// The term is logged — see [App.serveReady]. It belongs with [ReasonDraining]
+// and [ReasonUnconfigured] in health.go and sits here only because the estate
+// seam does.
+const ReasonEstateBehind = "estate_behind"
+
 // framePosture maps this node's own posture onto the one its sockets are
 // served in.
 //
@@ -582,7 +641,40 @@ func framePosture(h stream.Health) stream.FramePosture {
 
 func (a *App) serveReady(w http.ResponseWriter, r *http.Request) {
 	body, status := a.readiness(r.Context())
+	// THE ESTATE TERM, AFTER the ones readiness already decided, because
+	// it is the narrowest: a draining or unconfigured node is out of
+	// rotation for a reason an operator can act on directly, and reporting
+	// the estate instead would name a consequence over a cause.
+	if status == http.StatusOK {
+		if ok, refusal := a.estateReady(r.Context()); !ok {
+			body.Ready = false
+			body.Reason = ReasonEstateBehind
+			status = http.StatusServiceUnavailable
+			// THE REFUSAL REACHES THE LOG, NOT THE BODY. /ready is
+			// polled by an orchestrator every few seconds, so its
+			// body is a stable code a load balancer records, and the
+			// term that decided it — below the floor, behind, the
+			// broker unreachable — is what somebody reading the node
+			// wants. DEBUG, because a node catching up at boot would
+			// otherwise write a line per probe for the whole of a
+			// legitimate hydration.
+			log.DebugContext(r.Context(), "ready_withheld_for_the_estate",
+				"node", a.nodeID, "refusal", refusal)
+		}
+	}
 	writeJSON(w, status, body)
+}
+
+// estateReady reports whether this node's replicated estate can answer at the
+// log's floor, and names the term that says it cannot.
+//
+// A node with no seam declared has no replicated estate to be behind on, which
+// is what a company on Jira and Confluence has — see [Options.Estate].
+func (a *App) estateReady(ctx context.Context) (bool, string) {
+	if a.estate == nil {
+		return true, ""
+	}
+	return a.estate(ctx)
 }
 
 // writeJSON is [httpjson.Write] under this package's own name, kept so the

@@ -454,13 +454,19 @@ func (e *Engine) NativeHydrated() bool {
 //
 // A node with no native backend is trivially serviceable, which is what a
 // company on Jira and Confluence has.
-func (e *Engine) SeatsServiceable() (bool, string) {
+func (e *Engine) SeatsServiceable(ctx context.Context) (bool, string) {
 	if e.native == nil {
 		return true, ""
 	}
-	ok, domain := e.native.log.Healthy(e.native.run)
+	// THE CALLER'S CONTEXT, because this read reaches the broker for every
+	// domain's stream bounds. Bounded by the engine's own run context
+	// instead, a /ready probe waited on a slow broker for as long as the
+	// process had left to live — past its own deadline, past the
+	// orchestrator's, and the one caller that most needs a timely answer is
+	// the one asking whether to send this node traffic.
+	ok, domain := e.native.log.Healthy(ctx)
 	if !ok {
-		log.WarnContext(e.native.run, "seats_unserviceable",
+		log.WarnContext(ctx, "seats_unserviceable",
 			"domain", domain,
 			"hint", "this node's copy of that domain is wrong rather than "+
 				"behind; its seats move to a peer until it recovers")

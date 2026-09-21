@@ -1576,3 +1576,72 @@ func writeBootstrap(t *testing.T, boot *config.Bootstrap) string {
 	}
 	return path
 }
+
+// TestEveryNilMeansTrustOptionIsWiredAtTheOneAPICall.
+//
+// [api.Options] has a class of field whose nil is a REAL configuration rather
+// than a missing wire: the API treats it as "this node has nothing to gate on"
+// and serves. `Estate` is the one shipped today — nil is honest for a company
+// on Jira and Confluence, which runs no state-log domain at all — and that is
+// exactly what makes it dangerous here. An option the binary forgets to pass
+// compiles, boots, serves every route, and reports a healthy node whose
+// replicated rows have a hole nothing will fill. There is no runtime symptom
+// to watch for, because the absence IS the permissive answer.
+//
+// A SOURCE ASSERTION for the same reason
+// [TestTheConfigWriterIsInstalledOutsideTheHTTPSurface] is one: the bug is a
+// field that is not in a composite literal, and nothing about the running
+// process distinguishes "deliberately nil" from "nobody wired it". The list
+// is a declaration — a new option of this class is added here in the same
+// change that adds it to the API, or the next one inherits the gap.
+func TestEveryNilMeansTrustOptionIsWiredAtTheOneAPICall(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, "main.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	passed := map[string]bool{}
+	calls := 0
+	ast.Inspect(parsed, func(n ast.Node) bool {
+		lit, isLit := n.(*ast.CompositeLit)
+		if !isLit {
+			return true
+		}
+		sel, isSel := lit.Type.(*ast.SelectorExpr)
+		if !isSel || sel.Sel.Name != "Options" {
+			return true
+		}
+		pkg, isIdent := sel.X.(*ast.Ident)
+		if !isIdent || pkg.Name != "api" {
+			return true
+		}
+		calls++
+		for _, elt := range lit.Elts {
+			kv, isKV := elt.(*ast.KeyValueExpr)
+			if !isKV {
+				continue
+			}
+			if key, ok := kv.Key.(*ast.Ident); ok {
+				passed[key.Name] = true
+			}
+		}
+		return true
+	})
+
+	if calls != 1 {
+		t.Fatalf("main.go builds api.Options %d times; this gate reads the one "+
+			"the binary serves from, and several would let a second call skip "+
+			"what the first passes", calls)
+	}
+	for _, field := range []string{"Estate"} {
+		if !passed[field] {
+			t.Errorf("api.Options.%s is not passed at main.go's api.New call. "+
+				"Its nil means \"nothing to gate on\", so an unwired one serves "+
+				"confidently out of whatever state this node happens to hold — "+
+				"there is no symptom to notice and nothing else checks it",
+				field)
+		}
+	}
+}

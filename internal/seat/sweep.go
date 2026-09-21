@@ -751,6 +751,6 @@ func (h *Host) unserviceable(ctx context.Context) (unfit bool, reason string) {
 			unfit, reason = false, ""
 		}
 	}()
-	ok, why := h.serviceable()
+	ok, why := h.serviceable(ctx)
 	return !ok, why
 }

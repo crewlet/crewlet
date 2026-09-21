@@ -1721,6 +1721,30 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Config:  configSurface,
 		Secrets: secretSurface,
 		Setup:   setupSurface,
+		// WHETHER THIS NODE'S REPLICATED COPY IS FIT TO ANSWER FROM, for
+		// /ready. The ENGINE's own verdict rather than a second one built
+		// here: it is the same question that decides whether this node may
+		// keep the seats it holds, so a node taken out of rotation is the
+		// node that stopped running seats, and the two can never disagree
+		// about the copy they are both reading.
+		//
+		// [engine.Engine.SeatsServiceable] rather than
+		// [engine.Engine.NativeHydrated], deliberately. Hydration is about
+		// a copy that is BEHIND, which catches up on its own — refusing
+		// traffic for the whole of a legitimate boot would take a node out
+		// of rotation at exactly the moment a fleet wants it back. This is
+		// about a copy that is WRONG: rows below a trim floor with a hole
+		// nothing will fill, an applier halted on a record it cannot
+		// decode, an eviction whose peers drop everything this node
+		// writes. An answer out of that is one somebody acts on, and
+		// "there is no such work item" is how a duplicate gets filed.
+		//
+		// A METHOD VALUE, not a snapshot: every term under it moves while
+		// the process runs, and a cached answer is a node reporting ready
+		// through the whole window in which it stopped being so. It takes
+		// the REQUEST's context, so a probe against a slow broker ends at
+		// its own deadline rather than at the process's.
+		Estate: e.SeatsServiceable,
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through the FLEET'S coordination store, which is what
 		// makes a delivery that lands on any node wake the seat's owner

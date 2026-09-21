@@ -187,7 +187,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 		t.Fatalf("the adoption row says (%v, %v), want a completed adoption", adopted, err)
 	}
 	waitUntil(t, 30*time.Second, "the node to admit seats again", e.NativeHydrated)
-	if ok, domain := e.SeatsServiceable(); !ok {
+	if ok, domain := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("the node cannot keep its seats after adopting: %s", domain)
 	}
 	// AND THE CONSUMER WAS MOVED: nothing below the artefact's position is

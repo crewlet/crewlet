@@ -146,7 +146,7 @@ func TestAnUnserviceableNodeGivesBackEverySeat(t *testing.T) {
 	fit := true
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo", "eng"), Hooks: hooks,
-		Serviceable: func() (bool, string) {
+		Serviceable: func(context.Context) (bool, string) {
 			if fit {
 				return true, ""
 			}
@@ -199,7 +199,7 @@ func TestAPanickingServiceabilityGateKeepsTheSeats(t *testing.T) {
 	hooks := &hookLog{}
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo"), Hooks: hooks,
-		Serviceable: func() (bool, string) { panic("status source is down") },
+		Serviceable: func(context.Context) (bool, string) { panic("status source is down") },
 	})
 	h.renewNodePresence(f.ctx)
 	h.Sweep(f.ctx)

@@ -179,7 +179,7 @@ type Config struct {
 	// Nil keeps every seat, which is the single-node case and the case
 	// before a state log exists. It runs on the sweep path and, like
 	// Ready, must not block.
-	Serviceable func() (bool, string)
+	Serviceable func(ctx context.Context) (bool, string)
 
 	TTL               time.Duration
 	HeartbeatInterval time.Duration
@@ -209,7 +209,7 @@ type Host struct {
 	seats   func() []placement.Seat
 	ready   func() bool
 	// serviceable is Config.Serviceable — whether held seats may stay.
-	serviceable func() (bool, string)
+	serviceable func(ctx context.Context) (bool, string)
 	profile     placement.NodeProfile
 	status      func(context.Context) coord.NodeStatus
 	hooks       Hooks

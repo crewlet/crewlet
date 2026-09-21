@@ -118,7 +118,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	if e.NativeHydrated() {
 		t.Fatal("the node admits seats while below the published floor")
 	}
-	if ok, _ := e.SeatsServiceable(); ok {
+	if ok, _ := e.SeatsServiceable(t.Context()); ok {
 		t.Fatal("the node keeps its seats while below the published floor")
 	}
 
