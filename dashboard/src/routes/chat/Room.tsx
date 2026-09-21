@@ -22,11 +22,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { useParam } from "~/app/router.tsx";
+import { useNavigator, useParam } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Button, Callout, Skeleton, Tag } from "@crewlethq/ui";
-import { GroupGlyph } from "@crewlethq/icons/glyphs";
+import { EditGlyph, GroupGlyph } from "@crewlethq/icons/glyphs";
 import { Mark } from "~/ui/glyph.tsx";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -34,6 +34,7 @@ import type { ChatChannelSummary, ChatMessageView, ChatMessagesAnswer } from "~/
 
 import { Composer } from "./Composer.tsx";
 import { ReadCursors, packPosition } from "./cursor.ts";
+import { canJoin, canLeave, membershipNote } from "./directory.ts";
 import {
   DEGRADED_POLL_MS,
   useChatFocus,
@@ -46,10 +47,20 @@ import {
 import { EMPTY_TAIL, mergeNewest, mergeOlder } from "./messages.ts";
 import { useOutbox } from "./outbox.ts";
 import { PAGE } from "./page.ts";
+import { RoomSettings } from "./RoomSettings.tsx";
 import { isDirect, knownKind, roomKindLabel, roomMark, roomTitle } from "./rooms.ts";
+import { reportFor, type StartReport } from "./start.ts";
+import { StartNote } from "./StartNote.tsx";
 import { ThreadPane } from "./Thread.tsx";
 import { Transcript } from "./Transcript.tsx";
-import { deleteMessage, editMessage, flushRead, react as sendReaction } from "./writes.ts";
+import {
+  deleteMessage,
+  editMessage,
+  flushRead,
+  joinRoom,
+  leaveRoom,
+  react as sendReaction,
+} from "./writes.ts";
 
 const NO_REPLIES: ChatMessageView[] = [];
 
@@ -61,9 +72,11 @@ export interface RoomProps {
    *  for a public room they are reading without having joined. */
   summary?: ChatChannelSummary;
   cursors: ReadCursors;
+  /** A membership or a topic changed here: the rail is what draws both. */
+  onWrote: () => void;
 }
 
-export function Room({ channelID, viewer, nameOf, summary, cursors }: RoomProps) {
+export function Room({ channelID, viewer, nameOf, summary, cursors, onWrote }: RoomProps) {
   const { socket } = useClient();
   const { connected } = useConnection();
   const [threadRoot, setThreadRoot] = useParam("thread", "", "section");
@@ -222,6 +235,47 @@ export function Room({ channelID, viewer, nameOf, summary, cursors }: RoomProps)
     }
   }, [readState, channelID]);
 
+  // WHETHER THE READER IS IN THIS ROOM IS THE SERVER'S ANSWER, and it is a
+  // different question from whether they may read it: a public room and a
+  // unit's room are readable by every seat, joined or not, so arriving here
+  // from a search result is an ordinary way to be standing outside a room
+  // whose whole transcript is on the screen. The member flag is the room's own
+  // detail rather than the rail, which is bounded and leaves archived rooms
+  // out.
+  const nav = useNavigator();
+  const [moving, setMoving] = useState(false);
+  const [membership, setMembership] = useState<StartReport | null>(null);
+  const [settingTopic, setSettingTopic] = useState(false);
+  const standing = detail.data
+    ? { kind: detail.data.channel.kind, member: detail.data.member }
+    : null;
+
+  const moveMembership = useCallback(
+    async (leaving: boolean) => {
+      if (moving) return;
+      setMoving(true);
+      setMembership(null);
+      try {
+        const result = leaving ? await leaveRoom(channelID) : await joinRoom(channelID);
+        const answer = reportFor(leaving ? "leave" : "join", result);
+        if (result.outcome !== "refused") onWrote();
+        if (answer.tone === "success") {
+          // LEAVING TAKES THE READER OUT OF THE ROOM, and a private room they
+          // have just left is one they can no longer read at all — so staying
+          // on it would turn into "no such room" under them a moment later.
+          // The room itself is the confirmation of a join.
+          if (leaving) nav.to(["chat"]);
+          else detail.refetch();
+          return;
+        }
+        setMembership(answer);
+      } finally {
+        setMoving(false);
+      }
+    },
+    [moving, channelID, onWrote, nav, detail],
+  );
+
   const pending = outbox.rows.filter((row) => row.channelID === channelID && !row.threadRoot);
   const threadPending = outbox.rows.filter((row) => row.threadRoot === threadRoot && !!threadRoot);
 
@@ -237,6 +291,37 @@ export function Room({ channelID, viewer, nameOf, summary, cursors }: RoomProps)
             {channel && <Tag appearance="outline">{roomKindLabel(channel.kind)}</Tag>}
             {muted && <Tag appearance="outline">muted</Tag>}
             <span className="spacer" />
+            {/* WHAT THIS READER MAY DO ABOUT BEING IN THE ROOM, and nothing
+                the engine would refuse: a private room admits no join, a
+                unit's room no leave, and a direct conversation neither —
+                `directory.ts` mirrors those rules rather than inventing any. */}
+            {standing && canJoin(standing) && (
+              <Button
+                variant="secondary"
+                onClick={() => void moveMembership(false)}
+                disabled={moving}
+              >
+                {moving ? "Joining" : "Join"}
+              </Button>
+            )}
+            {standing && canLeave(standing) && (
+              <Button
+                variant="tertiary"
+                onClick={() => void moveMembership(true)}
+                disabled={moving}
+              >
+                {moving ? "Leaving" : "Leave"}
+              </Button>
+            )}
+            {writable && (
+              <Button
+                variant="tertiary"
+                leadingIcon={<EditGlyph size="sm" />}
+                onClick={() => setSettingTopic(true)}
+              >
+                Topic
+              </Button>
+            )}
             <Button variant="tertiary" onClick={() => void toggleMute()} disabled={muting}>
               {muted ? "Unmute" : "Mute"}
             </Button>
@@ -248,6 +333,10 @@ export function Room({ channelID, viewer, nameOf, summary, cursors }: RoomProps)
               {members.length} member{members.length === 1 ? "" : "s"}
             </span>
             {channel?.unit && <span>the {channel.unit} unit's own room</span>}
+            {/* STANDING OUTSIDE A ROOM YOU CAN READ IS AN ORDINARY STATE, and
+                an unsaid one is what makes a rail that does not list the room
+                look like a rail that lost it. */}
+            {standing && !standing.member && <span>you are not in this room</span>}
             {summary?.follow_all && <span>every message here reaches you</span>}
             {channel?.retention_days !== undefined && channel.retention_days !== null && (
               <span>
@@ -260,6 +349,23 @@ export function Room({ channelID, viewer, nameOf, summary, cursors }: RoomProps)
           <Presence presence={presence} viewer={viewer} nameOf={nameOf} />
         </header>
 
+        <StartNote report={membership} />
+        {standing &&
+          // A ROOM THIS BUILD CANNOT CLASSIFY IS NOT SAID TWICE. `refusal`
+          // below already carries that sentence, and two renderings of one
+          // rule are two sentences that can come to disagree.
+          knownKind(standing.kind) &&
+          !canJoin(standing) &&
+          !canLeave(standing) &&
+          membershipNote(standing) && (
+            // WHY THERE IS NO BUTTON, said rather than left to an absence.
+            // Each of these is a rule about the room — the org chart maintains
+            // this membership, a private room is joined by being added, a
+            // direct conversation is the people in it — and a person who
+            // cannot see the rule reads the missing control as a permission
+            // they lack.
+            <p className="t-caption muted">{membershipNote(standing)}</p>
+          )}
         {!writable && refusal && <Callout variant="neutral">{refusal}</Callout>}
         {pageError && (
           <Callout variant="warning">
@@ -326,6 +432,20 @@ export function Room({ channelID, viewer, nameOf, summary, cursors }: RoomProps)
           </p>
         )}
       </div>
+
+      {settingTopic && channel && (
+        <RoomSettings
+          channel={channel}
+          member={standing?.member === true}
+          onClose={() => setSettingTopic(false)}
+          onWrote={() => {
+            // BOTH LISTS THAT DRAW A TOPIC. The room's own header reads the
+            // detail, and the rail draws the room's name beside it.
+            detail.refetch();
+            onWrote();
+          }}
+        />
+      )}
 
       {threadRoot && (
         <ThreadPane

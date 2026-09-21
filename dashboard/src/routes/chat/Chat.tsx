@@ -35,15 +35,23 @@
  * the disagreement would be silent in whichever direction it went.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { href } from "~/app/router.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Callout, Count, EmptyState, Skeleton } from "@crewlethq/ui";
-import { ChatGlyph, NotificationsGlyph, PersonGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Callout, Count, EmptyState, Skeleton } from "@crewlethq/ui";
+import {
+  AddGlyph,
+  ChatGlyph,
+  ExploreGlyph,
+  NotificationsGlyph,
+  PersonAddGlyph,
+  PersonGlyph,
+  SearchGlyph,
+} from "@crewlethq/icons/glyphs";
 import { Mark } from "~/ui/glyph.tsx";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -53,15 +61,32 @@ import { relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
+import { Browse } from "./Browse.tsx";
 import { useReadCursors } from "./cursor.ts";
 import { DEGRADED_POLL_MS, useChatActivity, useCoalesced } from "./live.ts";
 import { Mentions } from "./Mentions.tsx";
+import { peopleOptions } from "./people.ts";
 import { Room } from "./Room.tsx";
 import { Search } from "./Search.tsx";
+import { StartDirect } from "./StartDirect.tsx";
+import { StartRoom } from "./StartRoom.tsx";
 import { badgesAreMeasured, isDirect, roomMark, roomTitle, unreadLabel } from "./rooms.ts";
 
 /** Which of the three lists the main column is showing. */
 export type ChatView = "room" | "mentions" | "search";
+
+/**
+ * The gesture a person is in the middle of, if any.
+ *
+ * A DIALOG RATHER THAN AN ADDRESS, unlike every list on this screen. A room,
+ * the mention feed and search are places somebody can be — each has a URL and
+ * each is worth handing to a colleague — while making a room is a gesture that
+ * is either finished or abandoned. `#/chat/new-room` would also collide with
+ * the one segment under `chat` that carries an id: a room is addressed by the
+ * uuid the engine minted for it, and a reserved word there is a room somebody
+ * can never reach.
+ */
+type StartGesture = "" | "room" | "direct" | "browse";
 
 export function Chat({ channel = "", view = "room" }: { channel?: string; view?: ChatView }) {
   const viewer = useViewer();
@@ -78,6 +103,11 @@ export function Chat({ channel = "", view = "room" }: { channel?: string; view?:
     () => (handle: string) => index.byHandle.get(handle)?.name ?? handle,
     [index],
   );
+  // EVERYBODY THE COMPANY HAS, for the two gestures that name people. Built
+  // once here rather than inside each dialog: the roster is the same roster,
+  // and two derivations of it would order the same colleague two ways.
+  const people = useMemo(() => peopleOptions(index.seats, viewer.handle), [index, viewer.handle]);
+  const [gesture, setGesture] = useState<StartGesture>("");
 
   // ONE CURSOR WRITER FOR THE TAB, above the room, so switching rooms is a
   // flush rather than a new writer that has forgotten what the last one had
@@ -162,6 +192,36 @@ export function Chat({ channel = "", view = "room" }: { channel?: string; view?:
 
       <div className="chat-frame">
         <nav className="chat-rail" aria-label="Your rooms">
+          {/* THE HALF A PERSON DOES FIRST. Everything else on this screen
+              reads a conversation that already exists; these three start one,
+              and they sit above the lists because a reader with an empty rail
+              has nothing below them to look at. */}
+          <div className="row wrap gap-1">
+            <Button
+              variant="tertiary"
+              size="small"
+              leadingIcon={<AddGlyph size="sm" />}
+              onClick={() => setGesture("room")}
+            >
+              New room
+            </Button>
+            <Button
+              variant="tertiary"
+              size="small"
+              leadingIcon={<PersonAddGlyph size="sm" />}
+              onClick={() => setGesture("direct")}
+            >
+              Message
+            </Button>
+            <Button
+              variant="tertiary"
+              size="small"
+              leadingIcon={<ExploreGlyph size="sm" />}
+              onClick={() => setGesture("browse")}
+            >
+              Find a room
+            </Button>
+          </div>
           <ChatRailLink
             path={["chat", "mentions"]}
             current={view === "mentions"}
@@ -214,6 +274,7 @@ export function Chat({ channel = "", view = "room" }: { channel?: string; view?:
               nameOf={nameOf}
               summary={channels.find((room) => room.channel.id === channel)}
               cursors={cursors}
+              onWrote={rail.refetch}
             />
           ) : (
             <EmptyState
@@ -225,6 +286,18 @@ export function Chat({ channel = "", view = "room" }: { channel?: string; view?:
           )}
         </div>
       </div>
+
+      {/* THE RAIL IS ASKED AGAIN WHEN ONE OF THESE WRITES, rather than left to
+          the frame the record's own applier will raise: the frame is what
+          makes this list correct eventually, and a person who has just made a
+          room is looking at the rail now. */}
+      {gesture === "room" && (
+        <StartRoom people={people} onClose={() => setGesture("")} onWrote={rail.refetch} />
+      )}
+      {gesture === "direct" && (
+        <StartDirect people={people} onClose={() => setGesture("")} onWrote={rail.refetch} />
+      )}
+      {gesture === "browse" && <Browse onClose={() => setGesture("")} onWrote={rail.refetch} />}
     </>
   );
 }

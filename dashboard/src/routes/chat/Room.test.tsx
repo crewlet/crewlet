@@ -95,7 +95,13 @@ function mount() {
   const view = render(
     <ClientContext.Provider value={{ store, socket } as never}>
       <Router>
-        <Room channelID="room-1" viewer="ada" nameOf={(handle) => handle} cursors={cursors} />
+        <Room
+          channelID="room-1"
+          viewer="ada"
+          nameOf={(handle) => handle}
+          cursors={cursors}
+          onWrote={() => undefined}
+        />
       </Router>
     </ClientContext.Provider>,
   );
@@ -404,4 +410,59 @@ test("a burst of frames is one re-read, not one per message", async () => {
   expect(socket.query.mock.calls.filter(([what]) => what === "chat_messages").length).toBeLessThan(
     before + 6,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Standing in a room you are not in
+// ---------------------------------------------------------------------------
+
+test("a room the reader may read but is not in says so, and offers to join", async () => {
+  // A public room is readable by every seat, joined or not — so arriving here
+  // from a search result and standing outside the room whose whole transcript
+  // is on the screen is an ordinary state. Unsaid, a rail that does not list
+  // the room looks like a rail that lost it.
+  answers.chat_channel = {
+    ...served,
+    channel,
+    revision: 3,
+    message_seq: 2,
+    member: false,
+    members: [],
+  };
+  mount();
+  await waitFor(() => expect(screen.getByText(/you are not in this room/i)).toBeTruthy());
+
+  fireEvent.click(screen.getByRole("button", { name: /^join$/i }));
+  await waitFor(() => expect(posted).toHaveLength(1));
+  expect(posted[0]?.path).toBe("/chat/channels/room-1/join");
+});
+
+test("leaving a room takes the reader out of it rather than leaving them in front of it", async () => {
+  // A private room somebody has just left is one they can no longer read, so
+  // staying on it would turn into "no such room" under them a moment later.
+  mount();
+  await screen.findByText("line 2");
+  fireEvent.click(screen.getByRole("button", { name: /^leave$/i }));
+
+  await waitFor(() => expect(posted).toHaveLength(1));
+  expect(posted[0]?.path).toBe("/chat/channels/room-1/leave");
+  await waitFor(() => expect(location.hash).toBe("#/chat"));
+});
+
+test("a unit's room offers no leave, and says why there is no button", async () => {
+  // That membership is the org chart's own: a leave there is undone by the
+  // next apply, and a gesture that silently reverts is worse than one that is
+  // refused — so the engine refuses it and the screen does not offer it.
+  answers.chat_channel = {
+    ...served,
+    channel: { ...channel, kind: "unit", unit: "engineering" },
+    revision: 3,
+    message_seq: 2,
+    member: true,
+    members: [],
+  };
+  mount();
+  await waitFor(() => expect(screen.getByText(/org chart/i)).toBeTruthy());
+  expect(screen.queryByRole("button", { name: /^leave$/i })).toBeNull();
+  expect(posted).toHaveLength(0);
 });

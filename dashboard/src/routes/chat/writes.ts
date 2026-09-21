@@ -21,15 +21,29 @@
  */
 
 import { rest, RestError } from "~/protocol/index.ts";
-import type { ChatReadFlush, ChatReadState, ChatWriteAnswer } from "~/protocol/index.ts";
+import type {
+  ChatDirectAnswer,
+  ChatKind,
+  ChatReadFlush,
+  ChatReadState,
+  ChatWriteAnswer,
+} from "~/protocol/index.ts";
 
 /** Whether a write landed, is on its way, or is genuinely unknown. */
 export type WriteOutcome = "applied" | "pending" | "unknown" | "refused";
 
-/** What one write answered, classified for a screen. */
-export interface WriteResult {
+/**
+ * What one write answered, classified for a screen.
+ *
+ * THE ANSWER'S TYPE IS THE CALLER'S, because one route answers more than the
+ * shared shape: opening a direct conversation reports whether it CREATED the
+ * room, and that flag is a fact about the gesture rather than about the room.
+ * The parameter defaults to the shared shape, so every other gesture reads
+ * exactly as it did.
+ */
+export interface WriteResult<T extends ChatWriteAnswer = ChatWriteAnswer> {
   outcome: WriteOutcome;
-  answer: ChatWriteAnswer | null;
+  answer: T | null;
   /** The engine's own sentence, on the refusals written for a person to read:
    *  a name somebody else holds, an archived room, a body over the cap. */
   detail: string;
@@ -52,9 +66,12 @@ export interface WriteResult {
  * screen has to be able to tell it from a refusal — because one of them is
  * "this may well have been said" and the other is "it was not".
  */
-async function write(path: string, body?: unknown): Promise<WriteResult> {
+async function write<T extends ChatWriteAnswer = ChatWriteAnswer>(
+  path: string,
+  body?: unknown,
+): Promise<WriteResult<T>> {
   try {
-    const answer = (await rest.post(path, body)) as ChatWriteAnswer;
+    const answer = (await rest.post(path, body)) as T;
     return {
       outcome: answer?.outcome === "pending" ? "pending" : "applied",
       answer: answer ?? null,
@@ -63,7 +80,7 @@ async function write(path: string, body?: unknown): Promise<WriteResult> {
     };
   } catch (err) {
     if (err instanceof RestError) {
-      const answer = err.body as unknown as ChatWriteAnswer;
+      const answer = err.body as unknown as T;
       if (answer?.outcome === "unknown") {
         return { outcome: "unknown", answer, detail: "", code: "" };
       }
@@ -86,6 +103,133 @@ async function write(path: string, body?: unknown): Promise<WriteResult> {
 const room = (channelID: string) => `/chat/channels/${encodeURIComponent(channelID)}`;
 const message = (channelID: string, messageID: string) =>
   `${room(channelID)}/messages/${encodeURIComponent(messageID)}`;
+
+// ---------------------------------------------------------------------------
+// The room itself: making one, opening one, and moving your own membership
+// ---------------------------------------------------------------------------
+
+/**
+ * A room to create.
+ *
+ * THE NAMES ARE THE ROUTE'S OWN, spelled exactly: the engine refuses an unknown field
+ * on a write body rather than ignoring it, which is the opposite of the
+ * socket's query channel and deliberate — a key this build does not know is
+ * either a caller saying something it will not get (`colective`) or a caller
+ * claiming something it may not have, and both are silent when dropped. So a
+ * field spelled loosely here is a 400 rather than a setting that quietly did
+ * not apply.
+ *
+ * THERE IS NO AUTHOR FIELD, here or anywhere below. The server resolves the
+ * presented credential to a `kind: human` seat on every call and that seat is
+ * the author; a body that tries to name one is refused by name.
+ *
+ * THE ROUTE ALSO TAKES `purpose`, `unit` AND `retention_days`, and no surface
+ * in this dashboard sends any of them: a purpose is written from the room's
+ * own form once it exists, a unit's room is created by the ORG CHART rather
+ * than by a person naming a unit here, and a retention override decides how
+ * long a year of conversation survives on every node — an operator's gesture.
+ * They are left off this type rather than declared and never set, because a
+ * field with no writer reads exactly like one whose writer nobody found.
+ */
+export interface NewChannel {
+  /** The address, normalised and checked before this is sent — see `name.ts`. */
+  name: string;
+  /** One of the NAMED kinds. A direct conversation is [openDirect] instead:
+   *  its create arbitrates on the participants' own derived id rather than on
+   *  an address, which is a different discipline entirely. */
+  kind: ChatKind;
+  topic?: string;
+  /** The founding membership BESIDE the author, who is always in the room they
+   *  made. For a private room this is the only way anybody else gets in. */
+  members?: { handle: string; follow_all?: boolean }[];
+}
+
+/**
+ * Make a named room.
+ *
+ * THE CREATE ARBITRATES ON THE NAME. Two people typing `#launch` contend at
+ * the broker and exactly one wins; the other is refused with `name_taken`,
+ * which is the arbitration working rather than a fault — see [reportFor] in
+ * `start.ts`, which is what renders it as a name to negotiate.
+ */
+export function createChannel(body: NewChannel): Promise<WriteResult> {
+  return write("/chat/channels", body);
+}
+
+/**
+ * Open the conversation between these people, or reach the one that is
+ * already open.
+ *
+ * ITS ID IS DERIVED FROM THE PARTICIPANTS, so this is not a create that can
+ * collide: two people opening the same conversation from two nodes converge on
+ * one room, and the answer's `created` says whether this call was the one that
+ * made it. **Opening one that exists is not an error at all** — it is that
+ * room — which is why the answer type carries the flag rather than the
+ * transport raising anything.
+ *
+ * THE AUTHOR IS ADDED SERVER-SIDE, so the list is the OTHER people: a caller
+ * that sent its own handle would be naming a seat, which this surface refuses
+ * on principle.
+ */
+export function openDirect(participants: string[]): Promise<WriteResult<ChatDirectAnswer>> {
+  return write<ChatDirectAnswer>("/chat/dms", { participants });
+}
+
+/**
+ * Change what a room is FOR.
+ *
+ * EVERY FIELD IS ABSENT-MEANS-UNCHANGED, which is what the pointers are for on
+ * the engine's side: it is the only shape that tells "set this to empty" from
+ * "leave it alone". A patch that sets no field at all is refused by name — an
+ * empty patch is a record on the log, a history row and a wake for a change
+ * nobody made — and a patch that changes nothing publishes nothing and reports
+ * that it applied.
+ *
+ * THERE IS NO NAME HERE, and that is the value layer's own rule rather than an
+ * omission: a room's name is the address its create claimed, and this build has
+ * no record that moves one.
+ *
+ * The patch record also carries `archived` and `retention_days`. Neither is
+ * here for [NewChannel]'s reason: closing a company's conversation for ever
+ * after, and deciding how long it survives on every node, are gestures that
+ * belong beside the destructive ones rather than behind the button that fixes
+ * a typo in a topic.
+ */
+export interface ChannelPatch {
+  topic?: string;
+  purpose?: string;
+}
+
+export function patchChannel(channelID: string, patch: ChannelPatch): Promise<WriteResult> {
+  return write(`${room(channelID)}/patch`, patch);
+}
+
+/**
+ * Put yourself in a room, or take yourself out of one.
+ *
+ * THE CALLER'S OWN MEMBERSHIP AND NOBODY ELSE'S. Two refusals ride with these
+ * and the screen must not offer a gesture that meets either: **a private room
+ * refuses a join**, because its membership is the only way in and somebody
+ * already inside is who adds you; and **a unit's room refuses a leave**,
+ * because that membership is the org chart's own and the next apply would put
+ * it back — a gesture that silently reverts is worse than one that is refused.
+ * A direct conversation refuses both, since its id IS its participant set.
+ *
+ * A REPEAT WRITES NOTHING. Membership is a set, so joining a room you are
+ * already in is a no-op the engine reports as applied rather than a second
+ * record.
+ */
+export function joinRoom(channelID: string): Promise<WriteResult> {
+  return write(`${room(channelID)}/join`);
+}
+
+export function leaveRoom(channelID: string): Promise<WriteResult> {
+  return write(`${room(channelID)}/leave`);
+}
+
+// ---------------------------------------------------------------------------
+// What anybody says
+// ---------------------------------------------------------------------------
 
 /** What somebody said. */
 export interface NewMessage {

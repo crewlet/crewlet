@@ -22,7 +22,7 @@
  * beside pasted blocks — so this box takes words rather than a query language.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -32,6 +32,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
+import { MAX_BROWSE_ROOMS, useRoomDetails } from "./directory.ts";
 import { PAGE } from "./page.ts";
 import { isDirect, roomTitle } from "./rooms.ts";
 
@@ -61,15 +62,32 @@ export function Search({
     { enabled: q.trim().length > 0 },
   );
 
+  // THE ROOMS THE RAIL DOES NOT HOLD, which on this screen is most of them: a
+  // search runs over every room the viewer may READ, and the public and unit
+  // rooms they have not joined are exactly the ones a rail lookup misses. Left
+  // to the rail alone every hit in one of them was titled "a room" — which is
+  // this screen's own promise failing quietly, since finding something said
+  // somewhere you are not is what it is for. Bounded by [MAX_BROWSE_ROOMS] for
+  // the reason that constant states: one wave of the socket's in-flight
+  // queries, so a ranked page never queues behind its own titles.
+  const outside = useMemo(() => {
+    const rail = new Set(channels.map((summary) => summary.channel.id));
+    const ids = new Set(
+      (answer.data?.hits ?? []).map((hit) => hit.channel_id).filter((id) => !rail.has(id)),
+    );
+    return [...ids].slice(0, MAX_BROWSE_ROOMS);
+  }, [answer.data, channels]);
+  const resolved = useRoomDetails(outside);
+
   const titleOf = (id: string) => {
     const found = channels.find((summary) => summary.channel.id === id);
-    if (!found) return "a room";
-    const title = roomTitle(found.channel, {
-      participants: found.participants,
-      viewer,
-      nameOf,
-    });
-    return isDirect(found.channel.kind) ? title : `#${title}`;
+    const channel = found?.channel ?? resolved.rooms.get(id)?.channel;
+    // A ROOM NEITHER LIST HOLDS IS STILL A HIT. The read that would name it
+    // may not have come back yet, and one that was refused says nothing about
+    // whether the message is real — the engine ranked it, so it is.
+    if (!channel) return "a room";
+    const title = roomTitle(channel, { participants: found?.participants, viewer, nameOf });
+    return isDirect(channel.kind) ? title : `#${title}`;
   };
 
   return (

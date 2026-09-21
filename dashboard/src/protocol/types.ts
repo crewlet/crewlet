@@ -3021,6 +3021,24 @@ export interface ChatWriteAnswer {
   message?: ChatMessage;
 }
 
+/**
+ * What opening a direct conversation answered — `POST /chat/dms`.
+ *
+ * ONE FIELD MORE THAN EVERY OTHER WRITE, and it is a fact about the GESTURE
+ * rather than about the room: a direct conversation's id is derived from the
+ * sorted handles of the people in it, so two seats opening the same
+ * conversation from two nodes converge on one room and the loser of the race
+ * is handed the room the winner made. `created` is which of those happened.
+ *
+ * IT IS NOT AN ERROR FLAG. `created: false` with an `applied` outcome is the
+ * ordinary answer — the conversation is open, and it is that one — which is
+ * why it rides on the success shape rather than arriving as a refusal a screen
+ * would have to translate back into "here is your room".
+ */
+export interface ChatDirectAnswer extends ChatWriteAnswer {
+  created?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Turn
 // ---------------------------------------------------------------------------
