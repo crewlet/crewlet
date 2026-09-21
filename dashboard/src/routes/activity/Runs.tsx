@@ -773,23 +773,77 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
 }
 
 /**
+ * One bridged call's two records, formatted.
+ *
+ * INSIDE the lazy disclosure, and that placement is the point. `useMemo` in
+ * the row above would run for every row the moment the log rendered, because
+ * `lazy` defers a disclosure's CHILDREN and not its parent's body — so a run
+ * at the engine's bound of two hundred calls parsed every argument and every
+ * result, results included, before the reader opened one of them.
+ */
+function BridgeCallRecords({ call }: { call: BridgeCall }) {
+  // JSON TEXT ON THE WIRE, never a decoded map — a large id survives one
+  // encoder pass and not two — so it is INDENTED rather than re-encoded.
+  // `indentJSON` walks the text and copies every literal across byte for
+  // byte, which is what keeps that property while still putting each argument
+  // on its own line; its own doc has the rest. The engine records this
+  // compactly (`tools.RecordArgs`), so without it the whole call is one line
+  // however many arguments it had.
+  const args = useMemo(() => indentJSON(call.args ?? ""), [call.args]);
+  // A BRIDGED TOOL'S ANSWER is a JSON document as often as the call was, and
+  // what is not one comes back untouched.
+  const output = useMemo(() => indentJSON(call.output ?? ""), [call.output]);
+  return (
+    <div className="col gap-2">
+      <div className="col gap-1">
+        <div className="t-label">Arguments</div>
+        {/* `plain` DROPS THE HEADER, which is the opposite of what the word
+            meant on the block this replaced — there it turned wrapping off,
+            which is `wrap` here. The header goes because the disclosure above
+            already carries the tool's name and its own copy control.
+
+            WRAPPING STAYS ON, as it is by default, and indenting is what makes
+            that the right answer: these arguments used to be called aligned
+            JSON, which one minified line never was. Indented, the newlines
+            carry the structure and the only thing that can overrun the box is
+            one long string value — a line nobody finds the end of, which is
+            the case wrapping exists for.
+
+            `focusWhenScrollable` rather than `selectable`: a bridged tool's
+            arguments are not this screen's select-all subject, and a tab stop
+            in front of each of two hundred short blocks is worse than none.
+            The block measures its own box and takes the stop only when it
+            actually scrolls, which is a fact about the viewport rather than
+            about this call. */}
+        <CodeBlock
+          plain
+          maxHeight={RECORD_MAX_HEIGHT}
+          focusWhenScrollable
+          label={`${call.name} arguments`}
+          code={args || "(none)"}
+        />
+      </div>
+      <div className="col gap-1">
+        <div className="t-label">{call.failed ? "Error" : "Result"}</div>
+        <CodeBlock
+          plain
+          maxHeight={RECORD_MAX_HEIGHT}
+          focusWhenScrollable
+          label={`${call.name} ${call.failed ? "error" : "result"}`}
+          code={output || "(nothing returned)"}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
  * One bridged call, opened.
  *
  * ITS OWN COMPONENT so the indenting below can be memoised: a run's log runs
  * to two hundred of these, and `useMemo` is not available inside a `map`.
  */
 function BridgeCallRow({ call }: { call: BridgeCall }) {
-  // JSON TEXT ON THE WIRE, never a decoded map — a large id survives one
-  // encoder pass and not two — so it is INDENTED rather than re-encoded.
-  // `indentJSON` walks the text and copies every literal across byte for
-  // byte, which is what keeps that property while still putting each
-  // argument on its own line; its own doc has the rest. The engine records
-  // this compactly (`tools.RecordArgs`), so without it the whole call is one
-  // line however many arguments it had.
-  const args = useMemo(() => indentJSON(call.args ?? ""), [call.args]);
-  // A BRIDGED TOOL'S ANSWER is a JSON document as often as the call was, and
-  // what is not one comes back untouched.
-  const output = useMemo(() => indentJSON(call.output ?? ""), [call.output]);
   return (
     <Disclosure
       title={
@@ -814,46 +868,7 @@ function BridgeCallRow({ call }: { call: BridgeCall }) {
       // block holds no other state.
       lazy
     >
-      <div className="col gap-2">
-        <div className="col gap-1">
-          <div className="t-label">Arguments</div>
-          {/* `plain` DROPS THE HEADER, which is the opposite of what the word
-              meant on the block this replaced — there it turned wrapping off,
-              which is `wrap` here. The header goes because the disclosure
-              above already carries the tool's name and its own copy control.
-
-              WRAPPING STAYS ON, as it is by default, and indenting is what
-              makes that the right answer: these arguments used to be called
-              aligned JSON, which one minified line never was. Indented, the
-              newlines carry the structure and the only thing that can overrun
-              the box is one long string value — a line nobody finds the end
-              of, which is the case wrapping exists for.
-
-              `focusWhenScrollable` rather than `selectable`: a bridged tool's
-              arguments are not this screen's select-all subject, and a tab
-              stop in front of each of two hundred short blocks is worse than
-              none. The block measures its own box and takes the stop
-              only when it actually scrolls, which is a fact about the
-              viewport rather than about this call. */}
-          <CodeBlock
-            plain
-            maxHeight={RECORD_MAX_HEIGHT}
-            focusWhenScrollable
-            label={`${call.name} arguments`}
-            code={args || "(none)"}
-          />
-        </div>
-        <div className="col gap-1">
-          <div className="t-label">{call.failed ? "Error" : "Result"}</div>
-          <CodeBlock
-            plain
-            maxHeight={RECORD_MAX_HEIGHT}
-            focusWhenScrollable
-            label={`${call.name} ${call.failed ? "error" : "result"}`}
-            code={output || "(nothing returned)"}
-          />
-        </div>
-      </div>
+      <BridgeCallRecords call={call} />
     </Disclosure>
   );
 }

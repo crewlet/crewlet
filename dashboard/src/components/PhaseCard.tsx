@@ -90,6 +90,88 @@ import { href, useIsCurrent } from "~/app/router.tsx";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
 
+/**
+ * A call's two records, formatted.
+ *
+ * ITS OWN COMPONENT, mounted INSIDE the lazy disclosure, and that placement is
+ * the whole reason it exists. `useMemo` in the row above would run for every
+ * row on the phase's first render however many were closed, because `lazy`
+ * defers a disclosure's CHILDREN and not its parent's body — so a forty-round
+ * phase paid the full parse of every argument and every result before the
+ * reader opened anything. Here the work happens when a row is opened, which is
+ * what the flag was for.
+ *
+ * INDENTED FOR READING, NEVER RE-ENCODED. The engine records a call's
+ * arguments compactly, so what arrives is the whole call on ONE line with the
+ * argument a reader came for somewhere in the middle of it. Every other JSON
+ * block in this product is written at two spaces, and these were the exception
+ * rather than a decision. `indentJSON` walks the TEXT and copies every literal
+ * across byte for byte, which is what the alternative — decode, re-encode —
+ * cannot do: it rounds an id wider than 2^53 to a different id. Its own doc
+ * has the rest, including why a long string VALUE is the wrapping's problem
+ * rather than the indent's.
+ *
+ * Still memoised, because a live phase re-broadcasts twice per round and an
+ * OPEN row is re-rendered every time.
+ */
+function ToolRecords({
+  name,
+  args,
+  result,
+  failed,
+}: {
+  name: string;
+  args: string;
+  result: string;
+  failed: boolean;
+}) {
+  const prettyArgs = useMemo(() => indentJSON(args), [args]);
+  // THE RESULT TOO, by the same rule: an MCP server's answer is a JSON
+  // document as often as the call was. What is not one — a stack trace, a
+  // sentence, a page of markdown — comes back untouched.
+  const prettyResult = useMemo(() => indentJSON(result), [result]);
+  return (
+    <div className="col gap-1">
+      <div className="t-label">Arguments</div>
+      {/* NAMED WITH THE TOOL. A screen reader landing on a scrollable block
+          announces the name and nothing around it, and half a dozen regions
+          called "Arguments" on one round is the same as none.
+
+          `plain` MEANS SOMETHING ELSE OVER HERE: ours turned wrapping off,
+          theirs drops the header. The header is what goes — the block is bare
+          in this design.
+
+          WRAPPING IS BACK ON, and indenting is what pays for it. It was off
+          because these arguments were "aligned JSON", which one minified line
+          never was: the block simply scrolled sideways. Indented, the
+          structure is carried by the newlines, nothing is aligned in columns
+          any more, and the only thing left that can overrun the box is a
+          single long string value — a message body, a page of markdown —
+          which is exactly uilet's own case for wrapping, a line nobody finds
+          the end of.
+
+          `maxHeight` is our own `RECORD_MAX_HEIGHT`, and it has to be stated:
+          without one a 900-line record pushes the rest of the round off the
+          screen. */}
+      <CodeBlock
+        plain
+        maxHeight={RECORD_MAX_HEIGHT}
+        selectable
+        label={`${name} — arguments`}
+        code={prettyArgs || "{}"}
+      />
+      <div className="t-label">{failed ? "Error" : "Result"}</div>
+      <CodeBlock
+        plain
+        maxHeight={RECORD_MAX_HEIGHT}
+        selectable
+        label={`${name} — ${failed ? "error" : "result"}`}
+        code={prettyResult || "(empty)"}
+      />
+    </div>
+  );
+}
+
 function ToolRow({
   name,
   args,
@@ -101,23 +183,6 @@ function ToolRow({
   result: string;
   failed: boolean;
 }) {
-  // INDENTED FOR READING, NEVER RE-ENCODED. The engine records a call's
-  // arguments compactly, so what arrives is the whole call on ONE line with
-  // the argument a reader came for somewhere in the middle of it. Every other
-  // JSON block in this product is written at two spaces, and these were the
-  // exception rather than a decision. `indentJSON` walks the TEXT and copies
-  // every literal across byte for byte, which is what the alternative —
-  // decode, re-encode — cannot do: it rounds an id wider than 2^53 to a
-  // different id. Its own doc has the rest, including why a long string
-  // VALUE is the wrapping's problem rather than the indent's.
-  //
-  // MEMOISED because a live phase re-broadcasts twice per round, and a round
-  // this deep in the transcript is re-rendered every time.
-  const prettyArgs = useMemo(() => indentJSON(args), [args]);
-  // THE RESULT TOO, by the same rule and for the same reason: an MCP server's
-  // answer is a JSON document as often as the call was. What is not one — a
-  // stack trace, a sentence, a page of markdown — comes back untouched.
-  const prettyResult = useMemo(() => indentJSON(result), [result]);
   return (
     <div className={cx("tool-row", failed && "failed")}>
       <Disclosure
@@ -147,45 +212,7 @@ function ToolRow({
         // round's text.
         lazy
       >
-        <div className="col gap-1">
-          <div className="t-label">Arguments</div>
-          {/* NAMED WITH THE TOOL. A screen reader landing on a scrollable
-              block announces the name and nothing around it, and half a
-              dozen regions called "Arguments" on one round is the same as
-              none.
-
-              `plain` MEANS SOMETHING ELSE OVER HERE: ours turned wrapping off,
-              theirs drops the header. The header is what goes — the block is
-              bare in this design.
-
-              WRAPPING IS BACK ON, and indenting is what pays for it. It was
-              off because these arguments were "aligned JSON", which one
-              minified line never was: the block simply scrolled sideways.
-              Indented, the structure is carried by the newlines, nothing is
-              aligned in columns any more, and the only thing left that can
-              overrun the box is a single long string value — a message body,
-              a page of markdown — which is exactly uilet's own case for
-              wrapping, a line nobody finds the end of.
-
-              `maxHeight` is our own `RECORD_MAX_HEIGHT`, and it has to be
-              stated: without one a 900-line record pushes the rest of the
-              round off the screen. */}
-          <CodeBlock
-            plain
-            maxHeight={RECORD_MAX_HEIGHT}
-            selectable
-            label={`${name} — arguments`}
-            code={prettyArgs || "{}"}
-          />
-          <div className="t-label">{failed ? "Error" : "Result"}</div>
-          <CodeBlock
-            plain
-            maxHeight={RECORD_MAX_HEIGHT}
-            selectable
-            label={`${name} — ${failed ? "error" : "result"}`}
-            code={prettyResult || "(empty)"}
-          />
-        </div>
+        <ToolRecords name={name} args={args} result={result} failed={failed} />
       </Disclosure>
     </div>
   );
