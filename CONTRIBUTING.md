@@ -645,7 +645,7 @@ Required, and drawn from this set:
 
 The scope names the **component** the change lands in. For code that is the
 package directory under `internal/` — `agent`, `api`, `chart`, `coord`,
-`engine`, `gitlab`, `knowledge`, `mattermost`, `mcp`, `notify`, `queue`,
+`engine`, `gitlab`, `iam`, `knowledge`, `mattermost`, `mcp`, `notify`, `queue`,
 `sandbox`, `schedule`, `seat`, `secrets`, `store`, `tools`, and so on — so a
 reader can go from a subject line to a directory without guessing. Two scopes
 name a component by the name people use rather than by its import path:
