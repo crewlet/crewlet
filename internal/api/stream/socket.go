@@ -23,9 +23,25 @@ import (
 // queue rather than pile up.
 const MaxInFlightQueries = 4
 
-// The error codes a query answer can carry. CODES, not prose: the client
-// switches on the value, and a message there would make every new wording a
-// case nobody handles.
+// The error codes a query answer can carry — THE SOCKET'S SUBSET OF
+// [httpjson.Code], which is the engine's one refusal vocabulary.
+//
+// Each value is an entry on that table, and TestTheSocketAndRestShareOneTable
+// walks this package's own source to hold it there: a code declared here with
+// no entry over there is a refusal the socket calls one thing and REST another,
+// which is precisely what the dashboard's `QueryErrorCode` union drifted into
+// before anything pinned it.
+//
+// UNTYPED, because the same six codes are answered over plain HTTP by the
+// query surface's REST twin, which writes them as strings. Typing them here
+// would say nothing the walk does not, and would make the twin's answer a
+// conversion at every call site.
+//
+// CODES, not prose: the client switches on the value, and a frame carrying a
+// sentence would make every rewording a case nobody handles. The sentence
+// belongs to the code rather than to the occurrence — [httpjson.Code.Message]
+// holds one per code, which is what a REST refusal of the same question
+// answers with and what the dashboard's own per-code line is keyed on.
 const (
 	CodeUnknownQuery = "unknown_query"
 	CodeUnauthorized = "unauthorized"
@@ -52,6 +68,9 @@ const (
 	// message, which names the field and the values it would have
 	// accepted, is logged at DEBUG instead: available to whoever is
 	// debugging the screen, absent from the operator's log when nobody is.
+	// What the client renders is its own line for the code; the
+	// engine's sentence for that same code is what the REST surface
+	// answers with, and both are keyed on the one vocabulary.
 	CodeBadParams = "bad_params"
 
 	// CodeUnavailable is a question this node understood and cannot answer
@@ -127,8 +146,10 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			// Real JSON, not http.Error: that sets text/plain AND
 			// nosniff, so a JSON literal handed to it is the one
 			// combination guaranteed to stop a strict client parsing
-			// the body it is being sent.
-			httpjson.Fail(w, http.StatusUnauthorized, "invalid_token")
+			// the body it is being sent. The refusal envelope is the
+			// same one every REST route answers with, which is what
+			// lets the dashboard's HTTP re-ask read one shape.
+			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
 
@@ -335,7 +356,7 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 	}
 }
 
-func queryError(req request, code string) Envelope {
+func queryError(req request, code httpjson.Code) Envelope {
 	return Envelope{Kind: KindError, ID: req.ID, What: req.What, Error: code}
 }
 

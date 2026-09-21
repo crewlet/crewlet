@@ -2401,7 +2401,11 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
   moment, so `useQuery` asks again on its own rather than leaving a person to
   reload. The table is keyed on the protocol's `QueryErrorCode` union, so a
   code added to the union without a sentence here is a compile error, and a Go
-  test in `internal/api/stream` pins that union to the codes the engine sends.
+  test in `internal/api/stream` pins that union to the codes the engine sends —
+  and a second one pins those codes to the engine's own
+  [refusal vocabulary](api-endpoints.md#every-refusal-is-one-envelope), so a
+  query error and the HTTP refusal of the same question can never be two
+  different words.
 - **Zero** vs **unknown.** The integrations answer's `skipped` and `coalesced`
   are three-valued, and a count this node could not read comes back `null`,
   never `0`; `inbound` is a plain count whose unknown-ness rides on the
@@ -2430,6 +2434,33 @@ a node joining a fleet, which is the one empty state a reader has no way to
 question. What the seed cannot cover is a fleet peer's history, because the
 event store is per node; that is what the `events` and `tokens` queries are
 for, and what the window badge on Spend names.
+
+### A refusal is read, never parsed
+
+Every refused HTTP request answers the same three-part
+[envelope](api-endpoints.md#every-refusal-is-one-envelope), and the client
+treats each part as exactly one kind of thing:
+
+- **`message` is rendered VERBATIM.** It is product copy the engine holds one
+  sentence of per code, so the client shows it as sent — never reworded, never
+  truncated into a toast title, never prefixed with the code. Nothing branches
+  on it, and nothing matches its text: a copy improvement in the engine must
+  not be a screen that stops working.
+- **`detail` is what the client KEYS ON.** Everything beside `error` and
+  `message` is machine-readable and typed, so a screen reads the field it needs
+  and acts: `fields` puts a marker beside each input an integration is still
+  missing, `problems` puts a located failure beside the line of the document it
+  is about, `current_revision_id` tells a lost update from a stale form, a
+  `retry_after_ms` is waited out rather than shown as a number. Parsing a
+  sentence to find any of those is what this envelope exists to end.
+- **`error` decides WHICH screen state it is**, because it is the only closed
+  set of the three. A code the client does not know is rendered with the
+  engine's `message` and no behaviour attached, which is the honest fallback: a
+  refusal nobody anticipated still reads as a sentence rather than as a blank.
+
+A refusal with no `message` — a route whose code has not joined the shared
+vocabulary yet — falls back to the client's own line for that code, the same
+table the socket's query errors use.
 
 ---
 

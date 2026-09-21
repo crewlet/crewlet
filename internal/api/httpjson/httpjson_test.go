@@ -117,14 +117,19 @@ func TestABodyWithinTheCapIsReadWhole(t *testing.T) {
 	}
 }
 
-// FailWith carries a route's extras, and `error` always survives them: a
-// caller that branches on it must never find it missing because a route's
-// extra map happened to use the same key.
+// FailWith carries a route's detail, and the two RESERVED KEYS always survive
+// it: a caller that branches on `error` must never find it missing because a
+// route's detail happened to use the same key, and a person must never be
+// shown a sentence a route wrote over the vocabulary's own.
 func TestExtraFieldsNeverDisplaceTheErrorCode(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
 	httpjson.FailWith(rec, http.StatusConflict, httpjson.CodeInvalidBody,
-		map[string]string{"field": "roles[0].llm", "error": "hijacked"})
+		map[string]string{
+			"field":   "roles[0].llm",
+			"error":   "hijacked",
+			"message": "whatever this route felt like saying",
+		})
 
 	var body map[string]string
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -133,8 +138,79 @@ func TestExtraFieldsNeverDisplaceTheErrorCode(t *testing.T) {
 	if body["error"] != string(httpjson.CodeInvalidBody) {
 		t.Errorf("error = %q, want the code rather than the extra", body["error"])
 	}
+	if body["message"] != httpjson.CodeInvalidBody.Message() {
+		t.Errorf("message = %q, want the code's own sentence: the copy a person "+
+			"reads belongs to the vocabulary, not to the call site", body["message"])
+	}
 	if body["field"] != "roles[0].llm" {
-		t.Errorf("field = %q, want the route's extra to survive", body["field"])
+		t.Errorf("field = %q, want the route's detail to survive", body["field"])
+	}
+}
+
+// THE DETAIL IS STRUCTURED JSON, not a sentence and not a bag of strings.
+//
+// It is the half a client BRANCHES on — `retry_after_ms` is waited on,
+// `missing_grant` is rendered beside the permission it names, `problems` is
+// put field by field beside the inputs — and every one of those needs the
+// value's own type. The old shape was flat text: a number arrived as "4000"
+// for the client to parse back, and anything with structure arrived as prose
+// for it to read.
+//
+// THE CONTROL IS THE SECOND HALF: the same fact through the text form comes
+// back as a string. Route [httpjson.FailWithFields] through a
+// map[string]string — which is what "detail is a flat string" meant — and the
+// first half of this test goes red.
+func TestDetailSurvivesAsStructuredJson(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	httpjson.FailWithFields(rec, http.StatusServiceUnavailable, httpjson.CodeUnavailable,
+		httpjson.Detail{
+			"retry_after_ms": 4000,
+			"missing_grant":  "secrets.reveal",
+			"problems": []map[string]any{
+				{"path": "roles[0].llm", "segments": []any{"roles", 0, "llm"}},
+			},
+		})
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v (%s)", err, rec.Body)
+	}
+	if body["error"] != string(httpjson.CodeUnavailable) ||
+		body["message"] != httpjson.CodeUnavailable.Message() {
+		t.Errorf("the envelope lost its own two keys: %v", body)
+	}
+	if got, isNumber := body["retry_after_ms"].(float64); !isNumber || got != 4000 {
+		t.Errorf("retry_after_ms = %#v, want the number 4000: a client that has "+
+			"to parse it out of a string is reading prose", body["retry_after_ms"])
+	}
+	if body["missing_grant"] != "secrets.reveal" {
+		t.Errorf("missing_grant = %#v", body["missing_grant"])
+	}
+	problems, ok := body["problems"].([]any)
+	if !ok || len(problems) != 1 {
+		t.Fatalf("problems = %#v, want the list as it was given", body["problems"])
+	}
+	first, _ := problems[0].(map[string]any)
+	segments, _ := first["segments"].([]any)
+	if first["path"] != "roles[0].llm" || len(segments) != 3 || segments[1] != float64(0) {
+		t.Errorf("problems[0] = %#v, want its shape intact", first)
+	}
+
+	// The control. The text form is still there for the detail that
+	// genuinely is text — a field path, a hint — and this is what it does
+	// to a number, which is the shape this test exists to keep out of the
+	// structured one.
+	flat := httptest.NewRecorder()
+	httpjson.FailWith(flat, http.StatusServiceUnavailable, httpjson.CodeUnavailable,
+		map[string]string{"retry_after_ms": "4000"})
+	var text map[string]any
+	if err := json.Unmarshal(flat.Body.Bytes(), &text); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if _, isNumber := text["retry_after_ms"].(float64); isNumber {
+		t.Error("the text form produced a number, so this control proves nothing " +
+			"about the structured one")
 	}
 }
 
@@ -174,22 +250,77 @@ func TestStructuredFieldsKeepTheirShapeAndNeverDisplaceTheErrorCode(t *testing.T
 	}
 }
 
+// declared is every code this package names, the three groups together: the
+// writer's own, the query-answer set the socket shares, and the setup pass's.
+//
+// Hand-listed so that adding a constant without adding it here is caught by
+// the count below rather than passing as "nothing to check".
+var declared = []httpjson.Code{
+	httpjson.CodeEncodeFailed, httpjson.CodeBodyTooLarge,
+	httpjson.CodeUnreadableBody, httpjson.CodeInvalidBody,
+	httpjson.CodeInvalidQuery, httpjson.CodeInternalError,
+	httpjson.CodeDraining, httpjson.CodeInvalidToken,
+
+	httpjson.CodeUnknownQuery, httpjson.CodeUnauthorized,
+	httpjson.CodeQueryFailed, httpjson.CodeNotFound,
+	httpjson.CodeBadParams, httpjson.CodeUnavailable,
+
+	httpjson.CodePassInFlight, httpjson.CodeNotProvisionable,
+	httpjson.CodeNoPublicBaseURL, httpjson.CodeRequirementsOutstanding,
+	httpjson.CodeRunNotFound, httpjson.CodeVendorRefused,
+}
+
 // Every declared code is Valid, and an invented one is not — the guard that
 // keeps a fifth spelling of "too large" from appearing.
 func TestOnlyTheDeclaredCodesAreValid(t *testing.T) {
 	t.Parallel()
-	for _, code := range []httpjson.Code{
-		httpjson.CodeEncodeFailed, httpjson.CodeBodyTooLarge,
-		httpjson.CodeUnreadableBody, httpjson.CodeInvalidBody,
-		httpjson.CodeInvalidQuery, httpjson.CodeInternalError,
-		httpjson.CodeDraining,
-	} {
+	for _, code := range declared {
 		if !code.Valid() {
 			t.Errorf("%q is declared but not Valid", code)
 		}
 	}
 	if httpjson.Code("value_too_large").Valid() {
 		t.Error("a spelling this package does not define reported Valid")
+	}
+	if httpjson.Code("").Valid() {
+		t.Error("the zero Code reported Valid, so a refusal that named no code " +
+			"at all would read as a member of the vocabulary")
+	}
+}
+
+// EVERY CODE CARRIES A SENTENCE A PERSON READS, because the dashboard renders
+// it verbatim: whatever is written here is product copy, shown to an operator
+// in a toast or beside a form.
+//
+// So this is shaped like copy review rather than like a type check. A message
+// that reads as a log line — a bare code, a snake_case token, a fragment with
+// no full stop — fails, because the alternative is that one of them reaches a
+// screen and nobody notices until a person is confused by it.
+func TestEveryCodeCarriesASentenceAPersonReads(t *testing.T) {
+	t.Parallel()
+	for _, code := range declared {
+		message := code.Message()
+		switch {
+		case message == "":
+			t.Errorf("%q has no message: a refusal a person is shown nothing for",
+				code)
+			continue
+		case !strings.Contains(message, " "):
+			t.Errorf("%q says %q, which is a token rather than a sentence",
+				code, message)
+		case !strings.HasSuffix(message, "."):
+			t.Errorf("%q says %q, which is a fragment: it ends up mid-sentence "+
+				"on a screen", code, message)
+		case strings.Contains(message, "_"):
+			t.Errorf("%q says %q — a snake_case token in the copy means a code "+
+				"or a field name leaked into the half a person reads", code, message)
+		case message[0] < 'A' || message[0] > 'Z':
+			t.Errorf("%q says %q, which does not begin as a sentence", code, message)
+		}
+	}
+	if httpjson.Code("not_on_the_table").Message() != "" {
+		t.Error("a code outside the vocabulary answered a message, so Valid and " +
+			"Message are reading two different tables")
 	}
 }
 

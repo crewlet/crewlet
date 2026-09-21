@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -77,13 +78,19 @@ const (
 // ID, What and Error are omitted on a push and present on a query answer, which
 // is what lets one type carry both directions of the protocol without a client
 // having to know which shape to expect from which kind.
+//
+// Error is an [httpjson.Code] rather than a string, and that is the whole of
+// what makes "the socket and REST cannot call one refusal two things" a
+// compile-time fact rather than a convention: a frame can only carry a value
+// from the engine's one refusal vocabulary. The query-answer subset is named
+// in socket.go.
 type Envelope struct {
-	Kind  string `json:"kind"`
-	Data  any    `json:"data,omitempty"`
-	TS    string `json:"ts,omitempty"`
-	ID    int64  `json:"id,omitempty"`
-	What  string `json:"what,omitempty"`
-	Error string `json:"error,omitempty"`
+	Kind  string        `json:"kind"`
+	Data  any           `json:"data,omitempty"`
+	TS    string        `json:"ts,omitempty"`
+	ID    int64         `json:"id,omitempty"`
+	What  string        `json:"what,omitempty"`
+	Error httpjson.Code `json:"error,omitempty"`
 }
 
 // Push builds a broadcast envelope stamped now.

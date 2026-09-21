@@ -26,6 +26,56 @@ A body that does not arrive inside its deadline fails the read like any other tr
 
 ---
 
+## Every refusal is one envelope
+
+A refused request — on any route, from any surface, whatever the status — is
+one JSON object, and it always has the same three parts in the same places:
+
+```json
+{
+  "error": "no_public_base_url",
+  "message": "This deployment has no public address, so no webhook can be registered for it. Set the public base URL and run the pass again.",
+  "config_path": "integrations.public_base_url",
+  "hint": "set the HTTPS address third-party apps reach this deployment on; without it the pass can register no webhook"
+}
+```
+
+- **`error` is the code, and the only thing to branch on.** It comes from one
+  closed vocabulary shared by every surface (`internal/api/httpjson`), so the
+  same failure has the same name wherever it is met: a `413` is
+  `body_too_large` whether what overflowed was a config document, a secret
+  value or a webhook delivery, and a query the engine does not serve is
+  `unknown_query` over both the WebSocket and its REST twin. Never parse the
+  message to find out what happened.
+- **`message` is one sentence for a person**, written as product copy and
+  rendered verbatim by the dashboard. It belongs to the *code*, not to the call
+  site, so a refusal reads the same wherever it came from — and a route with
+  more to say says it in the detail rather than rewording the sentence.
+  Never match on it: the wording is copy and can be improved at any time. A few
+  refusals still build their body themselves and answer with the code alone —
+  several under `/config` and `/setup`, and the `/query/*` REST twin of the
+  socket's query errors — so a client renders `message` where it is present and
+  its own line for the code where it is not.
+- **Everything else is the detail** — the machine-readable facts about *this*
+  refusal, as typed JSON beside the two reserved keys rather than nested under
+  one: `config_path` and `hint` above, `fields` on an integration that is
+  missing values, `current_revision_id` on a lost update, `problems` and
+  `derived` on a refused configuration document. Values keep their own types,
+  so a count is a number and a list of located problems is a list.
+
+`error` and `message` are RESERVED: a route's own detail can never displace
+them, so a client that branches on the code cannot find it missing because a
+route happened to use the same key.
+
+Two shapes sit deliberately outside this envelope. A **WebSocket query answer**
+is a frame rather than a response — `{"kind": "error", "id", "what", "error"}`
+— and carries the code alone, because the client switches on the value and the
+sentence for each code is one the dashboard already holds (see
+[`WS /ws/stream`](#ws-wsstream)). And the routes that are not JSON at all —
+the dashboard shell, the Slack OAuth landing — answer as what they are.
+
+---
+
 ## During a drain
 
 A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP for the whole of its [drain](../concepts/agent-runtime.md#graceful-shutdown), and closes its listener only once the drain has completed. What changes from the drain's first moment is which requests it will still take:
@@ -46,6 +96,7 @@ A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load ba
 ```json
 {
   "error": "draining",
+  "message": "This node is shutting down and is not taking new work. Try another node, or this one once it has restarted.",
   "detail": "this node is draining for a shutdown: the turns already running finish, and nothing new is started here",
   "hint": "retry against another node, or once this one has restarted; /ready answers 503 for as long as the drain lasts"
 }
@@ -284,7 +335,7 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
       "kind": "dangling_reference", "ref": "manages",
       "path": "roles[0].manages[1]", "segments": ["roles", 0, "manages", 1],
       "seat": "ceo", "unit": "", "from": "CEO", "to": "Ghost",
-      "message": "seat \"CEO\" manages \"Ghost\", which is neither a seat nor a unit, so the entry manages nobody. Correct the entry or add a seat or unit with that name"
+      "message": "seat \"CEO\" manages \"ghost\", which is neither a seat's handle nor a unit's key, so the entry manages nobody. Correct the entry or add a seat or unit answering to it"
     }
   ],
   "derived": {"seats": [...], "units": [...]}
@@ -292,7 +343,7 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
 ```
 
 - **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` name it is about, empty when neither), plus `from` and `to` as display text. Two kinds:
-  - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead), `unit` (a root seat's `unit:`), `manages` (one `manages` entry, at the index it was written) or `gitlab_access_level` (a key under `integrations.gitlab.provisioning.access_levels` naming no seat).
+  - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead, a seat handle), `unit` (a root seat's `unit:`, a unit key), `manages` (one `manages` entry — a seat handle or a unit key — at the index it was written) or `gitlab_access_level` (a key under `integrations.gitlab.provisioning.access_levels` naming no seat).
   - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company stored before the rule answers with one, one beside each entity the violation names.
 - **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
 
@@ -320,7 +371,7 @@ A valid check answers `200`:
 
 #### Refusals carry located problems
 
-A refused document (`400 validation_error`, `400 invalid_patch`, `400 invalid_body`) keeps `error`, `detail` (one line per failure) and `hint`, and adds **`problems`**: the same failures, located and classified, so a client puts each beside the field it is about without parsing the detail.
+A refused document (`400 validation_error`, `400 invalid_patch`, `400 invalid_body`) is the [refusal envelope](#every-refusal-is-one-envelope) with a detail of its own: `detail` (one line per failure) and `hint` beside the `error` code and its `message`, and **`problems`** — the same failures, located and classified, so a client puts each beside the field it is about without parsing anything.
 
 ```json
 {
@@ -378,7 +429,7 @@ Four collections, `GET` and `PUT`:
 |--------|------|-------------|
 | `GET` | `/config/{kind}/{id}` | One entity, redacted, with an `ETag`. **The body is the entity itself**, so it goes straight back into the `PUT` |
 | `PUT` | `/config/roles/{handle}` | Replace one seat, wherever it lives — root-level or inside a unit, at any depth |
-| `PUT` | `/config/units/{name}` | Replace one org unit |
+| `PUT` | `/config/units/{key}` | Replace one org unit, addressed by its key (its `id`, or its name where it declares none) |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry |
 
@@ -418,7 +469,7 @@ Four rules follow from that:
   move: nothing that points at the old identity travels with the splice. A
   seat's durable id is a UUIDv5 over (company name, handle), so a renamed
   handle strands that seat's diary, onboarding marker and counterparty
-  profiles behind an id nothing derives any more; a unit's name is referenced
+  profiles behind an id nothing derives any more; a unit's key is referenced
   by every `manages:` entry and root seat `unit:` that names it, and an MCP
   server's name by every `mcp_env` block, a seat's or a unit's, keyed on it.
   For a role the check is on the **derived** handle, so a body that omits
@@ -502,7 +553,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `200 OK`: a successful read, or a [dry run](#dry-runs) that found the write valid (`{"valid", "base_revision_id", "warnings", "derived"}`)
 - `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings", "derived"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
-- `401 Unauthorized`: missing or invalid bearer token (`{"error": "invalid_token"}`)
+- `401 Unauthorized`: missing or invalid bearer token — `invalid_token`, in the same [refusal envelope](#every-refusal-is-one-envelope) every route answers with, written by the guard itself before any route runs
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, or `no_such_entity` on a per-entity write naming an id the active revision does not carry
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
 - `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active
@@ -1829,14 +1880,14 @@ push, so all three surfaces carry exactly one shape.
   "vision": "...",
   "policies": ["..."],
   "roles": [
-    {"name": "Founder", "kind": "human", "manages": ["CTO"], "availability": "CET business hours"}
+    {"name": "Founder", "kind": "human", "manages": ["cto"], "availability": "CET business hours"}
   ],
   "units": [
     {
       "name": "Engineering",
       "type": "department",
       "purpose": "...",
-      "lead": "CTO",
+      "lead": "cto",
       "goals": ["..."],
       "channel": "engineering",
       "knowledge": ["..."],
@@ -1880,12 +1931,15 @@ push, so all three surfaces carry exactly one shape.
 }
 ```
 
+In that document `manages: ["cto"]` is a seat **handle** and `manages: ["Platform"]` is a unit **key** — the unit declares no `id`, so its name is its key. A seat is always named by its handle and a unit always by its key; neither is ever named by a display name.
+
 **`derived` is the hierarchy the engine derives from that document**, so a
 client draws a chart rather than deriving one. Each rule in it is one a second
 implementation gets wrong: a handle is a slug with Go's own case mapping, a
-root seat carrying `unit:` moves into that unit, a lead and a channel cascade
-to child units that set none, a `manages` entry naming a unit stands for the
-seats in its subtree, a unit's lead manages the members nobody else manages,
+root seat carrying `unit:` moves into the unit that key names, a lead and a
+channel cascade to child units that set none, a `manages` entry keying a unit
+stands for the seats in its subtree, a unit's lead manages the members nobody
+else manages,
 and the primary manager is the first seat in the engine's own order that
 manages a seat. The dashboard derived these in TypeScript and had already
 diverged on three of them.

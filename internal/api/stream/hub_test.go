@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/stream"
 )
 
@@ -279,8 +280,9 @@ func TestAnErrorCarriesACodeNotProse(t *testing.T) {
 	t.Parallel()
 	// The client switches on the value. Prose there would make every
 	// message a new case nobody handles.
-	for _, code := range []string{
-		"unknown_query", "unauthorized", "bad_params", "query_failed",
+	for _, code := range []httpjson.Code{
+		stream.CodeUnknownQuery, stream.CodeUnauthorized,
+		stream.CodeBadParams, stream.CodeQueryFailed,
 	} {
 		raw, err := stream.Encode(stream.Envelope{
 			Kind: stream.KindError, ID: 1, What: "config", Error: code,
@@ -292,7 +294,7 @@ func TestAnErrorCarriesACodeNotProse(t *testing.T) {
 		if err := json.Unmarshal(raw, &got); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if got["error"] != code {
+		if got["error"] != string(code) {
 			t.Errorf("error = %v, want %q", got["error"], code)
 		}
 		if _, present := got["data"]; present {

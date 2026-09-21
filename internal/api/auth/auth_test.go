@@ -1,12 +1,14 @@
 package auth_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -566,5 +568,42 @@ func TestTheSocketPathTakesItsTokenFromTheQuery(t *testing.T) {
 		if res.StatusCode != http.StatusUnauthorized || seen != "" {
 			t.Errorf("%s = %d as %q, want 401 as nobody", path, res.StatusCode, seen)
 		}
+	}
+}
+
+// THE GUARD REFUSES IN THE ENVELOPE EVERY OTHER SURFACE ANSWERS WITH.
+//
+// It used to write the body by hand — a Content-Type, a WriteHeader and a JSON
+// literal, three lines that say nothing about which vocabulary the code comes
+// from or where the sentence beside it lives. A caller refused HERE, before any
+// route runs, and a caller refused BY a route must read one shape, because the
+// dashboard's token gate branches on both: a stale credential is refused at
+// this middleware and the screen that offers to forget it renders the same
+// `message` it would for any other refusal.
+func TestTheGuardsRefusalIsTheSharedEnvelope(t *testing.T) {
+	t.Parallel()
+	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
+	res, _ := serve(t, g, "POST", "/config", "Bearer stale-from-last-deployment")
+
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", res.StatusCode)
+	}
+	if got := res.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+	if got := res.Header.Get("X-Content-Type-Options"); got != "" {
+		t.Errorf("X-Content-Type-Options = %q: nosniff beside a JSON body is the "+
+			"one pairing that stops a strict client parsing it", got)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("the refusal is not JSON: %v", err)
+	}
+	if body["error"] != string(httpjson.CodeInvalidToken) {
+		t.Errorf("error = %v, want %q", body["error"], httpjson.CodeInvalidToken)
+	}
+	if body["message"] != httpjson.CodeInvalidToken.Message() {
+		t.Errorf("message = %v, want the code's own sentence — this is what a "+
+			"person is shown when their token stops working", body["message"])
 	}
 }

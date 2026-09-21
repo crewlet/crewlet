@@ -30,16 +30,15 @@ import (
 // writes, through the same fold, so the Integrations screen updates with no
 // extra plumbing and a pass run by hand can never disagree with a tick that
 // runs a minute later.
-
-// The refusals these routes add.
-const (
-	codePassInFlight      = httpjson.Code("pass_in_flight")
-	codeNotProvisionable  = httpjson.Code("not_provisionable")
-	codeNoPublicBaseURL   = httpjson.Code("no_public_base_url")
-	codeRequirementsShort = httpjson.Code("requirements_outstanding")
-	codeRunNotFound       = httpjson.Code("run_not_found")
-	codeVendorRefused     = httpjson.Code("vendor_refused")
-)
+//
+// # The refusals are the engine's, not this file's
+//
+// These routes had six route-local codes, which is how a vocabulary drifts: a
+// code only one file can see is a code the next route spells its own way, and
+// nothing holds the sentence a person is shown for it. They are entries on the
+// one refusal table now — [httpjson.CodePassInFlight] and its five siblings —
+// each with its own copy, and each answered in the envelope every other
+// surface answers with.
 
 // Status is where a pass records what it found.
 //
@@ -84,7 +83,7 @@ func (s *Service) check(w http.ResponseWriter, r *http.Request) {
 func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool) {
 	kind := integration.Kind(r.PathValue("kind"))
 	if !s.passes.Serves(kind) {
-		httpjson.FailWith(w, http.StatusConflict, codeNotProvisionable, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNotProvisionable, map[string]string{
 			"detail": "this build runs no provisioning pass for " + string(kind),
 			"hint": "its setup is the values on this surface; anything at the " +
 				"third-party app is done there or with the crewlet command line",
@@ -129,11 +128,15 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 			for _, m := range missing {
 				names = append(names, m.Field)
 			}
-			httpjson.Write(w, http.StatusConflict, map[string]any{
-				"error": string(codeRequirementsShort), "fields": names,
-				"hint": "supply these first; a pass writes at the third-party app and " +
-					"must not run against a half-configured integration",
-			})
+			httpjson.FailWithFields(w, http.StatusConflict,
+				httpjson.CodeRequirementsOutstanding, httpjson.Detail{
+					// THE FIELD NAMES, AS A LIST. A client puts each
+					// one beside the input it belongs to, which is
+					// what a sentence naming them cannot be used for.
+					"fields": names,
+					"hint": "supply these first; a pass writes at the third-party app and " +
+						"must not run against a half-configured integration",
+				})
 			return
 		}
 	}
@@ -169,7 +172,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		if in.WebhookBase == "" {
 			// A WRITING PASS WITH NO ADDRESS IS REFUSED BY NAME, rather
 			// than run to register nothing and report success.
-			httpjson.FailWith(w, http.StatusConflict, codeNoPublicBaseURL, map[string]string{
+			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoPublicBaseURL, map[string]string{
 				"config_path": "integrations.public_base_url",
 				"hint": "set the HTTPS address third-party apps reach this deployment on; " +
 					"without it the pass can register no webhook",
@@ -224,7 +227,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 			})
 		return
 	case !held:
-		httpjson.FailWith(w, http.StatusConflict, codePassInFlight, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodePassInFlight, map[string]string{
 			"hint": "another pass for this integration is running; wait for it " +
 				"rather than minting twice",
 		})
@@ -239,7 +242,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	in.Operator = ""
 	req.OperatorCredential = ""
 	if errors.Is(err, setup.ErrNoPass) {
-		httpjson.Fail(w, http.StatusConflict, codeNotProvisionable)
+		httpjson.Fail(w, http.StatusConflict, httpjson.CodeNotProvisionable)
 		return
 	}
 
@@ -263,14 +266,19 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		log.ErrorContext(r.Context(), "setup_pass_failed",
 			"integration", kind, "run", run.ID, "error", err.Error(),
 			"operator", operatorOf(r))
-		httpjson.Write(w, http.StatusBadGateway, map[string]any{
-			"error": string(codeVendorRefused), "run": run,
-			// The run carries the third-party app's own sentence, which is what an
-			// operator needs. It is safe here because the one refusal that
-			// could quote a config value no longer does.
-			"hint": "the third-party app refused this pass; nothing it had already done " +
-				"is undone, and re-running is safe",
-		})
+		httpjson.FailWithFields(w, http.StatusBadGateway,
+			httpjson.CodeVendorRefused, httpjson.Detail{
+				// THE WHOLE RUN, with its findings and attempts — a
+				// refusal detail is typed JSON rather than text, so
+				// the Findings tab renders the same record it would
+				// have read from the runs route.
+				"run": run,
+				// The run carries the third-party app's own sentence, which is what an
+				// operator needs. It is safe here because the one refusal that
+				// could quote a config value no longer does.
+				"hint": "the third-party app refused this pass; nothing it had already done " +
+					"is undone, and re-running is safe",
+			})
 		return
 	}
 	log.InfoContext(r.Context(), "setup_pass_ran",
@@ -343,7 +351,7 @@ const MaxRunsListed = 10
 func (s *Service) runs(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
 	if !kind.Valid() {
-		httpjson.FailWith(w, http.StatusNotFound, codeRunNotFound, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeRunNotFound, map[string]string{
 			"hint": "this build knows no integration by that name",
 		})
 		return
@@ -367,7 +375,7 @@ func (s *Service) runs(w http.ResponseWriter, r *http.Request) {
 func (s *Service) runByID(w http.ResponseWriter, r *http.Request) {
 	run, ok := s.passes.Get(r.PathValue("id"))
 	if !ok || run.Kind != integration.Kind(r.PathValue("kind")) {
-		httpjson.FailWith(w, http.StatusNotFound, codeRunNotFound, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeRunNotFound, map[string]string{
 			"hint": "a run is remembered by the node that executed it, and only " +
 				"for the last few passes",
 		})

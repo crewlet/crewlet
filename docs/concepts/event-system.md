@@ -306,14 +306,49 @@ those names losslessly, because a node of an earlier build keeps publishing
 them through a rolling upgrade and rows already written are read back for as
 long as retention keeps them; none may be registered or categorised again.
 
-**Excluded from the store**, each for a stated reason: `agent_turn_progress` (a
-live-only per-round signal whose durable record is `agent_phase_completed`),
-`budget_reported` (a snapshot of the fleet's shared token counter, published
-by every node on a fixed tick, which the next report supersedes; the live
-projection reads it), `raw_webhook` (the delivery is already a row), and the two
-A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
-already rows as `a2a_channel_opened` and `a2a_message_sent`). See the
-exclusions table in the Deployment page above.
+**Excluded from the store**, each with a stated CAUSE as well as a reason:
+`agent_turn_progress` (an intermediate state whose finished record is
+`agent_phase_completed`), `budget_reported` (a periodic snapshot of the fleet's
+shared token counter, published by every node on a fixed tick, which the next
+report supersedes; the live projection reads it), `raw_webhook` (the delivery is
+already a row), and the two A2A inbox wakes `a2a_request` and `a2a_message` (the
+ask and the answer are already rows as `a2a_channel_opened` and
+`a2a_message_sent`). The cause is a value rather than a sentence, because the
+admission rule below is checked by a walk and no walk can read intent out of
+prose. See the exclusions table in the Deployment page above.
+
+### What may reach the node estate
+
+A category is an **admission** as much as a filing: the map is what decides
+whether a type becomes a durable row, and the [event
+store](../guides/deployment.md#the-event-store) is a file on a disk an operator
+sized, copied whole by every backup, every snapshot a lagging node installs and
+every integrity check before either counts.
+
+So each categorised type also records **who authors its rate** — who decides
+how often it is published, which is never the same question as who publishes
+it:
+
+| Author | What sets the pace | Examples |
+|---|---|---|
+| `engine` | This company's own work: a turn, a tick, a duty, a schedule | `agent_phase_completed`, `sandbox_run_started`, `reflection_completed` |
+| `authenticated` | An admitted caller: an operator holding a token, a seat, a delivery whose signature or shared token verified | `external_notification`, `config_revision_activated`, `task_assigned` |
+| `anonymous` | Anybody who can reach the listener, with no credential and no identity | — none, and that is the rule |
+
+**No event type whose rate an unauthenticated caller authors reaches the node
+estate.** A failed login is the worked example: anyone who can reach the API
+can author millions a day for nothing, so a row per attempt hands the size of
+the store — and of every artefact taken from it — to whoever is making the
+attempts, with no credential to revoke and no identity on the row. The
+per-attempt fact belongs on a metrics counter; what becomes a row is a
+**coalesced** event, one per source per minute, published by the engine's own
+loop and therefore rated by the engine. A type that must stay out for this
+reason is excluded with the cause `anonymous_rate`.
+
+The rule is enforced by a walk over the taxonomy rather than remembered: a type
+given a category while declaring an anonymous rate, and a type given a category
+while declaring no rate author at all, both fail the suite in
+`internal/events`. An unstated author is not a claim that the rate is bounded.
 
 ---
 

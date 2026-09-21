@@ -38,11 +38,12 @@ func TestTheDocumentedCategoryVocabularyMatchesTheMap(t *testing.T) {
 				"add it to the table in § What gets stored", eventType, categoryDoc)
 		}
 	}
-	for eventType, reason := range events.Exclusions() {
+	for eventType, why := range events.Exclusions() {
 		if !strings.Contains(page, "`"+eventType+"`") {
 			t.Errorf("event type %q is deliberately excluded from the store and "+
 				"%s does not say so; an operator looking for it in a query finds "+
-				"nothing and no explanation (%s)", eventType, categoryDoc, reason)
+				"nothing and no explanation (%s: %s)",
+				eventType, categoryDoc, why.Cause, why.Reason)
 		}
 	}
 }
@@ -55,6 +56,14 @@ func TestTheDocumentedTableNamesNoVanishedType(t *testing.T) {
 	known := allTypes()
 	for name := range events.Exclusions() {
 		known[name] = true
+	}
+	// The exclusion table on the page names each type's CAUSE, and a cause
+	// shares the event-type grammar (lower-case words joined by
+	// underscores). They are real values of this vocabulary, so they are
+	// known here — and a cause the engine no longer declares is reported
+	// as vanished exactly like a retired event type, which is the point.
+	for _, cause := range events.ExclusionCauses() {
+		known[string(cause)] = true
 	}
 
 	page := readDoc(t)

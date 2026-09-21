@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -379,6 +380,14 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		if !authenticated {
+			// A LOG LINE, AND DELIBERATELY NOT AN EVENT. Whoever can
+			// reach this listener authors the rate of these, with no
+			// credential and no identity — so no per-attempt event
+			// type may carry one into the node estate, which is the
+			// admission rule internal/events states and walks. A
+			// durable record of failed authentication is a COALESCED
+			// count, per source per minute, paced by the engine's own
+			// loop rather than by the caller.
 			log.Warn("api_auth_failed",
 				"route", path,
 				"reason", "missing_or_invalid_bearer",
@@ -386,9 +395,14 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 				// is still a credential, and a log is a place it would
 				// outlive the request.
 				"remote", remoteHost(r))
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":"invalid_token"}`))
+			// THE SAME REFUSAL ENVELOPE EVERY OTHER SURFACE
+			// ANSWERS WITH. This was a hand-written JSON literal
+			// and a hand-set header pair — the shape that drifts,
+			// because nothing about it says which vocabulary the
+			// code belongs to or where the sentence beside it
+			// comes from. A caller refused here and refused by a
+			// route reads one body.
+			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
 		log.Debug("api_auth_ok", "operator_id", operatorID, "route", path)
