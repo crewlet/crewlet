@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -28,6 +29,10 @@ func argString(args map[string]any, key string) string {
 		return ""
 	case float64:
 		return fmt.Sprintf("%g", v)
+	case json.Number:
+		// THE LITERAL, not `%g` of it: this is the spelling the model
+		// sent, and it is exact where the float rendering is not.
+		return v.String()
 	case bool:
 		return fmt.Sprintf("%t", v)
 	}
@@ -36,12 +41,23 @@ func argString(args map[string]any, key string) string {
 
 // argInt reads an integer argument, or the fallback.
 //
-// JSON has one number type, so an int arrives as float64 through every decoder
-// in this path; the int cases are for the callers that hand a map straight in.
+// JSON has one number type, so an int arrives as a number through every
+// decoder in this path; the int cases are for the callers that hand a map
+// straight in.
 func argInt(args map[string]any, key string, fallback int) int {
 	switch v := args[key].(type) {
 	case float64:
 		return int(v)
+	case json.Number:
+		// INT64 FIRST, because that is the whole reason the decoders on
+		// this path read through json.Number: an id past 2^53 is exact
+		// here and rounded the moment it becomes a float.
+		if i, err := v.Int64(); err == nil {
+			return int(i)
+		}
+		if f, err := v.Float64(); err == nil {
+			return int(f)
+		}
 	case int:
 		return v
 	case int64:
@@ -120,6 +136,10 @@ func argFloat(args map[string]any, key string) float64 {
 	switch v := args[key].(type) {
 	case float64:
 		return v
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f
+		}
 	case int:
 		return float64(v)
 	case string:

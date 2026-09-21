@@ -1191,9 +1191,71 @@ rules fix it, and each one names a specific mechanism:
    and all. The engine now sends the split it already knows, at the point
    the round's assistant message is appended. A phase recorded before that
    has only the joined string and is shown whole rather than guessed apart.
-3. **The model's words are prose; JSON is monospace.** Reasoning and speech
-   get a proportional face, real leading and a bounded measure. Monospace
-   stays where it carries meaning — tool arguments and tool results.
+3. **The model's words are prose; JSON is monospace, and INDENTED.**
+   Reasoning and speech get a proportional face, real leading and a bounded
+   measure. Monospace stays where it carries meaning — tool arguments and tool
+   results.
+
+   Those arrive as the engine encoded them, which is the whole call on ONE
+   line however many arguments it had, with the one a reader came for — the
+   channel, the page id, the item key — somewhere in the middle of it. Every
+   other JSON block in this product is written at two spaces, and these were
+   the exception rather than a decision: the screen indents them now, and the
+   same rule covers a tool's result, which is a JSON document as often as the
+   call was. What that buys is a key per line, so a call is read down rather
+   than scanned across.
+
+   **It does not shorten a long VALUE, and must not.** A `create_page` body is
+   four thousand characters whether or not the document around it is indented,
+   because `\n` inside a JSON string is two characters. Resolving those would
+   produce text that is no longer JSON, no longer idempotent and no longer
+   paste-able into `jq`. What handles a long value is the block WRAPPING —
+   which is why both blocks stopped turning wrapping off at the same time as
+   they started indenting, and why the pair is one change rather than two.
+
+   **Indented by walking the text, never by decoding it.** The obvious
+   `JSON.stringify(JSON.parse(text), null, 2)` is the move both of these
+   screens had refused in a comment, and the reason is a display bug rather
+   than a purity argument. Two of the things that round trip loses are live on
+   this path: an id wider than 2^53 comes back a *different* id, and a
+   number's spelling (`1.0`, `1e3`) stops being what the model sent. Both are
+   there to lose only because the engine went to the trouble — every decoder
+   between a model and the record reads through Go's `json.Number` so a
+   19-digit Jira id or Slack timestamp stays exact — and a screen whose job is
+   to say which object a tool was called on must not show one that is off by
+   one. (It also keeps a duplicate key, an unresolved escape and the wire's
+   key order, none of which the engine's own encoder can produce: those are
+   what it costs nothing to be right about.) So `lib/jsontext.ts` scans the
+   text: structural characters get the newlines and the indent, and every
+   literal is copied across byte for byte. `JSON.parse` is still called, for
+   its verdict and nothing else — text that is not a JSON document at all
+   comes back exactly as it arrived, because a provider that answered with
+   something else is a reading the transcript has to be able to show.
+
+   With the structure now carried by newlines, nothing is aligned in columns
+   any more and both blocks wrap: the only thing left that can overrun one is
+   a single long string value, which is the case wrapping exists for.
+
+   Two bounds travel with it, and both are visible rather than magic. The
+   indent STOPS GROWING at 32 levels — 64 leading spaces is most of the width
+   one of these blocks has in a 420px detail rail, so past it a deeper
+   document keeps its newlines and gains no margin. That reading is also what keeps the
+   output linear: indentation is quadratic in nesting depth, and the depth
+   here belongs to whichever MCP server answered, with Go's decoder accepting
+   ten thousand levels. And a LIVE result over four thousand characters is
+   sent with a leading ellipsis, which is not a JSON document — so a long
+   result renders flat while the phase runs and indented once it completes.
+   The text already changes at that moment; the shape changing with it is the
+   same fact, not a second one.
+
+   The engine stopped writing the other half of the unreadability at the same
+   time. `json.Marshal` escapes `<`, `>` and `&` for embedding in HTML, so
+   every URL argument recorded before that read `?a=1\u0026b=2` and every
+   markdown body `\u003ch1\u003e` — on a screen that renders into a `pre` and
+   needs none of it. `tools.RecordArgs` is the one encoder both the phase
+   event and the bridged-run row use now, and it writes the characters the
+   model actually sent. Records taken by an older build still carry the
+   escapes, and are shown as what that build published.
 4. **Grouping is structural; colour is semantic.** A round is BRACKETED by a
    rail running from its numbered node down its own content, and adjacent
    rounds are told apart by a two-step alternating tint — not by a hue
@@ -1622,7 +1684,7 @@ not, which is the class of defect that never shows up in a screenshot:
   else. Measured rather than assumed, and on both axes since `wrap={false}`
   scrolls a block sideways in a box that is nowhere near tall enough to scroll
   down: a stop on every block would put one in front of each of a round's tool
-  arguments, most of them three lines. `label` is what such a block takes
+  arguments, most of them a handful of lines. `label` is what such a block takes
   focus under, from either door — taking focus without a name is the other
   half of the same trade.
 

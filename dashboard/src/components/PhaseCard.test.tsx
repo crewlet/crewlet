@@ -10,7 +10,7 @@
  * grouped and the rendering did not say so.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
@@ -392,5 +392,61 @@ describe("the phase body reads in the order the phase happened", () => {
     const error = all.findIndex((el) => el.textContent === "no model answered");
     expect(error).toBeGreaterThanOrEqual(0);
     expect(error).toBeLessThan(all.indexOf(screen.getByRole("button", { name: /^Prompt/ })));
+  });
+});
+
+/**
+ * A CALL'S ARGUMENTS ARE A JSON DOCUMENT, so they are shown as one.
+ *
+ * The engine writes them with a plain `json.Marshal` — the whole call on one
+ * line, however long it was — and every other JSON block in this product is
+ * written at two spaces. What is asserted here is both halves of the rule the
+ * transcript now keeps: that the block is indented, and that indenting it did
+ * not re-encode it.
+ */
+describe("a tool call's arguments", () => {
+  function withArgs(args: string): PhaseRecord {
+    return phase({
+      roundsUsed: 1,
+      narration: [{ round: 1, reasoning: "", content: "Working." }],
+      tools: [
+        {
+          name: "read_file",
+          round: 1,
+          args,
+          result: "contents",
+          failed: false,
+          durationMs: 0,
+          origin: "builtin",
+          server: "",
+        },
+      ],
+    });
+  }
+
+  function openedArgs(args: string): string {
+    render(<PhaseCard record={withArgs(args)} defaultOpen />);
+    // The row mounts its blocks only while open — a closed tool row must not
+    // put its result into the round's text — so the click is the test's own
+    // reader opening it.
+    fireEvent.click(screen.getByRole("button", { name: /^read_file/ }));
+    return screen.getByRole("region", { name: "read_file — arguments" }).textContent ?? "";
+  }
+
+  test("are indented, one key to a line", () => {
+    expect(openedArgs('{"path":"a.go","limit":10}')).toContain(
+      '{\n  "path": "a.go",\n  "limit": 10\n}',
+    );
+  });
+
+  test("keep an id too wide for a double exactly as the engine wrote it", () => {
+    // Decoded and re-encoded by the browser this reads 9007199254740992 — an
+    // id off by one, on the screen whose job is to say which object a tool
+    // was called on. lib/jsontext.ts is why it does not.
+    expect(openedArgs('{"id":9007199254740993}')).toContain('"id": 9007199254740993');
+  });
+
+  test("show arguments that are not a JSON document at all, untouched", () => {
+    expect(openedArgs("not json")).toContain("not json");
   });
 });

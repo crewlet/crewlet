@@ -63,7 +63,8 @@ import {
   tsKey,
 } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import type { SandboxEntry, SandboxRun, SandboxStatus } from "~/protocol/index.ts";
+import { indentJSON } from "~/lib/jsontext.ts";
+import type { BridgeCall, SandboxEntry, SandboxRun, SandboxStatus } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -763,66 +764,111 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
         )}
         <div className="list">
           {calls.map((call, i) => (
-            <Disclosure
-              key={`${call.at}:${i}`}
-              title={
-                <span className="row gap-2 baseline">
-                  <code className="inline">{call.name}</code>
-                  {call.failed && <Tag variant="danger">failed</Tag>}
-                  <span className="spacer" />
-                  <span className="t-caption">{fmtTime(call.at)}</span>
-                </span>
-              }
-            >
-              <div className="col gap-2">
-                {/* ARGUMENTS ARE JSON TEXT ON THE WIRE, never a decoded map —
-                    a large id survives one encoder pass and not two — so they
-                    are rendered as the text they are rather than re-encoded
-                    into a shape the engine never wrote. */}
-                <div className="col gap-1">
-                  <div className="t-label">Arguments</div>
-                  {/* `plain` DROPS THE HEADER, which is the opposite of what
-                      the word meant on the block this replaced — there it
-                      turned wrapping off, which is `wrap` here. The header
-                      goes because the disclosure above already carries the
-                      tool's name and its own copy control; the columns stay
-                      because arguments are aligned JSON.
-
-                      `focusWhenScrollable` rather than `selectable`: a
-                      bridged tool's arguments are not this screen's
-                      select-all subject, and a tab stop in front of each of
-                      two hundred three-line blocks is worse than none. The
-                      block measures its own box and takes the stop only when
-                      it actually scrolls, which is a fact about the viewport
-                      rather than about this call. */}
-                  <CodeBlock
-                    plain
-                    wrap={false}
-                    maxHeight={RECORD_MAX_HEIGHT}
-                    focusWhenScrollable
-                    label={`${call.name} arguments`}
-                    code={call.args || "(none)"}
-                  />
-                </div>
-                <div className="col gap-1">
-                  <div className="t-label">{call.failed ? "Error" : "Result"}</div>
-                  {/* WRAPS, unlike the arguments above and for the reason the
-                      phase card gives: a result is a message, a stack trace
-                      or a wall of prose, and a sideways scrollbar on one of
-                      those is a line nobody finds the end of. */}
-                  <CodeBlock
-                    plain
-                    maxHeight={RECORD_MAX_HEIGHT}
-                    focusWhenScrollable
-                    label={`${call.name} ${call.failed ? "error" : "result"}`}
-                    code={call.output || "(nothing returned)"}
-                  />
-                </div>
-              </div>
-            </Disclosure>
+            <BridgeCallRow key={`${call.at}:${i}`} call={call} />
           ))}
         </div>
       </div>
     </Card>
+  );
+}
+
+/**
+ * One bridged call's two records, formatted.
+ *
+ * INSIDE the lazy disclosure, and that placement is the point. `useMemo` in
+ * the row above would run for every row the moment the log rendered, because
+ * `lazy` defers a disclosure's CHILDREN and not its parent's body — so a run
+ * at the engine's bound of two hundred calls parsed every argument and every
+ * result, results included, before the reader opened one of them.
+ */
+function BridgeCallRecords({ call }: { call: BridgeCall }) {
+  // JSON TEXT ON THE WIRE, never a decoded map — a large id survives one
+  // encoder pass and not two — so it is INDENTED rather than re-encoded.
+  // `indentJSON` walks the text and copies every literal across byte for
+  // byte, which is what keeps that property while still putting each argument
+  // on its own line; its own doc has the rest. The engine records this
+  // compactly (`tools.RecordArgs`), so without it the whole call is one line
+  // however many arguments it had.
+  const args = useMemo(() => indentJSON(call.args ?? ""), [call.args]);
+  // A BRIDGED TOOL'S ANSWER is a JSON document as often as the call was, and
+  // what is not one comes back untouched.
+  const output = useMemo(() => indentJSON(call.output ?? ""), [call.output]);
+  return (
+    <div className="col gap-2">
+      <div className="col gap-1">
+        <div className="t-label">Arguments</div>
+        {/* `plain` DROPS THE HEADER, which is the opposite of what the word
+            meant on the block this replaced — there it turned wrapping off,
+            which is `wrap` here. The header goes because the disclosure above
+            already carries the tool's name and its own copy control.
+
+            WRAPPING STAYS ON, as it is by default, and indenting is what makes
+            that the right answer: these arguments used to be called aligned
+            JSON, which one minified line never was. Indented, the newlines
+            carry the structure and the only thing that can overrun the box is
+            one long string value — a line nobody finds the end of, which is
+            the case wrapping exists for.
+
+            `focusWhenScrollable` rather than `selectable`: a bridged tool's
+            arguments are not this screen's select-all subject, and a tab stop
+            in front of each of two hundred short blocks is worse than none.
+            The block measures its own box and takes the stop only when it
+            actually scrolls, which is a fact about the viewport rather than
+            about this call. */}
+        <CodeBlock
+          plain
+          maxHeight={RECORD_MAX_HEIGHT}
+          focusWhenScrollable
+          label={`${call.name} arguments`}
+          code={args || "(none)"}
+        />
+      </div>
+      <div className="col gap-1">
+        <div className="t-label">{call.failed ? "Error" : "Result"}</div>
+        <CodeBlock
+          plain
+          maxHeight={RECORD_MAX_HEIGHT}
+          focusWhenScrollable
+          label={`${call.name} ${call.failed ? "error" : "result"}`}
+          code={output || "(nothing returned)"}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One bridged call, opened.
+ *
+ * ITS OWN COMPONENT so the indenting below can be memoised: a run's log runs
+ * to two hundred of these, and `useMemo` is not available inside a `map`.
+ */
+function BridgeCallRow({ call }: { call: BridgeCall }) {
+  return (
+    <Disclosure
+      title={
+        <span className="row gap-2 baseline">
+          <code className="inline">{call.name}</code>
+          {call.failed && <Tag variant="danger">failed</Tag>}
+          <span className="spacer" />
+          <span className="t-caption">{fmtTime(call.at)}</span>
+        </span>
+      }
+      // A LOGGED CALL IS NOT A SECTION OF THE PAGE. uilet wraps a disclosure's
+      // trigger in a real heading by default, which is right for this screen's
+      // own cards and wrong for a tool call: the engine bounds this log at two
+      // hundred, so the default puts two hundred headings into the document
+      // outline of one run. The phase card reached the same conclusion about
+      // its own rows.
+      headingLevel="none"
+      // MOUNTED ON OPENING, for the reason uilet gives the flag: a closed row
+      // is two code blocks nobody asked for, each measuring its own box, two
+      // hundred times over. Closed again they unmount and take their scroll
+      // position with them, which is the whole of the trade here — a record
+      // block holds no other state.
+      lazy
+    >
+      <BridgeCallRecords call={call} />
+    </Disclosure>
   );
 }

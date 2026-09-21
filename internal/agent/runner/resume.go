@@ -2,7 +2,6 @@ package runner
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -299,19 +298,14 @@ func (r *Runner) recordSuspension(round int, surface *tools.Surface,
 // ledger renders from.
 //
 // The ledger elides PER VALUE, so it needs the map; the execution row carries
-// the string because that is what the dashboard reads. Unparseable input
-// yields nil rather than an error: a resumed turn's prior-work ledger losing
-// one call's arguments is a worse-rendered line, while failing the resume over
-// it loses the whole conversation.
+// the string because that is what the dashboard reads. [tools.ReadArgs] owns
+// both halves of that contract — json.Number so the id the string was written
+// to preserve survives this decode too, and nil on anything unreadable rather
+// than an error, because a resumed turn's prior-work ledger losing one call's
+// arguments is a worse-rendered line while failing the resume over it loses
+// the whole conversation.
 func decodeArgs(raw string) map[string]any {
-	if raw == "" {
-		return nil
-	}
-	var args map[string]any
-	if err := json.Unmarshal([]byte(raw), &args); err != nil {
-		return nil
-	}
-	return args
+	return tools.ReadArgs(raw)
 }
 
 // loadedSkills is what the running phase's guard has unlocked, or nil where
