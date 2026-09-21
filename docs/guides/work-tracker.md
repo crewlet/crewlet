@@ -489,7 +489,7 @@ default assignee are the **lead's**, and archiving the project
 itself takes a person's own credential. Every one of those is gated inside the
 verb, and each refusal names who can.
 
-An operator holds the same fourteen and more that no seat does, including the
+An operator holds the same thirteen and more that no seat does, including the
 two below. `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. A
 removal hides an item from every list and board and destroys nothing — its

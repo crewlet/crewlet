@@ -348,13 +348,14 @@ func historyNotified(t *testing.T, r *roundTrip, kind, id string) bool {
 // gets an opener, a key and a **By:** with nothing between them saying what
 // the person did — which is the one thing the wake exists to carry.
 //
-// It covered twenty of the twenty-eight kinds and nothing connected the two
-// lists, so the gap was invisible from both ends. Of the eight missing, seven
-// never reach it — `Prompt.Build` dispatches on [MetaObject] first, so a
-// person's queue renders through [buildObjectPrompt], and the project, policy,
-// view and catalogue kinds are not routable at all.
-// The twelfth was `purged`: task-subject, routable, and rendering no line for
-// the one operation in this engine that cannot be undone.
+// `changeLead` names twenty of the twenty-seven kinds and nothing connected
+// the two lists, so the gap was invisible from both ends. The seven it does
+// not name never reach it — `Prompt.Build` dispatches on [MetaObject] first,
+// so the two person-subject kinds render through [buildObjectPrompt], and the
+// project, policy, view and catalogue kinds are not routable at all.
+// The one that DID reach it and rendered nothing was `purged`: task-subject,
+// routable, and silent for the one operation in this engine that cannot be
+// undone, which is the case this test was written for.
 //
 // THE WALK IS OVER [tracker.ChangeKinds] rather than a list here, so a kind
 // added later is covered without anybody remembering to — which is the half

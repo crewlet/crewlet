@@ -993,9 +993,9 @@ func (q *Query) parseTotals(p Params) error {
 //
 // # Why one grammar and not one per question
 //
-// Thirteen registered questions take a level and a staleness bound, and
+// Seventeen registered questions take a level and a staleness bound, and
 // exactly ONE of them — the task board, which happens to be the one that goes
-// through [ParseQuery] — used to read either. The other twelve hardcoded a
+// through [ParseQuery] — used to read either. The rest hardcoded a
 // level and never looked at a bound at all, so a caller asking a project
 // listing for a fresher answer was served the same one and told it came back
 // at the level asked for. One grammar serves the board, the socket, the REST

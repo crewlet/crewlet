@@ -779,7 +779,7 @@ func (r MutationRecord) Encode() ([]byte, error) {
 // kind has variants.
 type ChangeKind string
 
-// The twenty-eight, and each constant IS its wire value: a kind is written into
+// The twenty-seven, and each constant IS its wire value: a kind is written into
 // every history row and onto every notification the log carries, so these
 // spellings are stored data in every company already running this build.
 // A kind added here goes into [ChangeKinds] in the same change: that slice is
