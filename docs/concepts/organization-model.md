@@ -21,6 +21,51 @@ Three things on this page are derived and therefore stored nowhere:
 - **Who manages a seat**, which is the other end of an edge only one end of
   which is authored.
 
+### What a structural change is, and what it refuses
+
+A change to the *shape* of the company — a hire, a move, a promotion, a team
+dissolved — is a **batch**: an ordered list of operations that lands as one
+arbitrated record, so exactly one batch at a time can change the chart. It is
+refused **whole**, naming the **first** operation that failed and the rule it
+broke, because a batch that applied what it could and skipped the rest would
+produce half a reorganisation with no record of which half — and which half
+would depend on the order you happened to write them in.
+
+The operations are `create_unit`, `create_seat`, `move`, `set_lead` and
+`remove`. Each is checked against the state the ones **before it** produced,
+which is the only reading under which the ordinary ways of editing a chart
+work:
+
+- **A parent an earlier operation created is a parent.** Building a department,
+  then a team inside it, then a seat inside that is one gesture and must be one
+  batch.
+- **A unit emptied by one operation can be removed by the next.** "Move
+  everybody out, then dissolve the team" is likewise one gesture.
+
+And it is the only reading under which the dangerous case is caught:
+
+- **A cycle the batch's own moves close is refused.** Moving Engineering under
+  Platform is fine while Platform is at the root; moving Platform under
+  Engineering is fine while Engineering is at the root. Together they put each
+  under the other, and no per-object check would ever have shown either writer
+  the other's move. This is why the whole structure arbitrates on one subject.
+
+The rest of the rules:
+
+| Refused | Why |
+|---|---|
+| A create onto a key something already holds | Two objects on one address |
+| A create onto a key a removal **retired** | A removed address never resolves again — its history, its references and the tombstone that stops its old records applying are all keyed on it. Its own rule, because the remedy differs: a taken key needs a different name, a removed one can never be used at all |
+| A placement under a unit nothing creates | A reference to a parent that is not there, and will not be |
+| Removing a unit that still holds children or seats | An orphaned subtree is reachable from nothing and removable by nothing |
+| A reserved key (`root`, `tree`, `barrier`) | Each already means something: the org root, and two of this log's own subject kinds |
+| More than 500 operations | One batch is one record, and a record past the broker's maximum payload is refused **permanently** with no retry that can place it. Submit several batches; each is arbitrated on its own |
+
+A **removal is its own record** and cannot ride with a placement, because a
+removal installs a gate and that has to be answerable without reading the
+record's contents. A batch that does both is refused, telling you to publish
+the placements first.
+
 ---
 
 ## Flexible Hierarchy

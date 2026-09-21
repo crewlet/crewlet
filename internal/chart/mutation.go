@@ -390,3 +390,30 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 		},
 	})
 }
+
+// unit is this payload as the stored shape, for the value rules.
+//
+// THE CAPS LIVE ON THE STORED SHAPE and are checked through it rather than
+// restated here, because a payload and the row it becomes must agree about
+// what is too long: a rule written twice is a value one side accepts and the
+// other refuses, and the side that refuses is the applier — where a refusal
+// stops that object's every later change on every node.
+func (u UnitPayload) unit() Unit {
+	return Unit{
+		V: DocumentVersion, Key: NormalizeKey(u.Key), Name: u.Name,
+		Type: u.Type, Purpose: u.Purpose, Goals: u.Goals,
+		Channel: u.Channel, Project: u.Project, Space: u.Space,
+		KnowledgeRefs: u.KnowledgeRefs,
+	}
+}
+
+// seat is this payload as the stored shape. See [UnitPayload.unit].
+func (s SeatPayload) seat() Seat {
+	return Seat{
+		V: DocumentVersion, Handle: NormalizeKey(s.Handle), Kind: s.Kind,
+		Name: s.Name, Email: s.Email, Backstory: s.Backstory, Goal: s.Goal,
+		Responsibilities:     s.Responsibilities,
+		BehavioralGuidelines: s.BehavioralGuidelines,
+		Project:              s.Project, Space: s.Space,
+	}
+}

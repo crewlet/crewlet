@@ -42,6 +42,46 @@ _secrets (a coordination KV bucket, no TTL)
 
 The bucket has **no TTL**, unlike the delivery dedupe and the notification valve beside it. Retention elsewhere in coordination is a bucket's age; a credential is not short-horizon state, and an expiring secret is an outage on a timer.
 
+### What the org chart puts here, and what it deliberately does not
+
+The company's **settings** are sealed as one whole document: per-field sealing
+looks tidier and leaks the shape, and which integrations you run is structure.
+The **org chart** is not a document any more — it is an ordered log, one record
+per object, arbitrated on a subject that *is* a unit key or a seat handle — so
+its shape is on the wire whatever this store does, and sealing it that way
+would put every writer of the chart back on one lock.
+
+So the chart makes its own trade, and states it rather than inheriting one:
+
+- **The structure is plaintext.** Keys, handles, parents and leads are subjects
+  and scope paths. Anyone who can read the broker can see the shape of your
+  company, and no setting changes that.
+- **A secret-tagged value is never plaintext.** A literal credential written to
+  a seat or a unit is sealed into this store under a name derived from the
+  object and the field, and the record carries a `${VAR}` **reference**. The
+  value reaches the store and never the log, the rows, a snapshot or a backup
+  of either. A write that hands a literal to a node with no secret store is
+  **refused** rather than stored.
+- **A whole `${VAR}` is stored as written.** It names a credential rather than
+  being one, it is what you edit, and sealing it would put a pointer inside the
+  store and a pointer to that pointer on the record.
+- **A person's own fields ride under a key that can be deleted.** A human
+  seat's name, address and contact identities are personal data rather than
+  company structure. Deleting that one key makes every copy of those fields —
+  in every node's rows, in every snapshot, in the log itself — unreadable,
+  which is the only erasure a write-ahead log can actually offer.
+
+**An address is still searchable, through a blind index.** A vendor payload
+carries an email and something has to turn it into a seat. The column holds a
+*keyed hash* instead of the address: every node computes the same value under
+the fleet's own key, so the lookup is one indexed read, and the column reveals
+nothing without that key. It is keyed rather than a plain digest because an
+email address has far too little entropy for an unkeyed hash to hide — the
+whole corpus of plausible addresses at one company is enumerable in seconds.
+What it costs is stated too: it answers **equality and nothing else**. There is
+no prefix search, no domain filter, no ordering, and a screen that wants
+"everyone at example.com" cannot have it from this column.
+
 At boot the engine loads every record into a process-local snapshot and installs it as the **secret source**. From then on `${VAR}` resolution asks the store first and falls back to the process environment:
 
 ```mermaid

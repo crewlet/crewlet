@@ -662,6 +662,17 @@ Every configuration read **redacts** credentials: `GET /config` (JSON and `?form
 
 A redacted `GET`, an edited field and a full-document `PUT` round-trip safely: the write path swaps each marker back to the currently stored value before validating, so a round trip never clobbers or exposes a credential. To *change* one, supply the new value (or a `${VAR}`) at that field.
 
+**Where each rule is checked now that the chart is a log.** The masking rule is one rule and it applies to both halves of a company's configuration, but the two check it in different places because one is a document and the other is not:
+
+| | The **settings** document | The **org chart** |
+|---|---|---|
+| What holds it | One sealed revision in the store | An ordered log, one record per object |
+| Where a mask is restored | On the write path, against the currently stored revision, before validation | Inside the **decide's own snapshot**, against the row the write patches |
+| Why there | The document has one version, so "the prior" is one thing | The row has its own writers. A restore taken before the snapshot pairs a value read at one instant with an expectation formed at another, and the broker accepts exactly that pair — so a colleague who rotated the credential between the two would have their rotation silently undone |
+| A mask with no prior value | Left standing, and the write is refused naming the field | Refused naming the field |
+
+Both refuse rather than store the marker, and for one reason: a credential replaced by the eight characters `__redacted__` fails hours later, at a vendor, naming nothing.
+
 **Members are matched by identity, not by position.** Matching by position meant a pure reorder handed each seat its neighbour's credentials, silently, since the lengths still agreed and no marker was left standing to refuse. So every member that can name itself is matched by that name:
 
 - **A seat by its handle, and a unit by its key, anywhere in the document.** One index covers the whole stored revision, so a seat moved from the root into a unit, from one unit to another, or back to the root keeps its credentials, and so does a unit moved under another unit. Reordering the roster, or adding a seat, restores every other member's credentials.
