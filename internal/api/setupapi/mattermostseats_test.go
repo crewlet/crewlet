@@ -53,11 +53,7 @@ func mattermostSeats(t *testing.T, s *surface) map[string]map[string]any {
 func TestTheMattermostRosterNamesEveryAgentsBot(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", mattermostDoc,
-		map[string]string{"X-Summary": "a company mid-rollout"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, mattermostDoc)
 	if err := s.vault.Set(t.Context(), "SRE_MATTERMOST_TOKEN", "a-real-bot-token",
 		"test", "test", pinned); err != nil {
 		t.Fatal(err)

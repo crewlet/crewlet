@@ -14,11 +14,21 @@ import (
 // REPLACEABLE through this surface, and nothing that would RUN it accepts it.
 
 // refusedByThisBuild makes a stored document this build's validator refuses:
-// a seat naming a model provider the company does not configure.
+// a delegate template naming a model provider the company does not configure.
+//
+// A SETTINGS RULE, deliberately. It used to be a SEAT naming a missing
+// provider, which was the same rule one field along — but a seat is the org
+// chart's now and a stored revision carries none, so the fixture was making a
+// document this surface can no longer be given. A worker template is the same
+// shape of mistake in the half a revision still holds.
 func refusedByThisBuild(document map[string]any) {
-	roles, _ := document["roles"].([]any)
-	seat, _ := roles[1].(map[string]any)
-	seat["llm"] = "nonexistent"
+	document["workers"] = map[string]any{
+		"researcher": map[string]any{
+			"description":   "reads sources and reports findings with citations",
+			"system_prompt": "You research.",
+			"model":         "nonexistent",
+		},
+	}
 }
 
 // A REVISION THIS BUILD REFUSES IS STILL SERVED.
@@ -37,7 +47,6 @@ func TestAStoredRevisionThisBuildRefusesIsStillServed(t *testing.T) {
 		"/config/revisions/" + id,
 		"/config/revisions/" + id + "/diff?against=active",
 		"/config/references",
-		"/config/roles/cto",
 	} {
 		res := s.do(t, http.MethodGet, path, "", nil)
 		if res.Code != http.StatusOK {
@@ -89,8 +98,9 @@ func TestAPatchReplacesARevisionThisBuildRefusesOnlyWhenItCorrectsIt(t *testing.
 	}
 
 	fixed := s.do(t, http.MethodPatch, "/config",
-		`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu"},
-		            {"name": "CTO", "handle": "cto", "llm": "zulu"}]}`,
+		`{"workers": {"researcher": {"description": "reads sources and reports
+		    findings with citations", "system_prompt": "You research.",
+		    "model": "zulu"}}}`,
 		summaryHeader)
 	if fixed.Code != http.StatusCreated {
 		t.Fatalf("a correcting PATCH = %d, want 201: %s", fixed.Code, fixed.Body)
@@ -140,6 +150,10 @@ func TestReloadAndRevertRefuseARevisionThisBuildCannotRun(t *testing.T) {
 // called "Platform" in different departments, each holding a seat called
 // "Engineer" on its own explicit handle. A build before those rules admitted
 // it, and a company running on it runs.
+//
+// IT IS A PRE-SPLIT REVISION, which is the second thing it is for here: it
+// carries `units:` inside the stored document, which is exactly the shape this
+// door now refuses to be given BACK.
 const duplicateNamesDoc = companyDoc + `
 units:
   - name: Engineering
@@ -154,20 +168,35 @@ units:
           - {name: Engineer, handle: product-engineer, llm: zulu}
 `
 
-// correctedUnits is the same organization with every name unique.
-const correctedUnits = `{"units": [
-  {"name": "Engineering", "children": [{"name": "Engineering Platform",
-    "roles": [{"name": "Platform Engineer", "handle": "platform-engineer", "llm": "zulu"}]}]},
-  {"name": "Product", "children": [{"name": "Product Platform",
-    "roles": [{"name": "Product Engineer", "handle": "product-engineer", "llm": "zulu"}]}]}]}`
+// oldChartDoc is a revision written before the chart's split, breaking no
+// rule: it is what a patch that names only settings has to keep working over.
+const oldChartDoc = companyDoc + `
+units:
+  - name: Engineering
+    id: engineering
+    roles:
+      - {name: Engineer, handle: engineer, llm: zulu}
+`
 
-// A STORED REVISION WITH DUPLICATE NAMES IS SERVED, AND A NEW WRITE KEEPING
-// THEM IS REFUSED, WHILE ONE CORRECTING THEM IS ACCEPTED.
+// A STORED REVISION CARRYING AN OLD CHART IS SERVED AND RE-ACTIVATED, AND
+// EVERY WRITE THAT WOULD CARRY IT FORWARD IS REFUSED NAMING THE CHART.
 //
-// The admission rules are the rules a company written before them breaks.
-// Such a company has to stay readable and repairable, and nothing may add a
-// fresh duplicate or carry an old one forward through a write.
-func TestDuplicateNamesAreServedStoredAndRefusedOnAWrite(t *testing.T) {
+// # What this case is now about
+//
+// It used to be about the two ADMISSION RULES on duplicate names: a company
+// written before them stays readable and repairable, and no write may carry a
+// duplicate forward. Those rules are the CHART's now, and they are checked
+// where a chart is written — [config.Company.ValidateAdmission] over an
+// authored file, and the chart's own batch validator over a record. This
+// surface stopped deciding them, so a test asserting them here would be
+// asserting a rule no code at this door runs.
+//
+// What is left is the half this door DOES decide, and it is the more
+// important half: a pre-split revision is still a real revision. It is served,
+// it is diffable, it is re-activatable — and the moment a caller sends any of
+// it BACK, the write is refused by name, because storing it again would write
+// a chart into a settings revision every node then refuses to apply.
+func TestAnOldChartIsServedAndNeverWrittenBack(t *testing.T) {
 	t.Parallel()
 
 	t.Run("served", func(t *testing.T) {
@@ -185,63 +214,67 @@ func TestDuplicateNamesAreServedStoredAndRefusedOnAWrite(t *testing.T) {
 		}
 	})
 
-	t.Run("a PUT keeping them is refused and a corrected one lands", func(t *testing.T) {
+	t.Run("a PUT sending it back is refused naming the chart", func(t *testing.T) {
 		t.Parallel()
 		s := newSurface(t, nil)
 		s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
 
-		kept := s.do(t, http.MethodPut, "/config", duplicateNamesDoc, map[string]string{"X-Summary": "keep"})
+		kept := s.do(t, http.MethodPut, "/config", duplicateNamesDoc,
+			map[string]string{"X-Summary": "keep"})
 		if kept.Code != http.StatusBadRequest {
-			t.Fatalf("a PUT keeping duplicate names = %d, want 400: %s", kept.Code, kept.Body)
+			t.Fatalf("a PUT carrying the old chart = %d, want 400: %s", kept.Code, kept.Body)
 		}
 		body := decode(t, kept)
-		detail, _ := body["detail"].(string)
-		if body["error"] != "validation_error" ||
-			!strings.Contains(detail, "duplicate unit name") || !strings.Contains(detail, "duplicate seat name") {
-			t.Errorf("the refusal does not name both rules: %v", body)
+		if body["error"] != "chart_not_writable_here" {
+			t.Errorf("error = %v, want chart_not_writable_here: %v", body["error"], body)
 		}
-
-		var corrected map[string]any
-		if err := json.Unmarshal([]byte(correctedUnits), &corrected); err != nil {
-			t.Fatal(err)
-		}
-		document := companyDoc + "\nunits: " + mustJSON(t, corrected["units"]) + "\n"
-		res := s.do(t, http.MethodPut, "/config", document, map[string]string{"X-Summary": "correct"})
+		// THE SETTINGS ALONE STILL LAND, which is what makes the
+		// refusal a redirection rather than a wall: the operator's own
+		// half of the document is writable at this door exactly as it
+		// always was.
+		res := s.do(t, http.MethodPut, "/config", companyDoc,
+			map[string]string{"X-Summary": "the settings alone"})
 		if res.Code != http.StatusCreated {
-			t.Fatalf("a corrected PUT = %d, want 201: %s", res.Code, res.Body)
+			t.Fatalf("a settings-only PUT = %d, want 201: %s", res.Code, res.Body)
 		}
 	})
 
-	t.Run("a PATCH keeping them is refused and a correcting one lands", func(t *testing.T) {
+	t.Run("a PATCH naming a unit is refused and one naming a setting lands", func(t *testing.T) {
 		t.Parallel()
+		// A PRE-SPLIT REVISION THAT BREAKS NO RULE, unlike the duplicate
+		// one above: a patch is validated as the merged document, so a
+		// base carrying an admission break is refused for THAT whatever
+		// the patch says — which would make the second half of this case
+		// pass for the wrong reason.
 		s := newSurface(t, nil)
-		s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
+		s.seedStored(t, oldChartDoc, func(map[string]any) {})
 
-		kept := s.do(t, http.MethodPatch, "/config", `{"mission": "unrelated"}`, summaryHeader)
-		if kept.Code != http.StatusBadRequest {
-			t.Fatalf("a PATCH keeping duplicate names = %d, want 400: %s", kept.Code, kept.Body)
+		chart := s.do(t, http.MethodPatch, "/config",
+			`{"units": [{"name": "Engineering", "id": "engineering"}]}`, summaryHeader)
+		if chart.Code != http.StatusBadRequest {
+			t.Fatalf("a PATCH naming units = %d, want 400: %s", chart.Code, chart.Body)
 		}
-		res := s.do(t, http.MethodPatch, "/config", correctedUnits, summaryHeader)
+		if got := decode(t, chart)["error"]; got != "chart_not_writable_here" {
+			t.Errorf("error = %v, want chart_not_writable_here", got)
+		}
+		// AND THE PATCH IS JUDGED ON WHAT THE CALLER SENT: this base
+		// still holds a chart, and a patch that does not name it is
+		// accepted with the chart carried through untouched. Judging
+		// the MERGE would refuse an operator editing a mission for a
+		// chart they neither sent nor can see.
+		res := s.do(t, http.MethodPatch, "/config", `{"mission": "ship it"}`, summaryHeader)
 		if res.Code != http.StatusCreated {
-			t.Fatalf("a correcting PATCH = %d, want 201: %s", res.Code, res.Body)
+			t.Fatalf("a settings-only PATCH = %d, want 201: %s", res.Code, res.Body)
 		}
-		if document := s.activeDocument(t); !strings.Contains(document, "Engineering Platform") {
-			t.Errorf("the correction did not land: %s", document)
-		}
-	})
-
-	t.Run("a PUT introducing them is refused", func(t *testing.T) {
-		t.Parallel()
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
-		res := s.do(t, http.MethodPut, "/config", duplicateNamesDoc, map[string]string{"X-Summary": "add"})
-		if res.Code != http.StatusBadRequest {
-			t.Fatalf("a PUT introducing duplicate names = %d, want 400: %s", res.Code, res.Body)
+		if document := s.activeDocument(t); !strings.Contains(document, "ship it") {
+			t.Errorf("the patch did not land: %s", document)
 		}
 	})
 
 	// A reload and a revert are applies, held to the runnable rules only: a
-	// credential rotation on a company carrying an old duplicate must work.
+	// credential rotation on a company carrying an old chart must work,
+	// because those two re-publish bytes that are already stored rather than
+	// writing anything a caller sent.
 	t.Run("a reload and a revert of it are accepted", func(t *testing.T) {
 		t.Parallel()
 		s := newSurface(t, nil)
@@ -276,20 +309,19 @@ func mustJSON(t *testing.T, v any) string {
 //
 // The strict reader refuses the merged document for the peer's field, and the
 // fallback reads it with the stored-form decoder. That fallback validated, and
-// validation runs before the masks are restored, so any PATCH carrying a roles
-// array read from GET /config (every seat's literal credential masked) was
-// refused as an invalid patch naming the masks.
+// validation runs before the masks are restored, so any PATCH carrying a list
+// read from GET /config (every member's literal credential masked) was refused
+// as an invalid patch naming the masks.
 func TestAPatchOverAPeerExtendedDocumentRestoresMasksBeforeValidating(t *testing.T) {
 	t.Parallel()
-	const literal = "per-seat-literal-token"
+	const literal = "per-server-literal-token"
 	doc := companyDoc + `
 mcp_servers:
   - name: tracker
     command: tracker-mcp
     shared: false
+    env: {TOKEN: ` + literal + `}
 `
-	doc = strings.Replace(doc, "    handle: ceo\n    llm: zulu\n",
-		"    handle: ceo\n    llm: zulu\n    mcp_env:\n      tracker: {TOKEN: "+literal+"}\n", 1)
 	s := newSurface(t, nil)
 	s.seedStored(t, doc, func(document map[string]any) {
 		document["a_setting_from_a_newer_build"] = map[string]any{"depth": 3}
@@ -303,15 +335,15 @@ mcp_servers:
 	if err := json.Unmarshal(read.Body.Bytes(), &served); err != nil {
 		t.Fatal(err)
 	}
-	roles, err := json.Marshal(map[string]any{"roles": served["roles"]})
+	servers, err := json.Marshal(map[string]any{"mcp_servers": served["mcp_servers"]})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(roles), "__redacted__") {
-		t.Fatalf("the roles carry no mask, so this proves nothing: %s", roles)
+	if !strings.Contains(string(servers), "__redacted__") {
+		t.Fatalf("the servers carry no mask, so this proves nothing: %s", servers)
 	}
 
-	res := s.do(t, http.MethodPatch, "/config", string(roles), summaryHeader)
+	res := s.do(t, http.MethodPatch, "/config", string(servers), summaryHeader)
 	if res.Code != http.StatusCreated {
 		t.Fatalf("PATCH = %d, want 201: %s", res.Code, res.Body)
 	}

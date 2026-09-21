@@ -353,6 +353,14 @@ whatever the fleet is running. And to change a **running** fleet with no
 restart at all, use `crewlet config import company.yaml` — it goes through the
 node's API and every node converges on it.
 
+Both of those write the file's **settings**. A company file also carries the
+org chart — its `roles:` and `units:` — and that is a domain of its own, with
+its own records and its own history (see
+[The org chart domain](../concepts/chart-domain.md)). A first deployment gets
+its chart from the file, seeded by `crewlet run -company` when the chart is
+empty; after that the chart belongs to whoever edits it, and `config import`
+says plainly that the file's units and seats were not published.
+
 A running node always serves the store, not the file.
 
 **Or two steps** — import once, then run:
@@ -501,7 +509,7 @@ Automating a deployment means driving `crewlet` and the REST API:
 
 ```bash
 crewlet validate                       # check both tiers in CI
-crewlet config import company.yaml     # write a new active revision
+crewlet config import company.yaml     # write a new active revision (settings)
 crewlet run                            # start the node
 ```
 

@@ -104,7 +104,14 @@ func danglingLines(t *testing.T, logs *bytes.Buffer) []danglingLine {
 func TestDanglingReferencesAreLoggedOncePerAppliedEpoch(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	p := newPlane(t, func(o *engine.ReconcilerOptions) {
+	// THE REFERENCES ARE ON THE CHART, which is where they live: a lead and
+	// a `manages:` entry name a seat, and seats are the chart's. So the
+	// engine boots on this document and its seed puts the dangling ones on
+	// the log — the revisions activated below carry the SETTINGS, and a
+	// settings document has nothing to resolve.
+	p := planeFor(t, newEngine(t, engine.Options{
+		Company: parsedCompany(t, danglingCompanyDoc),
+	}), func(o *engine.ReconcilerOptions) {
 		o.Log = slog.New(slog.NewJSONHandler(&logs, nil))
 	})
 

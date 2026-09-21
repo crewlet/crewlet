@@ -59,11 +59,7 @@ func detailOf(t *testing.T, s *surface, kind string) string {
 func TestAWorkingSeatNamesTheAccountItIsAtEachApp(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	// Every seat credential sealed, because the identity is shown only over
 	// a seat that works: a derived name is what the engine WOULD create
 	// rather than proof it did.
@@ -103,11 +99,7 @@ func TestAWorkingSeatNamesTheAccountItIsAtEachApp(t *testing.T) {
 func TestASeatWithNothingSealedNamesNoAccount(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a company mid-setup"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 
 	for _, kind := range []string{"gitlab", "datadog", "mattermost", "jira"} {
 		got := detailOf(t, s, kind)

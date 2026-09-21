@@ -208,6 +208,11 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	applied = append(applied, "company")
+	// COMPOSED WITH THIS NODE'S CHART BEFORE ANY STAGE RUNS. The revision
+	// carries the SETTINGS and the org chart is a log of its own, so the
+	// company this apply just built has no seats in it at all — and every
+	// stage below wires against a roster. See [epoch.withView].
+	next = e.epoch.withView(next)
 	// Equipped before it is published, for the same reason as at boot: a
 	// turn can start the instant the pointer moves, and a revision that
 	// silently dropped every builtin would look like a model that stopped

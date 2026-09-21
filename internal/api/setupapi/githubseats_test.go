@@ -33,11 +33,7 @@ const githubAppsDoc = `{
 // seedGitHubApps imports that company and seals the one key that resolves.
 func (s *surface) seedGitHubApps(t *testing.T) {
 	t.Helper()
-	res := s.do(t, http.MethodPut, "/config", githubAppsDoc,
-		map[string]string{"X-Summary": "a company mid-rollout"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, githubAppsDoc)
 	if err := s.vault.Set(t.Context(), "REVIEWER_GITHUB_APP_KEY",
 		"-----BEGIN RSA PRIVATE KEY-----\nnot-a-real-key\n-----END RSA PRIVATE KEY-----",
 		"test", "test", pinned); err != nil {
@@ -449,7 +445,7 @@ func TestASeatWithNoWebhookSecretHoldsNoPointerToOne(t *testing.T) {
 func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", `{
+	s.seedDocument(t, `{
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {"public_base_url": "https://engine.example.com",
@@ -459,10 +455,7 @@ func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
 	     "integrations": {"github": {"tier": "review"}}},
 	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
 	  ]
-	}`, map[string]string{"X-Summary": "one agent on GitHub, one not"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	}`)
 
 	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
 	if state["satisfied"] != false {
@@ -557,17 +550,14 @@ func TestAGitHubCardMissingACompanyAnswerStillHasABoxToFill(t *testing.T) {
 func TestADatadogSeatCarriesTheRoleItsAccountHolds(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", `{
+	s.seedDocument(t, `{
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
 	    "webhook_token": "EXAMPLEDATADOGTOKEN0000000",
 	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Datadog Standard Role"}}},
 	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
-	}`, map[string]string{"X-Summary": "datadog on a standard role"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	}`)
 
 	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/datadog", "", nil))
 	rows, _ := state["seats"].([]any)
@@ -599,17 +589,14 @@ func TestADatadogSeatCarriesTheRoleItsAccountHolds(t *testing.T) {
 func TestACustomDatadogRoleKeepsItsOwnName(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", `{
+	s.seedDocument(t, `{
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
 	    "webhook_token": "EXAMPLEDATADOGTOKEN0000000",
 	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Acme On-Call"}}},
 	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
-	}`, map[string]string{"X-Summary": "datadog on a role of our own"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	}`)
 
 	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/datadog", "", nil))
 	rows, _ := state["seats"].([]any)
@@ -670,7 +657,7 @@ func TestAGitHubToolWithNoWorkingAgentIsNotSatisfied(t *testing.T) {
 	s := newSurface(t)
 	// A COMPANY WHERE NOBODY HAS STARTED: the org block is complete and no
 	// seat has an app.
-	res := s.do(t, http.MethodPut, "/config", `{
+	s.seedDocument(t, `{
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {
@@ -679,10 +666,7 @@ func TestAGitHubToolWithNoWorkingAgentIsNotSatisfied(t *testing.T) {
 	               "provisioning": {"org": "crewbed"}}
 	  },
 	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
-	}`, map[string]string{"X-Summary": "github connected for nobody"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	}`)
 	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", "test", "test", pinned); err != nil {
 		t.Fatal(err)
 	}

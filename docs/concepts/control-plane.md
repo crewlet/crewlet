@@ -231,6 +231,20 @@ That gate is the whole of it. Seeding on every boot and letting the import ledge
 
 The seed publishes both halves — one import record for the structure, because it is one graph and has to be arbitrated whole, then each object's own content on its own subject. A seeded chart without the second half is a company of empty seats: every handle in the right unit, with no model, no credentials and no name.
 
+### An activation records the chart it ran on
+
+A company used to be one document, so "what was this company at 14:02" had one answer: the revision that was active. It has two halves now, and neither one names the other — so a revert to revision N restores the settings somebody had and says nothing about the chart they had, which is usually the half a reader is asking about: who was in which team.
+
+So a node that applies a revision stamps the **chart position it composed the epoch at** onto its own copy of that revision (`company_config.chart_position`). The pair `(revision, position)` is the company.
+
+Three things about it are worth stating, because each is a decision:
+
+- **It is written after the apply, not inside the activation.** A node flips `is_active` and composes the epoch afterwards, against whatever position its applier has reached. Recording at the flip would record the one instant the epoch has not been composed at yet.
+- **It is this NODE's own answer**, which is why it is in the node estate rather than the replicated one. One pointer flip activates a revision fleet-wide and each node reaches it at its own position: a node still replaying applies the same settings over fewer chart records. Recording one node's position as the fleet's would be a claim about peers its database never sees.
+- **A failure to write it is a log line, never a status.** The epoch is already published and serving. Reporting an error would turn a gap in the history into a revision this node reports as unapplied, and the control plane would retry an apply that has already happened.
+
+`NULL` is not zero here: a revision activated by a build before the column existed has no recorded position, and one activated on an empty chart has the answer `0`.
+
 ---
 
 ## What a running turn sees

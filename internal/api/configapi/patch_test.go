@@ -46,7 +46,7 @@ func TestAPatchChangesOnlyWhatItNames(t *testing.T) {
 	}
 	// EVERYTHING ELSE SURVIVED. A merge that replaced the document would
 	// pass the assertion above and lose the company.
-	for _, want := range []string{`"Acme"`, "zulu", "gitlab.example.com", "ceo"} {
+	for _, want := range []string{`"Acme"`, "zulu", "gitlab.example.com"} {
 		if !strings.Contains(document, want) {
 			t.Errorf("%s is gone from the document after a patch: %s", want, document)
 		}

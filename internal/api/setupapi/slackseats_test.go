@@ -45,11 +45,7 @@ func slackSeatRows(t *testing.T, s *surface) map[string]map[string]any {
 func TestASlackSeatCarriesTheManifestItsAppIsBuiltFrom(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", slackDoc,
-		map[string]string{"X-Summary": "a company with an agent"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, slackDoc)
 
 	seat := slackSeatRows(t, s)["sre-lead"]
 	if seat == nil {
@@ -99,11 +95,7 @@ func TestASlackSeatOffersNoManifestWithoutAPublicAddress(t *testing.T) {
 	s := newSurface(t)
 	doc := strings.Replace(slackDoc,
 		`"integrations": {"public_base_url": "https://engine.example.com"},`, "", 1)
-	res := s.do(t, http.MethodPut, "/config", doc,
-		map[string]string{"X-Summary": "a company with no public address"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, doc)
 
 	seat := slackSeatRows(t, s)["sre-lead"]
 	if seat == nil {
@@ -134,11 +126,7 @@ func TestAnUnresolvedBaseProducesNoManifestRatherThanALiteralOne(t *testing.T) {
 	s := newSurface(t)
 	doc := strings.Replace(slackDoc, `"public_base_url": "https://engine.example.com"`,
 		`"public_base_url": "${PUBLIC_URL}"`, 1)
-	res := s.do(t, http.MethodPut, "/config", doc,
-		map[string]string{"X-Summary": "a company whose address is a reference"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, doc)
 
 	seat := slackSeatRows(t, s)["sre-lead"]
 	if seat == nil {
@@ -167,11 +155,7 @@ func TestAResolvedBaseReferenceBuildsARealManifest(t *testing.T) {
 	s := newSurface(t)
 	doc := strings.Replace(slackDoc, `"public_base_url": "https://engine.example.com"`,
 		`"public_base_url": "${PUBLIC_URL}"`, 1)
-	res := s.do(t, http.MethodPut, "/config", doc,
-		map[string]string{"X-Summary": "a company whose address is a reference"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, doc)
 	if err := s.vault.Set(t.Context(), "PUBLIC_URL", "https://engine.example.com",
 		"test", "test", pinned); err != nil {
 		t.Fatal(err)
@@ -193,11 +177,7 @@ func TestASeatWhoseNameSlackRefusesSaysSo(t *testing.T) {
 	s := newSurface(t)
 	doc := strings.Replace(slackDoc, `"name": "SRE Lead"`,
 		`"name": "Site Reliability Engineering Team Lead For Europe"`, 1)
-	res := s.do(t, http.MethodPut, "/config", doc,
-		map[string]string{"X-Summary": "a company with a long role name"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, doc)
 
 	seat := slackSeatRows(t, s)["sre-lead"]
 	if seat == nil {
@@ -226,11 +206,7 @@ func TestASeatWhoseNameSlackRefusesSaysSo(t *testing.T) {
 func TestASlackSeatNamesTheAppItAuthenticatesAs(t *testing.T) {
 	t.Parallel()
 	s := newSurfaceWithApps(t, map[string]string{"sre-lead": "A0ACME"})
-	res := s.do(t, http.MethodPut, "/config", slackDoc,
-		map[string]string{"X-Summary": "a company with an agent"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, slackDoc)
 
 	seat := slackSeatRows(t, s)["sre-lead"]
 	if detail, _ := seat["detail"].(string); detail != "App A0ACME" {
@@ -247,11 +223,7 @@ func TestASlackSeatNamesTheAppItAuthenticatesAs(t *testing.T) {
 func TestASlackSeatWithNoKnownAppNamesItsCredential(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", slackDoc,
-		map[string]string{"X-Summary": "a company with an agent"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, slackDoc)
 
 	seat := slackSeatRows(t, s)["sre-lead"]
 	detail, _ := seat["detail"].(string)

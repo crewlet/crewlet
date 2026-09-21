@@ -62,9 +62,6 @@ type Applied struct {
 	// the revision: references that resolve to nothing, and admission rules
 	// a re-activated stored company still breaks. Never nil.
 	Warnings []config.Warning
-
-	// Derived is the hierarchy the engine derives from the revision.
-	Derived config.Derived
 }
 
 // RacedError reports that the active revision moved under the caller.
@@ -108,22 +105,21 @@ func (e *PatchError) Unwrap() error { return e.Err }
 //
 // A patch is validated as the WHOLE document it produces, so a section that
 // is fine on its own is still refused when it leaves the company invalid.
-type ValidationError struct {
-	Err error
-
-	// Derived is the hierarchy the refused document derives. A document
-	// with problems still has one, and a person fixing those problems needs
-	// to see it: a misspelled lead is easier to find in the chart it breaks.
-	Derived config.Derived
-}
+type ValidationError struct{ Err error }
 
 func (e *ValidationError) Error() string { return "configapi: " + e.Err.Error() }
 func (e *ValidationError) Unwrap() error { return e.Err }
 
 // RefusalFields is the structured half of a refused configuration document,
 // for a surface answering the refusal in its own words: the problems it
-// breaks, located and classified ([config.Problems]), and the hierarchy the
-// engine derived from it when it parsed far enough to have one.
+// breaks, located and classified ([config.Problems]).
+//
+// IT NO LONGER CARRIES A DERIVED HIERARCHY, and the reason is that a settings
+// document has none. The hierarchy came from `roles:` and `units:`, which are
+// the org chart's own domain now — so a refusal answering one would answer an
+// EMPTY chart for every company on earth, which reads as "your org chart is
+// gone" rather than as "this field is not here any more". A person placing a
+// problem on the chart reads the chart from the chart.
 //
 // ONE MAPPING for every surface a document refusal reaches, so a dashboard
 // placing problems on the chart reads the same shape from /config and from
@@ -140,7 +136,7 @@ func RefusalFields(err error) map[string]any {
 	var docErr *DocumentError
 	switch {
 	case errors.As(err, &invalid):
-		return map[string]any{"problems": config.Problems(invalid.Err), "derived": invalid.Derived}
+		return map[string]any{"problems": config.Problems(invalid.Err)}
 	case errors.As(err, &patchErr):
 		return map[string]any{"problems": config.Problems(patchErr.Err)}
 	case errors.As(err, &docErr):
@@ -236,7 +232,6 @@ type prepared struct {
 	base     string
 	document []byte
 	warnings []config.Warning
-	derived  config.Derived
 }
 
 // prepare builds and checks a write, storing nothing.
@@ -289,11 +284,10 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	}
 	// DERIVED BEFORE IT IS JUDGED, because a refusal carries it too: a
 	// document with problems still has a hierarchy.
-	derived := config.Derive(company)
 	if invalid := d.rules(company); invalid != nil {
-		return nil, &ValidationError{Err: invalid, Derived: derived}
+		return nil, &ValidationError{Err: invalid}
 	}
-	p := &prepared{document: document, warnings: company.Warnings(), derived: derived}
+	p := &prepared{document: document, warnings: company.Warnings()}
 	if found {
 		p.base = active.ID
 	}
@@ -371,7 +365,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary, operator str
 		"revision", id, "epoch", published.Epoch, "by", operator, "summary", summary)
 	return Applied{
 		RevisionID: id, Epoch: published.Epoch, Parent: p.base,
-		Warnings: p.warnings, Derived: p.derived,
+		Warnings: p.warnings,
 	}, nil
 }
 

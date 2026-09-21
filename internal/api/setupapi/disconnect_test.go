@@ -27,11 +27,7 @@ import (
 func TestAnOrdinaryDisconnectNamesTheCredentialsItLeaves(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 
 	// WITH A STATUS STORE, because the ordinary path records the intent on
 	// the fleet row and refuses without one.
@@ -84,11 +80,7 @@ func TestAnOrdinaryDisconnectNamesTheCredentialsItLeaves(t *testing.T) {
 func TestASingleAtlassianProductLeavesTheSharedCredentialUnnamed(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	// CONFLUENCE STAYS, reading the same shared credential Jira does.
 	patch := s.do(t, http.MethodPatch, "/config",
 		`{"integrations":{"confluence":{"url":"https://acme.atlassian.net/wiki","token":"${OPS_TOKEN}"}}}`,
@@ -128,11 +120,7 @@ func TestASingleAtlassianProductLeavesTheSharedCredentialUnnamed(t *testing.T) {
 func TestADisconnectNamesNoCredentialNobodySet(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 
 	s.withPass(t, &recordingPass{kind: integration.KindGitLab})
 	out := s.do(t, http.MethodDelete, "/setup/integrations/gitlab", `{}`, nil)
@@ -166,11 +154,7 @@ func TestADisconnectNamesNoCredentialNobodySet(t *testing.T) {
 func TestASeatWhoseCredentialWentWithItsAccountIsNotSatisfied(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	// A provisioned seat: the pass sealed both slots.
 	for name, value := range map[string]string{
 		"SRE_ATLASSIAN": "atlassian-token",
@@ -226,11 +210,7 @@ func seatRow(t *testing.T, s *surface, kind, handle string) map[string]any {
 func TestASeatIsNotSatisfiedOnASurfaceTheCompanyDoesNotDeclare(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	for name, value := range map[string]string{
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
@@ -277,11 +257,7 @@ func TestASeatTheLoopFoundBrokenIsNotSatisfied(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	status, _ := s.withPass(t, &recordingPass{})
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	for name, value := range map[string]string{
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
@@ -322,11 +298,7 @@ func TestAnAdvisoryFindingLeavesASeatSatisfied(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	status, _ := s.withPass(t, &recordingPass{})
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	for name, value := range map[string]string{
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
@@ -415,11 +387,7 @@ func TestAGitHubDisconnectNamesEachAgentsAppCredentials(t *testing.T) {
 func TestADisconnectRefusedByAConcurrentPassSaysItIsRetryable(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	_, runner := s.withPass(t, &recordingPass{kind: integration.KindGitLab})
 
 	// SOMETHING ELSE IS WRITING AT IT, held for the whole request.
@@ -453,11 +421,7 @@ func TestADisconnectRefusedByAConcurrentPassSaysItIsRetryable(t *testing.T) {
 func TestADisconnectRefusedPermanentlyIsNotMarkedRetryable(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	s.status.mu.Lock()
 	s.status.loadErr = errors.New("the coordination store could not be reached")
 	s.status.mu.Unlock()

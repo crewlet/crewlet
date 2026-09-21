@@ -18,6 +18,26 @@ curl -s $CREWLET_URL/health
 
 See the [Configuration concept doc](../concepts/configuration.md) for the two-tier split and the rationale behind live config management, and the [API endpoints reference](../reference/api-endpoints.md) for status codes.
 
+> **This surface writes the company's settings, not its org chart.** A stored
+> revision holds the providers, the integrations, the turn engine and the
+> scheduling defaults. The **units and the seats** are a domain of their own,
+> with their own records, their own per-object arbitration and their own
+> history — see [The org chart domain](../concepts/chart-domain.md). A `PUT` or
+> a `PATCH` here carrying a top-level `roles:` or `units:` is refused in full
+> with `400 chart_not_writable_here`, and so is a write to
+> `/config/roles/{handle}` or `/config/units/{key}`. Both stay **readable**.
+>
+> A node's first chart is seeded from the company file at boot — `crewlet run
+> -company company.yaml`, which seeds only while the chart is empty.
+>
+> It is refused rather than ignored on purpose. A write that quietly kept half
+> of what you sent would answer `201`, activate, and leave the new seat
+> nowhere — with your own document saying it exists.
+>
+> The **authoring file keeps both halves.** You write one `company.yaml`
+> describing a company, `crewlet validate` reads it whole, and `crewlet config
+> import` is what divides it: the settings to a revision, the chart to its log.
+
 ---
 
 ## Option 1 — Single full-document PUT (recommended for bootstrap)
@@ -50,15 +70,25 @@ that Tier B applies deliberately. When both are present the **header wins**:
 it is the more explicit channel, and a `_summary` can survive in a document
 somebody keeps in version control long after it stopped describing the write.
 
-Response is `201 Created` with the new `revision_id` and `epoch`, the
-`warnings` the engine has about the document (a lead or a `manages` entry that
-names nobody, for example) and the `derived` hierarchy it will run. See
+The document you send here is the **settings half** — everything in
+`company.yaml` except `roles:` and `units:`. To load a whole authored file, use
+`crewlet config import`, which divides it and publishes both halves.
+
+Response is `201 Created` with the new `revision_id`, `epoch` and the
+`warnings` the engine has about the document. See
 [What a write answers](../reference/api-endpoints.md#what-a-write-answers).
+
+There is **no `derived` hierarchy in the answer** any more, and that is
+deliberate rather than an omission: the hierarchy came from `roles:` and
+`units:`, so a settings write answering one would answer an *empty* org chart
+for every company — which reads as "your chart is gone" rather than as "that
+field moved". Read the chart from the chart.
 
 To check a document without writing it, send the same request with
 `?dry_run=true`. Nothing is stored or activated, no summary is needed, and the
-answer is `200 {"valid": true, "base_revision_id", "warnings", "derived"}`, or
-the refusal the write would get:
+answer is `200 {"valid": true, "base_revision_id", "warnings"}`, or the
+refusal the write would get — including the chart refusal, so a check tells
+you what the save will do:
 
 ```bash
 curl -X PUT "$CREWLET_URL/config?dry_run=true" \
@@ -110,26 +140,25 @@ curl -X PUT $CREWLET_URL/config \
 
 ## Option 2 — Evolve a live company one entity at a time
 
-Four collections are addressable on their own: **roles**, **units**,
-**llm-providers** and **mcp-servers**. Use these to change one thing about an
-already-active company; use Option 1 to bootstrap it, and for anything the
-four do not cover (the identity block, integrations, the turn engine, the
-knowledge scope).
+Two collections are **writable** here: **llm-providers** and **mcp-servers**.
+Use these to change one thing about an already-active company; use Option 1 to
+bootstrap it, and for anything they do not cover (the identity block,
+integrations, the turn engine, the knowledge scope).
 
 ```
-PUT /config/roles/{handle}
-PUT /config/units/{key}
 PUT /config/llm-providers/{key}
 PUT /config/mcp-servers/{name}
 ```
 
+`roles` and `units` are still **readable** at `/config/roles/{handle}` and
+`/config/units/{key}` — a revision written before the chart's split still
+carries both inside it, and you have to be able to see one you are repairing.
+Writing either is `400 chart_not_writable_here`.
+
 Each is addressed by the thing the *document* resolves it by, never by its
-display name: a seat by its `handle` (derived from the name where it declares
-none) and a unit by its `key` (its `id`, or its name where it declares none —
-one is minted from the name when a document is imported). That is the same
-value a `manages:` entry and a seat's `unit:` carry, so the id in the URL is
-the id everything else in the company already uses. `GET` on the collection
-lists exactly those, which is the list to address from.
+display name: a provider by its key under `providers.llm`, a server by its
+`name`. `GET` on the collection lists exactly those, which is the list to
+address from.
 
 Why bother, when `PUT /config` already works? Because that write makes every
 edit a company-wide one. Changing one seat's goal means sending back a
@@ -145,27 +174,27 @@ document `GET /config` serves, sliced:
 
 ```bash
 # What the collection holds
-curl -s "$CREWLET_URL/query/config_entities?kind=roles" -H "$AUTH" | jq
+curl -s "$CREWLET_URL/query/config_entities?kind=mcp-servers" -H "$AUTH" | jq
 
 # One entity. The response IS the entity, so it goes straight back.
-curl -s -D headers.txt "$CREWLET_URL/config/roles/ceo" -H "$AUTH" > ceo.json
+curl -s -D headers.txt "$CREWLET_URL/config/mcp-servers/tracker" -H "$AUTH" > tracker.json
 
-# Edit ceo.json, then send it back — quoting the ETag the read returned, so a
-# concurrent activation is refused rather than silently overwritten.
-curl -X PUT $CREWLET_URL/config/roles/ceo \
+# Edit tracker.json, then send it back — quoting the ETag the read returned,
+# so a concurrent activation is refused rather than silently overwritten.
+curl -X PUT $CREWLET_URL/config/mcp-servers/tracker \
   -H "$AUTH" -H "Content-Type: application/json" \
   -H "If-Match: $(awk -F'"' '/^[Ee][Tt]ag:/ {print $2}' headers.txt)" \
-  -H "X-Summary: give the CEO a quarterly goal" \
-  -d @ceo.json
+  -H "X-Summary: point the tracker server at the new endpoint" \
+  -d @tracker.json
 ```
 
 The `config_entities` query still lists a collection and still answers a
 `{kind, id, entity}` envelope — it is what the dashboard reads. For one entity
 prefer `GET /config/{kind}/{id}`, whose body is exactly what `PUT` takes.
 
-The response is `201 Created` with the new `revision_id`, `epoch`, `warnings`
-and `derived` hierarchy, exactly as a full PUT would be: the write changed one
-entity and created one revision.
+The response is `201 Created` with the new `revision_id`, `epoch` and
+`warnings`, exactly as a full PUT would be: the write changed one entity and
+created one revision.
 
 ### What a write actually does
 
@@ -174,11 +203,12 @@ entity in, restores the credential masks the read showed you against that same
 revision, **validates the whole document**, and stores the result. Three
 consequences worth knowing before you script against it:
 
-- **The whole company is validated, not just your entity.** A seat naming an
-  `llm` provider that no longer exists is fine on its own and breaks the
-  company; you get `400 validation_error` naming the field. This is the point
-  of validating whole — you never see the rest of the document, so it is the
-  one place that break can be caught.
+- **The whole company is validated, not just your entity.** A delegate
+  template naming an `llm` provider that no longer exists is fine on its own
+  and breaks the company; you get `400 validation_error` naming the field,
+  even though nothing in the body you sent is about it. This is the point of
+  validating whole — you never see the rest of the document, so it is the one
+  place that break can be caught.
 - **An unknown field is refused, not dropped.** A body carrying `gaol` where
   you meant `goal` is `400 invalid_body` naming the field, exactly as the
   whole-document parser refuses an unknown key. A decoder that ignored what it
@@ -190,29 +220,22 @@ consequences worth knowing before you script against it:
   company without you ever seeing the document you changed. Add through
   `PUT /config`.
 - **The path is the identity, and a `PUT` never renames.** `PUT
-  /config/roles/ceo` replaces whatever is at `ceo`; a body carrying a
-  different handle is `400 identity_mismatch` rather than a move. The handle
-  is effectively permanent — the seat's durable id derives from it, so a
-  rename orphans that seat's diary, its onboarding marker and its counterparty
-  profiles — and nothing that references the old name travels with the splice.
-  The check is on the **derived** handle, so `{"name": "Chief Executive"}`
-  with no `handle` is refused too: an omitted handle is derived from the name,
-  which makes a display-name edit a rename by accident. Keep `handle` in the
-  body and change whatever else you like. Renaming is a full-document edit.
-- **`PUT` is the only verb.** There is no `DELETE /config/roles/ceo`; the path
-  answers `405`. Removal is a full-document edit for the same reason creation
-  is, only more so — deleting a seat also strands its mailbox and its in-flight
-  work, and deleting a provider silently repoints every role that named it. If
-  that is going to happen, it should happen in a document you looked at, and
-  land as one reviewable revision. Export, edit, `PUT /config`.
-
-A seat inside a unit is reachable by handle like any other — you do not have
-to know which list it lives in, or how deeply the unit is nested.
+  /config/mcp-servers/tracker` replaces whatever is at `tracker`; a body
+  carrying a different `name` is `400 identity_mismatch` rather than a move.
+  A server's name is the key every seat declares its credentials under and the
+  prefix its tools carry, so a rename here silently unhooks everything that
+  named it, and nothing that references the old name travels with the splice.
+  Keep the identity in the body and change whatever else you like.
+- **`PUT` is the only verb.** There is no `DELETE /config/mcp-servers/tracker`;
+  the path answers `405`. Removal is a full-document edit for the same reason
+  creation is, only more so — deleting a provider silently repoints everything
+  that named it. If that is going to happen, it should happen in a document you
+  looked at, and land as one reviewable revision. Export, edit, `PUT /config`.
 
 A write keeps what the node's own build cannot represent. During a rolling
 upgrade a node may hold a document a newer node wrote, with settings its
 `GET` cannot show you; whatever you send back through it, those settings
-survive on every seat, unit and MCP server matched by its identity. See
+survive on every member of a list matched by its identity. See
 [Fields a newer build wrote survive every write](../reference/api-endpoints.md#fields-a-newer-build-wrote-survive-every-write).
 
 ### `X-Summary` and `If-Match`

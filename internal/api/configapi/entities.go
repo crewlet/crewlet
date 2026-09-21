@@ -395,6 +395,12 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 func (s *Service) putEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		// BEFORE THE BODY IS EVEN READ. A seat and a unit left the
+		// settings document, and splicing one back in would store a
+		// revision every node then refuses to read. See chartdoor.go.
+		if refuseChartEntity(w, kind, id) {
+			return
+		}
 		body, err := readBody(w, r)
 		if err != nil {
 			refuseBody(w, err)

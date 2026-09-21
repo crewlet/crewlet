@@ -25,11 +25,7 @@ import (
 func TestTheSurfaceLeaseIsHeldWhenThePassIsRecorded(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	// THE REQUIREMENTS SATISFIED, because a pass refuses to run against a
 	// half-configured integration and this case is about what happens after
 	// one runs.
@@ -84,11 +80,7 @@ func TestTheSurfaceLeaseIsHeldWhenThePassIsRecorded(t *testing.T) {
 func TestThePassesOfOneSurfaceAreListable(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	for _, name := range []string{"GL_SIGN", "GL_ADMIN"} {
 		if err := s.vault.Set(t.Context(), name,
 			"whsec_Y3Jld2xldC10ZXN0LXNpZ25pbmcta2V5LTMyYnl0ZXM=",

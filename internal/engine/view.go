@@ -146,13 +146,40 @@ func (e *epoch) viewAt() (org.ViewPosition, bool) {
 //
 // Called under the lock.
 func (e *epoch) compose() *Company {
-	settings := e.settings
+	out := e.composed(e.settings)
+	e.current.Store(out)
+	return out
+}
+
+// withView is [epoch.composed] for a settings epoch that is not published yet.
+//
+// # Why an apply needs this before it runs a single stage
+//
+// A config apply builds its epoch from the revision's own bytes, and those
+// carry no org chart — so the value every stage would otherwise wire against
+// has a roster of NOBODY. Measured, that was an apply reporting `seats=0` on a
+// company with seats, wiring each integration against an empty roster and
+// leaving every code-host webhook naming a stranger until something else
+// happened to republish.
+//
+// It is the SAME derivation the read side publishes, reached through the same
+// function, because two derivations of one company is how the value a stage
+// wired against and the value a turn reads stop agreeing.
+func (e *epoch) withView(settings *Company) *Company {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.composed(settings)
+}
+
+// composed derives the value a reader sees from one settings epoch and this
+// node's rows, and publishes nothing.
+//
+// Called under the lock.
+func (e *epoch) composed(settings *Company) *Company {
 	if settings == nil {
-		e.current.Store(nil)
 		return nil
 	}
 	if !e.read {
-		e.current.Store(settings)
 		return settings
 	}
 	// A COPY rather than a mutation of the settings epoch: an in-flight
@@ -171,21 +198,69 @@ func (e *epoch) compose() *Company {
 		log.Warn("chart_cycle_broken", "units", view.Reparented,
 			"detail", "these units form a cycle in this node's chart rows and "+
 				"were re-parented to the root so the company can run; every "+
-				"node breaks it identically. Move them with `crewlet chart`")
+				"node breaks it identically. A write through the chart's own "+
+				"log is what moves them back")
 	}
-	e.current.Store(&composed)
 	return &composed
 }
 
-// refreshChart brings this node's chart view up to the position its applier has
-// reached, and reports the position the published view carries.
+// refreshChart brings this node's chart view up to the position its applier
+// has reached, publishes the company that composes, and reconciles what
+// follows a company. It reports the position the published view carries.
+func (e *Engine) refreshChart(ctx context.Context) (org.ViewPosition, error) {
+	at, err := e.rebuildChart(ctx)
+	if err != nil {
+		return org.ViewPosition{}, err
+	}
+
+	// AND WHAT FOLLOWS THE COMPANY FOLLOWS THIS TOO. A chart write publishes
+	// a new company exactly as a config apply does, so anything an apply
+	// reconciles against its new epoch has to be reconciled here, or it
+	// follows only half of what a company is. Two things do today.
+	//
+	// THE PARTY REGISTRY is derived from one org and answers for it
+	// permanently, so a company with a new seat needs a new one. A registry
+	// rebuilt only on an apply leaves a seat hired this morning
+	// unaddressable until somebody happens to change a provider — with
+	// nothing failing, because every lookup answers "nobody matches" the
+	// way it does for a stranger.
+	//
+	// THE SCHEDULER is the other. A seat's `schedules:` ride the chart, so
+	// a founder giving somebody their first standup is a chart write, and a
+	// loop armed only on an apply fires nothing until the next one — which
+	// on a company nobody is reconfiguring is never.
+	//
+	// # Why this runs on EVERY call and not only on a rebuild
+	//
+	// Because a caller that finds the view already current has to be able
+	// to rely on the answer. The rebuild is coalesced — a caller arriving
+	// while one runs waits for the next pass, and one arriving after it
+	// returns early — so a hook inside the rebuild is a hook some callers
+	// never reach, on a pass another goroutine may still be finishing.
+	// Running it here makes the guarantee the same for all three exits.
+	//
+	// Both are idempotent at an unchanged answer: the registry is skipped
+	// when it was built from exactly this company, and the scheduler is
+	// armed or disarmed rather than rebuilt. So the ordinary call costs two
+	// comparisons. It takes the rebuild's own context, which outlives any
+	// one request; [Engine.armSchedulerLocked] strips its cancellation.
+	if published := e.Company(); published != nil {
+		if !e.indexes(published) {
+			e.refreshParties(published)
+		}
+		e.reconcileScheduler(ctx, published)
+	}
+	return at, nil
+}
+
+// rebuildChart is [Engine.refreshChart]'s derivation, without what follows it.
 //
 // # It is a no-op at an equal cursor
 //
-// The triggers below fire on every committed record, on a timer, and at two
-// points during boot and rejoin. Most of those find the view already current,
-// and rebuilding it anyway would re-derive a twenty-thousand-seat tree to
-// arrive at the same bytes — so the cheap comparison comes first.
+// The triggers fire on every committed record, on a timer, and at two points
+// during boot and rejoin. Most of those find the view already current, and
+// rebuilding it anyway would re-derive a twenty-thousand-seat tree to arrive
+// at the same bytes — so the cheap comparison comes first.
 //
 // # One rebuild serves every waiter, and a waiter gets a FRESH pass
 //
@@ -200,7 +275,7 @@ func (e *epoch) compose() *Company {
 // anybody. So a burst of N records costs two derivations rather than N, and
 // the guarantee a waiter gets is the one it needs: everything committed
 // before it called.
-func (e *Engine) refreshChart(ctx context.Context) (org.ViewPosition, error) {
+func (e *Engine) rebuildChart(ctx context.Context) (org.ViewPosition, error) {
 	reader := e.Chart()
 	if reader == nil {
 		// A node with no chart runtime has nothing to derive from. It is

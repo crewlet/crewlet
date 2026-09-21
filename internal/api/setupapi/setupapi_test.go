@@ -256,13 +256,36 @@ func (s *surface) do(t *testing.T, method, path, body string, headers map[string
 	return rec
 }
 
-// seed imports the company so there is something to patch.
+// seed stores the company so there is something to patch.
+//
+// STRAIGHT INTO THE STORE rather than through `PUT /config`, because the
+// fixture carries seats: this whole surface is about what each AGENT needs
+// before an integration works, and the config door refuses a body carrying an
+// org chart (see internal/api/configapi's chartdoor.go). A revision written
+// before that split still holds both halves, which is exactly what this
+// writes — and the patches these cases send name settings, which is what the
+// door still takes.
 func (s *surface) seed(t *testing.T) {
 	t.Helper()
-	res := s.do(t, http.MethodPut, "/config", companyDoc,
-		map[string]string{"X-Summary": "first import"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	s.seedDocument(t, companyDoc)
+}
+
+// seedDocument stores one document as the active revision.
+func (s *surface) seedDocument(t *testing.T, document string) {
+	t.Helper()
+	cfg, err := config.ParseCompany([]byte(document))
+	if err != nil {
+		t.Fatalf("parse the fixture: %v", err)
+	}
+	payload, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.configs.InsertActive(t.Context(), store.Revision{
+		Source: "test", CreatedBy: "operator", Summary: "first import",
+		Payload: payload, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
 }
 
@@ -393,15 +416,12 @@ func TestThePublicBaseIsAnsweredOnce(t *testing.T) {
 func TestAnUnresolvedPublicBaseNamesItsVariable(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", `{
+	s.seedDocument(t, `{
   "name": "Acme",
   "integrations": {"public_base_url": "${PUBLIC_BASE_URL}"},
   "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
   "roles": [{"name": "CTO", "handle": "cto", "llm": "zulu"}]
-}`, map[string]string{"X-Summary": "pointing at a variable"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+}`)
 
 	body := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))
 	base, _ := body["public_base_url"].(map[string]any)
@@ -424,15 +444,12 @@ func TestAnUnresolvedPublicBaseNamesItsVariable(t *testing.T) {
 func TestALiteralPublicBaseNamesNoVariable(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", `{
+	s.seedDocument(t, `{
   "name": "Acme",
   "integrations": {"public_base_url": "https://engine.example.com"},
   "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
   "roles": [{"name": "CTO", "handle": "cto", "llm": "zulu"}]
-}`, map[string]string{"X-Summary": "a literal"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+}`)
 
 	base, _ := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))["public_base_url"].(map[string]any)
 	if base["resolved"] != true || base["value"] != "https://engine.example.com" {
@@ -603,8 +620,12 @@ func TestASubmissionIsValidatedAsTheWholeCompany(t *testing.T) {
 	if !slices.Contains(paths, "integrations.datadog.route_to") {
 		t.Errorf("problems name %v, want integrations.datadog.route_to: %s", paths, res.Body)
 	}
-	if _, ok := body["derived"].(map[string]any); !ok {
-		t.Errorf("the refusal carries no derived hierarchy: %s", res.Body)
+	// AND IT CARRIES NO DERIVED HIERARCHY, because this surface writes the
+	// company's SETTINGS and a settings document produces none. An empty one
+	// would tell the screen that the company has no seats, which is the one
+	// answer worse than no answer.
+	if _, present := body["derived"]; present {
+		t.Errorf("the refusal carries a derived hierarchy: %s", res.Body)
 	}
 }
 
@@ -1660,7 +1681,7 @@ func firstRunes(s string, n int) string {
 func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", `{
+	s.seedDocument(t, `{
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {"gitlab": {"enabled": true, "url": "https://gitlab.com",
@@ -1671,10 +1692,7 @@ func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 	     "mcp_env": {"gitlab": {"GITLAB_TOKEN": "${CODER_GITLAB_TOKEN}"}}},
 	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
 	  ]
-	}`, map[string]string{"X-Summary": "one agent opted in, one not"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	}`)
 
 	// A SURFACE THAT PROVISIONS, which is what makes the two states above
 	// different from each other at all.

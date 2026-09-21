@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -31,13 +32,19 @@ import (
 // window by sleeping through it.
 var pinnedNow = time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
 
-// brokenRevision is well-formed JSON that cannot be built: a seat naming a
-// provider the document does not configure. The provider block is non-empty
-// deliberately: a company with no models at all is a supported authoring
-// state, and an empty one would not be refused at all (see nomodels_test.go).
+// brokenRevision is well-formed JSON that cannot be built: a delegate template
+// naming a provider the document does not configure. The provider block is
+// non-empty deliberately: a company with no models at all is a supported
+// authoring state, and an empty one would not be refused at all (see
+// nomodels_test.go).
+//
+// A SETTINGS RULE, because a revision carries settings: it used to be a SEAT
+// naming a missing provider, which is the same rule one field along on a half
+// a revision no longer holds.
 var brokenRevision = json.RawMessage(`{"name":"Acme",
   "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["k"]}}},
-  "roles":[{"name":"CEO","handle":"ceo","llm":"nonexistent"}]}`)
+  "workers":{"researcher":{"description":"reads sources and reports findings",
+    "system_prompt":"You research.","model":"nonexistent"}}}`)
 
 // A second company, differing from companyDoc in the one way a reconcile has
 // to be visible through.
@@ -51,8 +58,13 @@ var brokenRevision = json.RawMessage(`{"name":"Acme",
 //
 // So it differs by its PROVIDERS and its token budget: both are settings, both
 // are things a revision owns, and both are visible on the epoch this apply
-// publishes. Its seats are companyDoc's, unchanged, which is what the chart
-// carries.
+// publishes.
+//
+// AND IT CARRIES NO CHART AT ALL, which is what a stored revision holds. One
+// that did would be refused by the apply itself
+// ([config.DecodeSettingsAsCompany]) before a single assertion here ran. The
+// seats these cases read are the engine's own, seeded from companyDoc onto the
+// chart's log at boot and untouched by every apply below.
 const grownCompanyDoc = `
 name: Acme
 token_budget: 4242
@@ -62,17 +74,6 @@ providers:
       type: anthropic
       model: claude-sonnet-5
       api_keys: ["${K}"]
-roles:
-  - name: CEO
-    handle: ceo
-    llm: zulu
-  - name: CTO
-    handle: cto
-    llm: zulu
-  - name: Founder
-    kind: human
-    contact:
-      slack_user_id: U0FOUNDER
 `
 
 // plane is one engine, one store, and the reconciler between them.
@@ -171,13 +172,24 @@ func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMe
 // yamlToJSON stores a company the way an import does: parse the authored
 // document once, and store its JSON form, which is what the payload column
 // holds and what every node reads from then on.
+// yamlToJSON is one authored document as the bytes a revision stores.
+//
+// THE SETTINGS HALF, which is what every writer in the tree stores now:
+// `crewlet run -company`, `crewlet config import` and `PUT /config` all take
+// an authored document and keep the eighteen fields a revision holds. A
+// fixture that stored the whole file would be activating a revision this
+// build refuses to apply, so every case using it would assert the refusal
+// rather than its own subject.
+//
+// The seats these cases read come from the CHART, seeded onto its log from
+// the engine's own boot company.
 func yamlToJSON(t *testing.T, doc string) json.RawMessage {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	raw, err := json.Marshal(cfg)
+	raw, err := json.Marshal(config.SettingsOf(cfg).Company())
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -256,6 +268,64 @@ func TestANewRevisionReplacesTheEpoch(t *testing.T) {
 	// write was a second writer of the company's structure.
 	if got := p.seats(t); !slices.Equal(got, []string{"ceo", "cto"}) {
 		t.Errorf("seats = %v, want the chart's own, untouched by the apply", got)
+	}
+}
+
+// AN APPLY RECORDS THE CHART POSITION IT RAN AT.
+//
+// # What the pair is for
+//
+// A company used to be ONE document, so "what was this company at 14:02" had
+// one answer: the revision that was active. It has two halves now, and neither
+// names the other — so a revert to revision N restores the settings somebody
+// had and says nothing about the chart they had, which is usually the half a
+// reader is asking about: who was in which team.
+//
+// # And why NULL and zero are not the same answer
+//
+// A revision activated by a build before the column existed has no recorded
+// position; one activated on an empty chart ran at 0. Collapsing them would
+// report every historical activation as having run on an empty company, so the
+// column is a pointer and the absence is asserted as well as the value.
+func TestAnActivationRecordsTheChartPositionItAppliedAt(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+
+	// BEFORE: a revision this node never applied has no position at all.
+	p.activate(t.Context(), t, grownCompanyDoc)
+	before, found, err := p.store.Configs().Active(t.Context())
+	if err != nil || !found {
+		t.Fatalf("active: %v (found=%v)", err, found)
+	}
+	if before.ChartPosition != nil {
+		t.Errorf("a revision nothing has applied carries a position: %d",
+			*before.ChartPosition)
+	}
+
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	after, found, err := p.store.Configs().Active(t.Context())
+	if err != nil || !found {
+		t.Fatalf("active: %v (found=%v)", err, found)
+	}
+	if after.ChartPosition == nil {
+		t.Fatal("an applied revision records no chart position, so its history " +
+			"cannot say which org chart it ran on")
+	}
+	// THE POSITION THE EPOCH WAS COMPOSED AT, compared against what the
+	// view actually carries rather than against a constant: a stamp that
+	// wrote any number at all would pass a non-nil check.
+	at, ok := p.engine.ViewPosition()
+	if !ok {
+		t.Fatal("the engine published no chart view to compare against")
+	}
+	want := statelog.Position{Generation: at.Generation, Seq: at.Seq}.Packed()
+	if *after.ChartPosition != want {
+		t.Errorf("recorded %d, want %d — the pair (revision, position) is what "+
+			"says which chart this revision ran on",
+			*after.ChartPosition, want)
 	}
 }
 

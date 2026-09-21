@@ -7,30 +7,29 @@ import (
 	"testing"
 )
 
-// movableDoc holds a root seat with a literal per-seat credential and a unit
-// to move it into.
+// movableDoc holds two MCP servers, each with a literal credential of its
+// own, so one can be MOVED in the list and the match tested.
 const movableDoc = companyDoc + `
 mcp_servers:
-  - {name: tracker, command: tracker-mcp, shared: false}
-units:
-  - name: Engineering
-    roles:
-      - {name: SRE, handle: sre, llm: zulu}
+  - {name: tracker, command: tracker-mcp, shared: false, env: {TOKEN: tracker-literal}}
+  - {name: notion, command: notion-mcp, env: {TOKEN: notion-literal}}
 `
 
-// A SEAT MOVED THROUGH THE WRITE SURFACE KEEPS ITS CREDENTIAL.
+// A LIST MEMBER MOVED THROUGH THE WRITE SURFACE KEEPS ITS CREDENTIAL.
 //
-// The whole loop a builder runs: read the redacted document, move a seat from
-// the root into a unit, send it back. The restore used to match a seat only
-// within the list it now sat in, so the move was refused with a redaction
-// error on a credential the caller never touched.
-func TestAMovedSeatKeepsItsCredentialThroughAPut(t *testing.T) {
+// The whole loop a builder runs: read the redacted document, reorder a list,
+// send it back. A restore that matched by POSITION would hand one server's
+// credential to the other — which is not a refusal but a silent swap, so every
+// assertion here is on the STORED bytes rather than on the status.
+//
+// This used to be a seat moved from the root into a unit, which is the same
+// match one shape up; a seat is the org chart's own now, and
+// [config.Company.RestoreRedacted]'s own suite is where the document-wide
+// version of this rule is held.
+func TestAMovedListMemberKeepsItsCredentialThroughAPut(t *testing.T) {
 	t.Parallel()
-	const literal = "cto-tracker-literal"
-	doc := strings.Replace(movableDoc, "    handle: cto\n    llm: zulu\n",
-		"    handle: cto\n    llm: zulu\n    mcp_env: {tracker: {TOKEN: "+literal+"}}\n", 1)
 	s := newSurface(t, nil)
-	s.seed(t, doc, nil)
+	s.seed(t, movableDoc, nil)
 
 	read := s.do(t, http.MethodGet, "/config", "", nil)
 	if read.Code != http.StatusOK {
@@ -40,52 +39,58 @@ func TestAMovedSeatKeepsItsCredentialThroughAPut(t *testing.T) {
 	if err := json.Unmarshal(read.Body.Bytes(), &document); err != nil {
 		t.Fatal(err)
 	}
-	roles, _ := document["roles"].([]any)
-	cto := roles[1]
-	document["roles"] = roles[:1]
-	units, _ := document["units"].([]any)
-	engineering, _ := units[0].(map[string]any)
-	members, _ := engineering["roles"].([]any)
-	engineering["roles"] = append(members, cto)
+	servers, _ := document["mcp_servers"].([]any)
+	servers[0], servers[1] = servers[1], servers[0]
 	body, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(body), "__redacted__") {
-		t.Fatalf("the moved seat carries no mask, so this proves nothing: %s", body)
+		t.Fatalf("the moved server carries no mask, so this proves nothing: %s", body)
 	}
 
-	res := s.do(t, http.MethodPut, "/config", string(body), map[string]string{"X-Summary": "move the CTO"})
+	res := s.do(t, http.MethodPut, "/config", string(body),
+		map[string]string{"X-Summary": "reorder the servers"})
 	if res.Code != http.StatusCreated {
 		t.Fatalf("PUT = %d, want 201: %s", res.Code, res.Body)
 	}
-	stored := s.activeDocument(t)
-	if !strings.Contains(stored, literal) || strings.Contains(stored, "__redacted__") {
-		t.Errorf("the moved seat's credential was not restored: %s", stored)
+	stored := storedTree(t, s)
+	if strings.Contains(s.activeDocument(t), "__redacted__") {
+		t.Fatalf("a mask was stored as a credential: %s", s.activeDocument(t))
+	}
+	// EACH VALUE BACK ON ITS OWN MEMBER. A positional restore stores two
+	// real credentials and swaps them, which nothing else here would see.
+	for name, want := range map[string]string{
+		"tracker": "tracker-literal", "notion": "notion-literal",
+	} {
+		server := serverByName(stored, name)
+		env, _ := server["env"].(map[string]any)
+		if env["TOKEN"] != want {
+			t.Errorf("%s holds %v, want %q — the restore matched by position",
+				name, env["TOKEN"], want)
+		}
 	}
 }
 
-// A DOCUMENT READ AND SENT BACK UNCHANGED KEEPS A DISABLED SCHEDULE DISABLED.
+// A DOCUMENT READ AND SENT BACK UNCHANGED KEEPS AN EXPLICIT `false` FALSE.
 //
-// The read once dropped every toggle's state, so a schedule kept in config
-// with `enabled: false` was served without the field and the unchanged
-// document sent back stored a schedule that fires. The assertion is on the
-// read as well as the stored result, because the builder edits exactly what
-// the read serves.
-func TestAReadDocumentSentBackKeepsADisabledSchedule(t *testing.T) {
+// The read once dropped every toggle's state, so a server kept in config with
+// `shared: false` was served without the field and the unchanged document sent
+// back stored a server that is shared — one child for the whole company where
+// the operator asked for one per seat, which hands one seat's credentials to
+// another. The assertion is on the read as well as the stored result, because
+// the builder edits exactly what the read serves.
+func TestAReadDocumentSentBackKeepsAnExplicitFalse(t *testing.T) {
 	t.Parallel()
-	doc := strings.Replace(companyDoc, "    handle: ceo\n    llm: zulu\n",
-		"    handle: ceo\n    llm: zulu\n    schedules:\n"+
-			"      - {name: standup, cron: \"0 9 * * 1-5\", task: Post the standup, enabled: false}\n", 1)
 	s := newSurface(t, nil)
-	s.seed(t, doc, nil)
+	s.seed(t, movableDoc, nil)
 
 	read := s.do(t, http.MethodGet, "/config", "", nil)
 	if read.Code != http.StatusOK {
 		t.Fatalf("GET /config = %d: %s", read.Code, read.Body)
 	}
-	if !strings.Contains(read.Body.String(), `"enabled":false`) {
-		t.Fatalf("the read dropped the disabled schedule's toggle: %s", read.Body)
+	if !strings.Contains(read.Body.String(), `"shared":false`) {
+		t.Fatalf("the read dropped the toggle's explicit false: %s", read.Body)
 	}
 
 	res := s.do(t, http.MethodPut, "/config", read.Body.String(),
@@ -93,7 +98,7 @@ func TestAReadDocumentSentBackKeepsADisabledSchedule(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Fatalf("PUT = %d, want 201: %s", res.Code, res.Body)
 	}
-	if stored := s.activeDocument(t); !strings.Contains(stored, `"enabled":false`) {
-		t.Errorf("sending the read back enabled the schedule: %s", stored)
+	if stored := s.activeDocument(t); !strings.Contains(stored, `"shared":false`) {
+		t.Errorf("sending the read back shared the server: %s", stored)
 	}
 }

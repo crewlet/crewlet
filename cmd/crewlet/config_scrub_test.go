@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // `crewlet config scrub` — the one-time erasure of personal data from
@@ -53,16 +56,8 @@ func TestTheScrubErasesSupersededRevisionsAndRefusesTheActiveOne(t *testing.T) {
 	// TWO REVISIONS: the first names Sarah, the second is the same company
 	// with her mission changed, so the first is superseded and still holds
 	// her address.
-	first := companyFile(t, dir, "first.yaml", func(string) string { return scrubCompanyDoc })
-	if _, errs, err := configCmd(t, cfg, "import", first); err != nil {
-		t.Fatalf("import the first revision: %v (%s)", err, errs)
-	}
-	second := companyFile(t, dir, "second.yaml", func(string) string {
-		return scrubCompanyDoc + "mission: ship it\n"
-	})
-	if _, errs, err := configCmd(t, cfg, "import", second); err != nil {
-		t.Fatalf("import the second revision: %v (%s)", err, errs)
-	}
+	seedPreSplit(t, cfg, scrubCompanyDoc)
+	seedPreSplit(t, cfg, scrubCompanyDoc+"mission: ship it\n")
 
 	// THE DRY RUN FIRST, because an operator making an irreversible change
 	// to every superseded revision wants to know how many hold anything.
@@ -133,16 +128,8 @@ func TestASecondScrubFindsNothing(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 
-	first := companyFile(t, dir, "first.yaml", func(string) string { return scrubCompanyDoc })
-	if _, _, err := configCmd(t, cfg, "import", first); err != nil {
-		t.Fatalf("import: %v", err)
-	}
-	second := companyFile(t, dir, "second.yaml", func(string) string {
-		return scrubCompanyDoc + "mission: ship it\n"
-	})
-	if _, _, err := configCmd(t, cfg, "import", second); err != nil {
-		t.Fatalf("import: %v", err)
-	}
+	seedPreSplit(t, cfg, scrubCompanyDoc)
+	seedPreSplit(t, cfg, scrubCompanyDoc+"mission: ship it\n")
 	if _, _, err := configCmd(t, cfg, "scrub"); err != nil {
 		t.Fatalf("first scrub: %v", err)
 	}
@@ -169,17 +156,8 @@ func TestADiffAcrossAScrubShowsTheTombstone(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 
-	first := companyFile(t, dir, "first.yaml", func(string) string { return scrubCompanyDoc })
-	if _, _, err := configCmd(t, cfg, "import", first); err != nil {
-		t.Fatalf("import: %v", err)
-	}
-	old := activeRevisionID(t, cfg)
-	second := companyFile(t, dir, "second.yaml", func(string) string {
-		return scrubCompanyDoc + "mission: ship it\n"
-	})
-	if _, _, err := configCmd(t, cfg, "import", second); err != nil {
-		t.Fatalf("import: %v", err)
-	}
+	old := seedPreSplit(t, cfg, scrubCompanyDoc)
+	seedPreSplit(t, cfg, scrubCompanyDoc+"mission: ship it\n")
 	if _, _, err := configCmd(t, cfg, "scrub"); err != nil {
 		t.Fatalf("scrub: %v", err)
 	}
@@ -257,12 +235,8 @@ func TestTheScrubWalksPastTheFirstPage(t *testing.T) {
 	// round trips — including a last one that comes back short, which is
 	// the loop's own exit.
 	for i := range 5 {
-		path := companyFile(t, dir, "r.yaml", func(string) string {
-			return scrubCompanyDoc + "mission: revision " + string(rune('a'+i)) + "\n"
-		})
-		if _, errs, err := configCmd(t, cfg, "import", path); err != nil {
-			t.Fatalf("import %d: %v (%s)", i, err, errs)
-		}
+		seedPreSplit(t, cfg, scrubCompanyDoc+
+			"mission: revision "+string(rune('a'+i))+"\n")
 	}
 
 	cs, closeStore, err := openConfigStore(t.Context(), cfg)
@@ -285,4 +259,30 @@ func TestTheScrubWalksPastTheFirstPage(t *testing.T) {
 			t.Errorf("the active revision %s is in the walk's targets", rev.ID)
 		}
 	}
+}
+
+// seedPreSplit stores one PRE-SPLIT revision — a whole company document, org
+// chart and all — and makes it the active one, returning its id.
+//
+// # Why these cases cannot import a file any more
+//
+// `crewlet config import` writes the SETTINGS half now: the org chart is a log
+// of its own, and a revision carrying one is a revision no node applies. So an
+// import can no longer produce the thing the scrub exists for.
+//
+// And that is exactly what the scrub IS for — what is already in the archive.
+// Every build before the split wrote a human seat's address into a revision,
+// on every node and in every backup, and removing the seat never reached one,
+// because a removal writes a NEW revision. These cases write those bytes.
+func seedPreSplit(t *testing.T, cfg, document string) string {
+	t.Helper()
+	company, err := config.ParseCompany([]byte(document))
+	if err != nil {
+		t.Fatalf("parse the fixture: %v", err)
+	}
+	payload, err := json.Marshal(company)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return activateStored(t, cfg, string(payload))
 }

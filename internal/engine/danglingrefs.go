@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
@@ -22,8 +21,22 @@ import (
 // reference as absent ([org.Organization.DanglingRefs] says why refusing it
 // would make per-entity bootstrap impossible); an entry that persists across
 // epochs is a misspelling nothing else will ever report.
-func reportDanglingRefs(ctx context.Context, logger *slog.Logger, target coord.Activation, cfg *config.Company) {
-	for _, ref := range cfg.DanglingRefs() {
+//
+// # It reads the COMPANY, never the revision's own bytes
+//
+// Every reference here — a unit's lead, a seat's `manages`, a root seat's
+// `unit:` — names something in the ORG CHART, and a revision carries none: it
+// is the settings half, and the chart is a log of its own. Asked of those
+// bytes this reported nothing at all, on every company, for ever. The
+// composed company is where the two halves meet, so it is the only value that
+// can answer.
+func reportDanglingRefs(ctx context.Context, logger *slog.Logger,
+	target coord.Activation, c *Company) {
+
+	if c == nil || c.Org == nil {
+		return
+	}
+	for _, ref := range c.Org.DanglingRefs() {
 		logger.WarnContext(ctx, "org_dangling_reference",
 			"epoch", target.Epoch, "revision", target.RevisionID,
 			"ref", string(ref.Kind), "from", ref.From, "to", ref.To,

@@ -319,7 +319,10 @@ func ParseMemberNode(doc *yaml.Node, out any) error {
 //     restores its masks from or merges onto: no rules at all. Those readers
 //     never run the company, and refusing them is what locks it out.
 //   - Applying a revision (engine apply, boot, reload, revert): the rules a
-//     running company depends on, before anything is built.
+//     running company depends on, before anything is built. Those callers do
+//     not come through here at all any more — they read a revision as
+//     [DecodeSettings] does, which refuses one still carrying an org chart
+//     rather than applying it with the chart dropped.
 //   - A document a person submits: every rule, after its masks are restored.
 func DecodeCompany(payload []byte) (*Company, error) {
 	// Onto the DEFAULTS, not onto a zero value. A field the payload omits

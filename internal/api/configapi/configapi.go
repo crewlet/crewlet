@@ -517,6 +517,12 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// BEFORE THE DOCUMENT IS PARSED, because the parser's answer to a
+	// chart is "unknown field" and that sends an operator hunting a typo
+	// they did not make. See chartdoor.go.
+	if refuseChartIn(w, sent, http.MethodPut) {
+		return
+	}
 	incoming, err := sent.company()
 	if err != nil {
 		refuseDocument(w, httpjson.CodeInvalidBody, err.Error(), "", &DocumentError{Err: err})
@@ -610,6 +616,13 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.checkPrecondition(w, r, active, found); !ok {
 		return
 	}
+	// ON WHAT THE CALLER SENT, never on the merge: a revision written
+	// before the chart's split still carries one inside it, so judging the
+	// merged document would refuse an operator patching a mission for a
+	// chart they did not send and cannot see. See chartdoor.go.
+	if refuseChartIn(w, sent, http.MethodPatch) {
+		return
+	}
 
 	prepared, err := s.prepare(r.Context(), patchDraft(ApplyRequest{
 		Patch: sent.text, Summary: summary, Operator: operatorOf(r), Expect: active.ID,
@@ -640,7 +653,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 func writeChecked(w http.ResponseWriter, p *prepared) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"valid": true, "base_revision_id": p.base,
-		"warnings": p.warnings, "derived": p.derived,
+		"warnings": p.warnings,
 	})
 }
 
@@ -648,7 +661,7 @@ func writeChecked(w http.ResponseWriter, p *prepared) {
 func writeApplied(w http.ResponseWriter, applied Applied) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"revision_id": applied.RevisionID, "epoch": applied.Epoch,
-		"warnings": applied.Warnings, "derived": applied.Derived,
+		"warnings": applied.Warnings,
 	})
 }
 

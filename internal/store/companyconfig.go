@@ -46,6 +46,20 @@ type Revision struct {
 	// to be able to tell that from corruption. See
 	// `0030_a_superseded_revision_can_be_scrubbed.sql`.
 	ScrubbedAt time.Time
+
+	// ChartPosition is the org chart position THIS NODE composed its epoch
+	// at when it activated this revision, packed, and nil where it has
+	// none.
+	//
+	// A POINTER because zero is a real answer and absence is a different
+	// one: a revision activated on an empty chart ran at position 0, and a
+	// revision activated by a build before the column existed has no
+	// recorded position at all. A plain int64 would report every historical
+	// activation as having run on an empty company.
+	//
+	// See `0031_an_activation_records_the_chart_it_ran.sql` for why the
+	// company needs both halves to be answerable.
+	ChartPosition *int64
 }
 
 // Configs is the versioned Tier B store.
@@ -59,7 +73,8 @@ type Configs struct{ db *DB }
 func (d *DB) Configs() *Configs { return &Configs{db: d} }
 
 const revisionColumns = `revision_id, parent_revision_id, created_at, created_by,
-	source, summary, payload, is_active, activated_at, scrubbed_at`
+	source, summary, payload, is_active, activated_at, scrubbed_at,
+	chart_position`
 
 // InsertActive writes a new revision and makes it the active one, returning
 // its id.
@@ -339,11 +354,15 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 	var parent sql.NullString
 	var payload string
 	var createdAt int64
-	var activatedAt, scrubbedAt sql.NullInt64
+	var activatedAt, scrubbedAt, chartPosition sql.NullInt64
 	var active int64
 	if err := rows.Scan(&r.ID, &parent, &createdAt, &r.CreatedBy, &r.Source,
-		&r.Summary, &payload, &active, &activatedAt, &scrubbedAt); err != nil {
+		&r.Summary, &payload, &active, &activatedAt, &scrubbedAt,
+		&chartPosition); err != nil {
 		return Revision{}, fmt.Errorf("store: read config revision: %w", err)
+	}
+	if chartPosition.Valid {
+		r.ChartPosition = &chartPosition.Int64
 	}
 	r.ParentID = Text(parent)
 	r.CreatedAt = DecodeTime(createdAt)
@@ -529,4 +548,52 @@ func (c *Configs) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
 		return 0, fmt.Errorf("store: purge config revisions: %w", err)
 	}
 	return n, nil
+}
+
+// RecordChartPosition stamps the chart position this node composed its epoch
+// at when it activated a revision.
+//
+// # Why it is a write of its own rather than a column of the activation
+//
+// The two happen at different moments and the order matters. A node activates
+// a revision by flipping `is_active`, and it composes the epoch AFTER that —
+// against whatever chart position its applier has reached, which may itself
+// move while the settings are being installed. Writing the position inside
+// [Configs.Activate] would record the position at the flip, which is the one
+// instant the epoch has not been composed at yet.
+//
+// # It is BEST EFFORT at the caller, and that is a property of the value
+//
+// The pair (revision, position) is how a reader answers "what was this
+// company"; it is not what the node RUNS on. An epoch composes from the
+// settings and the live view whether or not this row was written, so a failure
+// here is a gap in the history rather than a company that stops. The caller
+// logs it and carries on — refusing the activation over an audit column would
+// take a healthy company down to protect a record of it.
+//
+// IDEMPOTENT, because re-activating an unchanged revision is the ordinary
+// credential-rotation gesture: it re-stamps with the position that
+// re-activation ran at, which is the true answer for the activation that just
+// happened.
+func (c *Configs) RecordChartPosition(ctx context.Context, revisionID string, packed int64) error {
+	result, err := c.db.sql.ExecContext(ctx,
+		`UPDATE company_config SET chart_position = ? WHERE revision_id = ?`,
+		packed, revisionID)
+	if err != nil {
+		return fmt.Errorf("store: record the chart position of revision %s: %w",
+			revisionID, err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: record the chart position of revision %s: %w",
+			revisionID, err)
+	}
+	if n == 0 {
+		// A REVISION THIS NODE DOES NOT HOLD, which is an ordinary state
+		// rather than a fault: the local copy is best effort, so a node
+		// whose disk was full when the pointer moved applies the epoch
+		// from the fleet's bytes and has no row to stamp.
+		return fmt.Errorf("%w: %s", ErrNoRevision, revisionID)
+	}
+	return nil
 }

@@ -85,6 +85,29 @@ flowchart LR
 
 ## What it means for you
 
+**The config API no longer writes it, and says so.** A `PUT` or a `PATCH
+/config` carrying a top-level `roles:` or `units:` is refused in full with
+`400 chart_not_writable_here`, and so is a write to `/config/roles/{handle}` or
+`/config/units/{key}`; both stay readable. It is a refusal rather than a quiet
+drop because the quiet drop is what actually hurts: a founder sends a whole
+document with a new seat in it, the write succeeds, the revision activates —
+and the seat is nowhere, with their own document saying it exists.
+
+**A fresh deployment's chart is seeded from the company file**, by `crewlet run
+-company company.yaml`, and only while the chart is empty — see
+[the boot seed](control-plane.md#the-boot-seed).
+
+**Your `company.yaml` still holds both halves**, and always will. You author one
+document describing a company, `crewlet validate` reads it whole, and `crewlet
+config import` divides it: the settings to a revision, the chart to this log.
+
+**A revision written before the split is refused at apply, and served on every
+read.** It still carries the chart inside it, so a node applying one would have
+to pick between running a chart no other node reads and dropping it to serve a
+company with no seats. It refuses instead and names the repair — one `crewlet
+config import`. Every read still answers, because that revision is exactly the
+one you have to look at in order to repair it.
+
 **Nothing to configure, and one thing you may want to.** The chart's log has a
 byte ceiling, `stream.chart_log_max_bytes`, and it is the only state log whose
 default is *not* derived from your disk: unset, it takes a flat **1 GiB**. The

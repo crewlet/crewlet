@@ -728,7 +728,12 @@ export interface DryRunResult {
   /** The revision the draft was validated against. */
   base_revision_id: string;
   warnings: ConfigWarning[] | null;
-  derived: Derived;
+  /** ABSENT from any engine whose revisions carry the SETTINGS only: the
+   *  hierarchy came from `roles:` and `units:`, which are the org chart's own
+   *  domain, and an engine that answered an empty one would be telling this
+   *  client the company has no seats. A check without it leaves the authored
+   *  tree standing — see `overlay` in `~/lib/seats.ts`. */
+  derived?: Derived;
 }
 
 /** `201` from a configuration write that stored and activated a revision. */
@@ -736,11 +741,12 @@ export interface WriteResult {
   revision_id: string;
   epoch: number;
   warnings: ConfigWarning[] | null;
-  /** The hierarchy the stored document derives to, as `configapi` writes it
-   *  beside the revision id on every 201. It was missing from this shape,
-   *  which is how a caller that wanted the new chart after a save came to
-   *  read it back from a second request the answer already carried. */
-  derived: Derived;
+  /** ABSENT from any engine whose revisions carry the SETTINGS only, for
+   *  [DryRunResult.derived]'s reason. It was once required here — a caller
+   *  that wanted the new chart after a save read it back from a second
+   *  request the answer already carried — and the chart it named moved to a
+   *  domain of its own, so the answer stopped carrying one. */
+  derived?: Derived;
 }
 
 // ---------------------------------------------------------------------------

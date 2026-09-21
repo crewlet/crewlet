@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -65,37 +66,51 @@ units:
 	}
 }
 
-// AND A REVISION WITH NO CHART DECODES.
+// AND A REVISION WITH NO CHART DECODES, ONTO THE DEFAULTS.
+//
+// The base matters as much as the fields. A revision written before a setting
+// existed omits it, and a decode onto a zero value would bring that setting
+// back as 0 — which for a timeout, a round cap or a retention window is a
+// different company running on the same bytes.
 func TestDecodeSettingsReadsARevisionWithNoChart(t *testing.T) {
 	t.Parallel()
 
-	got, err := config.DecodeSettings([]byte(`
-name: Acme
-mission: ship it
-token_budget: 1000
-`))
+	got, err := config.DecodeSettings([]byte(
+		`{"name":"Acme","mission":"ship it","token_budget":1000}`))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if got.Name != "Acme" || got.Mission != "ship it" || got.TokenBudget != 1000 {
 		t.Errorf("decoded %+v", got)
 	}
+	defaults := config.DefaultCompany()
+	if got.TurnEngine.MaxToolRounds != defaults.TurnEngine.MaxToolRounds ||
+		got.TurnEngine.MaxToolRounds == 0 {
+		t.Errorf("max_tool_rounds = %d, want the default %d — a revision that "+
+			"omits a setting has to land where the authored path puts it",
+			got.TurnEngine.MaxToolRounds, defaults.TurnEngine.MaxToolRounds)
+	}
 }
 
-// AN UNKNOWN SETTING IS REFUSED RATHER THAN IGNORED.
+// A SETTING THIS BUILD DOES NOT KNOW IS KEPT RATHER THAN REFUSED.
 //
-// Strict, like every other decode here: a typo in a setting is a refusal at
-// the moment it is written instead of a value that silently never took effect.
-func TestDecodeSettingsRefusesAnUnknownField(t *testing.T) {
+// This is the reader on the APPLY path, so the bytes it meets were written by
+// whichever node served the write — possibly a NEWER one, mid rolling upgrade.
+// Refusing an unrecognised key here makes that upgrade an outage in the older
+// direction: every older node stops applying the fleet's revision, and each
+// one reports a configuration it cannot read. Strictness belongs at the import,
+// which is where a person's document arrives and where a typo is a mistake to
+// catch.
+func TestDecodeSettingsKeepsRunningOnAFieldANewerBuildWrote(t *testing.T) {
 	t.Parallel()
 
-	_, err := config.DecodeSettings([]byte("name: Acme\nmision: typo\n"))
-	if err == nil {
-		t.Fatal("a misspelled setting decoded cleanly, so it would silently " +
-			"never take effect")
+	got, err := config.DecodeSettings([]byte(
+		`{"name":"Acme","a_setting_from_a_newer_build":{"depth":3}}`))
+	if err != nil {
+		t.Fatalf("a revision a newer peer wrote was refused: %v", err)
 	}
-	if errors.Is(err, config.ErrRevisionCarriesAChart) {
-		t.Errorf("a typo was reported as a chart: %v", err)
+	if got.Name != "Acme" {
+		t.Errorf("decoded %+v", got)
 	}
 }
 
@@ -122,13 +137,66 @@ func TestTheChartKeysAreExactlyWhatTheFileHasAndTheSettingsDoNot(t *testing.T) {
 	}
 
 	// AND THE SETTINGS DO NOT.
-	settings, err := config.DecodeSettings([]byte("name: Acme\n"))
+	settings, err := config.DecodeSettings([]byte(`{"name":"Acme"}`))
 	if err != nil {
 		t.Fatalf("decode a minimal settings document: %v", err)
 	}
 	if settings.Name != "Acme" {
 		t.Errorf("decoded %+v", settings)
 	}
+
+	// EXACTLY THOSE TWO, and this is the assertion with teeth: the split is
+	// the FILE's keys minus the SETTINGS' keys, so a field added to
+	// [config.Company] and forgotten on [config.Settings] silently becomes
+	// a chart key — and then `PUT /config` refuses a document carrying it,
+	// naming the org chart, for a setting that has nothing to do with one.
+	// Nothing else in the tree would notice.
+	chart := config.ChartKeys()
+	slices.Sort(chart)
+	if !slices.Equal(chart, []string{"roles", "units"}) {
+		t.Errorf("the chart owns %v, want exactly roles and units — a key "+
+			"here that is neither is a SETTING missing from config.Settings, "+
+			"and the config door now refuses every document carrying it",
+			chart)
+	}
+}
+
+// A SETTINGS DOCUMENT IS A COMPANY WITH NO CHART IN IT, BOTH WAYS.
+//
+// Nothing below the config layer was re-typed when the chart left: an epoch is
+// built from a [config.Company], a validator reads one, a provider chain is
+// constructed from one. So a stored revision becomes a Company again on the
+// apply path, and a field that fell out on either leg is a setting an operator
+// wrote and the engine silently never read.
+func TestASettingsDocumentRoundTripsThroughACompany(t *testing.T) {
+	t.Parallel()
+
+	company := loadCompany(t, exampleNimbus)
+	back := config.SettingsOf(company).Company()
+
+	// THE CHART IS GONE, which is the whole point of the trip.
+	if len(back.Roles) != 0 || len(back.Units) != 0 {
+		t.Errorf("the settings half carries %d seats and %d units, want none",
+			len(back.Roles), len(back.Units))
+	}
+	// AND EVERYTHING ELSE SURVIVED IT, compared as the documents a node
+	// stores: the same company minus its chart, encoded the same way.
+	want := *company
+	want.Roles, want.Units = nil, nil
+	if got, expected := mustJSON(t, back), mustJSON(t, &want); got != expected {
+		t.Errorf("the round trip lost or changed a setting:\n got %s\nwant %s",
+			got, expected)
+	}
+}
+
+// mustJSON renders a company as the bytes a revision stores.
+func mustJSON(t *testing.T, c *config.Company) string {
+	t.Helper()
+	raw, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return string(raw)
 }
 
 // AN AUTHORED FILE SPLITS INTO SETTINGS WITHOUT LOSING ONE.

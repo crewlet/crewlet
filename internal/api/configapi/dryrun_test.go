@@ -126,11 +126,23 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 	}{
 		{"a valid put", http.MethodPut, companyDoc, true, http.StatusOK},
 		{"a valid put creating the company", http.MethodPut, companyJSONDoc, false, http.StatusOK},
-		{"a put the validator refuses", http.MethodPut, strings.Replace(companyDoc, "llm: zulu", "llm: nowhere", 1), true, http.StatusBadRequest},
+		{"a put the validator refuses", http.MethodPut,
+			strings.Replace(companyDoc, "type: anthropic", "type: nowhere", 1),
+			true, http.StatusBadRequest},
 		{"a put that does not parse", http.MethodPut, "name: [", true, http.StatusBadRequest},
 		{"a valid patch", http.MethodPatch, `{"mission": "checked"}`, true, http.StatusOK},
-		{"a patch the validator refuses", http.MethodPatch, `{"roles": [{"name": "CEO", "llm": "nowhere"}]}`, true, http.StatusBadRequest},
+		{"a patch the validator refuses", http.MethodPatch,
+			`{"providers": {"llm": {"zulu": {"type": "nowhere", "model": "m"}}}}`,
+			true, http.StatusBadRequest},
 		{"a patch naming an unknown key", http.MethodPatch, `{"missionn": "typo"}`, true, http.StatusBadRequest},
+		// A CHART IN A DRY RUN IS REFUSED TOO. A check that accepted what
+		// the write refuses would tell a builder the save will work.
+		{"a put carrying a chart", http.MethodPut,
+			companyDoc + "\nroles:\n  - {name: CEO, handle: ceo}\n",
+			true, http.StatusBadRequest},
+		{"a patch carrying a chart", http.MethodPatch,
+			`{"units": [{"name": "Engineering", "id": "engineering"}]}`,
+			true, http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -175,26 +187,33 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 	}
 }
 
-// THE ANSWER SAYS THE WRITE IS VALID, WHAT IT WAS CHECKED AGAINST, AND WHAT IT
-// WOULD PRODUCE.
+// THE ANSWER SAYS THE WRITE IS VALID AND WHAT IT WAS CHECKED AGAINST.
 //
 // base_revision_id is how a client learns that the revision moved between its
-// read and its check without a second request; the warnings and the derived
-// hierarchy are what a builder draws before the operator saves.
-func TestADryRunAnswersTheBaseTheWarningsAndTheDerivedHierarchy(t *testing.T) {
+// read and its check without a second request, and the warnings list is what a
+// builder draws beside the document before the operator saves.
+//
+// # The warnings list is EMPTY here, and empty is the assertion
+//
+// A dry run judges a SUBMITTED document, held to every rule — so anything a
+// warning could be about is a refusal instead, and the two cannot both happen.
+// What a submitted document can still carry a warning for is nothing at all
+// today: the reference warnings were every one of them about a seat, and seats
+// are the chart's now ([config.Company.ReferenceWarnings] says why a settings
+// document reports none). The list still has to be an empty ARRAY rather than
+// null, because a builder renders null as a failure and `[]` as "nothing to
+// say" — and that is the half of this answer a change would break silently.
+//
+// The warnings that are still REACHED come back from a reload and a revert,
+// which re-activate a stored company under the runnable rules only; those are
+// asserted by [TestEveryWriteAnswersItsWarnings].
+func TestADryRunAnswersTheBaseAndItsWarnings(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
 	base := s.seed(t, companyDoc, nil)
 
-	// `manages` carries a seat's HANDLE or a unit's KEY, so the live entry
-	// is `cto` and the dangling one is a well-formed handle nothing answers
-	// to. WELL-FORMED MATTERS: a value shaped like a display name can never
-	// resolve under any chart and is refused outright, so a fixture written
-	// that way would be a 400 rather than the dangling-reference warning
-	// this case is about.
 	res := s.do(t, http.MethodPatch, "/config?dry_run=true",
-		`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu", "manages": ["cto", "ghost"]},
-		            {"name": "CTO", "handle": "cto", "llm": "zulu"}]}`, nil)
+		`{"mission": "ship the rewrite"}`, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("dry run = %d, want 200: %s", res.Code, res.Body)
 	}
@@ -202,7 +221,6 @@ func TestADryRunAnswersTheBaseTheWarningsAndTheDerivedHierarchy(t *testing.T) {
 		Valid    bool             `json:"valid"`
 		Base     string           `json:"base_revision_id"`
 		Warnings []config.Warning `json:"warnings"`
-		Derived  config.Derived   `json:"derived"`
 	}
 	if err := json.Unmarshal(res.Body.Bytes(), &answer); err != nil {
 		t.Fatalf("decode: %v (%s)", err, res.Body)
@@ -210,13 +228,8 @@ func TestADryRunAnswersTheBaseTheWarningsAndTheDerivedHierarchy(t *testing.T) {
 	if !answer.Valid || answer.Base != base {
 		t.Errorf("valid = %v, base = %q, want true and %q", answer.Valid, answer.Base, base)
 	}
-	if len(answer.Warnings) != 1 || answer.Warnings[0].Kind != config.WarningDanglingReference ||
-		answer.Warnings[0].Path != "roles[0].manages[1]" || answer.Warnings[0].Seat != "ceo" {
-		t.Errorf("warnings = %+v, want the dangling manages entry, located", answer.Warnings)
-	}
-	if len(answer.Derived.Seats) != 2 || answer.Derived.Seats[1].Manager != "ceo" ||
-		answer.Derived.Seats[1].Path != "roles[1]" {
-		t.Errorf("derived = %+v, want the CTO reporting to the CEO, with its path", answer.Derived)
+	if answer.Warnings == nil || len(answer.Warnings) != 0 {
+		t.Errorf("warnings = %+v, want an empty list rather than null", answer.Warnings)
 	}
 
 	// Creating the company is checked against nothing, and says so.
@@ -239,10 +252,9 @@ func TestADryRunAnswersTheBaseTheWarningsAndTheDerivedHierarchy(t *testing.T) {
 //
 // The first thing the dashboard's builder sends on every load is a check of a
 // draft with no operations in it, which is an empty merge patch: it is how the
-// lens gets the warnings and the hierarchy of the company as it stands. An
-// empty patch object is therefore not the empty BODY a write refuses, and a
-// check that answered invalid_patch would open the builder on a problem
-// nobody caused.
+// lens gets the warnings of the company as it stands. An empty patch object is
+// therefore not the empty BODY a write refuses, and a check that answered
+// invalid_patch would open the builder on a problem nobody caused.
 func TestACheckOfADraftWithNoChangesIsValid(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
@@ -252,8 +264,13 @@ func TestACheckOfADraftWithNoChangesIsValid(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("a check of an empty patch = %d, want 200: %s", res.Code, res.Body)
 	}
-	if derived, ok := decode(t, res)["derived"].(map[string]any); !ok || derived["seats"] == nil {
-		t.Errorf("the check carries no hierarchy for the company as it stands: %s", res.Body)
+	body := decode(t, res)
+	if valid, _ := body["valid"].(bool); !valid {
+		t.Errorf("a check of a draft that changes nothing is not valid: %s", res.Body)
+	}
+	if _, ok := body["warnings"].([]any); !ok {
+		t.Errorf("the check carries no warnings list for the company as it "+
+			"stands: %s", res.Body)
 	}
 	if got := s.writes(); got != (writeCounts{}) {
 		t.Errorf("a check wrote %+v", got)
@@ -373,23 +390,27 @@ func TestADryRunIsRefusedForWhatTheWriteIsRefusedFor(t *testing.T) {
 	}
 }
 
-// EVERY WRITE ANSWERS WHAT IT PRODUCED: its revision and epoch, its warnings
-// and the hierarchy the engine derives from it.
+// EVERY WRITE ANSWERS WHAT IT PRODUCED: its revision, its epoch and its
+// warnings.
 //
 // A reload and a revert re-activate a stored company under the runnable rules
 // only, so theirs is the answer that can carry an admission warning: a company
 // stored before a rule, which runs and which a write keeping it would be
 // refused for.
-func TestEveryWriteAnswersItsWarningsAndDerivedHierarchy(t *testing.T) {
+//
+// THE ENTITY WRITE IS AN MCP SERVER, because the two collections this door
+// used to edit one at a time are the org chart's now and it refuses them.
+func TestEveryWriteAnswersItsWarnings(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
 	first := s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
 
 	for _, tc := range []struct{ name, method, path, body string }{
 		{"reload", http.MethodPost, "/config/reload", ""},
-		{"put", http.MethodPut, "/config", companyDoc},
+		{"put", http.MethodPut, "/config", entityDoc},
 		{"patch", http.MethodPatch, "/config", `{"mission": "answered"}`},
-		{"entity", http.MethodPut, "/config/roles/ceo", `{"name": "CEO", "handle": "ceo", "llm": "zulu"}`},
+		{"entity", http.MethodPut, "/config/mcp-servers/tracker",
+			`{"name": "tracker", "transport": "http", "url": "https://mcp.example.com"}`},
 		{"revert", http.MethodPost, "/config/revisions/" + first + "/revert", ""},
 	} {
 		res := s.do(t, tc.method, tc.path, tc.body, summaryHeader)
@@ -400,14 +421,12 @@ func TestEveryWriteAnswersItsWarningsAndDerivedHierarchy(t *testing.T) {
 			RevisionID string           `json:"revision_id"`
 			Epoch      int64            `json:"epoch"`
 			Warnings   []config.Warning `json:"warnings"`
-			Derived    *config.Derived  `json:"derived"`
 		}
 		if err := json.Unmarshal(res.Body.Bytes(), &answer); err != nil {
 			t.Fatalf("%s: decode: %v", tc.name, err)
 		}
-		if answer.RevisionID == "" || answer.Epoch == 0 || answer.Warnings == nil ||
-			answer.Derived == nil || len(answer.Derived.Seats) == 0 {
-			t.Errorf("%s answered %s, want a revision, an epoch, a warnings list and the hierarchy",
+		if answer.RevisionID == "" || answer.Epoch == 0 || answer.Warnings == nil {
+			t.Errorf("%s answered %s, want a revision, an epoch and a warnings list",
 				tc.name, res.Body)
 		}
 		var kinds []string

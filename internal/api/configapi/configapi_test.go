@@ -41,6 +41,12 @@ const (
 // that must survive an edit, and an integration secret. The integration is
 // GitLab because its signing secret has a SHAPE the validator checks, which
 // makes it the one whose redaction cannot be faked by a fixture.
+//
+// IT HAS NO ORG CHART, and that is what a company this surface writes looks
+// like now: `roles:` and `units:` are the chart's own domain, and a body
+// carrying either is refused at the door (see chartdoor.go). A fixture that
+// kept them would exercise that refusal on every case rather than the write
+// each case is about.
 const companyDoc = `
 name: Acme
 providers:
@@ -54,13 +60,6 @@ integrations:
     enabled: true
     url: https://gitlab.example.com
     signing_secret: ` + signingSecret + `
-roles:
-  - name: CEO
-    handle: ceo
-    llm: zulu
-  - name: CTO
-    handle: cto
-    llm: zulu
 `
 
 // surface is the service plus everything a test needs to look at.
@@ -118,9 +117,13 @@ func (s *surface) service() *configapi.Service { return s.svc }
 // resolved rather than stored.
 // companyJSONDoc is the smallest document PUT /config accepts, for the cases
 // that write to a node with nothing on it yet.
+//
+// NO CHART IN IT, like every body this surface takes: `roles:` and `units:`
+// are the org chart's own domain and the door refuses a body carrying either
+// (see chartdoor.go), so a fixture that carried one would be testing the
+// refusal rather than the write.
 const companyJSONDoc = `{"name":"Acme","providers":{"llm":{"zulu":` +
-	`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["k"]}}},` +
-	`"roles":[{"name":"CEO","handle":"ceo","llm":"zulu"}]}`
+	`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["k"]}}}}`
 
 func (s *surface) activeDocument(t *testing.T) string {
 	t.Helper()
@@ -355,10 +358,8 @@ func TestADiffNamesWhatChanged(t *testing.T) {
 	// rewrites lines that mean nothing. What an operator asks is "what
 	// changed about the company".
 	s := newSurface(t, nil)
-	first := s.seed(t, companyDoc, nil)
-	grown := strings.Replace(companyDoc,
-		"  - name: CTO\n    handle: cto\n    llm: zulu\n",
-		"  - name: CTO\n    handle: cto\n    llm: zulu\n  - name: Designer\n    handle: designer\n    llm: zulu\n", 1)
+	first := s.seed(t, serverDoc, nil)
+	grown := serverDoc + "  - {name: notion, command: notion-mcp}\n"
 	s.seed(t, grown, nil)
 
 	res := s.do(t, http.MethodGet, "/config/revisions/"+first+"/diff?against=active", "", nil)
@@ -380,10 +381,10 @@ func TestADiffNamesWhatChanged(t *testing.T) {
 	for _, change := range body.Changes {
 		paths = append(paths, change.Path+":"+change.Kind)
 	}
-	// The active side has the extra seat, and the target does not — so
+	// The active side has the extra server, and the target does not — so
 	// from the target's point of view it is removed.
-	if !strings.Contains(strings.Join(paths, " "), "roles[2]") {
-		t.Errorf("the diff does not mention the seat that differs: %v", paths)
+	if !strings.Contains(strings.Join(paths, " "), "mcp_servers[1]") {
+		t.Errorf("the diff does not mention the server that differs: %v", paths)
 	}
 }
 
@@ -514,7 +515,7 @@ func TestAMaskedDocumentCanBeSentBack(t *testing.T) {
 func TestAnInvalidDocumentIsRefusedWithItsReason(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, nil)
-	broken := strings.Replace(companyDoc, "llm: zulu", "llm: nonexistent", 1)
+	broken := strings.Replace(companyDoc, "type: anthropic", "type: nonexistent", 1)
 	res := s.do(t, http.MethodPut, "/config", broken,
 		map[string]string{"X-Summary": "break it"})
 	if res.Code != http.StatusBadRequest {
@@ -1005,8 +1006,8 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 			opening + "name: Acme\nnotification_coalesce_max_batch: 3\nnonsense: true\n", false, 6},
 		{"a patch", http.MethodPatch, "/config",
 			opening + "mission: checked\nnonsense: true\n", true, 5},
-		{"an entity", http.MethodPut, "/config/roles/cto",
-			opening + "name: CTO\nhandle: cto\nllm: zulu\ngaol: ship it\n", true, 7},
+		{"an entity", http.MethodPut, "/config/llm-providers/zulu",
+			opening + "type: anthropic\nmodel: claude-sonnet-5\napi_keys: [\"k\"]\nmodell: haiku\n", true, 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1304,7 +1305,8 @@ func TestEveryWriteRouteTakesTheSummaryFromEitherChannel(t *testing.T) {
 	}{
 		{"put", http.MethodPut, "/config", "_summary: %s\n" + companyDoc, false},
 		{"patch", http.MethodPatch, "/config", `{"_summary":%q,"mission":"ship it"}`, true},
-		{"entity", http.MethodPut, "/config/roles/ceo", `{"_summary":%q,"name":"CEO"}`, true},
+		{"entity", http.MethodPut, "/config/llm-providers/zulu",
+			`{"_summary":%q,"type":"anthropic","model":"claude-sonnet-5"}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

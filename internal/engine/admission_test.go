@@ -15,17 +15,25 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// duplicateNamesRevision is a stored company that breaks both admission rules
-// and none of the runnable ones: two units called "Platform" in different
-// departments, each with a seat called "Engineer" on its own explicit handle.
-// A build before those rules admitted it, and it runs.
-var duplicateNamesRevision = json.RawMessage(`{"name":"Acme",
-  "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["${K}"]}}},
-  "units":[
-    {"name":"Engineering","children":[{"name":"Platform",
-      "roles":[{"name":"Engineer","handle":"platform-engineer","llm":"zulu"}]}]},
-    {"name":"Product","children":[{"name":"Platform",
-      "roles":[{"name":"Engineer","handle":"product-engineer","llm":"zulu"}]}]}]}`)
+// duplicateStepsRevision is a stored SETTINGS company that breaks an
+// admission rule and none of the runnable ones: two sandbox setup steps under
+// one name. A build before that rule admitted it, and it runs.
+//
+// A SETTINGS RULE, because a revision carries settings. The fixture used to
+// be two units called "Platform", each with a seat called "Engineer" — which
+// is the same class of violation on the half a revision no longer holds, and
+// is refused as a chart before any rule is reached.
+//
+// The rule is a real one and its consequence is a write: a step's `env` and
+// `files` are credentials restored by the step's NAME, so two steps of one
+// name leave every later write carrying that list refused on masks nobody
+// edited.
+var duplicateStepsRevision = json.RawMessage(`{"name":"Acme",
+  "providers":{
+    "llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["${K}"]}},
+    "sandbox":{"default_run_in":"direct","local":{},"setup":[
+      {"name":"git-auth","commands":["true"]},
+      {"name":"git-auth","commands":["false"]}]}}}`)
 
 // logBuffer is a slog destination a test can read while the reconciler writes.
 type logBuffer struct {
@@ -78,7 +86,7 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 
 	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "from-an-older-peer", Summary: "written before the rule",
-		Payload: duplicateNamesRevision, At: pinnedNow,
+		Payload: duplicateStepsRevision, At: pinnedNow,
 	})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
@@ -100,21 +108,14 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 		t.Fatal("the apply reported success and published no epoch")
 	}
 
-	// SIX: the two duplicates, and one per unit with no id.
-	//
-	// A unit's id is its KEY — what a `manages:` entry and a seat's
-	// `unit:` resolve — and an import mints one from the name. A revision
-	// stored before that rule has none on any unit, which is precisely
-	// what this fixture is, so the id warning fires once per unit. It is
-	// the same class as the two below it: applied as it stands, refused on
-	// the next write, located at the field to change.
+	// ONE, for the one violation this revision holds.
 	warnings := logs.records(t, "org_admission_warning")
-	if len(warnings) != 6 {
-		t.Fatalf("%d admission warnings, want one per violation — the seat name, "+
-			"the unit name, and one per unit with no id: %v", len(warnings), warnings)
+	if len(warnings) != 1 {
+		t.Fatalf("%d admission warnings, want one per violation: %v",
+			len(warnings), warnings)
 	}
-	// Each line names every place its violation is about, in the paths the
-	// config package located it at: both seats, and both units.
+	// AND IT NAMES THE PLACE, in the path the config package located it at,
+	// so a person can change the field rather than search for it.
 	placed := map[string][]string{}
 	for _, w := range warnings {
 		if w["revision"] != "from-an-older-peer" {
@@ -127,19 +128,14 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 			text, _ := path.(string)
 			paths = append(paths, text)
 		}
-		for _, rule := range []string{"duplicate seat name", "duplicate unit name"} {
-			if strings.Contains(detail, rule) {
-				placed[rule] = paths
-			}
+		if strings.Contains(detail, "duplicate setup step name") {
+			placed["duplicate setup step name"] = paths
 		}
 	}
-	for rule, want := range map[string][]string{
-		"duplicate seat name": {"units[0].children[0].roles[0].name", "units[1].children[0].roles[0].name"},
-		"duplicate unit name": {"units[0].children[0].name", "units[1].children[0].name"},
-	} {
-		if !slices.Equal(placed[rule], want) {
-			t.Errorf("the %s warning names paths %v, want %v", rule, placed[rule], want)
-		}
+	if want := []string{"providers.sandbox.setup"}; !slices.Equal(
+		placed["duplicate setup step name"], want) {
+		t.Errorf("the warning names paths %v, want %v",
+			placed["duplicate setup step name"], want)
 	}
 
 	// ONCE PER APPLIED EPOCH. A tick on an epoch this node already applied
@@ -147,8 +143,8 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("second tick: %v", err)
 	}
-	if got := len(logs.records(t, "org_admission_warning")); got != 6 {
-		t.Errorf("%d admission warnings after a second tick on the same epoch, want still 6", got)
+	if got := len(logs.records(t, "org_admission_warning")); got != 1 {
+		t.Errorf("%d admission warnings after a second tick on the same epoch, want still 1", got)
 	}
 }
 
@@ -159,7 +155,7 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 // node that refused to build it would not start at all after an upgrade.
 func TestAnEngineBootsOnAStoredCompanyThatBreaksAnAdmissionRule(t *testing.T) {
 	t.Parallel()
-	company, err := config.DecodeCompany(duplicateNamesRevision)
+	company, err := config.DecodeCompany(duplicateStepsRevision)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -167,7 +163,8 @@ func TestAnEngineBootsOnAStoredCompanyThatBreaksAnAdmissionRule(t *testing.T) {
 		t.Fatal("the fixture breaks no admission rule, so this proves nothing")
 	}
 	e := newEngine(t, engine.Options{Company: company})
-	if got := len(e.Company().Seats()); got != 2 {
-		t.Errorf("seats = %d, want both engineers", got)
+	if e.Company() == nil {
+		t.Error("a node refused to build an epoch from a company that breaks " +
+			"an admission rule, so it would not start at all after an upgrade")
 	}
 }

@@ -481,7 +481,37 @@ func (c *Company) AdmissionWarnings() []Warning {
 // ([Company.DanglingRefs]), located in the document: a unit's lead at its
 // `lead`, a root seat's unit at its `unit`, a manages entry at the index it
 // was written at, and a GitLab access level at its key.
+//
+// # A document with no chart in it resolves nothing, and says nothing
+//
+// Every reference here is answered by the ORG CHART: "is this handle real" is
+// a question about the seats, and the seats are a state-log domain now. An
+// authored FILE still carries both halves, so `crewlet validate` gets the
+// report it always got. A stored SETTINGS revision does not — and asked the
+// same question it would answer that every reference it holds is dangling,
+// because the half that resolves them is not in the bytes.
+//
+// That is not a conservative answer, it is a wrong one, and it is wrong on
+// every company at once: a GitLab access level naming a live seat would be
+// reported as pointing at nobody on every write, on every node, for ever. So
+// a document holding no chart at all reports no references — it has nothing to
+// resolve them against, and saying nothing is the only answer that invents
+// nothing.
+//
+// The cost is a file that genuinely declares an access level for a seat it
+// does not declare, and declares no unit or seat either: that one loses its
+// warning here. It is the price of the two halves being tellable apart at all,
+// and every file that declares a chart — which is every file a founder
+// authors — still gets the whole report.
 func (c *Company) ReferenceWarnings() []Warning {
+	if len(c.Roles) == 0 && len(c.Units) == 0 {
+		// EMPTY, NEVER NIL, like every other exit here: the answer is
+		// "no references to report", and [Company.Warnings] appends onto
+		// this — so a nil would make a company with no findings answer
+		// `null` where a surface renders an empty list as "nothing to
+		// say" and a null as a failure.
+		return []Warning{}
+	}
 	o, x := c.organization()
 	refs := append(o.DanglingRefs(), c.danglingAccessLevels(o)...)
 	out := make([]Warning, 0, len(refs))

@@ -26,7 +26,7 @@ subcommand below is served by it.
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
-| `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
+| `crewlet config import <company.yaml>` | Load a company file's **settings** and activate them as a new `company_config` revision. The file's `roles:` and `units:` are the [org chart](../concepts/chart-domain.md)'s own domain and are NOT published — the command says so and names where they come from |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
 | `crewlet config show` | One-line summary of the active revision |
 | `crewlet config revisions [--limit N]` | List recent revisions (newest first) |

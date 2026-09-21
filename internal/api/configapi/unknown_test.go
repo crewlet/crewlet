@@ -13,20 +13,29 @@ import (
 // A write made by this build keeps what this build cannot represent.
 //
 // Every case seeds a document as a NEWER peer would have written it, carrying
-// keys no field of this build decodes, at the root, inside a known block, on a
-// seat, on a unit and on a seat inside a unit. It then writes through a route
-// the way an operator or the dashboard does, and reads the stored bytes back,
-// because the struct is exactly what cannot show the loss.
+// keys no field of this build decodes: at the root, inside a KEYED block
+// (`providers.llm.zulu`) and on each member of a LIST whose members can name
+// themselves (`mcp_servers`). It then writes through a route the way an
+// operator or the dashboard does, and reads the stored bytes back, because the
+// struct is exactly what cannot show the loss.
+//
+// THE LEVELS ARE THE ONES A SETTINGS REVISION HAS. They were a seat, a unit
+// and a seat inside a unit as well — the three deepest, and the ones a
+// positional match got wrong — and those are the org chart's own domain now,
+// with its own records and its own write path. What makes `mcp_servers` the
+// right stand-in is the property that mattered: its members are matched by
+// IDENTITY rather than by position, so a reordered list is still the test it
+// was.
 
-// newerPeerDoc is the fixture every case extends: two root seats, a unit with
-// a member, an MCP server.
-const newerPeerDoc = movableDoc
+// newerPeerDoc is the fixture every case extends: two providers and two MCP
+// servers, so a reorder has something to get wrong.
+const newerPeerDoc = entityDoc
 
 // newer marks a value only a newer build writes.
 const newer = "from-a-newer-build"
 
 // seedNewerPeer stores newerPeerDoc with unknown keys at every level a write
-// could lose one, and a known goal on the CTO.
+// could lose one, and a known field on the tracker server.
 func seedNewerPeer(t *testing.T, s *surface) string {
 	t.Helper()
 	return s.seedStored(t, newerPeerDoc, func(document map[string]any) {
@@ -34,17 +43,12 @@ func seedNewerPeer(t *testing.T, s *surface) string {
 		providers := document["providers"].(map[string]any)
 		zulu := providers["llm"].(map[string]any)["zulu"].(map[string]any)
 		zulu["provider_setting_"+newer] = true
-		roles := document["roles"].([]any)
-		cto := roles[1].(map[string]any)
-		cto["seat_setting_"+newer] = "cto"
-		cto["goal"] = "a known goal"
-		units := document["units"].([]any)
-		engineering := units[0].(map[string]any)
-		engineering["unit_setting_"+newer] = "engineering"
-		sre := engineering["roles"].([]any)[0].(map[string]any)
-		sre["seat_setting_"+newer] = "sre"
-		server := document["mcp_servers"].([]any)[0].(map[string]any)
-		server["server_setting_"+newer] = "tracker"
+		servers := document["mcp_servers"].([]any)
+		tracker := servers[0].(map[string]any)
+		tracker["server_setting_"+newer] = "tracker"
+		tracker["url"] = "https://mcp.example.com"
+		notion := servers[1].(map[string]any)
+		notion["server_setting_"+newer] = "notion"
 	})
 }
 
@@ -60,30 +64,16 @@ func storedTree(t *testing.T, s *surface) map[string]any {
 	return tree
 }
 
-// seatByHandle finds a seat anywhere in a stored tree.
-func seatByHandle(tree map[string]any, handle string) map[string]any {
-	var found map[string]any
-	visit := func(list any) {
-		items, _ := list.([]any)
-		for _, item := range items {
-			seat, _ := item.(map[string]any)
-			if seat["handle"] == handle && found == nil {
-				found = seat
-			}
+// serverByName finds an MCP server in a stored tree.
+func serverByName(tree map[string]any, name string) map[string]any {
+	items, _ := tree["mcp_servers"].([]any)
+	for _, item := range items {
+		server, _ := item.(map[string]any)
+		if server["name"] == name {
+			return server
 		}
 	}
-	visit(tree["roles"])
-	var units func(list any)
-	units = func(list any) {
-		items, _ := list.([]any)
-		for _, item := range items {
-			unit, _ := item.(map[string]any)
-			visit(unit["roles"])
-			units(unit["children"])
-		}
-	}
-	units(tree["units"])
-	return found
+	return nil
 }
 
 // assertNewerKeysKept checks every unknown key seedNewerPeer wrote.
@@ -98,24 +88,14 @@ func assertNewerKeysKept(t *testing.T, s *surface, route string) {
 	if zulu["provider_setting_"+newer] != true {
 		t.Errorf("%s: a key inside a known block was lost: %v", route, zulu)
 	}
-	if cto := seatByHandle(tree, "cto"); cto == nil || cto["seat_setting_"+newer] != "cto" {
-		t.Errorf("%s: the CTO's key was lost: %v", route, cto)
-	}
-	if sre := seatByHandle(tree, "sre"); sre == nil || sre["seat_setting_"+newer] != "sre" {
-		t.Errorf("%s: the SRE's key was lost: %v", route, sre)
-	}
-	var engineering map[string]any
-	for _, item := range tree["units"].([]any) {
-		if unit := item.(map[string]any); unit["name"] == "Engineering" {
-			engineering = unit
+	// BY NAME, never by position, which is the whole reason a list member
+	// that can name itself is matched the way it is: the reorder case below
+	// would otherwise pass while putting one server's key on the other.
+	for _, name := range []string{"tracker", "notion"} {
+		server := serverByName(tree, name)
+		if server == nil || server["server_setting_"+newer] != name {
+			t.Errorf("%s: %s's key was lost: %v", route, name, server)
 		}
-	}
-	if engineering == nil || engineering["unit_setting_"+newer] != "engineering" {
-		t.Errorf("%s: the unit's key was lost: %v", route, engineering)
-	}
-	server := tree["mcp_servers"].([]any)[0].(map[string]any)
-	if server["server_setting_"+newer] != "tracker" {
-		t.Errorf("%s: the server's key was lost: %v", route, server)
 	}
 }
 
@@ -133,30 +113,29 @@ func read(t *testing.T, s *surface) map[string]any {
 	return document
 }
 
-// A PATCH REPLACING THE ROSTER KEEPS EVERY SEAT'S AND UNIT'S UNKNOWN KEYS.
+// A PATCH REPLACING A WHOLE LIST KEEPS EVERY MEMBER'S UNKNOWN KEYS.
 //
-// The builder's save: a merge patch naming `roles` and `units` whole, built
-// from a read this build served without the keys. Array replacement is RFC
-// 7396's rule, so without the carry every seat and unit lost them. The roster
-// is also REORDERED, so a positional match would put the CTO's key on the CEO.
-func TestAPatchReplacingTheRosterKeepsWhatThisBuildCannotRepresent(t *testing.T) {
+// The builder's save: a merge patch naming `mcp_servers` whole, built from a
+// read this build served without the keys. Array replacement is RFC 7396's
+// rule, so without the carry every member lost them. The list is also
+// REORDERED, so a positional match would put one server's key on the other.
+func TestAPatchReplacingAListKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, nil)
 	seedNewerPeer(t, s)
 
 	document := read(t, s)
-	roles := document["roles"].([]any)
-	roles[0], roles[1] = roles[1], roles[0]
-	patch, err := json.Marshal(map[string]any{"roles": roles, "units": document["units"]})
+	servers := document["mcp_servers"].([]any)
+	servers[0], servers[1] = servers[1], servers[0]
+	patch, err := json.Marshal(map[string]any{"mcp_servers": servers})
 	if err != nil {
 		t.Fatal(err)
 	}
 	patchOnly(t, s, string(patch), summaryHeader)
 
-	assertNewerKeysKept(t, s, "PATCH replacing the roster")
-	if ceo := seatByHandle(storedTree(t, s), "ceo"); ceo["seat_setting_"+newer] != nil {
-		t.Errorf("the CTO's key reached the CEO, which took its position: %v", ceo)
-	}
+	// assertNewerKeysKept matches BY NAME, so it is what catches a key that
+	// followed a position rather than its owner.
+	assertNewerKeysKept(t, s, "PATCH replacing a list")
 }
 
 // AND A PATCH THAT NAMES NO ARRAY KEEPS THEM TOO. The struct's own `roles`
@@ -170,82 +149,41 @@ func TestAPatchNamingNoArrayKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 	assertNewerKeysKept(t, s, "PATCH naming no array")
 }
 
-// A PATCH KEEPS EVERY LIST IT DID NOT NAME EXACTLY AS IT WAS STORED, one whose
-// members have no identity included.
+// A PATCH KEEPS EVERY LIST IT DID NOT NAME EXACTLY AS IT WAS STORED.
 //
-// A schedule cannot be matched to a stored one (two of a seat's schedules
-// can share a cron and a task), so when a write REPLACES a list of them, the
-// fields a newer build wrote on each are gone, and the API reference says
-// so. A patch that names no schedule replaced none. It still lost them: the
-// merge wrote this build's encoding of the whole company back over the
-// stored document, which replaced every list in it, and the carry could
-// bring back only what it could match.
+// The merge wrote this build's encoding of the WHOLE company back over the
+// stored document, which replaced every list in it whatever the patch named,
+// and the carry could bring back only what it could match.
+//
+// # The list this is shown on, and the limit that used to be shown beside it
+//
+// The pair of cases used to be a seat's `schedules` — a list whose members
+// have NO identity, so a replacement genuinely loses what a newer build wrote
+// on each, which the API reference states. Every list of that shape sat on a
+// seat or a unit, and those are the org chart's own domain now; the settings a
+// revision still holds have no unidentified list left to show it on. The rule
+// itself did not move, and [TestAPatchWritesBackOnlyWhatItNamed] is where it
+// is held, against a schema written for the purpose rather than against
+// whichever fields this build happens to have today.
+//
+// What is shown here is the half that is about the MERGE rather than about
+// matching: a patch naming one key of one block must leave every list it never
+// mentioned exactly as the bytes hold it.
 func TestAPatchKeepsEveryListItDidNotName(t *testing.T) {
 	t.Parallel()
-	schedule := func(owner string) []any {
-		return []any{map[string]any{
-			"name": "standup", "cron": "0 9 * * 1-5", "task": "Post the standup",
-			"schedule_setting": owner,
-		}}
-	}
-	seed := func(t *testing.T) *surface {
-		s := newSurface(t, nil)
-		s.seedStored(t, newerPeerDoc, func(document map[string]any) {
-			document["units"].([]any)[0].(map[string]any)["schedules"] = schedule("unit")
-			document["roles"].([]any)[1].(map[string]any)["schedules"] = schedule("cto")
-		})
-		return s
-	}
-	setting := func(t *testing.T, s *surface, owner string) any {
-		t.Helper()
-		tree := storedTree(t, s)
-		var holder map[string]any
-		if owner == "unit" {
-			holder = tree["units"].([]any)[0].(map[string]any)
-		} else {
-			holder = seatByHandle(tree, owner)
-		}
-		schedules, _ := holder["schedules"].([]any)
-		if len(schedules) != 1 {
-			t.Fatalf("%s holds %d schedules, want its one: %v", owner, len(schedules), holder)
-		}
-		return schedules[0].(map[string]any)["schedule_setting"]
-	}
+	s := newSurface(t, nil)
+	seedNewerPeer(t, s)
 
-	t.Run("a patch naming no list", func(t *testing.T) {
-		t.Parallel()
-		s := seed(t)
-		patchOnly(t, s, `{"mission": "unrelated", "providers": {"llm": {"zulu": {"model": "claude-opus-5"}}}}`, summaryHeader)
-		for _, owner := range []string{"unit", "cto"} {
-			if got := setting(t, s, owner); got != owner {
-				t.Errorf("the %s schedule's field became %v, want it kept", owner, got)
-			}
-		}
-		zulu := storedTree(t, s)["providers"].(map[string]any)["llm"].(map[string]any)["zulu"].(map[string]any)
-		if zulu["model"] != "claude-opus-5" {
-			t.Errorf("the named model was not written: %v", zulu)
-		}
-	})
+	patchOnly(t, s, `{"mission": "unrelated", "providers": {"llm": {"zulu": {"model": "claude-opus-5"}}}}`,
+		summaryHeader)
 
-	// The contrast, which is the documented limit: a patch replacing the
-	// roster replaced the seats' schedules, and what it did not name keeps
-	// its own.
-	t.Run("a patch naming the roster", func(t *testing.T) {
-		t.Parallel()
-		s := seed(t)
-		document := read(t, s)
-		patch, err := json.Marshal(map[string]any{"roles": document["roles"]})
-		if err != nil {
-			t.Fatal(err)
-		}
-		patchOnly(t, s, string(patch), summaryHeader)
-		if got := setting(t, s, "unit"); got != "unit" {
-			t.Errorf("the unit's schedule field became %v, want it kept", got)
-		}
-		if got := setting(t, s, "cto"); got != nil {
-			t.Errorf("the CTO's replaced schedule kept %v, which nothing can match it by", got)
-		}
-	})
+	// THE LIST THE PATCH NEVER MENTIONED, with the keys a newer build wrote
+	// on each of its members still on the right member.
+	assertNewerKeysKept(t, s, "PATCH naming one key of one block")
+	zulu := storedTree(t, s)["providers"].(map[string]any)["llm"].(map[string]any)["zulu"].(map[string]any)
+	if zulu["model"] != "claude-opus-5" {
+		t.Errorf("the named model was not written: %v", zulu)
+	}
 }
 
 // A PATCH'S RESTORED ENCODING LANDS ONLY WHERE THE PATCH NAMED SOMETHING.
@@ -306,20 +244,18 @@ func TestAPatchWritesBackOnlyWhatItNamed(t *testing.T) {
 	}
 }
 
-// A FULL PUT OF THE READ, WITH A SEAT MOVED, KEEPS THEM. Nobody sending a
-// document through this build could have named one of these keys, so nobody
-// meant to remove one; the SRE moves to the root and keeps its own.
+// A FULL PUT OF THE READ, WITH A LIST MEMBER MOVED, KEEPS THEM. Nobody
+// sending a document through this build could have named one of these keys,
+// so nobody meant to remove one; the servers swap places and each keeps its
+// own.
 func TestAPutKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, nil)
 	seedNewerPeer(t, s)
 
 	document := read(t, s)
-	units := document["units"].([]any)
-	engineering := units[0].(map[string]any)
-	sre := engineering["roles"].([]any)[0]
-	delete(engineering, "roles")
-	document["roles"] = append(document["roles"].([]any), sre)
+	servers := document["mcp_servers"].([]any)
+	servers[0], servers[1] = servers[1], servers[0]
 	body, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
@@ -328,26 +264,33 @@ func TestAPutKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Fatalf("PUT = %d, want 201: %s", res.Code, res.Body)
 	}
-	assertNewerKeysKept(t, s, "PUT with a seat moved")
+	assertNewerKeysKept(t, s, "PUT with a list member moved")
 }
 
-// A KEY THIS BUILD KNOWS IS NOT CARRIED. The CTO's goal is left out of the
-// write, which is how a person removes it, and it stays removed.
+// A KEY THIS BUILD KNOWS IS NOT CARRIED. The tracker server's tool prefix is
+// left out of the write, which is how a person removes it, and it stays
+// removed.
 func TestAKnownFieldAWriteLeavesOutIsRemoved(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, nil)
-	seedNewerPeer(t, s)
+	s.seedStored(t, newerPeerDoc, func(document map[string]any) {
+		document["mcp_servers"].([]any)[0].(map[string]any)["tool_prefix"] = "tr_"
+	})
 
 	document := read(t, s)
-	cto := document["roles"].([]any)[1].(map[string]any)
-	delete(cto, "goal")
-	patch, err := json.Marshal(map[string]any{"roles": document["roles"]})
+	for _, item := range document["mcp_servers"].([]any) {
+		server := item.(map[string]any)
+		if server["name"] == "tracker" {
+			delete(server, "tool_prefix")
+		}
+	}
+	patch, err := json.Marshal(map[string]any{"mcp_servers": document["mcp_servers"]})
 	if err != nil {
 		t.Fatal(err)
 	}
 	patchOnly(t, s, string(patch), summaryHeader)
-	if got := seatByHandle(storedTree(t, s), "cto")["goal"]; got != nil {
-		t.Errorf("the goal the write removed came back: %v", got)
+	if got := serverByName(storedTree(t, s), "tracker")["tool_prefix"]; got != nil {
+		t.Errorf("the tool prefix the write removed came back: %v", got)
 	}
 }
 
@@ -385,13 +328,6 @@ func TestAPatchNamingAKeyThisBuildCannotRepresentIsRefused(t *testing.T) {
 			func(d map[string]any) { d["root_setting"] = "from-a-newer-build" },
 			`{"root_setting": "mine now"}`,
 		},
-		"deleting one on a seat": {
-			func(d map[string]any) {
-				d["roles"].([]any)[1].(map[string]any)["seat_setting"] = "cto"
-			},
-			`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu"},
-			            {"name": "CTO", "handle": "cto", "llm": "zulu", "seat_setting": null}]}`,
-		},
 		"deleting one inside a known block": {
 			func(d map[string]any) {
 				providers := d["providers"].(map[string]any)
@@ -403,7 +339,8 @@ func TestAPatchNamingAKeyThisBuildCannotRepresentIsRefused(t *testing.T) {
 			func(d map[string]any) {
 				d["mcp_servers"].([]any)[0].(map[string]any)["server_setting"] = "tracker"
 			},
-			`{"mcp_servers": [{"name": "tracker", "command": "tracker-mcp", "server_setting": null}]}`,
+			`{"mcp_servers": [{"name": "tracker", "transport": "http",
+			  "url": "https://mcp.example.com", "server_setting": null}]}`,
 		},
 		// A typo is the same shape: the key is in no build, so deleting it
 		// removes nothing and the merged document is clean either way.
@@ -448,11 +385,10 @@ func TestAPatchNamingAKeyThisBuildCannotRepresentIsRefused(t *testing.T) {
 func TestAnEntityWriteKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ kind, id string }{
-		{configapi.EntityRoles, "cto"},
-		{configapi.EntityRoles, "sre"},
-		{configapi.EntityUnits, "engineering"},
 		{configapi.EntityLLMProviders, "zulu"},
+		{configapi.EntityLLMProviders, "yankee"},
 		{configapi.EntityMCPServers, "tracker"},
+		{configapi.EntityMCPServers, "notion"},
 	} {
 		t.Run(tc.kind+"/"+tc.id, func(t *testing.T) {
 			t.Parallel()
@@ -514,8 +450,9 @@ func TestAnEntityWriteAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 			t.Fatalf("active: %v", err)
 		}
 		if _, err := s.svc.ApplyEntity(t.Context(), configapi.ApplyEntityRequest{
-			Kind: configapi.EntityRoles, ID: "cto",
-			Body:    []byte(`{"name": "CTO", "handle": "cto", "llm": "zulu", "goal": "` + name + `"}`),
+			Kind: configapi.EntityLLMProviders, ID: "zulu",
+			Body: []byte(`{"type": "anthropic", "model": "claude-sonnet-5",
+			  "api_keys": ["sk-` + strings.ReplaceAll(name, " ", "-") + `"]}`),
 			Summary: "an entity", Operator: "operator", Expect: spell(current.ID),
 		}); err != nil {
 			t.Errorf("ApplyEntity with %s = %v", name, err)

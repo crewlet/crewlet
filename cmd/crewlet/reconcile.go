@@ -111,7 +111,17 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 		}
 		return publishLocalActive(ctx, plane, pub, active, log)
 	}
-	document, err := json.Marshal(seed.Company)
+	// THE SETTINGS HALF, because that is what a revision holds. The file
+	// carries both and always will — an operator authors one document
+	// describing a company — and the two halves land on this node by two
+	// paths: the settings here, and the org chart from the SAME file
+	// through the engine's boot seed, which publishes it to the chart log
+	// when that log is empty.
+	//
+	// Storing the whole file instead would store a revision every node
+	// then refuses to apply ([config.DecodeSettings]), including this one
+	// on its next restart — a company that boots once and never again.
+	document, err := json.Marshal(config.SettingsOf(seed.Company).Company())
 	if err != nil {
 		return fmt.Errorf("encode the company config: %w", err)
 	}
@@ -311,7 +321,11 @@ func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Compan
 	if err != nil {
 		return nil, fmt.Errorf("open the active revision %s: %w", active.ID, err)
 	}
-	company, err := config.DecodeCompany(document)
+	// AS SETTINGS: a stored revision is the company's settings and the org
+	// chart is the state log's own domain. A revision written before the
+	// split is refused rather than applied with its chart dropped — see
+	// [config.DecodeSettings], whose refusal names the repair.
+	company, err := config.DecodeSettingsAsCompany(document)
 	if err != nil {
 		return nil, fmt.Errorf("parse the active revision %s: %w", active.ID, err)
 	}

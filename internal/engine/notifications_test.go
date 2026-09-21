@@ -9,12 +9,17 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// The registry is DERIVED from one org and answers for it permanently, so an
-// apply must build a new one — a node that indexed only its first company
-// would resolve every party against an org that is no longer running, and a
-// seat added by an apply would be permanently unreachable with nothing
+// The registry is DERIVED from one org and answers for it permanently, so a
+// new company must build a new one — a node that indexed only its first
+// company would resolve every party against an org that is no longer running,
+// and a seat hired afterwards would be permanently unreachable with nothing
 // failing.
-func TestThePartyRegistryFollowsTheAppliedCompany(t *testing.T) {
+//
+// THE SEAT IS HIRED ON THE CHART, because that is where a seat comes from. A
+// config apply carries settings and no roster, so adding one to the applied
+// document would change nothing about who exists — and this case would pass
+// for a registry that never followed anything.
+func TestThePartyRegistryFollowsTheCompany(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
 
@@ -36,23 +41,18 @@ func TestThePartyRegistryFollowsTheAppliedCompany(t *testing.T) {
 		t.Fatal("the founder is not marked human")
 	}
 
-	// THE APPLY. A new seat must become addressable without a restart.
-	grown := parsedCompany(t, companyDoc+`
-  - name: Staff Engineer
-    handle: staff
-    llm: alpha
-`)
-	if _, _, err := e.Apply(t.Context(), grown); err != nil {
-		t.Fatalf("Apply: %v", err)
+	// THE HIRE. A new seat must become addressable without a restart.
+	if err := hire(t, e, "staff"); err != nil {
+		t.Fatal(err)
 	}
 
 	if _, ok := e.Registry().ByHandle("staff"); !ok {
-		t.Fatal("a seat added by an apply is not addressable")
+		t.Fatal("a seat hired onto the chart is not addressable")
 	}
 	// And the registry is a NEW one: the old org's answer must not
 	// survive into a company that no longer has that seat.
 	if e.Registry() == reg {
-		t.Fatal("the apply reused the previous registry")
+		t.Fatal("the new company reused the previous registry")
 	}
 }
 

@@ -30,27 +30,34 @@ func pathsOf(changes []configapi.Change) map[string]configapi.Change {
 	return out
 }
 
+// serverDoc is companyDoc with a LIST in it: `mcp_servers`, which is what a
+// settings revision still carries and what every case here about list
+// positions needs.
+const serverDoc = companyDoc + `
+mcp_servers:
+  - {name: tracker, transport: http, url: "https://mcp.example.com"}
+`
+
 func TestADiffTellsAddedFromRemoved(t *testing.T) {
 	t.Parallel()
-	base := companyFrom(t, companyDoc)
-	grown := companyFrom(t, strings.Replace(companyDoc,
-		"  - name: CTO\n    handle: cto\n    llm: zulu\n",
-		"  - name: CTO\n    handle: cto\n    llm: zulu\n  - name: Designer\n    handle: designer\n    llm: zulu\n", 1))
+	base := companyFrom(t, serverDoc)
+	grown := companyFrom(t, serverDoc+
+		"  - {name: notion, command: notion-mcp}\n")
 
 	forward, err := configapi.Changes(base, grown)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if change, present := pathsOf(forward)["roles[2]"]; !present || change.Kind != configapi.KindAdded {
-		t.Errorf("adding a seat reads as %+v, want added", change)
+	if change, present := pathsOf(forward)["mcp_servers[1]"]; !present || change.Kind != configapi.KindAdded {
+		t.Errorf("adding a server reads as %+v, want added", change)
 	}
 
 	backward, err := configapi.Changes(grown, base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if change, present := pathsOf(backward)["roles[2]"]; !present || change.Kind != configapi.KindRemoved {
-		t.Errorf("removing a seat reads as %+v, want removed", change)
+	if change, present := pathsOf(backward)["mcp_servers[1]"]; !present || change.Kind != configapi.KindRemoved {
+		t.Errorf("removing a server reads as %+v, want removed", change)
 	}
 }
 
@@ -135,7 +142,7 @@ func TestASubtreeIsAddedWholeRatherThanLeafByLeaf(t *testing.T) {
 		t.Fatal("a diff against nothing found no changes")
 	}
 	byPath := pathsOf(changes)
-	for _, section := range []string{"name", "providers", "roles"} {
+	for _, section := range []string{"name", "providers", "integrations"} {
 		change, present := byPath[section]
 		if !present {
 			t.Errorf("no change for the %q section", section)
@@ -161,7 +168,7 @@ func wideCompanyDoc(model string) string {
 	for i := range configapi.MaxChanges + 10 {
 		fmt.Fprintf(&doc, "    p%04d: {type: anthropic, model: %s, api_keys: [\"${K}\"]}\n", i, model)
 	}
-	doc.WriteString("roles:\n  - {name: CEO, handle: ceo}\n")
+	doc.WriteString("mcp_servers:\n  - {name: tracker, command: tracker-mcp}\n")
 	return doc.String()
 }
 
@@ -247,14 +254,14 @@ func TestAChangeInsideAListElementIsFound(t *testing.T) {
 	// answer: what an operator asks is which FIELD of which seat changed.
 	// Reporting the whole element as changed would make a one-character
 	// edit to a handle read as a seat replaced.
-	base := companyFrom(t, companyDoc)
-	renamed := companyFrom(t, strings.Replace(companyDoc, "handle: ceo", "handle: chief", 1))
+	base := companyFrom(t, serverDoc)
+	renamed := companyFrom(t, strings.Replace(serverDoc, "name: tracker", "name: issues", 1))
 
 	changes, err := configapi.Changes(base, renamed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	change, present := pathsOf(changes)["roles[0].handle"]
+	change, present := pathsOf(changes)["mcp_servers[0].name"]
 	if !present {
 		var paths []string
 		for _, c := range changes {
@@ -262,7 +269,7 @@ func TestAChangeInsideAListElementIsFound(t *testing.T) {
 		}
 		t.Fatalf("the change inside the list element was not found; got %v", paths)
 	}
-	if change.Kind != configapi.KindChanged || change.From != "ceo" || change.To != "chief" {
+	if change.Kind != configapi.KindChanged || change.From != "tracker" || change.To != "issues" {
 		t.Errorf("change = %+v", change)
 	}
 }
@@ -295,22 +302,18 @@ func TestARotatedCredentialIsReportedWithoutEitherValue(t *testing.T) {
 
 // AN ADDED OR REMOVED SUBTREE CARRIES ITS VALUE REDACTED.
 //
-// An addition is reported as the whole subtree, so a seat added with its own
-// credentials would otherwise print them in full. The seat is appended at the
-// END of the list, so position alone makes it an addition or a removal.
+// An addition is reported as the whole subtree, so a server added with its own
+// credentials would otherwise print them in full. It is appended at the END of
+// the list, so position alone makes it an addition or a removal.
 func TestAnAddedOrRemovedSubtreeIsRedacted(t *testing.T) {
 	t.Parallel()
-	const literal = "per-seat-literal-token"
-	withSeat := companyDoc + `  - name: CFO
-    handle: cfo
-    llm: zulu
-    mcp_env:
-      tracker: {TOKEN: ` + literal + `}
-mcp_servers:
-  - {name: tracker, command: tracker-mcp, shared: false}
+	const literal = "per-server-literal-token"
+	withServer := serverDoc + `  - name: notion
+    command: notion-mcp
+    env: {TOKEN: ` + literal + `}
 `
-	base := companyFrom(t, companyDoc)
-	grown := companyFrom(t, withSeat)
+	base := companyFrom(t, serverDoc)
+	grown := companyFrom(t, withServer)
 
 	for name, pair := range map[string][2]*config.Company{
 		"added": {base, grown}, "removed": {grown, base},
@@ -319,8 +322,8 @@ mcp_servers:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, present := pathsOf(changes)["roles[2]"]; !present {
-			t.Errorf("%s: the seat is not reported: %+v", name, changes)
+		if _, present := pathsOf(changes)["mcp_servers[1]"]; !present {
+			t.Errorf("%s: the server is not reported: %+v", name, changes)
 		}
 		assertNoValue(t, changes, literal)
 	}

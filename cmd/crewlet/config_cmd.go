@@ -282,7 +282,10 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 func importConfig(ctx context.Context, cs *configStore, path string,
 	company *config.Company, summary string, stdout io.Writer,
 ) error {
-	document, err := json.Marshal(company)
+	// THE SETTINGS HALF, because that is what a revision holds. Storing the
+	// whole file would store a revision every node then refuses to apply
+	// ([config.DecodeSettings]).
+	document, err := json.Marshal(config.SettingsOf(company).Company())
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", path, err)
 	}
@@ -320,6 +323,7 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 		return fmt.Errorf("import %s: %w", path, err)
 	}
 	fmt.Fprintf(stdout, "imported %s as revision %s (sealed=%t)\n", path, id, cs.cipher != nil)
+	sayTheChartWasNotPublished(company, stdout)
 	fmt.Fprintln(stdout, publishNote)
 	return nil
 }
@@ -670,4 +674,57 @@ func importThroughNode(ctx context.Context, boot *config.Bootstrap, t importTarg
 		t.path, id, epoch)
 	fmt.Fprintf(stdout, "wrote to %s\n", client.Describe())
 	return nil
+}
+
+// sayTheChartWasNotPublished tells an operator that the units and seats in the
+// file they just imported did not move.
+//
+// # Why this command writes one half and says so
+//
+// A company file carries both halves — the settings and the org chart — and
+// this command runs OFFLINE, against the node's own store file with no broker
+// open. The settings are a row it can write; the chart is a record on an
+// ordered log, which needs the stream this process did not open.
+//
+// So it writes what it can and says what it did not, rather than doing either
+// of the two silent things. Storing the whole file would store a revision no
+// node applies. Saying nothing would let an operator who moved a seat in their
+// file read "imported" and believe the seat moved.
+//
+// NOTHING IS LOST EITHER WAY: the chart this node runs is untouched, and it is
+// the same rule `-company` has always had — the store wins over a file once a
+// company exists.
+func sayTheChartWasNotPublished(company *config.Company, stdout io.Writer) {
+	if company == nil || (len(company.Roles) == 0 && len(company.Units) == 0) {
+		return
+	}
+	units, seats := countChart(company)
+	fmt.Fprintf(stdout,
+		"note: %d unit(s) and %d seat(s) in that file were NOT published — an "+
+			"org chart is a log of its own and this command writes the "+
+			"settings. The chart this company runs is unchanged. A first "+
+			"deployment gets its chart from `crewlet run -company <file>`, "+
+			"which seeds an empty one from the same document.\n",
+		units, seats)
+}
+
+// countChart is how many units and seats a file declares, AT ANY DEPTH.
+//
+// Both walk, because both nest: a company's units are a tree and its seats sit
+// at the root and inside any unit of it. Counting only the top level would
+// report "1 unit and 1 seat" for a document holding forty of each, which is
+// the one number an operator reads to decide whether the note is about
+// anything.
+func countChart(company *config.Company) (units, seats int) {
+	seats = len(company.Roles)
+	var walk func([]config.Unit)
+	walk = func(in []config.Unit) {
+		for i := range in {
+			units++
+			seats += len(in[i].Roles)
+			walk(in[i].Children)
+		}
+	}
+	walk(company.Units)
+	return units, seats
 }

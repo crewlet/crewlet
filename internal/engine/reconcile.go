@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -542,7 +543,14 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 	// or an older peer mid-upgrade), and it runs exactly as it did before the
 	// rule existed; refusing it here is how a working company goes down on
 	// upgrade. It is applied, and warned about below.
-	cfg, err := config.DecodeCompany(document)
+	//
+	// AS SETTINGS, which is what a stored revision holds: the org chart is
+	// the state log's own domain, and the seats this node runs are derived
+	// from its rows rather than from these bytes. A revision written before
+	// the split still carries a chart inside it and is REFUSED here rather
+	// than applied with the chart dropped — dropping it would run a company
+	// with no seats at all, from a document that decoded cleanly.
+	cfg, err := config.DecodeSettingsAsCompany(document)
 	if err != nil {
 		return configplane.StatusError, nil, fmt.Errorf("engine: parse revision %s: %w",
 			target.RevisionID, err)
@@ -559,7 +567,11 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 		// same lines on every attempt for a revision this node is not even
 		// serving.
 		r.warnAdmission(ctx, target, cfg)
-		reportDanglingRefs(ctx, r.log, target, cfg)
+		// THE COMPOSED COMPANY, which is the only value that holds both
+		// halves: every reference this reports names something in the org
+		// chart, and the revision carries none.
+		reportDanglingRefs(ctx, r.log, target, r.engine.Company())
+		r.recordChartPosition(ctx, target.RevisionID)
 	}
 	return status, applied, err
 }
@@ -888,4 +900,39 @@ func (r *Reconciler) peerHealth(ctx context.Context, epoch int64) (ok, reported 
 		}
 	}
 	return ok, reported, nil
+}
+
+// recordChartPosition stamps the chart position this node composed the epoch
+// at, so the pair (revision, position) says what the company WAS.
+//
+// # Here rather than inside installEpoch
+//
+// Only this frame knows which revision was applied — an epoch carries its
+// settings and its view and nothing that names the row they came from. And
+// only the success branch reaches it, which is what makes the stamp mean "this
+// node ran this revision at this position" rather than "this node tried".
+//
+// # Every failure is a LOG LINE, never a status
+//
+// The pair is how a reader answers what the company was; it is not what the
+// node runs on. The epoch is already published and serving by the time this
+// is called, so reporting an error would turn a gap in the history into a
+// revision this node reports as unapplied — and the control plane would retry
+// an apply that has already happened.
+//
+// A node with no chart read yet records NOTHING rather than zero, for the
+// reason the column's own migration gives: a position of 0 is a real answer
+// (an empty chart) and absence is a different one.
+func (r *Reconciler) recordChartPosition(ctx context.Context, revisionID string) {
+	at, read := r.engine.epoch.viewAt()
+	if !read {
+		return
+	}
+	packed := statelog.Position{Generation: at.Generation, Seq: at.Seq}.Packed()
+	if err := r.configs.RecordChartPosition(ctx, revisionID, packed); err != nil {
+		r.log.WarnContext(ctx, "chart_position_not_recorded",
+			"revision", revisionID, "generation", at.Generation, "seq", at.Seq, "error", err,
+			"detail", "this node applied the revision and is serving it; its "+
+				"config history will not say which org chart it ran on")
+	}
 }

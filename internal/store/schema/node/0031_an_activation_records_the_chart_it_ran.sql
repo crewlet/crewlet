@@ -1,0 +1,37 @@
+-- An activated revision records the chart position this node ran it at.
+--
+-- A company used to be ONE document, so "what was this company at 14:02" had
+-- one answer: the revision that was active. It has two halves now — a
+-- settings revision and an org chart the state log derives — and neither one
+-- names the other. A revert to revision N therefore restores the settings
+-- somebody had and says nothing at all about the chart they had, which is the
+-- half a reader is usually asking about: who was in which team.
+--
+-- So an activation stamps the chart position the epoch was composed at. The
+-- pair (revision, position) is the company, and it is what `crewlet config
+-- show` renders, what a diff across an activation anchors on, and what an
+-- incident review reads to ask which chart a decision was made under.
+--
+-- IT IS THIS NODE'S OWN ANSWER, which is why it is in the node estate rather
+-- than the replicated one. A revision is activated fleet-wide by one pointer
+-- flip, and each node reaches it at its own position: a node still replaying
+-- applies the same settings over fewer chart records, and recording one
+-- node's position as the fleet's would be a claim about peers this database
+-- never sees. Each node stamps what IT ran.
+--
+-- THE PACKED FORM, one column, because that is what every durable position
+-- column in this tree stores: (generation << 40) | seq, which orders
+-- lexicographically by (generation, seq) for free. Two columns would be a
+-- second encoding of one value and a comparison somebody has to remember to
+-- write as a tuple.
+--
+-- NULL IS NOT ZERO HERE. A revision activated by a build before this column
+-- existed has no answer; a revision activated on an empty chart has the
+-- answer 0. Collapsing the two would report every historical activation as
+-- having run on an empty company.
+ALTER TABLE company_config ADD COLUMN chart_position INTEGER;
+
+-- NO INDEX. Nothing selects on it: the column is read one row at a time,
+-- beside a revision somebody already named, and written once per activation.
+-- An index would be a write cost on the company's hottest configuration path
+-- for a query nobody makes.

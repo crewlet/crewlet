@@ -60,7 +60,7 @@ one JSON object, and it always has the same three parts in the same places:
   refusal, as typed JSON beside the two reserved keys rather than nested under
   one: `config_path` and `hint` above, `fields` on an integration that is
   missing values, `current_revision_id` on a lost update, `problems` and
-  `derived` on a refused configuration document. Values keep their own types,
+  `problems` on a refused configuration document. Values keep their own types,
   so a count is a number and a list of located problems is a list.
 
 `error` and `message` are RESERVED: a route's own detail can never displace
@@ -332,20 +332,31 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
   "epoch": 42,
   "warnings": [
     {
-      "kind": "dangling_reference", "ref": "manages",
-      "path": "roles[0].manages[1]", "segments": ["roles", 0, "manages", 1],
-      "seat": "ceo", "unit": "", "from": "CEO", "to": "Ghost",
-      "message": "seat \"CEO\" manages \"ghost\", which is neither a seat's handle nor a unit's key, so the entry manages nobody. Correct the entry or add a seat or unit answering to it"
+      "kind": "admission", "ref": "",
+      "path": "providers.sandbox.setup", "segments": ["providers", "sandbox", "setup"],
+      "seat": "", "unit": "", "from": "", "to": "",
+      "message": "providers.sandbox.setup: conflicting settings: duplicate setup step name \"git-auth\": 2 steps carry it ..."
     }
-  ],
-  "derived": {"seats": [...], "units": [...]}
+  ]
 }
 ```
 
 - **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` name it is about, empty when neither), plus `from` and `to` as display text. Two kinds:
   - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead, a seat handle), `unit` (a root seat's `unit:`, a unit key), `manages` (one `manages` entry — a seat handle or a unit key — at the index it was written) or `gitlab_access_level` (a key under `integrations.gitlab.provisioning.access_levels` naming no seat).
   - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company stored before the rule answers with one, one beside each entity the violation names.
-- **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its `id`, its effective type, lead and channel (and whether each was inherited). A unit's `id` is its **key** — what a `manages:` entry and a seat's `unit:` resolve — so a client can follow a reference it reads elsewhere in the same response rather than matching on a display name that is a different value. Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
+
+  A **settings** revision reports no `dangling_reference` at all, and that is a
+  property of the split rather than a gap: every reference here — a unit's
+  lead, a seat's `manages`, a GitLab access level's key — is answered by the
+  **org chart**, which is a domain of its own. Asked of bytes that carry no
+  chart, the check would report every reference in the company as dangling, on
+  every write, for ever. `crewlet validate` still reports them over an
+  authored file, which carries both halves.
+
+**There is no `derived` hierarchy in this answer.** It used to carry the whole
+org chart the document produced; a settings revision produces none, and
+answering an empty one would tell every client that the company has no seats.
+Read the hierarchy from [`GET /org`](#get-org).
 
 #### Dry runs
 
@@ -360,7 +371,7 @@ curl -X PATCH "https://engine.example.com/config?dry_run=true" \
 A valid check answers `200`:
 
 ```json
-{"valid": true, "base_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41", "warnings": [], "derived": {"seats": [...], "units": [...]}}
+{"valid": true, "base_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41", "warnings": []}
 ```
 
 - **`dry_run` is read before anything else**, and takes exactly `true` or `false`, or nothing. Any other value (`1`, `yes`, an empty value, the parameter twice) is `400 invalid_query`: the two readings of a guess differ by whether the fleet's configuration changes.
@@ -376,21 +387,21 @@ A refused document (`400 validation_error`, `400 invalid_patch`, `400 invalid_bo
 ```json
 {
   "error": "validation_error",
-  "detail": "roles[1].llm: value not in the allowed set: \"nowhere\" is not a configured provider: providers.llm has zulu. ...",
+  "detail": "workers.researcher.model: value not in the allowed set: \"nowhere\" is not a configured provider: providers.llm has zulu. ...",
   "hint": "the WHOLE document a write produces is validated, ...",
   "problems": [
     {
-      "path": "roles[1].llm", "segments": ["roles", 1, "llm"], "kind": "unknown_value",
-      "message": "roles[1].llm: value not in the allowed set: ...", "seat": "cto"
+      "path": "workers.researcher.model", "segments": ["workers", "researcher", "model"],
+      "kind": "unknown_value",
+      "message": "workers.researcher.model: value not in the allowed set: ..."
     }
-  ],
-  "derived": {"seats": [...], "units": [...]}
+  ]
 }
 ```
 
 | Field | Meaning |
 |-------|---------|
-| `path` | The authored path in the whole document that was validated. For a per-entity write that is the document the entity was spliced into, and an entity body it cannot read is placed where that entity sits (`roles[1].gaol` for a typo in the second seat). `""` only for a failure that belongs to no place in it, such as a whole document that is not YAML at all |
+| `path` | The authored path in the whole document that was validated. For a per-entity write that is the document the entity was spliced into, and an entity body it cannot read is placed where that entity sits (`mcp_servers[1].comand` for a typo in the second server). `""` only for a failure that belongs to no place in it, such as a whole document that is not YAML at all |
 | `segments` | The same path taken apart: strings for keys, numbers for list indexes. A map key can hold a dot, so read these rather than splitting `path`. `null` when `path` is `""` |
 | `kind` | `missing`, `unknown_value`, `out_of_range`, `conflict`, `unknown_field`, `shape`, or `invalid` for anything this build does not classify |
 | `message` | The failure's whole line, exactly as it appears in `detail`. A duplicate name is one line naming every entity and one problem beside each, so there can be more problems than lines |
@@ -398,11 +409,11 @@ A refused document (`400 validation_error`, `400 invalid_patch`, `400 invalid_bo
 | `unit` | The name of the unit the problem is about, when it is about one |
 | `line` | The 1-based line in the text that was sent, for a failure the parser found. A patch's failure found in the merged document names no line, because that text is the engine's merge rather than anything sent |
 
-`derived` is present whenever the document parsed: a document with problems still has a hierarchy, and a person fixing a misspelled lead finds it in the chart it breaks. A body or patch that never became a document carries none.
+A refusal carries no `derived` hierarchy, for the reason [a write's answer](#what-a-write-answers) gives: a settings document produces none, and an empty one would read as a company with no seats.
 
 No message repeats a credential. A document read from `GET /config` carries masks, which a write restores from the stored revision before validating, so the values a refusal judges are ones the caller was never shown: a message says what rule a value breaks and never the value, a fragment of it, or its length.
 
-The [`/setup`](#setting-an-integration-up) submissions that change the document answer their `validation_error` with the same `problems` and `derived`.
+The [`/setup`](#setting-an-integration-up) submissions that change the document answer their `validation_error` with the same `problems`.
 
 #### Conditional requests
 
@@ -423,17 +434,26 @@ Independently of any header, every write names the revision it derived from as t
 
 #### Per-entity read and write
 
-Four collections, `GET` and `PUT`:
+Four collections readable, **two writable**:
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/config/{kind}/{id}` | One entity, redacted, with an `ETag`. **The body is the entity itself**, so it goes straight back into the `PUT` |
-| `PUT` | `/config/roles/{handle}` | Replace one seat, wherever it lives — root-level or inside a unit, at any depth |
-| `PUT` | `/config/units/{key}` | Replace one org unit, addressed by its key (its `id`, or its name where it declares none) |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry |
+| `PUT` | `/config/roles/{handle}` | **`400 chart_not_writable_here`** — a seat is the [org chart](../concepts/chart-domain.md)'s, not the settings' |
+| `PUT` | `/config/units/{key}` | **`400 chart_not_writable_here`** — likewise for a unit |
+
+A fresh deployment's chart is seeded from its company file at boot; see [the boot seed](../concepts/control-plane.md#the-boot-seed).
 
 Any other method is `405` with an `Allow` header naming `GET, PUT`. There is no `DELETE` — removal is a full-document edit, for the reasons below.
+
+`roles` and `units` stay **readable** because a revision written before the
+chart's split still carries both, and an operator repairing one has to be able
+to see it. The write is refused rather than answered `404`: on such a revision
+the splice would succeed and store another revision carrying a chart, which
+every node then refuses to apply — so the failure would arrive at the next
+restart instead of at the request that caused it.
 
 Why these exist beside the whole-document write: `PUT /config` makes every edit
 a company-wide one. A founder renaming one seat's goal sends back a document
@@ -446,18 +466,19 @@ It is the same write underneath, and that matters more than the convenience:
 an entity `PUT` opens the active revision, splices the entity in, restores the
 masks the read showed against that same revision, **validates the whole
 document**, and stores a new revision. A change that would leave the company
-invalid is refused even when the entity itself is fine — a seat naming a
-provider that no longer exists is exactly the break a per-entity surface
-invites, because the caller never sees the rest of the document.
+invalid is refused even when the entity itself is fine — a delegate template
+naming a provider that no longer exists is exactly the break a per-entity
+surface invites, because the caller never sees the rest of the document.
 
 Four rules follow from that:
 
 - **An unknown field is refused, not dropped.** The entity body is read by the
-  whole-document parser, JSON or YAML: `gaol` where `goal` was meant is
+  whole-document parser, JSON or YAML: `modell` where `model` was meant is
   `400 invalid_body` with an `unknown_field` [problem](#refusals-carry-located-problems)
-  placed where the seat sits in the document (`roles[1].gaol`), with its line in
-  the body. A decoder that ignored what it did not recognise would answer `201`
-  and store the seat with its goal silently gone.
+  placed where the entity sits in the document
+  (`providers.llm.zulu.modell`), with its line in the body. A decoder that
+  ignored what it did not recognise would answer `201` and store the provider
+  with its model silently gone.
 - **A `PUT` never creates.** An id nothing carries is `404 no_such_entity`, not
   a new entity: naming one that is not there is far more often a typo than an
   intent to add one, and creating through this route would grow the company
@@ -467,17 +488,10 @@ Four rules follow from that:
 - **The id in the path is the identity, and a `PUT` never renames.** A body
   whose own identity disagrees with the path is `400 identity_mismatch`, not a
   move: nothing that points at the old identity travels with the splice. A
-  seat's durable id is a UUIDv5 over (company name, handle), so a renamed
-  handle strands that seat's diary, onboarding marker and counterparty
-  profiles behind an id nothing derives any more; a unit's key is referenced
-  by every `manages:` entry and root seat `unit:` that names it, and an MCP
-  server's name by every `mcp_env` block, a seat's or a unit's, keyed on it.
-  For a role the check is on the **derived** handle, so a body that omits
-  `handle` and changes `name` is refused too: that is a rename, just an
-  accidental one.
-  Send the identity back unchanged (changing a seat's display name while
-  keeping its handle is an ordinary edit); rename through `PUT /config`, where
-  what has to move with it is visible.
+  provider's key is what every seat's `llm:` chain names, and an MCP server's
+  name is the key every `mcp_env` block is keyed on and the prefix its tools
+  carry. Send the identity back unchanged and change whatever else you like;
+  rename through `PUT /config`, where what has to move with it is visible.
 - **The same summary and `If-Match` rules apply**, and a node with no
   active revision answers `409 no_active_revision` — there is nothing to splice
   into, and building a company out of one seat is not what this route is for.
@@ -550,8 +564,8 @@ On a `409`, re-read `/config` and send the edit again.
 
 ### Status codes
 
-- `200 OK`: a successful read, or a [dry run](#dry-runs) that found the write valid (`{"valid", "base_revision_id", "warnings", "derived"}`)
-- `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings", "derived"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
+- `200 OK`: a successful read, or a [dry run](#dry-runs) that found the write valid (`{"valid", "base_revision_id", "warnings"}`)
+- `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token — `invalid_token`, in the same [refusal envelope](#every-refusal-is-one-envelope) every route answers with, written by the guard itself before any route runs
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, or `no_such_entity` on a per-entity write naming an id the active revision does not carry
@@ -654,8 +668,8 @@ writes one: the history stays append-only, so "the credentials were reloaded
 at 04:12" is a fact somebody can find later. `X-Summary` names it; unset, it
 records `reload configuration`.
 
-Answers `201` with the revision, its epoch, its warnings and its derived
-hierarchy (see [What a write answers](#what-a-write-answers)),
+Answers `201` with the revision, its epoch and its warnings (see
+[What a write answers](#what-a-write-answers)),
 `409 no_active_revision` when nothing is configured, and
 `400 validation_error` when the active document breaks a
 runnable rule of this build (a reload is an apply, so it re-publishes only a

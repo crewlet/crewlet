@@ -9,9 +9,52 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
 | **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging (level, shape and an optional rotating log file) |
-| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets |
+| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | The company's **settings**: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), token budgets |
+| **The chart** | The state log (`CREWLET_CHART_LOG`) + rows on every node | Whoever is hiring | Live, per object, one record per change | The **org chart**: the units, the seats, who reports to whom — see [The org chart domain](chart-domain.md) |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
+
+### Tier B is two halves now
+
+The org chart used to be two keys of the Tier B document — `roles:` and
+`units:` — and it is a domain of its own. The difference is not tidiness. A
+settings document is edited by an operator a few times a month and read whole;
+a chart is edited per object by whoever is hiring, and every write contends
+with every other. Keeping them in one document put both on one revision
+counter, so adding a seat and rotating a token were the same kind of write,
+colliding on the same version, and the loser was refused in full.
+
+**The authoring FILE still carries both**, and always will: an operator writes
+one `company.yaml` describing a company, and `crewlet validate` reads it whole.
+What divides it is where each half is written — `crewlet config import` and
+`PUT /config` store the settings as a revision, and a node's first chart is
+seeded from the same file at boot (`crewlet run -company company.yaml`, which
+seeds only while the chart is empty).
+
+What changed is where a WRITE lands.
+
+| You want to… | Send it to… |
+|---|---|
+| Change a provider, an integration, the turn engine, a policy | `PUT` / `PATCH /config` |
+| Give a fresh deployment its first chart | `crewlet run -company company.yaml` — it seeds one while the chart is empty |
+| Load a whole authored file's settings | `crewlet config import` |
+
+A `PUT` or a `PATCH /config` carrying a top-level `roles:` or `units:` is
+refused in full with `400 chart_not_writable_here`, and so is a write to
+`/config/roles/{handle}` or `/config/units/{key}`. It is refused rather than
+ignored because ignoring it is the shape that hurts: a founder sends a whole
+document with a new seat in it, the write succeeds, the revision activates —
+and the seat is nowhere, with their own document saying it exists.
+
+**A revision written before the split is refused at APPLY, and served on every
+read.** It still holds the chart inside it, so a node that applied one would
+have to choose between running a chart no other node reads and dropping it to
+serve a company with no seats at all. It refuses instead, and keeps serving
+whatever it already applied; the refusal names the repair, which is to store
+the settings half from the company file (`crewlet config import
+company.yaml`). Every read — `crewlet config show`, `export`, `diff`,
+`GET /config` and the entity reads — still answers, because that revision is
+exactly the one an operator has to look at in order to repair it.
 
 ### Tier A example (`crewlet.yaml`)
 
@@ -228,7 +271,8 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 | `GET /config/revisions` | `200 []` |
 | `PUT /config` | Accepted, and creates the first active revision, as long as the FLEET has no activation either: a node that has not caught up with its fleet answers `412 already_configured` (with `If-None-Match: *`) or `409 revision_advanced`, naming the revision the fleet is on. Send no precondition, or `If-None-Match: *` to insist nothing is configured yet; an `If-Match` names a revision to match, so it answers `412 no_active_revision` |
 | `POST /config/revisions/{id}/revert` | `404` — no revisions exist yet |
-| Per-entity routes (`PUT /config/roles/{handle}`, etc.) and `PATCH /config` | `409 Conflict` — they edit a document, and there is none; initialise via `PUT /config` first |
+| Per-entity routes (`PUT /config/llm-providers/{key}`, `/config/mcp-servers/{name}`) and `PATCH /config` | `409 Conflict` — they edit a document, and there is none; initialise via `PUT /config` first |
+| `PUT /config/roles/{handle}`, `PUT /config/units/{key}` | `400 chart_not_writable_here` — a seat and a unit are the [org chart](chart-domain.md)'s, whatever this node holds |
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
 | `POST /webhooks/...` | Signature check still runs (a forgery is rejected as a forgery); body logged at WARNING; returns `503 {"status": "unavailable", "reason": "unconfigured"}` with `Retry-After` so the sender **retries**. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet |
 
@@ -522,7 +566,7 @@ fields went, never which and never what they held.
 A stored revision is not a document somebody just submitted. It passed the validation of the build that wrote it, which is not necessarily the build reading it: a later build can add a rule, and during a rolling upgrade an older peer keeps activating documents that break it. So reading a revision and running one are held to different standards.
 
 - **Reading holds a revision to no rule.** `GET /config`, a revision read, the diff, the reference index, the entity reads, `crewlet config show`, `export` and `diff`, and the prior a write restores its masks from or merges onto all decode the stored document as it is. A revision this build would refuse is exactly the one an operator needs to see and replace, so none of these may refuse it.
-- **Applying holds a revision to the runnable rules.** A node's reconcile tick validates a revision before anything on the node changes, so a refused revision leaves the previous epoch serving untouched. Booting from the store validates the active revision and names it when it cannot run, with `crewlet config import` as the way out because the node's API is not up yet. A company file named with `-company` or `-import-company` is held to the runnable rules while the node only runs it, because most boots write nothing from it: it is already the active revision, or a bootstrap the store's own company outranks. `POST /config/reload` and a revert validate what they re-activate.
+- **Applying holds a revision to the runnable rules, and to one rule about its SHAPE.** It must carry no org chart: a revision written before the chart moved onto its own log is refused before any rule is checked, because applying it would mean either running a chart no other node reads or dropping it and serving a company with no seats. Past that, a node's reconcile tick validates a revision before anything on the node changes, so a refused revision leaves the previous epoch serving untouched. Booting from the store validates the active revision and names it when it cannot run, with `crewlet config import` as the way out because the node's API is not up yet. A company file named with `-company` or `-import-company` is held to the runnable rules while the node only runs it, because most boots write nothing from it: it is already the active revision, or a bootstrap the store's own company outranks. `POST /config/reload` and a revert validate what they re-activate.
 - **A written document is held to every rule.** `PUT`, `PATCH`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) validate the entire document the write produces, after its masks are restored. A write over a revision this build refuses therefore succeeds exactly when it corrects it.
 
 The difference between the last two is the **admission rules**: rules added after companies already existed, which a stored company can break and still run exactly as it did before them. Today they are [unique seat names, unique seat ids and unique unit keys](organization-model.md#names-and-handles-are-unique), and unique sandbox setup step names within one `setup` list (`providers.sandbox.setup`, or one seat's `sandbox.setup`): a step's `env` and `files` are credentials restored by the step's name, so two steps of one name would leave every write carrying that list refused on masks nobody edited. So is a `unit:` reference on a seat declared inside a unit it does not name: the reference places only a root seat, so there it moves nothing and reads as a placement (see [the organization model](organization-model.md#a-seats-unit-reference)). A seat's own GitHub App (`integrations.github`) on a [human seat](humans-in-the-org.md) is one too: an app is the identity an agent acts as on GitHub, a person acts as their own `contact.github_login`, and nothing creates or reconciles an app for a person, so the block would read as a setting and do nothing. Three more are **whole-document** rules, and they are admission rules for the same reason plus one of their own. Each compares one half of the document against the other, or one seat against every other seat, so a per-object [chart](organization-model.md) write cannot check them at all — it sees one seat and its own snapshot of the structure, never the settings half and never what a second writer is doing on a second subject at the same moment. An authored file, whole, is the one place they are sound:

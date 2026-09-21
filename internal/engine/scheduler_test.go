@@ -2,11 +2,13 @@ package engine_test
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/org"
@@ -85,8 +87,16 @@ func TestTheSchedulerRespectsItsOffSwitch(t *testing.T) {
 
 // THE FIRST SCHEDULE ADDED TO A LIVE COMPANY STARTS THE LOOP, and the last
 // one removed stops it. Without this an operator's first schedule does
-// nothing until the next restart — and the config plane exists precisely so
-// that a company can be edited without one.
+// nothing until the next restart.
+//
+// # It is added through the CHART, because that is where a schedule lives
+//
+// A seat's `schedules:` are part of the seat, and a seat is the org chart's.
+// So the gesture that gives somebody their first standup is a chart write, not
+// a config apply — and a loop armed only on an apply would fire nothing until
+// the next one, which on a company nobody is reconfiguring is never. The
+// company a chart write publishes is a company like any other, so every loop
+// that follows the epoch has to follow that too.
 func TestAddingTheFirstScheduleLiveArmsTheLoop(t *testing.T) {
 	t.Parallel()
 	e := scheduledEngine(t, parsedCompany(t, companyDoc))
@@ -94,19 +104,16 @@ func TestAddingTheFirstScheduleLiveArmsTheLoop(t *testing.T) {
 		t.Fatal("armed before any schedule existed")
 	}
 
-	withSchedule := scheduledCompany(t)
-	if _, _, err := e.Apply(t.Context(), withSchedule); err != nil {
-		t.Fatalf("apply: %v", err)
-	}
+	setSeatSchedules(t, e, "cto", []org.Schedule{{
+		Name: "standup", Cron: "30 9 * * *", Task: "Post the standup thread",
+	}})
 	if !e.SchedulerRunning() {
 		t.Fatal("adding the first schedule to a live company did not arm the " +
 			"loop, so it fires nothing until the process restarts")
 	}
 
 	// ...and back again.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
-		t.Fatalf("apply: %v", err)
-	}
+	setSeatSchedules(t, e, "cto", nil)
 	if e.SchedulerRunning() {
 		t.Fatal("removing the last schedule left the loop running and its " +
 			"fleet duty claimed")
@@ -168,5 +175,53 @@ func TestStoppingTheEngineStopsTheScheduler(t *testing.T) {
 	e.Stop(ctx)
 	if e.SchedulerRunning() {
 		t.Fatal("the tick loop outlived the engine that owns it")
+	}
+}
+
+// setSeatSchedules rewrites one seat's schedules on the chart and waits for
+// the company view to carry the change.
+//
+// THROUGH THE SEAT'S RUNTIME DOCUMENT, which is where everything the chart has
+// no column for lives — a model chain, a credential, a schedule. The row's own
+// fields are restated because a content write is a FULL POST-STATE: a field
+// left empty is a field set to empty.
+func setSeatSchedules(t *testing.T, e *engine.Engine, handle string, each []org.Schedule) {
+	t.Helper()
+	writer := e.ChartWriter()
+	if writer == nil {
+		t.Fatal("this engine runs no chart writer")
+	}
+	seat := e.Company().Org.Role(handle)
+	if seat == nil {
+		t.Fatalf("%s is not a seat in this company", handle)
+	}
+	edited := *seat
+	edited.Schedules = each
+	runtime, err := org.SeatRuntime(&edited)
+	if err != nil {
+		t.Fatalf("encode the seat's runtime: %v", err)
+	}
+	if _, err := writer.WriteSeat(t.Context(),
+		fmt.Sprintf("test:schedules:%s:%d", handle, len(each)),
+		chart.SeatContent{
+			Handle: handle, Kind: chart.SeatKind(edited.EffectiveKind()),
+			Name: edited.Name, Email: edited.Email, Runtime: runtime,
+		}); err != nil {
+		t.Fatalf("write %s: %v", handle, err)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := engine.RefreshChartForTest(t.Context(), e); err != nil {
+			t.Fatalf("refresh: %v", err)
+		}
+		if got := e.Company().Org.Role(handle); got != nil &&
+			len(got.Schedules) == len(each) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the schedule change on %s never reached the view", handle)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
