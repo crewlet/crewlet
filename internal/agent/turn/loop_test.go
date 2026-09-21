@@ -29,6 +29,12 @@ type fake struct {
 	notesSeen             []string
 	historySeen           [][]ledger.Iteration
 	reviewedWork          []turn.Work
+
+	// The round NUMBERS the loop drove each phase with, beside the counts
+	// above. A resumed turn re-enters the round it parked in, so how many
+	// passes ran and which rounds they were are two different answers.
+	roundsSeen     []int
+	reviewedRounds []int
 }
 
 func at[T any](s []T, round int) T {
@@ -44,6 +50,7 @@ func at[T any](s []T, round int) T {
 
 func (f *fake) Execute(_ context.Context, round int, notes string, h []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	f.workRounds++
+	f.roundsSeen = append(f.roundsSeen, round)
 	f.notesSeen = append(f.notesSeen, notes)
 	f.historySeen = append(f.historySeen, h)
 	// THE PARTIAL RECORD TRAVELS WITH THE ERROR, which is what the real
@@ -59,13 +66,16 @@ func (f *fake) Resume(_ context.Context, h []ledger.Iteration) (turn.Work, turn.
 	if f.resumeErr != nil {
 		return at(f.works, 1), at(f.surfaces, 1), f.resumeErr
 	}
-	// A resumed phase re-enters the FIRST round, so it reads the same slot
-	// an ordinary executor pass would have.
+	// THE FIRST SLOT, whatever round the loop is on. Resume takes no round
+	// number — the real one reads it off the parked row rather than off the
+	// loop — so the re-entry always reads slot one, while Execute's and
+	// Review's slots stay indexed by the round.
 	return at(f.works, 1), at(f.surfaces, 1), nil
 }
 
 func (f *fake) Review(_ context.Context, round int, w turn.Work, _ []ledger.Iteration) (turn.Review, error) {
 	f.revRounds++
+	f.reviewedRounds = append(f.reviewedRounds, round)
 	f.reviewedWork = append(f.reviewedWork, w)
 	if f.revErr != nil {
 		return turn.Review{}, f.revErr
@@ -685,6 +695,193 @@ func TestAResumedTurnCanSuspendAgain(t *testing.T) {
 	}
 	if !res.Suspended {
 		t.Error("a resumed turn that called the sandbox again did not suspend")
+	}
+}
+
+// A RESUMED TURN DOES NOT GET ITS BUDGET BACK. The round it parked in is a
+// round it already spent, so `max_iterations` bounds the whole turn rather
+// than each half of it. The loop counted from one instead, and a turn that
+// suspended at round three of three came back from the box with three more
+// executor→reviewer rounds than the company had configured.
+func TestAResumedTurnDoesNotGetAFreshRoundBudget(t *testing.T) {
+	t.Parallel()
+	prior := []ledger.Iteration{
+		{Iteration: 1, Intent: "first"},
+		{Iteration: 2, Intent: "second"},
+	}
+	f := &fake{
+		works:    []turn.Work{delivered("back from the box")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 3},
+		turn.Input{
+			RunID: "t1", Reply: turn.ToolReply(""),
+			Resume: true, Round: 3, History: prior,
+		})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.resumeRounds != 1 || f.workRounds != 0 {
+		t.Errorf("resume %d / execute %d — the re-entry spent round three, so it "+
+			"was the turn's last", f.resumeRounds, f.workRounds)
+	}
+	if res.Breach == nil || res.Breach.Kind != types.GuardMaxIter {
+		t.Errorf("breach = %+v, want max_iter", res.Breach)
+	}
+	if res.Rounds != 3 {
+		t.Errorf("rounds = %d, want the round the turn re-entered", res.Rounds)
+	}
+	// The number the reviewer judged under is the number the runner already
+	// stamps the resumed phase's own record with.
+	if len(f.reviewedRounds) != 1 || f.reviewedRounds[0] != 3 {
+		t.Errorf("reviewed rounds = %v, want [3]", f.reviewedRounds)
+	}
+	assertOneEntryPerIteration(t, res.Iterations)
+}
+
+// EVERY ROUND AFTER THE RE-ENTRY CONTINUES THE COUNT. It is an ordinary round,
+// and one that re-used a number the pre-suspend half had already closed wrote
+// a second ledger entry under it — which the executor's prior-work block then
+// rendered as two "Iteration 2" sections, and which collided with that round's
+// phase record on the `turn|phase|iteration` key every screen files it under.
+func TestTheRoundsAfterAResumedOneContinueTheNumbering(t *testing.T) {
+	t.Parallel()
+	prior := []ledger.Iteration{{Iteration: 1, Intent: "before the box"}}
+	f := &fake{
+		works:    []turn.Work{delivered("back"), delivered("and again")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews: []turn.Review{
+			// Slot one is never read: the turn re-enters at round two.
+			{Decision: phase.Failed},
+			{Decision: phase.SelfIterate, Notes: "more"},
+			{Decision: phase.Done},
+		},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 5},
+		turn.Input{
+			RunID: "t1", Reply: turn.ToolReply(""),
+			Resume: true, Round: 2, History: prior,
+		})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Decision != phase.Done {
+		t.Fatalf("decision = %s, want done", res.Decision)
+	}
+	if len(f.roundsSeen) != 1 || f.roundsSeen[0] != 3 {
+		t.Errorf("executor rounds = %v, want [3] — the round after the re-entry",
+			f.roundsSeen)
+	}
+	if len(f.reviewedRounds) != 2 || f.reviewedRounds[0] != 2 || f.reviewedRounds[1] != 3 {
+		t.Errorf("reviewed rounds = %v, want [2 3]", f.reviewedRounds)
+	}
+	if res.Rounds != 3 {
+		t.Errorf("rounds = %d, want 3", res.Rounds)
+	}
+	assertOneEntryPerIteration(t, res.Iterations)
+}
+
+// A PARKED ROW THAT CANNOT SAY WHERE IT STOPPED resumes at round one, which is
+// what every resumed turn did before the round travelled at all. Zero is not a
+// round: taken literally the loop would run an extra one and file its ledger
+// entry under iteration zero.
+func TestAResumedTurnWithNoParkedRoundStartsAtOne(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works:    []turn.Work{delivered("back")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate}, {Decision: phase.Done}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 2},
+		turn.Input{RunID: "t1", Reply: turn.ToolReply(""), Resume: true, Round: 0})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Decision != phase.Done {
+		t.Fatalf("decision = %s, want done", res.Decision)
+	}
+	if len(f.reviewedRounds) != 2 || f.reviewedRounds[0] != 1 || f.reviewedRounds[1] != 2 {
+		t.Errorf("reviewed rounds = %v, want [1 2]", f.reviewedRounds)
+	}
+}
+
+// THE RE-ENTERED ROUND RUNS EVEN PAST THE CAP. `max_iterations` is
+// founder-owned and edited live while a detached run can be parked for hours,
+// so a resume can arrive at a round the budget no longer reaches. It is not a
+// new round: its executor pass already ran and its `run_sandbox` call is still
+// unanswered, so refusing it would throw away a coding run the company has
+// paid for and leave that conversation answered by nobody.
+func TestTheReEnteredRoundRunsEvenPastALoweredCap(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works:    []turn.Work{delivered("back from the box")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.Done}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 1},
+		turn.Input{RunID: "t1", Reply: turn.ToolReply(""), Resume: true, Round: 4})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.resumeRounds != 1 {
+		t.Errorf("resume ran %d times — the parked round was refused", f.resumeRounds)
+	}
+	if f.workRounds != 0 {
+		t.Errorf("execute ran %d times — a lowered cap bought the turn extra rounds",
+			f.workRounds)
+	}
+	if res.Decision != phase.Done {
+		t.Errorf("decision = %s, want done", res.Decision)
+	}
+}
+
+// THIS RUN'S FIRST ROUND ALWAYS RUNS, and on a resumed turn that is the parked
+// round rather than round one. The clock starts when [turn.Run] is entered, so
+// the rounds before the box ran against a different one entirely — a cap read
+// against `round > 1` breached before the re-entry had done anything.
+func TestAResumedTurnsFirstRoundOutrunsTheWallClockCap(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(0, 0)
+	f := &fake{
+		works:    []turn.Work{delivered("back from the box")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.Done}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{
+		MaxIterations: 5,
+		MaxWallClock:  30 * time.Second,
+		// One minute per read, so the cap is already past by the time the
+		// loop reaches its first round boundary.
+		Now: func() time.Time { now = now.Add(time.Minute); return now },
+	}, turn.Input{RunID: "t1", Reply: turn.ToolReply(""), Resume: true, Round: 3})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.resumeRounds != 1 {
+		t.Errorf("resume ran %d times — the cap refused the round it re-entered",
+			f.resumeRounds)
+	}
+	if res.Breach != nil {
+		t.Errorf("breach = %+v, want none: the first round always runs", res.Breach)
+	}
+	if res.Rounds != 3 {
+		t.Errorf("rounds = %d, want 3", res.Rounds)
+	}
+}
+
+// assertOneEntryPerIteration is the invariant the restarting counter broke:
+// the ledger a turn hands on carries one entry per round it closed, and a
+// resumed turn that re-numbered from one appended a second entry under a
+// number the suspended half had already used.
+func assertOneEntryPerIteration(t *testing.T, records []ledger.Iteration) {
+	t.Helper()
+	seen := map[int]bool{}
+	for _, rec := range records {
+		if seen[rec.Iteration] {
+			t.Errorf("iteration %d appears twice in %+v", rec.Iteration, records)
+		}
+		seen[rec.Iteration] = true
 	}
 }
 

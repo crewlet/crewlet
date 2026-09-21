@@ -181,6 +181,46 @@ type Input struct {
 	// round. The SAME turn id continues: the resumed conversation is the
 	// one the sandbox call left waiting.
 	Resume bool
+
+	// Round is the round that executor parked in, so the resumed turn
+	// carries on the budget rather than being handed a fresh one. Read
+	// only when Resume is set, and zero everywhere else.
+	//
+	// SEPARATE FROM History, although the two arrive together, because
+	// they answer different questions and only one of them is a count of
+	// rounds. History is what CLOSED before the suspend, and the round
+	// that called run_sandbox closed nothing — [Run] returns on a suspend
+	// without appending it — so `len(History)+1` is the parked round by
+	// coincidence rather than by rule, and stops being it the moment a
+	// round ends any other way. The number itself is already durable:
+	// [execstate.State.Round], which the runner also stamps the resumed
+	// phase's own record with, so the loop and the phase events agree
+	// about which round this is instead of differing by however many
+	// rounds ran before the box did.
+	//
+	// Zero or less is read as one. The value comes off a durable row
+	// another process, and possibly another build, wrote; a row that
+	// cannot say where it parked resumes at one exactly as it did before
+	// this field existed, and taking a negative literally would run the
+	// loop extra rounds and file them under iteration zero.
+	Round int
+}
+
+// firstRound is the round this turn's counter starts at.
+//
+// One for an ordinary turn. For a resumed one it is the round the suspend
+// happened in — a RE-ENTRY of that round rather than the one after it, which
+// is what the rest of the engine already says: [Phases.Resume] is called
+// instead of Execute for that round, the round appended no ledger entry when
+// it suspended, and the runner stamps the resumed phase's record with the same
+// number. A counter that restarted at one instead re-used every iteration
+// number the pre-suspend half had already spent, so the resumed phase records
+// collided with them on the one key a screen has for a phase.
+func (in Input) firstRound() int {
+	if !in.Resume || in.Round < 1 {
+		return 1
+	}
+	return in.Round
 }
 
 // Settings is the turn's pinned configuration.
@@ -244,7 +284,15 @@ type Result struct {
 	// fired.
 	Iterations []ledger.Iteration
 
-	// Rounds is how many executor passes actually ran.
+	// Rounds is the round number the turn reached.
+	//
+	// Which is how many executor passes ran, for a turn that started at
+	// round one — and deliberately NOT that for a resumed one, which
+	// re-enters the round it parked in and so counts the rounds that ran
+	// before the box did. The turn is what the number describes rather
+	// than this process's share of it: it is published as the completion
+	// event's `iterations`, and a turn that suspended at round three used
+	// to close reporting one.
 	Rounds int
 
 	// Breach names the guard that ended the turn, if one did.
@@ -347,21 +395,44 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 	notes := ""
 	maxRounds := set.iterations()
 
+	// WHERE THE BUDGET PICKS UP. A turn that parked on a detached coding
+	// run re-enters the round it suspended in, so the counter starts there
+	// rather than at one: starting at one handed every resumed turn a whole
+	// fresh MaxIterations, and a turn that suspended at round three of three
+	// came back from the box with three more executor→reviewer rounds than
+	// the company had configured. It also re-used iteration numbers the
+	// pre-suspend half had already published phase records under.
+	first := in.firstRound()
+	if maxRounds < first {
+		// THE RE-ENTERED ROUND ALWAYS RUNS, for the reason the first round
+		// always outruns the wall-clock cap below: it is not a new round
+		// but the second half of one whose executor pass already ran and
+		// whose run_sandbox call is still unanswered. Refusing it would
+		// throw away a coding run the company has already paid for and
+		// leave that conversation answered by nobody. The case is real
+		// rather than theoretical — MaxIterations is founder-owned and
+		// edited live, and a detached run outlives an edit — so the budget
+		// bounds the rounds a turn may START and the parked one already did.
+		maxRounds = first
+	}
+
 	started := set.now()
 	resuming := in.Resume
-	for round := 1; round <= maxRounds; round++ {
-		// The wall-clock cap, at a ROUND BOUNDARY. Round one always runs:
-		// a cap that refused before any work started would report a turn
-		// as timed out having done nothing, which is a misconfiguration
-		// rather than a slow turn and reads better as one.
-		if elapsed := set.now().Sub(started); round > 1 &&
+	for round := first; round <= maxRounds; round++ {
+		// The wall-clock cap, at a ROUND BOUNDARY. THIS RUN's first round
+		// always runs — which is `first` rather than one, because the clock
+		// starts here and a resumed turn's earlier rounds ran against
+		// somebody else's: a cap that refused before any work started would
+		// report a turn as timed out having done nothing, which is a
+		// misconfiguration rather than a slow turn and reads better as one.
+		if elapsed := set.now().Sub(started); round > first &&
 			set.MaxWallClock > 0 && elapsed >= set.MaxWallClock {
 			res.Breach = &Breach{
 				Kind: types.GuardScheduledTimeout,
 				Detail: fmt.Sprintf(
 					"the turn ran %s across %d round(s), past its %s cap, so no "+
 						"further round was started", elapsed.Round(time.Second),
-					round-1, set.MaxWallClock),
+					round-first, set.MaxWallClock),
 			}
 			return res, nil
 		}

@@ -584,17 +584,8 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// NO WALL-CLOCK CAP ON A RESUME. The cap bounds the turn a fire started;
 	// a detached sandbox run can legitimately outlive it, and the resumed
 	// half is finishing work the box already did rather than starting more.
-	res, err := turn.Run(ctx, r, company.TurnSettings(0), turn.Input{
-		RunID:   in.Run.TurnID,
-		Depth:   in.Run.DelegationDepth,
-		History: in.State.Iterations,
-		Resume:  true,
-		// Who is waiting, carried on the row rather than re-derived: the
-		// resumed turn never sees its trigger, so without this a turn
-		// somebody asked for would come back from a coding run free to
-		// end in silence.
-		Reply: resumedReply,
-	})
+	res, err := turn.Run(ctx, r, company.TurnSettings(0),
+		resumeInputFor(in, resumedReply))
 	// THE TURN RAN, so from here the indicator follows what it concluded
 	// rather than the retry rule above: a resumed turn that suspended AGAIN
 	// keeps it, because the same box is still working.
@@ -720,6 +711,29 @@ func resumeTask(in resumeInput) string {
 // who is waiting is the half of the delivery question this engine exists to get
 // right. The refusal is a ROUTING failure, like a state this build cannot
 // decode, so the completion goes back for a peer that can read it.
+// resumeInputFor renders a parked run coming back as the loop's own
+// [turn.Input].
+//
+// A NAMED MAPPING for the reason [turnInputFor] is one on the dispatch path,
+// and this literal proved it twice over: every field here is one the resumed
+// loop cannot derive for itself, and each degrades SILENTLY without. A missing
+// History forgets the rounds that closed before the box and re-fires their
+// deliveries; a missing Reply skips every delivery gate; a missing Round hands
+// the turn a whole fresh `max_iterations` and re-numbers rounds the suspended
+// half had already published phase records under. Three of the five come off
+// the parked row rather than off anything in this process, which is precisely
+// why nothing else can notice one going missing.
+func resumeInputFor(in resumeInput, reply turn.Reply) turn.Input {
+	return turn.Input{
+		RunID:   in.Run.TurnID,
+		Depth:   in.Run.DelegationDepth,
+		Reply:   reply,
+		History: in.State.Iterations,
+		Resume:  true,
+		Round:   in.State.Round,
+	}
+}
+
 func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 	if run.Reply == "" {
 		return turn.NoReply(), nil

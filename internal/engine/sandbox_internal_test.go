@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
@@ -795,5 +798,47 @@ func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 	}
 	if _, found, err := store.Get(t.Context(), "t1"); err != nil || found {
 		t.Fatalf("the retired seat's run survived (found %v, %v)", found, err)
+	}
+}
+
+// THE MAPPING THE RESUMED LOOP DEPENDS ON, and three of its five fields come
+// off the parked row rather than off anything this process can see — so a
+// field dropped from the literal this replaced had no symptom here at all. The
+// round is the one that did have one: the loop counted from one again, so a
+// turn that suspended at round three of three came back with three more.
+func TestAResumedRunCarriesEveryFieldTheLoopGatesOn(t *testing.T) {
+	t.Parallel()
+	prior := []ledger.Iteration{{Iteration: 1, Intent: "before the box"}}
+	in := resumeInput{
+		Run: sandbox.PendingRun{
+			TurnID: "run-1", DelegationDepth: 3, AgentHandle: "swe",
+		},
+		State: execstate.State{Round: 4, Iterations: prior},
+	}
+	got := resumeInputFor(in, turn.ToolReply("slack"))
+
+	// THE SAME TURN CONTINUES. A resume that minted its own id would file
+	// the second half of one turn as a second execution of it.
+	if got.RunID != "run-1" {
+		t.Errorf("RunID = %q, want the parked run's", got.RunID)
+	}
+	if !got.Resume {
+		t.Error("the loop would start a fresh executor rather than re-entering one")
+	}
+	// The budget, not a fresh one.
+	if got.Round != 4 {
+		t.Errorf("Round = %d, want the round the executor parked in", got.Round)
+	}
+	if got.Depth != 3 {
+		t.Errorf("Depth = %d, want 3 — the cap would be checked against zero", got.Depth)
+	}
+	if got.Reply != turn.ToolReply("slack") {
+		t.Errorf("Reply = %q — the resumed turn would run with no delivery gate",
+			got.Reply)
+	}
+	// The rounds that closed before the box, so their deliveries are not
+	// fired a second time.
+	if len(got.History) != 1 || got.History[0].Intent != "before the box" {
+		t.Errorf("History = %+v, want the ledger the suspend handed out", got.History)
 	}
 }

@@ -197,6 +197,21 @@ Arguments use **per-value** elision, never a cap on the serialised blob. `json.M
 
 **The ledger survives a sandbox suspend.** A detached `run_sandbox` ends the turn and its completion resumes it in another process, so the records are serialised into the pending run's `execute_state` (`internal/agent/execstate`) and rehydrated onto the resumed turn. Without that round-trip, a turn that self-iterated before suspending would forget those rounds and re-fire their deliveries after the resume. That blob carries an explicit version and a permanent reader for the previous one, because a parked run can outlive the build that suspended it and nothing rewrites a parked row.
 
+**So does the round count.** The parked round travels in the same blob and the
+resumed loop starts its counter there rather than at one, so `max_iterations`
+bounds the **turn** rather than each half of it: a turn that suspended at round
+three of three comes back with that round to finish and no more. The counter
+restarted at one before, which handed every resumed turn a second full budget
+and re-used iteration numbers the suspended half had already spent — so the
+resumed phases' records collided with the pre-suspend rounds' on the
+`turn_id` + phase + iteration key every screen files a phase under, and the
+prior-work block rendered two sections numbered the same. The one round the cap
+cannot refuse is the re-entered one itself: it is the second half of a round
+whose executor pass already ran and whose `run_sandbox` call is still
+unanswered, so it runs even where `max_iterations` has been lowered past it
+while the box worked — refusing it would throw away a coding run that has
+already been paid for and leave that conversation answered by nobody.
+
 The **task description** is not mutated by a `self_iterate` round: the correction is prefixed to the user MESSAGE instead. Appending review notes to the task leaked them into the knowledge-search query builders, the sandbox brief, and the episode / turn-completed publishers — all of which want the requester's actual ask.
 
 ### The same ledger, one scope wider

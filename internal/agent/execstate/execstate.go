@@ -79,6 +79,12 @@ type State struct {
 
 	// Round is the turn iteration the suspend happened in, so the resumed
 	// phase continues numbering rather than restarting at 1.
+	//
+	// TWO READERS, and they have to agree: the runner stamps the resumed
+	// phase's own record with it, and the turn loop starts its round
+	// counter there. The loop did not read it once, which is how one turn
+	// came to publish phase records numbered from the parked round while
+	// its budget was being spent from one again.
 	Round int `json:"iteration"`
 
 	// InputTokens and OutputTokens are what the pre-suspend rounds spent.
