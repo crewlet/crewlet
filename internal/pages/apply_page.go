@@ -259,7 +259,7 @@ func (a *Applier) applyRetitle(ctx context.Context, tx *sql.Tx, at applyContext,
 func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, at applyContext,
 	p PagePatch) (int, error) {
 
-	head, found, err := readHead(ctx, tx, at.subject().ID)
+	head, writtenAt, found, err := readHeadAt(ctx, tx, at.subject().ID)
 	if err != nil {
 		return 0, err
 	}
@@ -273,6 +273,21 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, at applyContext,
 			"this position, so a missing row is a record this build applied "+
 			"incorrectly rather than one that has not arrived",
 			at.position, at.subject().ID)
+	}
+	if writtenAt >= at.packed {
+		// ALREADY APPLIED. Every row this function writes is guarded on
+		// its own key, and for one of them that is not enough: the next
+		// revision number is DERIVED from the head it just read, so a
+		// redelivery reads a head that has already moved, derives a
+		// number one higher, and inserts a second immutable body under
+		// a key nothing has taken. Two nodes then hold the same page at
+		// different revision counts, and the one that saw the
+		// redelivery reports a version the other has never heard of.
+		//
+		// A KEY GUARD CANNOT EXPRESS THIS, which is why the check is
+		// here and not on the insert: the key is correct and unused, and
+		// the record that produced it is one this node has already run.
+		return 0, nil
 	}
 
 	rows := 0
@@ -746,22 +761,38 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext,
 	return int(n), nil
 }
 
-// readHead reads one page's current state out of this transaction.
-func readHead(ctx context.Context, tx *sql.Tx, id string) (Page, bool, error) {
+// readHeadAt reads one page's current state AND the position it was last
+// written at, out of this transaction.
+//
+// THE POSITION COMES BACK WITH THE STATE because an apply that DERIVES a value
+// from the state it read — the next revision number is the head's version plus
+// one — cannot be made idempotent by a key guard on what it writes. A
+// redelivery re-reads a head that has already moved, derives a number one
+// higher, and inserts a second row under a key nothing has taken. Reading the
+// two separately is how one of them ends up describing a different apply.
+func readHeadAt(ctx context.Context, tx *sql.Tx, id string) (Page, int64, bool, error) {
 	var document []byte
+	var at int64
 	err := tx.QueryRowContext(ctx,
-		`SELECT document FROM pages_heads WHERE id = ?`, id).Scan(&document)
+		`SELECT document, version FROM pages_heads WHERE id = ?`, id).Scan(&document, &at)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Page{}, false, nil
+		return Page{}, 0, false, nil
 	case err != nil:
-		return Page{}, false, fmt.Errorf("pages: read the head of %s: %w", id, err)
+		return Page{}, 0, false, fmt.Errorf("pages: read the head of %s: %w", id, err)
 	}
 	head, err := DecodePage(document)
 	if err != nil {
-		return Page{}, false, fmt.Errorf("pages: decode the head of %s: %w", id, err)
+		return Page{}, 0, false, fmt.Errorf("pages: decode the head of %s: %w", id, err)
 	}
-	return head, true, nil
+	return head, at, true, nil
+}
+
+// readHead is [readHeadAt] for the callers that write nothing derived from
+// what they read, and therefore need no position to compare against.
+func readHead(ctx context.Context, tx *sql.Tx, id string) (Page, bool, error) {
+	head, _, found, err := readHeadAt(ctx, tx, id)
+	return head, found, err
 }
 
 // pageIsPurged reports whether a page carries a permanent deletion marker.

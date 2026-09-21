@@ -709,3 +709,62 @@ func TestAPagesChildSetsCrossAChunkBoundaryUnchanged(t *testing.T) {
 			"commits", chunked.rows, tight, probed.rows)
 	}
 }
+
+// A REDELIVERED SAVE WRITES NO SECOND REVISION.
+//
+// Every row an apply writes here is guarded on its own key, and for the
+// revision that is not enough: the revision NUMBER is derived from the head
+// the apply just read. A redelivery reads a head that has already moved,
+// derives a number one higher, and inserts a second immutable body under a
+// key nothing has taken — so two nodes hold the same page at different
+// revision counts, and the one that saw the redelivery reports a version the
+// other has never heard of.
+//
+// A key guard cannot express that, which is why the apply compares the
+// record's POSITION against the one the head was last written at. The shared
+// contract suite catches it too; this is the case that says which value went
+// wrong and why.
+func TestARedeliveredSaveWritesNoSecondRevision(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	if _, _, err := h.apply(create("page-1", "ENG", "Deploy", "# v1\n")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	second := "# v2\n"
+	save := record(pages.PageSubject("page-1"), pages.OpPatch, "op-save-1",
+		pages.PagePatch{V: pages.DocumentVersion, Body: &second},
+		pages.ScopeSet{Subject: true, Container: "ENG"})
+	if _, _, err := h.apply(save); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if got := h.count("pages_revisions"); got != 2 {
+		t.Fatalf("%d revisions after a create and one save, want 2", got)
+	}
+
+	// THE SAME RECORD AT THE SAME POSITION, which is what a redelivery
+	// is: the broker hands back the message it already handed over.
+	rows, _, err := h.applyAt(save, h.seq)
+	if err != nil {
+		t.Fatalf("redelivery: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("a redelivered save wrote %d rows, want none", rows)
+	}
+	if got := h.count("pages_revisions"); got != 2 {
+		t.Errorf("%d revisions after the same save arrived twice, want 2 — the "+
+			"second is an immutable body under a version no other node has", got)
+	}
+
+	// AND THE NEXT REAL SAVE STILL LANDS, which is what says the guard is
+	// a position comparison rather than a door that shut.
+	third := "# v3\n"
+	next := record(pages.PageSubject("page-1"), pages.OpPatch, "op-save-2",
+		pages.PagePatch{V: pages.DocumentVersion, Body: &third},
+		pages.ScopeSet{Subject: true, Container: "ENG"})
+	if _, _, err := h.apply(next); err != nil {
+		t.Fatalf("the save after the redelivery: %v", err)
+	}
+	if got := h.count("pages_revisions"); got != 3 {
+		t.Errorf("%d revisions after a genuine third save, want 3", got)
+	}
+}
