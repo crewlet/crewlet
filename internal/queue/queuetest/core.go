@@ -508,13 +508,19 @@ func (s *suite) runCore(t *testing.T) {
 	t.Run("pause_topic_buffers_then_resume_flushes", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
+		// HELD BEFORE ATTACHING, because this case asserts an exact
+		// delivery ORDER and the window here is wider than most: the
+		// second Subscribe below is a broker round trip sitting between
+		// topic.a's attachment and the hold, so topic.a's consume loop is
+		// very likely already parked in a fetch when the flag lands. An
+		// event served into that fetch is delivered and handed back — one
+		// delivery spent, and a redelivery racing the flush this case
+		// measures. See holdBeforeAttach.
+		release := holdBeforeAttach(ctx, t, q, "topic.a", "grp")
 		a, b := newJournal(), newJournal()
 		subscribe(ctx, t, q, "topic.a", "grp", recordingHandler(a))
 		subscribe(ctx, t, q, "topic.b", "grp", recordingHandler(b))
 
-		if err := q.PauseTopic(ctx, "topic.a", "grp", "test"); err != nil {
-			t.Fatalf("PauseTopic: %v", err)
-		}
 		publish(ctx, t, q, "topic.a", newEvent("a1"))
 		publish(ctx, t, q, "topic.a", newEvent("a2"))
 		// A different topic is unaffected while topic.a is held.
@@ -523,9 +529,7 @@ func (s *suite) runCore(t *testing.T) {
 		b.awaitLabels(t, "an unpaused topic to keep flowing", "b1")
 		a.staysAt(t, 0, "a paused topic buffers rather than delivering")
 
-		if err := q.ResumeTopic(ctx, "topic.a", "grp", "test"); err != nil {
-			t.Fatalf("ResumeTopic: %v", err)
-		}
+		release()
 		a.awaitLabels(t, "the held events to flush in publish order", "a1", "a2")
 	})
 

@@ -500,6 +500,15 @@ func (s *suite) runBatch(t *testing.T) {
 		// that partitions correctly and dispatches in receive order passes
 		// the whole suite without this case.
 		q := s.start(ctx, t)
+		// Held so both land in one batch as two partitions; delivered one
+		// at a time there is no dispatch order to observe. The hold is
+		// taken BEFORE the attachment exists — see holdBeforeAttach — so
+		// neither event can be served into a fetch already in flight.
+		// This case cannot afford that: its own note above says a backend
+		// dispatching in receive order passes the whole suite without it,
+		// so a fill that quietly delivered one event early is a vacuous
+		// pass with nothing else to catch it.
+		release := holdBeforeAttach(ctx, t, q, "topic.age", "grp")
 		batches := newBatchJournal()
 		subscribeBatch(ctx, t, q, "topic.age", "grp", recordingBatchHandler(batches),
 			queue.DefaultBatchOptions())
@@ -510,16 +519,9 @@ func (s *suite) runBatch(t *testing.T) {
 		quiet := newConvEvent("quiet", "quiet")
 		quiet.Timestamp = now.Add(-time.Minute)
 
-		// Held so both land in one batch as two partitions; delivered one
-		// at a time there is no dispatch order to observe.
-		if err := q.PauseTopic(ctx, "topic.age", "grp", "queuetest-fill"); err != nil {
-			t.Fatalf("PauseTopic: %v", err)
-		}
 		publish(ctx, t, q, "topic.age", hot)
 		publish(ctx, t, q, "topic.age", quiet)
-		if err := q.ResumeTopic(ctx, "topic.age", "grp", "queuetest-fill"); err != nil {
-			t.Fatalf("ResumeTopic: %v", err)
-		}
+		release()
 
 		batches.await(t, "the conversation that has waited longest to go first",
 			func(got [][]string) bool {
@@ -624,21 +626,37 @@ func (s *suite) runBatch(t *testing.T) {
 		// partitions: delivered one at a time, the multi-partition loop
 		// this covers never runs.
 		//
-		// THE PUBLISH SIDE IS NOW RACE-FREE AND WAS NOT. This case failed
-		// intermittently on JetStream, and the cause was recorded here as
-		// unattributed alongside the claim that the hold put every event
-		// in the mailbox before the attachment could read one. That claim
-		// was false: the hold used to be taken AFTER the subscription, so
-		// an attachment already sitting in a long poll was served the
-		// first publish and handed it straight back — which on this
-		// backend returns it BEHIND the events published after it, so the
-		// partition this case expects first arrived second.
-		// holdForOneBatch takes the hold before the attachment exists and
-		// states the mechanism in full.
+		// THE PUBLISH SIDE IS NOW RACE-FREE AND WAS NOT — but this case's
+		// intermittent failure is STILL UNATTRIBUTED, and saying otherwise
+		// here was a mistake worth not repeating.
 		//
-		// The DRAIN side is still an assumption: nothing obliges a backend
-		// to hand all three partitions to one handler call. If this case
-		// recurs, capture the BACKLOG ORDER from the final assertion
+		// What was fixed is real: the hold used to be taken AFTER the
+		// subscription, so an attachment already sitting in a long poll
+		// could be served the first publish and hand it straight back,
+		// spending one of its deliveries before this case had begun. That
+		// is why the hold now precedes the attachment — see
+		// holdBeforeAttach, which states the mechanism and what it cost
+		// the case next door.
+		//
+		// What does NOT follow is that it explains THIS case. It was
+		// briefly written up here as though it did, on the theory that the
+		// handed-back event returns behind the events published after it
+		// and so shuffled the partitions. Both halves are wrong: a
+		// hand-back naks with no delay and comes back at the FRONT, and
+		// dispatch order here is not arrival order anyway —
+		// queue.OrderForDispatch sorts partitions by their oldest event,
+		// so the partition this case expects first is dispatched first
+		// whatever order the drain collected. Reintroducing the old hold
+		// order does not reproduce this case's failure.
+		//
+		// So what is known is what was known before: 22 consecutive clean
+		// runs (12 isolated, 10 full-package, all under -race), and no
+		// reproduction. Forcing a split with a max batch of 2 did not
+		// reproduce it either, though with a zero linger that variant may
+		// not exercise a split at all — so that experiment rules nothing
+		// out. The DRAIN side remains the open assumption: nothing obliges
+		// a backend to hand all three partitions to one handler call. If
+		// this recurs, capture the BACKLOG ORDER from the final assertion
 		// before anything else — a deferral pushes its partition to the
 		// front, so the order distinguishes a split (which is timing) from
 		// partitions handled past a deferral (which is the ordering defect
@@ -858,7 +876,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// comparison of two DIFFERENT messages presumes they entered the
 		// drain at the same delivery count, and nothing here established
 		// that. An early delivery of the stopping partition and nothing
-		// else — which is exactly what holdForOneBatch now prevents, and
+		// else — which is exactly what holdBeforeAttach now prevents, and
 		// what the hold used to allow — lowers the baseline by one and
 		// makes the two readings EQUAL while the hand-back was charged
 		// correctly. Reported, of course, as a hand-back that was free.
@@ -929,12 +947,25 @@ func (s *suite) runBatch(t *testing.T) {
 				"cost", first)
 		}
 		if fresh != attempts-1 {
+			// TWO-SIDED, because the two directions are different bugs and
+			// a message naming one of them misdirects the other's reader.
+			// LOWER means this partition had already been delivered and
+			// handed back before the batch — a fill that did not hold
+			// everything back, which is holdBeforeAttach's subject rather
+			// than a charge this case can read. HIGHER means the backend
+			// is reporting the budget rather than the headroom AFTER the
+			// delivery in hand, which is queue.DeliveriesLeft's own
+			// contract and nothing to do with the fill. Both numbers are
+			// printed because this is a Fatalf: the reading the case is
+			// actually named for is never reached otherwise.
 			t.Fatalf("the partition that stopped the drain reported %d deliveries "+
-				"left of %d attempts, want %d: it is dispatched on its FIRST "+
-				"delivery, so anything lower means it had already been delivered "+
-				"and handed back before this batch — a fill that did not hold "+
-				"everything back, not a charge this case can read. See "+
-				"holdForOneBatch.", fresh, attempts, attempts-1)
+				"left of %d attempts, want %d (the handed-back one read %d): it "+
+				"is dispatched on its FIRST delivery, so lower means it was "+
+				"delivered and handed back before this batch — see "+
+				"holdBeforeAttach — and higher means the backend stated the "+
+				"budget rather than what is left AFTER the delivery in hand, "+
+				"which is queue.DeliveriesLeft's contract.",
+				fresh, attempts, attempts-1, handed)
 		}
 		if handed != fresh-1 {
 			t.Errorf("the partition handed back undispatched reported %d deliveries "+
@@ -945,7 +976,8 @@ func (s *suite) runBatch(t *testing.T) {
 				"%d it was free, which is also what a backend that split the fill "+
 				"into separate batches reports: there was then no undispatched "+
 				"remainder to charge and this case never ran the loop it is named "+
-				"for. See holdForOneBatch.)", handed, fresh, fresh)
+				"for, and the two are indistinguishable from here. See "+
+				"holdBeforeAttach.)", handed, fresh, fresh)
 		}
 	})
 
@@ -995,33 +1027,39 @@ func (s *suite) runBatch(t *testing.T) {
 	})
 }
 
-// holdForOneBatch holds a subscription's deliveries so several events can be
-// put in ONE batch, and returns the function that publishes them and releases
-// the hold.
+// holdBeforeAttach takes a subscription's pause hold and returns the release,
+// so a caller can hold, attach, publish, and only then let delivery start.
 //
-// TWO CALLS RATHER THAN ONE, and their order is the whole of it: the hold has
-// to be in place BEFORE the caller attaches. So a case takes the hold, then
-// subscribes, then fills — and a single pause/publish/resume helper called
-// after SubscribeBatch, which is what this was, cannot give the guarantee
-// while reading exactly as though it does.
+// THE ORDER IS THE WHOLE OF IT, and it is why this is two calls rather than
+// one. The hold has to be in place BEFORE the caller attaches. A single
+// pause/publish/resume helper invoked AFTER Subscribe — which is what the
+// cases here used to do — cannot give that guarantee while reading exactly as
+// though it does.
 //
 // A HOLD CANNOT RETRACT A FETCH THAT IS ALREADY IN FLIGHT. An idle attachment
 // on a pull backend sits in a long poll, and a hold is a flag on the client:
 // an event published a moment after the flag is set is served straight into
 // that outstanding request, delivered, and then handed back by the very guard
-// the hold exists for. It reaches the next drain having ALREADY SPENT a
-// delivery — and, on a backend where a redelivery returns behind
-// never-delivered mail (which is measured true of JetStream), behind the
-// events published after it.
+// the hold exists for. It reaches the next drain HAVING ALREADY SPENT A
+// DELIVERY.
 //
-// That is not hypothetical and it is not one case's problem. It was
-// reproduced by letting the attachment reach its first fetch before the hold
-// lands, and it accounts for two intermittent failures in this group, with
-// two different symptoms:
-// an_undispatched_partition_pays_for_its_hand_back read the STOPPING
-// partition's headroom one lower than the remainder's and so reported a
-// hand-back as free, and a_deferral_stops_the_rest_of_a_batch had its first
-// partition arrive other than first.
+// THE COST IS THE CHARGE, NOT THE ORDER, and getting that wrong is what the
+// previous version of this comment did. A hand-back is [queue.Result]-free
+// housekeeping and naks with NO delay, and a delay-less nak is replayed from
+// the FRONT: measured here, the handed-back event comes back AHEAD of the
+// never-delivered ones (5 of 6 runs; the sixth put it behind, so it is not
+// even a stable ordering to rely on). The suite's HeadReplayOnNak capability
+// says the opposite, and it is not about this path — it is measured on the
+// FAILURE path, which naks WITH a backoff delay, and the delay is what puts
+// that redelivery behind. Do not reach for it to explain anything a hold did.
+//
+// Reproduced, not theorised: letting the attachment reach its first fetch
+// before the hold lands makes
+// an_undispatched_partition_pays_for_its_hand_back fail every time, with the
+// CI numbers that prompted this — the stopping partition charged once before
+// it was ever dispatched, so its headroom came back EQUAL to the remainder's
+// instead of one above it, and a hand-back that had been charged correctly
+// read as free.
 //
 // Holding before the attachment exists removes it BY CONSTRUCTION rather than
 // by a wait: the attachment's own first look at the flag already sees the
@@ -1037,29 +1075,42 @@ func (s *suite) runBatch(t *testing.T) {
 // without exercising the multi-partition loop they are named for: the first
 // single-partition batch defers, the attachment quiesces, and there never was
 // a "rest of the batch" to stop. That is a vacuous pass, not a false one, and
-// it is invisible from most of the assertions —
-// an_undispatched_partition_pays_for_its_hand_back is the exception, because
-// it can tell a split from a hand-back that cost nothing and says which it
-// saw.
+// it is invisible from the assertions. The one case that goes RED on a split
+// rather than passing vacuously is
+// an_undispatched_partition_pays_for_its_hand_back — but it cannot say WHICH
+// it saw, because a split and an uncharged hand-back produce the identical
+// pair of numbers, which is exactly what its failure message tells the reader.
 //
 // The in-memory twin is where these genuinely exercise the loop, because it
 // drains everything available into one delivery. Treat a green result on an
 // asynchronous backend as "did not contradict" rather than "certified", and if
 // that distinction ever needs closing it needs an observable the contract does
 // not currently have — how many partitions a delivery was drawn from.
-func holdForOneBatch(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string) func(convs ...string) {
+func holdBeforeAttach(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string) func() {
 	t.Helper()
 	if err := q.PauseTopic(ctx, topic, group, "queuetest-fill"); err != nil {
 		t.Fatalf("PauseTopic: %v", err)
 	}
+	return func() {
+		t.Helper()
+		if err := q.ResumeTopic(ctx, topic, group, "queuetest-fill"); err != nil {
+			t.Fatalf("ResumeTopic: %v", err)
+		}
+	}
+}
+
+// holdForOneBatch is [holdBeforeAttach] plus the conversation events the batch
+// cases fill with: it returns the function that publishes one event per
+// conversation and then releases the hold.
+func holdForOneBatch(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string) func(convs ...string) {
+	t.Helper()
+	release := holdBeforeAttach(ctx, t, q, topic, group)
 	return func(convs ...string) {
 		t.Helper()
 		for _, conv := range convs {
 			publish(ctx, t, q, topic, newConvEvent(conv, conv))
 		}
-		if err := q.ResumeTopic(ctx, topic, group, "queuetest-fill"); err != nil {
-			t.Fatalf("ResumeTopic: %v", err)
-		}
+		release()
 	}
 }
 
