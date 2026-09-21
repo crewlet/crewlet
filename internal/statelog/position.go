@@ -111,6 +111,28 @@ func (p Position) Packed() int64 {
 	return int64(p.Generation)*GenerationStride | int64(p.Seq)
 }
 
+// Unpack is [Position.Packed]'s inverse, over the stream the column belongs to.
+//
+// IT EXISTS BECAUSE THE ARITHMETIC WAS WRITTEN FOUR TIMES — twice in this
+// package's own table reader, once in the tracker's coverage report and once
+// more in every domain that reads a position back out of a column. Each was
+// the same two lines, and each was one edit away from a generation that
+// divides where it should modulo: a position that is silently in the wrong
+// number space compares as plausible and orders wrongly, which is the failure
+// the generation exists to make impossible.
+//
+// THE STREAM IS AN ARGUMENT because it is not in the packed form: it is the
+// identity of the number space rather than a coordinate in it, and a caller
+// reading a column already knows which log it belongs to. A position built
+// without one fails [Position.Valid] and refuses every comparison.
+func Unpack(stream string, packed int64) Position {
+	return Position{
+		Stream:     stream,
+		Generation: uint32(packed / GenerationStride),
+		Seq:        uint64(packed % GenerationStride),
+	}
+}
+
 // Before reports whether p is strictly before q, and refuses a comparison
 // across streams.
 //

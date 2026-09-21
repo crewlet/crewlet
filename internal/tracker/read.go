@@ -1794,11 +1794,7 @@ func coverageOf(ctx context.Context, tx *sql.Tx, scope statelog.ScopeSet) (*Inco
 	}
 	return &Incomplete{
 		Records: count,
-		From: statelog.Position{
-			Stream:     trackerStream,
-			Generation: uint32(lowest.Int64 / statelog.GenerationStride),
-			Seq:        uint64(lowest.Int64 % statelog.GenerationStride),
-		},
+		From:    statelog.Unpack(trackerStream, lowest.Int64),
 		Scope:   scope.Paths,
 		Version: int(version.Int64),
 	}, nil

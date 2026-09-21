@@ -170,11 +170,7 @@ func (t tables) anchor(ctx context.Context, tx *sql.Tx, subject string, gen uint
 	case err != nil:
 		return Position{}, fmt.Errorf("statelog: read the anchor on %s: %w", subject, err)
 	}
-	return Position{
-		Stream:     t.stream,
-		Generation: uint32(packed / GenerationStride),
-		Seq:        uint64(packed % GenerationStride),
-	}, nil
+	return Unpack(t.stream, packed), nil
 }
 
 // writeOp records that this node applied an operation at a position.
@@ -316,11 +312,7 @@ func (t tables) op(ctx context.Context, tx *sql.Tx, opID string) (Position, bool
 	case err != nil:
 		return Position{}, false, fmt.Errorf("statelog: read operation %q: %w", opID, err)
 	}
-	return Position{
-		Stream:     t.stream,
-		Generation: uint32(packed / GenerationStride),
-		Seq:        uint64(packed % GenerationStride),
-	}, true, nil
+	return Unpack(t.stream, packed), true, nil
 }
 
 // retain stores a record this build cannot decode, byte for byte, with every
