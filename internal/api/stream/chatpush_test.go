@@ -107,6 +107,39 @@ func frames(c *Client) []Envelope {
 	}
 }
 
+// workingIn is the room's working set once it has n entries, and it is a WAIT
+// rather than a read because the raise is asynchronous by design:
+// [notify.StatusDriver.Begin] states that "THE RAISE IS THE GOROUTINE'S FIRST
+// ACT, not this function's last", so that a turn never blocks on a chat
+// backend to start working. A test that read the room on the line after Begin
+// would be asserting a goroutine scheduling order nothing promises — and it
+// lost that race, reporting an empty room.
+//
+// BOUNDED AND LOUD, in [notify]'s own `shownAtLeast` idiom: two seconds is
+// long enough that no scheduler misses it and short enough that a raise which
+// genuinely never happens fails the suite rather than hanging it, and the
+// failure prints what the room DID report so a real regression is
+// distinguishable from a slow machine.
+//
+// Only the raise needs this. [notify.StatusSession.End] cancels the loop,
+// waits on its done channel and clears inline, so a read straight after End is
+// already ordered.
+func workingIn(t *testing.T, h *ChatHub, room string, n int) []ChatWorking {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got := h.presenceOf(nil, []string{room}, h.now())[room].Working
+		if len(got) >= n {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s reports %v as working after two seconds, want %d",
+				room, got, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // kinds is what a client was sent, in order.
 func kinds(c *Client) []string {
 	var out []string
@@ -455,15 +488,15 @@ func TestRaisingTheIndicatorPutsTheSeatInTheRoomItIsAnswering(t *testing.T) {
 	if session == nil {
 		t.Fatal("no indicator was raised for a mention under `always`")
 	}
-	room := h.presenceOf(nil, []string{"public-1"}, h.now())["public-1"]
-	if len(room.Working) != 1 || room.Working[0].Handle != "agent-swe" {
-		t.Fatalf("the room reports %v as working", room.Working)
+	working := workingIn(t, h, "public-1", 1)
+	if len(working) != 1 || working[0].Handle != "agent-swe" {
+		t.Fatalf("the room reports %v as working", working)
 	}
-	if room.Working[0].Thread != "m-1" {
+	if working[0].Thread != "m-1" {
 		t.Errorf("the indicator sits under %q rather than the thread the reply "+
-			"will land in", room.Working[0].Thread)
+			"will land in", working[0].Thread)
 	}
-	if room.Working[0].Status == "" {
+	if working[0].Status == "" {
 		t.Error("the indicator carries no words, although this backend renders " +
 			"text — a reader then cannot tell which phase is running")
 	}
