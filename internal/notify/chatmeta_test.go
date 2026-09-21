@@ -26,7 +26,7 @@ func fullMeta() map[string]string {
 		notify.FollowReasonField: string(notify.FollowMention),
 		notify.FollowingField:    string(notify.FollowMention),
 		notify.RecipientField:    "swe",
-		notify.KeyField:          "native:c-42:m-1",
+		notify.PartitionField:    "native:c-42:m-1",
 		notify.ReplayedField:     "true",
 	}
 }
@@ -59,7 +59,7 @@ func TestEveryChatMetadataKeyHasAReader(t *testing.T) {
 	readElsewhere := map[string]string{
 		notify.ChannelKindField: "internal/engine's turn-start prefetch, which " +
 			"selects on the canonical surface shape",
-		notify.KeyField: "the broker's partition function and the event store, " +
+		notify.PartitionField: "the broker's partition function and the event store, " +
 			"which read it off the envelope rather than out of this map",
 	}
 	cases := []struct {
@@ -101,7 +101,7 @@ func TestEveryChatMetadataKeyHasAReader(t *testing.T) {
 			})})
 		}},
 		{notify.ThreadAnchorField, "Anchor, which is where the reply and the indicator both go", func() bool {
-			return metaPrompt().ConversationKey(meta(func(m map[string]string) {
+			return metaPrompt().PartitionKey(meta(func(m map[string]string) {
 				m[notify.ThreadAnchorField] = "m-99"
 			}), "") == "c-42:m-99"
 		}},

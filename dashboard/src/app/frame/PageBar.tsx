@@ -1,9 +1,12 @@
 /**
  * The page bar: where you are, and what you can do about it.
  *
- * Sticky, 52 px, on every screen. It replaces a topbar that carried a single
- * `<h1>` derived from the route's first segment — so an item page said "Work",
- * a project said "Work", and a page nested four levels deep said "Knowledge".
+ * On every screen, and 52 px whenever it can be: the height is a FLOOR rather
+ * than a fixed value, because the bar grows a second row once its own width
+ * cannot hold the trail beside the page's controls — see `@container page` in
+ * frame.css. It replaces a topbar that carried a single `<h1>` derived from
+ * the route's first segment — so an item page said "Work", a project said
+ * "Work", and a page nested four levels deep said "Knowledge".
  *
  * # The breadcrumb is the address, not a title
  *
@@ -193,8 +196,16 @@ export function PageBar({
           />
         </span>
       )}
+      {/* AND IT IS WHAT PUSHES EVERYTHING ELSE RIGHT. A `.spacer` used to sit
+          between the trail and the controls doing that job, which was fine
+          while the trail was rigid — and the trail being rigid is exactly
+          what broke the bar: a flex container assigns items to lines by their
+          UNSHRUNK size, so a 427px trail forced a second line that a trail
+          willing to give up 250px would not have. `.crumbs` is the bar's one
+          flexible item now (see frame.css), so it both absorbs the free space
+          and yields it, and a second grower beside it would halve what it
+          gets for nothing. */}
       <Breadcrumb crumbs={crumbs} />
-      <span className="spacer" />
       {/* WHAT THIS PAGE CAN DO, IN ONE ELEMENT.
           The portalled slot and the frame's own actions were two siblings of
           the bar, which is fine until the bar has to fit a phone: there they

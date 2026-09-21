@@ -120,7 +120,12 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// no prompt (it re-entered a phase rather than opening one). Without
 	// this an operator reading an agent-mode turn sees a run that finished
 	// and no sign of what it was asked.
-	r.emitter().started(ctx, phase.Execute, round, system, user)
+	//
+	// NO SEED — this opens a phase rather than re-entering one — and the
+	// surface, whose definitions are NOT in the Brief below: they reach the
+	// CLI over the MCP bridge, where the CLI's own model is billed for
+	// every one of them. See [emitter.promptSize].
+	r.emitter().started(ctx, phase.Execute, round, system, user, nil, surface)
 
 	if err := r.cfg.AgentRun.LaunchExecutor(ctx, AgentRunRequest{
 		Brief:   system + "\n\n" + user,

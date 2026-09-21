@@ -36,6 +36,24 @@ import (
 // was not for it, the turn failed, the budget ran out — has no backend-side
 // signal at all, so a session always clears explicitly when its last turn
 // ends.
+//
+// # And one property of the CALLER shapes where the requests are made
+//
+// EVERY RAISE AND EVERY RE-ASSERTION IS MADE BY THE SESSION'S OWN GOROUTINE,
+// never by the turn that asked for it. Both calls sit on a turn's critical
+// path — [StatusDriver.Begin] runs before the turn assembles its context, and
+// [StatusSession.Phase] runs immediately before a phase's first provider call
+// — so a chat instance that takes its client timeout to answer would delay
+// the agent's actual work by that long, for a cosmetic surface whose every
+// other failure is swallowed. So those two only write the state and wake the
+// goroutine, which is also what makes the ORDER of what a backend hears total:
+// one writer, so a re-assertion can never overtake the raise it belongs to.
+//
+// The teardown is the deliberate exception. [StatusSession.End] and
+// [StatusDriver.Stop] cancel the goroutine, WAIT for it, and only then clear —
+// because the clear has to be the last thing the backend hears, and a process
+// that exits before it lands leaves an indicator claiming an agent is working
+// for the whole of the backend's expiry.
 
 // StatusMode is when an agent shows a working status.
 type StatusMode string
@@ -163,8 +181,28 @@ type session struct {
 	phase    string
 	rotation int
 
+	// poke asks this session's goroutine to re-assert the status NOW, which
+	// is how a phase change reaches the backend without the turn waiting on
+	// the request.
+	//
+	// Capacity one and a NON-BLOCKING send, because the goroutine posts
+	// whatever the state says when it wakes rather than a queued value: a
+	// second request landing while the first is in flight asks for the same
+	// thing, and a phase superseded before its post reached the backend is
+	// a phase the reader is better off never seeing.
+	poke chan struct{}
+
 	cancel context.CancelFunc
 	done   chan struct{}
+}
+
+// wake asks the session's goroutine to re-assert, and never blocks. See
+// [session.poke].
+func (s *session) wake() {
+	select {
+	case s.poke <- struct{}{}:
+	default:
+	}
 }
 
 // StatusOptions configure a [StatusDriver].
@@ -181,10 +219,16 @@ type StatusOptions struct {
 // StatusDriver owns every live working indicator on one backend.
 //
 // Sessions are keyed by (handle, channel, thread) and REFERENCE-COUNTED by
-// turn id, so two turns for one agent in one thread — a suspend/resume pair,
-// or a queued follow-up — share a heartbeat and the indicator clears only
-// when the last of them finishes. Clearing on the first would take the
-// indicator down while somebody is still waiting.
+// turn id, so two DIFFERENT turns for one agent in one thread — a queued
+// follow-up, or a colleague's ask arriving mid-conversation — share a
+// heartbeat and the indicator clears only when the last of them finishes.
+// Clearing on the first would take the indicator down while somebody is still
+// waiting.
+//
+// A suspend/resume pair is NOT that case and must not be confused with it: it
+// is ONE turn id, so its hold is one, taken back by [StatusDriver.Rejoin]
+// rather than counted twice — which is what makes ending a resumed turn take
+// the indicator down instead of decrementing a count that never reached two.
 type StatusDriver struct {
 	poster  StatusPoster
 	mode    StatusMode
@@ -295,24 +339,98 @@ func (d *StatusDriver) Begin(ctx context.Context, handle, turnID, phase string, 
 		// should not read as one long thought, and the seed is what
 		// makes their lines differ.
 		seed: turnID, phase: phase,
+		poke: make(chan struct{}, 1),
 	}
+	// DETACHED FROM THE CALLER'S CONTEXT, because the indicator outlives the
+	// call that raised it in the one case it matters most: a turn that
+	// suspends into a detached coding run ends its own context and keeps the
+	// indicator up (see [StatusSession.End]).
 	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s.cancel, s.done = cancel, make(chan struct{})
 	d.sessions[key] = s
-	text := d.phrases.Pick(phase, s.seed, 0)
 	d.mu.Unlock()
 
-	d.post(ctx, key, text)
-	go d.heartbeat(loopCtx, s)
+	// THE RAISE IS THE GOROUTINE'S FIRST ACT, not this function's last: see
+	// the third property in this file's opening comment. Begin returns as
+	// soon as the session exists, so the turn it belongs to never waits on a
+	// chat backend to start working.
+	go d.run(loopCtx, s)
 	return &StatusSession{driver: d, key: key, turn: turnID}
+}
+
+// Rejoin takes back the hold a turn already has on a live indicator.
+//
+// It is what a RESUMED turn calls. A turn that suspended into a detached
+// coding run ended with keepAlive, so its indicator is still up and still
+// heartbeating; the turn that re-enters that conversation minutes later needs
+// the hold back so it can end it for real — and it CANNOT call Begin, because
+// a resume has no trigger to raise from: the parked run's own row deliberately
+// carries no chat metadata (the message that woke the suspended turn may be
+// days gone, and a coalescing key is a partition rather than an address).
+//
+// Addressed by (handle, turn id) rather than by conversation for the same
+// reason, and it never raises, never posts and never creates: a session this
+// driver does not hold answers nil, which is the honest answer where the seat
+// moved node or the process restarted — the indicator then lapses on the
+// backend's own expiry, and a resumed turn that raised a fresh one would be
+// claiming a conversation it cannot prove it is in.
+//
+// No guard on an empty handle or turn id, because the match below already is
+// one: no live session is keyed on an empty handle ([StatusDriver.Begin]
+// refuses one) and no hold is recorded under an empty turn id, so both answer
+// nil by the same rule everything else does.
+func (d *StatusDriver) Rejoin(handle, turnID string) *StatusSession {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for key, s := range d.sessions {
+		if key.handle == handle && s.turns[turnID] {
+			return &StatusSession{driver: d, key: key, turn: turnID}
+		}
+	}
+	return nil
+}
+
+// ClearFor takes down every indicator this driver holds for one seat.
+//
+// Called when this node stops running the seat. A kept-alive session is the
+// reason it has to exist: a turn that suspended into a detached coding run
+// leaves its indicator up deliberately, and the resume lands on whichever node
+// holds the seat WHEN THE BOX FINISHES. Left alone, a node that has handed the
+// seat on would re-assert "is thinking…" every refresh interval, for a turn it
+// is no longer running, for as long as the process lives — and on the backend
+// whose indicator expires in seconds that is a request every couple of seconds
+// for ever.
+func (d *StatusDriver) ClearFor(ctx context.Context, handle string) {
+	d.mu.Lock()
+	var live []*session
+	for key, s := range d.sessions {
+		if key.handle != handle {
+			continue
+		}
+		live = append(live, s)
+		delete(d.sessions, key)
+	}
+	d.mu.Unlock()
+
+	for _, s := range live {
+		s.cancel()
+		<-s.done
+		d.clear(ctx, s.key)
+	}
 }
 
 // Phase moves the indicator to a new phase's wording.
 //
+// NO CONTEXT, deliberately: this writes the state and wakes the session's own
+// goroutine, which makes the request. The caller is a turn about to make its
+// first provider call of a new phase, and a context here would be a context
+// the request does not run under — see the third property in this file's
+// opening comment.
+//
 // A no-op on a backend that cannot render text: the session still runs and
 // the heartbeat still keeps the indicator alive, but a phase change stops
 // costing a request, because there is nothing about it a reader could see.
-func (s *StatusSession) Phase(ctx context.Context, phase string) {
+func (s *StatusSession) Phase(phase string) {
 	if s == nil || s.driver == nil {
 		return
 	}
@@ -331,16 +449,18 @@ func (s *StatusSession) Phase(ctx context.Context, phase string) {
 	// phase — Execute, Review, Execute again after a self-iterate — does
 	// not repeat the same line and read as though nothing moved.
 	sess.rotation++
-	text := d.phrases.Pick(phase, sess.seed, sess.rotation)
 	d.mu.Unlock()
-	d.post(ctx, s.key, text)
+	sess.wake()
 }
 
 // End releases this turn's hold.
 //
-// The indicator comes down only when the LAST holder ends. keepAlive holds
-// it up regardless — the suspend/resume case, where the same turn id resumes
-// once a detached coding run completes and the person is still waiting.
+// The indicator comes down only when the LAST holder ends. keepAlive holds it
+// up regardless — the suspend case, where this same turn resumes once a
+// detached coding run completes and the person is still waiting. The resumed
+// half takes this hold back with [StatusDriver.Rejoin], and ends it without
+// keepAlive; a node that never sees that resume takes it down when it stops
+// running the seat ([StatusDriver.ClearFor]).
 func (s *StatusSession) End(ctx context.Context, keepAlive bool) {
 	if s == nil || s.driver == nil || keepAlive {
 		return
@@ -415,39 +535,62 @@ func (d *StatusDriver) Stop(ctx context.Context) {
 	}
 }
 
-// heartbeat re-asserts a status inside the backend's expiry window.
-func (d *StatusDriver) heartbeat(ctx context.Context, s *session) {
+// run is the session's own goroutine, and the ONLY writer of its indicator:
+// the opening raise, every phase change and every re-assertion inside the
+// backend's expiry window are all this loop.
+//
+// No liveness re-check anywhere in it, and the ORDERING is why that is safe:
+// End, ClearFor and Stop all cancel this context and wait for this goroutine
+// to exit BEFORE they clear the indicator. So a post can never follow a clear
+// — the worst case is one extra post that the clear immediately takes down. A
+// check here would read as though that ordering were in doubt.
+func (d *StatusDriver) run(ctx context.Context, s *session) {
 	defer close(s.done)
-	interval := d.poster.StatusRefresh()
-	if interval <= 0 {
-		// A poster that declares no interval gets no heartbeat rather
-		// than a spin: its indicator lapses, which is a cosmetic loss,
-		// where a zero-interval ticker is a hot loop against a third-party app's
-		// rate limiter.
-		log.WarnContext(ctx, "status_poster_declares_no_refresh", "backend", d.poster.StatusBackend())
-		<-ctx.Done()
+	// THE RAISE. Skipped only where the session is already over, which is a
+	// turn that ended before its own indicator went up: posting then would
+	// raise an indicator for nobody, and the clear that follows would be
+	// taking down something the reader never saw.
+	if ctx.Err() != nil {
 		return
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	d.repost(ctx, s)
+
+	// A poster that declares no interval gets NO ticker rather than a spin:
+	// its indicator lapses, which is a cosmetic loss, where a zero-interval
+	// ticker is a hot loop against a third-party app's rate limiter. It
+	// still serves phase changes — a nil channel blocks in the select below
+	// for ever, which is exactly "no heartbeat".
+	var tick <-chan time.Time
+	if interval := d.poster.StatusRefresh(); interval > 0 {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		tick = ticker.C
+	} else {
+		log.WarnContext(ctx, "status_poster_declares_no_refresh", "backend", d.poster.StatusBackend())
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			// No liveness re-check, and the ORDERING is why it is
-			// safe: End and Stop both cancel this context and wait
-			// for this goroutine to exit BEFORE they clear the
-			// indicator. So a re-assertion can never follow a clear
-			// — the worst case is one extra post that the clear
-			// immediately takes down. A check here would read as
-			// though that ordering were in doubt.
-			d.mu.Lock()
-			text := d.phrases.Pick(s.phase, s.seed, s.rotation)
-			d.mu.Unlock()
-			d.post(ctx, s.key, text)
+		case <-s.poke:
+			d.repost(ctx, s)
+		case <-tick:
+			d.repost(ctx, s)
 		}
 	}
+}
+
+// repost asserts whatever the session's state says NOW.
+//
+// The state rather than a value handed in, so a phase change that landed while
+// the previous request was in flight is picked up by this one instead of being
+// posted after it — which is what makes a coalesced [session.wake] correct
+// rather than lossy.
+func (d *StatusDriver) repost(ctx context.Context, s *session) {
+	d.mu.Lock()
+	text := d.phrases.Pick(s.phase, s.seed, s.rotation)
+	d.mu.Unlock()
+	d.post(ctx, s.key, text)
 }
 
 func (d *StatusDriver) post(ctx context.Context, key statusKey, text string) {

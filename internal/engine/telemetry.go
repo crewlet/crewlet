@@ -28,8 +28,8 @@ import (
 //   - agent_turn_completed is the DASHBOARD's single-phase summary. It is what
 //     ends a seat's live row, so a turn that failed to publish it leaves a
 //     working indicator up until the next turn starts.
-//   - turn_completed is the LEARNING subsystem's Plan/Execute/Review-shaped
-//     record — the same turn, described for a different consumer. One event
+//   - turn_completed is the LEARNING subsystem's own record of the same turn,
+//     described for a different consumer. One event
 //     serving both would have to be the union of two schemas, and every reader
 //     would then have to know which half applied to it.
 //
@@ -48,10 +48,19 @@ type turnTelemetry struct {
 	// completion name the same run. See ADR-0017.
 	runID string
 	// workKey is the unit of work, stable across a re-run.
-	workKey   string
-	agentID   string
-	trigger   types.Trigger
+	workKey string
+	agentID string
+	trigger types.Trigger
+
+	// convKey is the CONVERSATION IDENTITY — what every event this turn
+	// publishes is tagged with, what the episode row is filed under, and
+	// what matches a person's answer back to a detached run — while
+	// partKey is the inbox PARTITION the trigger arrived in, carried only
+	// so a detached coding run's row can also state the batch it was
+	// launched from, which is all a peer predating the identity can match
+	// on.
 	convKey   string
+	partKey   string
 	startedAt time.Time
 	trace     events.TraceContext
 
@@ -88,18 +97,21 @@ func newRunID() string { return uuid.NewString() }
 // message happened to arrive while the seat was busy.
 func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) turnTelemetry {
 	t := turnTelemetry{
-		handle:    req.Handle,
-		runID:     req.RunID,
-		workKey:   req.WorkKey,
-		convKey:   req.ConversationKey,
+		handle:  req.Handle,
+		runID:   req.RunID,
+		workKey: req.WorkKey,
+		convKey: req.ConversationKey,
+		// READ OFF THE PARTITION'S OWN EVENTS rather than carried on the
+		// Request beside the identity, because every constituent already
+		// holds it and a field would be one more thing a second Request
+		// construction site could leave empty — which is exactly how the
+		// conversation reached the sandbox row as "" for the whole life of
+		// that feature. The identity has no such source: a resumed turn
+		// has no events at all, so it has to travel.
+		partKey:   partitionKeyOf(req.Events),
 		startedAt: time.Now().UTC(),
 	}
-	if role := company.Org.AgentSeatByHandle(req.Handle); role != nil {
-		t.role = role.Name
-		if id, ok := company.Org.AgentIDFor(role); ok {
-			t.agentID = id.String()
-		}
-	}
+	t.role, t.agentID = seatIdentity(company, req.Handle)
 	// OFF THE ASK: a coalesced conversation's interactions come from the
 	// merged digest's own constituent list, which is the same set the
 	// partition held and the one place a merge combined them.
@@ -159,8 +171,17 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			Chain: chain,
 			// The conversation this turn owes an answer to, so work it
 			// detaches carries it: a coding run's row is written from
-			// here, and the resumed turn reports back from the row.
+			// here, the resumed turn reports back through it, and a
+			// person's answer is MATCHED on it — because a person
+			// answers on the conversation rather than into the batch
+			// their reply lands in.
+			//
+			// The partition rides along so the row can state the batch
+			// the run was launched from: it tells two runs parked on
+			// one direct message apart, and it is all a peer predating
+			// the conversation field has to match on.
 			ConversationKey: t.convKey,
+			PartitionKey:    t.partKey,
 			// The brief and the delivery obligation, carried for the
 			// same reason: a resumed turn sees neither its trigger nor
 			// this frame, so both have to reach the row from here.
@@ -189,7 +210,8 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// The model that answered the LAST phase to run, which is what a
 		// one-line row names. The per-phase models are carried beside it
 		// rather than collapsed, because a seat with a fallback chain can
-		// legitimately have run three phases on three models.
+		// legitimately have run the executor and the reviewer on two
+		// different models.
 		Model:          lastModel(spend),
 		Trigger:        t.trigger,
 		Prompt:         t.trigger.Summary,
@@ -215,20 +237,29 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		Failed:          failed,
 		ConversationKey: t.convKey,
 	}
-	switch {
-	case err != nil:
+	if err != nil {
 		// Bounded only so the event is publishable at all; see
 		// events.MaxDiagnosticBytes. An event refused by the queue is
 		// logged and dropped, so an unbounded failure text costs the
 		// operator the whole record rather than its tail.
 		summary.Error = events.ClipDiagnostic(err.Error())
 		summary.ErrorKind = "error"
-	case res.Breach != nil:
-		// A guard breach is not an error — the turn ran and was stopped by
-		// a rule. Naming the RULE is the whole value: "depth_cap" and "stall"
-		// send an operator to different places, and a bare "failed" sends
-		// them to neither.
-		summary.Error = events.ClipDiagnostic(res.Breach.Detail)
+	}
+	if res.Breach != nil {
+		// A guard breach is not an error: the turn ran and was stopped by
+		// a rule. Naming the RULE is the whole value: "depth_cap" and
+		// "stall" send an operator to different places, and a bare "failed"
+		// sends them to neither.
+		//
+		// THE RULE WINS WHEN BOTH ARE SET, and a panic is the case that
+		// sets both: its error says what broke and its breach names the
+		// guard. Read the other way round, the one kind that says the
+		// engine itself is at fault reached the Turn screen as the generic
+		// "error". The error's own text is kept, since it names the phase
+		// and round the breach detail does not.
+		if summary.Error == "" {
+			summary.Error = events.ClipDiagnostic(res.Breach.Detail)
+		}
 		summary.ErrorKind = string(res.Breach.Kind)
 	}
 	e.publishEvent(ctx, events.New(summary, t.trace), t.role)
@@ -301,7 +332,7 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 		e.publishEvent(ctx, events.New(types.TurnGuardBreach{
 			Agent:    t.agentID,
 			RoleName: t.role,
-			Kind:     types.GuardKind(res.Breach.Kind),
+			Kind:     res.Breach.Kind,
 			Detail:   events.ClipDiagnostic(res.Breach.Detail),
 			TurnID:   t.runID,
 			WorkKey:  t.workKey,
@@ -405,9 +436,26 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// second id here would split one turn across two on every screen.
 		// The work key rides the row for the same reason its reply does:
 		// the resume sees no trigger and could not re-derive it.
-		runID:     in.Run.TurnID,
-		workKey:   in.Run.UnitOfWork(),
-		convKey:   in.Run.ConversationKey,
+		runID:   in.Run.TurnID,
+		workKey: in.Run.UnitOfWork(),
+		// AND EACH CONVERSATION VALUE FROM ITS OWN FIELD: the resumed
+		// turn's events are tagged with the conversation it reports back
+		// to and is answered on, while the partition it was launched from
+		// is carried forward so a run that suspends AGAIN writes the same
+		// pair a first launch would.
+		//
+		// PartitionKey rather than ConversationKey for the second one,
+		// which is the whole of it: the row's ConversationKey is the
+		// IDENTITY — that is the field the split moved the name onto —
+		// so reading it here collapsed the pair the moment a run parked
+		// twice. A re-parked row then held the bare DM channel where its
+		// first launch held the thread, and [sandbox.ConversationRef.Best]
+		// lost the one fact that tells two questions on one direct
+		// message apart: with no partition to agree with, both rows fall
+		// through to recency and the reply to the question in one thread
+		// resumes the run waiting in the other.
+		convKey:   in.Run.Conversation(),
+		partKey:   in.Run.PartitionKey,
 		startedAt: time.Now().UTC(),
 		role:      in.Run.Role,
 		agentID:   in.Run.AgentID,
@@ -424,13 +472,38 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	}
 	// Re-derived from the org when the row predates a rename, so a resumed
 	// turn is still attributed to a seat that exists.
-	if role := company.Org.AgentSeatByHandle(in.Run.AgentHandle); role != nil {
-		t.role = role.Name
-		if id, ok := company.Org.AgentIDFor(role); ok {
-			t.agentID = id.String()
+	if role, agentID := seatIdentity(company, in.Run.AgentHandle); role != "" {
+		t.role = role
+		if agentID != "" {
+			t.agentID = agentID
 		}
 	}
 	return t
+}
+
+// seatIdentity is the role name and agent id a seat's events are addressed
+// to, or two empty strings for a handle this company does not name.
+//
+// ONE DERIVATION for every frame that addresses a seat-level event: the
+// turn's own telemetry, the resumed turn's, and the guard breach a panic
+// outside either publishes. Written out at each, the three would have to
+// agree about a human seat (no agent id) and an unknown handle (no role)
+// without anything checking that they do.
+//
+// Nil-safe on the company, because the panic path can run on a node that has
+// no epoch yet.
+func seatIdentity(company *Company, handle string) (role, agentID string) {
+	if company == nil || company.Org == nil {
+		return "", ""
+	}
+	seat := company.Org.AgentSeatByHandle(handle)
+	if seat == nil {
+		return "", ""
+	}
+	if id, ok := company.Org.AgentIDFor(seat); ok {
+		agentID = id.String()
+	}
+	return seat.Name, agentID
 }
 
 // skipDecision maps the turn's decision onto the one plan_decision value
@@ -438,7 +511,7 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 //
 // A turn that decided nobody was asking is [types.PlanDecisionSkip]; every
 // other turn writes the empty string, which is what the field already meant
-// for a turn that produced no plan artifact. The learning gate reads exactly
+// for a turn that produced no artifact. The learning gate reads exactly
 // one value, so writing a richer vocabulary here would be inventing consumers.
 func skipDecision(decision string) types.PlanDecision {
 	if decision == string(phase.Skipped) {

@@ -119,7 +119,7 @@ func TestTheConversationKeyMergesADirectBurstAndNothingElse(t *testing.T) {
 			in := trigger(t, "eng", func(n *chat.Notify) {
 				n.ChannelKind, n.ThreadRoot = tc.kind, tc.thread
 			})
-			if got := prompts.Key(in); got != tc.want {
+			if got := prompts.Partition(in); got != tc.want {
 				t.Errorf("%s keys on %q, want %q", name, got, tc.want)
 			}
 		})

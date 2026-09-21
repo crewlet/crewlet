@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -126,8 +127,8 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, req Request, r
 // and forwarding it verbatim sends a colleague the wrong thing while looking
 // like an answer:
 //
-//   - `skipped` puts the PLANNER'S REASONING in the artifact — a private "no
-//     one was asking this seat to do anything", which is both internal and
+//   - `skipped` puts the EXECUTOR'S OWN REASONING in the artifact: a private
+//     "no one was asking this seat to do anything", which is both internal and
 //     wrong, since somebody plainly was.
 //   - a guard breach and a failure end the turn with whatever text was in
 //     hand when it stopped, which is a fragment of working-out rather than an
@@ -139,6 +140,26 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, req Request, r
 func answerContent(res turn.Result) string {
 	if res.Decision == phase.Done && res.Artifact != "" {
 		return res.Artifact
+	}
+	// A DONE TURN THAT IS BLOCKED STILL HAS AN ACCOUNT, and it is the one
+	// way `done` arrives carrying no prose: the seat answered as far as it
+	// could, put the rest to somebody who has to answer it, and had nothing
+	// left to write as an artifact.
+	//
+	// The evidence is there to be used. `submit_work` REFUSES a blocked
+	// outcome with an empty `evidence` — what was tried, and what stopped
+	// it — so the one case whose artifact may be empty is the one case
+	// guaranteed to have something to say instead.
+	//
+	// Falling through to the apology below is not a cosmetic loss. The
+	// caller CLOSES the channel immediately after this, so an asker whose
+	// colleague did exactly the right thing is told the turn produced
+	// nothing and then has nowhere to follow up — and it re-asks, which is
+	// the duplicate this whole path exists to stop.
+	if res.Decision == phase.Done && res.LastWork != nil &&
+		res.LastWork.Outcome == turn.OutcomeBlocked &&
+		strings.TrimSpace(res.LastWork.Evidence) != "" {
+		return res.LastWork.Evidence
 	}
 	if res.Breach != nil {
 		return "I could not answer this: my turn stopped on the engine's " +

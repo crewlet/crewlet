@@ -20,8 +20,31 @@ import { describe, expect, test } from "vitest";
 
 const STYLES = fileURLToPath(new URL(".", import.meta.url));
 
+/**
+ * One stylesheet, WITH ITS COMMENTS BLANKED.
+ *
+ * Every case here reads CSS as text, and several of them slice it at a
+ * breakpoint — `split("@media (max-width: 860px)")` for the wide half,
+ * `indexOf("@container page (max-width:")` for the broken bar. A COMMENT
+ * naming one of those at-rules truncates that slice at the prose instead of
+ * at the rule, and this file's comments name at-rules constantly, because
+ * explaining why a rule sits at a breakpoint means writing the breakpoint
+ * down.
+ *
+ * It has happened: a note on `.page` mentioning `@media (max-width: 860px)`
+ * moved the wide half's end 480 lines up the file, and three cases failed
+ * naming `.grid-wrap` and `.rail-label` — selectors nothing in that change
+ * had touched. A gate that fails for the wrong reason is a gate somebody
+ * fixes by deleting an assertion.
+ *
+ * BLANKED RATHER THAN REMOVED: every comment becomes spaces of the same
+ * length, so an offset into this string is still an offset into the file and
+ * a failure's line number still points at the rule.
+ */
 function sheet(name: string): string {
-  return readFileSync(join(STYLES, name), "utf8");
+  return readFileSync(join(STYLES, name), "utf8").replace(/\/\*[\s\S]*?\*\//g, (c) =>
+    c.replace(/[^\n]/g, " "),
+  );
 }
 
 /** The body of the first rule whose selector is exactly `selector`. */
@@ -304,10 +327,12 @@ describe("the frame's layout", () => {
 
   // A FIXED-COLUMN FIGURE BLOCK IS REACHABLE.
   //
-  // The turn page's prompt weights are three `.num-col` figures at 5.5rem
-  // under their own headings, beside a phase tag: 370px in the 332px a phone
-  // leaves inside the card, so the tokens column was cut off — and lining the
-  // three up under their headings is the entire reason `.num-col` exists.
+  // The turn page's prompt weights are five `.num-col` figures at 7rem under
+  // their own headings, beside a phase tag: far past the 332px a phone leaves
+  // inside the card, so the tokens column was cut off — and lining the five up
+  // under their headings is the entire reason `.num-col` exists. (It was
+  // already cut off at three, before the tool-definition array and a resumed
+  // phase's own conversation each earned a column.)
   //
   // SIDEWAYS HERE, where a grid gets a card. The shapes take opposite answers
   // for a reason: a grid's flexible tracks resolve to zero the moment its wrap
@@ -320,11 +345,50 @@ describe("the frame's layout", () => {
     // `max-content` IS THE HALF THAT MAKES IT WORK: a flex line inside a
     // scrollport is otherwise sized to the port, so its items shrink or
     // overflow and the headings stop lining up with the figures they head.
-    const row = block(css, ".num-block > .row");
-    expect(row).toMatch(/width:\s*max-content/);
+    const rows = block(css, ".num-rows");
+    expect(rows).toMatch(/width:\s*max-content/);
     // And the min-width is what leaves the spacer able to push the figures
     // right on a screen the block already fits in.
-    expect(row).toMatch(/min-width:\s*100%/);
+    expect(rows).toMatch(/min-width:\s*100%/);
+  });
+
+  // ONE BOX FOR EVERY ROW, WHICH IS WHAT KEEPS THE COLUMNS COLUMNS.
+  //
+  // The width above used to sit on `.num-block > .row`, one row at a time, and
+  // a row's own `max-content` is its own phase tag and its own chips. So the
+  // moment the block was clamped — a phone — every row resolved to a DIFFERENT
+  // width and the figures splayed: 12 KB, 23 KB and 5.3 KB at three x
+  // positions under one heading. Sized together they scroll together.
+  //
+  // TWO-SIDED, because putting the width back on the rows is exactly how it
+  // returns and neither half fails on its own: the rows' box has to carry it,
+  // and nothing per-row may.
+  test("the rows of a figure block are sized as one box, not one at a time", () => {
+    const css = sheet("components.css");
+    expect(/\.num-block\s*>\s*\.row\b/.test(css), "a per-row width is the splay this removed").toBe(
+      false,
+    );
+    expect(block(css, ".num-rows")).toMatch(/width:\s*max-content/);
+  });
+
+  // AND THE BLOCK IS SIZED TO ITS ROWS RATHER THAN TO THE PANEL.
+  //
+  // A `.spacer` puts a figure at the end of whatever box it is in, which is
+  // right in a rail and wrong in a full-bleed card: the turn's prompt ledger
+  // drew a phase tag at x=37 and its token count at x=645 on a 1570px screen,
+  // with most of a panel of nothing in between, and a reader tracking a row
+  // across that gap arrives at the wrong one.
+  //
+  // `fit-content`, NOT A CHOSEN CAP — which is what this was first written as.
+  // A cap is a number invented to be wider than the content, so it still
+  // leaves a gap, and it has to be re-invented the day a column is added. The
+  // `max-width` that remains is a ceiling only: 100% so a phone scrolls the
+  // block instead of the page, and a rem bound so prose-long labels cannot
+  // quietly restore the gap.
+  test("a figure block is sized to its own rows, with max-width only a ceiling", () => {
+    const b = block(sheet("components.css"), ".num-block");
+    expect(b).toMatch(/width:\s*fit-content/);
+    expect(b).toMatch(/max-width:\s*min\(100%,\s*\d+(\.\d+)?rem\)/);
   });
 
   // AND A CAPPED CELL DOES NOT PAINT OUTSIDE ITS TRACK.
@@ -425,6 +489,36 @@ describe("the frame's layout", () => {
     ).toEqual([]);
   });
 
+  // A ROW LIST LINES UP WITH ITS OWN HEADING.
+  //
+  // A row list usually sits in a `Card`, and `Card.Header` pads `--space-4`.
+  // Every row class in the tree wrote `--space-3` instead, so on the turn page
+  // four panels drew their content four pixels inside their own titles while
+  // the panels between them did not, and the screen read as though two people
+  // had built it. It is one token now, which is the only shape under which
+  // seven classes in two files can be said to agree.
+  test("every row in the product takes the one inset", () => {
+    const ROWS = [
+      [".list-row", "components.css"],
+      [".turn-row", "screens.css"],
+      [".feed-row", "screens.css"],
+      [".work-row", "screens.css"],
+      [".wl-row", "screens.css"],
+      [".attention-row", "screens.css"],
+      [".thread-entry", "screens.css"],
+    ] as const;
+    for (const [row, file] of ROWS) {
+      expect(block(sheet(file), row), `${row} writes its own inset`).toMatch(
+        /padding:[^;]*var\(--row-inline\)/,
+      );
+    }
+    // AND THE TOKEN IS THE HEADING'S OWN STEP. `Card.Header` is the design
+    // system's and pads `--spacing-4`, which `uilet.css` aliases as
+    // `--space-4`; a row list that took any other step would be back to the
+    // misalignment with one place to change it instead of seven.
+    expect(block(sheet("tokens.css"), ":root")).toMatch(/--row-inline:\s*var\(--space-4\)/);
+  });
+
   // A DISCLOSURE HEAD WRAPS, which is rule 15 of the design doc.
   //
   // A phase's head is up to fifteen items — the phase tag, the iteration, a
@@ -517,42 +611,110 @@ describe("the frame's layout", () => {
     expect(block(narrow, ".table tr + tr")).toMatch(/border-top:/);
   });
 
-  test("the page bar wraps rather than pushing the chrome off a phone", () => {
+  // A FACT LINE IS A ROW OF FACTS, so it has to have a pitch. This one is a
+  // flex row of column boxes, which means each fact is as wide as its widest
+  // CHILD — and a note is prose where the value above it is a word.
+  test("a footnote cannot set its fact's column or its row", () => {
+    const css = sheet("frame.css");
+    const line = block(css, ".fact-line");
+    // A GRID WITH A REGULAR TRACK, not a flex row that sizes to content.
+    // Measured before: `v1` under a 146px "set by Agent CEO · 2m ago" beside
+    // three note-less facts at 66 to 75px, so the gaps between five labels ran
+    // 85, 162, 90, 169 — five columns placed at random rather than one row.
+    expect(line).toMatch(/display:\s*grid/);
+    expect(line).toMatch(/grid-template-columns:\s*repeat\(/);
+
+    // AND EVERY FACT SITS ON THE SAME FOUR BANDS. Subgrid is what keeps the
+    // labels on one line and the values on the next across the whole row: as
+    // four independent boxes, one three-line note pushed its own value up and
+    // left the rest of the row hanging.
+    const fact = block(css, ".fact");
+    expect(fact).toMatch(/grid-template-rows:\s*subgrid/);
+    expect(fact).toMatch(/grid-row:\s*span 4/);
+
+    // AND THE CAP THAT USED TO STAND IN FOR ALL OF IT IS GONE. `max-width:
+    // 16ch` could only narrow the problem — sixteen characters at `--fs-3xs`
+    // is still wider than most values — and left with the track doing the
+    // bounding it would cut a note the column had room for.
+    expect(
+      rules(css, ".fact-note").join(" "),
+      "the track bounds a note now; a cap on top of it only cuts one early",
+    ).not.toMatch(/max-width:/);
+  });
+
+  test("the page bar shrinks, and breaks only where it was told to", () => {
     const css = sheet("frame.css");
     const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
     expect(narrow, "the narrow breakpoint is gone").toContain(".page-bar");
 
-    // THE BAR WRAPS AT EVERY WIDTH, because what overflows it is CONTENT.
-    // Behind the phone breakpoint this missed a whole second band: a screen's
-    // own control group is `flex: 0 0 auto` and the turns list's is 478px, so
-    // at 1180px with the rail and the sidebar open the SEARCH TRIGGER — the
-    // command palette's only pointer affordance — was past the right edge on
-    // the turns list and the event log, and the turns page took the whole
-    // document to 1263 so the heading scrolled sideways with it.
+    // THE BASE BAR DOES NOT WRAP. `flex-wrap: wrap` was on it at every width
+    // and it is the wrong instrument: a flex container assigns items to lines
+    // by their size BEFORE any shrinking, so `wrap` means "never shrink,
+    // always break" — and the break lands in source order, which on a turn
+    // page is after the screen's own controls. Measured on
+    // `#/activity/turns/<id>` at a 1919px window with the rail and the
+    // sidebar open: a 1587px bar, and the viewer chip and the SEARCH TRIGGER
+    // — the command palette's only pointer affordance — alone at the left of
+    // a second line under the trail, with a hundred pixels spare on the
+    // first.
     //
-    // A FLOOR RATHER THAN A HEIGHT, so a wrapped bar is not clipped and an
-    // unwrapped one is exactly the height it always was.
+    // A FLOOR RATHER THAN A HEIGHT, so the two rows the container query and
+    // the control group's own wrap can create are not clipped, and a bar that
+    // needs neither is exactly the height it always was.
     const base = css.slice(0, css.indexOf("@media (max-width: 860px)"));
     const wide = block(base, ".page-bar");
-    expect(wide).toMatch(/flex-wrap:\s*wrap/);
+    expect(wide).toMatch(/flex-wrap:\s*nowrap/);
     expect(wide).toMatch(/min-height:\s*var\(--page-bar-h\)/);
     expect(wide).toMatch(/height:\s*auto/);
     // AND NOT A FIXED HEIGHT ANYWHERE ELSE, which is the declaration that
     // would silently undo it.
     expect(
       rules(css, ".page-bar").join(" "),
-      "a fixed height clips the second line the wrap creates",
+      "a fixed height clips the second row the container query creates",
     ).not.toMatch(/(^|[;\s])height:\s*var\(--page-bar-h\)/);
 
-    // AND THE SECOND LINE IS THE PAGE'S OWN CONTROLS: a full basis is what
+    // THE TRAIL IS THE ONE THING THAT GIVES WAY, and it stops before the way
+    // back out is gone. `flex-grow` is the `.spacer` this replaced; the large
+    // shrink factor is the ordering against the viewer chip and the search
+    // trigger; and the floor is what keeps `overflow: hidden` from clipping
+    // the ancestors, which at `min-width: 0` rendered the trail as "Activit".
+    const crumbs = block(base, ".crumbs");
+    expect(crumbs).toMatch(/flex:\s*1 100 auto/);
+    expect(crumbs).toMatch(/min-width:\s*20ch/);
+
+    // AND THE CONTROL GROUP DOES NOT SHRINK BY SO MUCH AS A FRACTION. It
+    // wraps, so a shrink does not shave a label, it drops the last control
+    // onto a row of its own — measured at a 1250px bar, a 0.13px share of the
+    // overflow put "Copy link" on a second row while the trail still had
+    // 250px to give. `max-width` is the valve `flex-shrink: 0` would
+    // otherwise remove: a group wider than the whole bar still wraps.
+    const controls = block(base, ".page-controls");
+    expect(controls).toMatch(/flex:\s*0 0 auto/);
+    expect(controls).toMatch(/max-width:\s*100%/);
+    expect(controls).toMatch(/flex-wrap:\s*wrap/);
+    expect(controls).toMatch(/justify-content:\s*flex-end/);
+
+    // THE BREAK IS A CONTAINER QUERY, because what overflows is the BAR and
+    // a viewport query cannot see it: the rail and an open workspace sidebar
+    // take 330px, so a 1919px window and a 1440px window with the sidebar
+    // shut give the same bar. `.page` is the container that measures it.
+    expect(block(base, ".page"), "the page is no longer a container").toMatch(
+      /container:\s*page \/ inline-size/,
+    );
+    const atBreak = css.slice(css.indexOf("@container page (max-width:"));
+    expect(atBreak, "the page bar's own break is gone").toContain(".page-controls");
+    // AND THE SECOND ROW IS THE PAGE'S OWN CONTROLS: a full basis is what
     // breaks the line, an order past the globals is what keeps the viewer
     // chip and the search trigger on the first one, and the scroll is what
-    // makes a group wider than the phone reachable rather than merely
-    // out of sight.
-    const controls = block(narrow, ".page-controls");
-    expect(controls).toMatch(/flex:\s*0 0 100%/);
-    expect(controls).toMatch(/order:\s*\d/);
-    expect(controls).toMatch(/overflow-x:\s*auto/);
+    // makes a group wider than the bar reachable rather than merely out of
+    // sight.
+    const broken = block(atBreak, ".page-controls");
+    expect(broken).toMatch(/flex:\s*0 0 100%/);
+    expect(broken).toMatch(/order:\s*\d/);
+    expect(broken).toMatch(/overflow-x:\s*auto/);
+    // …and the bar has to be told to wrap again, since the base rule no
+    // longer does.
+    expect(block(atBreak, ".page-bar")).toMatch(/flex-wrap:\s*wrap/);
 
     // AND THE BOTTOM BAR IS NAVIGATION. Its foot carried the engine pill, the
     // theme switch and the density switch — 250px of 390, leaving about two

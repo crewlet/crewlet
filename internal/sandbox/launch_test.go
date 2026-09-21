@@ -14,7 +14,13 @@ func launchReq(turnID string) LaunchRequest {
 	return LaunchRequest{
 		Turn: TurnRef{
 			TurnID: turnID, AgentID: "a-1", AgentHandle: "swe", Role: "SWE",
-			ConversationKey: "chat:C1", Reply: "tool",
+			// A DIRECT MESSAGE, the one shape where the two keys differ:
+			// the conversation an answer is matched on is the bare
+			// channel, while the partition the kick-off arrived in is a
+			// thread inside it. Equal ones here would let a launch that
+			// copied one field onto both look correct.
+			PartitionKey: "chat:D1:root-1", ConversationKey: "chat:D1",
+			Reply:   "tool",
 			TraceID: "tr-1", SpanID: "sp-1",
 		},
 		Brief: "Clone example.com/acme/api and fix the failing test",
@@ -55,8 +61,14 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 	if run.Reply != "tool" {
 		t.Fatalf("who is waiting was not persisted: %+v", run)
 	}
-	if run.ConversationKey != "chat:C1" || run.TraceID != "tr-1" {
+	// BOTH CONVERSATION VALUES, because the row asks two questions of them
+	// and one construction site forgetting one is exactly how this field
+	// was empty at every site for the life of the feature.
+	if run.PartitionKey != "chat:D1:root-1" || run.TraceID != "tr-1" {
 		t.Fatalf("the routing and trace were not persisted: %+v", run)
+	}
+	if run.ConversationKey != "chat:D1" {
+		t.Fatalf("the run has nowhere to report back to: %+v", run)
 	}
 	if !rig.runner.Installed(res.SandboxID) {
 		t.Fatal("the coding agent was never installed in the box")

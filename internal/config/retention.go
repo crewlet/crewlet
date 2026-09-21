@@ -122,6 +122,23 @@ const (
 	DerivedLogMaxBytesFraction       = 4
 	DerivedLogMaxBytesFloor    int64 = 4 << 30
 	DerivedLogMaxBytesCeiling  int64 = 64 << 30
+
+	// StoreMaxBytesFloor and StoreMaxBytesCeiling bound the embedded
+	// broker's own declared store limit.
+	//
+	// THE FLOOR IS FOUR GIBIBYTES, which is the smallest limit the engine's
+	// own logs fit inside: three state-log domains, none of which may be
+	// sized below TrackerLogMaxBytesFloor, plus the mailboxes, the event
+	// stream and every coordination bucket, which reserve nothing and grow
+	// against the same number. Below it a node provisions its way to a
+	// refusal on whichever stream happens to be last.
+	//
+	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is two
+	// orders of magnitude above the largest estate the domain ceilings can
+	// describe (1 TiB of mutation log, 256 GiB of vectors), so anything
+	// past it is a unit mistake rather than a deployment.
+	StoreMaxBytesFloor   int64 = 4 << 30
+	StoreMaxBytesCeiling int64 = 64 << 40
 )
 
 // MinAge is the trim's age floor as a duration, with the default applied.
@@ -246,16 +263,19 @@ func containsFloor(f BackupFloor) bool {
 
 // bytesInRange refuses a byte ceiling outside its bounds, naming both.
 //
-// THE FLOOR IS NOT A PARAMETER, because every state log shares it and a
-// parameter that only ever receives one value is a knob nobody turns — see
-// [LogMaxBytesFloor]. The ceiling genuinely differs per field and stays one.
-func bytesInRange(p *problems, path Path, name string, v, hi int64) {
+// BOTH BOUNDS ARE PARAMETERS, and the floor was briefly not: every state log
+// shares [LogMaxBytesFloor], so while the logs were the only callers it was a
+// knob nobody turned. `store_max_bytes` is the caller that made it one again
+// — it bounds the WHOLE embedded broker rather than one log, so its floor is
+// four gibibytes against a log's one, and hard-coding the log's would have
+// admitted a broker limit smaller than a single log's own floor.
+func bytesInRange(p *problems, path Path, name string, v, lo, hi int64) {
 	if v == 0 {
 		return
 	}
-	if v < LogMaxBytesFloor || v > hi {
+	if v < lo || v > hi {
 		p.add(at(path, name), ErrOutOfRange,
-			"%d is outside %d..%d bytes", v, LogMaxBytesFloor, hi)
+			"%d is outside %d..%d bytes", v, lo, hi)
 	}
 }
 

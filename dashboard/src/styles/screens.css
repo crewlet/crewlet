@@ -10,7 +10,7 @@
 .turn-card {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   overflow: hidden;
 }
 .turn-card.live {
@@ -65,7 +65,7 @@
 .phase-card {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-sm);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   overflow: hidden;
 }
 .phase-card.failed {
@@ -324,7 +324,7 @@
 
 .tool-row {
   border-radius: var(--r-xs);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
 }
 .tool-row.failed {
@@ -338,7 +338,7 @@
   align-items: flex-start;
   gap: var(--space-3);
   width: 100%;
-  padding: var(--space-3);
+  padding: var(--space-3) var(--row-inline);
   border-bottom: 1px solid var(--border-subtle);
   text-align: left;
   min-width: 0;
@@ -403,7 +403,7 @@
   padding: var(--space-3);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   text-align: left;
   min-width: 0;
   transition: border-color var(--dur-fast) var(--ease);
@@ -441,7 +441,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
   padding: var(--space-3);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   min-width: 0;
 }
 .org-unit-head {
@@ -471,7 +471,7 @@
   padding: var(--space-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-sm);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   min-width: 190px;
   text-align: left;
 }
@@ -732,7 +732,7 @@
   gap: var(--space-3);
   align-items: baseline;
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--row-inline);
   border-bottom: 1px solid var(--border-subtle);
   text-align: left;
   font-size: var(--fs-xs);
@@ -753,7 +753,7 @@
   gap: var(--space-3);
   align-items: baseline;
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--row-inline);
   border-bottom: 1px solid var(--border-subtle);
   text-align: left;
   font-size: var(--fs-xs);
@@ -808,6 +808,17 @@
   font-size: var(--fs-3xs);
   white-space: nowrap;
 }
+
+/* HOW MANY ROWS THIS ONE STANDS FOR — see `collapseRuns` in lib/turnstory.ts.
+   A step BRIGHTER than the wire type beside it, because it qualifies the
+   sentence at the other end of the row and a reader scanning a failure band
+   has to see "×8" without hunting for it; the type is a name they read only
+   when they already care. It borrows the tail's own size rather than taking
+   one of its own: a count set larger than the row's quietest column would
+   read as a badge, and this is a footnote to a line. */
+.run-count {
+  color: var(--text);
+}
 @media (max-width: 700px) {
   .feed-row {
     grid-template-columns: 54px minmax(0, 1fr);
@@ -838,7 +849,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  padding: var(--space-3);
+  padding: var(--space-3) var(--row-inline);
   border-bottom: 1px solid var(--border-subtle);
   min-width: 0;
 }
@@ -970,7 +981,7 @@
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--r-full);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   color: var(--text-secondary);
   font-size: var(--fs-2xs);
   cursor: pointer;
@@ -1190,7 +1201,7 @@
 }
 
 .int-card {
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   overflow: hidden;
@@ -1264,7 +1275,7 @@
   width: var(--row-h-lg);
   height: var(--row-h-lg);
   border-radius: var(--r-full);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   color: var(--text);
 }
 .vendor-mark {
@@ -1568,7 +1579,7 @@
   border-left: 4px solid currentColor;
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
-  transition: transform 120ms ease;
+  transition: transform var(--dur-fast) var(--ease);
 }
 .int-form-more[open] > summary::before {
   transform: rotate(90deg);
@@ -1592,7 +1603,9 @@
 .int-seat-form {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
-  background: var(--surface-1);
+  /* THE RUNG ABOVE ITS GROUND. This block lives inside a modal, and a modal
+   paints the panel rung. */
+  background: var(--surface-raised);
 }
 .int-seat-form + .int-seat-form {
   margin-top: calc(var(--space-3) - var(--space-5));
@@ -1620,13 +1633,21 @@
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
   color: var(--text-muted);
-  transition: transform 120ms ease;
+  transition: transform var(--dur-fast) var(--ease);
 }
 .int-seat-form[open] > .int-seat-summary::before {
   transform: rotate(90deg);
 }
+/* A HOVER IS AN INTERACTION STATE, so it takes the interaction token rather
+   than a structural rung. It used to reach for the rung above the page, which
+   worked only while `.int-seat-form` stood on the page itself; the form is on
+   the raised rung now (it opens inside a modal, and a modal paints the panel
+   one), so naming that same rung here drew the summary in its own parent's
+   colour and the block lost its hover affordance entirely. `--surface-hover`
+   is a translucent overlay, so it lifts whatever it lands on — which is what
+   every other hover in the product already uses. */
 .int-seat-summary:hover {
-  background: var(--surface-2);
+  background: var(--surface-hover);
 }
 /* The badge sits at the far end, so a column of blocks reads down its right
    edge as a list of what is left to do. */
@@ -1675,7 +1696,7 @@
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
   color: var(--text-muted);
-  transition: transform 120ms ease;
+  transition: transform var(--dur-fast) var(--ease);
 }
 .int-manifest[open] > .int-manifest-summary::before {
   transform: rotate(90deg);
@@ -1699,7 +1720,7 @@
   overflow: auto;
   padding: var(--space-3);
   border-radius: var(--r-sm);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
@@ -1737,7 +1758,7 @@
   margin: 0;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--r-md);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   font-size: var(--fs-2xs);
   line-height: 1.5;
   color: var(--text-muted);
@@ -1844,7 +1865,10 @@ details > summary.int-summary::-webkit-details-marker {
   padding: 1px var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  background: var(--surface-1);
+  /* THE RUNG ABOVE ITS GROUND. A chip inside `.int-card`, which is a panel, so
+   at the panel rung it drew nothing — and it drew nothing before this ramp was
+   named either, when both were the page's colour. */
+  background: var(--surface-raised);
   color: var(--text-muted);
   font-size: var(--fs-2xs);
   /* The addresses and URLs this carries have no spaces to break at. */
@@ -1904,7 +1928,7 @@ details > summary.int-summary::-webkit-details-marker {
   flex-wrap: wrap;
   gap: var(--space-4) var(--space-6);
   padding: var(--space-3) var(--space-4);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-1), var(--inset-hairline);
@@ -2034,11 +2058,11 @@ details > summary.int-summary::-webkit-details-marker {
 }
 /* A LANE IS A RECESS IN THE PAGE, and `--surface-inset` is the token whose
    job that is — an overlay that darkens the ground in light and lifts it in
-   dark, so the lane reads as a surface under the cards in BOTH. `--bg-sunken`
-   was the wrong one: it is the app's own ground, BELOW the page in either
-   theme, and in dark that put the lane darker than what surrounds it — an
-   empty column became a hole nobody could see, so the one lane with room in
-   it was the one that looked absent. */
+   dark, so the lane reads as a surface under the cards in BOTH. The retired
+   `--bg-sunken` was the wrong one: it resolved to the panel colour, ABOVE the
+   page in either theme, so a recess in the page was drawn as a thing standing
+   on it — and an empty column read as a hole nobody could see, which made the
+   one lane with room in it the one that looked absent. */
 .work-col {
   flex: 0 0 auto;
   width: min(292px, 82vw);
@@ -2109,7 +2133,7 @@ details > summary.int-summary::-webkit-details-marker {
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3) var(--space-3);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-sm);
   box-shadow: var(--shadow-1);
@@ -2259,7 +2283,7 @@ details > summary.int-summary::-webkit-details-marker {
   grid-template-columns: subgrid;
   grid-column: 1 / -1;
   align-items: center;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--row-inline);
   border-bottom: 1px solid var(--border-subtle);
   min-height: var(--row-h);
   font-size: var(--fs-xs);
@@ -2316,7 +2340,7 @@ details > summary.int-summary::-webkit-details-marker {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
@@ -2391,18 +2415,18 @@ details > summary.int-summary::-webkit-details-marker {
    — so it is drawn quieter rather than left out, which is what lets a task
    due on the 1st be visible from the month before it.
 
-   THE GROUND IS RUNG 3, AND RUNG 2 WAS A NO-OP. This rule said `--surface-2`
-   and rendered nothing from the day it was written: that token is
-   `--color-surface-topbar-lift`, which is #f4f4f5 light and #1c1e24 dark —
-   byte-identical to `--color-surface-subtle`, the ground every Card in this
-   product paints, in all three states of the cascade. So every cell of the grid
-   came back the card's own colour and the leading 31 was indistinguishable from
-   the 1st. The `--surface-1/2/3` ramp steps off the PAGE and a card already
-   stands on rung 2, so rung 3 is the first step a card can show. See uilet.css's
-   surfaces note; `styles/surfaces.test.ts` resolves both against the installed
-   palette and fails if they collide again. */
+   THE GROUND IS A PANEL, SO THE TINT HAS TO BE THE RUNG ABOVE ONE. This rule
+   said `--surface-2` and rendered nothing from the day it was written: that
+   token was `--color-surface-topbar-lift`, which is #f4f4f5 light and #1c1e24
+   dark — byte-identical to `--color-surface-subtle`, the ground every Card in
+   this product paints, in all three states of the cascade. So every cell of
+   the grid came back the card's own colour and the leading 31 was
+   indistinguishable from the 1st. The ramp is named by rung now and there is
+   exactly one step above a panel; see uilet.css's surfaces note.
+   `styles/surfaces.test.ts` resolves every pair against the installed palette
+   and fails if any of them collide again. */
 .work-cal-cell.out {
-  background: var(--surface-3);
+  background: var(--surface-raised);
 }
 .work-cal-day {
   align-self: flex-start;
@@ -2798,6 +2822,28 @@ a.work-cal-chip {
   accent-color: var(--accent);
   opacity: 0.85;
 }
+/* A FENCED BLOCK WRAPS RATHER THAN SCROLLING, which is the whole of the fix
+   and also the design system's own default: uilet's CodeBlock wraps unless a
+   caller turns it off, because "a sideways scrollbar is a line nobody finds
+   the end of". A `pre` is `white-space: pre` with `overflow: visible` out of
+   the box, so before this recipe existed one long line of JSON in a page
+   body, a work item's description or a phase prompt pushed the PAGE sideways
+   — 1378px of scroll width in a 700px viewport, measured. Scrolling the block
+   instead would have fixed the page and owed a tab stop, since a scroll
+   container no keyboard can reach is content no keyboard can read; wrapping
+   owes nothing.
+
+   `overflow-wrap: anywhere` rather than `break-word` because these lines have
+   no spaces to break at: a minified payload, a base64 blob and a long path
+   are each one word to a line breaker. */
+.prose.md pre.md-code {
+  background: var(--surface-inset);
+  border-radius: var(--r-sm);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .prose.md blockquote {
   margin: 0;
   padding-inline-start: var(--space-3);
@@ -2877,7 +2923,7 @@ a.work-cal-chip {
    ends looks like one rewritten in the middle. */
 .diff-skip {
   padding: var(--space-1) var(--space-3);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   color: var(--text-muted);
   font-family: var(--font-sans);
   font-size: var(--fs-2xs);
@@ -2986,7 +3032,7 @@ a.work-cal-chip {
   overflow-y: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
-  background: var(--surface-1);
+  background: var(--surface-panel);
 }
 .tl-inner {
   position: relative;
@@ -3079,7 +3125,7 @@ a.work-cal-chip {
   text-overflow: ellipsis;
 }
 .tl-bar[data-tone="planned"] {
-  background: var(--surface-2);
+  background: var(--surface-raised);
   border-color: var(--border-strong);
   color: var(--text);
 }
@@ -3126,7 +3172,10 @@ a.work-cal-chip {
   left: 0;
   top: 24px;
   z-index: 3;
-  background: var(--surface-1);
+  /* THE RUNG ABOVE ITS GROUND. The frozen name column sits over `.tl-scroll`,
+   which is a panel, and an opaque background is the whole reason it has one —
+   at the same rung the bars scrolled under it invisibly. */
+  background: var(--surface-raised);
   border-right: 1px solid var(--border-subtle);
 }
 .tl-name {
@@ -3207,7 +3256,7 @@ a.work-cal-chip {
   grid-template-columns: minmax(140px, 1.4fr) minmax(120px, 1.6fr) minmax(120px, 2fr) 5rem 6rem;
   gap: var(--space-3);
   align-items: center;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--row-inline);
 }
 .wl-head {
   font-size: var(--fs-xs);
@@ -3341,7 +3390,7 @@ a.work-cal-chip {
   padding: var(--space-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
-  background: var(--surface-2);
+  background: var(--surface-raised);
 }
 /* A DASHED EDGE ON THE IRREVERSIBLE ONE, not a red fill: it is still just
    text on a page, and a block that shouted would be a delete button. */
@@ -3381,7 +3430,7 @@ a.work-cal-chip {
   align-items: stretch;
   gap: var(--space-1) var(--space-2);
   padding: var(--space-2) var(--space-3);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
 }
@@ -3453,7 +3502,7 @@ a.work-cal-chip {
   top: var(--sticky-top);
   min-width: 0;
   padding: var(--space-3);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
 }
@@ -3495,7 +3544,7 @@ a.work-cal-chip {
   flex-direction: column;
   gap: 2px;
   padding: var(--space-3);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px dashed var(--border-subtle);
   border-radius: var(--r-md);
 }
@@ -3721,7 +3770,7 @@ a.work-cal-chip {
 }
 /* THE ROOT OF A THREAD, drawn as the thing the pane is about. */
 .chat-message.root {
-  background: var(--surface-2);
+  background: var(--surface-raised);
 }
 /* A TOMBSTONE IS STILL A ROW. The body is gone and the message is not: a reply
    still resolves to it, and a thread keeps the line it hangs off. */
@@ -3778,7 +3827,7 @@ a.work-cal-chip {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-full);
   font-size: var(--fs-2xs);
-  background: var(--surface-1);
+  background: var(--surface-panel);
 }
 .chat-reaction:hover:enabled {
   background: var(--surface-hover);
@@ -3810,7 +3859,7 @@ a.work-cal-chip {
   min-width: 0;
   min-height: 0;
   padding: var(--space-3);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
 }

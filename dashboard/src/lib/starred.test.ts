@@ -101,3 +101,48 @@ describe("a store that will not cooperate", () => {
     expect(stored().map((s) => s.label)).toEqual(["ENG-1"]);
   });
 });
+
+/**
+ * A SECOND TAB IS THE SAME STORAGE, and a write replaces the whole key.
+ *
+ * The module holds a render snapshot for `useSyncExternalStore`, which must
+ * be referentially stable. Built a mutation on it, this list handed back
+ * whatever the tab last painted — so with two tabs open on one company, the
+ * second one's star destroyed the first one's, silently, while `toggleStar`
+ * returned "starred". This list refuses at the cap rather than evicting,
+ * because every entry is a decision somebody made; this path evicted up to
+ * forty-nine of them.
+ *
+ * The other tab is simulated by writing the key directly, which is exactly
+ * what it does: one origin, one key, no coordination.
+ */
+describe("two tabs on one origin", () => {
+  it("keeps what another tab starred while this one was painting", () => {
+    star("ENG-1", "work", "ENG-1");
+    // This tab paints, so the snapshot is taken.
+    expect(isStarred(["work", "ENG-1"])).toBe(true);
+    // The other tab stars something. No event is delivered here.
+    localStorage.setItem(
+      "crewlet_starred",
+      JSON.stringify([
+        { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work", at: 1 },
+        { path: ["work", "ENG-2"], label: "ENG-2", workspace: "work", at: 2 },
+      ]),
+    );
+    star("ENG-3", "work", "ENG-3");
+    expect(stored().map((s) => s.label)).toEqual(["ENG-1", "ENG-2", "ENG-3"]);
+  });
+
+  it("unstars against what is stored, not against what it last drew", () => {
+    star("ENG-1", "work", "ENG-1");
+    localStorage.setItem(
+      "crewlet_starred",
+      JSON.stringify([
+        { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work", at: 1 },
+        { path: ["work", "ENG-2"], label: "ENG-2", workspace: "work", at: 2 },
+      ]),
+    );
+    expect(star("ENG-1", "work", "ENG-1")).toBe("unstarred");
+    expect(stored().map((s) => s.label)).toEqual(["ENG-2"]);
+  });
+});

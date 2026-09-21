@@ -336,10 +336,21 @@ func isDirect(kind string) bool { return slices.Contains(DirectKinds, kind) }
 // text is ABOUT the channel rather than addressed to anyone, so delivering
 // them produces turns triaging "user X joined the channel".
 func SkipReason(post map[string]any) string {
-	if kind := str(post, "type"); strings.HasPrefix(kind, "system_") {
+	return skipReason(str(post, "type"), truthy(post["delete_at"]))
+}
+
+// skipReason is that rule over the two fields that decide it.
+//
+// ONE FUNCTION, because the same post arrives in two shapes: the websocket
+// delivers it as an untyped map inside a JSON string, and the REST thread
+// read decodes it into [Post]. Written twice, the two would drift — and a
+// deleted post that wakes nobody but still renders into a seat's thread block
+// is exactly the kind of divergence nothing would report.
+func skipReason(kind string, deleted bool) string {
+	if strings.HasPrefix(kind, "system_") {
 		return "system post type: " + kind
 	}
-	if deleted, ok := post["delete_at"]; ok && truthy(deleted) {
+	if deleted {
 		return "deleted post"
 	}
 	return ""
@@ -352,18 +363,25 @@ func SkipReason(post map[string]any) string {
 // blank notification body, which reads to a seat as a message with nothing
 // in it rather than as a file it should go and look at.
 func Text(post map[string]any) string {
-	if msg := str(post, "message"); msg != "" {
-		return msg
+	files, _ := post["file_ids"].([]any)
+	return postText(str(post, "message"), len(files))
+}
+
+// postText is that rule over the two values that decide it, shared with
+// [Post.Body] for the reason [skipReason] is shared: one post, two decoded
+// shapes, and a rule written twice is a rule that drifts.
+func postText(message string, files int) string {
+	if message != "" {
+		return message
 	}
-	files, ok := post["file_ids"].([]any)
-	if !ok || len(files) == 0 {
+	if files == 0 {
 		return ""
 	}
 	noun := "files"
-	if len(files) == 1 {
+	if files == 1 {
 		noun = "file"
 	}
-	return fmt.Sprintf("(shared %d %s)", len(files), noun)
+	return fmt.Sprintf("(shared %d %s)", files, noun)
 }
 
 // field reads a typed value out of a decoded JSON object.

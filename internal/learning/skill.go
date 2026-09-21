@@ -24,7 +24,8 @@ import (
 type SkillState string
 
 const (
-	// SkillActive is a skill the Plan prefetch offers and the loader loads.
+	// SkillActive is a skill the turn-start prefetch offers and the loader
+	// loads.
 	SkillActive SkillState = "active"
 	// SkillStale is one going unused. It is still listed and still
 	// loadable — the prefetch renders it with a marker so the agent knows
@@ -519,14 +520,15 @@ func (s *Skills) Update(ctx context.Context, skillID string, rev Revision, r Ref
 	}
 
 	// NO RETRY LOOP HERE. This transaction reads the live row and rewrites
-	// it, so a competing refine makes one of the two conflict with its
-	// snapshot — and [store.DB.Tx] retries exactly that, re-running the body
-	// against a fresh read. The loop that used to sit here retried EVERY
-	// error, because telling a write conflict from a dead store once meant
-	// reading driver error strings that two drivers worded differently.
-	// There is one driver, the discrimination is written once in the store,
-	// and a second budget on top of it only multiplied the attempts a
-	// genuinely-down store gets hammered with.
+	// it, and a competing refine cannot interleave with it: [store.DB.Tx]
+	// holds the database's write lock from its BEGIN and queues for it, so
+	// the second refine reads only after the first has committed and there
+	// is no conflict to recover from. The loop that used to sit here
+	// retried EVERY error, because telling a write conflict from a dead
+	// store once meant reading driver error strings that two drivers worded
+	// differently. There is one driver, the discrimination is written once
+	// in the store, and a second budget on top of it only multiplied the
+	// attempts a genuinely-down store gets hammered with.
 	var updated Skill
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -705,7 +707,7 @@ type Use struct {
 // stopped refreshing.
 //
 // The revival is part of the same transaction as the bump, deliberately: a
-// skill used again is visible to the very next Plan prefetch, not only after
+// skill used again is visible to the very next turn-start prefetch, not only after
 // the curator's next tick, which on the default schedule is up to a day later.
 //
 // An archived row's counters still move and it stays archived. Loading one is
@@ -718,10 +720,10 @@ func (s *Skills) MarkUsed(ctx context.Context, skillID string, at time.Time) Use
 	}
 	// NO RETRY LOOP HERE, for the reason [Skills.Update] carries: the
 	// failure this path was built to survive is a write conflict, and
-	// [store.DB.Tx] retries exactly that against a fresh read. What the loop
-	// added on top was a second budget over every OTHER error too — an
-	// outage included — which is the case that cannot be helped by trying
-	// again.
+	// [store.DB.Tx] holds the write lock from its BEGIN, so there is none
+	// left to survive. What the loop added on top was a second budget over
+	// every OTHER error too — an outage included — which is the case that
+	// cannot be helped by trying again.
 	var use Use
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 		// The prior state is read in the same transaction as the bump so
@@ -1025,7 +1027,7 @@ func (s *Skills) Curate(ctx context.Context, p CuratorPolicy, handle string, now
 		}
 		if change.To != SkillActive {
 			// Demotions are guarded against the snapshot this pass read. The
-			// Plan prefetch caches a seat's skills at turn start, so without
+			// the prefetch caches a seat's skills at turn start, so without
 			// the guard a skill loaded mid-turn can be archived underneath
 			// the agent holding it and its next use_skill fails.
 			//

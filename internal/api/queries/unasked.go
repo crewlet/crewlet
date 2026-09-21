@@ -207,7 +207,7 @@ func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
 	if err != nil {
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return answer, nil
 }

@@ -539,7 +539,7 @@ func TestACallWithNoToolsGetsNoContract(t *testing.T) {
 	}
 }
 
-// The cap is what keeps a fleet of seats entering Plan together from
+// The cap is what keeps a fleet of seats starting their turns together from
 // exhausting the engine host — each CLI is a full runtime at 200-400 MB.
 func TestConcurrencyIsCapped(t *testing.T) {
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "ok", "FAKE_SLEEP_MS": "250"}, nil)

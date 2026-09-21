@@ -192,8 +192,8 @@ func TestAConfiguredScopeNarrowsTheQuery(t *testing.T) {
 	}
 }
 
-// AN AUTO-DRAFTED SKILL MUST NOT REACH A PLANNER during its review window,
-// and the exclusion has TWO tests because the first can silently stop
+// AN AUTO-DRAFTED SKILL MUST NOT REACH A SEAT'S SEARCH during its review
+// window, and the exclusion has TWO tests because the first can silently stop
 // matching.
 func TestAutoDraftsAreHiddenByAncestorAndByTitle(t *testing.T) {
 	t.Parallel()
@@ -220,12 +220,13 @@ func TestAutoDraftsAreHiddenByAncestorAndByTitle(t *testing.T) {
 		Text: "deploy", Org: o, Seat: &org.Role{Name: "SWE"},
 	})
 	if len(hits) != 1 || hits[0].Title != "Real page" {
-		t.Fatalf("an unreviewed draft reached the planner: %+v", hits)
+		t.Fatalf("an unreviewed draft reached a seat's search: %+v", hits)
 	}
 }
 
-// THE SKILLS SPACE IS MACHINERY, not knowledge: a planner told to read a
-// tool skill would follow an instruction written for a different phase.
+// THE SKILLS SPACE IS MACHINERY, not knowledge: a tool skill is injected into
+// a phase by the engine, and a seat handed one as a search hit would follow it
+// as an instruction.
 func TestTheSkillsSpaceIsNotKnowledge(t *testing.T) {
 	t.Parallel()
 	inst := newInstance(t, func(string) (int, string) {
@@ -682,8 +683,15 @@ func TestTheSpacePromptTellsTheLeadSilenceIsOrdinary(t *testing.T) {
 func TestThePageIsTheConversation(t *testing.T) {
 	t.Parallel()
 	meta := map[string]string{"page_id": "1001", "space": "ENG"}
-	if got := (confluence.Prompt{}).ConversationKey(meta, ""); got != "1001" {
-		t.Fatalf("conversation key = %q", got)
+	if got := (confluence.Prompt{}).PartitionKey(meta, ""); got != "1001" {
+		t.Fatalf("partition key = %q", got)
+	}
+	// AND THE TWO KEYS COINCIDE: a page is one object that is both the
+	// merge unit and the durable thread, so an identity that diverged from
+	// the key would file the page's history where the next edit on it never
+	// looks.
+	if got := (confluence.Prompt{}).ConversationIdentity(meta, ""); got != "1001" {
+		t.Fatalf("conversation identity = %q, want the page id the key uses", got)
 	}
 }
 
@@ -718,8 +726,8 @@ func TestACommentWithNoTopLevelPageStillNamesItsPage(t *testing.T) {
 		t.Fatalf("page_id = %q, want the container's — an empty one keys the "+
 			"comment on its own event id and coalesces with nothing", id)
 	}
-	if key := (confluence.Prompt{}).ConversationKey(got[0].Metadata, ""); key != "1001" {
-		t.Fatalf("conversation key = %q", key)
+	if key := (confluence.Prompt{}).PartitionKey(got[0].Metadata, ""); key != "1001" {
+		t.Fatalf("partition key = %q", key)
 	}
 }
 

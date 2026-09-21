@@ -12,8 +12,8 @@ import (
 //
 // A cross-agent promotion is a draft page a unit lead reviews. Two properties
 // carry the whole design: the draft must land UNDER the auto-drafted parent,
-// because that subtree is what the Plan-phase knowledge search excludes — a
-// page outside it is reachable by every seat in the company, unreviewed — and
+// because that subtree is what a seat's knowledge search excludes (a page
+// outside it is reachable by every seat in the company, unreviewed), and
 // a promotion already drafted must not be drafted again, because the pass
 // re-clusters the same skills on every tick.
 

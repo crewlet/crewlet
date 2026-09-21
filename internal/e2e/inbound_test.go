@@ -69,7 +69,7 @@ func routed(handle, body string, meta map[string]string) notify.Routed {
 // THE ENVELOPES TOO, not only the decoded payloads. The broker partitions a
 // seat's inbox on the envelope's own bag (see notify.Stamp / notify.KeyOf),
 // and the metadata copy inside the payload is what a PROMPT renders from — so
-// a conversation-key assertion made against the payload copy cannot fail for
+// a partition-key assertion made against the payload copy cannot fail for
 // the bug it describes, which is the key never reaching the envelope at all.
 type inbox struct {
 	mu        sync.Mutex
@@ -176,14 +176,20 @@ func TestAVerifiedDeliveryWakesTheSeat(t *testing.T) {
 	if !strings.Contains(woken.Body, "## Triage") {
 		t.Fatalf("the trigger was not rendered:\n%s", woken.Body)
 	}
-	// The resolved recipient and the conversation key both ride along —
-	// the first is what a parser cannot know, the second is what lets the
-	// inbox coalesce without re-deriving a third-party app's rule.
+	// The resolved recipient and both keys ride along — the first is what a
+	// parser cannot know, the second is what lets the inbox coalesce
+	// without re-deriving a third-party app's rule, and the third is where
+	// the turn's history is filed. A top-level message in an open channel
+	// is the shape where the two keys coincide: the thread it starts IS the
+	// conversation.
 	if got := woken.Metadata[notify.RecipientField]; got != "ceo" {
 		t.Fatalf("the recipient stamp reads %q", got)
 	}
-	if got := woken.Metadata[notify.KeyField]; got != "stub:C1:p1" {
-		t.Fatalf("the conversation key reads %q", got)
+	if got := woken.Metadata[notify.PartitionField]; got != "stub:C1:p1" {
+		t.Fatalf("the partition key reads %q", got)
+	}
+	if got := woken.Metadata[notify.ConversationField]; got != "stub:C1:p1" {
+		t.Fatalf("the conversation identity reads %q", got)
 	}
 	// AND ON THE ENVELOPE, which is the copy that actually partitions the
 	// inbox. The metadata one above is what a prompt renders from; while
@@ -194,6 +200,9 @@ func TestAVerifiedDeliveryWakesTheSeat(t *testing.T) {
 	box.mu.Unlock()
 	if got := notify.KeyOf(envelope); got != "stub:C1:p1" {
 		t.Fatalf("the broker would partition this on %q", got)
+	}
+	if got := notify.ConversationIdentityOf(envelope); got != "stub:C1:p1" {
+		t.Fatalf("the ledger would key this turn on %q", got)
 	}
 }
 

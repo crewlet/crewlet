@@ -31,9 +31,10 @@ import (
 //
 // Every other test in this tree stops at a seam. This one starts a real engine
 // on a real broker, wakes a real seat with a real trigger, drives a real
-// Plan/Execute/Review loop against a scripted vendor endpoint, and reads the
-// result off a WebSocket dialled the way the dashboard dials it — then feeds
-// those exact frames through the dashboard's OWN store.js and socket.js.
+// executor and reviewer loop against a scripted vendor endpoint, and reads the
+// result off a WebSocket dialled the way the dashboard dials it, then feeds
+// those exact frames through the dashboard's OWN protocol module (the store
+// and the socket, built as static/dashboard/protocol.js).
 //
 // It is the only test that can catch the class of bug it was written for. The
 // turn engine emitted NO events at all when this was written: every payload
@@ -243,7 +244,26 @@ func (n *node) wakeInConversation(t *testing.T, handle, text, conversation strin
 	n.publishWake(t, handle, text, conversation, events.TraceContext{})
 }
 
+// wakeInDirectThread is a message in a thread on a DIRECT MESSAGE — the one
+// shape where the two keys differ. The inbox partitions on the thread, because
+// that is the batch the reply belongs to, while the conversation is the whole
+// DM line, because that is what a person is talking on.
+//
+// Worth a helper of its own: a wake whose two keys are equal cannot tell a
+// reader of either field from a reader of the right one, so every assertion
+// about which key something was filed under passes for a frame that copied the
+// other.
+func (n *node) wakeInDirectThread(t *testing.T, handle, text, channel, thread string) {
+	t.Helper()
+	n.publishWakeKeyed(t, handle, text, channel+":"+thread, channel, events.TraceContext{})
+}
+
 func (n *node) publishWake(t *testing.T, handle, text, conversation string, tc events.TraceContext) {
+	t.Helper()
+	n.publishWakeKeyed(t, handle, text, conversation, conversation, tc)
+}
+
+func (n *node) publishWakeKeyed(t *testing.T, handle, text, partition, conversation string, tc events.TraceContext) {
 	t.Helper()
 	body := text
 	ev := events.New(types.ExternalNotification{
@@ -260,7 +280,12 @@ func (n *node) publishWake(t *testing.T, handle, text, conversation string, tc e
 		Body:        text,
 		SalientBody: &body,
 	}, tc)
-	notify.Stamp(ev, conversation)
+	// BOTH KEYS, as the notification service stamps them. A golden wake
+	// that named only the partition would leave the turn's ledger entry
+	// filed through the identity read's peer fallback rather than through
+	// the field this build stamps — green either way, and silent the day
+	// that fallback is the only thing holding it up.
+	notify.Stamp(ev, partition, conversation)
 	if err := n.engine.Backends().Queue.Publish(t.Context(),
 		topics.AgentInbox(handle), ev); err != nil {
 		t.Fatalf("wake %s: %v", handle, err)
@@ -449,8 +474,9 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 
 // --- the client's half ----------------------------------------------------- //
 
-// replayScript drives the dashboard's own store.js and socket.js over the
-// frames this server produced. See tests/dashboard/js/replay.mjs.
+// replayScript drives the dashboard's own protocol module, the store and the
+// socket built as static/dashboard/protocol.js, over the frames this server
+// produced. See tests/dashboard/js/replay.mjs.
 const (
 	replayScript  = "../../tests/dashboard/js/replay.mjs"
 	dashboardTree = "../../static/dashboard"
@@ -467,7 +493,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// The `agents` push was going out as an object keyed by role. Every
 	// field in it was correct. The server's tests asserted that shape and
 	// passed; the dashboard's own suites passed; the socket delivered every
-	// frame. And store.js guards applyAgents with Array.isArray, so it
+	// frame. And the store guards applyAgents with Array.isArray, so it
 	// dropped all of them, and a company running a full turn rendered idle
 	// from the first phase to the last. Nothing on either side could see
 	// it, because nothing on either side ran both.
@@ -559,7 +585,7 @@ func nodeBinary(t *testing.T) string {
 
 func TestTheSeatCanReachItsBuiltins(t *testing.T) {
 	t.Parallel()
-	// The catalogue a planner is SHOWN, and the surface it can actually
+	// The catalogue an executor is SHOWN, and the surface it can actually
 	// call, are built from the epoch's registry — which NewCompany leaves
 	// empty, because building an epoch must be something `crewlet validate`
 	// can do without a database. So the engine fills it, per epoch, and a
@@ -586,7 +612,7 @@ func TestTheSeatCanReachItsBuiltins(t *testing.T) {
 	} {
 		if !have[want] {
 			t.Errorf("%s is not in the epoch's registry, so no seat can call "+
-				"it and no planner is told it exists", want)
+				"it and no executor is told it exists", want)
 		}
 	}
 }

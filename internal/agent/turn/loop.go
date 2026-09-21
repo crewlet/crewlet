@@ -2,12 +2,14 @@ package turn
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -263,11 +265,12 @@ type Result struct {
 	// Acted reports that this turn's own record PROVES it already reached
 	// outside the engine — see [Acted].
 	//
-	// It exists for the ONE caller that has to tell a turn which broke
+	// It exists for the callers that have to tell a turn which broke
 	// having done nothing from one which broke having already posted,
 	// asked a colleague or started a box. Those are two different facts
 	// and a redelivery is right for exactly one of them; the dispatcher
-	// used to have only `err != nil`, which is neither.
+	// used to have only `err != nil`, which is neither. Both callers read
+	// it through [Abandon] rather than directly.
 	//
 	// The zero value is the safe answer and the honest one: a turn that
 	// proved nothing gets today's behaviour, which is to come back. Set
@@ -308,6 +311,11 @@ type Result struct {
 // error: those are ordinary outcomes the caller records and reports, and
 // collapsing them into err would make "the model did not finish" and "the
 // process is broken" one condition.
+//
+// A phase that PANICKED is a phase that broke: Run recovers it, returns a
+// [PanicError] and names [types.GuardUnhandledException] on the result, so no
+// panic in a phase unwinds past the loop. Whether the caller may run the turn
+// again is [Abandon]'s answer, not a check of its own.
 func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error) {
 	if ph == nil {
 		return Result{}, fmt.Errorf("turn: no phases")
@@ -330,7 +338,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		// distinction this function's doc comment exists to keep.
 		return Result{
 			Decision: phase.Failed,
-			Breach:   &Breach{Kind: BreachDepth, Detail: err.Error()},
+			Breach:   &Breach{Kind: types.GuardDepthCap, Detail: err.Error()},
 		}, nil
 	}
 
@@ -349,7 +357,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		if elapsed := set.now().Sub(started); round > 1 &&
 			set.MaxWallClock > 0 && elapsed >= set.MaxWallClock {
 			res.Breach = &Breach{
-				Kind: BreachScheduledTimeout,
+				Kind: types.GuardScheduledTimeout,
 				Detail: fmt.Sprintf(
 					"the turn ran %s across %d round(s), past its %s cap, so no "+
 						"further round was started", elapsed.Round(time.Second),
@@ -372,9 +380,15 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			// conversation, and only this round: if the resumed executor
 			// loops back, round two is an ordinary round.
 			resuming, entered = false, "resume"
-			work, surface, err = ph.Resume(ctx, res.Iterations)
+			err = guarded(ctx, in.RunID, entered, round, func() (callErr error) {
+				work, surface, callErr = ph.Resume(ctx, res.Iterations)
+				return callErr
+			})
 		} else {
-			work, surface, err = ph.Execute(ctx, round, notes, res.Iterations)
+			err = guarded(ctx, in.RunID, entered, round, func() (callErr error) {
+				work, surface, callErr = ph.Execute(ctx, round, notes, res.Iterations)
+				return callErr
+			})
 		}
 		// BEFORE THE ERROR CHECK, and that ordering is the point. A phase
 		// that broke halfway through its tool loop hands back the calls it
@@ -389,7 +403,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		// see [Result.Delivered] for why the two questions differ.
 		res.Delivered = Answered(work.Calls, surface, in.Reply)
 		if err != nil {
-			return res, fmt.Errorf("turn: %s round %d: %w", entered, round, err)
+			return broke(res, fmt.Errorf("turn: %s round %d: %w", entered, round, err))
 		}
 
 		if work.Suspended {
@@ -429,9 +443,12 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 				"correction", verdict.Correction)
 			rev = Review{Decision: phase.SelfIterate, Notes: verdict.Correction}
 		} else {
-			rev, err = ph.Review(ctx, round, work, res.Iterations)
+			err = guarded(ctx, in.RunID, "review", round, func() (callErr error) {
+				rev, callErr = ph.Review(ctx, round, work, res.Iterations)
+				return callErr
+			})
 			if err != nil {
-				return res, fmt.Errorf("turn: review round %d: %w", round, err)
+				return broke(res, fmt.Errorf("turn: review round %d: %w", round, err))
 			}
 		}
 		res.LastReview = &rev
@@ -471,7 +488,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			log.InfoContext(ctx, "turn_stall_aborted", "turn_id", in.RunID, "round", round)
 			res.Decision = phase.Failed
 			res.Breach = &Breach{
-				Kind:   BreachStall,
+				Kind:   types.GuardStall,
 				Detail: "consecutive self_iterate rounds produced the same artifact",
 			}
 			return res, nil
@@ -503,11 +520,51 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 	log.InfoContext(ctx, "turn_max_iterations_exhausted", "turn_id", in.RunID, "max", maxRounds)
 	res.Decision = phase.Failed
 	res.Breach = &Breach{
-		Kind: BreachMaxIterations,
+		Kind: types.GuardMaxIter,
 		Detail: fmt.Sprintf("executor/review loop exhausted at %d rounds without done",
 			maxRounds),
 	}
 	return res, nil
+}
+
+// guarded runs one phase call, turning a panic inside it into a [PanicError].
+//
+// THE PHASE IS THE BOUNDARY because it is where the loop hands control to code
+// it does not own: a provider SDK, an MCP client, every tool handler a seat can
+// reach. The loop's own decisions between phases are plain arithmetic over
+// values it holds. Recovered here, a panic becomes the one thing the rest of
+// the engine already knows how to handle, a phase that broke, so the turn is
+// closed, published and answered exactly as a broken phase's is.
+//
+// The stack is logged here and only here, because this is the frame that
+// recovered it: [PanicError.Error] carries the value alone, and that is what
+// reaches the turn's events.
+func guarded(ctx context.Context, turnID, phaseName string, round int, call func() error) (err error) {
+	defer func() {
+		if panicked := Recovered(recover()); panicked != nil {
+			log.ErrorContext(ctx, "turn_phase_panicked", "turn_id", turnID,
+				"phase", phaseName, "round", round, "panic", panicked.Value,
+				"stack", panicked.Stack)
+			err = panicked
+		}
+	}()
+	return call()
+}
+
+// broke returns a turn whose phase broke, naming the guard when it panicked.
+//
+// A panic is BOTH a breach and an error, which is the pairing
+// [types.GuardUnhandledException] was declared for: the error says what broke
+// and the breach names the invariant that ended the turn, so the seat goes AFK
+// with a cause rather than sitting in `working` until its next turn. Any other
+// broken phase is an error alone, as it always was.
+func broke(res Result, err error) (Result, error) {
+	var panicked *PanicError
+	if errors.As(err, &panicked) {
+		res.Decision = phase.Failed
+		res.Breach = &Breach{Kind: types.GuardUnhandledException, Detail: panicked.Error()}
+	}
+	return res, err
 }
 
 // calledReads narrows a surface's read-only annotations to the ones this

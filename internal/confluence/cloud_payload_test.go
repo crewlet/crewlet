@@ -166,10 +166,16 @@ func TestACloudReplyAndItsParentShareAConversation(t *testing.T) {
 		}
 		return routed[0].Inbound.Metadata
 	}
-	top := (confluence.Prompt{}).ConversationKey(parse(cloudCommentCreated), "")
-	reply := (confluence.Prompt{}).ConversationKey(parse(cloudReplyCreated), "")
+	top := (confluence.Prompt{}).PartitionKey(parse(cloudCommentCreated), "")
+	reply := (confluence.Prompt{}).PartitionKey(parse(cloudReplyCreated), "")
 	if top == "" || top != reply {
 		t.Fatalf("a comment keys on %q and a reply to it on %q", top, reply)
+	}
+	// A REPLY IS NOT A SUB-THREAD HERE, which is why this source's two keys
+	// coincide: both the comment and the reply to it belong to the page, so
+	// there is no grain for the partition to cut finer than the identity.
+	if got := (confluence.Prompt{}).ConversationIdentity(parse(cloudReplyCreated), ""); got != reply {
+		t.Fatalf("a reply's identity is %q and its partition key %q", got, reply)
 	}
 }
 

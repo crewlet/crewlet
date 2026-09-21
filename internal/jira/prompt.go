@@ -62,7 +62,7 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 	}
 }
 
-// ConversationKey implements [notify.Prompt]: the issue is the conversation.
+// PartitionKey implements [notify.Prompt]: the issue is the conversation.
 //
 // Keyed on the ISSUE KEY rather than the numeric id, because the key rides
 // every payload Jira sends — issue and comment alike — while the id is
@@ -70,8 +70,17 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 // is sometimes missing splits one issue's comments and its field updates
 // into two coalescing partitions, silently: each half looks like a perfectly
 // ordinary conversation.
-func (Prompt) ConversationKey(metadata map[string]string, _ string) string {
+func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 	return metadata["issue_key"]
+}
+
+// ConversationIdentity implements [notify.Prompt]: the same issue key.
+//
+// The two coincide because the issue is one object that is both the merge
+// unit and the durable thread; Jira has no sub-thread grain a partition could
+// cut finer than the issue.
+func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
+	return p.PartitionKey(metadata, subject)
 }
 
 // WakesActor implements [notify.Prompt]: never.

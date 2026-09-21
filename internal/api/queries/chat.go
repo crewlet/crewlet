@@ -208,7 +208,7 @@ func chatFailure(err error) error {
 		// one. See [freshness] for the same wrapping.
 		return fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
-	return unavailableIfBehind(err)
+	return unavailableIfTransient(err)
 }
 
 // chatChannelID reads the room a question is about.

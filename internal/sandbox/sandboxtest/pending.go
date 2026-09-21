@@ -46,6 +46,7 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"AFinishedRunIsGoneForEveryReader", testAFinishedRunIsGoneForEveryReader},
 		{"AFinishedRunIsNotRecreatedByALateWrite", testAFinishedRunIsNotRecreatedByALateWrite},
 		{"ARunIsFinishedExactlyOnce", testARunIsFinishedExactlyOnce},
+		{"AnEndingIsRefusedOutsideItsLicense", testAnEndingIsRefusedOutsideItsLicense},
 		{"AnEndingIsNotAStatus", testAnEndingIsNotAStatus},
 		{"EveryLaunchIsNamedAnew", testEveryLaunchIsNamedAnew},
 		{"AClaimForAnotherLaunchIsRefused", testAClaimForAnotherLaunchIsRefused},
@@ -68,7 +69,12 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"ExecuteStateRoundTrips", testExecuteStateRoundTrips},
 		{"ActiveIncludesResumed", testActiveIncludesResumed},
 		{"AnAnswerFindsTheRunThatAsked", testAnAnswerFindsTheRunThatAsked},
+		{"ARunParkedOnATopLevelDMIsAnsweredInItsThread", testARunParkedOnATopLevelDMIsAnsweredInItsThread},
+		{"TwoQuestionsOnOneDMAreToldApartByTheirThreads", testTwoQuestionsOnOneDMAreToldApartByTheirThreads},
+		{"AnAnswerOnAnotherConversationMatchesNothing", testAnAnswerOnAnotherConversationMatchesNothing},
 		{"AnAnswerWithNoConversationMatchesNothing", testAnAnswerWithNoConversationMatchesNothing},
+		{"ARowWithNoIdentityReportsBackToItsPartition", testARowWithNoIdentityReportsBackToItsPartition},
+		{"APreSplitRowIsStillAnswerable", testAPreSplitRowIsStillAnswerable},
 		{"ListingsAreStable", testListingsAreStable},
 		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
 		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
@@ -91,9 +97,22 @@ func run(turnID string) sandbox.PendingRun {
 	return sandbox.PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
 		CodingAgent: "claude-code", TaskDescription: "fix the flake",
-		ConversationKey: "slack:C1", Reply: "tool",
+		// THE TWO CONVERSATION VALUES OF A DIRECT MESSAGE, which is the
+		// one shape where they differ — a reply in the thread this run's
+		// question was asked in partitions on the thread while the
+		// conversation is the whole DM line. A fixture that made them
+		// equal would let every backend certify the split by accident.
+		PartitionKey: "chat:D1:root-1", ConversationKey: "chat:D1",
+		Reply:   "tool",
 		TraceID: "tr-1", CreatedAt: base,
 	}
+}
+
+// answerOnTheDM is the reply to the question [run] parked on: the same DM
+// line, in the same thread. BOTH VALUES, because a store is free to read
+// either and a fixture that stated one would let it read that one alone.
+var answerOnTheDM = sandbox.ConversationRef{
+	Identity: "chat:D1", Partition: "chat:D1:root-1",
 }
 
 // mustBeginLaunch opens a launch and leaves the run where a launch leaves it:
@@ -400,9 +419,17 @@ func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) 
 	// after the delete there is nothing left to read one from.
 	tail := answerTo(t, s, "t1")
 
-	finished, err := s.Finish(ctx, "t1", sandbox.Fence{})
+	settled, finished, err := s.Finish(ctx, "t1", sandbox.Fence{}, sandbox.Active)
 	if err != nil || !finished {
 		t.Fatalf("Finish = %v, %v; want the record deleted", finished, err)
+	}
+	// THE RECORD IT DELETED, not the caller's snapshot of it: a settle that
+	// could not read the row first reclaims the box this names, so a store
+	// handing back a zero value there would leave a live box named by
+	// nothing.
+	if settled.TurnID != "t1" || settled.SandboxID != "box-t1" ||
+		settled.Status != sandbox.StatusAwaiting {
+		t.Errorf("Finish handed back %+v; want the record as the store held it", settled)
 	}
 	if got, found, err := s.Get(ctx, "t1"); err != nil || found {
 		t.Fatalf("Get after Finish = %+v, found %v, %v; want no record", got, found, err)
@@ -413,14 +440,14 @@ func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) 
 	if seat, err := s.ListActiveForSeat(ctx, "swe"); err != nil || len(seat) != 0 {
 		t.Errorf("the seat's busy read still sees a finished run: %+v, %v", seat, err)
 	}
-	if _, found, err := s.FindAwaitingByConversation(ctx, "swe", "slack:C1"); err != nil || found {
+	if _, found, err := s.FindAwaitingByConversation(ctx, "swe", answerOnTheDM); err != nil || found {
 		t.Errorf("an answer matched the question of a finished run: found %v, %v", found, err)
 	}
 	if _, won, err := s.ClaimForResume(ctx, "t1", tail); err != nil || won {
 		t.Errorf("a finished run was claimed: won=%v err=%v", won, err)
 	}
 	// Two parties reaching the end of one run is ordinary, not an error.
-	if again, err := s.Finish(ctx, "t1", sandbox.Fence{}); err != nil || again {
+	if _, again, err := s.Finish(ctx, "t1", sandbox.Fence{}, sandbox.Active); err != nil || again {
 		t.Errorf("a second Finish = %v, %v; want false and no error", again, err)
 	}
 }
@@ -432,7 +459,7 @@ func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) 
 func testAFinishedRunIsNotRecreatedByALateWrite(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	mustLaunched(t, s, run("t1"))
-	if _, err := s.Finish(ctx, "t1", sandbox.Fence{}); err != nil {
+	if _, _, err := s.Finish(ctx, "t1", sandbox.Fence{}, sandbox.Active); err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
 	late := map[string]func() error{
@@ -484,7 +511,7 @@ func testARunIsFinishedExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 	for range racers {
 		wg.Go(func() {
 			<-start
-			finished, err := s.Finish(t.Context(), "t1", sandbox.Fence{})
+			_, finished, err := s.Finish(t.Context(), "t1", sandbox.Fence{}, sandbox.Active)
 			if err != nil {
 				t.Errorf("Finish: %v", err)
 				return
@@ -498,6 +525,42 @@ func testARunIsFinishedExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 	wg.Wait()
 	if got := wins.Load(); got != 1 {
 		t.Fatalf("%d of %d concurrent Finish calls reported deleting the record, want exactly 1", got, racers)
+	}
+}
+
+// A settle that could NOT read the row hands the decision to the store: it
+// asks for the run to be ended only while it is still the status its claim
+// left it in. So a row that moved on under it — a relaunch the resumed turn
+// made, which takes the run back through launching and reuses the very box
+// this settle would kill — has to survive the call, and a row still in the
+// claim has to be deleted by it.
+func testAnEndingIsRefusedOutsideItsLicense(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	claimed := []string{sandbox.StatusResumed}
+
+	if _, ended, err := s.Finish(ctx, "t1", sandbox.Fence{}, claimed); err != nil || ended {
+		t.Errorf("a running run was ended under a claimed-only licence: %v, %v", ended, err)
+	}
+	if got, found, err := s.Get(ctx, "t1"); err != nil || !found {
+		t.Fatalf("the record is gone after a refused ending (found %v, %v)", found, err)
+	} else if got.Status != sandbox.StatusRunning {
+		t.Errorf("a refused ending left the record at %q", got.Status)
+	}
+	// An empty licence ends nothing at all, which is the safe reading of a
+	// caller that stated none.
+	if _, ended, err := s.Finish(ctx, "t1", sandbox.Fence{}, nil); err != nil || ended {
+		t.Errorf("an ending with no licence deleted the record: %v, %v", ended, err)
+	}
+
+	if _, _, err := s.ClaimForResume(ctx, "t1", completionOf(t, s, "t1")); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, ended, err := s.Finish(ctx, "t1", sandbox.Fence{}, claimed); err != nil || !ended {
+		t.Errorf("the run the claim left behind was not ended: %v, %v", ended, err)
+	}
+	if _, found, err := s.Get(ctx, "t1"); err != nil || found {
+		t.Errorf("the claimed run still has a record (found %v, %v)", found, err)
 	}
 }
 
@@ -665,7 +728,8 @@ func testAReleaseOfARunNoLongerClaimedIsRefused(t *testing.T, s sandbox.PendingS
 	// back at all.
 	mustLaunched(t, s, run("t1"))
 	claimed := mustClaim(t, s, "t1")
-	if finished, err := s.Finish(t.Context(), "t1", sandbox.Fence{}); err != nil || !finished {
+	if _, finished, err := s.Finish(t.Context(), "t1", sandbox.Fence{},
+		sandbox.Active); err != nil || !finished {
 		t.Fatalf("reap: finished=%v err=%v", finished, err)
 	}
 	if released, err := s.ReleaseClaim(t.Context(), "t1", releaseOf(claimed)); err != nil || released {
@@ -935,13 +999,14 @@ func testAStaleFenceCannotWrite(t *testing.T, s sandbox.PendingStore) {
 	}
 	// Nor may it END the run: a node whose lease moved deleting the record
 	// its successor recovered strands the successor's box.
-	if finished, err := s.Finish(t.Context(), "t1", stale); err != nil || finished {
+	if _, finished, err := s.Finish(t.Context(), "t1", stale, sandbox.Active); err != nil || finished {
 		t.Errorf("a stale fence finished the run: %v, %v", finished, err)
 	}
 	if _, found, err := s.Get(t.Context(), "t1"); err != nil || !found {
 		t.Fatalf("the record is gone after a stale Finish (found %v, %v)", found, err)
 	}
-	if finished, err := s.Finish(t.Context(), "t1", sandbox.Fence{Owner: "node-b:2", Epoch: 7}); err != nil || !finished {
+	if _, finished, err := s.Finish(t.Context(), "t1",
+		sandbox.Fence{Owner: "node-b:2", Epoch: 7}, sandbox.Active); err != nil || !finished {
 		t.Errorf("the owning lease could not finish its own run: %v, %v", finished, err)
 	}
 }
@@ -1022,7 +1087,7 @@ func testActiveIncludesResumed(t *testing.T, s sandbox.PendingStore) {
 	}
 
 	// A finished run does not.
-	if _, err := s.Finish(t.Context(), "t1", sandbox.Fence{}); err != nil {
+	if _, _, err := s.Finish(t.Context(), "t1", sandbox.Fence{}, sandbox.Active); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
 	if got, _ := s.ListActive(t.Context()); len(got) != 0 {
@@ -1044,16 +1109,185 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 			t.Fatalf("park %s: %v", id, err)
 		}
 	}
-	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", "slack:C1")
+	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", answerOnTheDM)
 	if err != nil || !ok {
 		t.Fatalf("find: ok=%v err=%v", ok, err)
 	}
 	if got.TurnID != "t2" {
 		t.Errorf("matched %s, want the most recently parked question", got.TurnID)
 	}
-	// And a different seat's thread is not this seat's.
-	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "other", "slack:C1"); ok {
+	// And a different seat's conversation is not this seat's.
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "other", answerOnTheDM); ok {
 		t.Error("another seat's answer matched this seat's run")
+	}
+	// THE MATCH IS ON THE CONVERSATION, NOT ON THE BATCH BESIDE IT: a direct
+	// message is one conversation however it is threaded, so a TOP-LEVEL
+	// reply on the same DM line answers a question asked in a thread on it.
+	// Compared on the partition this would miss, which is the same miss that
+	// strands a question asked the other way round — see
+	// testARunParkedOnATopLevelDMIsAnsweredInItsThread.
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D1", Partition: "chat:D1",
+	}); !ok {
+		t.Error("a top-level reply on the DM line did not answer the question asked on it")
+	}
+	// And the identity IS carried, so the resume knows where to report.
+	if got.ConversationKey != "chat:D1" {
+		t.Errorf("the run reports back to %q, want the DM line it was launched from",
+			got.ConversationKey)
+	}
+	if got.Conversation() != "chat:D1" {
+		t.Errorf("Conversation() = %q", got.Conversation())
+	}
+}
+
+// A ROW FROM BEFORE THE SPLIT carries only the partition key, and a resume
+// must still know where to report: nothing rewrites a parked run, and one
+// waits for a person, so this row shape outlives any upgrade window.
+func testARowWithNoIdentityReportsBackToItsPartition(t *testing.T, s sandbox.PendingStore) {
+	old := run("t1")
+	old.ConversationKey = ""
+	mustLaunched(t, s, old)
+	got, found, err := s.Get(t.Context(), "t1")
+	if err != nil || !found {
+		t.Fatalf("Get: found=%v err=%v", found, err)
+	}
+	if got.Conversation() != "chat:D1:root-1" {
+		t.Errorf("a pre-split row reports back to %q, want the one key it carries — "+
+			"an empty answer records no ledger entry at all", got.Conversation())
+	}
+}
+
+// THE ENGINE'S OWN PROMPT SENDS THE ANSWER WHERE THE PARTITION CANNOT REACH.
+//
+// A run launched from a TOP-LEVEL direct message parks under the bare DM
+// channel, because that is the partition a top-level burst coalesces on — and
+// the chat prompt then tells the seat to reply AS A THREAD, so the person's
+// answer arrives keyed on that thread. Compared on the partition the two
+// strings never meet: the clarification the box is parked waiting for is
+// silently never delivered, and the run sits until its pause TTL reaps it.
+// Compared on the conversation it arrives, because a direct message is ONE
+// conversation however it is threaded.
+func testARunParkedOnATopLevelDMIsAnsweredInItsThread(t *testing.T, s sandbox.PendingStore) {
+	top := run("t1")
+	// What a top-level DM turn writes: the partition IS the bare channel,
+	// and so is the conversation.
+	top.PartitionKey, top.ConversationKey = "chat:D1", "chat:D1"
+	mustLaunched(t, s, top)
+	park(t, s, "t1")
+
+	// The person's reply, in the thread the seat was told to open.
+	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D1", Partition: "chat:D1:root-1",
+	})
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if !ok || got.TurnID != "t1" {
+		t.Fatalf("the threaded reply matched %q (ok=%v); the answer to a question "+
+			"asked from a top-level DM never reaches the run that asked it",
+			got.TurnID, ok)
+	}
+}
+
+// TWO QUESTIONS PARKED IN TWO THREADS OF ONE DIRECT MESSAGE ARE TOLD APART BY
+// THE THREAD, not by which was asked last.
+//
+// A direct message is one conversation however it is threaded, which is what
+// makes an answer reach the run that asked at all — and it means every run
+// parked on that channel shares one identity. So a reply in thread root-1 is
+// admitted by both runs, and picking the NEWEST resumes the one waiting in
+// root-2: its question spliced with the answer to somebody else's, and the run
+// that was actually answered still waiting. Both the arriving reference and
+// each row carry the thread; preferring the row whose partition matches is the
+// whole fix, and recency is what decides only between runs that agree on it.
+func testTwoQuestionsOnOneDMAreToldApartByTheirThreads(t *testing.T, s sandbox.PendingStore) {
+	first, second := run("t1"), run("t2")
+	// The same DM line, two threads on it — and the one asked EARLIER is
+	// the one the reply belongs to, so recency alone gets this wrong.
+	first.PartitionKey = "chat:D1:root-1"
+	second.PartitionKey = "chat:D1:root-2"
+	second.CreatedAt = base.Add(time.Minute)
+	mustLaunched(t, s, first)
+	mustLaunched(t, s, second)
+	park(t, s, "t1")
+	park(t, s, "t2")
+
+	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D1", Partition: "chat:D1:root-1",
+	})
+	if err != nil || !ok {
+		t.Fatalf("find: ok=%v err=%v", ok, err)
+	}
+	if got.TurnID != "t1" {
+		t.Errorf("a reply in thread root-1 answered %s, the question parked in "+
+			"root-2: the answer to one question resumed another run", got.TurnID)
+	}
+	// AND THE OTHER THREAD'S REPLY REACHES THE OTHER RUN, so what is under
+	// test is the pairing rather than a preference for the older row.
+	got, ok, err = s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D1", Partition: "chat:D1:root-2",
+	})
+	if err != nil || !ok || got.TurnID != "t2" {
+		t.Errorf("a reply in thread root-2 answered %q (ok=%v err=%v)", got.TurnID, ok, err)
+	}
+	// AND RECENCY IS STILL THE LAST WORD where the thread cannot decide: a
+	// TOP-LEVEL reply on the DM line matches neither thread, and the person
+	// is answering what they were just asked.
+	got, ok, err = s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D1", Partition: "chat:D1",
+	})
+	if err != nil || !ok || got.TurnID != "t2" {
+		t.Errorf("a top-level reply answered %q (ok=%v err=%v), want the most "+
+			"recently parked question", got.TurnID, ok, err)
+	}
+}
+
+// A run is answered by ITS conversation and no other. Matching on the seat
+// alone would hand an unrelated message to whichever run happened to be
+// waiting — and that run would treat it as the answer to its question.
+func testAnAnswerOnAnotherConversationMatchesNothing(t *testing.T, s sandbox.PendingStore) {
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D2", Partition: "chat:D2:root-9",
+	}); ok {
+		t.Error("a message on another conversation answered this run's question")
+	}
+}
+
+// A PRE-SPLIT ROW IS STILL ANSWERABLE, in both readings of the one value it
+// carries — and it has to be: nothing rewrites a parked run, one waits for a
+// person, so this row shape outlives any upgrade window.
+//
+// Its value is the PARTITION its build derived, so comparing the arriving
+// partition against it reproduces that build's own match exactly. It is
+// compared against the identity as well, which is not a second spelling of
+// the same rule: such a row parked from a top-level DM holds the bare
+// channel, which is precisely what this build calls the identity, so reading
+// it that way is what repairs the rows the defect already stranded.
+func testAPreSplitRowIsStillAnswerable(t *testing.T, s sandbox.PendingStore) {
+	// Parked from a DM thread by a build that had no identity to write.
+	threaded := run("t1")
+	threaded.ConversationKey = ""
+	mustLaunched(t, s, threaded)
+	park(t, s, "t1")
+	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", answerOnTheDM)
+	if err != nil || !ok || got.TurnID != "t1" {
+		t.Fatalf("find = %q ok=%v err=%v; a row parked before the split stopped "+
+			"being answerable at all", got.TurnID, ok, err)
+	}
+
+	// And one parked from a top-level DM, whose one value is the channel.
+	toplevel := run("t2")
+	toplevel.PartitionKey, toplevel.ConversationKey = "chat:D9", ""
+	toplevel.CreatedAt = base.Add(time.Minute)
+	mustLaunched(t, s, toplevel)
+	park(t, s, "t2")
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D9", Partition: "chat:D9:root-2",
+	}); !ok {
+		t.Error("a pre-split row parked from a top-level DM is still unanswerable")
 	}
 }
 
@@ -1066,8 +1300,25 @@ func testAnAnswerWithNoConversationMatchesNothing(t *testing.T, s sandbox.Pendin
 		sandbox.Clarification{Question: "?"}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
-	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", ""); ok {
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe",
+		sandbox.ConversationRef{}); ok {
 		t.Error("a message with no conversation matched a parked run")
+	}
+	// AND NEITHER DOES A RUN WITH NONE, which is what a schedule tick or an
+	// A2A wake launches: it stored no conversation any message could ever
+	// reproduce, so every reply on every surface would otherwise be its
+	// answer.
+	keyless := run("t2")
+	keyless.PartitionKey, keyless.ConversationKey = "", ""
+	keyless.CreatedAt = base.Add(time.Minute)
+	mustLaunched(t, s, keyless)
+	park(t, s, "t2")
+	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", answerOnTheDM)
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if ok && got.TurnID == "t2" {
+		t.Error("a run launched with no conversation was answered by a chat message")
 	}
 }
 

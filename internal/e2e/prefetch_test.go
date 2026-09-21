@@ -41,7 +41,7 @@ func waitForTurn(t *testing.T, n *node) {
 // The claim being tested is NOT "the block rendered" — the prefetch suite
 // covers that against fakes. It is that a real node, with a real store,
 // resolves the seat, reads its diary, runs the filter on the seat's own
-// auxiliary model and puts the result in front of the planner. Every one of
+// auxiliary model and puts the result in front of the executor. Every one of
 // those is a wire that was not connected before.
 
 // remember writes a memory as this seat's own, the way the persist decider
@@ -99,7 +99,7 @@ func TestASeatsOwnMemoryReachesTheExecutorsPrompt(t *testing.T) {
 }
 
 // A FRESH SEAT gets no memory section at all — not an empty one. A heading
-// with nothing under it tells the planner it has a memory it cannot read.
+// with nothing under it tells the executor it has a memory it cannot read.
 func TestAFreshSeatGetsNoMemorySection(t *testing.T) {
 	n := start(t)
 	waitForSeat(t, n, "ceo")
@@ -116,9 +116,9 @@ func TestAFreshSeatGetsNoMemorySection(t *testing.T) {
 //
 // The prefetch is frozen at turn start and the onboarding pass runs after
 // it, so the hint is rendered against a seat that has not onboarded YET —
-// which is true at that instant and false by the time Plan reads it. Without
-// the suppression the first turn of every seat's life ends with the planner
-// being told to go and read the pages it has just finished reading.
+// which is true at that instant and false by the time the executor reads it.
+// Without the suppression the first turn of every seat's life ends with the
+// executor being told to go and read the pages it has just finished reading.
 func TestASeatThatJustOnboardedIsNotToldToOnboard(t *testing.T) {
 	n := start(t)
 	waitForSeat(t, n, "ceo")

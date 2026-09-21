@@ -16,7 +16,7 @@ import (
 // WHAT THIS WORKER IS FOR.
 //
 // Every reader of a synthesized skill shipped before anything wrote one:
-// use_skill, the Plan-phase catalogue, refine_skill, the curator's ageing
+// use_skill, the turn-start skill catalogue, refine_skill, the curator's ageing
 // pass, the health rollup. All of them ran correctly over a permanently empty
 // table, which is why nothing went red. These cases are about the producer.
 

@@ -155,10 +155,77 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		// observe, and no round trip spent observing it.
 		return bucket, nil
 	}
+	if jsprovision.OutOfCapacity(createErr) {
+		// THE BROKER HAS NO ROOM. Nothing frees capacity by being
+		// waited for, so this was attempted ONCE — [jsprovision.Place]
+		// re-asks only [jsprovision.Unplaceable] — and it is terminal.
+		// That is the whole difference between this arm and the one
+		// below, and the reason they are two rather than one condition:
+		// they are told apart by whether the create is retried, and a
+		// merged arm could only ever be exercised as a pair.
+		//
+		// IT IS NOT A CEILING OF THIS BUCKET'S OWN. A bucket declares
+		// none — nats.go sends MaxBytes -1 for a [jetstream.KeyValueConfig]
+		// that sets none, and checkBytesLimits reads a negative as one
+		// byte — so what is spent is what the limit's OTHER reservations
+		// already hold, the state logs' ceilings above all, and what an
+		// operator changes is theirs or the limit's rather than this
+		// bucket's.
+		//
+		// WHICH LIMIT REFUSED DEPENDS ON THE TOPOLOGY, and for a BUCKET
+		// it is never the one a clustered stream gets. A standalone
+		// create is checked against the account's limit and the
+		// server's (checkAllLimits, checkServer=true), so
+		// `stream.store_max_bytes` can refuse it. A clustered create
+		// runs the account half alone (jsClusteredStreamLimitsCheck →
+		// checkAccountLimits, checkServer=false), and the place a
+		// clustered STREAM's server limit surfaces instead — the
+		// metadata leader's peer selection — skips its storage check
+		// entirely for an object with no ceiling: the test is
+		// `maxBytes > 0 && maxBytes > available`
+		// (server/jetstream_cluster.go, selectPeerGroup). So on a fleet
+		// this is the ACCOUNT limit's refusal alone, under the two
+		// codes [jsprovision.OutOfCapacity] names. A clustered member
+		// that cannot place the bucket for want of room is not this
+		// arm and not this fact: that refusal is about another
+		// member's disk, which is why it stays [jsprovision.Unplaceable]
+		// below and is waited out rather than reported.
+		//
+		// NOT READ BACK: nothing was placed. Without this arm the
+		// refusal fell through to the read-back below and came back as
+		// a bucket that is "not there", which is the one reading that
+		// sends an operator to the wrong subsystem.
+		return nil, createErr
+	}
+	if jsprovision.NoApplicableLimit(createErr) {
+		// NO LIMIT APPLIES TO THIS BUCKET AT ALL, which is not the arm
+		// above wearing another code: that one is a ceiling that does
+		// not fit inside a limit, and this is an account that states no
+		// limit to fit into. A bucket declares no ceiling of its own,
+		// so it is the clearest case of the two being different — there
+		// is no number here to make smaller.
+		//
+		// TERMINAL AND NOT READ BACK for the same reason as the arm
+		// above, and it matters more here: unclassified, this refusal
+		// fell through and reported a bucket that is "not there", which
+		// of everything on a boot path is the sentence most likely to
+		// be read as corruption.
+		return nil, fmt.Errorf("%w%s", createErr,
+			jsprovision.NoApplicableLimitDetail(cfg.Replicas))
+	}
 	if jsprovision.Unplaceable(createErr) {
-		// STILL FORMING and it stayed that way for the whole budget,
-		// which createKeyValue has already waited out. Nothing was
-		// placed, so there is nothing to read back.
+		// STILL FORMING, and it stayed that way for the whole budget,
+		// which createKeyValue has already waited out — re-asking every
+		// [jsprovision.PlacementRetry] until the create's deadline. A
+		// cluster still gathering members is the one condition worth
+		// waiting on, which is exactly why the capacity refusal above
+		// must not share this arm: waited out, a limit nobody was going
+		// to raise cost the whole provisioning budget and then reported
+		// the broker's bare text.
+		//
+		// Nothing was placed here either, so there is nothing to read
+		// back and a not-found would only obscure the refusal that says
+		// what is actually wrong.
 		return nil, createErr
 	}
 	// A PEER MAY HAVE WON THE RACE between the read above and this

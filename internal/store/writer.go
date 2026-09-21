@@ -1,9 +1,7 @@
 package store
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -26,6 +24,19 @@ func Category(eventType string) (string, bool) { return events.Category(eventTyp
 
 // tagKeys are the flat JSON fields promoted out of an event into its tags.
 //
+// THE ONE LIST, and the reason it is here rather than beside the publish
+// listener that uses it is the reason [Category] delegates to internal/events:
+// this was a map here and another in internal/observe, with nothing asserting
+// they agreed — so a dimension added to one and forgotten in the other was
+// written by nobody or read by nobody, and no test anywhere could see it.
+// That is not hypothetical. `notification_source` lived only here, read only
+// by a mapping function in this package that had no production caller —
+// observe.Record is the writer — so the tag the Integrations room counts its
+// merges and drops by was never written at all, and every one of those counts
+// read zero on a company whose third-party apps were delivering fine. That
+// function is gone; internal/observe imports this package, so it calls
+// [ExtractTags] rather than keeping a second opinion.
+//
 // Reading them from the event's own JSON rather than from typed struct fields
 // is what keeps this list independent of the event catalogue: an event type
 // this build has never heard of still arrives with its fields intact in the
@@ -37,20 +48,62 @@ func Category(eventType string) (string, bool) { return events.Category(eventTyp
 // differ in one place — `role` on the event is `agent_role` in the tags,
 // because that is the name every filter and index uses.
 var tagKeys = map[string]string{
-	"agent_id":         "agent_id",
-	"role":             "agent_role",
-	"task_id":          "task_id",
-	"channel_id":       "channel_id",
-	"sender":           "sender",
+	"agent_id":   "agent_id",
+	"role":       "agent_role",
+	"task_id":    "task_id",
+	"channel_id": "channel_id",
+	"sender":     "sender",
+	// The identity of one unit of agent work. Almost every event a turn
+	// publishes carries it — each phase record, the turn's own completion,
+	// a provider fallback, a guard breach, a sandbox suspend and its
+	// resume — and until it was promoted none of them could be found BY
+	// it, so "everything that happened in this turn" was a question with
+	// no answer. A trace is NOT a substitute: one trace can span several
+	// turns, and a turn resumed after a restart can span several traces.
+	// [EventLog.Append] reads it back out of here for the turn_id column,
+	// and it was MISSING here while internal/observe's copy of this map
+	// carried it — so this mapping and the one the engine actually wrote
+	// through disagreed about a dimension Append reads back out of the
+	// tags. One map is what makes that disagreement unrepresentable.
+	"turn_id": "turn_id",
+	// The unit of work behind that run: turn_id names one EXECUTION, which
+	// is what a phase row, a live call and the turns list are keyed on, and
+	// a trigger that fails without acting is redelivered — so one unit of
+	// work legitimately produces several. This is what still groups them,
+	// and the only identity a re-run reproduces. See ADR-0017.
+	"work_key": "work_key",
+	// WHICH CONVERSATION — a chat thread, a work item, a page — the event
+	// belongs to. channel_id does NOT cover it: that is set on A2A events
+	// alone and never on the phase records that carry the model's
+	// reasoning, so without this no query can ask history for one thread's
+	// turns.
+	//
+	// ONE MEANING ACROSS EVERY EVENT TYPE, which is a property of the wire
+	// field rather than of this line: the tag is the conversation IDENTITY
+	// because every payload that spells a field `conversation_key` holds
+	// the identity. The coalescing record used to promote its inbox
+	// PARTITION through it and now names that `partition_key` below, so a
+	// filter on this tag cannot mean the thread a seat is talking on for
+	// one row and the batch a wake arrived in for the next — two values
+	// that differ exactly where it matters, since a direct message's
+	// identity is the bare channel and its partition can be a thread
+	// inside it. A tag whose meaning depends on the row is worse than an
+	// absent one: the query still answers.
 	"conversation_key": "conversation_key",
-	// The two turn identities. `turn_id` was MISSING here while
-	// internal/observe's copy of this map carried it, so this mapping and
-	// the one the engine actually writes through disagreed about a
-	// dimension [EventLog.Append] reads back out of the tags — see the
-	// fallback there. `work_key` is its counterpart: turn_id names one RUN
-	// and this names the unit of work behind it (ADR-0017).
-	"turn_id":   "turn_id",
-	"work_key":  "work_key",
+	// WHICH INBOX PARTITION a coalescing record merged.
+	//
+	// ITS OWN TAG rather than nothing, because the partition is the
+	// subject of the only event that carries it — "N deliveries became one
+	// turn" is a fact about a batch — and an operator watching how hard
+	// batching is kicking in asks it per line: which thread, which DM,
+	// which issue is arriving faster than its seat can answer. A listing
+	// deliberately never selects the payload column, so without a tag that
+	// question is unaskable of history and the panel is left with a count
+	// per third-party app. Its own tag rather than the conversation's for
+	// the reason stated there: on a direct message the two differ, and one
+	// tag meaning either is a dimension that answers neither question.
+	"partition_key": "partition_key",
+	// A2A participants, for cross-referencing a channel's traffic.
 	"requester": "requester",
 	"target":    "target",
 	"recipient": "recipient",
@@ -63,39 +116,6 @@ var tagKeys = map[string]string{
 	// before this tag existed read back without it — a real discontinuity
 	// at that point in the timeline, not a bug to paper over.
 	"notification_source": "notification_source",
-}
-
-// RecordFor builds the stored form of an event, reporting false when the event
-// is not one this store keeps (see [Category]).
-//
-// Pure: it touches no database, so the mapping is testable on its own.
-func RecordFor(ev *events.Event) (EventRecord, bool, error) {
-	if ev == nil {
-		return EventRecord{}, false, nil
-	}
-	category, tracked := events.Category(ev.Type)
-	if !tracked {
-		return EventRecord{}, false, nil
-	}
-	payload, err := json.Marshal(ev)
-	if err != nil {
-		return EventRecord{}, false, fmt.Errorf("store: encode event %s: %w", ev.ID, err)
-	}
-	return EventRecord{
-		ID:           ev.ID.String(),
-		Type:         ev.Type,
-		Source:       ev.Source,
-		Time:         ev.Timestamp,
-		Category:     category,
-		Summary:      ev.Summary(),
-		Actor:        ev.Actor(),
-		TraceID:      ev.TraceID,
-		SpanID:       ev.SpanID,
-		ParentSpanID: ev.ParentSpanID,
-		Tags:         extractTags(payload),
-		Spend:        SpendFor(ev.Type, payload),
-		Payload:      payload,
-	}, true, nil
 }
 
 // spendEventType is the one event that carries an LLM call's cost.
@@ -156,29 +176,21 @@ func SpendFor(eventType string, payload []byte) *Spend {
 	return spend
 }
 
-// Record writes an event to the log, skipping types the store does not keep.
-//
-// Errors are returned rather than swallowed, but the caller is a publish
-// listener and must treat them as fire-and-forget: an observability write that
-// fails must not disrupt the event pipeline that produced it.
-func (l *EventLog) Record(ctx context.Context, ev *events.Event) error {
-	rec, tracked, err := RecordFor(ev)
-	if err != nil {
-		return err
-	}
-	if !tracked {
-		return nil
-	}
-	return l.Append(ctx, rec)
-}
-
-// extractTags pulls the filterable dimensions out of an event's serialized
+// ExtractTags pulls the filterable dimensions out of an event's serialized
 // form.
 //
 // "Which agent does this event concern" is a RULE, not a field, and one copy
 // of it is all this codebase should have — which is why it lives beside the
 // columns it feeds rather than being re-derived by each reader downstream.
-func extractTags(payload []byte) map[string]string {
+// Exported for internal/observe, which is the publish listener that actually
+// writes the rows; see [tagKeys] for what a second copy of this cost.
+//
+// It takes the SERIALIZED event rather than a decoded map so the caller on
+// the publishing goroutine pays a shallow decode: map[string]json.RawMessage
+// leaves everything no tag names as bytes, where map[string]any deep-decodes
+// the engine's largest payload — a phase completion carries the whole prompt
+// and tool log — on every LLM call.
+func ExtractTags(payload []byte) map[string]string {
 	var flat map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &flat); err != nil {
 		return map[string]string{}
@@ -216,9 +228,6 @@ func extractTags(payload []byte) map[string]string {
 	return tags
 }
 
-// jsonString reads a JSON value as a string, yielding "" for anything that is
-// not one — including absent, null, and a number that happens to sit in a
-// field a tag names.
 // jsonInt reads a number out of a raw JSON field.
 //
 // json.Number rather than float64, so a token count past 2^53 is not silently
@@ -238,6 +247,9 @@ func jsonInt(raw json.RawMessage) int {
 	return int(v)
 }
 
+// jsonString reads a JSON value as a string, yielding "" for anything that is
+// not one — including absent, null, and a number that happens to sit in a
+// field a tag names.
 func jsonString(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""

@@ -201,7 +201,7 @@ func TestASeatThisNodeDoesNotOwnIsDeferred(t *testing.T) {
 	}
 }
 
-func TestAwaitingSandboxParksRatherThanRunning(t *testing.T) {
+func TestASeatHeldBySandboxParksRatherThanRunning(t *testing.T) {
 	t.Parallel()
 	// A detached coding run outlasts any broker ack window, so its seat's
 	// mail is requeued rather than held against the ack deadline. Nil
@@ -218,8 +218,8 @@ func TestAwaitingSandboxParksRatherThanRunning(t *testing.T) {
 		},
 	}
 	e := newEngine(t, engine.Options{
-		Dispatch:        d,
-		AwaitingSandbox: func(handle string) bool { return handle == "ceo" },
+		Dispatch:    d,
+		SandboxRuns: func(handle string) (bool, bool) { return handle == "ceo", false },
 	})
 	// The seat host has claimed nothing, so ownership would defer first.
 	// Override just that answer, keeping the engine's own sandbox wiring.

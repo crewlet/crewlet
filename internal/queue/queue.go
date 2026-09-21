@@ -19,6 +19,15 @@
 //     subscription drops the event silently — hence EnsureSubscription.
 //   - Handlers have three outcomes, not two. Ack, Nak, and Defer (leave it
 //     unacked, stop consuming) — see Result.
+//   - A handler is told how many deliveries are LEFT before the backend
+//     dead-letters a message, because every outcome that puts one back spends
+//     one and the count rides on the message rather than on the process
+//     handling it. TWO numbers, because one cannot answer both questions: the
+//     PARTITION's (DeliveriesLeft, the smallest of its messages') answers
+//     "will handing this batch back dead-letter something", and each
+//     MESSAGE's (DeliveriesLeftFor) answers "how much is left of this one".
+//     A caller that reads the first where it means the second is bounded by
+//     the worst message it happens to be batched with.
 //   - Attachment has four verbs with different destructiveness: Quiesce,
 //     Unquiesce, Detach, DeleteSubscription.
 //   - The durable subscriptions a broker holds can be LISTED
@@ -118,22 +127,34 @@ const (
 	// right to do — a seat whose lease moved, a node serving a stale
 	// config. Acking would claim work it will not perform.
 	//
-	// WHAT IT COSTS DIFFERS BY BACKEND, and the contract says so rather
-	// than pretending otherwise. The in-memory twin returns the events
-	// without touching their counters. A real broker has no "give this
-	// back without counting it": returning a message promptly means a Nak,
-	// and a Nak spends one of its deliveries — so the delivery budget is
-	// sized to cover handoffs as well as failures, and the backend
-	// dead-letters at the boundary rather than letting the broker's own
-	// MaxDeliver backstop discard a healthy event with nothing recorded.
-	// The alternative, letting the ack timer expire instead, parks a
-	// seat's whole mailbox for the ack window on every lease movement.
+	// IT COSTS ONE DELIVERY, exactly as a Nak does, on every backend. No
+	// broker here has a "give this back without counting it": returning a
+	// message promptly means a Nak, and a Nak spends one of its deliveries
+	// — so the delivery budget is sized to cover handoffs as well as
+	// failures, and the backend dead-letters at the boundary rather than
+	// letting the broker's own MaxDeliver backstop discard a healthy event
+	// with nothing recorded. The alternative, letting the ack timer expire
+	// instead, parks a seat's whole mailbox for the ack window on every
+	// lease movement.
+	//
+	// THIS USED TO DIFFER BY BACKEND, and the contract said so: the
+	// in-memory twin returned the events without touching their counters,
+	// gated behind a conformance capability. That made one rule two —
+	// DeliveriesLeft's doc asserted every return spends one while the
+	// suite's own flag asserted a deferral spends nothing — and it made the
+	// twin the only backend its own handoff case was ever run against. The
+	// twin spends one now, so the sentence above is true of everything that
+	// implements this contract.
+	//
+	// WHAT EVERY BACKEND OWES IS UNCHANGED, and it is the weaker claim the
+	// capability used to protect: a deferral must not kill a HEALTHY event.
+	// That is answered by sizing the budget so handoffs cannot exhaust it,
+	// not by making the handoff free.
 	//
 	// When the consumer closes, the broker returns the message to
-	// whoever attaches next, in order and at zero accrued redeliveries.
-	// Never substitute a republish: that sends the event to the topic
-	// tail while its prefetched siblings replay from the head,
-	// reordering the conversation.
+	// whoever attaches next, in order. Never substitute a republish: that
+	// sends the event to the topic tail while its prefetched siblings
+	// replay from the head, reordering the conversation.
 	OutcomeDefer
 )
 
@@ -171,7 +192,7 @@ func Defer(reason string) Result { return Result{Outcome: OutcomeDefer, Reason: 
 // Handler processes one event.
 type Handler func(ctx context.Context, ev *events.Event) Result
 
-// BatchHandler processes one conversation partition of a drained batch.
+// BatchHandler processes one PARTITION of a drained batch.
 type BatchHandler func(ctx context.Context, evs []*events.Event) Result
 
 // ErrNotLive reports that a verb reached a queue that is not live — never
@@ -212,7 +233,19 @@ type AnswerFunc func(ctx context.Context, request []byte) ([]byte, error)
 // Unsubscribe cancels a stream subscription and releases backend resources.
 type Unsubscribe func(ctx context.Context) error
 
-// BatchKeyFunc derives the conversation key an event partitions under.
+// BatchKeyFunc derives the PARTITION KEY an event is handled under: which
+// other events this one is drained, merged and dispatched WITH.
+//
+// NOT the conversation the event belongs to, which it was and which is a
+// different question with a different answer on at least one source. A direct
+// message is one conversation however it is threaded, so its identity is the
+// bare channel — while a reply in a thread on that line still partitions on
+// the thread, because merging it with unrelated top-level pings would hand
+// one digest a reply target that names only one of them. This layer must not
+// know that: internal/queue cannot import internal/notify, so the producer
+// stamps both values and the caller hands the partition one down (see
+// node.partitionKey, over notify.KeyOf). Prose is the only thing tying the
+// two ends together, which is exactly why it has to name the right key.
 type BatchKeyFunc func(ev *events.Event) string
 
 // PublishListener is invoked inline on every publish. Listeners run in the
@@ -253,9 +286,10 @@ type EventQueue interface {
 
 	// SubscribeBatch attaches with batched, key-partitioned delivery:
 	// drain what is locally available (plus a linger window), partition
-	// by key preserving arrival order, dispatch one handler call per
-	// partition oldest-conversation-first, and ack per partition. A
-	// failing partition never blocks or replays a different one.
+	// by the key [BatchKeyFunc] derives preserving arrival order,
+	// dispatch one handler call per partition oldest-partition-first,
+	// and ack per partition. A failing partition never blocks or replays
+	// a different one.
 	//
 	// opts is read live on every cycle, so a config reload changes
 	// linger and batch size with no re-subscription.
@@ -271,15 +305,37 @@ type EventQueue interface {
 	// quiesces and must be able to come back, or it holds the seat,
 	// stays attached, and consumes nothing for the rest of its life.
 	//
-	// Does NOT touch pause holds — a seat resuming from a stale-renew
-	// window may still be legitimately paused for a running sandbox.
+	// Does NOT touch pause holds: a seat resuming from a stale-renew
+	// window may still be legitimately held by another subsystem (the
+	// engine's own is the park of a node with no turn engine).
 	Unquiesce(ctx context.Context, topic, group string) (bool, error)
 
 	// Detach closes this process's consumers, leaving the subscription.
-	// Non-destructive: cursor and retained mail survive, so unacked
-	// messages return to the next attacher in order with no accrued
-	// redeliveries. Releases this attachment's pause holds — a hold that
-	// outlived a detach would leave a re-attaching node silently deaf.
+	//
+	// NON-DESTRUCTIVE, WHICH IS A CLAIM ABOUT THE MAIL AND NOT ABOUT THE
+	// COST. The subscription, its cursor and everything it retains all
+	// survive, so nothing is lost and whoever attaches next gets the lot,
+	// including what was published while nothing was attached. That is
+	// what makes a seat handoff cheap and an unowned seat safe.
+	//
+	// WHAT THIS DOES COST is one delivery of each message the consumer
+	// had taken and not settled. Those go back the way every hand-back
+	// goes back, because no backend here has a "return this without
+	// counting it" — see DeliveriesLeft, which is the one place that rule
+	// and the blockers that trigger it are written down, a detach among
+	// them. The partitions a stopped drain never dispatched are charged
+	// on the same terms as the one that stopped it. A message under a
+	// RUNNING handler is the exception, and not because it is cheaper:
+	// the handler runs to completion and its own outcome settles it.
+	//
+	// A message that goes back may return BEHIND events that were never
+	// delivered rather than at the head. The backends genuinely differ
+	// there (queuetest.Caps.HeadReplayOnNak), so nothing above this
+	// package may depend on either answer — within-conversation order
+	// comes from event timestamps, which is what OrderForDispatch is for.
+	//
+	// Releases this attachment's pause holds — a hold that outlived a
+	// detach would leave a re-attaching node silently deaf.
 	//
 	// Detach does NOT wait for a running handler. It stops the
 	// subscription taking new work and returns; a handler already
@@ -440,10 +496,11 @@ type EventQueue interface {
 
 	// PauseTopic pauses ONE subscription's delivery under a named
 	// reason. Holds are reason-scoped and keyed by the (topic, group)
-	// PAIR: two independent subsystems gate the same inbox — the
-	// sandbox busy gate and the config-divergence shed — and with one
-	// flat set the sandbox resuming its own run would un-gate a node
-	// serving a stale company.
+	// PAIR, so a second subsystem gating the same inbox cannot release
+	// the first one's hold by lifting its own, and a hold on one group
+	// does not gate every other group on a shared subject. The engine
+	// takes one reason today: a seat whose node has no turn engine
+	// pauses before requeuing, so the copies buffer rather than loop.
 	PauseTopic(ctx context.Context, topic, group, reason string) error
 
 	// ResumeTopic releases one reason's hold, flushing when none remain.
@@ -541,7 +598,7 @@ func (o *BatchOptions) EffectiveMaxBatch() int {
 
 // --- partitioning and dispatch ordering -----------------------------------
 
-// Partition is one conversation's slice of a drained batch.
+// Partition is one partition key's slice of a drained batch.
 type Partition[T any] struct {
 	Key   string
 	Items []T
@@ -604,14 +661,14 @@ func eventType(ev *events.Event) string {
 // needs, and is the one place either is decided.
 //
 // Between partitions: oldest constituent event first. Receive order alone
-// starves a quiet conversation behind a hot one under deferral — the quiet
-// conversation's requeued copies re-enter the topic AFTER whatever arrived
-// during the hot conversation's turn, so receive-ordered dispatch picks the
-// hot one on every drain. Timestamps carry the aging signal, so the
-// conversation that has waited longest dispatches first.
+// starves a quiet partition behind a hot one under deferral — the quiet
+// partition's requeued copies re-enter the topic AFTER whatever arrived
+// during the hot one's turn, so receive-ordered dispatch picks the hot one
+// on every drain. Timestamps carry the aging signal, so the partition that
+// has waited longest dispatches first.
 //
 // Within a partition: event timestamp, not delivery order. This is what
-// makes a conversation read correctly regardless of how a broker interleaves
+// makes a partition read correctly regardless of how a broker interleaves
 // redeliveries with fresh arrivals — measured, JetStream returns a
 // redelivered message BEHIND never-delivered ones, where the in-memory twin
 // replays it from the head. Relying
@@ -694,13 +751,12 @@ func LogResult(l *slog.Logger, topic, group string, ev *events.Event, r Result) 
 	}
 }
 
-// LogBatchResult emits the standard line for one conversation partition's
-// outcome.
+// LogBatchResult emits the standard line for one partition's outcome.
 //
-// A distinct event name from LogResult, carrying the conversation key and
-// the partition size, because the two failures are operationally different
-// things: one delivery failing is a bad event, a whole conversation failing
-// is a bad turn. A log consumer must be able to tell them apart without
+// A distinct event name from LogResult, carrying the partition key and the
+// partition size, because the two failures are operationally different
+// things: one delivery failing is a bad event, a whole partition failing is
+// a bad turn. A log consumer must be able to tell them apart without
 // parsing, and every backend must emit the same name for the same situation
 // — which is why this lives in the contract rather than in each backend.
 func LogBatchResult(l *slog.Logger, topic, group, batchKey string, evs []*events.Event, r Result) {

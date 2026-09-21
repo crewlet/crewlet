@@ -27,7 +27,7 @@ import (
 // makes it documentation rather than per-agent memory.
 //
 // So the output is a DRAFT PAGE under the unit's `Auto-Drafted Skills`
-// parent, which the Plan-phase knowledge search deliberately excludes: an
+// parent, which the turn-start knowledge search deliberately excludes: an
 // unvetted draft never reaches another agent. A unit lead reviews it and
 // publishes by moving it out of that parent, at which point it is an ordinary
 // knowledge-base page every seat can find. Nothing here promotes itself past
@@ -311,7 +311,7 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 		return nil, nil
 	}
 
-	// THE PREFIX IS WHAT HIDES IT. The Plan-phase knowledge search excludes
+	// THE PREFIX IS WHAT HIDES IT. The turn-start knowledge search excludes
 	// the auto-drafted parent by title prefix, so a draft published without
 	// it reaches every agent in the company unreviewed.
 	title := knowledge.AutoDraftTitlePrefix + draft.Name

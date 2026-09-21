@@ -167,6 +167,11 @@ type ExecutorInput struct {
 	// a query-time search built from the trigger, frozen at turn start.
 	RelevantKnowledge string
 
+	// ThreadContext is the chat thread this turn was woken in, read at
+	// turn start and handed over rather than left for the agent to fetch.
+	// Empty for every trigger that is not a chat thread reply.
+	ThreadContext string
+
 	// Skills is the tool-skill registry. Nil keeps the prompt free of skill
 	// scaffolding entirely.
 	Skills SkillCatalogue
@@ -218,6 +223,20 @@ func BuildExecutor(seat Seat, in ExecutorInput) string {
 		parts = append(parts, executorSandboxSection)
 	}
 
+	// FIRST of the prefetched blocks, because it is the trigger's own
+	// context rather than something retrieved about it, and the executor
+	// reads this prompt top-down: what the conversation is before what the
+	// seat remembers about conversations like it, and before the standing
+	// instruction to go and read the team's onboarding pages.
+	//
+	// "The thread so far" rather than "Thread context", which is what the
+	// chat prompt titles the section it writes into the notification BODY
+	// — and that lands in the USER message of this same conversation. Two
+	// sections under one heading saying different things is a model reading
+	// whichever it saw last.
+	if in.ThreadContext != "" {
+		parts = append(parts, "\n## The thread so far", in.ThreadContext)
+	}
 	// The onboarding hint gates on the tool as well as the marker: the
 	// same rule the memory / skill blocks follow, so a prompt never tells
 	// the model to call something that is not registered.

@@ -44,16 +44,26 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 // save on every page it follows.
 func (Prompt) Addressed(n notify.Inbound) bool { return Addressed(n.Metadata) }
 
-// ConversationKey implements [notify.Prompt]: the page id.
+// PartitionKey implements [notify.Prompt]: the page id.
 //
 // THE ID rather than the title, unlike a work item's human key: a title
 // changes, and a conversation keyed on one would split in half at a rename —
 // silently, each half looking like an ordinary conversation.
-func (Prompt) ConversationKey(metadata map[string]string, _ string) string {
+func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 	if id := metadata[MetaPageID]; id != "" {
 		return id
 	}
 	return ""
+}
+
+// ConversationIdentity implements [notify.Prompt]: the same page id.
+//
+// The two coincide because the page is one object that is both the merge unit
+// and the durable thread — a comment on a page is activity ON the page rather
+// than a thread of its own. The id-not-title argument above is a
+// conversation-identity one and holds for both.
+func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
+	return p.PartitionKey(metadata, subject)
 }
 
 // WakesActor implements [notify.Prompt]: never. Every change here is one the

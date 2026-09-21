@@ -68,9 +68,10 @@ const (
 	// debugging the screen, absent from the operator's log when nobody is.
 	CodeBadParams = "bad_params"
 
-	// CodeUnavailable is a question this node cannot answer YET or at all
-	// — a projection still catching up, a surface not wired in this
-	// process.
+	// CodeUnavailable is a question this node understood and cannot answer
+	// YET: a projection still catching up, or a coordination store that
+	// could not be reached. A surface this process does not have at all is
+	// CodeUnknownQuery instead, because waiting never changes that answer.
 	//
 	// It is the code that must never be flattened into an empty result.
 	// "This company has no work" is an answer a person acts on: they file

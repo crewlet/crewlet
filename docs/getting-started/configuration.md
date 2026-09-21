@@ -400,6 +400,36 @@ stream:
                                     #   page there, so the engine refuses to
                                     #   boot it on an in-memory stream rather
                                     #   than lose them at the first restart
+  # store_max_bytes: 68719476736    # how much of that directory's volume the
+                                    #   EMBEDDED broker may hold — the ONE number
+                                    #   every stream ceiling on it is compared
+                                    #   against, because a ceiling is a
+                                    #   RESERVATION the broker refuses if it
+                                    #   cannot back it. UNSET, the broker sizes
+                                    #   itself: three quarters of that volume's
+                                    #   free space when its JetStream came up,
+                                    #   plus what it already occupies there,
+                                    #   which is what a single-engine host should
+                                    #   have. MEASURED ONCE, AT BOOT, on either
+                                    #   path — a disk that later grows or shrinks
+                                    #   does not move this limit, and a node that
+                                    #   should see a resized volume is restarted.
+                                    #   SET IT WHEN MORE THAN ONE ENGINE SHARES A
+                                    #   FILESYSTEM and divide it between them:
+                                    #   free space bounds their SUM, so two
+                                    #   engines each sizing themselves from what
+                                    #   they can see over-commit it, and the
+                                    #   failure is `insufficient storage
+                                    #   resources available` — or, on a fleet,
+                                    #   `no suitable peers for placement,
+                                    #   insufficient storage` — naming whichever
+                                    #   stream was provisioned last. Bounds:
+                                    #   4 GiB..64 TiB, and it must not be smaller
+                                    #   than the ceilings declared inside it.
+                                    #   REFUSED for `type: nats` — an external
+                                    #   cluster's account limits are its own
+                                    #   operator's, and this node reads them back
+                                    #   rather than declaring them
   # url: "nats://nats.internal:4222"  # required for `nats`, REFUSED for
                                     #   embedded — an embedded server has no
                                     #   address, so a url there is read by
@@ -513,7 +543,11 @@ stream:
                                     #   had. Every one of the four is the value
                                     #   a stream is CREATED with: editing it
                                     #   later changes nothing until
-                                    #   `crewlet retention set-capacity` does
+                                    #   `crewlet retention set-capacity` does.
+                                    #   WHAT THE BROKER CAN GRANT is
+                                    #   `store_max_bytes` wherever you set one,
+                                    #   and Tier A refuses a limit smaller than
+                                    #   the ceilings declared inside it
   # tracker_vectors_max_bytes: 17179869184
                                     #   the vector changelog's ceiling (default
                                     #   16 GiB). SIZED FOR THE PEAK: the stream
@@ -649,12 +683,23 @@ store:
                                     #   socket admits at once, which is the chat
                                     #   screen's opening burst: below it a query
                                     #   queues for a connection before it starts
-                                    #   — the `pool_starved` alarm — and above it
-                                    #   the spare connections only deepen a
-                                    #   queue, since writers serialise on the
-                                    #   file lock however many readers there are.
-                                    #   Raise it only for a node serving more
-                                    #   dashboards than one
+                                    #   — the `pool_starved` alarm, see
+                                    #   reference/alarms.md — and above it the
+                                    #   spare connections only deepen a queue,
+                                    #   since writers serialise on the file lock
+                                    #   however many readers there are. Raise it
+                                    #   only for a node serving more dashboards
+                                    #   than one
+  # busy_timeout_seconds: 0         #   how long a WRITE waits for the
+                                    #   database's write lock before giving up
+                                    #   and retrying once; 0 takes the store's
+                                    #   default of 5s, half the dashboard's own
+                                    #   query timeout. It bounds the wait
+                                    #   wherever it happens — in the driver, or
+                                    #   in the engine's own FIFO queue for that
+                                    #   lock. Raise it on a node doing bulk
+                                    #   applies, where `store_tx_retry` in the
+                                    #   log names it; see guides/replication.md
 
 coordination:
   type: local                       # one node holding its own seat leases;
@@ -995,7 +1040,8 @@ integrations:
   slack:                                 # per-seat apps live on each role
     typing_status: always                # working indicator: always (default) | addressed
     status_phrases:                      # optional — replaces the built-in wording, per phase
-      plan: ["is nimbusing...", "is thinking very hard..."]
+      execute: ["is nimbusing...", "is thinking very hard..."]
+      review:  ["is re-nimbusing...", "is double-checking..."]
 
   mattermost:                            # self-hosted chat — transport AND inbound fleet
     enabled: true

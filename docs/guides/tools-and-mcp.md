@@ -408,7 +408,7 @@ From the LLM's perspective, builtin tools and MCP tools are identical — both a
 1. **Per-role MCP tools** — checked first (role-specific credentials)
 2. **Global tools** — builtin tools + global MCP tools
 
-**Tool output is returned to the LLM in full.** Control characters are stripped, secrets redacted and binary rejected, but results are **never length-truncated** — a truncated result silently hides content the agent reasons over. The same principle applies across the engine: the turn's own trigger text, the Plan-phase prefetch blocks (personal memory, similar prior work, synthesized skills, counterparty profiles), the tool catalogue and every `list_mcp_server_tools` listing, the draft handed to Review, the agent diary and the conversation ledger as **stored**, coalesced notification digests, and the knowledge-base search query all carry their full text.
+**Tool output is returned to the LLM in full.** Control characters are stripped, secrets redacted and binary rejected, but results are **never length-truncated**: a truncated result silently hides content the agent reasons over. The same principle applies across the engine: the turn's own trigger text, the turn-start prefetch blocks (personal memory, similar prior work, synthesized skills, counterparty profiles), the tool catalogue and every `list_mcp_server_tools` listing, the draft handed to Review, the agent diary and the conversation ledger as **stored**, coalesced notification digests, and the knowledge-base search query all carry their full text.
 
 **Where a bound is genuinely unavoidable, the engine refuses or says so — it never shortens in silence.** Three shapes, and which one applies is a deliberate choice:
 

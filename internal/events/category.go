@@ -27,8 +27,10 @@ import (
 //
 // So the exclusions below are deliberate, and stated, rather than left as gaps.
 var categories = map[string]string{
-	// Lifecycle: the org and its seats coming and going, plus the config
-	// changes an operator is most likely to go looking for after the fact.
+	// Lifecycle: the org coming and going, plus the config changes an
+	// operator is most likely to go looking for after the fact. A seat
+	// coming and going is not here: agent_spawned and agent_terminated are
+	// live-only, and [excluded] says why.
 	"org_started":               "lifecycle",
 	"org_stopped":               "lifecycle",
 	"config_revision_activated": "lifecycle",

@@ -21,7 +21,7 @@
 //     them belong to the Broker; attachments, pause holds, quiesce flags and
 //     the drain pause belong to a node. For one process the conflation is
 //     invisible; for two it inverts the property above — one node's Detach
-//     dropped its peer's consumer, and one node's sandbox pause stopped its
+//     dropped its peer's consumer, and one node's pause hold stopped its
 //     peer serving a seat it owned. Broker.Client mints a peer.
 //
 // What it still does differently, deliberately: DISPATCH IS INLINE. Publish
@@ -33,8 +33,16 @@
 // flags another pass instead of nesting one (see dispatch.go).
 //
 // Redelivery matches the broker's shape: the budget counts redeliveries AFTER
-// the first delivery (so N+1 total attempts), and an exhausted message moves to
-// the dead-letter subject rather than being destroyed.
+// the first delivery (so N+1 total attempts), an exhausted message moves to
+// the dead-letter subject rather than being destroyed, and EVERY return that
+// puts a message back spends one — a deferral as much as a nak, and the
+// partitions a blocked drain never dispatched as much as the one that blocked
+// it. That last clause is the contract's rather than this backend's
+// convenience: a free handoff here would model a broker nobody runs and
+// certify a bound production does not have. On the only broker this engine
+// ships, leaving the mailbox IS the delivery — its counter moves when a
+// message is FETCHED — so nothing it drained can be given back for free, and a
+// twin whose mailbox is a slice has to charge for a take deliberately.
 package memory
 
 import (
@@ -96,13 +104,13 @@ const (
 	//
 	// JetStream is the twin to track because it is the only broker this
 	// engine ships. It budgets 25 rather than the 10 a free-handoff broker
-	// needs because its deferral returns via Nak and spends an attempt —
-	// and this twin, whose Defer costs nothing, would otherwise sit on a
-	// budget less than half the production one. Where the twin's default
-	// disagrees with the real backend, every test written against the twin
-	// is calibrated to a broker nobody runs. See
-	// internal/queue/jetstream/stream.go maxDeliver; if it moves, this
-	// moves with it.
+	// needs because its deferral returns via Nak and spends an attempt, and
+	// this twin's deferral now spends one for the same reason — so the two
+	// budgets have to match in the quantity they denote as well as in what
+	// they are spent on. Where the twin's default disagrees with the real
+	// backend, every test written against the twin is calibrated to a broker
+	// nobody runs. See internal/queue/jetstream/stream.go maxDeliver; if it
+	// moves, this moves with it.
 	defaultMaxRedeliveries = 24
 
 	// defaultMaxHistory bounds the published-event log this backend keeps
@@ -258,6 +266,27 @@ type consumer struct {
 	// batching the same seat linger independently, exactly as two
 	// processes would.
 	window *lingerWindow
+
+	// detached records that this consumer has been dropped, and exists
+	// because REMOVING IT FROM THE SUBSCRIPTION IS NOT ENOUGH.
+	//
+	// Every other gate a delivery passes is read off the subscription or
+	// the client, so [Broker.drainPass] re-deriving the deliverable members
+	// each time round answers them. A detach is the one that is read off
+	// neither: it is a member LEAVING sub.members, which a loop already
+	// holding the *consumer never looks at again — and [Broker.deliverBatch]
+	// is exactly such a loop, holding one across a partition walk that can
+	// span many handler calls. So a detach landing mid-drain stopped
+	// nothing: the twin went on invoking, and ACKING, partitions 2..N on a
+	// consumer this node had already released, which is precisely the work
+	// the fenced release exists to abandon (internal/node detaches when a
+	// seat's lease is lost). The jetstream backend answers it with a flag
+	// of the same name on its own attachment, read by blocked() beside the
+	// other three.
+	//
+	// Never cleared: attaching again mints a NEW consumer, so there is no
+	// state from a previous life for a re-attach to inherit.
+	detached bool
 }
 
 type streamSub struct {
@@ -296,7 +325,7 @@ type Queue struct {
 
 	// Everything below is guarded by broker.mu. Node state, not broker
 	// state: every gate here describes THIS process's consumer, and a
-	// subscription-level answer would let one node's sandbox pause, or one
+	// subscription-level answer would let one node's pause hold, or one
 	// node's shutdown, stop a peer from serving the seat it owns.
 	running   bool
 	paused    bool
@@ -351,9 +380,9 @@ func (q *Queue) Start(context.Context) error {
 	// queue silently deaf" — but clearing on only one side leaves the window
 	// between the two open, and a hold taken there survives into the next
 	// life. Measured: Stop, PauseTopic, Start, Subscribe, Publish delivers
-	// nothing, with holds=[sandbox] on a queue that reports itself running.
-	// That is the same incident reached from the other side, and it is
-	// reachable by a sandbox gate or a config shed racing a drain.
+	// nothing, with a hold on a queue that reports itself running. That is
+	// the same incident reached from the other side, and it is reachable by
+	// any hold racing a drain, the no-turn-engine park's among them.
 	//
 	// The invariant is about the START of a life, not the end of one: a
 	// queue that has been started serves, and is never silently gated by
@@ -392,14 +421,19 @@ func (q *Queue) Stop(context.Context) error {
 	return nil
 }
 
-// dropMembersLocked removes this client's consumers from a subscription and
-// closes any linger window they were holding open.
+// dropMembersLocked removes this client's consumers from a subscription,
+// marks them detached and closes any linger window they were holding open.
+//
+// THE MARK AND THE REMOVAL ARE BOTH REQUIRED, for the reason [consumer.detached]
+// gives: the removal stops a FUTURE delivery being routed here, and the mark
+// stops a drain that is already holding this consumer from finishing on it.
 func (q *Queue) dropMembersLocked(sub *subscription) int {
 	mine := sub.membersOf(q)
 	if len(mine) == 0 {
 		return 0
 	}
 	for _, m := range mine {
+		m.detached = true
 		m.closeWindowLocked()
 	}
 	sub.members = slices.DeleteFunc(sub.members, func(m *consumer) bool { return m.client == q })
@@ -654,8 +688,9 @@ func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
 // reporting whether it was quiesced.
 //
 // It deliberately does NOT touch pause holds: a seat resuming from a
-// stale-renew window may still be legitimately paused for a running sandbox,
-// and clearing that would deliver into a suspended turn.
+// stale-renew window may still be legitimately held by another subsystem (the
+// engine's own is the park of a node with no turn engine), and clearing that
+// would restart the requeue loop the hold exists to stop.
 func (q *Queue) Unquiesce(ctx context.Context, topic, group string) (bool, error) {
 	key := subKey{topic, group}
 	q.broker.mu.Lock()
@@ -941,8 +976,8 @@ func (q *Queue) PauseDelivery(context.Context) error {
 //
 // It also had a consequence with real blast radius. DeleteSubscription exists
 // so a decommissioned role's inbox cannot accumulate undeliverable events for
-// ever; measured, a stray PauseTopic afterwards — a sandbox gate or a config
-// shed racing the decommission — RESURRECTED the subscription, which then
+// ever; measured, a stray PauseTopic afterwards (any hold racing the
+// decommission) RESURRECTED the subscription, which then
 // retained every event published to that topic for a role that no longer
 // existed. Exactly the accumulation the verb exists to prevent.
 //
@@ -972,10 +1007,9 @@ func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error
 
 // ResumeTopic releases one reason's hold, flushing when none remain.
 //
-// A topic stays paused while ANY reason holds it. Two independent subsystems
-// gate the same inbox — the sandbox busy gate and the config-divergence shed —
-// and with one flat hold the sandbox resuming its own run would un-gate a node
-// serving a stale company, on a completely ordinary code path.
+// A topic stays paused while ANY reason holds it. With one flat hold, a
+// second subsystem gating the same inbox would un-gate the first by lifting
+// its own hold, on a completely ordinary code path.
 func (q *Queue) ResumeTopic(ctx context.Context, topic, group, reason string) error {
 	key := subKey{topic, group}
 	reason = normalizeReason(reason)

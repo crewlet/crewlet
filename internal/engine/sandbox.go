@@ -275,7 +275,21 @@ type resumer struct{ engine *Engine }
 
 var _ sandbox.Resumer = (*resumer)(nil)
 
+// Resume re-enters the suspended turn a completion or an answer names.
+//
+// NO PANIC LEAVES THIS FRAME, for the reason [Dispatcher.Dispatch] gives on the
+// other path. A phase that panics is recovered inside the turn loop; anything
+// else that panics while re-entering a turn is recovered here and abandoned.
+// Unrecovered, it skipped the coordinator's revert as well as its settle, so
+// the run row was stranded in resumed while the queue redelivered a completion
+// the claim then refused.
 func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
+	return r.engine.guardResume(ctx, req.Run, func() error { return r.resume(ctx, req) })
+}
+
+// resume is [resumer.Resume]'s body, separated so the recovery around it is
+// one deferred call.
+func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 	state, ok, err := execstate.Decode(req.Run.ExecuteState)
 	if err != nil {
 		// A state this build cannot read is a ROUTING failure, not a run
@@ -294,6 +308,13 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 	// found could be gone from it, which fails the run with "not an agent seat"
 	// instead of routing the completion to a node that has the seat.
 	company := r.engine.Company()
+	if company == nil {
+		// A node with no applied revision has no seat to resume into, and
+		// a peer that has one can. Read through a nil company this was a
+		// nil dereference.
+		return fmt.Errorf("%w: this node has no applied company to resume run %s into",
+			sandbox.ErrResumeUnavailable, req.Run.TurnID)
+	}
 	seat := company.Org.AgentSeatByHandle(req.Run.AgentHandle)
 	if seat == nil {
 		// The seat is gone from this epoch — decommissioned, or this node
@@ -321,6 +342,40 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		CostUSD:       req.CostUSD,
 		DeliveredRefs: req.DeliveredRefs,
 	})
+}
+
+// guardResume runs one resume, abandoning it if it panics.
+//
+// It publishes the unhandled-exception guard itself because the frame that
+// would have, the resumed turn's own telemetry, is what did not run: without
+// it the seat renders as whatever it was last doing rather than AFK. The run's
+// own row names the seat, and the live epoch is preferred where it still does,
+// so a seat renamed since the run detached is addressed as it is now.
+func (e *Engine) guardResume(ctx context.Context, run sandbox.PendingRun, resume func() error) (err error) {
+	defer func() {
+		if panicked := turn.Recovered(recover()); panicked != nil {
+			err = e.resumePanicked(ctx, run, panicked)
+		}
+	}()
+	return resume()
+}
+
+// resumePanicked is [Engine.guardResume]'s recovery.
+func (e *Engine) resumePanicked(ctx context.Context, run sandbox.PendingRun, panicked *turn.PanicError) error {
+	log.ErrorContext(ctx, "sandbox_resume_panicked", "turn_id", run.TurnID,
+		"seat", run.AgentHandle, "panic", panicked.Value, "stack", panicked.Stack)
+	role, agentID := run.Role, run.AgentID
+	if live, id := seatIdentity(e.Company(), run.AgentHandle); live != "" {
+		role = live
+		if id != "" {
+			agentID = id
+		}
+	}
+	trace := events.TraceContext{TraceID: run.TraceID, SpanID: run.SpanID}
+	if breach := panicBreach(role, agentID, run.TurnID, trace, panicked); breach != nil {
+		e.observe(ctx, breach)
+	}
+	return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, turn.AbandonedPanicked, panicked)
 }
 
 // resumeInput is one re-entry, assembled.
@@ -382,7 +437,73 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		attribute.String("crewlet.work_key", in.Run.UnitOfWork()))
 	defer span.End()
 
+	// THE INDICATOR A RESUMED TURN SHOWS, which comes from one of two places
+	// and never from both. Ended below however the resumed turn goes.
+	//
+	// REJOIN FIRST, because a resume a BOX'S COMPLETION drove has nothing to
+	// raise from: the suspended half ended with keepAlive, so the hold is
+	// already up under this same turn id and the box's minutes are visible to
+	// whoever is waiting — and a parked run's row carries no chat metadata by
+	// design, the message that woke the suspended turn being days gone and
+	// never this node's to keep, while the conversation keys the row does
+	// carry are partition keys rather than addresses in a channel. A fresh
+	// raise there would assert a conversation this turn cannot prove it is
+	// in, over an indicator that is already up.
+	//
+	// BEGIN FROM THE TRIGGER WHERE NO HOLD IS LEFT, because that is a resume a
+	// PERSON'S ANSWER drove: the park released the hold, and the answer is an
+	// ordinary chat message carrying the conversation to raise in. Nil where
+	// neither holds — a completion whose session is not on this node, the seat
+	// having moved while the box ran or this process having restarted: the
+	// indicator that node raised lapses on the backend's own expiry, and
+	// nothing here invents a thread for it.
+	//
+	// See [Engine.resumeWorkingStatus], which owns that order and reports
+	// which of the two answered.
+	status, rejoined := e.resumeWorkingStatus(ctx, in.Turn.Handle(), in.Run.TurnID, in.Trigger)
+	// TRUE UNTIL THE TURN ACTUALLY RUNS, BUT ONLY ON ONE OF THE TWO ROUTES.
+	// Every early return below is a RETRY rather than an ending — a reply
+	// this build cannot read and a runner that could not be built both leave
+	// the coordinator to revert its claim — but the claim reverts to exactly
+	// the status it was taken FROM, and the two routes came from opposite
+	// facts:
+	//
+	//   - A BOX'S COMPLETION was claimed from a live run, so the revert puts
+	//     it back and the completion comes round again. Nothing else could
+	//     re-raise this indicator — the run's row carries no chat metadata,
+	//     so a later resume has only the hold to take back — where on the
+	//     dispatch path a redelivered trigger simply raises a fresh one. So
+	//     it is KEPT.
+	//   - A PERSON'S ANSWER was claimed from a question still open, so the
+	//     revert puts the run back to awaiting THEM. Nothing is working, and
+	//     an indicator over that wait tells the one person who could move it
+	//     that nobody needs them — the same lie the park exists to stop. So
+	//     it is CLEARED, and this is the only place that clear happens: the
+	//     coordinator's revert reports no stop, deliberately, because the
+	//     same revert on the completion route puts a run back to a box that
+	//     is still working. See [sandbox.Coordinator.unclaim].
+	//
+	//     THE MESSAGE ITSELF IS HANDED BACK, not spent. The offer reports
+	//     [sandbox.AnswerDeferred] — the run is awaiting THIS answer again
+	//     — so the dispatcher NAKs the delivery instead of letting it be
+	//     run as the ordinary chat message it looks like, and the
+	//     redelivery, once the queue's backoff has passed, raises its own
+	//     indicator off its own trigger. It used to fall through, which
+	//     answered the person with a turn rather than with the coding run
+	//     they were replying to and left that run waiting for a further
+	//     message. See [Dispatcher.answered].
+	working := rejoined
+	defer func() { endWorkingStatus(ctx, status, working) }()
+
 	company := in.Company
+	if company == nil {
+		// Not a second read of the epoch, which is the one thing this
+		// must not do (see [resumeInput.Company]). Handed back rather
+		// than settled: a caller that assembled a resume without its
+		// epoch is a defect here, and a peer can still resume the run.
+		return fmt.Errorf("%w: run %s was handed to resumeTurn without the "+
+			"company its seat was resolved in", sandbox.ErrResumeUnavailable, in.Run.TurnID)
+	}
 	resumedReply, err := resumeReply(in.Run)
 	if err != nil {
 		return err
@@ -422,6 +543,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// is the correct anchor, since the resume is what this node is
 			// admitted for.
 			Fence: e.seatFence(in.Turn.Handle()),
+			// The working indicator's phase updates, on the same terms as
+			// the dispatch path: the resumed Execute loop opens a phase
+			// like any other, and a reader watching the thread should see
+			// it move when the box's answer lands.
+			OnPhase: func(ph phase.Phase) { status.Phase(ph.String()) },
 			// THE SKILL REGISTRY, which this call site omitted. With nil
 			// Skills the runner's guardFor returns nil, so the load-before-use
 			// gate was disarmed for every resumed turn: a seat could call a
@@ -469,29 +595,65 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// end in silence.
 		Reply: resumedReply,
 	})
+	// THE TURN RAN, so from here the indicator follows what it concluded
+	// rather than the retry rule above: a resumed turn that suspended AGAIN
+	// keeps it, because the same box is still working.
+	working = res.Suspended
 	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
 	if err != nil {
-		if res.Acted {
+		if reason, abandon := turn.Abandon(res, err); abandon {
 			// The same decision the dispatcher makes on the other path
-			// (see (*Dispatcher).abandon), taken here in this
-			// subsystem's own vocabulary: the coordinator reads the
-			// sentinel and leaves the claim taken, so the completion is
-			// not redelivered into a conversation whose writes landed.
+			// (see (*Dispatcher).abandon), from the same rule, taken here
+			// in this subsystem's own vocabulary: the coordinator reads
+			// the sentinel and leaves the claim taken, so the completion
+			// is not redelivered into a conversation a retry must not
+			// re-enter.
 			//
 			// A resumed turn is the one most likely to qualify. It
 			// re-enters the executor's suspended loop with the whole
 			// pre-suspend conversation, and the round that called
-			// run_sandbox was never closed — so its writes are in no
+			// run_sandbox was never closed, so its writes are in no
 			// ledger and a replay would repeat every one of them.
-			return fmt.Errorf("%w: %w", sandbox.ErrResumeActed, err)
+			//
+			// The indicator comes down with it: the run is settled,
+			// the box reclaimed and the record deleted, so nothing is
+			// coming back for this turn.
+			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
 		}
+		// Reverted, so the turn is not over — and BOTH ROUTES BRING THIS
+		// SAME DELIVERY BACK rather than wait for a further one.
+		//
+		// A BOX'S COMPLETION is NAK'd by the seat's control-topic handler
+		// and redelivered on the broker's own backoff, to this node once
+		// it recovers or to the seat's next owner, until its delivery
+		// budget is spent.
+		//
+		// A PERSON'S ANSWER takes the same return for the same reason:
+		// the offer reports [sandbox.AnswerDeferred] — the run is awaiting
+		// THIS reply again — so the dispatcher hands the delivery back
+		// with a NAK rather than letting it be the ordinary chat message
+		// it looks like, bounded by the deliveries the message itself has
+		// left ([sandbox.AnswerDeliveryReserve], the only clause a seat
+		// handoff does not reset), by [sandbox.MaxAnswerAttempts] within
+		// this process, and by the run's own pause_ttl_seconds — and let
+		// go to the ordinary route past any of them. This comment used to say the resume went back to
+		// awaiting the person "for the conversation's next message rather
+		// than for a redelivery of this one", which described the defect
+		// rather than the design: the reply that carried the answer was
+		// spent on an unrelated turn while the run that asked waited out
+		// its pause TTL for a message that may never come.
+		//
+		// ON THE ROUTE'S OWN TERMS, exactly as the seed above: this is the
+		// same retry rule reached one step later, over the same revert.
+		working = rejoined
 		return err
 	}
 	// A resumed turn that suspended AGAIN persists its new conversation the
 	// same way the first one did — the coordinator sees the row back in
-	// running and leaves the box for the next completion.
+	// running and leaves the box for the next completion — and keeps its
+	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		e.persistSuspension(ctx, r, in.Run.TurnID)
+		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID))
 	}
 	e.recordResume(ctx, in, res)
 	return nil
@@ -516,7 +678,14 @@ func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Resu
 	// re-enters the run that suspended, so the entry names that one rather
 	// than a fresh id, and it dedupes against the same trigger the dispatch
 	// that launched it did.
-	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.ConversationKey,
+	//
+	// AND UNDER THE CONVERSATION IT REPORTS BACK TO, which is the
+	// conversation its answer was matched on and never the partition beside
+	// it: for a direct message those are different values, and filing here
+	// under the batch would put the coding work in a row the seat's next
+	// turn on that DM never looks up — the same silence this frame exists
+	// to end.
+	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.Conversation(),
 		in.Run.TurnID, in.Run.UnitOfWork(), resumeTask(in), res, e.dispatch.now())
 }
 
@@ -566,7 +735,8 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 }
 
 // persistSuspension writes a turn's suspended conversation to its row, which
-// is also what OPENS the run to the completion poll.
+// is also what OPENS the run to the completion poll, and reports whether the
+// turn is actually coming back.
 //
 // Called the moment the turn returns Suspended, because the runner holds the
 // conversation only until its frame unwinds. Until this lands the run sits in
@@ -579,27 +749,49 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // box is still in the engine's hands and the seat's owner is still this
 // process, is far better than leaving a launching row to hold a box until its
 // seat happens to move.
-func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string) {
+//
+// # Why it answers, and why the answer is three-valued
+//
+// A caller that has to know whether anything is still working cannot read that
+// off [turn.Result] — every path below leaves it Suspended while settling the
+// run, so the turn's own intent says "coming back" on exactly the endings
+// where nothing is. The working indicator is that caller: driven off the
+// intent it stayed up for the life of the process on every failure here.
+//
+// The three answers are the ordinary three, so the middle one is not collapsed
+// into the loss: (true, nil) the row is open and the poll will resume it;
+// (false, nil) the run is settled and definitively will not; and a non-nil
+// error for the one case nothing can establish — a write that failed MAY have
+// landed, and [sandbox.Coordinator.FailRun] settles only a run still
+// launching, so a row this reports as unwritten can be one the completion poll
+// resumes. The error is for deciding, not for logging: every failure path here
+// has already said what it did and why (see [Engine.failSuspension]), and no
+// caller fails a turn over it — the run is settled either way.
+func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string) (bool, error) {
 	if e.sandboxPending == nil || e.sandboxCoordinator == nil {
-		return
+		// No store and no coordinator: nothing recorded the run, nothing
+		// polls it, and nothing will ever resume this turn.
+		return false, nil
 	}
 	suspension, ok := r.Suspended()
 	if !ok {
 		e.failSuspension(ctx, turnID, "sandbox_suspension_missing",
 			"the turn suspended but recorded no conversation", nil)
-		return
+		return false, nil
 	}
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {
 		e.failSuspension(ctx, turnID, "sandbox_suspension_unserializable",
 			"the suspended conversation could not be serialized", err)
-		return
+		return false, nil
 	}
 	suspended, err := e.sandboxPending.MarkSuspended(ctx, turnID, blob)
 	if err != nil {
 		e.failSuspension(ctx, turnID, "sandbox_suspension_unwritable",
 			"the suspended conversation could not be written", err)
-		return
+		// UNKNOWN, not lost: the write may have landed, and the settle
+		// that follows it declines a row that is no longer launching.
+		return false, fmt.Errorf("engine: recording the suspension of turn %s: %w", turnID, err)
 	}
 	if !suspended {
 		// The row is not launching, so this suspension has nowhere to go:
@@ -608,7 +800,9 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		// one is worse than failing.
 		e.failSuspension(ctx, turnID, "sandbox_suspension_not_launching",
 			"the run was no longer launching when its conversation was written", nil)
+		return false, nil
 	}
+	return true, nil
 }
 
 // failSuspension settles a run whose suspension has nowhere to go, and says
@@ -726,44 +920,8 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		return sandbox.LaunchResult{}, err
 	}
 
-	agentID := ""
-	if id, ok := company.Org.AgentIDFor(seat); ok {
-		agentID = id.String()
-	}
-	// THE TRACE THE RUN BELONGS TO, which nothing set before.
-	//
-	// TurnRef has carried TraceID and SpanID since the OTLP receiver was
-	// written, and this — its only construction site — left both empty. So
-	// PendingRun.TraceID was always "", RunEnv returned nil for every launch
-	// (it refuses to mint a token scoped to an empty trace, which is the one
-	// property that scoping has), and no coding run has ever exported
-	// telemetry through an endpoint the engine goes to some length to offer.
-	// The same emptiness broke the resume: describeResume built the resumed
-	// turn's events from Run.TraceID, so every resumed turn was filed under
-	// no trace at all.
-	//
-	// Taken from the ACTIVE span, which at this point is the run_sandbox
-	// tool call, so the box's spans nest under the call that started them.
-	runTrace := tracing.TraceOf(ctx)
 	return sandbox.Launch(ctx, manager, pending, e.backends.Queue, sandbox.LaunchRequest{
-		Turn: sandbox.TurnRef{
-			TurnID: t.RunID, WorkKey: t.WorkKey,
-			AgentID: agentID, AgentHandle: t.Handle(), Role: seat.Name,
-			Depth: t.Depth, Chain: t.Chain,
-			TraceID: runTrace.TraceID, SpanID: runTrace.SpanID,
-			// THE CONVERSATION THE WORK CAME FROM, which nothing set
-			// either. The row has carried this field since it was
-			// written, and with it empty a resumed turn had no way to
-			// say where its answer belonged: it left no conversation
-			// entry at all, so the next turn on that thread re-read
-			// history that stopped at the moment the run detached and
-			// planned as though the coding work had never happened.
-			ConversationKey: t.ConversationKey,
-			// The brief and the delivery obligation, so the resumed turn
-			// has both when the trigger is long gone. Neither can be
-			// recovered from the row any other way.
-			Reply: t.Reply,
-		},
+		Turn:       sandboxTurnRef(ctx, t, seat.Name),
 		Brief:      brief,
 		Task:       t.Task,
 		Setup:      setup,
@@ -772,6 +930,66 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		MCPServers: servers,
 		ReuseBox:   reuse,
 	})
+}
+
+// sandboxTurnRef is what a detached run's durable row records about the turn
+// that launched it.
+//
+// ONE BUILDER FOR BOTH LAUNCH PATHS — the run_sandbox tool and a cli-agent
+// executor handed its whole turn — because it is one row, the same facts and
+// the same reasons: the resume happens in another process, days later, and can
+// recover none of this from a trigger that is long gone. Written out twice it
+// drifted inside a single commit: one copy put the partition in both
+// conversation fields, which compiles, because both are strings.
+//
+// EVERY FACT OFF THE TURN'S OWN EPOCH, never the engine's current company. An
+// apply landing mid-turn is the next epoch, and a company renamed there
+// derives a DIFFERENT agent id for the same seat — so a row taking its id from
+// the live company named an agent none of that turn's other events did, and
+// its announcements split the seat in two on every surface that groups by id.
+// One path already took the id from the turn and said why; the other did not,
+// which is the whole hazard of writing the rule twice.
+//
+// The ROLE NAME is the caller's, because each already holds the seat it
+// resolved and the turn's copy is the same pointer — nothing is gained by
+// deriving it a second time here.
+//
+// The TRACE comes from the ACTIVE span, so the box's spans nest under the call
+// that started them rather than appearing as unrelated work minutes later.
+// TurnRef carried these two since the OTLP receiver was written and the
+// run_sandbox path left both empty: PendingRun.TraceID was always "", RunEnv
+// minted no telemetry token for any launch (it refuses to scope one to an
+// empty trace, which is the one property that scoping has), and describeResume
+// filed every resumed turn under no trace at all.
+func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.TurnRef {
+	runTrace := tracing.TraceOf(ctx)
+	return sandbox.TurnRef{
+		// The id is derived from the turn's PINNED organization, like every
+		// other fact about the seat here. The engine's current company is
+		// the next epoch once an apply lands mid-turn, and a renamed
+		// company derives a different id for the same seat.
+		TurnID: t.RunID, WorkKey: t.WorkKey,
+		AgentID: t.AgentID(), AgentHandle: t.Handle(), Role: role,
+		Depth: t.Depth, Chain: t.Chain,
+		TraceID: runTrace.TraceID, SpanID: runTrace.SpanID,
+		// BOTH CONVERSATION VALUES, field for field with [turnctx.Turn] so
+		// a swapped pair reads as one. The row has carried a conversation
+		// since it was written and nothing set it: with it empty a resumed
+		// turn had no way to say where its answer belonged, so it left no
+		// conversation entry at all and the next turn on that thread read
+		// history that stopped when the run detached.
+		//
+		// The conversation is where the resume reports and what admits a
+		// person's answer; the partition states the batch this run was
+		// launched from, which tells two runs parked on one direct message
+		// apart and is all a peer predating the conversation can match on.
+		PartitionKey:    t.PartitionKey,
+		ConversationKey: t.ConversationKey,
+		// The delivery obligation, so the resumed turn knows whether
+		// anybody is waiting: it sees neither its trigger nor this frame,
+		// and the row is the only place this can reach it from.
+		Reply: t.Reply,
+	}
 }
 
 // sandboxHeadroom refuses a launch below turn_engine.sandbox_min_budget_tokens.
@@ -998,6 +1216,14 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 		// from every settle path, so a run that failed before it ever
 		// had a box closes its session too.
 		Ended: e.bridge.Close,
+		// A run that stops with a turn still suspended into it takes the
+		// working indicator down with it, whichever way it stopped: the
+		// agent is waiting on a person, or is never coming back at all,
+		// and either way the turn does not return to say so. ONE
+		// FUNCTION FOR EVERY REASON, because to the indicator they are
+		// one fact — the frame that raised it has already returned. See
+		// [sandbox.CoordinatorOptions.Stopped].
+		Stopped: e.releaseWorkingStatus,
 	})
 	if err != nil {
 		return err
@@ -1254,6 +1480,23 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// stopSeatServers drops the registry with the bridge, in one step.
 	e.stopSeatServers(ctx, handle)
 
+	// AND THE SEAT'S WORKING INDICATORS, for the reason the event above
+	// exists: a seat that went away with no signal leaves its last state
+	// standing, and on a chat surface that state is a live re-assertion
+	// rather than a stale row. A turn that suspended into a detached coding
+	// run deliberately leaves its indicator up, and the resume lands on
+	// whichever node holds the seat when the box reports — so a node that has
+	// handed the seat on would otherwise go on saying "is thinking…" every
+	// refresh interval, for a turn it is not running, until the process died.
+	//
+	// DETACHED AND BOUNDED, the same shape the memory flush below takes: the
+	// clear has to go out even when the release is a cancelled drain, and a
+	// chat instance that has stopped answering must cost the drain seconds
+	// rather than a client timeout per seat. See [statusTeardown].
+	clearCtx, stopClear := statusTeardown(ctx)
+	e.Status().ClearFor(clearCtx, handle)
+	stopClear()
+
 	// A LAST PUBLISH, then forget the seat. The publish is what makes a
 	// graceful handoff lossless: whatever this node learned since its last
 	// cycle reaches the changelog before the successor hydrates. Forgetting
@@ -1292,17 +1535,21 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	}
 }
 
-// AwaitingSandbox reports whether a seat is parked on a detached coding run.
+// SeatHeldBySandbox reports whether a detached coding run HOLDS a seat, so it
+// starts no new turn until the run settles.
 //
 // Exported for the operator surfaces and for a test: the inbox screening reads
 // it internally through the dispatcher's conditions, but "is this seat busy on
 // code work" is also a question a dashboard asks, and answering it from a
 // second place would eventually answer it differently.
-func (e *Engine) AwaitingSandbox(handle string) bool {
+//
+// It is NOT "does this seat have a run waiting for an answer" — a parked run
+// frees its seat by design. See [sandbox.Coordinator.SeatRuns].
+func (e *Engine) SeatHeldBySandbox(handle string) bool {
 	if e.sandboxCoordinator == nil {
 		return false
 	}
-	return e.sandboxCoordinator.AwaitingSandbox(handle)
+	return e.sandboxCoordinator.SeatHeldBySandbox(handle)
 }
 
 // sandboxLLM resolves the model a coding run works under, and the credential

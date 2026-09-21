@@ -41,8 +41,16 @@ func (tracker) Addressed(n notify.Inbound) bool { return n.EventType == "assigne
 // reaches them; everything else this third-party app emits, they already
 // know about.
 func (tracker) WakesActor(eventType string) bool { return eventType == "pipeline_failed" }
-func (tracker) ConversationKey(m map[string]string, _ string) string {
+func (tracker) PartitionKey(m map[string]string, _ string) string {
 	return m["issue_id"]
+}
+
+// ConversationIdentity: ONE LINE, delegating, which is what a source whose two
+// keys coincide looks like. An issue is both the merge unit and the durable
+// thread, and a second copy of the derivation here would be a second answer
+// nothing compares.
+func (t tracker) ConversationIdentity(m map[string]string, subject string) string {
+	return t.PartitionKey(m, subject)
 }
 func (tracker) DigestBody(eventType, body string) string {
 	if eventType == "issue_updated" {
@@ -352,7 +360,7 @@ func TestEveryConstituentSurvivesAtFullFidelity(t *testing.T) {
 
 // What the learning workers embed, so it carries the same supersede rule the
 // digest does.
-func TestTheMergedSalientTextMatchesWhatThePlannerSees(t *testing.T) {
+func TestTheMergedSalientTextMatchesWhatTheExecutorSees(t *testing.T) {
 	merged, _ := notify.Coalesce(prompts(), []types.ExternalNotification{
 		note("ana", "stale description", "issue_updated"),
 		note("bo", "the real question", "comment"),

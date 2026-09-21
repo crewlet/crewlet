@@ -381,7 +381,7 @@ export function CompanyScreen() {
                 size="compact"
                 icon={<ShieldGlyph size={32} />}
                 title="No policies are set"
-                description="Policies render into every planner's prompt in full. They are the company's standing instructions."
+                description="Policies render into every executor's prompt in full. They are the company's standing instructions."
               />
             )}
           </Card>

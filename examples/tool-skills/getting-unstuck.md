@@ -26,6 +26,25 @@ You can't complete the task and you've already exhausted what you can do alone:
 
 If you're just *uncertain*, prefer `self_iterate` first — re-plan with the uncertainty as the next thing to resolve.
 
+# Reviewing a turn that already handed off
+
+Everything above is about *deciding* to hand off, and none of it applies once
+the tool log shows the handoff happened. Judge that turn `done`.
+
+The reply comes asynchronously and re-triggers the agent, so no further round
+of *this* turn can produce it. Sending it back spends the iterations the real
+work needs and posts the same question a second time at somebody who has not
+had a chance to answer — which reads as nagging, not diligence.
+
+Send it back only when the log shows the handoff did not actually reach
+anybody, when it went somewhere other than where the work lives, or when it
+broke one of the rules below — a naked problem with no options and no
+recommendation is still a `self_iterate`, even though somebody was reached.
+
+One thing a handoff never excuses: whoever triggered the turn is owed a reply
+where *they* asked. Asking your manager in one place while the requester hears
+nothing in another leaves them waiting on a message that is never coming.
+
 # How to pick the surface
 
 Hand off on the surface where the problem already lives. The audit trail belongs next to the work.

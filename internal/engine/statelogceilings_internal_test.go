@@ -190,7 +190,7 @@ func brokerWithHeadroom(t *testing.T, headroom int64) *jetstream.Queue {
 // and provisions each against q, as a boot does.
 func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, free int64) error {
 	t.Helper()
-	ceilings, err := sizeCeilings(t.Context(), q, stream, free)
+	ceilings, err := sizeCeilings(t.Context(), q, stream, free, "/var/lib/crewlet/stream")
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 	t.Parallel()
 	const free = 64 * gib
 	q := brokerWithHeadroom(t, 12*gib)
-	first, err := sizeCeilings(t.Context(), q, config.Stream{}, free)
+	first, err := sizeCeilings(t.Context(), q, config.Stream{}, free, "/var/lib/crewlet/stream")
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 	if _, err := s.provisionAll(t.Context(), q); err != nil {
 		t.Fatalf("provision: %v", err)
 	}
-	again, err := sizeCeilings(t.Context(), q, config.Stream{}, free)
+	again, err := sizeCeilings(t.Context(), q, config.Stream{}, free, "/var/lib/crewlet/stream")
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
@@ -384,5 +384,141 @@ func TestTheChatLogAsksForWhatItsDomainDeclares(t *testing.T) {
 	if derived || set != 3*gib {
 		t.Errorf("a set ceiling came back as %d (derived %v), want 3 GiB "+
 			"explicit", set, derived)
+	}
+}
+
+// EVERY BUDGET SOURCE SAYS WHO SETS THE LIMIT, IN THE TERMS THAT CHANGE IT.
+//
+// The sentence is what an operator acts on after a refused boot, and the source
+// is the only thing that decides it. A source this build does not know falls
+// through to a sentence naming the value itself, which is honest and useless —
+// so the assertion is over the CLOSED SET rather than over the cases somebody
+// remembered, and a source added to the queue package fails here rather than
+// on a node whose boot just failed.
+func TestEveryBudgetSourceNamesTheLeverThatChangesIt(t *testing.T) {
+	t.Parallel()
+	// The lever each source's sentence has to reach, and the volume for
+	// the one whose answer depends on it.
+	const volume = "/var/lib/crewlet/stream"
+	levers := map[jetstream.BudgetSource]string{
+		jetstream.BudgetServerStore:        "stream.store_max_bytes",
+		jetstream.BudgetServerMemory:       "stream.store_dir",
+		jetstream.BudgetAccount:            "whoever operates the broker",
+		jetstream.BudgetAccountNoTier:      "stream.replicas",
+		jetstream.BudgetAccountTierNoLimit: "declare storage on that tier",
+		// UNSTATED HAS NO SETTING TO NAME — the account declares no
+		// limit and a client cannot read the server's — so what it owes
+		// a reader is who to ask.
+		jetstream.BudgetUnstated: "whoever operates that cluster",
+	}
+	for _, source := range jetstream.BudgetSources {
+		t.Run(string(source), func(t *testing.T) {
+			t.Parallel()
+			said := limitSource(source, volume)
+			if strings.Contains(said, "which this build does not know") {
+				t.Fatalf("%q reaches an operator as an unknown source, so a "+
+					"refused boot names no lever at all: %s", source, said)
+			}
+			lever, named := levers[source]
+			if !named {
+				t.Fatalf("%q has no lever written down here, so this test "+
+					"passes it without checking anything: add the one its "+
+					"sentence names", source)
+			}
+			if !strings.Contains(said, lever) {
+				t.Errorf("%q does not name %q, so an operator is sent to the "+
+					"wrong setting: %s", source, lever, said)
+			}
+		})
+	}
+	// AND THE NO-TIER SENTENCE IS NOT A CAPACITY ONE. Its limit is zero,
+	// which is also what an exhausted account reports, and the two send an
+	// operator to opposite places: one waits for room, the other edits a
+	// field. A reader told to free space on an account that grants this
+	// node's class nothing waits for something that will never happen.
+	noTier := limitSource(jetstream.BudgetAccountNoTier, volume)
+	if !strings.Contains(noTier, "no JetStream default or applicable tiered limit present") {
+		t.Errorf("the no-tier sentence does not quote what the broker will "+
+			"actually say, so nobody can match the two: %s", noTier)
+	}
+	// AND IT DOES NOT OFFER THE BYTE COMPARISON'S WORDS, which a missing
+	// tier never reaches: the class is not resolved at all, so nothing is
+	// ever compared. Naming both would send an operator to look at how
+	// full an account is when the account has no entry for them.
+	if strings.Contains(noTier, "insufficient storage resources available") {
+		t.Errorf("the no-tier sentence offers a refusal a missing tier cannot "+
+			"reach: %s", noTier)
+	}
+	// THE LIMITLESS TIER NAMES BOTH, because its report covers two
+	// realities the account cannot be asked to tell apart: a class with no
+	// entry in the limit table, and a class declared with no disk. The
+	// first is refused before a byte is compared and the second by the
+	// comparison, and an operator sent to only one of them is hunting
+	// either a declaration that is there or a fullness that is not.
+	tierNoLimit := limitSource(jetstream.BudgetAccountTierNoLimit, volume)
+	for _, want := range []string{
+		"no JetStream default or applicable tiered limit present",
+		"insufficient storage resources available",
+	} {
+		if !strings.Contains(tierNoLimit, want) {
+			t.Errorf("the limitless-tier sentence does not quote %q, so one of "+
+				"the two refusals it covers reaches a reader unexplained: %s",
+				want, tierNoLimit)
+		}
+	}
+	if strings.Contains(limitSource(jetstream.BudgetAccount, volume), "stream.replicas") {
+		t.Error("an ordinary account limit sends an operator to stream.replicas, " +
+			"which changes nothing about how full their account is")
+	}
+}
+
+// THE ROOM CLAUSE IS THE SAME FOUR NUMBERS WHEREVER IT APPEARS, and its three
+// cases are three different facts.
+//
+// It is the one sentence a refused create and a refused raise share, and they
+// were written separately once — which is the shape internal/textcut,
+// internal/whsec and internal/jsprovision each record drifting while two doc
+// comments asserted the two matched. What a test can hold is that neither of
+// the two unreadable cases is ever spelled as a number: a limit that could not
+// be read reported as zero, or a broker that states none reported as a broker
+// with none, is an operator told there is no room when nobody said so.
+func TestTheRoomClauseNeverSpellsAnUnknownAsANumber(t *testing.T) {
+	t.Parallel()
+	const volume = "/var/lib/crewlet/stream"
+	stated := jetstream.StorageBudget{
+		Limit: 8 * gib, Committed: 6 * gib, Source: jetstream.BudgetServerStore,
+	}
+	said := roomLeft(stated, nil, volume)
+	for _, want := range []string{
+		itoa(2 * gib), // left to reserve
+		itoa(6 * gib), // already reserved
+		itoa(8 * gib), // the limit
+		"stream.store_max_bytes",
+	} {
+		if !strings.Contains(said, want) {
+			t.Errorf("a stated limit does not say %q: %s", want, said)
+		}
+	}
+
+	// UNREAD IS NOT ZERO. The read failed, so there is no number — and a
+	// clause carrying one would be an invention on the one line an
+	// operator reads after a refused boot.
+	unread := roomLeft(jetstream.StorageBudget{}, errors.New("no responders"), volume)
+	if !strings.Contains(unread, "could not be read") {
+		t.Errorf("an unreadable budget does not say so: %s", unread)
+	}
+	if strings.Contains(unread, "0 bytes left") || strings.Contains(unread, "-byte limit") {
+		t.Errorf("an unreadable budget is spelled as a number: %s", unread)
+	}
+
+	// AND UNSTATED IS NOT UNLIMITED. The account states no limit this
+	// client can read; every server behind it still has a cap of its own.
+	unstated := roomLeft(jetstream.StorageBudget{Limit: -1,
+		Source: jetstream.BudgetUnstated}, nil, volume)
+	if !strings.Contains(unstated, "states no limit") {
+		t.Errorf("an unstated limit does not say so: %s", unstated)
+	}
+	if strings.Contains(unstated, "-1") {
+		t.Errorf("an unstated limit reaches an operator as the number -1: %s", unstated)
 	}
 }

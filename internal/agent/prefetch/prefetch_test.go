@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -274,36 +275,180 @@ func TestEveryStoreFailureCostsOnlyItsOwnBlock(t *testing.T) {
 		Counterparties: counterparties{err: failing},
 		Skills:         skills{err: failing},
 		Onboarding:     onboarding{err: failing},
-		Models:         models{provider: &aux{answers: []string{"[0]"}}},
-		Embed:          embeds,
+		// A CHAT SURFACE THAT REFUSES is the same class of failure, and
+		// on a trigger with no thread it must render nothing at all
+		// rather than a hint: a seat woken by a webhook told its thread
+		// could not be read goes looking for a thread that never
+		// existed.
+		Threads: &threads{refuse: true},
+		Models:  models{provider: &aux{answers: []string{"[0]"}}},
+		Embed:   embeds,
 	}, request(t))
 	if !blocks.Empty() {
 		t.Fatalf("blocks = %+v, want all empty", blocks)
 	}
 }
 
-// The six run CONCURRENTLY, so a panic in one would take the process down
-// rather than the turn — and these renderers decode model output and index
-// with numbers an LLM produced.
+// The SEVEN blocks run CONCURRENTLY, so a panic in any one of them would take
+// the process down rather than the turn — and these renderers decode model
+// output and index with numbers an LLM produced.
+//
+// EVERY SOURCE, because the guard is per BLOCK: one goroutine each with its own
+// deferred recover, so a case covering one source says nothing about the other
+// six. The seventh is the chat thread, in
+// TestAPanickingThreadReaderCostsOnlyItsOwnBlock next door, where it sits with
+// the three extra facts its block carries and that its recover has to clear
+// alongside the prose.
 func TestAPanickingSourceCostsOnlyItsOwnBlock(t *testing.T) {
 	t.Parallel()
-	blocks := fetch(t, prefetch.Sources{
-		Counterparties: panicking{},
-		Skills: skills{rows: []learning.Skill{
-			{Name: "ship-a-fix", Description: "the release checklist"}}},
-	}, request(t))
-	if blocks.CounterpartyProfile != "" {
-		t.Fatalf("the panicking source rendered %q", blocks.CounterpartyProfile)
+	// TWO healthy neighbours, so whichever one a case replaces there is
+	// still a sibling left to prove the turn kept the rest of its context.
+	healthy := func() prefetch.Sources {
+		return prefetch.Sources{
+			Skills: skills{rows: []learning.Skill{
+				{Name: "ship-a-fix", Description: "the release checklist"}}},
+			Onboarding: onboarding{done: false},
+			Models:     models{provider: &aux{answers: []string{"[0]"}}},
+			Embed:      embeds,
+		}
 	}
-	if !strings.Contains(blocks.SynthesizedSkills, "ship-a-fix") {
-		t.Fatalf("a sibling block was lost: %q", blocks.SynthesizedSkills)
+	cases := []struct {
+		name    string
+		install func(*prefetch.Sources, *reached)
+		block   func(prefetch.Blocks) string
+		// sibling is the neighbour that must have survived. Nil takes the
+		// skills block, which is every case but the skills one's own.
+		sibling func(prefetch.Blocks) string
+	}{{
+		name:    "diary",
+		install: func(s *prefetch.Sources, r *reached) { s.Diary = panickingDiary{r} },
+		block:   func(b prefetch.Blocks) string { return b.PersonalMemory },
+	}, {
+		name:    "knowledge",
+		install: func(s *prefetch.Sources, r *reached) { s.Knowledge = panickingSearcher{r} },
+		block:   func(b prefetch.Blocks) string { return b.RelevantKnowledge },
+	}, {
+		name:    "episodes",
+		install: func(s *prefetch.Sources, r *reached) { s.Episodes = panickingEpisodes{r} },
+		block:   func(b prefetch.Blocks) string { return b.EpisodeRecall },
+	}, {
+		name:    "counterparties",
+		install: func(s *prefetch.Sources, r *reached) { s.Counterparties = panicking{r} },
+		block:   func(b prefetch.Blocks) string { return b.CounterpartyProfile },
+	}, {
+		name:    "skills",
+		install: func(s *prefetch.Sources, r *reached) { s.Skills = panickingSkills{r} },
+		block:   func(b prefetch.Blocks) string { return b.SynthesizedSkills },
+		sibling: func(b prefetch.Blocks) string { return b.OnboardingHint },
+	}, {
+		name:    "onboarding",
+		install: func(s *prefetch.Sources, r *reached) { s.Onboarding = panickingOnboarding{r} },
+		block:   func(b prefetch.Blocks) string { return b.OnboardingHint },
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			src := healthy()
+			var asked reached
+			tc.install(&src, &asked)
+			blocks := fetch(t, src, request(t))
+			// THE SOURCE WAS ACTUALLY REACHED. An empty block is what a
+			// source nobody asked renders too, so without this a case
+			// passes by never exercising the guard it is named for — a
+			// gate moving in front of one of these sources would leave
+			// six green tests covering nothing.
+			if !asked.hit.Load() {
+				t.Fatalf("the %s source was never asked, so no panic was recovered",
+					tc.name)
+			}
+			if got := tc.block(blocks); got != "" {
+				t.Fatalf("the panicking %s source rendered %q", tc.name, got)
+			}
+			sibling := blocks.SynthesizedSkills
+			if tc.sibling != nil {
+				sibling = tc.sibling(blocks)
+			}
+			if sibling == "" {
+				t.Fatalf("a sibling block was lost to the panicking %s source: %+v",
+					tc.name, blocks)
+			}
+		})
+	}
+	// AND THE SKILLS BLOCK'S IDS GO WITH ITS PROSE, which is the one output
+	// besides the thread's that a recover has to clear as well: ids naming a
+	// menu that never rendered are reported to the curator as skills the
+	// turn used.
+	var asked reached
+	blocks := fetch(t, prefetch.Sources{Skills: panickingSkills{&asked},
+		Onboarding: onboarding{done: false}}, request(t))
+	if !asked.hit.Load() {
+		t.Fatal("the skills source was never asked, so no panic was recovered")
+	}
+	if len(blocks.SkillIDs) != 0 {
+		t.Errorf("the panicking skills source reported %v as offered", blocks.SkillIDs)
 	}
 }
 
-type panicking struct{}
+// reached records that a panicking source was actually asked.
+//
+// ATOMIC because the blocks render on their own goroutines, and the whole
+// suite runs under the detector. It is what keeps each case two-sided: an
+// empty block is also what a source nobody consulted produces.
+type reached struct{ hit atomic.Bool }
 
-func (panicking) Get(context.Context, string, learning.Subject) (learning.Profile, bool, error) {
-	panic("a malformed profile")
+// mark records the call and hands back the panic value, so the fake below can
+// still end in a panic statement.
+func (r *reached) mark(what string) string {
+	r.hit.Store(true)
+	return what
+}
+
+type panicking struct{ *reached }
+
+func (p panicking) Get(context.Context, string, learning.Subject) (learning.Profile, bool, error) {
+	panic(p.mark("a malformed profile"))
+}
+
+type panickingDiary struct{ *reached }
+
+func (p panickingDiary) Recall(context.Context, string, learning.RecallQuery, time.Time) ([]learning.DiaryHit, error) {
+	panic(p.mark("a malformed diary row"))
+}
+
+func (p panickingDiary) Recent(context.Context, string, time.Time, int) ([]learning.DiaryEntry, error) {
+	panic(p.mark("a malformed diary row"))
+}
+
+func (panickingDiary) MarkRetrieved(context.Context, []string, time.Time) {}
+
+// panickingSearcher fails where a knowledge backend actually can: the search
+// itself, past the two gates that decide whether to make one.
+type panickingSearcher struct{ *reached }
+
+func (panickingSearcher) Backend() string { return "fake" }
+
+func (panickingSearcher) CanSearch(*org.Role, *org.Organization) bool { return true }
+
+func (p panickingSearcher) Search(context.Context, knowledge.Query) []knowledge.Hit {
+	panic(p.mark("a malformed hit"))
+}
+
+type panickingEpisodes struct{ *reached }
+
+func (p panickingEpisodes) Recall(context.Context, learning.RecallQuery) ([]learning.Hit, error) {
+	panic(p.mark("a malformed episode"))
+}
+
+type panickingSkills struct{ *reached }
+
+func (p panickingSkills) List(context.Context, string, learning.ListOptions) ([]learning.Skill, error) {
+	panic(p.mark("a malformed skill"))
+}
+
+type panickingOnboarding struct{ *reached }
+
+func (p panickingOnboarding) Onboarded(context.Context, string, string) (bool, error) {
+	panic(p.mark("a malformed marker"))
 }
 
 // ── personal memory ──
@@ -605,7 +750,7 @@ func TestAGuaranteedEmptySearchSpendsNoModelCall(t *testing.T) {
 }
 
 // AUTO-DRAFTS ARE HIDDEN. Those pages are unreviewed proposals a synthesis
-// pass wrote; a planner cannot tell one from a ratified runbook, and
+// pass wrote; an executor cannot tell one from a ratified runbook, and
 // following one is how a draft becomes policy without anyone agreeing to it.
 func TestTheSearchHidesUnreviewedDrafts(t *testing.T) {
 	t.Parallel()
@@ -684,8 +829,8 @@ func TestRecallRendersWhatAPastTurnWasAndHowItWent(t *testing.T) {
 }
 
 // NO FALLBACK TO RECENCY. Recall's whole claim is "this resembles what you
-// are doing now"; the three most recent turns carry no such claim, and a
-// planner told they are similar work will treat them as precedent.
+// are doing now"; the three most recent turns carry no such claim, and an
+// executor told they are similar work will treat them as precedent.
 func TestRecallWithNoEmbeddingSurfacesNothing(t *testing.T) {
 	t.Parallel()
 	got := fetch(t, prefetch.Sources{
@@ -731,7 +876,7 @@ func TestTheEpisodeSummaryIsOptionalAndFailsSoft(t *testing.T) {
 // ── counterparty ──
 
 // ONE BLOCK PER DISTINCT SENDER: a coalesced trigger is several people
-// speaking, and profiling only the latest hands the planner a profile of
+// speaking, and profiling only the latest hands the executor a profile of
 // whoever spoke last while it answers all of them.
 func TestEverySenderWithAProfileIsRendered(t *testing.T) {
 	t.Parallel()

@@ -340,9 +340,13 @@ func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 	err := w.Tx(ctx, func(tx *sql.Tx) error {
 		attempts++
 		before := foreign.Load()
-		insertErr := insertUnprepared(ctx, tx, benchItems(benchRows))
+		// READ-THEN-WRITE, in the applier's own order. A body that
+		// wrote first would take its snapshot and the lock together
+		// and could not meet a stale snapshot at all, which is what
+		// this case is meant to be able to detect.
+		applyErr := applyShaped(ctx, tx, benchItems(benchRows))
 		during = foreign.Load() - before
-		return insertErr
+		return applyErr
 	})
 	close(stop)
 	wg.Wait()
@@ -363,19 +367,180 @@ func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 		"transaction was open; %d attempt(s)", foreign.Load(), during, attempts)
 }
 
+// AN APPLIER IS NOT STARVED BY A WRITER COMMITTING BACK TO BACK, which is the
+// other half of what the applier's occupancy model rests on: a foreign commit
+// cannot abort it, and a foreign WRITER cannot keep it from ever starting.
+//
+// The driver's lock has no queue. A waiter polls on SQLite's schedule and
+// wins only when a poll lands between one commit's release and the next one's
+// acquire — and on darwin every commit is an F_FULLFSYNC that holds the lock
+// for about 4 ms against a gap of microseconds, so the applier's busy timeout
+// expired with the writer beside it having committed some 1 300 times, and it
+// retried until the budget ran out. With fullfsync off on the same host each
+// commit holds it for about 0.25 ms and the waiter wins within a few polls,
+// which is why the Linux job never showed it. writequeue.go is what serves
+// the two in order.
+//
+// # What this case does NOT hold, measured rather than assumed
+//
+// It does not hold the queue, and no assertion here could on this platform.
+// Every quantity the scenario offers was measured with the queue REMOVED, on
+// linux/amd64, and each one overlaps the queued readings:
+//
+//   - the OUTCOME. The apply still completed in one attempt every time; it
+//     just waited. Green either way.
+//   - the ELAPSED TIME. 0.6 s to 5.5 s unqueued against about 1.6 s queued —
+//     the wall-clock comparison that failed a loaded macOS runner, and the
+//     reason the case this replaces was flaky.
+//   - HOW MANY FOREIGN COMMITS LAND BEFORE THE APPLY BEGINS, which is the
+//     starvation itself and looked like the answer: exactly 1 on every queued
+//     run, against 5 398, 100, 72, 19, 5, 3, 2 and 1 across eight unqueued
+//     ones. The unqueued population REACHES the queued value whenever the
+//     applier's first poll happens to land in a gap, so a threshold between
+//     them would pass vacuously on a lucky run and be a guess dressed as a
+//     guard.
+//
+// That the unbounded case is sometimes fast is exactly the hazard: on darwin
+// `PRAGMA fullfsync` makes each commit an F_FULLFSYNC holding the lock for
+// about 4 ms against a gap of microseconds, the lucky poll stops happening,
+// and the applier's busy timeout expires with the writer beside it having
+// committed some 1 300 times. The platform sets the odds; nothing about the
+// hazard is darwin's.
+//
+// # What it does hold
+//
+// The queue's own guarantee is held deterministically, by construction rather
+// than by a threshold, in TestWritersBeginInTheOrderTheyAsked — each writer is
+// observed to be IN LINE before the next is started, and it goes red under a
+// LIFO release, a release without handoff, a queue per handle and a pinned
+// writer that skips the queue.
+//
+// This is the SCENARIO, end to end, against a real back-to-back writer: the
+// apply's body runs once, the writer beside it is never refused, and it
+// commits again after the apply — because a queue that simply stopped the
+// writer would satisfy the first two. The commit count is LOGGED so a darwin
+// run prints the number this was written for, and asserted by nothing.
+func TestAnApplierIsNotStarvedByAWriterCommittingBackToBack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs a 4 000-row apply against a concurrent writer")
+	}
+	t.Parallel()
+	node, w := benchNodeT(t)
+	ctx := t.Context()
+	replicated := node.Replicated()
+	if err := replicated.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, foreignTable)
+		return err
+	}); err != nil {
+		t.Fatalf("create the foreign table: %v", err)
+	}
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var foreign, refused atomic.Int64
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if err := commitForeign(ctx, replicated); err == nil {
+				foreign.Add(1)
+			} else {
+				refused.Add(1)
+			}
+		}
+	})
+	settleForeign(t, &foreign)
+
+	var attempts int
+	var waitedBehind int64
+	asked := foreign.Load()
+	started := time.Now()
+	err := w.Tx(ctx, func(tx *sql.Tx) error {
+		attempts++
+		// ON THE FIRST ATTEMPT ONLY: a retry's wait is a different
+		// quantity, and attempts is asserted to be one anyway.
+		if attempts == 1 {
+			waitedBehind = foreign.Load() - asked
+		}
+		return applyShaped(ctx, tx, benchItems(benchRows))
+	})
+	elapsed := time.Since(started)
+	if err == nil {
+		// THE OTHER DIRECTION: the queue hands the lock on rather than
+		// releasing it, so the writer that waited behind the apply
+		// commits again once the apply is done. Without this the case
+		// would pass on a store that had simply stopped the writer.
+		settleAfter(t, &foreign, foreign.Load())
+	}
+	close(stop)
+	wg.Wait()
+	if err != nil {
+		t.Fatalf("the apply failed beside a writer committing back to back: %v", err)
+	}
+	if attempts != 1 {
+		t.Errorf("the applier's transaction ran %d times beside a writer "+
+			"committing back to back: it should have waited for the commits "+
+			"queued ahead of it, not polled against them", attempts)
+	}
+	if n := refused.Load(); n != 0 {
+		t.Errorf("the writer beside the apply was refused %d time(s): a writer "+
+			"queued behind the apply waits for it rather than failing", n)
+	}
+	t.Logf("%d foreign commit(s) in total, %d of them before the applier's body "+
+		"started; the apply took %v", foreign.Load(), waitedBehind,
+		elapsed.Round(time.Millisecond))
+}
+
+// commitForeign is one small commit to the foreign table, the audit log's
+// shape, through the store's own write path.
+func commitForeign(ctx context.Context, db *store.DB) error {
+	return db.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO bench_foreign (payload) VALUES (?)`, "phase")
+		return err
+	})
+}
+
+// applyShaped is an apply transaction's body in the order the applier's is:
+// the deferral probe's read first, then the rows.
+func applyShaped(ctx context.Context, tx *sql.Tx, items []benchItem) error {
+	if err := probeFirst(ctx, tx); err != nil {
+		return err
+	}
+	return insertUnprepared(ctx, tx, items)
+}
+
+// probeFirst stands in for the deferral probe: a read of the applier's own
+// tables before anything is written, which is what gives a per-file conflict
+// a window to abort through.
+func probeFirst(ctx context.Context, tx *sql.Tx) error {
+	var n int
+	return tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM bench_items WHERE project = ?`, "proj-00").Scan(&n)
+}
+
 // settleForeign waits until the concurrent writer has committed at least once,
 // so a test that staged no contention says so rather than passing.
 func settleForeign(t *testing.T, foreign *atomic.Int64) {
 	t.Helper()
+	settleAfter(t, foreign, 0)
+}
+
+// settleAfter waits until the concurrent writer has committed past mark.
+func settleAfter(t *testing.T, foreign *atomic.Int64, mark int64) {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if foreign.Load() > 0 {
+		if foreign.Load() > mark {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("the concurrent writer never committed, so this run staged no " +
-		"contention and its answer would be about an idle store")
+	t.Fatalf("the concurrent writer never committed past %d, so this run "+
+		"staged no contention and its answer would be about an idle store", mark)
 }
 
 // THE SHIPPED SHAPE COSTS ceil(rows/chunk) STATEMENTS AND NOT ONE PER ROW, and

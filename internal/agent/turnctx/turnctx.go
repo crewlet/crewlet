@@ -128,15 +128,32 @@ type Turn struct {
 	// the task came from. The resume cannot recover this by looking at the
 	// trigger, which may be long gone, so the launch writes it onto the
 	// run's own row and the resumed turn reads it back.
+	//
+	// THE DURABLE IDENTITY, which for a direct message is the whole DM
+	// channel rather than whichever thread the trigger arrived in.
 	ConversationKey string
+
+	// PartitionKey is the inbox partition the trigger arrived in, which is
+	// the identity above or a finer cut of it.
+	//
+	// It travels for the same reason and no other: a detached run's row
+	// states the batch it was launched from beside the conversation it is
+	// answered on, and the launch is the only frame that can put either on
+	// the row. Carried as a second field rather than collapsed into one,
+	// because the two differ for exactly the surface a clarification is
+	// most often asked on — a direct message — and one value answering
+	// both questions is the defect this pair was split out of: filed under
+	// the batch, a DM's coding work landed in a ledger row the next turn
+	// never read, and matched on it the person's answer reached nobody.
+	PartitionKey string
 
 	// Task is the ask this turn is working on, and Reply says who is
 	// waiting for it — [turn.Reply]'s wire value, carried as a plain
 	// string so this package does not import the turn engine it is
 	// carried through.
 	//
-	// Both travel for the same reason ConversationKey does: work this turn
-	// STARTS can outlive it. A detached coding run is resumed in another
+	// Both travel for the same reason the two conversation values do: work
+	// this turn STARTS can outlive it. A detached coding run is resumed in another
 	// process, days later, with no trigger left to re-read — so the launch
 	// writes both onto the run's row, and without them the resumed turn
 	// would come back with no brief and free to end in silence on a

@@ -1581,7 +1581,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// draw a different set depending on which node answered.
 			Channels: e.Backends().Fleet,
 			// The company's ONE knowledge backend, behind the same seam a
-			// seat's Plan phase searches through — nil when none is
+			// seat's own turn searches through. Nil when none is
 			// configured, which leaves the question unregistered rather
 			// than answering an empty search as though it had run.
 			//

@@ -423,6 +423,7 @@ func TestTheEndpointsAskForWhatTheyName(t *testing.T) {
 	c.ChannelByName(ctx, "t1", "eng")
 	c.Typing(ctx, "u1", "C1", "root-1")
 	c.ClientConfig(ctx)
+	c.Thread(ctx, "root-1")
 
 	want := []string{
 		"GET /api/v4/users/me",
@@ -432,6 +433,7 @@ func TestTheEndpointsAskForWhatTheyName(t *testing.T) {
 		"GET /api/v4/teams/t1/channels/name/eng",
 		"POST /api/v4/users/u1/typing",
 		"GET /api/v4/config/client?format=old",
+		"GET /api/v4/posts/root-1/thread?skipFetchThreads=true",
 	}
 	got := s.seen()
 	for i, w := range want {
@@ -454,7 +456,11 @@ func TestIncompleteCallsAreRefusedLocally(t *testing.T) {
 			_, e := c.PostsSince(ctx, "", time.Now())
 			return e
 		}),
-		"no team":       errOf(func() error { _, e := c.Channels(ctx, "u1", ""); return e }),
+		"no team": errOf(func() error { _, e := c.Channels(ctx, "u1", ""); return e }),
+		"no thread root": errOf(func() error {
+			_, e := c.Thread(ctx, "")
+			return e
+		}),
 		"one dm party":  errOf(func() error { _, e := c.DirectChannel(ctx, "u1", ""); return e }),
 		"typing nobody": c.Typing(ctx, "", "C1", ""),
 	} {
@@ -468,3 +474,130 @@ func TestIncompleteCallsAreRefusedLocally(t *testing.T) {
 }
 
 func errOf(f func() error) error { return f() }
+
+// A THREAD ARRIVES IN THE ORDER IT WAS WRITTEN, and the ordering is derived
+// from the posts' own timestamps rather than from the server's `order`.
+//
+// `order` is newest-first for the CHANNEL endpoint, which is a claim tested
+// for [Client.PostsSince] and for nothing else. /posts/{id}/thread is a
+// different endpoint, and reusing that reversal on it would hand a seat the
+// answer before the question — the exact failure the reversal exists to
+// prevent. A create_at sort is right whatever either endpoint answers.
+func TestAThreadIsOrderedByWhenItWasWritten(t *testing.T) {
+	s := newServer(t)
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
+		// `order` deliberately disagrees with the timestamps, in BOTH
+		// directions at once: a reader that trusted it either way lands
+		// on a different sequence from this one.
+		json.NewEncoder(w).Encode(map[string]any{
+			"order": []string{"p2", "root", "p1"},
+			"posts": map[string]any{
+				"root": map[string]any{"id": "root", "message": "the question", "create_at": 1000},
+				"p1":   map[string]any{"id": "p1", "message": "a first reply", "create_at": 2000},
+				"p2":   map[string]any{"id": "p2", "message": "the answer", "create_at": 3000},
+			},
+		})
+		return true
+	})
+
+	got, err := client(t, s).Thread(t.Context(), "root")
+	if err != nil {
+		t.Fatalf("Thread: %v", err)
+	}
+	var ids []string
+	for _, p := range got {
+		ids = append(ids, p.ID)
+	}
+	if strings.Join(ids, ",") != "root,p1,p2" {
+		t.Fatalf("the thread arrived as %v, want the root first and the answer last", ids)
+	}
+}
+
+// TWO POSTS IN THE SAME MILLISECOND still order the same way on every node.
+//
+// Without the tie-break the sequence is Go's map iteration order, so two
+// nodes rendering one thread into one seat's prompt would disagree — and a
+// system prompt that is not byte-stable costs the provider's prefix cache the
+// whole prompt on every round.
+func TestPostsWrittenAtOnceOrderStably(t *testing.T) {
+	s := newServer(t)
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
+		json.NewEncoder(w).Encode(map[string]any{
+			"order": []string{"b", "a", "c"},
+			"posts": map[string]any{
+				"a": map[string]any{"id": "a", "message": "one", "create_at": 1000},
+				"b": map[string]any{"id": "b", "message": "two", "create_at": 1000},
+				"c": map[string]any{"id": "c", "message": "three", "create_at": 1000},
+			},
+		})
+		return true
+	})
+	c := client(t, s)
+	for range 8 {
+		got, err := c.Thread(t.Context(), "a")
+		if err != nil {
+			t.Fatalf("Thread: %v", err)
+		}
+		var ids []string
+		for _, p := range got {
+			ids = append(ids, p.ID)
+		}
+		if strings.Join(ids, ",") != "a,b,c" {
+			t.Fatalf("the thread arrived as %v", ids)
+		}
+	}
+}
+
+// BOOKKEEPING AND CONTENT ARE ONE RULE ACROSS BOTH DECODED SHAPES.
+//
+// The websocket delivers a post as an untyped map and the thread read decodes
+// it into a [mattermost.Post]. A deleted post that wakes nobody but still
+// renders into a seat's thread block is the kind of divergence nothing would
+// report, because the block degrades silently by design.
+func TestOnePostRulesBothWays(t *testing.T) {
+	for name, tc := range map[string]struct {
+		post mattermost.Post
+		raw  map[string]any
+		skip bool
+		body string
+	}{
+		"an ordinary post": {
+			post: mattermost.Post{ID: "p1", Message: "hello"},
+			raw:  map[string]any{"id": "p1", "message": "hello"},
+			body: "hello",
+		},
+		"a system join line": {
+			post: mattermost.Post{ID: "p2", Type: "system_join_channel", Message: "x joined"},
+			raw:  map[string]any{"id": "p2", "type": "system_join_channel", "message": "x joined"},
+			skip: true, body: "x joined",
+		},
+		"a deleted post": {
+			post: mattermost.Post{ID: "p3", Message: "oops", DeleteAt: 1700},
+			raw:  map[string]any{"id": "p3", "message": "oops", "delete_at": float64(1700)},
+			skip: true, body: "oops",
+		},
+		"a file with no comment": {
+			post: mattermost.Post{ID: "p4", FileIDs: []string{"f1", "f2"}},
+			raw:  map[string]any{"id": "p4", "file_ids": []any{"f1", "f2"}},
+			body: "(shared 2 files)",
+		},
+		"nothing at all": {
+			post: mattermost.Post{ID: "p5"},
+			raw:  map[string]any{"id": "p5"},
+			body: "",
+		},
+	} {
+		if got := tc.post.Bookkeeping() != ""; got != tc.skip {
+			t.Errorf("%s: Post.Bookkeeping says skip=%v", name, got)
+		}
+		if got := mattermost.SkipReason(tc.raw) != ""; got != tc.skip {
+			t.Errorf("%s: SkipReason says skip=%v", name, got)
+		}
+		if got := tc.post.Body(); got != tc.body {
+			t.Errorf("%s: Post.Body = %q, want %q", name, got, tc.body)
+		}
+		if got := mattermost.Text(tc.raw); got != tc.body {
+			t.Errorf("%s: Text = %q, want %q", name, got, tc.body)
+		}
+	}
+}

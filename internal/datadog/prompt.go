@@ -53,7 +53,7 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 	return n.Metadata[RoutedViaField] == RoutedViaTag
 }
 
-// ConversationKey implements [notify.Prompt]: the MONITOR is the conversation.
+// PartitionKey implements [notify.Prompt]: the MONITOR is the conversation.
 //
 // Keyed on the monitor rather than on the alert, and the two are opposite
 // choices. The alert id is unique per NOTIFICATION, so keying on it would
@@ -78,7 +78,7 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 // retitled monitor then starts a new conversation, which is the correct
 // behaviour for the one case it costs anything: renaming a monitor is usually
 // redefining what it watches.
-func (Prompt) ConversationKey(metadata map[string]string, subject string) string {
+func (Prompt) PartitionKey(metadata map[string]string, subject string) string {
 	if id := metadata[MonitorIDField]; id != "" {
 		return "monitor:" + id
 	}
@@ -86,6 +86,16 @@ func (Prompt) ConversationKey(metadata map[string]string, subject string) string
 		return monitor
 	}
 	return subject
+}
+
+// ConversationIdentity implements [notify.Prompt]: the same monitor.
+//
+// The two coincide because a monitor is one object that is both the merge
+// unit and the durable thread — it has no sub-thread grain they could diverge
+// on, and an alert is addressed to nobody, so there is no reply target a
+// finer partition could steer.
+func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
+	return p.PartitionKey(metadata, subject)
 }
 
 // DigestBody implements [notify.Prompt]: every alert keeps its own message.

@@ -26,11 +26,11 @@ const ReflectGroup = "reflect-engine"
 // ReflectTool is the in-flight builtin an agent calls to write its own memory.
 //
 // The dispatcher reads it as "the LLM already handled persistence this turn".
-// It is a Plan-phase-only builtin, so a call lands in
-// [types.TurnCompleted.PlanToolSequence] and never in the Execute-scoped
-// ToolSequence — [Turn.SelfPersisted] reads both anyway, so moving the tool to
-// another phase cannot quietly turn the check into a no-op that
-// double-persists every turn.
+// It is an executor builtin, so a call lands in the executor-scoped
+// [types.TurnCompleted.ToolSequence]. [Turn.SelfPersisted] reads
+// [types.TurnCompleted.PlanToolSequence] too, which this build never writes: an
+// older build recorded its planning phase's calls there, and a turn one of its
+// nodes completed during a rolling upgrade must not be persisted twice.
 const ReflectTool = "reflect_and_persist"
 
 // ReflectSeen bounds the dispatcher's memory of turns it has already handled.
@@ -112,16 +112,40 @@ func (t Turn) DedupeKey() string {
 	return t.Event.TurnID
 }
 
-// Settled reports whether the turn reached a terminal outcome.
+// SettledOutcomes are the review decisions that END a turn, and therefore the
+// ones this package may learn from.
 //
 // self_iterate is not one: it is a mid-turn state the engine will REATTEMPT,
 // so a fact persisted from it — or a skill drafted from it — is learned from
 // work the agent itself judged incomplete, and the next round may contradict
 // it. done and failed both mean the turn ran its course; failed is as much a
 // lesson as done, which is why the settled set is not just "succeeded".
-func (t Turn) Settled() bool {
-	return t.Event.ReviewOutcome == "done" || t.Event.ReviewOutcome == "failed"
+//
+// ONE DEFINITION, THREE READERS, and it is a list because it had been three
+// separate literals: [Settled], the lifecycle sweep's SQL tuple, and the
+// clusterer's own pair. [terminalOutcomes]'s doc already warned that "two
+// hand-written lists is how a row ends up being neither" — there were three,
+// and it could not see the copy in cluster.go to say so.
+//
+// What that shape invites is silent in both directions. An outcome added here
+// and to the sweep but not the clusterer is learned from and compacted while
+// never drafting a skill; added to the clusterer alone it drafts skills from
+// episodes the sweep then deletes as mid-state. Neither fails anything.
+//
+// Returned fresh, never a package-level slice: a shared backing array is one
+// caller's append away from rewriting everybody else's list.
+func SettledOutcomes() []string { return []string{"done", "failed"} }
+
+// Settled reports whether a review outcome ended its turn.
+//
+// Takes the outcome rather than a [Turn], because two of the three readers
+// hold an [Episode] row instead — the turn they describe finished long ago.
+func Settled(outcome string) bool {
+	return slices.Contains(SettledOutcomes(), outcome)
 }
+
+// Settled reports whether the turn reached a terminal outcome.
+func (t Turn) Settled() bool { return Settled(t.Event.ReviewOutcome) }
 
 // SelfPersisted reports whether the turn already wrote its own memory.
 func (t Turn) SelfPersisted() bool {

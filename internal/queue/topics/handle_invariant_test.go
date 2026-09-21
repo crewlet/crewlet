@@ -240,7 +240,7 @@ func TestDistinctHandlesNeverShareAName(t *testing.T) {
 			}
 			if topics.Match(topics.AgentInbox(a), topics.AgentControl(b)) {
 				t.Errorf("seat %q's inbox subject matches seat %q's control subject; a "+
-					"sandbox completion would queue behind the pause it exists to lift",
+					"sandbox completion would be requeued behind the wait it exists to end",
 					a, b)
 			}
 		}

@@ -1,7 +1,7 @@
 /**
  * One phase of one turn, rendered as a stable round ledger.
  *
- * Six rules, each of which fixes a specific way the previous surface either
+ * Seven rules, each of which fixes a specific way the previous surface either
  * moved under the reader or told them something untrue:
  *
  *  1. **Identity is `turn|phase|iteration`** (see lib/phases.ts), so a phase
@@ -41,10 +41,24 @@
  *     the same shape and the row does not change height when it completes.
  *  6. **The prompt is a document, not a wall of text.** Every prompt this
  *     engine builds is markdown, so the Prompt fold folds each half on the
- *     headings the builders wrote and keeps the verbatim block as its other
- *     view — see `PromptDoc.tsx`. It was one 30 kB scroller, which is where a
- *     reader went to answer "what was this phase told about X" and scrolled
- *     looking for a heading.
+ *     headings the builders wrote, renders each section as the markdown it is,
+ *     and keeps the verbatim record as its other view — see `PromptDoc.tsx`.
+ *     It was one 30 kB scroller, which is where a reader went to answer "what
+ *     was this phase told about X" and scrolled looking for a heading.
+ *  7. **The body reads in the order the phase happened**: what it was given
+ *     (Prompt, Tool surface), then what it did (the rounds), then what it
+ *     delegated. The transcript used to come first and its two inputs sat
+ *     underneath it, so the question every round raises — what was it told,
+ *     what was it allowed to call — was answered past the end of the answer,
+ *     and a phase with forty rounds put a whole scroll between the two. Both
+ *     inputs are closed folds, so what the order costs a reader who only wants
+ *     the transcript is two header rows; what it buys is that the card can be
+ *     read top to bottom as the story of one phase.
+ *
+ *     Their own order is the request's: the Prompt is what was sent, and the
+ *     Tool surface is the schema array sent WITH it — one payload, described
+ *     in two folds, so they belong side by side rather than either side of
+ *     the transcript.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -105,9 +119,9 @@ function ToolRow({
         title={name}
         // A TRANSCRIPT ITEM IS NOT A SECTION OF THE PAGE. uilet wraps a
         // disclosure's trigger in a real heading by default, which is right for
-        // the card's own folds below (Prompt, Tool surface, Delegated to) and
-        // wrong for a tool call: a round with nine of them would put nine
-        // headings into the document outline of one phase.
+        // the card's own folds (Prompt, Tool surface, Delegated to) and wrong
+        // for a tool call: a round with nine of them would put nine headings
+        // into the document outline of one phase.
         headingLevel="none"
         // Our Disclosure mounted its children only while open. `lazy` is how
         // uilet spells that, and here it is the behaviour rather than an
@@ -477,6 +491,71 @@ export function PhaseCard({
           {record.failed && record.error && <Callout variant="danger">{record.error}</Callout>}
           {record.notes && <Callout variant="neutral">{record.notes}</Callout>}
 
+          {(record.systemPrompt || record.userPrompt) && (
+            // A REAL SECTION OF THIS CARD, so it keeps uilet's default heading
+            // — unlike a tool row, which is a transcript item. `lazy` matches
+            // what ours did: a closed fold mounted nothing, and a seat's system
+            // prompt is tens of kilobytes nobody asked for.
+            //
+            // What is INSIDE it is a document rather than a wall of text now:
+            // `PromptRecord` folds each half on its own markdown headings and
+            // renders each one, so "what was this phase told about X" is one
+            // click rather than a scroll through 30 kB. It keeps the verbatim
+            // record as its other view — the tallest block on the page by a
+            // wide margin, and the one that most needed to stay one selection.
+            <Disclosure title="Prompt" count={`${record.phase} phase`} lazy>
+              <PromptRecord
+                phase={record.phase}
+                system={record.systemPrompt}
+                user={record.userPrompt}
+              />
+            </Disclosure>
+          )}
+
+          {(record.toolsAvailable.length > 0 || record.toolCatalogue.length > 0) && (
+            <Disclosure
+              title="Tool surface"
+              count={record.toolsAvailable.length + record.toolCatalogue.length}
+              lazy
+            >
+              <div className="col gap-2">
+                {record.toolsAvailable.length > 0 && (
+                  <div className="col gap-1">
+                    <div className="t-label">
+                      Callable this round
+                      <span className="muted"> · full JSON schemas were sent</span>
+                    </div>
+                    <div className="row wrap gap-1">
+                      {/* A TOOL NAME IS AN IDENTITY, so it stays neutral —
+                          uilet's tone doc names a tool among the four things
+                          that must. */}
+                      {record.toolsAvailable.map((t) => (
+                        <Tag key={t} monospace appearance="outline">
+                          {t}
+                        </Tag>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {record.toolCatalogue.length > 0 && (
+                  <div className="col gap-1">
+                    <div className="t-label">
+                      Offered as prose
+                      <span className="muted"> · discoverable, not yet callable</span>
+                    </div>
+                    <div className="row wrap gap-1">
+                      {record.toolCatalogue.map((t) => (
+                        <Tag key={t} monospace appearance="outline">
+                          {t}
+                        </Tag>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Disclosure>
+          )}
+
           {/* The transcript. One block per round — thought, speech, calls —
               in the order they happened. Rounds append, so nothing above an
               insertion can move, which is the whole point. */}
@@ -544,71 +623,6 @@ export function PhaseCard({
                 The model is composing its first round. Nothing is published until it answers.
               </span>
             </div>
-          )}
-
-          {(record.systemPrompt || record.userPrompt) && (
-            // A REAL SECTION OF THIS CARD, so it keeps uilet's default heading
-            // — unlike a tool row, which is a transcript item. `lazy` matches
-            // what ours did: a closed fold mounted nothing, and a seat's system
-            // prompt is tens of kilobytes nobody asked for.
-            //
-            // What is INSIDE it is a document rather than a wall of text now:
-            // `PromptRecord` folds each half on its own markdown headings, so
-            // "what was this phase told about X" is one click rather than a
-            // scroll through 30 kB. It keeps the verbatim block as its other
-            // view — the tallest block on the page by a wide margin, and the
-            // one that most needed to stay one selection.
-            <Disclosure title="Prompt" count={`${record.phase} phase`} lazy>
-              <PromptRecord
-                phase={record.phase}
-                system={record.systemPrompt}
-                user={record.userPrompt}
-              />
-            </Disclosure>
-          )}
-
-          {(record.toolsAvailable.length > 0 || record.toolCatalogue.length > 0) && (
-            <Disclosure
-              title="Tool surface"
-              count={record.toolsAvailable.length + record.toolCatalogue.length}
-              lazy
-            >
-              <div className="col gap-2">
-                {record.toolsAvailable.length > 0 && (
-                  <div className="col gap-1">
-                    <div className="t-label">
-                      Callable this round
-                      <span className="muted"> · full JSON schemas were sent</span>
-                    </div>
-                    <div className="row wrap gap-1">
-                      {/* A TOOL NAME IS AN IDENTITY, so it stays neutral —
-                          uilet's tone doc names a tool among the four things
-                          that must. */}
-                      {record.toolsAvailable.map((t) => (
-                        <Tag key={t} monospace appearance="outline">
-                          {t}
-                        </Tag>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {record.toolCatalogue.length > 0 && (
-                  <div className="col gap-1">
-                    <div className="t-label">
-                      Offered as prose
-                      <span className="muted"> · discoverable, not yet callable</span>
-                    </div>
-                    <div className="row wrap gap-1">
-                      {record.toolCatalogue.map((t) => (
-                        <Tag key={t} monospace appearance="outline">
-                          {t}
-                        </Tag>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </Disclosure>
           )}
 
           {!!nested?.length && (

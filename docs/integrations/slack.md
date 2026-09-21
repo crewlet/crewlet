@@ -59,7 +59,7 @@ bot token, which is the reason the handover is a list rather than a sentence.
 
 ## Configure in YAML
 
-`integrations.slack: {}` (org-level) is a marker that enables the Slack **transport**; its one setting is [`typing_status`](#working-status-is-thinking). The Slack **MCP tool** server is a separate `mcp_servers` entry (`shared: false`). Per agent, the Slack identity has two consumers: the **transport** reads `role.integrations.slack` (`bot_token` and `signing_secret`, both required together), and the **Slack MCP subprocess** reads `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`. Name the same `${VAR}` in both — one credential, two readers, no secret duplicated:
+`integrations.slack: {}` (org-level) is a marker that enables the Slack **transport**; its one setting is [`typing_status`](#working-status-is-thinking). The Slack **MCP tool** server is a separate `mcp_servers` entry (`shared: false`). Per agent, the Slack identity has two consumers: the **transport** reads `role.integrations.slack` (`bot_token` and `signing_secret`, both required together), and the **Slack MCP subprocess** reads `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`. The transport both writes and reads on that token: it raises the working indicator, and at the start of a turn woken in a thread it calls `conversations.replies` so the agent is handed the conversation rather than told to go and fetch it (see [the thread block](../concepts/agent-runtime.md#the-thread-a-turn-was-woken-in)). That needs no new scope — the `*:history` scopes the manifest already requests cover it — and it reads as that app, so a channel the bot is not in answers `not_in_channel` and the turn runs without the block. `conversations.replies` pages from the *oldest* end, so a thread past ~1000 messages cannot be read to its newest end: the agent is then handed the newest of what was reached plus a note that the block stops short and the rest has to be read with its chat tools, never a truncated thread presented as the whole one. Name the same `${VAR}` in both — one credential, two readers, no secret duplicated:
 
 ```yaml
 integrations:
@@ -203,12 +203,12 @@ The single source of truth is `internal/slack` (`BotScopes` / `BotEvents`); the 
 | Scope | Used by |
 |-------|---------|
 | `app_mentions:read` | `app_mention` events (thread-follow trigger) |
-| `channels:history`, `channels:read` | public channels — thread routing + MCP `conversations_history` / `conversations_replies` / `channels_list` |
+| `channels:history`, `channels:read` | public channels — thread routing, the engine's own turn-start thread read, + MCP `conversations_history` / `conversations_replies` / `channels_list` |
 | `chat:write` | the working indicator (`assistant.threads.setStatus`) + MCP `conversations_add_message` |
 | `files:read` | shared-file notifications |
-| `groups:history`, `groups:read` | private channels — **required**, see the note below |
-| `im:history`, `im:read`, `im:write` | DMs, incl. escalation DMs to human seats |
-| `mpim:history`, `mpim:read` | group DMs — **required**, see the note below |
+| `groups:history`, `groups:read` | private channels — thread routing, the engine's own turn-start thread read, + MCP `conversations_history` / `conversations_replies`; `groups:read` **required**, see the note below |
+| `im:history`, `im:read`, `im:write` | DMs, incl. escalation DMs to human seats — and the engine's own turn-start thread read, which is the case it exists for: a DM reply is the thinnest trigger there is |
+| `mpim:history`, `mpim:read` | group DMs — thread routing, the engine's own turn-start thread read, + MCP `conversations_history` / `conversations_replies`; `mpim:read` **required**, see the note below |
 | `reactions:write` | MCP `reactions_add` / `reactions_remove` |
 | `search:read.public` | the bot-token search scope (the plain `search:read` is user-token-only) |
 | `usergroups:read`, `usergroups:write` | MCP `usergroups_*` tools |
@@ -357,8 +357,8 @@ routinely runs minutes. Without a signal, the human who posted sees
 nothing until the reply lands and cannot tell "the bot is working" from
 "the bot is dead". Crewlet closes that gap: while an agent reasons about a
 Slack message it shows a **working status** in the thread — "*Agent SWE is
-thinking…*" under the composer — and clears it when the agent replies or
-gives up.
+thinking…*" under the composer — and takes it down once nothing is working
+behind it.
 
 ### What Slack actually supports
 
@@ -387,12 +387,12 @@ movement rather than a fixed label:
 | Turn phase | Drawn from |
 |---|---|
 | First-turn onboarding | *is getting crewleted in…* · *is settling in…* · *is finding the coffee machine…* · … |
-| Plan | *is crewleting…* · *is thinking…* · *is mulling it over…* · … |
-| Execute | *is crewing…* · *is cracking on…* · *is executing the cunning plan…* · … |
+| Execute | *is crewleting…* · *is thinking it through…* · *is cracking on…* · … |
 | Review | *is re-crewleting…* · *is double-checking…* · *is marking its own homework…* · … |
 
-The full pools are `PHASE_PHRASES` in
-`internal/notify/status.go`; replace any of them with
+Those are the phases a turn has: the executor decides *and* acts in one pass,
+so there is no separate planning line. The full pools are `PhasePhrases` in
+`internal/notify/phrases.go`; replace any of them with
 your own wording via [`status_phrases`](#custom-status-phrases) below.
 
 Every line describes the **phase**, never a specific action. The pick is
@@ -403,33 +403,37 @@ of the time it appears, which teaches the reader to distrust the whole
 indicator. Generic ("is thinking…") or plainly figurative ("is finding
 the coffee machine…") is safe; plausible-and-specific is not.
 
+**When it goes up, when it is held and when it comes down is the turn's, not
+this page's.** Every point in that lifecycle — including what a detached
+[sandbox](../concepts/code-sandbox.md) run does to it, which is where most of
+its rules are — is the table in
+[Turn Engine § The working status](../concepts/turn-engine.md#the-working-status),
+and that table is the only copy of it. It is identical on Mattermost; what
+differs between the two backends is only what the indicator can *say*. What
+follows is what is true of **this** backend and of no other.
+
 - **One line per phase, held for that phase.** The pick is deterministic
-  in `(handle, channel, thread_ts, turn_id, phase)`, so the 45 s heartbeat
-  re-asserts the *same* words — text that churned mid-phase would read as
-  the agent restarting. Moving to the next phase draws the next line, and
-  a `self_iterate` loop back through Plan draws a different one than the
-  turn opened with, so a second pass is visible instead of looking stuck.
-- **Raised before the work starts** — including while the turn is queued
-  behind a busy agent, so a ping to a working agent is acknowledged
-  immediately.
+  in `(turn_id, phase, how many phases the turn has been through)`, so the
+  45 s heartbeat re-asserts the *same* words — text that churned mid-phase
+  would read as the agent restarting. Moving to the next phase draws the
+  next line, and a `self_iterate` loop back into Execute draws a different
+  one than that phase showed the first time, so a second pass is visible
+  instead of looking stuck. Two turns in one thread start from different
+  points in the pool, because the seed is the turn's own id.
 - **Kept alive across long turns.** Slack expires a status after 2
   minutes; the engine re-asserts it every 45 s (two attempts inside every
   expiry window, ~1.3 requests/min against Slack's 600/min per-app limit).
-- **Cleared when the turn ends** — a posted reply, a `no_action` outcome
-  decision ("not addressed to me"), a failure, or an exhausted budget all
-  clear it. Slack also clears it by itself the instant the agent posts
-  into the thread; the engine re-asserts only while a later phase is still
-  running, which is what keeps the indicator honest across a
-  `self_iterate` loop.
-- **Held across a detached [sandbox](../concepts/code-sandbox.md)
-  run.** When Execute suspends for a background coding job the agent has
-  neither replied nor given up, so the indicator stays up until the
-  resumed turn finishes.
-- **Self-healing.** If a turn dies without clearing, a liveness probe
-  drops the indicator within one refresh once the agent stops being busy;
-  an absolute one-hour cap bounds the pathological case. Every Slack call
-  is best-effort — a failed or rate-limited `setStatus` is logged and the
-  status simply expires.
+- **Slack clears it by itself the instant the agent posts into the thread.**
+  The engine re-asserts only while a later phase is still running, which is
+  what keeps the indicator honest across a `self_iterate` loop.
+- **A refused or rate-limited `setStatus` is logged and the status simply
+  expires.** Nothing about the indicator can fail a turn, and nothing about
+  it delays one.
+- **Two minutes is what is left standing when this process cannot clear
+  it.** A process killed outright leaves its last indicator to that expiry,
+  and a `PUT /config` that rebuilds the Slack transport clears the ones it
+  was holding — turns in flight then run without an indicator until they
+  end, and their replies land as usual.
 
 ### `typing_status` modes
 
@@ -475,8 +479,7 @@ integrations:
     typing_status: addressed
     status_phrases:
       onboarding: ["is getting nimbused in...", "is settling in..."]
-      plan:       ["is nimbusing...", "is thinking very hard...", "is scheming..."]
-      execute:    ["is nimbusing it...", "is on the case...", "is cracking on..."]
+      execute:    ["is nimbusing...", "is on the case...", "is cracking on..."]
       review:     ["is re-nimbusing...", "is double-checking..."]
 ```
 
@@ -493,15 +496,17 @@ Rules that keep the indicator readable:
 - A phase with **one** phrase is a fixed label; more phrases give it
   variety across turns. Either is fine — the engine holds one line for the
   whole phase regardless.
-- An **empty list** (or an omitted phase) keeps the built-in pool. A blank
-  string is rejected at config load: an empty status doesn't render, it
-  *clears* the indicator.
+- An **empty list** (or an omitted phase) keeps the built-in pool, and so
+  does a list with nothing usable left in it: a blank string is dropped
+  rather than shown, because an empty status doesn't render — it *clears*
+  the indicator.
 - `default` covers any future phase with no pool of its own. You rarely
   need it.
 
 Like `typing_status`, this is live-editable — a `PUT /config` swaps the
-wording without a restart. Turns already in flight keep the line they
-opened with.
+wording without a restart. The apply rebuilds the Slack transport, which
+clears the indicators it was holding: a turn already in flight finishes
+without one, and the next turn in that thread opens on the new wording.
 
 ---
 

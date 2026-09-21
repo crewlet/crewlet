@@ -179,6 +179,33 @@ Both are the system working. `crewlet retention status` publishes the longest
 apply transaction and the longest batch actually observed, so this is a
 measured property of your fleet rather than a surprise.
 
+**The occupancy is per domain, not per node.** Every domain's applier writes
+the same replicated database, and a node hands that database's write lock to
+its writers in the order they asked for it. A bulk update commits one
+transaction at a time — at most 4 000 rows, about two seconds at the measured
+drain — and a waiting writer takes the lock as soon as the one in front of it
+commits. So a bulk update in the work tracker delays the knowledge base's
+apply by the transactions already queued ahead of it, at most one per other
+writer on that node, never by the whole 16 seconds.
+
+A writer that does not reach the front within `store.busy_timeout_seconds`
+fails retryably and rejoins the line, logged as `store_tx_retry` naming the
+knob. With three domains applying and a bulk update in flight, the default
+five seconds is close to the three transactions a fourth writer can
+legitimately wait behind — so that log line on a node doing bulk work is the
+signal to raise it rather than a fault. Raise the knob before you widen
+anything else: a longer per-waiter bound lets one stuck holder block the line
+for longer, and this way the line still drains in order.
+
+**No apply transaction is ever aborted by a commit elsewhere in the database,
+and none is ever re-run because of one.** Every write transaction takes the
+lock when it begins rather than at its first write, so there is no window
+between an applier's read and its write for another commit to land in. The
+`crewlet.statelog.apply.tx.aborts` counter in
+[Metrics](../reference/metrics.md) reads zero on a healthy node for that
+reason, and a non-zero count is the retry budget being spent on something
+else.
+
 ## What a rolling upgrade blocks
 
 A record at a version this build cannot decode is retained, and everything
@@ -223,19 +250,25 @@ that was never published is not retired and still faults, which is what keeps
 this from hiding a writer publishing a kind it never declared. Sprints, removed
 from the work tracker, are the first retired kind.
 
-## The five capacity ceilings
+## The six capacity ceilings
 
-1. **Each log's byte ceiling**: `stream.tracker_log_max_bytes`,
+1. **The broker's storage limit** — `stream.store_max_bytes`. Every ceiling
+   below is a *reservation* checked against this one number, so it is the
+   ceiling above the ceilings. Unset, the embedded broker takes three quarters
+   of the free space on `stream.store_dir` when its JetStream comes up,
+   measured once. **Divide it when more than one engine shares a filesystem**:
+   free space bounds their sum, not each of them.
+2. **Each log's byte ceiling**: `stream.tracker_log_max_bytes`,
    `stream.tracker_vectors_max_bytes` and `stream.pages_log_max_bytes`, sized
    together as [below](#how-the-byte-ceilings-are-sized). A full log
    **refuses** appends rather than shedding old records; see
    [Retention](retention.md).
-2. **The trim floor** — how far back the log can be replayed from, which is
+3. **The trim floor** — how far back the log can be replayed from, which is
    what bounds how long a node may be away.
-3. **The store's own size** — every node is a full replica, so the corpus is
+4. **The store's own size** — every node is a full replica, so the corpus is
    held N times.
-4. **Applier occupancy** — the 16 seconds above.
-5. **The snapshot repository** — one artefact per node, sized in
+5. **Applier occupancy** — the 16 seconds above.
+6. **The snapshot repository** — one artefact per node, sized in
    [Retention](retention.md).
 
 ### How the byte ceilings are sized
@@ -247,7 +280,7 @@ number, and a node sizes them together, once, when it creates their streams:
 
 | Step | What happens |
 |---|---|
-| **What the broker can grant** | Read from the broker itself. An embedded broker's limit is three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
+| **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
 | **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
 | **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), the vector changelog for 16 GiB capped by the same quarter, and the chat log for 8 GiB capped by the same quarter. |
 | **The fit** | A ceiling you set is never scaled. The unset ones share what is left of the logs' half in proportion to what each asked for, and none goes below 1 GiB. |
@@ -271,18 +304,20 @@ that limit, and the Tier A field the ceiling came from:
 engine: the broker refused to reserve the pages log's ceiling:
 CREWLET_PAGES_LOG needed 1073741824 bytes and the broker had 536870912 bytes
 left to reserve (… of its …-byte limit already reserved), and that limit is
-three quarters of the free space on the volume holding stream.store_dir
-(/var/lib/crewlet/stream), counting what the broker's streams already hold
-there. stream.pages_log_max_bytes is unset, so the ceiling was derived and
-scaled into the state logs' share of the broker, and it goes no lower than
+stream.store_max_bytes where you set one, and otherwise three quarters of the
+free space on the volume holding stream.store_dir (/var/lib/crewlet/stream),
+counting what the broker's streams already hold there.
+stream.pages_log_max_bytes is unset, so the ceiling was derived and scaled
+into the state logs' share of the broker, and it goes no lower than
 1073741824 bytes. Give the broker more room; the state logs that already exist
 keep the ceilings they were created with, and no Tier A setting changes them: …
 ```
 
-The remedies are the ones it lists. Give the broker more room: on the embedded
-topology, free space on that volume (a first boot needs about 5.4 GiB free
-there, three quarters of which is the four 1 GiB floors), which the broker
-measures again when the node next starts. Or, when the refused log's ceiling is
+The remedies are the ones it lists. Give the broker more room: raise
+`stream.store_max_bytes` where you set one, or, where you did not, free space
+on that volume (a first boot needs about 5.4 GiB free there, three quarters of
+which is the four 1 GiB floors), which the broker measures again when the node
+next starts. Or, when the refused log's ceiling is
 above the 1 GiB floor, set its field to a smaller ceiling, and the refusal says
 so when that applies.
 

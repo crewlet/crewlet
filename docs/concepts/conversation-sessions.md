@@ -33,7 +33,7 @@ nothing else:
 
 | | Episodes | Conversation sessions |
 |---|---|---|
-| Keyed by | agent + vector similarity | agent + `conversation_key` |
+| Keyed by | agent + vector similarity | agent + `conversation_key` (the conversation identity) |
 | Holds | two ≤2000-char summaries, tool names | plan, reasoning, calls, the reply, the verdict |
 | Retrieval | cosine top-3, `done` only, no recency | the newest N of *this* conversation |
 | On thin triggers | prefetch gated **off** | always rendered |
@@ -44,6 +44,8 @@ a Jira comment webhook is a *pointer*, and the engine's thin-trigger gate
 skips all three aux-LLM prefetches on exactly those turns — the ones that
 continue an existing conversation. The session block is deterministic (no
 embedding, no aux LLM), so it renders there regardless.
+
+**It is not the same thing as [the thread block](agent-runtime.md#the-thread-a-turn-was-woken-in), and neither replaces the other.** `## The thread so far` is what *everyone* said on the chat surface, read back live from the vendor. A conversation session is what *this seat* said and did, across turns, recorded by the engine — the plan, the tool calls, the reply and the reviewer's verdict, none of which is visible in a chat thread. A seat reading only the thread cannot tell which of its own replies it has already reasoned through; a seat reading only the ledger does not know what the other five people in the thread have said since. Chat is also only one surface: a Jira comment, a GitHub review and a scheduled fire all have a conversation session and no thread to read.
 
 **Not a second, invisible memory.** The [`cli-agent` workspace](subscription-llm-backends.md)
 deletes a coding CLI's own sessions before and after every call, precisely so
@@ -82,6 +84,15 @@ sent re-creates the duplicate-answer bug in a place nothing else can catch.
   line" is something the reader has to notice while "nobody received this" is
   something it has to act on
 - **Reviewer** — `completed_work`, the prose on what already landed
+- **You ended that turn blocked** — what stopped it, taken from the executor's
+  own `evidence` on a `blocked` round and empty on every other outcome. A turn
+  that put a question to somebody and ended there records `done` exactly like one
+  that finished the work, so without this the seat's next turn on the thread
+  cannot tell *"I answered this"* from *"I asked about this and I am waiting"* —
+  and read as the first, a question the seat asked becomes work it believes it
+  delivered. It is also precisely the turn that reads the line: the reply to that
+  question is what wakes the seat, so the message in front of it is usually the
+  answer
 - **Turn ended** — only when the decision was not `done`
 
 The reviewer's *other* field, `turn.Review.Notes`, is deliberately **not**
@@ -117,7 +128,7 @@ A turn is appended when all of these hold:
 
 - it **completed** — a crashed turn has nothing coherent to record;
 - it was not a **detached-sandbox suspend** — the resumed turn records once, for real;
-- its trigger has a **reproducible conversation key** (see below);
+- its trigger has a **reproducible conversation identity** (see below);
 - it has a **work key** — the constituent-trigger identity used for dedupe.
 
 A turn that ended `failed` on a guard breach **is** recorded. "I tried this and
@@ -149,12 +160,21 @@ can carry the ledger with the seat. It is not a second dedupe: the table's
 off the one that wrote it, and `entry_id` says nothing about what a row
 *means* — two unkeyed turns get two ids and stay two rows.
 
-`conversation_key` is the `{source}:{local}` grammar that already partitions
-every seat inbox for [coalescing](event-system.md#inbox-batching--coalescing):
-`jira:POC-7`, `slack:C9:1718.001`, `github:acme/api#42`. A trigger with no
-derivable conversation — a scheduled fire, a task assignment, an A2A wake —
-keys as `event:{uuid}`, which no later message can reproduce; those are not
-recorded, because the row could never be read back.
+`conversation_key` holds the **conversation identity**: the `{source}:{local}`
+grammar of [the event system](event-system.md#inbox-batching--coalescing) —
+`jira:POC-7`, `slack:C9:1718.001`, `github:acme/api#42`. It is the durable
+thread, NOT the partition key the seat's inbox coalesces on. The two are the
+same string for every source but chat, and for chat they differ on exactly one
+surface: **a direct message is one conversation however it is threaded**, so it
+keys on the bare channel (`slack:D1`) while a reply inside it still partitions
+on its thread. Keying this row on the partition instead is what made the ledger
+silently empty on the surface it was written for — a DM's first turn was filed
+under the channel, its thread reply looked up the thread, and the seat re-read
+its own 1:1 line as a first turn.
+
+A trigger with no derivable conversation — a scheduled fire, a task assignment,
+an A2A wake — keys as `event:{uuid}`, which no later message can reproduce;
+those are not recorded, because the row could never be read back.
 
 Two seats legitimately serve one conversation (a lead and its report on one
 ticket) and each keeps its own ledger.
@@ -204,8 +224,8 @@ cache reads at full token value, so its cost multiplies by rounds used. Two
 things bound that product, and which one applies where is the whole design:
 
 - **`max_entries`, at write time** — how many turns of a conversation are kept
-  at all. A chat DM keys on the whole channel, so its ledger never stops
-  receiving entries.
+  at all. A chat DM is one conversation for the whole channel, so its ledger
+  never stops receiving entries.
 - **`ledger.InjectedMaxChars` (24 000 bytes), at render time** — how much
   reaches one prompt. It drops **whole entries**, oldest first, and says how
   many it dropped; the newest always survives however long it is. An entry
@@ -219,7 +239,10 @@ the seat said — which is how a seat repeats a reply it cannot see it already
 gave. Two config knobs (`injected_max_entries`, `injected_max_chars`) used to
 be documented here; neither was ever threaded to a caller, so both validated,
 defaulted and described a truncation that did not happen. The `prompt.size`
-telemetry event records the delta fleet-wide.
+telemetry event is where the delta shows up fleet-wide — read its
+`user_chars`, which is where this block lands, rather than its approximation:
+that figure also carries the tool-definition array, which is usually larger
+than the ledger and moves for reasons of its own.
 
 Against that: the re-recon it displaces costs a `list_mcp_server_tools` round,
 an `activate_tool` round and the read itself, on every turn of the
@@ -314,5 +337,5 @@ served so a reader can go to it.
 
 - [Turn Engine](turn-engine.md) — the phases, and the within-turn prior-work ledger
 - [Agent Learning](agent-learning.md) — episodes, the diary, counterparty profiles
-- [Event System](event-system.md) — the conversation key and inbox coalescing
+- [Event System](event-system.md) — the two keys, and inbox coalescing
 - [Scaling Out](scaling.md) — why shared state lives in the coordination slot

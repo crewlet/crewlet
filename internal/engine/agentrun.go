@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // Agent mode's engine half: turning a seat's executor into a detached run of
@@ -243,26 +242,7 @@ func maxTurnsFor(gate *config.RoleSandbox) *int {
 }
 
 // runTurnRef is what the run's durable row records about the turn that
-// launched it.
-//
-// THE SAME FIELDS A run_sandbox LAUNCH RECORDS, and for the same reasons: the
-// conversation the work came from and who is waiting for it cannot be
-// recovered any other way once the trigger is gone, and the trace comes from
-// the ACTIVE span so the run's own spans nest under the phase that started
-// them rather than appearing as unrelated work minutes later.
+// launched it. See [sandboxTurnRef], which both launch paths share.
 func (l *agentLauncher) runTurnRef(ctx context.Context) sandbox.TurnRef {
-	runTrace := tracing.TraceOf(ctx)
-	return sandbox.TurnRef{
-		// The id is derived from the turn's PINNED organization, like every
-		// other fact about the seat here. The engine's current company is
-		// the next epoch once an apply lands mid-turn, and a renamed company
-		// derives a different id for the same seat.
-		TurnID: l.turn.RunID, WorkKey: l.turn.WorkKey,
-		AgentHandle: l.turn.Handle(), AgentID: l.turn.AgentID(),
-		Role:            l.seat.Name,
-		ConversationKey: l.turn.ConversationKey,
-		Reply:           l.turn.Reply,
-		TraceID:         runTrace.TraceID, SpanID: runTrace.SpanID,
-		Depth: l.turn.Depth, Chain: l.turn.Chain,
-	}
+	return sandboxTurnRef(ctx, l.turn, l.seat.Name)
 }

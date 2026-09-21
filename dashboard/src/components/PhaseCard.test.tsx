@@ -330,3 +330,67 @@ describe("the tool-round count", () => {
     ).toBe("—");
   });
 });
+
+// THE BODY READS IN THE ORDER THE PHASE HAPPENED: what it was given, then what
+// it did, then what it delegated.
+//
+// The transcript used to come first and both of its inputs sat underneath it,
+// so the question every round raises — what was this told, what was it allowed
+// to call — was answered past the end of the answer, and a phase with forty
+// rounds put a whole scroll between the two. Both inputs are closed folds, so
+// the order costs a reader who only wants the transcript two header rows.
+describe("the phase body reads in the order the phase happened", () => {
+  const FULL = phase({
+    ...TWO_ROUNDS,
+    systemPrompt: "## Your turn\nDecide and act.",
+    userPrompt: "## Task\npost the summary",
+    toolsAvailable: ["submit_work"],
+    toolCatalogue: ["mattermost"],
+  });
+
+  test("the prompt and the tool surface come before the rounds, and the workers after", () => {
+    const { container } = render(
+      <PhaseCard
+        record={FULL}
+        defaultOpen
+        nested={[phase({ key: "turn-1|execute|1|w", worker: "researcher" })]}
+      />,
+    );
+    // Document order, which is the reading order: every element of the card in
+    // the order the markup puts them.
+    const all = [...container.querySelectorAll("*")];
+    const at = (el: Element | null) => (el === null ? -1 : all.indexOf(el));
+
+    const prompt = at(screen.getByRole("button", { name: /^Prompt/ }));
+    const tools = at(screen.getByRole("button", { name: /^Tool surface/ }));
+    const ledger = at(container.querySelector(".round-ledger"));
+    const delegated = at(screen.getByRole("button", { name: /^Delegated to/ }));
+
+    // THE CONTROL: "everything is in order" is satisfied by a card that drew
+    // none of them, which is the other way to lose a section.
+    expect([prompt, tools, ledger, delegated].every((i) => i >= 0)).toBe(true);
+
+    // The request first, and its two halves in the order they were sent: the
+    // prompt, then the schema array that went WITH it.
+    expect(prompt).toBeLessThan(tools);
+    expect(tools).toBeLessThan(ledger);
+    // Then what the rounds spawned.
+    expect(ledger).toBeLessThan(delegated);
+  });
+
+  // AND THE FAILURE STAYS AT THE TOP, above the inputs. It is a banner rather
+  // than a section — the reason the reader opened the card at all — so it is
+  // the one thing that does not wait its turn in the chronology.
+  test("an error is still the first thing in the body", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({ ...FULL, failed: true, error: "no model answered" })}
+        defaultOpen
+      />,
+    );
+    const all = [...container.querySelectorAll("*")];
+    const error = all.findIndex((el) => el.textContent === "no model answered");
+    expect(error).toBeGreaterThanOrEqual(0);
+    expect(error).toBeLessThan(all.indexOf(screen.getByRole("button", { name: /^Prompt/ })));
+  });
+});

@@ -30,16 +30,34 @@ func resumingEngine(t *testing.T) (*Engine, ledgerstore.Conversations) {
 	}}, conversations
 }
 
-func resumed(conversation string) resumeInput {
+// resumed is one parked run coming back, with BOTH of its conversation values
+// stated at every call site.
+//
+// THE TWO ARE NEVER EQUAL HERE, and that is the whole point of the pair: they
+// differ for exactly one surface, a direct message, where the partition is the
+// thread the kick-off trigger arrived in and the conversation is the whole DM
+// line. A fixture that set only one left the accessor falling back to the
+// other at every call site in this file, so the ledger key the split exists to
+// fix was filed under whichever field happened to be there — and reverting
+// [Engine.recordResume] to the partition passed every case below.
+func resumed(conversation, partition string) resumeInput {
 	return resumeInput{
 		Run: sandbox.PendingRun{
 			TurnID:          "wk-1",
 			AgentHandle:     "swe",
 			ConversationKey: conversation,
+			PartitionKey:    partition,
 		},
 		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: &org.Role{Name: "Engineer", DeclaredHandle: "swe"}},
 	}
 }
+
+// theDM is the pair a run launched from a direct message's thread carries: the
+// conversation a resume reports back to, and the batch it was launched from.
+const (
+	theDM       = "slack:D1"
+	theDMThread = "slack:D1:root-1"
+)
 
 // The finding this commit closes: a turn that ended on the resume path wrote
 // no conversation entry at all, so the thread's history stopped at the moment
@@ -49,19 +67,31 @@ func TestAResumedTurnRecordsWhatItSaidToTheConversation(t *testing.T) {
 	e, conversations := resumingEngine(t)
 	ctx := context.Background()
 
-	e.recordResume(ctx, resumed("slack:C1"), turn.Result{
+	e.recordResume(ctx, resumed(theDM, theDMThread), turn.Result{
 		Decision:   phase.Done,
 		Delivered:  true,
 		Artifact:   "shipped the branch and opened the MR",
 		LastReview: &turn.Review{CompletedWork: "MR !42 is up"},
 	})
 
-	got, err := conversations.History(ctx, "swe", "slack:C1", 0)
+	got, err := conversations.History(ctx, "swe", theDM, 0)
 	if err != nil {
 		t.Fatalf("History: %v", err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("history = %d entries, want the resumed turn's own", len(got))
+	}
+	// UNDER THE CONVERSATION AND NOT THE BATCH, which is the half a fixture
+	// stating one value could not assert: the seat's next turn on this DM
+	// reads the conversation back, and a coding turn filed under the thread
+	// it happened to be triggered in is history that turn never looks up.
+	batch, err := conversations.History(ctx, "swe", theDMThread, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(batch) != 0 {
+		t.Errorf("the resumed turn was filed under the inbox batch as well (%d entries): "+
+			"the next turn on this conversation reads it back from neither", len(batch))
 	}
 	if got[0].Reply != "shipped the branch and opened the MR" {
 		t.Errorf("reply = %q", got[0].Reply)
@@ -85,11 +115,11 @@ func TestAResumeThatSuspendsAgainRecordsNothing(t *testing.T) {
 	e, conversations := resumingEngine(t)
 	ctx := context.Background()
 
-	e.recordResume(ctx, resumed("slack:C1"), turn.Result{
+	e.recordResume(ctx, resumed(theDM, theDMThread), turn.Result{
 		Suspended: true, Decision: phase.SelfIterate, Artifact: "half a thought",
 	})
 
-	got, err := conversations.History(ctx, "swe", "slack:C1", 0)
+	got, err := conversations.History(ctx, "swe", theDM, 0)
 	if err != nil {
 		t.Fatalf("History: %v", err)
 	}
@@ -130,7 +160,7 @@ func TestAResumedTurnWithNoConversationRecordsNothing(t *testing.T) {
 	e, conversations := resumingEngine(t)
 	ctx := context.Background()
 
-	e.recordResume(ctx, resumed(""), turn.Result{Decision: phase.Done, Artifact: "x"})
+	e.recordResume(ctx, resumed("", ""), turn.Result{Decision: phase.Done, Artifact: "x"})
 
 	got, err := conversations.History(ctx, "swe", "", 0)
 	if err != nil {
@@ -138,6 +168,106 @@ func TestAResumedTurnWithNoConversationRecordsNothing(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("history = %d entries, want none", len(got))
+	}
+}
+
+// A ROW FROM BEFORE THE SPLIT CARRIES ONLY THE PARTITION, and the resume files
+// under it rather than recording nothing.
+//
+// The fallback is pinned on both sides of the seam on purpose: [PendingRun] has
+// it because nothing rewrites a parked run and one waits for a person, and
+// here because this is the frame that would otherwise write an empty key — a
+// resumed turn that recorded nothing at all is the gap [Engine.recordResume]
+// exists to close, and such a row would fall straight back into it.
+func TestAResumedRunFromBeforeTheSplitFilesUnderItsPartition(t *testing.T) {
+	t.Parallel()
+	e, conversations := resumingEngine(t)
+	ctx := context.Background()
+
+	e.recordResume(ctx, resumed("", theDMThread), turn.Result{
+		Decision: phase.Done, Delivered: true, Artifact: "shipped the branch",
+	})
+
+	got, err := conversations.History(ctx, "swe", theDMThread, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("history = %d entries under the one key the row carries, want the "+
+			"resumed turn's own: a pre-split row records nothing at all", len(got))
+	}
+}
+
+// THE TWO VALUES REACH THE ROW IN THE RIGHT FIELDS, which nothing asserted.
+//
+// This is the launch's own mapping, from the running turn onto the record a
+// resume days later reads back: the conversation the answer is matched on and
+// the turn reports through, and the batch the kick-off trigger arrived in. The
+// two fields sat under names that meant each other's concept, so the
+// assignment read as its own opposite and a crossed pair compiled — both are
+// strings — and cost a run every answer it was ever given. What a swap looks
+// like from here is a row whose conversation is a thread nobody replies on.
+func TestADetachedRunsRowKeepsThePartitionAndTheConversationApart(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}
+	l := &agentLauncher{
+		seat: seat,
+		turn: &turnctx.Turn{
+			RunID: "run-1", WorkKey: "wk-1", Seat: seat,
+			ConversationKey: theDM, PartitionKey: theDMThread,
+			Reply: "tool",
+		},
+	}
+
+	ref := l.runTurnRef(context.Background())
+	if ref.ConversationKey != theDM {
+		t.Errorf("the row's conversation = %q, want the DM line the person answers on", ref.ConversationKey)
+	}
+	if ref.PartitionKey != theDMThread {
+		t.Errorf("the row's partition = %q, want the batch the run was launched from", ref.PartitionKey)
+	}
+	// AND THE OTHER CROSSED PAIR, which is the same hazard one identity
+	// down: the run is this execution and the work key is what a redelivery
+	// reproduces (ADR-0017), both are strings, and a row that swapped them
+	// would resume under an id no completion poll is watching.
+	if ref.TurnID != "run-1" {
+		t.Errorf("the row's run = %q, want this execution's own id", ref.TurnID)
+	}
+	if ref.WorkKey != "wk-1" {
+		t.Errorf("the row's work key = %q, want the unit a redelivery reproduces", ref.WorkKey)
+	}
+	if ref.Reply != "tool" || ref.AgentHandle != "swe" {
+		t.Errorf("the rest of the row is wrong too: %+v", ref)
+	}
+}
+
+// AND A RESUME READS THEM BACK OUT OF THE ROW INTO THE RIGHT FIELDS.
+//
+// The launch's mapping had a test; the resume's did not, and it is the same
+// crossed pair in the other direction — the row's ConversationKey is the
+// IDENTITY, so reading it as the partition collapses the two into one value
+// the moment a run parks a second time. A re-parked row then carries the bare
+// DM channel where its first launch carried the thread, and
+// sandbox.ConversationRef.Best loses the one fact that tells two questions on
+// one direct-message line apart.
+func TestAResumeKeepsThePartitionAndTheConversationApart(t *testing.T) {
+	t.Parallel()
+	company := &Company{Org: &org.Organization{
+		Name:  "Acme",
+		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "swe"}},
+	}}
+
+	tel := (&Engine{}).describeResume(context.Background(), company,
+		resumed(theDM, theDMThread))
+
+	if tel.convKey != theDM {
+		t.Errorf("the resumed turn's conversation = %q, want the DM line the "+
+			"person answers on", tel.convKey)
+	}
+	if tel.partKey != theDMThread {
+		t.Errorf("the resumed turn's partition = %q, want the batch the run "+
+			"was launched from: a run that suspends again writes this back "+
+			"onto its row", tel.partKey)
 	}
 }
 
@@ -150,12 +280,12 @@ func TestRecordingAResumeNeverFailsTheRun(t *testing.T) {
 	done := turn.Result{Decision: phase.Done, Artifact: "x"}
 
 	// No ledger wired.
-	(&Engine{dispatch: &Dispatcher{}}).recordResume(ctx, resumed("slack:C1"), done)
+	(&Engine{dispatch: &Dispatcher{}}).recordResume(ctx, resumed(theDM, theDMThread), done)
 	// No dispatcher at all — a test or a partially built engine.
-	(&Engine{}).recordResume(ctx, resumed("slack:C1"), done)
+	(&Engine{}).recordResume(ctx, resumed(theDM, theDMThread), done)
 	// A ledger that refuses the write.
 	(&Engine{dispatch: &Dispatcher{Conversations: failingResumeConversations{}}}).
-		recordResume(ctx, resumed("slack:C1"), done)
+		recordResume(ctx, resumed(theDM, theDMThread), done)
 }
 
 type failingResumeConversations struct{}
@@ -181,7 +311,13 @@ func (failingResumeConversations) Purge(context.Context, time.Time) (int64, erro
 // trigger that may be long gone.
 func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 	t.Parallel()
-	tel := turnTelemetry{handle: "swe", convKey: "slack:C1", runID: "run-1", workKey: "wk-1"}
+	// BOTH CONVERSATION VALUES, and different ones: this is where the pair
+	// starts, and a fixture that made them equal would let either field be
+	// copied into both and still pass.
+	tel := turnTelemetry{
+		handle: "swe", convKey: theDM, partKey: theDMThread,
+		runID: "run-1", workKey: "wk-1",
+	}
 	company := &Company{Org: &org.Organization{
 		Name:  "Acme",
 		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "swe"}},
@@ -190,8 +326,16 @@ func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 	if got.Context == nil {
 		t.Fatal("the runner turn carries no turn context")
 	}
-	if got.Context.ConversationKey != "slack:C1" {
+	if got.Context.ConversationKey != theDM {
 		t.Errorf("turn context conversation = %q, want the trigger's", got.Context.ConversationKey)
+	}
+	// AND THE PARTITION BESIDE IT, in its own field. A detached run's row
+	// states both, and this frame is the only one that holds either — so a
+	// turn that carried one value twice would write a row whose answer match
+	// and whose report-back key are the same wrong string.
+	if got.Context.PartitionKey != theDMThread {
+		t.Errorf("turn context partition = %q, want the batch the trigger arrived in",
+			got.Context.PartitionKey)
 	}
 	if got.Context.Task != "fix the failing test" {
 		t.Errorf("turn context task = %q", got.Context.Task)
@@ -222,7 +366,7 @@ func TestAResumeRunsInTheEpochThatAdmittedIt(t *testing.T) {
 		Config: admitted.Config, Models: admitted.Models, Tools: admitted.Tools,
 		Org: &org.Organization{Name: admitted.Org.Name},
 	})
-	in := resumed("slack:C1")
+	in := resumed(theDM, theDMThread)
 	in.Company = admitted
 	in.Run.AgentHandle = seat.Handle()
 	in.Turn = &turnctx.Turn{

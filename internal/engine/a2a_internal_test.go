@@ -349,10 +349,10 @@ func TestACoalescedPartitionTakesItsDeepestTrigger(t *testing.T) {
 // A COLLEAGUE IS TOLD WHAT ACTUALLY HAPPENED.
 //
 // Only `done` produced something for them. The other decisions carry an
-// artifact that means something else — `skipped` holds the PLANNER'S private
+// artifact that means something else: `skipped` holds the EXECUTOR'S private
 // reasoning that nobody was asking, which is both internal and wrong, since
-// somebody plainly was — and forwarding it verbatim sends the wrong thing
-// while looking like an answer.
+// somebody plainly was. Forwarding it verbatim sends the wrong thing while
+// looking like an answer.
 func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 	t.Parallel()
 	if got := answerContent(turn.Result{Decision: phase.Done, Artifact: "the answer"}); got != "the answer" {
@@ -362,14 +362,14 @@ func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 		Decision: phase.Skipped, Artifact: "nobody was asking this seat to do anything",
 	})
 	if strings.Contains(skipped, "nobody was asking") {
-		t.Errorf("the planner's private reasoning was sent to a colleague: %q", skipped)
+		t.Errorf("the executor's private reasoning was sent to a colleague: %q", skipped)
 	}
 	if skipped == "" {
 		t.Error("a skipped turn answered with silence, so the asker waits out the sweep")
 	}
 	breached := answerContent(turn.Result{
 		Decision: phase.Failed,
-		Breach:   &turn.Breach{Kind: turn.BreachDepth},
+		Breach:   &turn.Breach{Kind: types.GuardDepthCap},
 	})
 	if !strings.Contains(breached, "depth") {
 		t.Errorf("a breach did not say which guard stopped it: %q", breached)
@@ -377,5 +377,55 @@ func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 	// A `done` turn that produced no text is still not silence.
 	if got := answerContent(turn.Result{Decision: phase.Done}); got == "" {
 		t.Error("an empty artifact answered with silence")
+	}
+}
+
+// A BLOCKED TURN'S ACCOUNT IS AN ANSWER, not a failure to produce one.
+//
+// This is the one way `done` arrives carrying no prose: the seat answered as
+// far as it could, put the rest to somebody who has to answer it, and had
+// nothing left to write. `submit_work` refuses a blocked outcome with empty
+// evidence, so the one case whose artifact may be empty is the one case
+// guaranteed to have something to say instead.
+//
+// The consequence of getting this wrong is worse than a thin answer:
+// answerColleague CLOSES the channel straight after, so the asker is told the
+// turn produced nothing AND has nowhere to follow up — and it re-asks, which
+// is the duplicate the answer leg exists to stop.
+func TestABlockedTurnAnswersWithWhatStoppedIt(t *testing.T) {
+	t.Parallel()
+	blocked := turn.Result{
+		Decision: phase.Done,
+		LastWork: &turn.Work{
+			Outcome:  turn.OutcomeBlocked,
+			Evidence: "asked @founder which repo to file against; waiting on them",
+		},
+	}
+	got := answerContent(blocked)
+	if !strings.Contains(got, "waiting on them") {
+		t.Errorf("the asker was not told what the turn is blocked on: %q", got)
+	}
+	if strings.Contains(got, "could not produce an answer") {
+		t.Errorf("a turn that did the right thing was reported as a failure: %q", got)
+	}
+
+	// The artifact still wins where there is one: the evidence is the
+	// fallback for an empty one, never a replacement for the seat's own
+	// answer.
+	withBoth := blocked
+	withBoth.Artifact = "the answer itself"
+	if got := answerContent(withBoth); got != "the answer itself" {
+		t.Errorf("the evidence displaced a real artifact: %q", got)
+	}
+
+	// And a blocked round that somehow carries no evidence falls through
+	// rather than answering with an empty string — silence is the one
+	// outcome the asker cannot act on.
+	bare := turn.Result{
+		Decision: phase.Done,
+		LastWork: &turn.Work{Outcome: turn.OutcomeBlocked, Evidence: "   "},
+	}
+	if got := answerContent(bare); strings.TrimSpace(got) == "" {
+		t.Error("a blocked turn with no evidence answered with silence")
 	}
 }

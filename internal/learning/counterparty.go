@@ -56,7 +56,7 @@ type Profile struct {
 	LastUpdatedAt time.Time
 
 	// LastCorroboratedAt moves only when the traits patch is non-empty, so
-	// it measures trait-CHANGE cadence. The Plan-phase prefetch demotes
+	// it measures trait-CHANGE cadence. The turn-start prefetch demotes
 	// stale traits by it — a counterparty seen daily whose traits have not
 	// moved in months is one the observer has stopped learning about, and
 	// that is a different fact from not having seen them.

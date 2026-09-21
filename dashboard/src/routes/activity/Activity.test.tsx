@@ -17,7 +17,9 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { Activity } from "./Activity.tsx";
+import { Activity, dayKey } from "./Activity.tsx";
+import { setZone } from "~/lib/prefs.ts";
+import { fmtDate } from "~/lib/format.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -203,4 +205,56 @@ test("the axis is asked for whole buckets, never for the clock's own millisecond
   expect(until % 3_600_000).toBe(0);
   expect(since % 3_600_000).toBe(0);
   expect(until - since).toBe(24 * 3_600_000);
+});
+
+/**
+ * A DAY HEADING GROUPS IN THE ZONE IT NAMES.
+ *
+ * The heading renders through `fmtDate`, which formats in the zone the reader
+ * chose; the split that decides where a heading goes used to read
+ * `getFullYear/getMonth/getDate` off a `Date`, which is the BROWSER's day. A
+ * reader viewing a company from another zone then got rows grouped on one
+ * boundary under a heading naming another.
+ *
+ * The suite runs in Europe/Berlin (see vitest.config.ts, which picks a zone
+ * with an offset on purpose), so these three instants separate the two
+ * readings cleanly at UTC+14:
+ *
+ *   09:00Z  Berlin 14 Sep   Kiritimati 14 Sep
+ *   11:00Z  Berlin 14 Sep   Kiritimati 15 Sep
+ *   +1d 05:00Z  Berlin 15 Sep   Kiritimati 15 Sep
+ *
+ * So the first pair must SPLIT and the second must GROUP, and the browser's
+ * own day says the opposite of both.
+ */
+test("a day heading splits on the reader's chosen zone, not the browser's", () => {
+  setZone("Pacific/Kiritimati");
+  try {
+    const before = dayKey("2026-09-14T09:00:00Z");
+    const after = dayKey("2026-09-14T11:00:00Z");
+    const nextMorning = dayKey("2026-09-15T05:00:00Z");
+    // One Berlin day, two Kiritimati days: two headings.
+    expect(before, "two Kiritimati days were drawn under one heading").not.toBe(after);
+    // Two Berlin days, one Kiritimati day: one heading.
+    expect(after, "one Kiritimati day was split across two headings").toBe(nextMorning);
+  } finally {
+    setZone("");
+  }
+});
+
+// AND THE KEY IS THE LABEL, which is what makes the case above true by
+// construction rather than by two pieces of date arithmetic agreeing. Asserted
+// against `fmtDate` itself rather than against a format: the shape a date
+// takes is the reader's `dates()` preference, and pinning one here would make
+// this case fail the day somebody changes that default for reasons that have
+// nothing to do with grouping.
+test("the key a heading groups on is the string it draws", () => {
+  setZone("Pacific/Kiritimati");
+  try {
+    for (const ts of ["2026-09-14T09:00:00Z", "2026-09-14T11:00:00Z", "2026-09-15T05:00:00Z"]) {
+      expect(dayKey(ts)).toBe(fmtDate(ts));
+    }
+  } finally {
+    setZone("");
+  }
 });

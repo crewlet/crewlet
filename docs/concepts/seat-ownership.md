@@ -110,7 +110,7 @@ It closes on the **epoch**, not on membership, because a seat can be lost and re
 | A seat whose teardown could not be proven | The lease is kept and renewed precisely so no peer can take it, so the grant has not moved and the in-flight turn is racing nobody |
 | A detached run — a coding CLI in agent mode, or a sandbox job | It outlives its turn by design; its placement is on its own row and the process that collects it is often not the one that launched it. What is fenced is the **resume**, under the grant the collecting node holds |
 
-A turn the fence stops is **deferred**, not failed: the delivery is healthy and the seat's new owner is entitled to it, so it goes back at zero accrued redeliveries. The one exception is a turn whose own record proves it already wrote outside the engine — that is acked and recorded instead, because a successor would repeat the write.
+A turn the fence stops is **deferred**, not failed: the delivery is healthy and the seat's new owner is entitled to it, so it goes back the way the three screening paths above send one — immediately, and with this attachment quiesced. That is what a deferral buys here; it is not cheaper. One handoff costs one delivery whether the turn never started or was a phase in — on every backend, the in-memory twin included — which is why the budget is sized for handoffs as well as failures (see [Event System](event-system.md#delivery-semantics)). The exceptions are a turn that panicked and a turn whose own record proves it already wrote outside the engine — each is acked and recorded instead, because a successor would reach the same defect or repeat the write.
 
 It is **not** on every seat-scoped write, and the honest inventory is narrower than "the learning tables are unfenced". What a duplicate write actually does, per table:
 
@@ -232,6 +232,7 @@ record rather than from `err != nil`:
 |---|---|
 | nothing reached outside the engine | **redelivered**, exactly as before — a provider that never answered, a runner that could not be built, a refused budget, a seat handed to another node mid-call. None of them wrote anything, and every one is worth trying again. |
 | a call reached outside the engine | **recorded and acked.** The rest of the turn is lost; its writes are not un-doable, and only one of those two is recoverable by trying again. |
+| the turn panicked | **recorded and acked**, whatever the record proves. A panic is a defect in the engine, so a redelivery runs the same code on the same input and panics again, having repeated whatever came before it. The panicking round's own record is lost with it, so "nothing reached outside" could not be established anyway. Before panics were recovered, one unwound into the queue backend's handler guard, which NAKs, and the trigger came back for the whole delivery budget. |
 
 The proof is deliberately narrow, because a true answer *spends* a trigger.
 A call counts only when it is MCP-backed and not positively annotated
@@ -245,16 +246,22 @@ every turn that closed a single round.
 
 Giving up on a trigger is never silent. The turn has already published its own
 completion marked failed, and a `TurnTriggerSkipped` beside it says the trigger
-behind it will not come back, and why.
+behind it will not come back, and why. A panic also publishes
+`turn.guard_breach(kind="unhandled_exception")`, which is what puts the seat in
+the dashboard's `afk` state, and the log line that recovered it
+(`turn_phase_panicked`, `dispatch_panicked` or `sandbox_resume_panicked`)
+carries the stack.
 
 The same decision guards the other path a turn can arrive by. A **resumed**
 turn re-enters the executor's suspended conversation, so a redelivery repeats
 every call the resumed round made — and a turn coming back from a coding box is
 the one most likely to have pushed a branch already. A resume that broke after
-acting therefore leaves its run row claimed, which is what stops a retry
-winning the flip; every other resume failure still un-claims and comes back,
-because the suspended conversation is the expensive thing there and a resume
-that proved nothing has lost nothing by trying again.
+acting, or that panicked, therefore keeps its claim, which is what stops a retry
+winning the flip, and its run is settled like one that finished: the box is
+reclaimed and the seat is free for its next turn. Every other resume failure
+still un-claims and comes back, because the suspended conversation is the
+expensive thing there and a resume that proved nothing has lost nothing by
+trying again.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:
 two nodes that both run one partition — possible if a turn outlives the
@@ -270,7 +277,7 @@ A seat is unowned during a lease gap, a claim ramp, a rebalance, or a full fleet
 It does, because the **durable subscription** is what retains messages, and the subscription exists whether or not anything is attached to it:
 
 - Every seat's subscription is created at boot, by **every node**, at the **earliest** message — and for every seat in the company rather than this node's share, because a mailbox is a fact about the company and the node that ends up serving a seat may not be this one. Creating one is a plain client call that attaches nothing (1.7 ms, idempotent), so it can neither take a share of a peer's live traffic the way creating one by *subscribing* would, nor cost anything when a peer got there first. A config apply that adds a role runs the same walk again.
-- Detach is non-destructive: the subscription and its cursor survive, so unacked messages return to whoever attaches next.
+- Detach is non-destructive: the subscription, its cursor and everything it retains survive, so nothing is lost and whoever attaches next gets all of it. That is a promise about the *mail*, not about the price: a message the detaching consumer had already taken and not settled goes back like any other hand-back and spends one of its deliveries, and it may come back behind messages that were never delivered rather than ahead of them. One handoff costs one delivery, which is what the 25-delivery budget is sized for.
 - Deleting one is explicit (`delete_subscription`) and reserved for a seat that has left the company, whose mailbox must not accumulate undeliverable events for ever. The maintenance duty does it, after a grace period: see [The removed seat](#the-removed-seat).
 
 > **Creation is a boot step because the alternative is a silent drop, not a slow one.**
@@ -404,7 +411,7 @@ The current protocol is **3**, and it has moved twice — each time because hold
 
 `GET /health` lists the seats this node holds (`seats`). The **Fleet** screen and the `fleet` query (`GET /query/fleet`) show every live node with the seats it holds, its roles and labels, its lease protocol and when its presence expires. The log carries the rest: `seat_sweep` reports each pass's held count against the computed capacity, `seat_claimed` and `seat_attached` / `seat_detached` carry the seat and the epoch (a detach also carries its reason), `seats_unplaceable` names seats no live node can run, and `seat_claims_blocked_by_older_protocol` names the protocol floor an older peer is imposing.
 
-`seat_still_unproven` is the line to alert on: it names a seat whose teardown keeps failing, with `stranded_seconds` and the attempt count, and repeats every twenty heartbeats while the seat stays stranded. Alert on the **duration**, not on the first `seat_release_unproven`: a teardown that fails once and succeeds on the next heartbeat retry is a working system (`seat_release_recovered`), while a seat still stranded minutes later is a seat nothing in the fleet is running.
+`unproven_seconds` on `GET /health` is the number to alert on: a map of seat handle to how long its teardown has been failing, present only when one is stranded, and absent from `seats` for as long as it is. The `seat_still_unproven` log line carries the same alarm with the attempt count, repeating every twenty heartbeats. Alert on the **duration**, not on the field appearing or on the first `seat_release_unproven`: a teardown that fails once and succeeds on the next heartbeat retry is a working system (`seat_release_recovered`), while a seat still stranded minutes later is a seat nothing in the fleet is running.
 
 ## Single node
 

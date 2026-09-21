@@ -77,8 +77,8 @@ type Record struct {
 }
 
 // Bucket is an accumulated total. Embedded rather than nested, because the
-// wire shape spreads it into each row: {"phase": "plan", "total_tokens": 150,
-// …}, not {"phase": "plan", "bucket": {…}}.
+// wire shape spreads it into each row: {"phase": "execute", "total_tokens":
+// 150, …}, not {"phase": "execute", "bucket": {…}}.
 type Bucket struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`

@@ -24,7 +24,13 @@
 // the suite was wrong more often than the backend was. What that looked like:
 //
 //   - It required a deferral to cost nothing. JetStream trades that away
-//     deliberately and raises MaxDeliver to absorb it. Now FreeDeferral.
+//     deliberately and raises MaxDeliver to absorb it, so this became the
+//     FreeDeferral capability — and that was the wrong repair. A capability
+//     the TWIN declares and the shipped broker does not runs its case against
+//     the twin alone, and it put the suite's own flag against the contract's
+//     own sentence, which says every return that puts a message back spends a
+//     delivery. The twin spends one now and the flag is gone; what the case
+//     certifies on both backends is the contract's number.
 //   - It required a nak to replay from the head. JetStream returns redelivered
 //     messages behind never-delivered ones, so only the twin does this. Now
 //     HeadReplayOnNak.
@@ -320,28 +326,6 @@ type Capabilities struct {
 	// is the part every broker owes.
 	StrictRoundRobin bool
 
-	// FreeDeferral declares that a deferral costs the message nothing —
-	// it returns unacked with no redelivery accrued, so its dead-letter
-	// budget is whole afterwards.
-	//
-	// A capability rather than a requirement, for the same measured reason
-	// as HeadReplayOnNak and from the same decision. The in-memory twin
-	// returns a deferred batch untouched, so a seat handoff there is free;
-	// on JetStream nothing is released by closing, so deferral is
-	// implemented with Nak() and costs one delivery count — and MaxDeliver
-	// was re-derived from 10 to 25 precisely to absorb handoffs.
-	//
-	// It is the twin that declares this and the shipped broker that does
-	// not, which is worth saying plainly: the case it gates certifies the
-	// twin against itself, not production.
-	//
-	// The invariant every backend still owes is the one the contract
-	// states: a deferral must not cause a HEALTHY event to die. A backend
-	// that spends a count per handoff satisfies it by sizing the budget so
-	// handoffs cannot exhaust it, not by making the handoff free. This flag
-	// only asks a backend that IS free to stay free.
-	FreeDeferral bool
-
 	// HeadReplayOnNak declares that a negatively acknowledged event
 	// returns to the FRONT of the mailbox, ahead of events already queued
 	// behind it.
@@ -464,6 +448,15 @@ func startQueue(ctx context.Context, t *testing.T, q queue.EventQueue) queue.Eve
 	return q
 }
 
+// holdReason is the pause-hold reason the cases take when one reason is all a
+// case needs.
+//
+// The engine's own, so a case reads as the hold a node actually takes: a seat
+// on a node with no turn engine pauses its inbox before requeuing, and that is
+// the only reason the engine passes to PauseTopic today. The contract is about
+// reasons in general, and a case that needs two uses a second one beside it.
+const holdReason = "no_turn_engine"
+
 // --- timing budgets -------------------------------------------------------
 
 const (
@@ -554,6 +547,24 @@ const (
 	// clamping it. A case needing a longer window to make something
 	// observable should find another way to observe it.
 	lingerFor = 50 * time.Millisecond
+
+	// mixedCountLinger is the window the mixed-delivery-count case needs,
+	// and it is longer than lingerFor for one specific reason.
+	//
+	// That case has to put a REDELIVERED message and a NEVER-DELIVERED one
+	// in the same drain, which is the only way to build a partition whose
+	// messages sit at different delivery counts. The redelivered half comes
+	// back on the backend's own nak spacing (25ms seed doubling to a 50ms
+	// ceiling in the JetStream harness), so the window a fresh publish
+	// opens has to outlast that spacing — and lingerFor is the SAME ORDER
+	// as it, which makes whether the two meet a coin toss rather than a
+	// property.
+	//
+	// 400ms is about eight times the harness's ceiling, so the meeting is
+	// determined by the backend's ordering rather than by the scheduler,
+	// and the case still costs well under settleFor. It is nowhere near
+	// queue.MaxLingerSeconds, so no backend has to refuse it.
+	mixedCountLinger = 400 * time.Millisecond
 
 	// racingWindow is the linger a case gets when its SETUP has to complete
 	// while the window is still open — the pause and stop cases, where the

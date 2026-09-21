@@ -31,7 +31,7 @@ func TestAZeroPromptRegistryStillAnswers(t *testing.T) {
 			t.Errorf("%q addressed the seat without a prompt to say so", source)
 		}
 	}
-	if got := none.Key(notify.Inbound{Source: "tracker"}); got != "" {
+	if got := none.Partition(notify.Inbound{Source: "tracker"}); got != "" {
 		t.Errorf("a source with no prompt derived the key %q", got)
 	}
 }

@@ -74,14 +74,29 @@ import { describe, expect, test } from "vitest";
  *
  * # What each side cannot see
  *
- * THE FORWARD SIDE reads class POSITIONS only — a `className` attribute and
- * the arguments of a `cx(…)` inside one — and inside `cx` only two positions
- * are a class: a bare string argument, and the right-hand side of a `&&`
- * guard. A string that is being COMPARED is not one: `cx("avatar", size !==
- * "md" && size)` names `avatar`, while `md` is the default it is testing for
- * and `size` is the variant it yields. Reading every quoted string in the call
- * would report `md` as undeclared for ever, and a check that cries wolf is one
- * somebody switches off.
+ * THE FORWARD SIDE reads class POSITIONS only — a `className` attribute, a
+ * `className:` property holding a string, and the arguments of a `cx(…)`
+ * inside an attribute — and inside `cx` only two positions are a class: a bare
+ * string argument, and the right-hand side of a `&&` guard. A string that is
+ * being COMPARED is not one: `cx("avatar", size !== "md" && size)` names
+ * `avatar`, while `md` is the default it is testing for and `size` is the
+ * variant it yields. Reading every quoted string in the call would report `md`
+ * as undeclared for ever, and a check that cries wolf is one somebody switches
+ * off.
+ *
+ * THE PROPERTY FORM IS HERE BECAUSE IT WAS MISSED, and the thing it hid was
+ * real. `lib/markdown.ts` builds its blocks with `createElement`, so every
+ * class it writes is `className: "…"` in a props object rather than an
+ * attribute — and one of them, the fenced block's, named two classes this
+ * stylesheet declares for something else and nothing declared for a `pre`. It
+ * therefore had no recipe at all: no surface, no padding, and a `pre`'s own
+ * `white-space: pre` with `overflow: visible`, so one long line pushed the
+ * page 678px past its viewport. The forward check read every one of that
+ * file's siblings — `md-table`, `md-tasks`, `md-task-body` — as covered,
+ * because they happened to be declared, and said nothing about the one that
+ * was not. A `className:` property with a string literal is as unambiguous a
+ * class position as the attribute is; what it does NOT cover is a property
+ * whose value is a call or a variable, which no file in this tree writes.
  *
  * THE INVERSE SIDE cannot afford that restraint, because a name it fails to
  * see is a recipe somebody deletes. A class reaches the DOM through more than
@@ -231,6 +246,11 @@ export function usesIn(file: string, text: string): Use[] {
       found.push({ name, where: `${file}:${line}` });
     }
   };
+  // A `className:` PROPERTY, which is how `createElement` spells the
+  // attribute — `lib/markdown.ts` writes every one of its block classes this
+  // way. Only a string literal: a `className: cx(…)` would need the argument
+  // reading the attribute arm below does, and nothing in this tree writes one.
+  for (const m of text.matchAll(/\bclassName:\s*"([^"]*)"/g)) add(m[1]!, m.index);
   for (const m of text.matchAll(/className=(?:"([^"]*)"|\{)/g)) {
     if (m[1] !== undefined) {
       add(m[1], m.index);

@@ -139,6 +139,27 @@ type Config struct {
 	// Turn identifies the turn these events belong to.
 	Turn Turn
 
+	// OnPhase is called as each phase OPENS, with the phase that is about to
+	// run. Nil is the ordinary case for anything driving a runner directly.
+	//
+	// It exists for the working indicator, which has to say which phase a
+	// seat is in and had no way to learn it: the engine owns the turn's
+	// lifetime but not its phases, and a turn's own indicator must not
+	// depend on a broker round trip to find out what it is doing.
+	//
+	// ONE SEAM, wired where agent_phase_started is published (see
+	// [emitter.started]) rather than at each phase's own call site, so the
+	// name a reader sees and the name every dashboard reads cannot drift:
+	// both are the same argument to the same call. It fires whether or not
+	// anything is listening on the stream, because an indicator is not
+	// telemetry — a node with no publisher still has a person waiting.
+	//
+	// Called SYNCHRONOUSLY, immediately before the phase's first provider
+	// call, so an implementation that blocks delays the turn. The one in the
+	// engine only writes state and wakes a goroutine: see
+	// [notify.StatusSession.Phase].
+	OnPhase func(phase.Phase)
+
 	// Onboarding wires the dedicated first-turn pass. Zero disables it,
 	// which is what a node with no marker store has — a pass that could
 	// never be marked would run every turn forever.
@@ -363,6 +384,7 @@ func (r *Runner) executorPrompt(_ int, notes string, history []ledger.Iteration,
 		ToolCatalogue:  r.cfg.Registry.Catalogue(),
 		AvailableTools: snapshot.Names(),
 
+		ThreadContext:       r.cfg.Context.ThreadContext,
 		PersonalMemory:      r.cfg.Context.PersonalMemory,
 		RelevantKnowledge:   r.cfg.Context.RelevantKnowledge,
 		EpisodeRecall:       r.cfg.Context.EpisodeRecall,
@@ -485,7 +507,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 	})
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
-		phase: phase.Review, surface: surface, system: system, user: r.cfg.Task,
+		phase: phase.Review, surface: surface, system: system, user: reviewTask(r.cfg.Task),
 		rounds: reviewRounds, iteration: round,
 		terminateAfter: []string{SubmitReviewTool}, intent: w.Summary,
 		// THE REVIEWER'S ONLY TOOL IS ITS SUBMISSION. Its surface carries
@@ -517,11 +539,11 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 				"executor set out to do against what the tool log says it did, " +
 				"and call " + SubmitReviewTool + ".",
 		}
-		r.emitter().completed(phaseCtx, reviewRecord(round, system, r.cfg.Task, res,
+		r.emitter().completed(phaseCtx, reviewRecord(round, system, reviewTask(r.cfg.Task), res,
 			string(rescue.Decision), rescue.Notes, true, surface))
 		return rescue, nil
 	}
-	r.emitter().completed(phaseCtx, reviewRecord(round, system, r.cfg.Task, res,
+	r.emitter().completed(phaseCtx, reviewRecord(round, system, reviewTask(r.cfg.Task), res,
 		payload.Decision.String(), payload.Notes, false, surface))
 	return turn.Review{
 		Decision:      payload.Decision,
@@ -529,6 +551,31 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		CompletedWork: payload.CompletedWork,
 		FinalArtifact: payload.FinalArtifact,
 	}, nil
+}
+
+// reviewTask frames the trigger for the reviewer.
+//
+// THE SAME BYTES MEAN DIFFERENT THINGS TO THE TWO PHASES. The executor is
+// HANDED this text as the thing to do, so it reaches that phase bare. The
+// reviewer is asked about a turn that is already underway, and handed the
+// same bytes bare it reads them as a request that has just arrived.
+//
+// Not hypothetical. On a turn whose first round had already posted a
+// clarifying question, reviewers read the unchanged trigger next to an
+// `## Earlier rounds` block showing that question, and the only account that
+// fits both is that the sender asked again — "the founder ... has now
+// re-posted the same vague request". Two consecutive rounds said it, and the
+// second built its correction on it, instructing the next round to act on a
+// message nobody had sent. So the trigger reaches the reviewer as evidence,
+// labelled, rather than as an instruction.
+//
+// The label is CONSTANT, unlike [Runner.taskFor]'s correction: the review
+// phase re-sends this every round, and a per-round frame would move bytes the
+// provider's prefix cache is keyed on.
+func reviewTask(task string) string {
+	return "The trigger this turn is answering, for reference. It is the message " +
+		"the agent was ALREADY working on when the rounds below ran — not a new " +
+		"one that arrived during the turn, and not a repeat of it:\n\n" + task
 }
 
 // reviewRecord builds Review's completed record.
@@ -761,7 +808,13 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// Published BEFORE the first provider call, so a seat that is thinking
 	// says which phase it is thinking in. The completed event is the durable
 	// record and may be minutes away.
-	emit.started(ctx, ph, iteration, system, user)
+	//
+	// THE SEED AND THE SURFACE TRAVEL WITH THE TEXT because the prompt is
+	// all three: a resumed loop opens with the saved messages instead of
+	// the strings, and every round of either carries the tool-definition
+	// array, which both HTTP vendors bill as input and the cli-agent text
+	// backend writes into the prompt literally.
+	emit.started(ctx, ph, iteration, system, user, in.seed, surface)
 
 	messages := in.seed
 	if messages == nil {
@@ -1074,13 +1127,15 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	// are in its snapshot. The closure is read at call time, by which point
 	// the surface exists.
 	var surface *tools.Surface
-	for _, tool := range DiscoveryTools(func() *tools.Surface { return surface }) {
-		var err error
-		snapshot, err = snapshot.With(tools.Entry{Tool: tool, Origin: tools.OriginBuiltin})
-		if err != nil {
-			return nil, fmt.Errorf("runner: %s: %w", ph, err)
+	if discovers(ph) {
+		for _, tool := range DiscoveryTools(func() *tools.Surface { return surface }) {
+			var err error
+			snapshot, err = snapshot.With(tools.Entry{Tool: tool, Origin: tools.OriginBuiltin})
+			if err != nil {
+				return nil, fmt.Errorf("runner: %s: %w", ph, err)
+			}
+			active = append(active, tool.Name())
 		}
-		active = append(active, tool.Name())
 	}
 
 	// The sub-agent spawner, on the same closure and for the same reason:
@@ -1126,6 +1181,21 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	r.guard = guard.skills()
 	r.mu.Unlock()
 	return surface.WithGuard(guard.tools()), nil
+}
+
+// discovers reports whether a phase is offered the discovery pair,
+// list_mcp_server_tools and activate_tool.
+//
+// The executor (fresh or resumed) and onboarding are, because their prompts
+// carry the slim catalogue that names each MCP server and tells the model to
+// discover its tools. The reviewer is not, and must not be: it judges the
+// round from the evidence in front of it, and its prompt promises it no domain
+// tools. activate_tool reaches every tool in the registry snapshot, MCP writes
+// included, so a reviewer offered the pair could post to a thread or edit a
+// ticket in the middle of grading whether the executor should have. Until this
+// gate, surfaceWith added the pair to every phase, the reviewer's included.
+func discovers(ph phase.Phase) bool {
+	return ph == phase.Execute || ph == phase.Onboarding
 }
 
 // armedGuard is one built gate: the concrete guard for the runner's own

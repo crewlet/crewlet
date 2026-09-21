@@ -59,6 +59,8 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -66,7 +68,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// FailureEventTypes are the events that ARE a failure by their very type,
+// failureEventTypes are the events that ARE a failure by their very type,
 // independent of any payload flag.
 //
 // Named here, beside the events themselves, because three layers need the same
@@ -74,8 +76,15 @@ import (
 // back out of history, and the API serializing a push — and a second copy is
 // how the same turn ends up red on one surface and not on another.
 //
-// Read-only. Ask through Failed rather than reaching into the map.
-var FailureEventTypes = map[string]struct{}{
+// UNEXPORTED, and that is the whole of the guarantee. It was exported under a
+// doc line asking callers to treat it as read-only, which is the one thing a Go
+// map cannot be: an exported map is writable by every importer that can name
+// it, so `delete(types.FailureEventTypes, "budget_exhausted")` compiled and
+// would have silently unfailed every turn refused at the budget gate, in every
+// layer at once. A comment is not an access modifier. [Failed] answers the
+// one-type question and [FailureEventNames] enumerates; between them nothing
+// outside this package needs the map itself.
+var failureEventTypes = map[string]struct{}{
 	"llm_unavailable":    {},
 	"budget_exhausted":   {},
 	"turn.guard_breach":  {},
@@ -88,12 +97,36 @@ var FailureEventTypes = map[string]struct{}{
 // live; tagFailed is the failed tag the event-store writer stamps, which is all
 // that survives into history (a history listing never selects the payload
 // column). Either one, or a type that is itself a failure, means failed.
+//
+// THE ANSWER FOR ONE EVENT, which is what almost every caller has: a row, an
+// envelope, a push. A caller that has to name the whole set — because it is
+// composing a query rather than judging a value — takes [FailureEventNames].
 func Failed(eventType string, payloadFailed, tagFailed bool) bool {
 	if payloadFailed || tagFailed {
 		return true
 	}
-	_, ok := FailureEventTypes[eventType]
+	_, ok := failureEventTypes[eventType]
 	return ok
+}
+
+// FailureEventNames is every type in the failure set, sorted, as a copy the
+// caller owns.
+//
+// [Failed] cannot serve a caller that has to ENUMERATE the set rather than test
+// one value against it — a SQL `IN (…)` clause needs the names and their bound
+// arguments, and it needs them in the same order twice, because the predicate
+// is spelled once and used for both a column and a filter. That is what sent
+// internal/store's turn aggregate reaching into the map the doc asked it not
+// to.
+//
+// SORTED, so the statement a caller builds is byte-stable: Go randomises map
+// iteration, so ranging it produced a different SQL string on every process
+// start — one that works, and one no two runs of a test could compare.
+//
+// A COPY, so a caller that sorts, appends to or trims what it is handed cannot
+// reach the catalogue through the slice header.
+func FailureEventNames() []string {
+	return slices.Sorted(maps.Keys(failureEventTypes))
 }
 
 // IntegrationTrigger is implemented by payloads that came in from an external

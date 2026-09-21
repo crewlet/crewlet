@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -179,6 +180,16 @@ type buildOpts struct {
 	// the phase a real fallback chain rather than the single key the
 	// fixture's seat runs on.
 	execChain org.ProviderKeys
+	// task overrides the brief, which is the one piece of the prompt a test
+	// can put arbitrary text into — so a case about how the prompt is
+	// MEASURED can make it carry multi-byte runes.
+	task string
+
+	// context is the turn's frozen prefetch, for the cases about what
+	// reaches a prompt rather than what a phase decides.
+	context prefetch.Blocks
+	// onPhase is the working indicator's seam. See [runner.Config.OnPhase].
+	onPhase func(phase.Phase)
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -240,16 +251,23 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 	role.LLMReview = org.ProviderKeys{"reviewer"}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 
+	task := opts.task
+	if task == "" {
+		task = "post the weekly summary"
+	}
+
 	r, err := runner.New(runner.Config{
 		Seat:      prompts.Seat{Org: organization, Role: role},
 		Registry:  reg,
 		Models:    models,
 		Caps:      runner.Caps{ExecutorRounds: 6},
-		Task:      "post the weekly summary",
+		Context:   opts.context,
+		Task:      task,
 		Reply:     waiting,
 		AgentRun:  opts.agentRun,
 		Resume:    opts.resume,
 		Publisher: opts.pub,
+		OnPhase:   opts.onPhase,
 		Turn:      runner.Turn{RunID: "t-1", WorkKey: "wk-1", AgentID: "a-1"},
 	})
 	if err != nil {

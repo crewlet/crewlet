@@ -78,16 +78,16 @@ const AutoDraftTitlePrefix = "[Auto-draft] "
 
 // DefaultLimit is how many hits the prefetch asks for.
 //
-// Eight, against a block that is re-sent on every round of the Plan phase:
+// Eight, against a block that is re-sent on every round of the executor:
 // the cost is the hit count times the round cap, and past a handful the
-// marginal hit is a page the planner will not read anyway. A knowledge base
+// marginal hit is a page the agent will not read anyway. A knowledge base
 // that cannot put something useful in eight results will not put it in
 // twenty either — it will bury it.
 const DefaultLimit = 8
 
 // SnippetLimit bounds a hit's snippet, in bytes.
 //
-// One sentence's worth. The block exists to tell a planner WHICH page to go
+// One sentence's worth. The block exists to tell an agent WHICH page to go
 // and read, not to be the page — and a longer snippet buys nothing while
 // multiplying by the hit count and the round cap.
 const SnippetLimit = 200
@@ -97,7 +97,7 @@ type Hit struct {
 	Title string
 
 	// URL is a shareable human link, empty when the backend cannot build
-	// one. Empty rather than a guess: a link that 404s costs a planner a
+	// one. Empty rather than a guess: a link that 404s costs an agent a
 	// round to discover, where an absent one costs nothing.
 	URL string
 
@@ -272,7 +272,7 @@ func Excludes(h Hit, ancestors []string) bool {
 // Snippet trims a page's text to `limit` bytes of plain summary.
 //
 // THE ONE PLACE a knowledge excerpt is shortened, and one of the few cuts in
-// this engine that is correct: the block it feeds tells a planner WHICH page
+// this engine that is correct: the block it feeds tells an agent WHICH page
 // to open and says so in as many words, and the page is re-readable in full
 // through the seat's own tools. A pointer that says it is a pointer is not the
 // same thing as content that was quietly halved.
@@ -281,7 +281,7 @@ func Excludes(h Hit, ancestors []string) bool {
 //
 //   - ALWAYS MARKED. Every cut ends in an ellipsis, including the no-space
 //     fallback. An unmarked cut is indistinguishable from a page that really
-//     does end there, which is how a planner concludes a runbook has no step 4.
+//     does end there, which is how an agent concludes a runbook has no step 4.
 //   - NEVER THROUGH A RUNE. A byte slice splits whatever multi-byte character
 //     straddles the boundary and yields invalid UTF-8, which reaches a model as
 //     a replacement character — a bug that appears the first time a page is not

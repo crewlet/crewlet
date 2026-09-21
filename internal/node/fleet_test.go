@@ -23,6 +23,7 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
@@ -262,7 +263,7 @@ func (f *fleet) send(handle string, work ...string) {
 	q := f.mkQueue(f.t)
 	for _, w := range work {
 		ev := events.New(trigger{Work: w}, events.TraceContext{})
-		ev.Payload = map[string]any{"conversation_key": "c/" + handle}
+		ev.Payload = map[string]any{notify.PartitionField: "c/" + handle}
 		if err := q.Publish(f.t.Context(), topics.AgentInbox(handle), ev); err != nil {
 			f.t.Fatalf("Publish(%s, %s): %v", handle, w, err)
 		}

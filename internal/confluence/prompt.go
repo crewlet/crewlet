@@ -47,13 +47,23 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 	return n.Metadata[RoutedViaField] == ViaMention
 }
 
-// ConversationKey implements [notify.Prompt]: the page is the conversation.
+// PartitionKey implements [notify.Prompt]: the page is the conversation.
 //
 // Keyed on the page id, so a burst of edits and the comments about them
 // coalesce into one trigger rather than one turn each — which is what a wiki
 // produces when somebody restructures a space.
-func (Prompt) ConversationKey(metadata map[string]string, _ string) string {
+func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 	return metadata["page_id"]
+}
+
+// ConversationIdentity implements [notify.Prompt]: the same page id.
+//
+// The two coincide because the page is one object that is both the merge unit
+// and the durable thread. Confluence's own reply-to-comment case already keys
+// a top-level comment and its reply to the PAGE, so there is no sub-thread
+// grain the partition could cut finer on.
+func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
+	return p.PartitionKey(metadata, subject)
 }
 
 // WakesActor implements [notify.Prompt]: never. A page reports what somebody
@@ -151,7 +161,7 @@ func header(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 // getFullContext is the recon pointer, on the same condition
 // [Prompt.RequiresRecon] answers.
 //
-// The two must agree: the flag tells the Plan phase not to bother filtering
+// The two must agree: the flag tells the prefetch not to bother filtering
 // against a pointer, and this block is what makes the pointer followable.
 func getFullContext(b *strings.Builder, meta map[string]string) {
 	id := meta["page_id"]

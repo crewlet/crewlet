@@ -71,10 +71,32 @@ func (ChatPrompt) DigestBody(_, body string) string { return body }
 
 // RequiresRecon implements [Prompt]: a thread reply is a POINTER.
 //
-// The prompt tells the agent to read the thread before responding, because
-// the triggering message is usually thin — "yes", "+1", "what about the
-// other one" — and the thread is the context. A top-level message or a
-// direct message carries its own body and needs no such trip.
+// The triggering message is usually thin — "yes", "+1", "what about the other
+// one" — and the thread is the context. A top-level message or a direct
+// message carries its own body and is no such pointer.
+//
+// IT STAYS TRUE NOW THAT THE ENGINE HANDS THE THREAD OVER at turn start (see
+// internal/agent/prefetch's thread block), and the two reasons are worth
+// having written down because the opposite reads as the obvious tidy-up.
+//
+// First, this flag describes the trigger BODY, which the thread block does
+// not change. What it gates are the three prefetches that judge relevance
+// against the trigger TEXT — the memory filter, the knowledge query, the
+// episode vector search — and "+1" is exactly as useless a query with the
+// thread in the system prompt as it was without it. Flipping the flag would
+// turn two auxiliary LLM calls back on for every chat thread reply in the
+// company, to search on a string that has not improved.
+//
+// Second, the flag is not only read here. It is stamped at parse time, merged
+// across a coalesced trigger, STORED on every event as
+// types.InboundInteraction.RequiresRecon and reported on prefetch_summary,
+// where the dashboard reads it to say "gated" rather than "broken". Changing
+// what it means for chat would silently rewrite what every past turn in the
+// store claims about itself.
+//
+// NATIVE CHAT IS THE ONE SOURCE THAT ANSWERS FALSE with a thread, and it
+// overrides this rather than weakening it: its trigger CARRIES the thread on
+// the record, so there is nothing to reconcile. See internal/chat's prompt.
 func (ChatPrompt) RequiresRecon(n Inbound) bool { return n.Metadata[ThreadField] != "" }
 
 // Addressed implements [Prompt] through the same rule the working-status
@@ -82,11 +104,11 @@ func (ChatPrompt) RequiresRecon(n Inbound) bool { return n.Metadata[ThreadField]
 // re-derived, so the two cannot disagree by construction.
 func (p ChatPrompt) Addressed(n Inbound) bool { return p.Address.Addressed(n.Metadata) }
 
-// ConversationKey implements [Prompt].
+// PartitionKey implements [Prompt].
 //
 // In a direct conversation a person's consecutive TOP-LEVEL messages are one
-// conversation, so they key on the channel alone and a typing burst
-// coalesces into one turn — the headline case for coalescing at all.
+// partition, so they key on the channel alone and a typing burst coalesces
+// into one turn — the headline case for coalescing at all.
 //
 // A direct THREAD REPLY keeps its thread key: merging it with unrelated
 // top-level pings would hand the turn one merged metadata whose thread
@@ -97,7 +119,7 @@ func (p ChatPrompt) Addressed(n Inbound) bool { return p.Address.Addressed(n.Met
 // key stays thread-grained throughout — a reply carries the root's id, and a
 // top-level message keys on its OWN id so its later replies land in the same
 // partition.
-func (p ChatPrompt) ConversationKey(metadata map[string]string, _ string) string {
+func (p ChatPrompt) PartitionKey(metadata map[string]string, _ string) string {
 	channel := metadata[ChannelField]
 	if channel == "" {
 		// No channel, no conversation identity — and a key that was
@@ -112,6 +134,63 @@ func (p ChatPrompt) ConversationKey(metadata map[string]string, _ string) string
 		return ""
 	}
 	return channel + ":" + anchor
+}
+
+// ConversationIdentity implements [Prompt]. THIS IS THE ONE SOURCE WHERE THE
+// TWO ANSWERS DIFFER, and the invariant is what decides how.
+//
+// A DIRECT CONVERSATION IS ONE CONVERSATION, thread or no thread: the whole
+// DM channel, regardless of thread_ts. What forces that is
+// [Prompt.ConversationIdentity]'s invariant — the identity must be constant
+// across every event in a partition. A top-level DM burst partitions on the
+// bare channel while its constituents carry different ts values, so an
+// identity of "channel:anchor" would give that ONE partition three different
+// identities and the ledger key would fall to whichever event sorted first.
+// The channel is the only value every constituent of that partition agrees
+// on.
+//
+// It is also what a person means. A DM is a 1:1 line that runs for months;
+// the thread a reply hangs off is a formatting detail of the transport, and
+// keying history on it filed the answer to "what did we say yesterday" under
+// an address the next turn never looked up.
+//
+// ELSEWHERE THE ANSWER IS THE PARTITION KEY: in a shared channel a thread IS
+// the conversation, and the partition is already thread-grained, so the two
+// coincide and the invariant holds trivially.
+//
+// WHERE AN ANCHOR IS USED AT ALL — the non-direct branch, which is
+// [ChatPrompt.PartitionKey] — IT IS THE SAME ONE: thread_ts falling back to
+// the message's own ts, which is what [ConversationOf] resolves for the
+// working indicator and what [ChatPrompt.Build] prints as the thread to
+// "reply as a thread" in. Three derivations of one anchor that agree only by
+// inspection is how the spinner a person is watching, the thread the reply
+// lands in and the ledger the seat reads come to name three different
+// threads.
+//
+// THE DIRECT BRANCH USES NO ANCHOR, deliberately, and that is not a fourth
+// derivation drifting from the other three — it is the answer to a different
+// question. The indicator and the reply target are about ONE MESSAGE: which
+// thread to raise a spinner in, which thread to post into. Both are still the
+// anchor on a direct message, and still that one. The identity is about the
+// LINE the message is on, and on a direct message the line is the channel. So
+// here the three must NOT agree: an identity carrying the anchor would give
+// one top-level DM partition as many identities as it has constituents, and
+// would file the seat's own history under a thread its next turn never looks
+// up — which is the failure this branch exists to remove.
+func (p ChatPrompt) ConversationIdentity(metadata map[string]string, subject string) string {
+	channel := metadata[ChannelField]
+	if channel == "" {
+		return ""
+	}
+	// THROUGH THE BACKEND'S OWN RULE, not a predicate of this prompt's:
+	// what counts as direct is a fact about the surface the message came
+	// from, and [AddressRule] is the one value that states it. A second
+	// answer here is how the delivery obligation and the conversation key
+	// came to disagree about the same message.
+	if p.Address.IsDirect(metadata) {
+		return channel
+	}
+	return p.PartitionKey(metadata, subject)
 }
 
 // Build implements [Prompt].
@@ -283,15 +362,29 @@ func (p ChatPrompt) triage(marker string) string {
 }
 
 // threadBlock is the thread-reply guidance, identical on every backend.
+//
+// IT NO LONGER SENDS THE AGENT TO GO AND READ THE THREAD. That instruction
+// cost three rounds on a company whose chat tools come from a per-role MCP
+// server (list the server's tools, activate one, then call it, with the schema
+// arriving on the next message), and an agent that skipped it answered eleven
+// words of trigger text having no idea what the thread was about. The thread
+// is now in the system prompt, under `## The thread so far` — a DIFFERENT
+// heading from this section's, because this one lands in the user message and
+// two sections with one name saying different things is a model reading
+// whichever it saw last.
+//
+// Everything else here stays: recognising the seat's own replies and not
+// repeating a take it already gave are properties of the CONVERSATION rather
+// than of where the thread came from, and they are what stop a seat answering
+// itself.
 func threadBlock(self string) string {
 	reference := self
 	if reference == "" {
 		reference = "your own account"
 	}
 	return "\n## Thread context" +
-		"\nThis is a thread reply. Read the thread with your chat tools" +
-		" before responding; focus on the triggering message and treat the" +
-		" rest as background." +
+		"\nThis is a thread reply. Focus on the triggering message and" +
+		" treat the rest of the thread as background." +
 		"\n" +
 		"\n**Self-check before replying.** Messages from " + reference +
 		" in this thread are YOUR previous replies." +

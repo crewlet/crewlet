@@ -19,7 +19,7 @@ import (
 // # Two halves with different failure postures, from one credential
 //
 // The PARSER routes page events, and a broken one costs notifications. The
-// SEARCHER answers the Plan phase's "what do we already know about this",
+// SEARCHER answers a turn's "what do we already know about this",
 // and a broken one costs every seat its company's written knowledge on every
 // turn — silently, because an empty knowledge block is indistinguishable
 // from a company that has written nothing down.
@@ -126,8 +126,8 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 // activity to the seat that led that space under the old one — silently,
 // because a lead-fallback notification looks identical whoever it reached.
 // The CREDENTIAL is the other half: after a rotation the old client 401s on
-// every read, and the Plan phase's knowledge block goes empty with nothing
-// saying why.
+// every read, and a turn's knowledge block goes empty with nothing saying
+// why.
 //
 // The tracker beside this one is reconciled for the first reason, and this
 // package needed the same edge from the moment it had a lead map.
@@ -163,7 +163,7 @@ func (e *Engine) reconcileConfluence(c *Company) {
 	// routing page activity under the credential being revoked.
 	//
 	// Confluence needs one step the others do not: the SEARCHER goes as
-	// well. It is what the Plan-phase knowledge prefetch reads through, so
+	// well. It is what the turn-start knowledge prefetch reads through, so
 	// leaving it would have every seat go on searching a wiki the company
 	// has removed, using the same credential.
 	if cfg == nil {

@@ -155,13 +155,17 @@ func TestAPinPastTheDeclaredCountIsRefused(t *testing.T) {
 	_ = again.Close()
 }
 
-// Writer.Tx and DB.Tx share ONE retry loop, so a conflicted read-then-write on
-// the pinned connection is retried exactly as it is on a pooled one.
+// Writer.Tx and DB.Tx share ONE write path: the same queue, the same BEGIN
+// that takes the lock, the same retry. So a read-then-write on the pinned
+// connection and one on a pooled connection are serialized against each other
+// exactly as two pooled ones are.
 //
-// The counter is the sharpest shape of it — pooled writers and the pinned one
-// all read and write the same row — and the assertion is on the FINAL VALUE,
-// because a lost update is silent by construction.
-func TestWriterAndTxShareOneRetryLoop(t *testing.T) {
+// The counter is the sharpest shape of it (pooled writers and the pinned one
+// all read and write the same row) and the assertion is on the FINAL VALUE,
+// because a lost update is silent by construction, and on how many times the
+// bodies RAN, because a path that recovered from a lost race by re-running the
+// body would pass the first and still be racing.
+func TestWriterAndTxShareOneWritePath(t *testing.T) {
 	t.Parallel()
 	db := openPinned(t, 1)
 	ctx := t.Context()
@@ -180,7 +184,9 @@ func TestWriterAndTxShareOneRetryLoop(t *testing.T) {
 	defer func() { _ = w.Close() }()
 
 	const each = 12
+	var ran atomic.Int64
 	bump := func(tx *sql.Tx) error {
+		ran.Add(1)
 		var n int
 		if err := tx.QueryRowContext(ctx,
 			`SELECT n FROM crewlet_pin_probe WHERE id = 1`).Scan(&n); err != nil {
@@ -193,32 +199,26 @@ func TestWriterAndTxShareOneRetryLoop(t *testing.T) {
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 3*each)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range each {
 			if err := w.Tx(ctx, bump); err != nil {
 				errs <- err
 			}
 		}
-	}()
+	})
 	for range 2 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range each {
 				if err := db.Tx(ctx, bump); err != nil {
 					errs <- err
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)
-	failed := 0
 	for err := range errs {
-		failed++
-		t.Logf("a transaction exhausted its retry budget: %v", err)
+		t.Errorf("a read-then-write failed under contention: %v", err)
 	}
 
 	var got int
@@ -226,11 +226,14 @@ func TestWriterAndTxShareOneRetryLoop(t *testing.T) {
 		`SELECT n FROM crewlet_pin_probe WHERE id = 1`).Scan(&got); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
-	if got+failed != 3*each {
-		t.Errorf("counter = %d with %d reported failures, want them to sum to %d: "+
-			"%d increments were lost silently, which means the pinned path is "+
-			"not retrying what the pooled one does", got, failed, 3*each,
-			3*each-got-failed)
+	if got != 3*each {
+		t.Errorf("counter = %d, want %d: %d increments were lost, which means "+
+			"the pinned path is not serialized against the pooled one", got,
+			3*each, 3*each-got)
+	}
+	if n := ran.Load(); n != 3*each {
+		t.Errorf("the bodies ran %d times for %d transactions: one of the two "+
+			"paths lost a race and was re-run", n, 3*each)
 	}
 }
 

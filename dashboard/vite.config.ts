@@ -165,10 +165,15 @@ export default defineConfig({
     license: { fileName: NOTICES },
     // The faces keep the paths they have always had. They arrive from
     // @crewlethq/tokens through its stylesheet rather than from public/, and
-    // Vite would otherwise content-hash them into assets/; the engine's own
-    // Go suite pins /static/dashboard/fonts/<name>.woff2, and a reader who
-    // bookmarked one is a reader a hash breaks for nothing. Everything else
-    // keeps the hashed default.
+    // Vite would otherwise content-hash them into assets/. Two things depend
+    // on them staying at /static/dashboard/fonts/<name>.woff2: the published
+    // notice says so in as many words (THIRD_PARTY_NOTICES.txt, written from
+    // the `license` block above), and a reader who bookmarked one is a reader
+    // a hash breaks for nothing. The engine's Go suite pins the DIRECTORY —
+    // TestTheBuiltDashboardIsWhole reads each face out of the stylesheet that
+    // asks for it and requires the path to be under fonts/ — rather than any
+    // filename, which is the design system's to choose. Everything else keeps
+    // the hashed default.
     rollupOptions: {
       output: {
         assetFileNames: (asset) =>

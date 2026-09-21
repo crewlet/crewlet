@@ -198,6 +198,31 @@ func (e *Engine) Status() *notify.Statuses {
 	return notify.NewStatuses(drivers...)
 }
 
+// ChatThreads is the read half of every chat surface this node runs, as one.
+//
+// A SET, on exactly the argument [Engine.Status] makes for the write half: a
+// company can run both chat surfaces and a turn is woken by one of them, so
+// handing out "the" reader would read the wrong backend's thread or, far more
+// likely, none at all.
+//
+// NEVER NIL, for the same reason as well. A company with no chat backend gets
+// an empty set, which reports "nothing could be read" for every thread — and
+// that is the honest answer rather than a wiring question the prefetch has to
+// ask, because a maintenance-mode node runs no transport at all and a node
+// whose instance was unreachable at boot runs none either.
+func (e *Engine) ChatThreads() *notify.ThreadReaders {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	var readers []notify.ThreadReader
+	if e.notify.mattermost != nil {
+		readers = append(readers, e.notify.mattermost)
+	}
+	if e.notify.slack != nil {
+		readers = append(readers, e.notify.slack)
+	}
+	return notify.NewThreadReaders(readers...)
+}
+
 // refreshParties rebuilds the registry for a newly applied epoch.
 //
 // Called on EVERY apply, because an epoch is published rather than mutated:

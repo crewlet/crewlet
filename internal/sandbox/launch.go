@@ -30,12 +30,35 @@ type TurnRef struct {
 	// say which trigger it came from after the run outlives its process.
 	WorkKey string
 
-	AgentID         string
-	AgentHandle     string
-	Role            string
+	AgentID     string
+	AgentHandle string
+	Role        string
+
+	// PartitionKey is the inbox batch the kick-off trigger arrived in and
+	// ConversationKey the durable conversation it belongs to. BOTH travel,
+	// and both are written onto the row: the conversation is what matches a
+	// person's answer back to this run and where the resumed turn reports,
+	// the partition tells two runs parked on one direct message apart and
+	// is all a peer predating the conversation field can match on. See
+	// [PendingRun].
+	//
+	// NAMED AS [turnctx.Turn] NAMES THEM, field for field, because that is
+	// where both values come from and the two launch sites copy them across
+	// one after the other. They were ConversationKey and
+	// ConversationIdentity here, holding the partition and the conversation
+	// respectively — so each assignment read as its own opposite and a
+	// swapped pair looked exactly like a correct one. The wire names did
+	// not move with them; see [PendingRun].
+	//
+	// Two fields where there was one, and the miss this guards against is
+	// now available twice: this struct's partition was empty at its only
+	// construction site for the whole life of the feature, so every resumed
+	// turn recorded nothing at all.
+	PartitionKey    string
 	ConversationKey string
-	TraceID         string
-	SpanID          string
+
+	TraceID string
+	SpanID  string
 
 	// Reply is who is waiting for this turn, persisted so the resumed turn
 	// inherits the same delivery obligation. See [PendingRun.Reply].
@@ -123,6 +146,10 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		Placement:       string(req.Spec.Placement),
 		CodingAgent:     req.Spec.CodingAgent,
 		TaskDescription: req.Task,
+		PartitionKey:    req.Turn.PartitionKey,
+		// The conversation an answer is matched on and the resume
+		// reports back to, because a resume days later has neither the
+		// trigger nor this frame.
 		ConversationKey: req.Turn.ConversationKey,
 		Reply:           req.Turn.Reply,
 		TraceID:         req.Turn.TraceID, SpanID: req.Turn.SpanID,
@@ -184,6 +211,10 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		Agent: req.Turn.AgentID, AgentHandle: req.Turn.AgentHandle,
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
+		// THE IDENTITY on the announcement: this event is read for
+		// display, and what a person means by "which conversation is
+		// this run for" is the durable thread rather than the batch the
+		// trigger arrived in.
 		ConversationKey: req.Turn.ConversationKey,
 		Task:            summarise(req.Brief),
 	}
@@ -271,7 +302,9 @@ func abandon(ctx context.Context, m *Manager, store PendingStore, req LaunchRequ
 				"sandbox_id", sandboxID, "error", err.Error())
 		}
 	}
-	if _, err := store.Finish(ctx, req.Turn.TurnID, req.Fence); err != nil {
+	// Every live status, like every other settle that has already reclaimed
+	// the box: this launch is abandoned whatever the row reached.
+	if _, _, err := store.Finish(ctx, req.Turn.TurnID, req.Fence, Active); err != nil {
 		log.WarnContext(ctx, "sandbox_launch_finish_failed",
 			"turn_id", req.Turn.TurnID, "error", err.Error())
 	}
@@ -303,10 +336,10 @@ func summarise(brief string) string {
 // and the hint together, so the agent does not spend rounds rediscovering
 // that git auth is already wired.
 //
-// There is no success-criteria section any more. It came from the planner's
-// declared criteria, and with one loop there is no separate plan to declare
-// them: what "done" means is the executor's own brief, written by the frame
-// that will read the answer.
+// There is no success-criteria section any more. It came from the planning
+// phase's declared criteria, and with one phase deciding and acting there is
+// no separate plan to declare them: what "done" means is the executor's own
+// brief, written by the frame that will read the answer.
 func buildBrief(req LaunchRequest) string {
 	var b strings.Builder
 	b.WriteString(req.Brief)

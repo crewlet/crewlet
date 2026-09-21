@@ -39,9 +39,15 @@ func (Generic) RequiresRecon(Inbound) bool { return false }
 // [Prompt.Addressed].
 func (Generic) Addressed(Inbound) bool { return false }
 
-// ConversationKey is empty for an unrecognised source, which coalesces
+// PartitionKey is empty for an unrecognised source, which coalesces
 // nothing — the honest answer when the backend cannot say what a thread is.
-func (Generic) ConversationKey(map[string]string, string) string { return "" }
+func (Generic) PartitionKey(map[string]string, string) string { return "" }
+
+// ConversationIdentity is empty for the SAME reason, and the two halves are
+// both load-bearing: an unrecognised source's events merge with nothing AND
+// record nothing, because a conversation the spine cannot name is one no
+// later message could ever read back.
+func (Generic) ConversationIdentity(map[string]string, string) string { return "" }
 
 // WakesActor is false for an unrecognised source: an event type nobody has
 // classified that turns out to loop takes the company down with it, while

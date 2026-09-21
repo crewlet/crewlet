@@ -569,8 +569,9 @@ func (s Sources) countOutcomes(ctx context.Context, out *traffic) {
 //
 // FROM THE TAG, not the payload: a listing deliberately never selects the
 // payload column, so the tag is all a historical row carries — see
-// [store.RecordFor]. A row written before that tag existed carries none and
-// is skipped rather than guessed at.
+// [store.ExtractTags], which the publish listener that writes the rows calls.
+// A row written before that tag existed carries none and is skipped rather
+// than guessed at.
 func integrationOf(row store.EventRecord) string {
 	return strings.TrimSpace(row.Tags["notification_source"])
 }

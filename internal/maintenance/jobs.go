@@ -209,7 +209,7 @@ type DiaryStore interface {
 // entries — NULL deadline — are never touched. The read path already filters
 // expired rows out of recall, but reads cannot delete: without this job every
 // expired short-term memory stays a row the per-agent vector scan pays for on
-// every Plan phase, for the life of the deployment.
+// every turn start, for the life of the deployment.
 //
 // This is the exact failure the package doc names — Diary.Expire existed,
 // diary.go's comments described the background sweep, and nothing anywhere
@@ -235,7 +235,7 @@ func LearningJobs(d DiaryStore) []Job {
 			// count rather than a clock: a diary_long row is a fact
 			// the agent marked durable, so it has no deadline to
 			// pass — but recall scans every one of them on every
-			// Plan phase, so it cannot be unbounded either. See
+			// turn start, so it cannot be unbounded either. See
 			// learning.DiaryLongCap.
 			Name: "agent_diary_long", Scope: NodeLocal,
 			Run: func(ctx context.Context, _, _ time.Time) (int64, error) {

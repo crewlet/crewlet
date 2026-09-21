@@ -87,13 +87,6 @@ var allowed = []Allowance{
 			"deterministic and there is no inline dispatch to observe. Certified on the " +
 			"memory twin.",
 	},
-	{
-		Package: "internal/queue/jetstream",
-		Test:    "TestConformance/NegativePaths/a_deferral_spends_no_dead_letter_budget",
-		When:    Always,
-		Why: "Defer is implemented as a Nak here, which costs one delivery count — why " +
-			"MaxDeliver was re-derived from 10 to 25. Certified on the memory twin.",
-	},
 
 	// -----------------------------------------------------------------
 	// Structural: a driver capability that has not reached Go yet. This is

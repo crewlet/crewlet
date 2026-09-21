@@ -182,7 +182,7 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 				"stream.pages_log_max_bytes and stream.chat_log_max_bytes to "+
 				"choose them")
 	}
-	return sizeCeilings(ctx, host, boot.Stream, free)
+	return sizeCeilings(ctx, host, boot.Stream, free, volume)
 }
 
 // sizeCeilings is [ceilingsFor] on a volume already measured.
@@ -202,7 +202,7 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 // read their caps; the volume this node measured is the one figure it has, so
 // the same share of that bounds it.
 func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
-	free int64) (map[string]domainCeiling, error) {
+	free int64, volume string) (map[string]domainCeiling, error) {
 
 	asked := map[string]domainCeiling{}
 	var held int64
@@ -236,6 +236,25 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 	}
 	if err != nil || available < 0 {
 		available = free
+	}
+	// A LIMIT OF ZERO FROM AN ACCOUNT THAT DECLARES NONE FOR THIS NODE IS
+	// SAID OUT LOUD, because the boot that follows does not say it.
+	//
+	// It is the ONE reading that is a misconfiguration rather than a
+	// condition: the broker refuses every create on such an account before
+	// it compares a byte, so a node whose objects all already exist starts
+	// and works, sized against a pool of nothing but what those logs
+	// already hold, until the first time it has to make something new.
+	// Then a create is refused and the operator meets a fact that has been
+	// true since this line. Every other zero is a full broker, which the
+	// refusal itself explains when it arrives.
+	if err == nil && noApplicableLimit(budget.Source) {
+		log.WarnContext(ctx, "statelog_broker_states_no_limit",
+			"broker_source", string(budget.Source),
+			"detail", limitSource(budget.Source, volume)+
+				". This node will start if every stream, consumer and bucket it "+
+				"needs already exists, and the first create it has to make will "+
+				"be refused")
 	}
 	pool := int64(float64(available+held) * StreamBudgetShare)
 	sized := fitCeilings(asked, pool)
@@ -390,18 +409,7 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 	domain statelog.Domain, ceiling domainCeiling, cause error) error {
 
 	budget, err := host.StreamBudget(ctx)
-	var had string
-	switch {
-	case err != nil:
-		had = fmt.Sprintf("what the broker had left could not be read (%v)", err)
-	case budget.Limit < 0:
-		had = "the broker states no limit this node can read, so what refused it " +
-			"is a server's own cap"
-	default:
-		had = fmt.Sprintf("the broker had %d bytes left to reserve (%d of its "+
-			"%d-byte limit already reserved), and %s", budget.Available(),
-			budget.Committed, budget.Limit, limitSource(budget.Source, s.volume))
-	}
+	had := roomLeft(budget, err, s.volume)
 	from := fmt.Sprintf("%s is unset, so the ceiling was derived and scaled into "+
 		"the state logs' share of the broker, and it goes no lower than %d bytes",
 		ceiling.Field, MinDomainCeiling)
@@ -422,14 +430,67 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 		domain.Name(), domain.Stream().Name, ceiling.Bytes, had, from, remedy, cause)
 }
 
+// roomLeft is what the broker had to reserve when it refused, in the terms an
+// operator acts on: how much is left, how much of the limit is spoken for, what
+// the limit is, and who sets it.
+//
+// ONE SENTENCE FOR BOTH REFUSALS, the create's ([stateLog.storageRefused]) and
+// the raise's ([Engine.capacityRefusal]). They are the same four numbers about
+// the same broker and were written twice, which is the shape this tree has paid
+// for before: [internal/textcut], [internal/whsec] and [internal/jsprovision]
+// each record a rule that drifted while two doc comments asserted they matched.
+//
+// PURE OVER THE VALUES IT IS GIVEN, and the read is the caller's — which buys
+// the property that matters here: the numbers in the message are provably the
+// numbers that decided, because there is no second source for them to come
+// from. A caller that read the budget to decide and then asked again for the
+// wording could refuse an operator against one limit and quote them another,
+// on a topology where each read is a live round trip.
+//
+// The three cases are three different facts and never collapse: a limit that
+// could not be read is not a limit of zero, and a broker that states none is
+// not a broker with none — its servers still have caps this client cannot see.
+func roomLeft(budget jetstream.StorageBudget, readErr error, volume string) string {
+	switch {
+	case readErr != nil:
+		return fmt.Sprintf("what the broker had left could not be read (%v)", readErr)
+	case budget.Limit < 0:
+		return "the broker states no limit this node can read, so what refused it " +
+			"is a server's own cap"
+	}
+	return fmt.Sprintf("the broker had %d bytes left to reserve (%d of its "+
+		"%d-byte limit already reserved), and %s", budget.Available(),
+		budget.Committed, budget.Limit, limitSource(budget.Source, volume))
+}
+
+// noApplicableLimit reports a budget whose zero means the account declares no
+// limit that applies to this node at all, rather than a limit that is spent.
+//
+// TWO SOURCES AND NOT A ZERO TEST, because the two are the same number and the
+// opposite instruction: a spent limit clears by somebody freeing room, and
+// these clear only by a change of configuration.
+func noApplicableLimit(source jetstream.BudgetSource) bool {
+	switch source {
+	case jetstream.BudgetAccountNoTier, jetstream.BudgetAccountTierNoLimit:
+		return true
+	}
+	return false
+}
+
 // limitSource says who sets a broker's limit, in the terms an operator
 // changes.
 func limitSource(source jetstream.BudgetSource, volume string) string {
 	switch source {
 	case jetstream.BudgetServerStore:
-		return fmt.Sprintf("that limit is three quarters of the free space on the "+
-			"volume holding stream.store_dir (%s), counting what the broker's "+
-			"streams already hold there", volume)
+		// BOTH SOURCES OF THE SAME NUMBER, because the broker reports
+		// only the number and not which one set it: stream.store_max_bytes
+		// where an operator declared one, and nats-server's own sizing of
+		// the volume where nobody did. Naming only the second sends an
+		// operator who set the first to a disk that has room.
+		return fmt.Sprintf("that limit is stream.store_max_bytes where you set "+
+			"one, and otherwise three quarters of the free space on the volume "+
+			"holding stream.store_dir (%s), counting what the broker's streams "+
+			"already hold there", volume)
 	case jetstream.BudgetServerMemory:
 		return "that limit is three quarters of this host's memory, because " +
 			"stream.store_dir is unset and the embedded broker keeps its streams " +
@@ -437,6 +498,48 @@ func limitSource(source jetstream.BudgetSource, volume string) string {
 	case jetstream.BudgetAccount:
 		return "that limit is the NATS account's own JetStream storage limit, " +
 			"which whoever operates the broker sets"
+	case jetstream.BudgetAccountTierNoLimit:
+		// TWO REALITIES UNDER ONE REPORT, which is why this clause names
+		// both refusals rather than the missing tier's alone. A class
+		// the limit table has no entry for is never resolved and is
+		// refused before a byte is compared; a class the account really
+		// does declare with NO DISK — a memory-only tier, whose
+		// DiskStorage reaches MaxStore verbatim — resolves normally and
+		// is refused by the byte comparison instead. Nothing in the
+		// account's own report tells the two apart, so an operator sent
+		// looking for a missing declaration would be hunting the one
+		// thing that account is not missing.
+		return "that limit is zero because the NATS account is TIERED, reports the " +
+			"replica class stream.replicas puts this node in and states no storage " +
+			"for it — a class an account holds objects in is reported whether or not " +
+			"a limit was ever set for it, so a class being present is not a class " +
+			"being declared. Either the limit table has no entry for it, and every " +
+			"create is refused before a byte is compared (`no JetStream default or " +
+			"applicable tiered limit present`), or the tier is declared with no disk " +
+			"and every create that reserves bytes is refused by the comparison " +
+			"(`insufficient storage resources available`). Have the cluster's " +
+			"operator declare storage on that tier, or set stream.replicas to a class " +
+			"that has some"
+	case jetstream.BudgetAccountNoTier:
+		// NOT A CAPACITY SENTENCE, which is why it is not folded into the
+		// one above. The account grants this node's replica class nothing
+		// at all, so the broker refuses every create on it before it
+		// compares a byte, and waiting for room is the one thing that
+		// will never help.
+		return "that limit is zero because the NATS account is TIERED and declares no " +
+			"tier for the replica class stream.replicas puts this node in, so the " +
+			"broker refuses every stream on it — `no JetStream default or applicable " +
+			"tiered limit present` — whatever ceiling is asked for. Set " +
+			"stream.replicas to a class the account declares, or have the cluster's " +
+			"operator declare that tier"
+	case jetstream.BudgetUnstated:
+		// REACHED ONLY IF A CALLER STOPS BRANCHING ON THE LIMIT FIRST, an
+		// unstated one being negative and read as "no limit this node can
+		// see" before it gets here. Written anyway, because "unreachable"
+		// is a claim about every caller rather than about this function,
+		// and the cost of being wrong is the fallthrough below.
+		return "the account states no limit this node can read, so what refused this " +
+			"is a cap on a server it does not run; ask whoever operates that cluster"
 	}
 	return fmt.Sprintf("the broker's limit comes from %q, which this build does "+
 		"not know", source)

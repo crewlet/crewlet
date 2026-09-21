@@ -26,7 +26,7 @@ import (
 // nothing else in the system removes one. Recall is what pays for that, and it
 // pays LINEARLY: there is still no ANN index reachable from the Go driver,
 // re-measured at the pin, so recall visits every embedded row
-// the seat owns, in the Plan phase of every turn.
+// the seat owns, at the start of every turn.
 //
 // The constant shrank when the distance arithmetic moved into the database
 // — the rows no longer cross the driver boundary to be decoded
@@ -90,7 +90,7 @@ type Cluster struct {
 // that was 90% failed once surfaced under an outcome filter of "done" because
 // the model mislabelled it. The data is right there; nothing needs to guess.
 type Summary struct {
-	// CommonTaskPattern is one declarative sentence. The planner reads it
+	// CommonTaskPattern is one declarative sentence. The agent reads it
 	// as "you have done this kind of work N times".
 	CommonTaskPattern string
 
@@ -169,7 +169,7 @@ type Options struct {
 	// undefined, and there is no other similarity signal here — so for a
 	// chat-only seat the fold that bounds every other seat's raw rows
 	// never fires and the table only grows. Every one of those rows is
-	// scanned and cosined on the Plan phase of every turn, for ever.
+	// scanned and cosined at the start of every turn, for ever.
 	//
 	// A horizon rather than a cap, because these rows have no cluster to
 	// be a member of: there is no summary that would carry their content
@@ -197,7 +197,7 @@ const (
 	// MEASURED, and it is a latency budget rather than a storage one: recall
 	// scans every embedded row a seat owns, once per turn, at 7.5 µs per
 	// row at 1 536 dimensions (BenchmarkRecallScan, re-measured at the pin).
-	// 500 rows is ~3.9 ms on the Plan phase of every turn — a rounding error
+	// 500 rows is ~3.9 ms at the start of every turn, a rounding error
 	// next to one LLM round. 2000 is ~15 ms and still climbing linearly,
 	// because nothing else in the system bounds this number.
 	//
@@ -232,7 +232,7 @@ const (
 	// speaks to. A tool-free turn IS a conversation — it answered somebody
 	// without doing anything — so its value as "similar prior work" decays
 	// with the thread it belonged to, while its cost does not decay at all:
-	// it is a row recall scans on every Plan phase at 7.5 µs, permanently.
+	// it is a row recall scans at every turn start at 7.5 µs, permanently.
 	//
 	// Deliberately far longer than the other two raw-row horizons here (14
 	// and 30 days), because those drop rows that are half-finished or
@@ -358,19 +358,36 @@ func NewLifecycle(db *store.DB, s Summarizer, o Options) *Lifecycle {
 // Options returns the knobs in force, defaults applied.
 func (l *Lifecycle) Options() Options { return l.opts }
 
-// terminalOutcomes are the Review decisions that END a turn, as a SQL tuple.
+// terminalOutcomes is [SettledOutcomes] as a SQL tuple.
 //
-// ONE definition used twice, in complementary directions: a compaction
-// candidate must be in it, and the mid-state sweep drops everything that is
-// not. Two hand-written lists is how a row ends up being neither: a sweep
-// naming 'self_iterate' explicitly while the candidate query takes only
-// ('done','failed') leaves any other value undroppable AND uncompactable, and
-// it stays in the seat's memory forever.
+// Used twice here, in complementary directions: a compaction candidate must be
+// in it, and the mid-state sweep drops everything that is not. Two hand-written
+// lists is how a row ends up being neither — a sweep naming 'self_iterate'
+// explicitly while the candidate query takes only ('done','failed') leaves any
+// other value undroppable AND uncompactable, and it stays in the seat's memory
+// forever. That was written when this was a literal, and it was already wrong
+// by one: cluster.go held a third copy it could not see.
 //
-// Spelled inline rather than bound: these are compile-time constants of this
-// package and never caller input, exactly like the state names in
-// ListOptions.filter.
-const terminalOutcomes = `('done', 'failed')`
+// Spelled into the query rather than bound: these are compile-time constants
+// of this package and never caller input, exactly like the state names in
+// ListOptions.filter. The day one stops being a bare identifier, the tuple
+// this builds would need quoting rules it does not have — which is why a test
+// holds every value to that shape rather than trusting the next editor to
+// remember it.
+var terminalOutcomes = sqlTuple(SettledOutcomes())
+
+// sqlTuple renders values as a SQL tuple literal.
+//
+// No escaping, deliberately: see [terminalOutcomes] for why nothing here is
+// ever caller input, and why the constraint that keeps it that way is a test
+// rather than a quoting pass that would imply otherwise.
+func sqlTuple(vals []string) string {
+	quoted := make([]string, 0, len(vals))
+	for _, v := range vals {
+		quoted = append(quoted, "'"+v+"'")
+	}
+	return "(" + strings.Join(quoted, ", ") + ")"
+}
 
 // RawCount reports how many raw rows a seat holds, and whether that is past
 // the threshold.
@@ -468,7 +485,7 @@ func (l *Lifecycle) Pass(ctx context.Context, handle string, now time.Time) (Pas
 	// The one bound on a chat-only seat's raw rows. Nothing below this can
 	// reach them: the fold clusters by tool overlap and skips them
 	// entirely, so without this the table grows for the life of the
-	// deployment and every Plan phase pays for it.
+	// deployment and every turn start pays for it.
 	n, err = l.dropToolFree(ctx, handle, now.Add(-l.opts.ToolFreeMaxAge))
 	res.ToolFreeDropped = int(n)
 	if err != nil {
@@ -1021,7 +1038,7 @@ func (l *Lifecycle) buildCompacted(handle string, cluster, exemplars []Episode, 
 	}
 	pattern := strings.TrimSpace(s.CommonTaskPattern)
 	if pattern == "" {
-		// The planner reads this line as the whole reason the row exists.
+		// The agent reads this line as the whole reason the row exists.
 		// An empty one renders as a count with no claim attached, which
 		// reads like a bug in the dashboard rather than a thin summary.
 		pattern = "(unspecified)"
@@ -1319,7 +1336,7 @@ Output format (strict, JSON only -- no prose before or after):
 }
 
 Rules:
-- ` + "``common_task_pattern``" + ` is declarative and short; the planner reads
+- ` + "``common_task_pattern``" + ` is declarative and short; the agent reads
   it as "you've done this kind of work N times".
 - ` + "``subjects_involved``" + ` lists distinct named counterparties (chat
   user labels, ticket reporter handles).  Empty if none consistent.
@@ -1330,13 +1347,13 @@ Rules:
 - If the turns don't actually share a coherent pattern, emit
   ` + "``{\"common_task_pattern\": \"(heterogeneous)\"}``" + `; the rest of the
   fields can be empty -- the compactor will still write the row but
-  the planner will see it as low-signal.
+  the agent will see it as low-signal.
 `
 
 // perTurnDetail clamps how much of one turn's prose reaches the prompt.
 //
 // A cluster can be as large as the batch (200 turns), and every turn renders
-// four lines. At 280 characters each for the task and the plan that is roughly
+// four lines. At 280 characters each for the task and its summary that is roughly
 // 120 KB, about 30k tokens, in a single call — affordable once a month per
 // seat. Without the clamp one turn carrying a pasted stack trace sets the size
 // of the call.
@@ -1388,7 +1405,7 @@ func oneLine(s string) string {
 // both recover, and a clean one parses exactly as sent.
 //
 // FIELD BY FIELD once an object is found, never all-or-nothing. The pattern
-// sentence is the only part the planner actually reads, and decoding the whole
+// sentence is the only part the agent actually reads, and decoding the whole
 // object into one struct throws it away whenever any other field comes back
 // the wrong shape — a model answering "subjects_involved": "nobody" instead of
 // a list would cost the summary the LLM call just bought.

@@ -329,6 +329,31 @@ func embeddedOptions(cfg Config) (*server.Options, string, error) {
 		// The engine's own handler is the one that must run, and it must
 		// run to completion.
 		NoSigs: true,
+
+		// HOW MUCH OF ITS OWN VOLUME THIS BROKER MAY HOLD, declared
+		// rather than inferred — see [Config.StoreMaxBytes].
+		//
+		// THE SERVER OPTION IS THE LEVER, not the account's limit, and
+		// the two are not interchangeable. This number is what bounds a
+		// stream's reservation on BOTH topologies: standalone it is
+		// checked directly against the create (server/jetstream.go,
+		// checkBytesLimits), and clustered it is what each member
+		// publishes as its own capacity for the metadata leader's peer
+		// selection to subtract from. The ACCOUNT limit reaches only
+		// the first of those, and cannot be set to this same number at
+		// all — the server compares a limit change against the
+		// difference from "unlimited", which is one byte more than the
+		// limit being asked for.
+		//
+		// Zero leaves nats-server to derive it: three quarters of the
+		// free space on StoreDir when its JetStream comes up, plus what
+		// it already occupies there (server/jetstream.go,
+		// dynJetStreamConfig and finalizeDynamicMaxStore). Either way
+		// the number in force is readable afterwards, and declared or
+		// derived is invisible to the reader: [embeddedServer.budget]
+		// reports whichever it is as [BudgetServerStore], which is what
+		// [Queue.StreamBudget] holds a reservation to.
+		JetStreamMaxStore: cfg.StoreMaxBytes,
 	}
 	var scratch string
 	if opts.StoreDir == "" {

@@ -512,6 +512,12 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 // company mid-turn changes it; the run's durable row must carry the id of the
 // organization the turn is pinned to, which is the id every other event of
 // that turn carries, not the one the engine's current company would derive.
+//
+// It covers BOTH launch paths now, because there is one builder behind them:
+// the run_sandbox tool took this id off the LIVE company and was the odd one
+// out, so a renamed epoch gave its row an agent id no other event of that turn
+// carried. Asserted through the launcher rather than against the builder
+// directly, so a path that stopped using it would fail here.
 func TestARunRecordsTheAgentIDOfItsPinnedTurn(t *testing.T) {
 	t.Parallel()
 	pinned, seat := modeCompany(t, "claude-code", true, config.PlacementDirect)

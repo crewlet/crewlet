@@ -18,14 +18,11 @@ package notify
 // [ChannelKindField] and [ActorField] are stamped by every source that has
 // the fact, and [RecipientField] and [KeyField] are stamped by the spine
 // itself after resolution. They are part of the vocabulary — [ChatKeys]
-// lists them — and they keep their homes.
+// lists them — and they keep their homes. [TransportField] is one of those:
+// it is declared beside the conversation grammar it discriminates, not here,
+// because it answers "which backend" for every source rather than only for
+// a chat one.
 const (
-	// TransportField names the backend that produced a notification, and
-	// is the discriminator every chat consumer keys on: a driver refuses
-	// a trigger that is not its own backend's, so a turn resumed from a
-	// detached sandbox run resolves the same conversation as its kick-off.
-	TransportField = "transport"
-
 	// ChannelField is the backend's own id for the surface a message
 	// arrived on. Opaque: only the producing backend may read structure
 	// out of it, which is what [AddressRule.DMPrefix] is guarded by.
@@ -109,7 +106,7 @@ func ChatKeys() []string {
 		FollowReasonField,
 		FollowingField,
 		RecipientField,
-		KeyField,
+		PartitionField,
 		ReplayedField,
 	}
 }

@@ -18,6 +18,7 @@ import { outcomeOf, problemCount, turnFacts, type TurnView } from "./Turn.tsx";
 import { turnSpan } from "~/lib/phases.ts";
 import type { PhaseRecord, Timed } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
+import { tellStory } from "~/lib/turnstory.ts";
 
 function record(payload: Record<string, unknown>): EventRecord {
   return { payload } as unknown as EventRecord;
@@ -241,6 +242,9 @@ describe("turnFacts", () => {
       workerCount: 0,
       iterations: 0,
       traceIds: [],
+      story: tellStory([]),
+      trouble: 0,
+      clean: false,
       ...over,
     };
   }

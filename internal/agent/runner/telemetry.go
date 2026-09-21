@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -78,7 +80,10 @@ type Turn struct {
 	// able to show its source.
 	Trigger types.Trigger
 
-	// ConversationKey is which conversation this turn served. It is the
+	// ConversationKey is which conversation this turn served — the durable
+	// CONVERSATION IDENTITY, never the inbox partition key beside it
+	// ([notify.Prompt.ConversationIdentity]), so a direct message's phases
+	// are one thread however the messages in it were threaded. It is the
 	// only way to ask the store for one thread's phases: the reasoning is
 	// durably kept as the <think> prefix of a phase response, and without
 	// this it is addressable by agent and time alone.
@@ -110,6 +115,10 @@ type emitter struct {
 	role  string
 	tally *Spend
 
+	// onPhase is the working indicator's hook, or nil. See
+	// [Config.OnPhase]; it is called from [emitter.started].
+	onPhase func(phase.Phase)
+
 	// mu guards the delegation counters on tally, which several workers
 	// write concurrently. Nil on an emitter that publishes nothing.
 	mu *sync.Mutex
@@ -131,6 +140,7 @@ func (r *Runner) emitter() emitter {
 	return emitter{
 		pub: r.cfg.Publisher, turn: r.cfg.Turn,
 		role: r.cfg.Seat.Role.Name, tally: &r.spend, mu: &r.mu,
+		onPhase: r.cfg.OnPhase,
 	}
 }
 
@@ -304,7 +314,18 @@ func (e emitter) on() bool { return e.pub != nil }
 // phase is working, so the live view can show what the agent was asked while
 // it is still answering. Consumers read RoundNum+1 as "rounds so far", which
 // is why the sentinel is -1 and not 0 — a 0 would claim a round had finished.
-func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int, system, user string) {
+func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
+	system, user string, seed []llm.Message, surface *tools.Surface,
+) {
+	// BEFORE THE PUBLISHER GATE, and off the same `ph` the event below
+	// carries. The working indicator is not telemetry: a runner whose phases
+	// are silent — a test, an embedded runner, a node whose broker refused
+	// every publish — still has a person watching a chat thread, so gating
+	// this on whether anything is listening to the stream would be gating a
+	// reader's own view on the engine's observability. See [Config.OnPhase].
+	if e.onPhase != nil {
+		e.onPhase(ph)
+	}
 	if !e.on() {
 		return
 	}
@@ -334,7 +355,7 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int, sys
 		RoundNum: openingRound,
 	}, e.traceFor(ctx)))
 
-	e.promptSize(ctx, ph, iteration, system, user)
+	e.promptSize(ctx, ph, iteration, system, user, seed, surface)
 }
 
 // openingRound is the RoundNum of the update published before a phase's first
@@ -344,18 +365,58 @@ const openingRound = -1
 // promptSize measures the prompt a phase is about to send.
 //
 // Published from [emitter.started] because that is the one frame holding the
-// FINAL system and user text — after every section builder, every prefetch and
-// every ledger have had their say. Anywhere earlier measures a draft.
+// FINAL prompt — after every section builder, every prefetch and every ledger
+// have had their say. Anywhere earlier measures a draft.
+//
+// THE SURFACE IS TAKEN, NOT ITS DEFINITIONS, and rendered inside the [emitter.on]
+// guard above: [tools.Surface.ToolDefs] clones every active tool's schema, and
+// a runner with no publisher — every sub-agent, and every test driving one
+// directly — would otherwise pay that render to build an event nobody
+// receives. The call is safe from here: ToolDefs takes the surface's lock only
+// to clone the active name list and has released it before it looks a tool up,
+// and neither caller of started holds that lock.
+//
+// AGENT MODE COUNTS THE ARRAY TOO, although the launcher's Brief is the system
+// and user text alone. Those definitions reach the coding CLI over the MCP
+// bridge and that CLI's own model is billed for every one of them, so leaving
+// them out would report the engine's cheapest-looking phase as its slimmest.
 //
 // The token figure is approximate by construction and says so in its field
 // name: a real count needs the vendor's own tokenizer, which differs per model
-// and would make this event a provider call. Four characters per token is the
-// long-standing rule of thumb for English prose plus JSON, and the character
-// counts ride along so anyone comparing builds can apply their own ratio
-// rather than inheriting this one.
-func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int, system, user string) {
+// and would make this event a provider call. The size fields ride along so
+// anyone comparing builds can apply their own ratio rather than inheriting
+// this one.
+//
+// MEASURED IN BYTES, which is what len() of a Go string is and what the Go
+// fields are named for. The WIRE KEYS still say chars and deliberately do not
+// move — see [types.PromptSize], which carries the whole reason.
+func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int,
+	system, user string, seed []llm.Message, surface *tools.Surface,
+) {
 	if !e.on() {
 		return
+	}
+	// Every phase in this package builds its surface before it opens, so a
+	// nil one is not a state the engine reaches — but this runs on the
+	// turn's own goroutine, where a nil dereference takes the seat down
+	// rather than the measurement, and a telemetry frame is the last place
+	// worth discovering that from.
+	var defs []llm.ToolDef
+	if surface != nil {
+		defs = surface.ToolDefs()
+	}
+	m, err := measurePrompt(system, user, seed, defs)
+	if err != nil {
+		// The row still goes out, short one term, and it is worth more
+		// than a phase with no measurement at all — whatever could not be
+		// encoded here is what the provider call after it is about to
+		// reject for the same reason. The log line is the only place that
+		// says WHICH term came up short, because the row itself cannot:
+		// a tool_chars of 0 beside a non-zero tool_count is visible, but
+		// a conversation measured short of its own tool-call arguments
+		// reads as a perfectly ordinary figure.
+		log.WarnContext(ctx, "prompt_size_measure_failed", "phase", ph,
+			"turn_id", e.turn.RunID, "error", err)
 	}
 	e.publish(ctx, events.New(types.PromptSize{
 		Agent:             e.turn.AgentID,
@@ -364,17 +425,189 @@ func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int, 
 		WorkKey:           e.turn.WorkKey,
 		Iteration:         iteration,
 		Phase:             types.Phase(ph),
-		ApproximateTokens: (len(system) + len(user)) / charsPerToken,
-		SystemChars:       len(system),
-		UserChars:         len(user),
+		ApproximateTokens: m.approximateTokens(),
+		SystemBytes:       m.system,
+		UserBytes:         m.user,
+		MessageBytes:      m.messages,
+		ToolBytes:         m.tools,
+		ToolCount:         m.toolCount,
 	}, e.traceFor(ctx)))
 }
 
-// charsPerToken is the ratio the approximate count uses. Four is the figure
-// both built-in providers' own documentation gives for English text, and this
-// number exists to make prompt growth comparable across builds rather than to
-// bill anybody — the real count is on the completed phase, from the provider.
-const charsPerToken = 4
+// bytesPerToken is the ratio the approximate count uses. Four is the figure
+// both built-in providers' own documentation gives for English text — stated
+// there as characters per token, which is the same number here because the
+// prose and JSON a prompt is made of is overwhelmingly ASCII, where one
+// character is one byte. This number exists to make prompt growth comparable
+// across builds rather than to bill anybody — the real count is on the
+// completed phase, from the provider.
+const bytesPerToken = 4
+
+// promptMeasure is one prompt's size, by component.
+type promptMeasure struct {
+	system    int
+	user      int
+	messages  int
+	tools     int
+	toolCount int
+}
+
+// approximateTokens is the whole prompt over one ratio.
+func (m promptMeasure) approximateTokens() int {
+	return (m.system + m.user + m.messages + m.tools) / bytesPerToken
+}
+
+// measurePrompt sizes what a phase is about to send.
+//
+// PURE OVER VALUES, in the shape internal/textindex and internal/search use
+// for the same reason: arithmetic that can only be exercised through a live
+// runner is arithmetic nobody re-measures.
+//
+// A SEEDED phase and a fresh one are measured as the loop sends them, which is
+// exclusively one or the other: a resumed loop re-enters its saved messages
+// and the system and user strings are ignored (see [phaseRun], which switches
+// on the same nil), so counting them here would report bytes no provider
+// receives — and counting only them is what reported every resumed executor at
+// 0/0.
+//
+// THE TWO TERMS ARE MEASURED INDEPENDENTLY and the first failure is returned
+// with both of them filled as far as they got. The caller publishes the row
+// either way, and a term zeroed because a different term could not be encoded
+// is a number nobody can interpret.
+func measurePrompt(system, user string, seed []llm.Message, defs []llm.ToolDef) (promptMeasure, error) {
+	m := promptMeasure{toolCount: len(defs)}
+	var failure error
+	if seed == nil {
+		m.system, m.user = len(system), len(user)
+	} else {
+		m.messages, failure = seedBytes(seed)
+	}
+	// Not named `tools`: this file imports the package of that name, and a
+	// local that shadows it is a compile error waiting for the next line
+	// added here.
+	size, err := toolDefBytes(defs)
+	m.tools = size
+	if failure == nil {
+		failure = err
+	}
+	return m, failure
+}
+
+// seedBytes is what a parked conversation weighs: every message's text, the
+// reasoning each assistant round carries, and the arguments of the tool calls
+// in it. It returns what it managed to count alongside any failure, because
+// the row goes out regardless.
+//
+// THE THINKING TERM IS COUNTED ONCE PER MESSAGE, and that is the whole of the
+// arithmetic here. [llm.Message] carries a model's reasoning in two shapes and
+// a backend sets either or both: the Anthropic backend fills ThinkingBlocks —
+// which it hands straight back into the next call's content blocks and is
+// billed for — and ALSO renders that same thinking text into ReasoningContent
+// as prose, while the OpenAI backend fills ReasoningContent alone and the
+// cli-agent text backend writes exactly that prose into the prompt it builds.
+// So summing both would double the largest term a parked Anthropic turn
+// carries, on the one backend that actually pays for it, and dropping either
+// would report a resumed phase as having thought nothing on the other. The
+// blocks win wherever there are blocks; the prose stands in where there are
+// none.
+//
+// Signature is deliberately out of the sum: it is a fixed-size opaque token
+// the provider mints per block rather than anything a model wrote, so counting
+// it would make this figure move with a vendor's token format instead of with
+// the prompt. A tool call's id and name are out for the same reason — bounded
+// identifiers beside arguments that run to kilobytes.
+func seedBytes(seed []llm.Message) (int, error) {
+	total := 0
+	for _, msg := range seed {
+		total += len(msg.Content)
+		if len(msg.ThinkingBlocks) > 0 {
+			for _, tb := range msg.ThinkingBlocks {
+				// Data is the redacted-thinking payload, which is the
+				// whole of such a block: it has no readable Thinking,
+				// and it is still handed back and still billed.
+				total += len(tb.Thinking) + len(tb.Data)
+			}
+		} else {
+			total += len(msg.ReasoningContent)
+		}
+		for _, tc := range msg.ToolCalls {
+			if len(tc.Arguments) == 0 {
+				total += emptyArgsBytes
+				continue
+			}
+			encoded, err := json.Marshal(tc.Arguments)
+			if err != nil {
+				// NAME THE CALL, as toolDefBytes names the tool: json
+				// reports the offending Go type and a parked
+				// conversation holds one per round.
+				return total, fmt.Errorf("measuring the parked conversation: the "+
+					"arguments of tool call %q cannot be encoded as JSON: %w",
+					tc.Name, err)
+			}
+			total += len(encoded)
+		}
+	}
+	return total, nil
+}
+
+// emptyArgsBytes is what an argument-less tool call weighs on the wire: the two
+// bytes of `{}` both HTTP backends send for one, rather than the four
+// json.Marshal answers for a nil map. A `null` there is a shape no provider
+// ever receives.
+const emptyArgsBytes = len(`{}`)
+
+// toolDefBytes is the compact JSON size of a tool-definition array.
+//
+// COMPACT, and ONE CANONICAL SHAPE rather than any vendor's own: this object
+// per tool, whoever serves the phase. Marshalling [llm.ToolDef] itself would
+// measure its Go field names, and measuring each backend's real array would
+// make "is the prompt getting smaller" unanswerable the moment a fallback
+// chain moved a seat between providers — which is the question this figure
+// exists for.
+//
+// WHICH MAKES IT A FLOOR, stated on [types.PromptSize.ToolBytes] where a
+// reader of the row will find it: every backend sends MORE than this. OpenAI
+// wraps each entry as {"type":"function","function":{…}}, Anthropic spells
+// the schema `input_schema` and puts a cache breakpoint on the last entry,
+// both write an absent schema out as {"type":"object","properties":{}} where
+// the omitempty below drops it, and the cli-agent text backend renders the
+// same definitions indented inside a fenced catalogue. An empty DESCRIPTION
+// is the one thing genuinely dropped on both — neither vendor sends a field
+// for it.
+func toolDefBytes(defs []llm.ToolDef) (int, error) {
+	if len(defs) == 0 {
+		return 0, nil
+	}
+	wire := make([]toolDefWire, 0, len(defs))
+	for _, d := range defs {
+		wire = append(wire, toolDefWire{
+			Name: d.Name, Description: d.Description, Parameters: d.Parameters,
+		})
+	}
+	encoded, err := json.Marshal(wire)
+	if err != nil {
+		// NAME THE TOOL a person has to fix, which the array's own error
+		// cannot: json reports the offending Go type and there are as
+		// many of those as there are schemas on the surface. One pass per
+		// tool on a path that is already failing.
+		for _, d := range defs {
+			if _, each := json.Marshal(d.Parameters); each != nil {
+				return 0, fmt.Errorf("measuring the tool definitions: the parameters "+
+					"of tool %q cannot be encoded as JSON: %w", d.Name, each)
+			}
+		}
+		return 0, fmt.Errorf("measuring the tool definitions: %w", err)
+	}
+	return len(encoded), nil
+}
+
+// toolDefWire is the canonical entry a tool array is measured as. Deliberately
+// not any one vendor's: see [toolDefBytes].
+type toolDefWire struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters,omitempty"`
+}
 
 // fallback records one hand-off inside a phase's provider chain.
 //
@@ -619,7 +852,7 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		Iteration: e.hostIteration,
 		// NESTED under the phase that spawned it, so a dashboard groups
 		// it beneath that Execute round rather than rendering it as a
-		// standalone sibling of the turn's own three phases.
+		// standalone sibling of the turn's own phases.
 		HostPhase:     types.PhaseExecute,
 		HostIteration: e.hostIteration,
 		// WHICH task and WHICH template. A call of eight otherwise

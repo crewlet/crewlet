@@ -100,7 +100,7 @@ func TestABackendsOwnChannelTypeIsDirectToEveryReader(t *testing.T) {
 	if !prompt.Addressed(notify.Inbound{Source: "native", Metadata: direct}) {
 		t.Fatal("a direct conversation does not oblige an answer")
 	}
-	if got := prompt.ConversationKey(direct, ""); got != "c-42" {
+	if got := prompt.PartitionKey(direct, ""); got != "c-42" {
 		t.Fatalf("a direct conversation keys on %q, want the channel alone", got)
 	}
 	// And a room on that same backend is neither.
@@ -108,7 +108,7 @@ func TestABackendsOwnChannelTypeIsDirectToEveryReader(t *testing.T) {
 	if prompt.Address.IsDirect(room) {
 		t.Fatal("a room is read as direct")
 	}
-	if got := prompt.ConversationKey(room, ""); got != "c-42:m-7" {
+	if got := prompt.PartitionKey(room, ""); got != "c-42:m-7" {
 		t.Fatalf("a room message keys on %q, want channel:anchor", got)
 	}
 }

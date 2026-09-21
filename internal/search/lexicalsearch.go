@@ -255,8 +255,8 @@ func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, te
 
 // snippetBytes is the window a hit's snippet is cut to.
 //
-// Two hundred, matching [knowledge.SnippetLimit]: the block exists to tell a
-// planner WHICH page to read, not to be the page, and it is re-sent on every
+// Two hundred, matching [knowledge.SnippetLimit]: the block exists to tell an
+// agent WHICH page to read, not to be the page, and it is re-sent on every
 // round of the phase.
 const snippetBytes = 200
 

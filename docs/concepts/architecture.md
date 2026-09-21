@@ -50,7 +50,9 @@ servers, and each seat's server carries *that seat's* credentials
 (`role.mcp_env`), so a comment on an issue is written by the agent, not by a
 service account fronting for it. The engine's own integration packages exist for the
 *inbound* half — verifying a delivery, parsing it, deciding whose it is — plus
-provisioning and the chat working-indicator. See [Tool
+provisioning and the two calls a chat transport makes on the seat's own bot
+token: the working indicator it raises while the seat thinks, and the thread it
+reads back at the start of a turn woken in one. See [Tool
 capabilities](tool-capabilities.md) for why no engine prompt names a vendor tool.
 
 The second picture is the supply — what a node reaches out to while a turn runs.
@@ -330,7 +332,7 @@ sequenceDiagram
     participant M as LLM + MCP
 
     S->>O: the seat's durable consumer,<br/>group agent-HANDLE
-    O->>O: drain the backlog, partition by<br/>conversation key, one digest per partition
+    O->>O: drain the backlog, partition by<br/>partition key, one digest per partition
     O->>O: take a slot at node.max_concurrent
     O->>M: executor → reviewer
     M-->>O: the reply is posted by the agent's<br/>own Slack tool, as itself
@@ -448,11 +450,11 @@ plan in one conversation and act in another; the actor lost everything the
 planner had read, and the planner had to name its tools in advance against a
 catalogue it was never shown. The executor decides and acts in one place, so it
 carries the whole picture — identity, policies, the team roster, and the
-**turn-start prefetch**. That prefetch is six blocks rendered concurrently
-*before the turn starts*: personal memory, relevant knowledge, similar prior
-work, known counterparty, synthesized skills, first-turn onboarding. The
-reviewer's question is narrower and its prompt is smaller: is this round's work
-right, given the record. A frontier model can do the work while a cheap one
+**turn-start prefetch**. That prefetch is seven blocks rendered concurrently
+*before the turn starts*: the chat thread the turn was woken in, personal
+memory, relevant knowledge, similar prior work, known counterparty, synthesized
+skills, first-turn onboarding. The reviewer's question is narrower and its
+prompt is smaller: is this round's work right, given the record. A frontier model can do the work while a cheap one
 reviews; see [Turn Engine](turn-engine.md).
 
 **Tools are discovered, not enumerated.** A role with 50–150 MCP tools would
@@ -745,7 +747,7 @@ here.
 | Webhook routes, verification, parsers | `internal/api/webhooks`, `internal/whsec` | [Jira](../integrations/jira.md) · [Confluence](../integrations/confluence.md) · [GitHub](../integrations/github.md) · [GitLab](../integrations/gitlab.md) · [Slack](../integrations/slack.md) · [Mattermost](../integrations/mattermost.md) |
 | Routing a delivery to a seat | `internal/notify` | [Event system](event-system.md) |
 | Subjects, streams, delivery semantics | `internal/queue`, `internal/events` | [Event system](event-system.md) |
-| Inbox batching and coalescing | `internal/queue` (the drain and the partition), `internal/agent/inbox` (the guard order), `internal/notify` (the merge), `internal/engine` (which of the three runs when) | [Event system](event-system.md#inbox-batching--coalescing) |
+| Inbox batching and coalescing | `internal/queue` (the drain and the partition), `internal/agent/inbox` (the guard order), `internal/notify` (the merge, and where BOTH keys — the inbox partition and the durable conversation identity — are defined), `internal/engine` (which of the three runs when) | [Event system](event-system.md#inbox-batching--coalescing) |
 | Seat leases, placement, acquire and release | `internal/seat`, `internal/node` | [Seat ownership](seat-ownership.md) |
 | Leases, buckets, the three-valued answer | `internal/coord` | [Coordination](coordination.md) |
 | The activation pointer and node postures | `internal/configplane` | [Control plane](control-plane.md) |

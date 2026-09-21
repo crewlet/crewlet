@@ -11,7 +11,8 @@ import (
 
 // answer is a stand-in for a phase's payload. Deliberately not one of the real
 // ones: what is under test here is the SHAPE and its three rules, and a test
-// built on the plan's schema would fail for a reason belonging to the planner.
+// built on a phase's own schema would fail for a reason belonging to that
+// phase.
 type answer struct {
 	Decision string `json:"decision"`
 	Note     string `json:"note"`

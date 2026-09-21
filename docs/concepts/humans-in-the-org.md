@@ -263,7 +263,9 @@ colleague-surface tools** during Execute, never via the engine:
 
 When a turn only discovers it needs a human at review, the reviewer
 returns `self_iterate` with a note, and the executor's next round makes
-the mention. If the agent genuinely **can't reach the human** (it has no
+the mention. Once the mention has gone out the reviewer ends the turn
+`done` instead — the human's reply is what re-triggers the agent, so no
+further round of that turn can produce it. If the agent genuinely **can't reach the human** (it has no
 chat tool, or the human has no contact ID), that surfaces as a config gap
 to fix: give the agent the tool, or route the work through a colleague who
 has it. The engine never manufactures a sender to bridge the gap: there is

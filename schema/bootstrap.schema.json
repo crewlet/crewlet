@@ -255,7 +255,7 @@
       "additionalProperties": false,
       "properties": {
         "busy_timeout_seconds": {
-          "description": "Lock wait before a write gives up, and the anchor for the one retry it then gets; 0 takes the store default.",
+          "description": "Lock wait before a write gives up, whether it waits in the driver or in the store's own queue, and the anchor for the one retry it then gets; 0 takes the store default.",
           "minimum": 0,
           "type": "number"
         },
@@ -319,6 +319,12 @@
           "description": "Embedded stream persistence directory. Empty = in-memory (nothing survives a restart).",
           "type": "string"
         },
+        "store_max_bytes": {
+          "description": "How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem.",
+          "maximum": 70368744177664,
+          "minimum": 4294967296,
+          "type": "integer"
+        },
         "sync": {
           "description": "always (default) fsyncs every write before acknowledging it; a duration (30s) declines the fsync and names the window an acknowledged write may be behind the disk.",
           "type": "string"
@@ -331,7 +337,7 @@
           "type": "string"
         },
         "tracker_log_max_bytes": {
-          "description": "Byte ceiling on the mutation log; unset derives a quarter of the stream volume's free space, clamped to 4 GiB..64 GiB.",
+          "description": "Byte ceiling on the mutation log; unset derives a quarter of the free space on the volume the streams live on - stream.store_dir where an embedded broker has one, store.path otherwise - clamped to 4 GiB..64 GiB.",
           "maximum": 1099511627776,
           "minimum": 1073741824,
           "type": "integer"

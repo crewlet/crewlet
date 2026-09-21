@@ -246,9 +246,9 @@ func (a *attachment) wait(d time.Duration) {
 // Holds live on the QUEUE, keyed by the (topic, group) pair, not on an
 // attachment. Two reasons, both learned the hard way.
 //
-// Keyed by the PAIR rather than by topic alone, because two subsystems gate
-// one inbox — the sandbox busy gate and the config-divergence shed — and a
-// topic-keyed hold also gated every other group on a shared subject.
+// Keyed by the PAIR rather than by topic alone, because a topic-keyed hold
+// also gated every other group on a shared subject, and because a second
+// subsystem gating one inbox must not release the first one's hold.
 //
 // Owned by the QUEUE rather than by an attachment, because a hold is
 // routinely taken BEFORE anything attaches: an engine that knows a seat is
@@ -478,9 +478,38 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 		return
 	}
 	a.q.beginHandler()
-	res := runHandler(ctx, a.log, ev, h)
+	res := runHandler(a.withHeadroom(ctx, delivery{msg: msg, ev: ev}), a.log, ev, h)
 	a.q.endHandler()
 	a.apply(ctx, msg, ev, res)
+}
+
+// withHeadroom states EACH message's remaining headroom on the handler's
+// context — see [queue.DeliveriesLeftFor] for the number one message
+// carries and [queue.DeliveriesLeft] for the partition's own, which the
+// contract folds from this same list so no backend decides it.
+//
+// Off THIS message's own metadata rather than off [attachment.failures],
+// which counts something else entirely: the map is one attachment's record of
+// FAILURES and resets on every re-attach, while the budget a message is
+// spending is carried by the message and survives every handoff. Confusing
+// the two is the defect the value exists to end.
+//
+// A message whose metadata will not parse is LEFT OUT rather than guessed at,
+// for the same reason [attachment.nakOrDeadLetter] still returns it: the
+// count is unreadable, not zero.
+func (a *attachment) withHeadroom(ctx context.Context, ds ...delivery) context.Context {
+	perMessage := make([]queue.Headroom, 0, len(ds))
+	for _, d := range ds {
+		md, err := d.msg.Metadata()
+		if err != nil || d.ev == nil {
+			continue
+		}
+		perMessage = append(perMessage, queue.Headroom{
+			ID:   d.ev.ID,
+			Left: budgetFor(a.q.cfg) - int(md.NumDelivered),
+		})
+	}
+	return queue.WithHeadroom(ctx, perMessage)
 }
 
 // decode parses a message, acking-and-dropping a corrupt payload.
@@ -646,8 +675,9 @@ func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
 // Unquiesce resumes a quiesced attachment.
 //
 // Does NOT touch pause holds: a seat resuming from a stale-renew window may
-// still be legitimately paused for a running sandbox, and clearing that
-// would deliver into a suspended turn.
+// still be legitimately held by another subsystem (the engine's own is the
+// park of a node with no turn engine), and clearing that would restart the
+// requeue loop the hold exists to stop.
 //
 // This needs no prefetch reclamation — pull
 // consumers never pushed anything into a client-side queue, so resuming is

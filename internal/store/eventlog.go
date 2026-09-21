@@ -312,13 +312,14 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	// promotion exists to remove, so it must not be reintroduced by the
 	// write path.
 	//
-	// The comment here used to say [RecordFor] fills it on the one
-	// production path "so this normally costs nothing". That was false in
-	// both halves: RecordFor has no production caller — the wiring is
-	// observe.NewWriter — so this branch was the ONLY one ever taken, and
-	// it re-decoded the payload on every phase completion. observe.Record
-	// now sets Spend from the bytes it already has, which makes the
-	// fallback the exception it was always described as.
+	// The comment here used to name a mapping function in this package as
+	// the one production path, "so this normally costs nothing". That was
+	// false in both halves: the function had no production caller — the
+	// wiring is observe.NewWriter — so this branch was the ONLY one ever
+	// taken, and it re-decoded the payload on every phase completion. That
+	// function is gone and observe.Record sets Spend from the bytes it
+	// already has, which makes the fallback the exception it was always
+	// described as.
 	//
 	// The zero value writes the same empty strings and zeroes the column
 	// defaults would, so every non-phase row is unaffected.
@@ -621,11 +622,11 @@ func (l *EventLog) Trace(ctx context.Context, traceID string) ([]EventRecord, er
 
 // Turn returns every event of one turn, OLDEST first.
 //
-// Ordered like a trace and for the same reason: a turn is read forwards — plan,
-// then execute, then review — rather than as a feed. It is a DIFFERENT set from
-// the trace, which is why it is a separate read: one trace can span several
-// turns (a webhook that wakes two seats), and a turn resumed on another node
-// after a restart can span several traces.
+// Ordered like a trace and for the same reason: a turn is read forwards, the
+// executor and then the reviewer round by round, rather than as a feed. It is
+// a DIFFERENT set from the trace, which is why it is a separate read: one
+// trace can span several turns (a webhook that wakes two seats), and a turn
+// resumed on another node after a restart can span several traces.
 //
 // A caller that gets exactly MaxTurnEvents rows should say the view is
 // truncated, and should read [EventLog.TurnClosing] beside it: because this

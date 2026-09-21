@@ -33,9 +33,9 @@ import (
 // here should read as a capability that vanished — in the log line and in the
 // test — not as an engine that will not start. What it would actually cost is
 // worth stating precisely rather than as "best effort": two of recall's three
-// callers log and carry on with an empty block (the Plan-phase prefetches),
+// callers log and carry on with an empty block (the turn-start prefetches),
 // and the third is the `query_episodes` builtin, which propagates and surfaces
-// as a tool error to the planner. So a company keeps running and its seats
+// as a tool error to the agent. So a company keeps running and its seats
 // stop remembering.
 type Capabilities struct {
 	// VectorFunctions is vector32() and vector_distance_cos(): similarity

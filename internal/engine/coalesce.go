@@ -78,12 +78,23 @@ func mergeNotifications(prompts notify.Prompts, evs []*events.Event) (*events.Ev
 	out.Source = latest.Source
 	out.ParentTurnID = latest.ParentTurnID
 	out.DelegationDepth, out.DelegationChain = delegationOf(evs)
-	// The conversation key rides the envelope for every reader downstream of
-	// the partition — the sandbox coordinator matching a person's answer back
-	// to the question that asked it, most of all. The constituents all carry
-	// the same one by construction; taking it through [conversationKeyOf]
-	// keeps the "first non-empty" rule in one place.
-	notify.Stamp(out, conversationKeyOf(evs))
+	// BOTH KEYS ride the merged envelope, because it REPLACES its
+	// constituents: from here on this one event is the partition, and a
+	// reader handed it must be able to ask either question. Every reader
+	// downstream of the merge is such a reader — the dispatcher deriving the
+	// turn's conversation from the trigger, and anything re-reading a stored
+	// digest later.
+	//
+	// The stamp is NOT for the sandbox coordinator, which is what this
+	// comment used to say: the answer match runs on screening.Events, before
+	// the merge, and never sees this envelope.
+	//
+	// The constituents all carry the same pair by construction — the
+	// partition key because that is what the broker grouped them on, the
+	// identity because a source's partition key refines it — so taking both
+	// through the dispatcher's own derivations keeps the "first non-empty"
+	// rule in one place rather than two.
+	notify.Stamp(out, partitionKeyOf(evs), conversationIdentityOf(evs))
 	return out, true
 }
 

@@ -25,7 +25,7 @@ import (
 // The routing is the FILE'S, not the directory's, because a skill is
 // identified by what it declares — an operator who files one under `ENG/`
 // still means a skill, and publishing it there as prose would put an
-// instruction meant for one phase of one turn into every planner's context.
+// instruction meant for one phase of one turn into every executor's context.
 //
 // # Identity is the TITLE, and that is Confluence's limitation not a choice
 //
@@ -86,7 +86,7 @@ func Walk(root, skillsSpace string) (*Plan, error) {
 				// TOOL SKILLS ARE OFF for this company. Filing the page
 				// under its parent directory's space instead would put
 				// an instruction written for one phase of one turn into
-				// every planner's knowledge search — the exact thing the
+				// every agent's knowledge search, the exact thing the
 				// skills space exists to keep out.
 				return nil, fmt.Errorf(
 					"confluence: %s declares a tool-skill trigger but this "+
@@ -452,7 +452,7 @@ func pruneSkills(ctx context.Context, opts PublishOptions,
 		if err := opts.Client.DeletePage(ctx, page.ID); err != nil {
 			notes = append(notes, fmt.Sprintf(
 				"%s/%s is orphaned and could not be deleted (%v) — it stays in "+
-					"every planner's tool-skill catalogue until it is removed "+
+					"every agent's tool-skill catalogue until it is removed "+
 					"by hand", space, page.Title, err))
 			continue
 		}

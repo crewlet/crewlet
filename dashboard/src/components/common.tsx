@@ -241,15 +241,7 @@ export function AttentionRow({ item }: { item: Attention }) {
  * coloured category chips in one list, repeated on every row, is most of what
  * made the old feed unreadable.
  */
-export function EventRow({
-  event,
-  onOpen,
-  showDate,
-}: {
-  event: FeedRow;
-  onOpen?: () => void;
-  showDate?: boolean;
-}) {
+export function EventRow({ event, onOpen }: { event: FeedRow; onOpen?: () => void }) {
   const now = useNow();
   const body = (
     <>
@@ -258,7 +250,13 @@ export function EventRow({
         dateTime={event.timestamp}
         title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
       >
-        {showDate ? fmtDateTime(event.timestamp) : fmtTime(event.timestamp)}
+        {/* A WALL CLOCK, AND THE TRACK IS SIZED FOR ONE. The full instant is
+            in the title; which DAY a row belongs to is a heading between days
+            (`routes/activity/Activity.tsx`), because a date is a property of
+            the rows under it rather than of the first of them — and rendered
+            here it put `fmtDateTime` in a 62px column and wrapped one row per
+            day to three lines. */}
+        {fmtTime(event.timestamp)}
       </time>
       <span className="feed-actor truncate">{event.actor || "engine"}</span>
       <span className="feed-what truncate">
@@ -370,8 +368,9 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
   ),
   unavailable: (
     <Callout variant="neutral" icon={<ScheduleGlyph size="md" />}>
-      This node has not finished reading the company&rsquo;s own records yet — its projection is
-      still catching up. Nothing is wrong and nothing is lost; the screen fills in on its own.
+      This node cannot answer yet: its copy of the company&rsquo;s records is still catching up, or
+      it could not reach the coordination store for a moment. Nothing is lost, and this screen asks
+      again on its own.
       <strong> This is not an empty company.</strong>
     </Callout>
   ),

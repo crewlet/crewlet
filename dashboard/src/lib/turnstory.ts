@@ -202,10 +202,38 @@ export function tellStory(events: readonly EventRecord[]): Story {
 export interface PromptWeight {
   phase: string;
   iteration: number;
-  /** The engine's own approximation, off `prompt.size`. */
+  /** The engine's own approximation, over every character term below. */
   approximateTokens: number;
-  systemChars: number;
-  userChars: number;
+  /**
+   * BYTES, which is what the engine measures — `len()` of a Go string — read
+   * off the wire keys `system_chars` / `user_chars` and the three beside them.
+   *
+   * THE NAMES DISAGREE ON PURPOSE. The measurement has always been bytes and
+   * the keys have always said chars, and the panel used to print "24 KB"
+   * under a tooltip claiming it had counted characters; the two units only
+   * agree on ASCII. The label is what was lying, so the label was fixed. The
+   * KEY is a peer contract frozen by ADR-0006 — renaming it would read back
+   * as a rendered 0 on every row already in the store — so it stays, and
+   * `PromptSize` in internal/events/types/turn.go carries the full reason.
+   */
+  systemBytes: number;
+  userBytes: number;
+  /**
+   * The conversation a RESUMED phase re-entered — zero for a phase that
+   * opened one of its own, which is nearly all of them.
+   */
+  messageBytes: number;
+  /** The tool-definition array, as compact JSON: usually the largest term. */
+  toolBytes: number;
+  toolCount: number;
+  /**
+   * How many times this phase key was measured in this turn — 1 for every
+   * phase of a turn that ran once. See [promptWeights].
+   */
+  runs: number;
+  /** The smallest and largest approximation across those runs. */
+  minTokens: number;
+  maxTokens: number;
 }
 
 /**
@@ -215,29 +243,84 @@ export interface PromptWeight {
  * about, and it is addressed like every other phase event precisely so the
  * size a TURN paid is readable on that turn. It was banded into `given` here
  * and then read by nobody: the Turn screen took one event out of that band
- * (`prefetch_summary`) and dropped the rest, so six small integers per phase
- * reached the browser and went nowhere. The only way to the number was the
- * raw payload of a row in the residual list.
+ * (`prefetch_summary`) and dropped the rest, so a whole row of integers per
+ * phase reached the browser and went nowhere. The only way to the number was
+ * the raw payload of a row in the residual list.
  *
- * Rows come back in the order they were published — one per phase run, so a
- * self-iterating turn contributes one per round and they read down the page
- * beside the phases they belong to.
+ * `?? 0` ON EVERY TERM, which is load-bearing in one direction only: a node
+ * running an older engine publishes a row without the tool and message keys,
+ * and the columns for them read 0 rather than NaN. It is also how a key that
+ * never arrives — a misspelled tag, a term the engine stopped measuring —
+ * renders as a permanent zero instead of raising, which is why the tests
+ * behind these fields assert a value only the engine could have produced.
+ *
+ * ONE ROW PER PHASE KEY, because `turn_id|phase|iteration` IS the phase key —
+ * the same identity `agent_phase_started` and `agent_phase_completed` share,
+ * and the one this screen was rebuilt around. A measurement is published once
+ * per phase RUN, so a second row under one key does not mean a second phase:
+ * it means that phase ran again, which happens when a turn's whole dispatch is
+ * re-delivered and re-run under its work key (the turn id IS the work key —
+ * see `runnerTurn` in internal/engine/telemetry.go).
+ *
+ * Listed flat, those re-runs were the screen's own worst habit back again. A
+ * turn that ran five times drew ten rows — ONBOARDING, EXECUTE, ONBOARDING,
+ * EXECUTE, five times over, byte-identical — for two facts and a count, and
+ * an identical row repeated with nothing to explain it reads as a rendering
+ * fault rather than as news about the turn. The count is the news, so the
+ * count is what is drawn.
+ *
+ * THE LAST RUN'S FIGURES, not the first and not a mean. A mean is a prompt
+ * that was never sent, and the run that stands is the one whose frame the
+ * phase actually reasoned in — the four that preceded it measured a prompt
+ * the turn then threw away. The range rides along so a reader can see that
+ * the earlier ones differed at all, which is the only thing the discarded
+ * rows still had to say.
+ *
+ * Keys come back in the order they were first published, so a self-iterating
+ * turn's rounds read down the page beside the phases they belong to.
  */
 export function promptWeights(events: readonly EventRecord[]): PromptWeight[] {
-  const out: PromptWeight[] = [];
+  const byKey = new Map<string, PromptWeight>();
   for (const event of events) {
     if (event.type !== "prompt.size") continue;
     const p = event.payload as Record<string, unknown> | undefined;
     if (!p) continue;
-    out.push({
+    const tokens = Number(p.approximate_tokens ?? 0);
+    const row: PromptWeight = {
       phase: String(p.phase ?? ""),
       iteration: Number(p.iteration ?? 0),
-      approximateTokens: Number(p.approximate_tokens ?? 0),
-      systemChars: Number(p.system_chars ?? 0),
-      userChars: Number(p.user_chars ?? 0),
+      approximateTokens: tokens,
+      // ONE KEY EACH, never a both-spellings chain. The wire key never
+      // moved, so there is no second spelling to accept — and a `??` would
+      // not have rescued one anyway: scalars in the catalogue carry no
+      // omitempty, so a relayed event asserts `0` rather than omitting the
+      // key, and `??` does not fall through on 0.
+      systemBytes: Number(p.system_chars ?? 0),
+      userBytes: Number(p.user_chars ?? 0),
+      messageBytes: Number(p.message_chars ?? 0),
+      toolBytes: Number(p.tool_chars ?? 0),
+      toolCount: Number(p.tool_count ?? 0),
+      runs: 1,
+      minTokens: tokens,
+      maxTokens: tokens,
+    };
+    const key = `${row.phase}|${row.iteration}`;
+    const seen = byKey.get(key);
+    if (!seen) {
+      byKey.set(key, row);
+      continue;
+    }
+    // REPLACED, not merged: every figure on the row is the last run's, and
+    // only the count and the range carry what the earlier ones said. Set
+    // rather than deleted-and-set, so the key keeps its first-seen position.
+    byKey.set(key, {
+      ...row,
+      runs: seen.runs + 1,
+      minTokens: Math.min(seen.minTokens, tokens),
+      maxTokens: Math.max(seen.maxTokens, tokens),
     });
   }
-  return out;
+  return [...byKey.values()];
 }
 
 /** One prefetch block: what it is called, whether it hit, and how big it was. */
@@ -252,9 +335,9 @@ export interface PrefetchBlock {
 }
 
 /**
- * The six context blocks an executor's prompt is built from.
+ * The seven context blocks an executor's prompt is built from.
  *
- * The event's own one-line summary collapses this to "2/6 hits", which is the
+ * The event's own one-line summary collapses this to "2/7 hits", which is the
  * right shape for a feed and the wrong one for the screen about this turn:
  * every block degrades to empty on failure by design, so an unreachable store,
  * an unconfigured auxiliary model and a filter that selected nothing all
@@ -269,6 +352,11 @@ export function prefetchBlocks(event: EventRecord | undefined): PrefetchBlock[] 
   const thin = gated ? "the trigger was a bare pointer — this filter never ran" : "";
   const picks = Number(p.relevant_knowledge_selection_count ?? 0);
   return [
+    // NOT GATED, and that is the point of it: this block is what makes a thin
+    // trigger thick. `trigger_requires_recon` says the trigger BODY is a
+    // pointer, which is still true of a "+1" whose thread the engine handed
+    // over — so the flag stays set and this block still ran.
+    block("The thread so far", p, "thread_context", "", threadNote(p)),
     block("Personal memory", p, "personal_memory", thin),
     block("Similar prior work", p, "episode_recall", thin),
     block(
@@ -288,6 +376,32 @@ export function prefetchBlocks(event: EventRecord | undefined): PrefetchBlock[] 
   ];
 }
 
+/**
+ * What the thread block actually did, in one phrase.
+ *
+ * THREE STATES BEHIND ONE HIT. Both of the block's zero-message paths render
+ * non-empty prose into the prompt — "there is nothing earlier" and "it could
+ * not be read from this node" — so hit and bytes look identical on a thread
+ * that was read and empty and on one no backend answered for. This read the
+ * first as the second until the engine started reporting `thread_context_read`
+ * beside the count, and told an operator that a healthy node could not reach
+ * its own chat surface.
+ *
+ * `thread_context_stopped_short` is the fourth: a thread too long to read to
+ * its end is handed over missing the NEWEST messages, the one that woke the
+ * turn included, and its message count reads exactly like a whole thread's.
+ */
+function threadNote(p: Record<string, unknown>): string {
+  if (p.thread_context_hit !== true) return "";
+  if (p.thread_context_read !== true) return "the thread could not be read from that node";
+  const posts = Number(p.thread_context_posts ?? 0);
+  if (posts === 0) return "read, and there was nothing earlier";
+  const handed = `${posts} message${posts === 1 ? "" : "s"} handed over`;
+  return p.thread_context_stopped_short === true
+    ? `${handed}, but not the newest — the thread was too long to read`
+    : handed;
+}
+
 function block(
   label: string,
   p: Record<string, unknown>,
@@ -305,4 +419,63 @@ function block(
     gated: hit ? "" : gated,
     note,
   };
+}
+
+/**
+ * A band's rows, with a repeat rendered ONCE and counted.
+ *
+ * A provider chain that falls through on every phase of a self-iterating turn
+ * publishes one `provider_fallback` per attempt, and `SummaryFor` renders the
+ * same sentence for each: the fields that tell the attempts apart — the phase
+ * and the iteration — are on the payload and not in the line. So a turn that
+ * lost its chain three times over seven phases drew eight byte-identical rows
+ * of "default failed (auth) — no provider left in the chain" under a heading
+ * that said 13, and the five rows that said something ELSE were what a reader
+ * had to find among them.
+ *
+ * COUNTED, NOT DROPPED. Eight attempts is the fact: it is the difference
+ * between one provider that is misconfigured and one that is flapping, and
+ * `problemCount` goes on counting every one of them, because the heading is a
+ * count of what went wrong rather than of what this list draws.
+ *
+ * CONSECUTIVE ONLY. The axis of every band is time — each row renders its own
+ * instant — so merging across an intervening different row would either lie
+ * about when the run happened or reorder the band to make the lie true. A run
+ * carries its first and last instants and the row prints the span.
+ *
+ * THE KEY IS WHAT THE READER CAN SEE plus the one thing they cannot: the type,
+ * the summary, and the failed flag. Two rows a reader cannot tell apart are
+ * what this exists for; two that merely share a sentence while one of them
+ * failed are not.
+ *
+ * A PURE FUNCTION OVER VALUES, for the reason `textindex`'s arithmetic and
+ * `tracker`'s coercion table are: a rule that can only be exercised by
+ * rendering a screen is a rule nobody re-measures.
+ */
+export interface Run {
+  /** The first event of the run — its id keys the row and its link. */
+  event: EventRecord;
+  /** How many rows it stands for, 1 for an ordinary row. */
+  count: number;
+  /** The last event of the run; the same object as `event` when count is 1. */
+  last: EventRecord;
+}
+
+export function collapseRuns(events: readonly EventRecord[]): Run[] {
+  const out: Run[] = [];
+  for (const event of events) {
+    const open = out[out.length - 1];
+    if (open && sameRow(open.last, event)) {
+      open.count += 1;
+      open.last = event;
+      continue;
+    }
+    out.push({ event, count: 1, last: event });
+  }
+  return out;
+}
+
+/** Whether two rows would draw identically — see [collapseRuns]. */
+function sameRow(a: EventRecord, b: EventRecord): boolean {
+  return a.type === b.type && a.summary === b.summary && isFailed(a) === isFailed(b);
 }

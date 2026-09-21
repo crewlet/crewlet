@@ -253,12 +253,53 @@ func TestAnAccountsBudgetIsInCeilingUnits(t *testing.T) {
 			replicas: 3,
 			want:     StorageBudget{Limit: 30 * gib, Committed: 4 * gib, Source: BudgetAccount},
 		},
+		// UNDER ITS OWN SOURCE, which is the half a bare zero could not
+		// carry. The server refuses every create on such an account
+		// before it compares a byte, so the answer is not a capacity
+		// that happens to be spent and what clears it is a setting
+		// rather than room.
 		"tiered, no tier for this replica count": {
 			info: jetstream.AccountInfo{Tiers: map[string]jetstream.Tier{
 				"R1": limited(30*gib, 0, 0, 0),
+				"R5": limited(90*gib, 0, 0, 0),
 			}},
 			replicas: 3,
-			want:     StorageBudget{Limit: 0, Source: BudgetAccount},
+			want:     StorageBudget{Limit: 0, Source: BudgetAccountNoTier},
+		},
+		// A TIER THAT IS THERE AND STATES NOTHING is the same refusal
+		// wearing the other shape. The account's report lists a class it
+		// merely holds OBJECTS in, with no limit ever set for it, so
+		// "present" does not mean "declared".
+		"tiered, this node's class present with no limit on it": {
+			info: jetstream.AccountInfo{Tiers: map[string]jetstream.Tier{
+				"R1": limited(30*gib, 0, 0, 0),
+				"R3": {ReservedStore: uint64(gib)},
+			}},
+			replicas: 3,
+			want: StorageBudget{Limit: 0, Committed: gib,
+				Source: BudgetAccountTierNoLimit},
+		},
+		// AND ZERO IS NOT THE SAME TEST AS BELOW ZERO. A tier declared
+		// unlimited reports its limit negative and the broker creates
+		// against it, so a `<= 0` reading would refuse the tiered
+		// account with the most room of all.
+		"tiered, and this node's class is unlimited": {
+			info: jetstream.AccountInfo{Tiers: map[string]jetstream.Tier{
+				"R3": limited(-1, -1, 0, 0),
+			}},
+			replicas: 3,
+			want:     StorageBudget{Limit: -1, Source: BudgetUnstated},
+		},
+		// AND THE DISCRIMINATOR IS THE PRESENCE OF TIERS, NOT OF THIS
+		// ONE: asked the second question, the case above fell through
+		// to the un-tiered branch and read that account's unset
+		// top-level MaxStore as a limit somebody had set.
+		"tiered, and this node's class is the only one": {
+			info: jetstream.AccountInfo{Tiers: map[string]jetstream.Tier{
+				"R3": limited(30*gib, 0, uint64(gib), 0),
+			}},
+			replicas: 3,
+			want:     StorageBudget{Limit: 30 * gib, Committed: gib, Source: BudgetAccount},
 		},
 		"no limit stated": {
 			info:     jetstream.AccountInfo{Tier: limited(-1, -1, 0, 0)},

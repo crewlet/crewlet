@@ -11,7 +11,7 @@
 
 export { Store, MAX_EVENTS, MAX_CHAT_LIVE, MAX_CHAT_ROOMS } from "./store.ts";
 export type { StoreState, Slice, ChatLive, ChatRoomLive } from "./store.ts";
-export { LiveSocket } from "./socket.ts";
+export { LiveSocket, queryErrorCode } from "./socket.ts";
 export { api } from "./api.ts";
 export { rest, RestError, REQUEST_TIMEOUT_MS, isAbort } from "./rest.ts";
 export type { RequestOptions, RestResponse, QueryValue } from "./rest.ts";

@@ -17,11 +17,33 @@
  * correct when a prompt grows one — a hardcoded list would render a stale
  * outline and there would be no symptom but a section nobody could find.
  *
- * THE BODIES STAY VERBATIM. A prompt is a RECORD: it is what an operator
- * reproduces a turn from and what they diff when a model starts behaving
- * differently, so a section's body is the source slice, in a code block, not
- * this app's reading of it. Rendering it as prose would lose the one property
- * the screen is for.
+ * TWO VIEWS, AND EACH ONE DOES ITS WHOLE JOB. `Rendered` is for reading: the
+ * outline, with every body set as the markdown it is. `Source` is the record:
+ * the whole document, one block, byte for byte, one selection — what an
+ * operator reproduces a turn from and what they diff when a model starts
+ * behaving differently.
+ *
+ * WHY THE READING VIEW RENDERS. The bodies used to be source slices in code
+ * blocks, on the rule that a prompt is a record. But THAT view was never the
+ * record: building the outline consumes the heading lines, so what a fold
+ * showed was the bytes with their structure taken out — the worst of both,
+ * and the one thing the screen had no other route to was the reading. So a
+ * seat's identity arrived as `You are **Engineer** at **Acme**`, a contract's
+ * `- **done** — it meets the ask` as a column of literal hyphens and
+ * asterisks, and every `` `submit_work` `` with its backticks: a reader
+ * decoding markdown the model was handed already decoded.
+ *
+ * AND WHAT IS GENUINELY RECORD-SENSITIVE SURVIVES RENDERING. A fenced block
+ * comes out as its own `pre` holding the exact text, so a tool schema, a JSON
+ * example and a contract template are byte-identical in both views. What the
+ * reading view spends is emphasis markers and list bullets — formatting, one
+ * click from the bytes, on a control that says which one you are looking at.
+ *
+ * THE SWITCH IS OFFERED ON EVERY DOCUMENT, headings or none. It used to be
+ * gated on having an outline, because without one the two views were the same
+ * picture under two names. They are not any more: a prompt with no headings is
+ * still markdown and still has a record behind it, so both views still answer
+ * a question the other does not.
  *
  * THE OUTLINE IS THE DOCUMENT'S OWN SHAPE, which mostly means flat and
  * sometimes does not. Every section a prompt builder writes is a peer, so an
@@ -32,23 +54,16 @@
  * heading level, which is correct only because the levels are — the engine's
  * own suite holds every builder to one, after an `h1` over a run of `h2`s
  * would have nested the whole prompt inside the agent's identity.
- *
- * AND THE WHOLE DOCUMENT STAYS ONE SELECTION. An outline that is the only
- * route to the record turns "copy the prompt" into a dozen opens and a dozen
- * select-alls. The view switch is what pays that back: `whole` is byte for
- * byte the block this screen drew before, and it is offered only where there
- * are headings to have split — on a document with none, the two views would be
- * the same picture under two names.
  */
 
 import { useMemo, useState } from "react";
 import { CodeBlock, Disclosure } from "@crewlethq/ui";
 import { Segmented } from "~/ui/primitives.tsx";
-import { nestSections, splitSections, type SectionNode } from "~/lib/markdown.ts";
+import { nestSections, renderMarkdown, splitSections, type SectionNode } from "~/lib/markdown.ts";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
-type View = "sections" | "whole";
+type View = "read" | "source";
 
 /**
  * One half of the prompt, with what it is called and what to call its blocks.
@@ -80,9 +95,25 @@ function outlined(doc: Half): boolean {
  * prompt's weight went is asking about the BLOCK, and a conversation ledger
  * whose own body is its six rules and whose children are eight turns would
  * otherwise report the rules.
+ *
+ * COUNTED ON THE SOURCE in both views, because it is a share of the prompt the
+ * model was billed for rather than a measure of what this screen drew.
  */
 function weigh(node: SectionNode): number {
   return node.body.length + node.children.reduce((sum, child) => sum + weigh(child), 0);
+}
+
+/**
+ * One run of a prompt, as the markdown it is.
+ *
+ * `prose md` is the same pair a page body and a work item's description carry:
+ * the renderer decides what a break is, and the blocks it emits get a
+ * document's spacing. Unbounded, unlike the `Source` block — a ceiling belongs
+ * on a wall of text a reader did not choose, and every block here is either a
+ * section they opened by name or a document with no sections to open.
+ */
+function Rendered({ source }: { source: string }) {
+  return <div className="prose md">{renderMarkdown(source)}</div>;
 }
 
 /**
@@ -111,30 +142,31 @@ export function PromptRecord({
         .map((d) => ({ ...d, sections: nestSections(splitSections(d.text)) })),
     [phase, system, user],
   );
-  const [view, setView] = useState<View>("sections");
-  const splittable = docs.some(outlined);
+  // READING IS THE DEFAULT, because the question this fold is opened with is
+  // what the phase was told, and the bytes are one click away. The other way
+  // round, every reader pays the decoding on every open to serve the rarer
+  // reproduce-and-diff.
+  const [view, setView] = useState<View>("read");
 
   return (
     <div className="col gap-3">
-      {splittable && (
-        <div className="row gap-2 wrap">
-          <Segmented<View>
-            size="sm"
-            ariaLabel="How to show the prompt"
-            value={view}
-            onChange={setView}
-            options={[
-              { value: "sections", label: "Sections", title: "One fold per markdown heading" },
-              { value: "whole", label: "Whole", title: "The document as it was sent" },
-            ]}
-          />
-          <span className="t-caption muted">
-            {view === "sections"
-              ? "folded on the document's own headings"
-              : "the record as the model received it"}
-          </span>
-        </div>
-      )}
+      <div className="row gap-2 wrap">
+        <Segmented<View>
+          size="sm"
+          ariaLabel="How to show the prompt"
+          value={view}
+          onChange={setView}
+          options={[
+            { value: "read", label: "Rendered", title: "The prompt as the markdown it is" },
+            { value: "source", label: "Source", title: "The record, exactly as it was sent" },
+          ]}
+        />
+        <span className="t-caption muted">
+          {view === "read"
+            ? "rendered, and folded where the document has headings"
+            : "the record as the model received it, byte for byte"}
+        </span>
+      </div>
       {docs.map((doc) => (
         <div className="col gap-1" key={doc.kind}>
           <div className="t-label">
@@ -142,17 +174,24 @@ export function PromptRecord({
             <span className="muted">
               {" · "}
               {fmtCount(doc.text.length)} chars
-              {view === "sections" && outlined(doc)
+              {view === "read" && outlined(doc)
                 ? ` · ${plural(doc.sections.filter((s) => s.level > 0).length, "section")}`
                 : ""}
             </span>
           </div>
-          {view === "sections" && outlined(doc) ? (
-            <Outline doc={doc} />
+          {view === "read" ? (
+            // A document with no headings has no outline to draw and is still
+            // markdown, so it is one rendered run rather than a fold nobody
+            // could name.
+            outlined(doc) ? (
+              <Outline doc={doc} />
+            ) : (
+              <Rendered source={doc.text} />
+            )
           ) : (
             /* THE TALLEST BLOCK ON THE PAGE by a wide margin, and `selectable`
                is how uilet makes it reachable: the tab stop, the accessible
-               name and ⌘A tied into one flag. It is the record this screen is
+               name and ⌘A tied into one flag. It is the record this view is
                about, which is exactly what that flag is for. */
             <CodeBlock
               plain
@@ -179,14 +218,7 @@ function Outline({ doc, nodes }: { doc: Half; nodes?: SectionNode[] }) {
           // sub-agent's parent prompt — short, and the first thing the model
           // read, so hiding it behind a control called nothing would be worse
           // than the wall of text this replaces.
-          <CodeBlock
-            key={i}
-            plain
-            maxHeight={RECORD_MAX_HEIGHT}
-            focusWhenScrollable
-            label={`${doc.label} — before the first heading`}
-            code={section.body}
-          />
+          <Rendered key={i} source={section.body} />
         ) : (
           <Disclosure
             key={i}
@@ -208,22 +240,11 @@ function Outline({ doc, nodes }: { doc: Half; nodes?: SectionNode[] }) {
             lazy
           >
             <div className="col gap-1">
-              {/* A SECTION IS A RECORD TOO, so it takes the same flag the
-                  whole document does: while it has focus ⌘A means this
-                  section rather than the page. */}
-              {section.body !== "" && (
-                <CodeBlock
-                  plain
-                  maxHeight={RECORD_MAX_HEIGHT}
-                  selectable
-                  label={`${doc.label} — ${section.title}`}
-                  code={section.body}
-                />
-              )}
+              {section.body !== "" && <Rendered source={section.body} />}
               {/* A heading with NOTHING under it — no text and no
                   sub-sections — is a fact about the prompt, so it is said
-                  rather than drawn as an empty block: a `CodeBlock` with no
-                  code reads as one that failed to load. A heading that only
+                  rather than drawn as an empty block: a block with no content
+                  reads as one that failed to load. A heading that only
                   introduces its sub-sections is not that, and gets no note. */}
               {section.body === "" && section.children.length === 0 && (
                 <span className="t-caption muted">Nothing under this heading.</span>

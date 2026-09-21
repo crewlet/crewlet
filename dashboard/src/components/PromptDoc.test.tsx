@@ -1,13 +1,14 @@
 /**
- * THE OUTLINE IS DERIVED, AND THE RECORD IS UNCHANGED.
+ * THE OUTLINE IS DERIVED, AND THE RECORD IS STILL REACHABLE.
  *
  * Two claims, and the screen is worth nothing without either. A prompt's
  * sections are whatever headings `internal/agent/prompts` wrote, so this file
  * may not name one — a case asserting "Review has a self_iterate section"
  * would pass on a component that hardcoded the list and go on passing after
- * the engine renamed it. And a section's body is the SOURCE, so what the fold
- * shows has to be the bytes the model was handed rather than a reading of
- * them: this surface is where an operator reproduces a turn from.
+ * the engine renamed it. And the reading view is a RENDERING, so the bytes
+ * have to stay one control away: this surface is where an operator reproduces
+ * a turn from, and a view that decoded the markdown and offered nothing else
+ * would have traded one half of the job for the other.
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -49,6 +50,11 @@ function folds(): string[] {
   return screen.getAllByRole("button").map((b) => b.textContent ?? "");
 }
 
+/** Switch to the byte-for-byte view. */
+function showSource() {
+  fireEvent.click(screen.getByRole("radio", { name: "Source" }));
+}
+
 describe("a prompt with headings", () => {
   it("draws one fold per heading, named by the heading", () => {
     draw();
@@ -62,7 +68,15 @@ describe("a prompt with headings", () => {
     // It has no title, so there is nothing to call the control that would
     // hide it — and it is the first thing the model read.
     draw();
-    expect(screen.getByText(/You are \*\*Engineer\*\*/)).toBeTruthy();
+    expect(screen.getByText(/You are/)).toBeTruthy();
+  });
+
+  it("renders that run's markdown rather than printing it", () => {
+    // The seat's identity is `**Engineer** at **Acme**`, and a reader decoding
+    // asterisks the model was handed already decoded is the whole complaint.
+    draw();
+    expect(screen.getByText("Engineer").closest("strong")).toBeTruthy();
+    expect(screen.getByText("Acme").closest("strong")).toBeTruthy();
   });
 
   it("keeps a closed section's body out of the card entirely", () => {
@@ -70,22 +84,25 @@ describe("a prompt with headings", () => {
     // outline whose every body is mounted is the wall of text it replaces,
     // and a closed fold must not put its text into the card.
     const { container } = draw();
-    expect(container.textContent).not.toContain("post_message(...) → success");
+    expect(container.textContent).not.toContain("post_message");
   });
 
-  it("shows a section's source verbatim once it is opened", () => {
+  it("renders a section's markdown once it is opened", () => {
     draw();
     fireEvent.click(screen.getByRole("button", { name: /What the agent did/ }));
-    // VERBATIM: the bullet's own markdown, not this app's rendering of it.
-    expect(screen.getByText("- post_message(...) → success")).toBeTruthy();
+    // A LIST ITEM, not a line starting with a hyphen.
+    const item = screen.getByText("post_message(...) → success");
+    expect(item.closest("li")).toBeTruthy();
   });
 
   it("offers the whole document as one block, byte for byte", () => {
-    // The escape hatch the outline owes: an operator copying a prompt to
-    // reproduce a turn must not have to open a dozen folds to do it.
+    // The half the rendering owes back: an operator reproducing a turn needs
+    // what was sent, markers and all, in one selection rather than a dozen
+    // opens and a dozen select-alls.
     const { container } = draw();
-    fireEvent.click(screen.getByRole("radio", { name: "Whole" }));
-    expect(container.textContent).toContain("Judge the work below.");
+    showSource();
+    expect(container.textContent).toContain("You are **Engineer** at **Acme** (reports to: Lead).");
+    expect(container.textContent).toContain("## What the agent did");
     expect(container.textContent).toContain("- post_message(...) → success");
     expect(container.textContent).toContain("Posted the summary.");
   });
@@ -118,7 +135,8 @@ describe("a prompt with headings", () => {
   it("sizes a section by everything under it, sub-sections included", () => {
     // A reader looking for where a heavy prompt's weight went is asking about
     // the BLOCK. A parent reporting only its own body reports its rules and
-    // hides the eight turns beneath them.
+    // hides the eight turns beneath them. Counted on the SOURCE, which is the
+    // share of the prompt the model was billed for — not on what was drawn.
     draw({ system: "## Ledger\nrules\n\n### Turn one\n" + "x".repeat(400) });
     expect(screen.getByRole("button", { name: /Ledger/ }).textContent).toContain("405");
   });
@@ -130,16 +148,33 @@ describe("a prompt with headings", () => {
     expect(folds().some((t) => t.startsWith("Task"))).toBe(true);
     expect(folds().some((t) => t.startsWith("Already done earlier in this turn"))).toBe(true);
   });
+
+  it("keeps a fenced block's bytes in the reading view", () => {
+    // WHAT MAKES RENDERING SAFE HERE. A tool schema, a JSON example and a
+    // contract template travel in fences, and a fence renders to its own
+    // block holding the exact text — so the record-sensitive half of a prompt
+    // is byte-identical in both views and only the formatting differs.
+    draw({ system: '## Contract\n```json\n{"outcome": "**not** bold"}\n```' });
+    fireEvent.click(screen.getByRole("button", { name: /Contract/ }));
+    expect(screen.getByText('{"outcome": "**not** bold"}')).toBeTruthy();
+  });
 });
 
 describe("a prompt with no headings", () => {
-  it("is drawn as the one block it has always been", () => {
-    const { container } = draw({ system: "a task prompt somebody wrote by hand" });
-    expect(container.textContent).toContain("a task prompt somebody wrote by hand");
-    // NO VIEW SWITCH. With nothing to split on, the two views are the same
-    // picture under two names, and a control that changes nothing is worse
-    // than no control.
-    expect(screen.queryByRole("radiogroup")).toBeNull();
+  it("is rendered as the one document it is", () => {
+    // NO OUTLINE TO DRAW, and still markdown: the reading view is one run
+    // rather than a fold that would have nothing to be called.
+    draw({ system: "a **handwritten** task prompt" });
+    expect(screen.getByText("handwritten").closest("strong")).toBeTruthy();
     expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
+
+  it("still offers the record, because the two views differ on every document", () => {
+    // The switch used to be gated on having headings, on the rule that
+    // without them the two views were the same picture under two names. They
+    // are not: one decodes the markdown and one is the bytes.
+    const { container } = draw({ system: "a **handwritten** task prompt" });
+    showSource();
+    expect(container.textContent).toContain("a **handwritten** task prompt");
   });
 });

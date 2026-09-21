@@ -170,6 +170,19 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	return r
 }
 
+// holdTheAppliersPin takes the pinned writer this harness's replicated estate
+// declares and keeps it for the test's life, as a running node's applier
+// does. Housekeeping that needs a pin of its own cannot get one on a live
+// node, and a harness that left the pin free would pass it anyway.
+func holdTheAppliersPin(t *testing.T, r *roundTrip) {
+	t.Helper()
+	w, err := r.db.Replicated().Writer(t.Context())
+	if err != nil {
+		t.Fatalf("pin the applier's writer: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+}
+
 // applyWhileWriting makes this node's applier run from inside a write's own
 // wait, which is what it does in production and what this harness otherwise
 // cannot express.

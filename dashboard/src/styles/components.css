@@ -31,7 +31,7 @@
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   border-radius: var(--r-sm);
 }
 
@@ -41,40 +41,98 @@
    `.row` is a flex line with a gap and nothing else, so a trailing figure
    after a `.spacer` lands wherever its own text ends. That is right for ONE
    figure — the spacer pushes both the header and the value to the same right
-   edge — and wrong the moment there is a second: three figures of differing
-   widths sit adjacent, and the labels above them sit adjacent at their own
-   widths, so nothing is a column. */
+   edge — and wrong the moment there is a second: figures of differing widths
+   sit adjacent, and the labels above them sit adjacent at their own widths, so
+   nothing is a column.
+
+   7rem BECAUSE OF THE HEADING, not the figure. A fixed column wraps its own
+   heading rather than growing for it, and the widest one these blocks carry
+   — APPROX. TOKENS — measures 103px at `--fs-3xs` with `--track-wide`, so at
+   the 5.5rem this started on it broke across two lines while every value
+   under it sat on one. A label is what says which number this is, so it is
+   the label that sets the width; 112px clears the measurement with room for
+   the next one. A heading longer than that wraps, visibly, which is the
+   failure worth having — the alternative, `nowrap`, paints it over the
+   column beside it. */
 .num-col {
   flex: none;
-  width: 5.5rem;
+  width: 7rem;
   text-align: right;
 }
 
-/* AND THE BLOCK THEY ARE COLUMNS OF SCROLLS, because three of them at 5.5rem
-   plus a phase tag is 370px and a phone is 390 with the card's own padding
-   taken out of it — measured at 332px of room, so the tokens column was cut
-   off, and `.num-col` exists precisely to make these three line up.
+/* AND THE BLOCK THEY ARE COLUMNS OF SCROLLS, because the widest of these
+   blocks is the prompt-weights table, and its FIVE columns at 5.5rem plus a
+   phase tag come to about 570px against the 332px of room a 390px phone has
+   once the card's padding is taken out — so it overflows by a wide margin, and
+   `.num-col` exists precisely to make those five line up while it does. (It
+   already overflowed at three, at 370px, which is what this was measured on
+   before a term the engine had never counted — the tool-definition array —
+   and a resumed phase's own conversation each earned a column.)
 
    SIDEWAYS HERE, where a grid gets a card instead (see frame.css). The two
    shapes take opposite answers for a reason: a grid's flexible tracks resolve
    to ZERO the moment its wrap becomes a scroller, and its cells are prose. A
    fixed 5.5rem figure column has no such collapse and no prose in it, and the
-   whole value of the block is that the three figures sit under their own
-   headings — which wrapping them would destroy, since the header row and each
-   value row would break at different points.
+   whole value of the block is that the figures sit under their own headings —
+   which wrapping them would destroy, since the header row and each value row
+   would break at different points.
 
-   `max-content` ON THE ROWS is the half that makes it work: without it a flex
-   line inside a scrollport is still sized to the port, its items shrink or
-   overflow, and the header stops lining up with the values it heads. The
-   `min-width` is what keeps the spacer able to push the figures right on a
-   screen where the block already fits. */
+   `max-content` ON THE ROWS' OWN BOX is the half that makes it work: without
+   it a flex line inside a scrollport is still sized to the port, its items
+   shrink or overflow, and the header stops lining up with the values it
+   heads. ONE box around all of them rather than the width on each row, which
+   is what this was: a row's own `max-content` is its own tag and its own
+   chips, so the moment the port was narrower than the widest row every row
+   fell back to a DIFFERENT width and the columns splayed — a phone drew
+   `12 KB`, `23 KB` and `5.3 KB` at three x positions under one heading.
+   Sized together they scroll together. The `min-width` is what keeps the
+   spacer able to push the figures right on a screen where the block already
+   fits.
+
+   AND IT IS SIZED TO ITS OWN ROWS, because the shape that makes a single
+   figure readable stops working once the panel is wide. A `.spacer` puts the
+   figure at the far end of whatever it is in, which is right in a rail and
+   wrong in a full-bleed card: on a 1570px screen the turn's prompt ledger
+   drew a phase tag at x=37 and its token count at x=645, with most of a
+   panel of nothing between them, and a reader tracking a row across that gap
+   arrives at the wrong one.
+
+   `fit-content` rather than a chosen cap, which is what this was first
+   written as: a cap is a number invented to be wider than the content and
+   therefore still leaves a gap, and it has to be re-invented the day a
+   column is added. Sized to the rows, the spacer has nothing left to push
+   with and the figures sit where the labels end — while the fixed `.num-col`
+   still holds them in columns, and the rows narrower than the widest still
+   right-align to the same edge through their own spacer.
+
+   The `max-width` is a ceiling rather than the layout: 100% so a phone still
+   scrolls the block instead of the page, and 38rem so a block whose labels
+   grow prose-long cannot quietly restore the gap this removed.
+
+   ON THE BLOCK rather than on the card, because the card also carries prose
+   and a callout, and those have a measure of their own that is not this
+   one. */
 .num-block {
   overflow-x: auto;
+  width: fit-content;
+  max-width: min(100%, 38rem);
 }
 
-.num-block > .row {
+.num-rows {
   width: max-content;
   min-width: 100%;
+}
+
+/* A SECOND LEDGER UNDER THE FIRST needs a line between them, which a gap
+   cannot supply: both open with a `.t-label` header row, so stacked at the
+   card's own rhythm the second table's heading reads as another row of the
+   first. It is a hairline rather than a bigger gap because the two ARE one
+   panel — they answer the same question from opposite ends — and spacing them
+   apart far enough to separate them would have read as two. Only when
+   something precedes it: first in the card, there is nothing to divide. */
+.ledger-follows:not(:first-child) {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-3);
 }
 
 /* A count beside a section title. Neutral by design: a coloured count is a
@@ -221,11 +279,37 @@ a.seat-chip:hover {
   display: flex;
   flex-direction: column;
 }
+
+/* WHICH DAY THE ROWS UNDER IT ARE FROM.
+   A band rather than a wider cell in the time column: the column is sized for
+   a wall clock, which is right for every row but the first of each day, and
+   putting a full instant in it wrapped that one row to three lines. The band
+   takes the list's own inset so its text starts where every row's does, and
+   the micro-label register is `.t-label`'s — it is a heading over rows, not a
+   row. Sticky so the day a reader is inside stays named while they scroll
+   past it, which is the other half of what a date marker is for — parked at
+   `--sticky-top`, like every other band in the product, because a screen's
+   toolbar owns the top of the scroller and a band at zero stops UNDERNEATH
+   it and is simply gone. Above the rows, which are `position: relative` for
+   their own link and would otherwise paint over it in document order. */
+.list-day {
+  position: sticky;
+  top: var(--sticky-top);
+  z-index: 1;
+  padding: var(--space-2) var(--row-inline) var(--space-1);
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
 .list-row {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--row-inline);
   border-bottom: 1px solid var(--border-subtle);
   min-height: var(--row-h);
   min-width: 0;
@@ -281,10 +365,12 @@ a.seat-chip:hover {
      otherwise draw a list past the bottom of the dialog. */
   max-height: 12rem;
   overflow-y: auto;
-  /* OPAQUE, and --surface-1 is the token that is: this floats over a dialog
-     that is already a surface, and a translucent one let the help line and
-     the fields beneath show through the names. */
-  background: var(--surface-1);
+  /* OPAQUE, and a rung is: this floats over a dialog that is already a
+     surface, and a translucent one let the help line and the fields beneath
+     show through the names. */
+  /* THE RUNG ABOVE ITS GROUND, not the same one: this opens over a modal, and a
+     modal paints the panel rung. */
+  background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   box-shadow: var(--shadow-2);
@@ -343,7 +429,7 @@ a.seat-chip:hover {
    `Segmented` in ui/primitives.tsx — and a selector left on the old attribute
    is how a correct role ships with the selected segment drawn as unselected. */
 .segmented > button[aria-checked="true"] {
-  background: var(--surface-1);
+  background: var(--surface-panel);
   color: var(--text);
   box-shadow: var(--shadow-1);
 }
@@ -484,7 +570,7 @@ kbd {
 .veil {
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--bg-sunken) 72%, transparent);
+  background: color-mix(in srgb, var(--surface-panel) 72%, transparent);
   backdrop-filter: blur(3px);
   display: flex;
   align-items: flex-start;

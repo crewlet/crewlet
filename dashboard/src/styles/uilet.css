@@ -3,7 +3,7 @@
 
    WHY A SHEET AND NOT A RENAME. Every stylesheet in this tree — frame.css,
    screens.css, components.css, shell.css — is written against short names
-   (`--space-4`, `--fs-sm`, `--surface-1`). uilet publishes the same ideas
+   (`--space-4`, `--fs-sm`, `--surface-panel`). uilet publishes the same ideas
    under a canonical namespace (`--spacing-4`, `--font-size-sm`,
    `--color-surface-topbar`). Aliasing is how the design system arrives
    without rewriting ~3,000 lines of CSS that are not about colour at all,
@@ -108,27 +108,52 @@
 
   /* ---- Surfaces --------------------------------------------------------
      FIGURE AND GROUND, kept. Ours has an opaque page under opaque panels, so
-     the panels have to resolve to an OPAQUE colour in both themes — which is
-     the `topbar` ramp, not the `subtle`/`muted` one, whose dark values are
-     translucent overlays meant to sit on top of a background rather than to
-     be one. Mapping panels onto those would make every panel in dark mode a
-     5%-white wash over black, and the page would read as one flat field.
+     the panels have to resolve to an OPAQUE colour in both themes — which
+     rules out `hover`, `pressed` and `inset`, whose values are translucent
+     overlays meant to sit on top of a background rather than to be one.
+     Mapping panels onto those would make every panel in dark mode a 5%-white
+     wash over black, and the page would read as one flat field.
 
-     THE RAMP STEPS OFF THE PAGE, NOT OFF A CARD, and that is the one thing to
-     know before spending a rung. `color-surface-topbar-lift` and
-     `color-surface-subtle` carry the SAME value in every state of the cascade —
-     #f4f4f5 light, #1c1e24 dark — and `color-surface-subtle` is what every Card
-     paints. So inside a card `surface-2` and `bg-sunken` are the card's own
-     colour: the declaration parses, applies, and shows nothing. `surface-3` is
-     the first rung a card can show, and `surface-1` the first below it. The
-     calendar's neighbouring-month cells were `surface-2` for their whole life
-     and drew a uniform grid; `styles/surfaces.test.ts` is what now measures the
-     claim in this paragraph rather than restating it. */
+     THERE ARE EXACTLY THREE OPAQUE VALUES, and that is the whole shape of
+     this block. The package publishes nine surface names and they collapse
+     onto three colours in every state of the cascade:
+
+       background = topbar                      #ffffff / #15171c
+       subtle = muted = topbar-lift             #f4f4f5 / #1c1e24
+       elevated = topbar-active                 #ebebee / #22252b
+
+     THIS USED TO BE FOUR NAMES OVER THOSE THREE VALUES, and the collision was
+     at the bottom, where the chrome lives: `--surface-1` was `topbar`, which
+     is `background` — the same bytes as the page. So the page bar, the rail,
+     the workspace sidebar, every card and every grid painted THE PAGE'S OWN
+     COLOUR and were told apart from it by a 1px border and nothing else.
+     Twenty-two declarations, none of which drew anything. The turn screen was
+     where it showed worst: a near-black window with a near-black header on it
+     and seven near-black panels down it, hairlines all the way.
+
+     `--surface-2` was the other end of the same mistake — `topbar-lift` is
+     `subtle`, which is what every `Card` paints, so inside a card it was the
+     card's own colour and thirteen more declarations drew nothing. The
+     calendar's neighbouring-month cells were that for their whole life and
+     came back as a uniform grid.
+
+     So the names are the rungs now, and there are as many as there are
+     colours. A rung says where it stands rather than how far along a scale it
+     is, which is what makes "is this visible on that?" answerable at the call
+     site instead of by resolving two aliases against the installed palette.
+     `styles/surfaces.test.ts` measures every pair rather than restating this
+     paragraph. */
   --bg: var(--color-surface-background);
-  --bg-sunken: var(--color-surface-subtle);
-  --surface-1: var(--color-surface-topbar);
-  --surface-2: var(--color-surface-topbar-lift);
-  --surface-3: var(--color-surface-topbar-active);
+  /* THE FIRST RUNG ABOVE THE PAGE: the chrome, a card, a panel, a grid. It is
+     what `Card` paints, so it is also the ground a screen's own tint lands
+     on. */
+  --surface-panel: var(--color-surface-subtle);
+  /* THE FIRST RUNG A PANEL CAN SHOW: a block inside a card, a grid's head, a
+     badge on the rail, a pill lifted out of a well. The last opaque step the
+     package has — there is no fourth, so a block inside a block inside a card
+     has to reach for a border or `--surface-inset` rather than another rung
+     that does not exist. */
+  --surface-raised: var(--color-surface-elevated);
   --surface-inset: var(--color-surface-inset);
   --surface-hover: var(--color-surface-hover);
   --surface-active: var(--color-surface-pressed);

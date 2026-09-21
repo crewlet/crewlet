@@ -94,11 +94,22 @@ func TestTheExecutorPromptStaysUnderBudgetWithABigCatalogue(t *testing.T) {
 // is the note saying so plus the incomplete rule, which is what stops a
 // reviewer grading an engine-written outcome as the agent's own verdict.
 //
+// 750 -> 800 when the blocked rule became a three-way split. It had named a
+// single outcome, `self_iterate`, while saying in the same breath that the
+// colleague "reply asynchronously and that re-triggers the agent" — and both
+// halves cannot hold at once. A seat that had correctly put a clarifying
+// question to its founder was sent back by the reviewer, asked again two
+// minutes later, and ended on the max-iterations guard. Telling the three
+// cases apart — not asked yet, already asked, nobody's reply would finish it
+// — measures at 53 tokens over the one-outcome instruction, and buys back the
+// two extra rounds every such turn was burning.
+//
 // The headroom is small on purpose: the next addition should have to justify
-// itself here, not slip in.
+// itself here, not slip in. 800 keeps it at ~30 tokens, which is what 750
+// left before the split — the raise pays for the rule, not for room.
 func TestReviewPromptIsSmall(t *testing.T) {
 	t.Parallel()
-	withinBudget(t, "review", BuildReview(lead(), ReviewInput{}), 750)
+	withinBudget(t, "review", BuildReview(lead(), ReviewInput{}), 800)
 }
 
 // THE WHOLE TURN, which is the number that actually bills.
