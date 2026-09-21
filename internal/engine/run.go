@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skillsync"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -72,6 +73,10 @@ type Engine struct {
 	setupRunner func() *setup.Runner
 	// metrics is the process's one recorder, from [Options.Metrics].
 	metrics *metrics.Recorder
+
+	// chatLive is [Options.ChatLive], held so startStateLog can hand it to
+	// the chat applier. Nil is a documented no-op.
+	chatLive chat.Observer
 
 	// searching is how many knowledge scans this node is running right
 	// now — the gauge behind `crewlet.tracker.search.concurrency`. On the
@@ -497,6 +502,26 @@ type Options struct {
 	// run for minutes; a test shrinks it so a run settles in a second
 	// rather than waiting out a real tick.
 	SandboxPollInterval time.Duration
+
+	// ChatLive is where a committed chat record is announced, and it is an
+	// OPTION rather than a setter because of WHEN the applier is built.
+	//
+	// [New] brings the state log up (run.go -> startNative ->
+	// startStateLog), and the applier takes its observer at construction —
+	// so by the time a caller holds an *Engine to call a setter on, the
+	// thing that would have to be told already exists and has been running.
+	// Every other late seam here (SetPosture, the config writer) is
+	// installed after New precisely because nothing reads it during one.
+	//
+	// The process builds the hub FIRST and hands it here, which is what
+	// [api.NewChatLive] documents and why every seam that hub reads
+	// through is a function: none of them has to exist yet, this one
+	// included.
+	//
+	// Nil is legal and is what a company off native chat has: the applier
+	// still writes every row, and the push is what is absent. A node whose
+	// API does not serve is the same case.
+	ChatLive chat.Observer
 }
 
 // New assembles an engine.
@@ -601,6 +626,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		sandboxOtel: otel,
 		bridge:      bridge,
 		metrics:     opts.Metrics,
+		chatLive:    opts.ChatLive,
 		mode:        mode,
 		incarnation: incarnation,
 		id:          nodeID,

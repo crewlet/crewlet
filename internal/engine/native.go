@@ -653,6 +653,21 @@ func (e *Engine) ChatStore() *chat.Store {
 	return e.native.chat
 }
 
+// ChatIndex is this node's chat keyword index, or nil.
+//
+// THE RAW INDEX, unlike [Engine.chatSearch]: that seam takes a viewer and
+// resolves the visible rooms itself, because a TOOL able to supply the channel
+// set is a tool able to supply the wrong one. The query surface resolves the
+// same set through [chat.Reader.Readable] before it gets here and passes it on
+// the query, so what it needs is the index and not the guard — and it refuses
+// a query naming no channel rather than reading it as every channel.
+func (e *Engine) ChatIndex() *search.ChatIndexer {
+	if e.native == nil {
+		return nil
+	}
+	return e.native.chatIndex
+}
+
 // NativeSearcher is the native knowledge searcher, or nil.
 func (e *Engine) NativeSearcher() *pages.Searcher {
 	if e.native == nil {

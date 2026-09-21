@@ -159,6 +159,12 @@ type stateLog struct {
 	// loop's instruments are observed rather than merely declared.
 	metrics *metrics.Recorder
 
+	// chatLive is the chat applier's observer, from [Options.ChatLive].
+	// Threaded down for the reason `metrics` is: the applier is built here
+	// and the thing it announces to belongs to the process. Nil is a
+	// documented no-op — see [stateLog.applierFor].
+	chatLive chat.Observer
+
 	// skills is this build's tool-skill parser and nudge, threaded down
 	// because the PAGES APPLIER is what notices a skill page arriving or
 	// leaving: natively there is no page webhook and the change feed
@@ -337,8 +343,9 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	s := &stateLog{
 		domains: map[string]*runningDomain{},
 		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
-		metrics: e.metrics,
-		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
+		metrics:  e.metrics,
+		chatLive: e.chatLive,
+		skills:   skillDetector{}, nudgeSkills: e.nudgeSkills,
 		ceilings: ceilings, volume: streamVolume(boot),
 		run: runCtx, stop: cancel,
 	}
@@ -1138,15 +1145,28 @@ func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) 
 		// send that returns when there is nothing to send to.
 		return pages.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
 	case chat.Domain{}.Name():
-		// NO OBSERVER FROM HERE. The applier's live seam is what pushes
-		// a committed message onto an open socket, and the sink for that
-		// is the API's — built with the socket hub, which does not exist
-		// when the state log comes up and is not this package's to reach
-		// through. A nil observer is a legal, documented no-op
-		// ([chat.NewApplier]), so a node whose API is not serving still
-		// applies every record: the rows are the durable answer and the
-		// push is a courtesy on top of them.
-		return chat.NewApplier(s.nodeID, nil), nil
+		// THE OBSERVER COMES FROM THE PROCESS, through
+		// [Options.ChatLive]. The applier's live seam is what pushes a
+		// committed message onto an open socket, and the sink for it is
+		// the API's socket hub — which this package can neither build nor
+		// reach, and which does not exist yet when the state log comes
+		// up. So the process builds the hub FIRST and hands it in; see
+		// [api.NewChatLive], whose seams are all functions for exactly
+		// that reason.
+		//
+		// It used to be a hard nil here, on the reasoning that the rows
+		// are the durable answer and the push is a courtesy on top of
+		// them. The first half is true and the second is not: the
+		// dashboard polls a room only while its socket is DOWN, and
+		// relies on these frames to refetch while it is up — so a nil
+		// here is not a lost courtesy, it is every connected client
+		// frozen until somebody reloads.
+		//
+		// Nil remains legal and is still a documented no-op
+		// ([chat.NewApplier]): a company off native chat has no hub, and
+		// a node that serves no API has no socket to push onto. Both
+		// apply every record regardless.
+		return chat.NewApplier(s.nodeID, s.chatLive), nil
 	}
 	return nil, fmt.Errorf("engine: domain %q is registered and has no applier, "+
 		"so its records would be consumed and produce no rows on this node",
