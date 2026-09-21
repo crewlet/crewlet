@@ -35,9 +35,33 @@ func TestEveryRegisteredDomainIsSizedFromTierA(t *testing.T) {
 			if err != nil {
 				t.Fatalf("tierACeiling: %v", err)
 			}
-			if derived.Bytes < MinDomainCeiling || derived.Explicit {
-				t.Errorf("unset = %+v, want a derived ceiling of at least %d",
-					derived, MinDomainCeiling)
+			if derived.Explicit {
+				t.Errorf("unset = %+v, want a DERIVED ceiling", derived)
+			}
+			// A NODE NEVER DERIVES A CEILING ITS OWN VALIDATION WOULD
+			// REFUSE TO BE TOLD, which is the invariant rather than a
+			// number: each field's floor is Tier A's to state, and they
+			// are not all the same. The org chart's is far below the
+			// corpus-sized logs' gibibyte, because a ceiling is granted
+			// in full at create time and a chart is a few thousand
+			// records a year — a fourth domain at the corpus floor
+			// raised the disk a node needs to boot by a gibibyte for a
+			// log that will not fill one this century.
+			//
+			// Asserted by round-tripping the derived value THROUGH Tier
+			// A's own validation rather than against a constant here,
+			// so a new domain inherits the rule without this test
+			// learning its field's bounds.
+			boot := config.DefaultBootstrap()
+			boot.Stream.StoreDir = t.TempDir()
+			reflect.ValueOf(&boot.Stream).Elem().
+				FieldByIndex(keys[strings.TrimPrefix(derived.Field, "stream.")]).
+				SetInt(derived.Bytes)
+			if err := boot.Validate(); err != nil {
+				t.Errorf("%s derives %d, which Tier A then refuses: %v.\n"+
+					"A node that derives a ceiling its own validation will not "+
+					"accept cannot be configured to the value it chose for "+
+					"itself.", derived.Field, derived.Bytes, err)
 			}
 			key, found := strings.CutPrefix(derived.Field, "stream.")
 			field, known := keys[key]

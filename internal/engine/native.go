@@ -71,11 +71,13 @@ type native struct {
 	nodeID string
 
 	// log is this node's state-log runtime: every registered domain, each
-	// with its own apply loop and write authority. A native tracker or a
-	// native knowledge base starts it ([config.Company.RunsStateLog]) and
-	// it runs the whole register or none, so a company on Jira whose pages
-	// are the engine's own runs every domain. A company on vendors for both
-	// has no native at all.
+	// with its own apply loop and write authority.
+	//
+	// EVERY COMPANY HAS ONE. It runs the whole register or none, and the
+	// register always holds the org chart — so a company on Jira and
+	// Confluence, which configures no engine-native backend at all, still
+	// runs this for its units and seats. The domains its VENDOR backends
+	// would have contributed are the ones that are conditional.
 	log *stateLog
 
 	// It adopts the state log in its own step; until then this node runs
@@ -143,12 +145,18 @@ type native struct {
 // without either, so every engine that reaches this holds both.
 func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Company) error {
 	// AN IN-MEMORY STREAM NEVER GETS THIS FAR. [Engine.New] refused a
-	// company that runs the log on one ([config.CheckTiers]): its first
+	// company whose log would live on one ([config.CheckTiers]): its first
 	// restart recreates the log empty and the node never serves again, so
 	// the error line once logged here was printed on the way to that state.
-	if !c.Config.RunsStateLog() {
-		return nil
-	}
+	//
+	// AND THERE IS NO LONGER A COMPANY THAT SKIPS THIS. The early return
+	// here asked whether this company ran the engine's own tracker or its
+	// own knowledge base, because those were the only domains and a company
+	// on Jira and Confluence started none. The ORG CHART is a domain now
+	// and nothing makes it optional: a company that configures no
+	// engine-native backend at all still has units and seats, and they are
+	// rows the log is the write-ahead for. A node that returned here would
+	// serve a company with no chart, which is a company with no seats.
 	runTracker := c.Config.TrackerBackendFor() == config.TrackerNative
 	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeNative
 

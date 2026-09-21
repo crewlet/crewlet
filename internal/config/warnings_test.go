@@ -295,19 +295,27 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 	}
 }
 
-// A NATIVE BACKEND ON AN IN-MEMORY STREAM IS REFUSED, and it takes both
-// documents to see it.
+// A STATE LOG ON AN IN-MEMORY STREAM IS REFUSED, WHATEVER THE COMPANY RUNS,
+// and it takes both documents to see it.
 //
-// The engine's own tracker and its own knowledge base keep their write-ahead
-// logs on the stream, and an embedded stream with no store directory keeps its
-// streams in memory, so a restart recreates them empty and a node whose
-// durable tables are ahead of a stream that restarted from nothing refuses to
-// serve PERMANENTLY: every snapshot it could adopt is above the recreated
-// stream too.
+// A domain's write-ahead log lives on the stream, and an embedded stream with
+// no store directory keeps its streams in memory — so a restart recreates them
+// empty, and a node whose durable tables are ahead of a stream that restarted
+// from nothing refuses to serve PERMANENTLY: every snapshot it could adopt is
+// above the recreated stream too.
 //
-// EITHER BACKEND. The rule once asked only about the tracker, and the
-// knowledge base is native by default, so a company on Jira with no Confluence
-// ran its pages on an in-memory log and was accepted.
+// # EVERY company, which is what the backend cases are here to hold
+//
+// The rule once asked whether the company ran the engine's own tracker or its
+// own knowledge base, because those were the only domains. The ORG CHART is a
+// domain now, and nothing makes it optional: a company on Jira and Confluence
+// configures no engine-native backend at all and still has units and seats,
+// which are rows a log is the write-ahead for.
+//
+// So the case that matters most is `vendors for both`. Under the old rule it
+// PASSED — and a company that passed would start a chart log in memory and
+// lose its entire org chart on the first restart, with nothing having warned.
+// It is here, refused, for that reason.
 //
 // Each tier validates alone and neither can see the other, which is why this
 // is a rule of its own rather than a field's.
@@ -326,7 +334,10 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 		"a blank store directory is none":         {"  ", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false},
 		"native with a store directory":           {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true},
 		"native on an external cluster":           {"", config.StreamNATS, config.TrackerNative, config.KnowledgeNative, true},
-		"vendors for both on the same stream":     {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, true},
+		// THE CASE THE OLD RULE LET THROUGH. A company that names a
+		// vendor for both still has an org chart, and a chart is a log.
+		"vendors for both on the same stream":     {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, false},
+		"vendors for both with a store directory": {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()
@@ -348,12 +359,16 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 				return
 			}
 			if err == nil {
-				t.Fatal("a native backend on an in-memory stream was accepted")
+				t.Fatal("a state log on an in-memory stream was accepted, so " +
+					"this node would lose every record it holds on its first " +
+					"restart and then refuse to serve")
 			}
+			// THE BACKENDS ARE NOT IN THE MESSAGE ANY MORE, and that
+			// is the rule changing rather than the message getting
+			// worse: naming them said "you chose this", and nobody
+			// chooses to have an org chart.
 			for _, want := range []string{
-				"stream.store_dir", "refuses to serve",
-				"tracker.backend: " + string(tc.tracker),
-				"knowledge.backend: " + string(tc.knowledge),
+				"stream.store_dir", "refuses to serve", "org chart",
 			} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("refusal = %q, want it to say %q", err, want)

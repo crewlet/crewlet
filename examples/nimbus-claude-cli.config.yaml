@@ -83,12 +83,15 @@ logging:
 # process.
 #
 # store_dir is NOT optional, and not merely inadvisable: leaving it empty
-# selects an in-memory server, and this company runs the engine's own
-# tracker and knowledge base (see tracker.backend and knowledge.backend in
-# the company document), whose logs live on that stream.  A restart would
-# recreate them empty and this node would stop serving for good, so the
-# engine refuses the pairing outright rather than losing the records —
-# `crewlet validate` refuses it too, naming stream.store_dir.
+# selects an in-memory server, and this company's own records live on that
+# stream.  Its org chart does whatever backends it names — a company's
+# units and seats are a state-log domain — and its work items and its
+# pages do too, because it runs the engine's own tracker and knowledge
+# base (see tracker.backend and knowledge.backend in the company
+# document).  A restart would recreate those logs empty and this node
+# would stop serving for good, so the engine refuses to boot without one
+# rather than losing the records — `crewlet validate` refuses it too,
+# naming stream.store_dir.
 #
 # `type: nats` dials an external NATS server or cluster instead, and takes
 # `url` (plus `credentials` / `token` / `tls` where the estate demands

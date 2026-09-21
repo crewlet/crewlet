@@ -317,8 +317,8 @@ down anyway.
 5. **Start the fleet again.**
 
 A `stream.store_dir` left empty selects an in-memory stream server: nothing
-survives a restart and there is nothing to back up. Set it before backups are
-worth discussing at all.
+survives a restart and there is nothing to back up. The engine refuses to boot
+without one, so a fleet that reaches this procedure has already set it.
 
 ## Restoring
 

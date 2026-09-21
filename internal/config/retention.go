@@ -94,21 +94,42 @@ const (
 	// operator's volume has something to say about; a chart does not. It is
 	// hundreds of objects — a company's units and its seats — and it changes
 	// when somebody is hired, moved or promoted rather than on every comment
-	// or every save. At the reference company's rate, a few hundred
-	// structural records and a few thousand content records a year at a few
-	// kilobytes each, a COMPLETELY BLOCKED trim reaches a gibibyte in well
-	// over a century. There is no smaller number worth having — a gibibyte
-	// is already the framework's own minimum domain ceiling, below which the
-	// engine's scaling will not take a log — so the honest default is the
-	// floor rather than a fraction of a disk that would reserve a quarter of
-	// a storage array for records no company will ever write.
+	// or every save.
+	//
+	// # Sixty-four mebibytes, and why it is not the gibibyte the others take
+	//
+	// At the reference company's rate — a few hundred structural records and
+	// a few thousand content records a year, a few kilobytes each, so under
+	// twenty mebibytes a year at the pessimistic end — this is FOUR YEARS of
+	// a COMPLETELY BLOCKED trim. A blocked trim is not a quiet state: it
+	// raises an alarm, holds the backup age against the operator and is the
+	// loudest thing the retention estate has to say. Four years past the
+	// point where somebody was told is not a window that refuses an append
+	// before anybody could act.
+	//
+	// It took a gibibyte first, on the reasoning that a gibibyte is the
+	// framework's own minimum domain ceiling ([engine.MinDomainCeiling]) and
+	// there was no smaller number worth having. That reasoning was wrong in
+	// a way a test then demonstrated. The floor is a property of the logs it
+	// was written for — a mutation log below a gibibyte really is a window
+	// that refuses appends within a week — and what it costs is RESERVED
+	// BYTES: the broker grants a stream its whole ceiling at create time, so
+	// a fourth domain at the same floor raised the free space a node needs
+	// to boot at all by a gibibyte, for a log that will not fill one this
+	// century. On a 3.4 GiB volume, where three domains fitted, the fourth
+	// made the node refuse to start.
+	//
+	// So a floor is per-log rather than universal, and this one is the
+	// chart's own. The engine's scaling already handles it without a change:
+	// a log that asks for less than [engine.MinDomainCeiling] keeps what it
+	// asked for, because scaling never raises.
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy, like the store
-	// limit's: 16 GiB is four orders of magnitude past the modelled
+	// limit's: 16 GiB is five orders of magnitude past the modelled
 	// year-five volume, so anything beyond it is a unit mistake and not a
 	// deployment.
-	DefaultChartLogMaxBytes int64 = 1 << 30
-	ChartLogMaxBytesFloor   int64 = 1 << 30
+	DefaultChartLogMaxBytes int64 = 64 << 20
+	ChartLogMaxBytesFloor   int64 = 64 << 20
 	ChartLogMaxBytesCeiling int64 = 16 << 30
 
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes

@@ -983,23 +983,26 @@ type Stream struct {
 	// ordered stream every change to the company's own structure goes
 	// through.
 	//
-	// UNSET TAKES A FLAT GIBIBYTE, which is the framework's own minimum
-	// domain ceiling, and it is the only state log here that is NOT derived
-	// from the disk. The reason is that the other three grow with a corpus
-	// the operator's volume has something to say about, and this one does
-	// not: a chart is hundreds of objects, it changes when somebody is
-	// hired, moved or promoted, and a COMPLETELY BLOCKED trim reaches a
-	// gibibyte in well over a century at the modelled rate. A quarter of a
-	// storage array would be disk reserved for records no company will ever
-	// write, and a quarter of a laptop would be the same number by
-	// coincidence.
+	// UNSET TAKES A FLAT 64 MiB, and it is the only state log here that is
+	// NOT derived from the disk. The reason is that the other three grow
+	// with a corpus the operator's volume has something to say about, and
+	// this one does not: a chart is hundreds of objects, it changes when
+	// somebody is hired, moved or promoted, and 64 MiB is four years of a
+	// COMPLETELY BLOCKED trim at the modelled rate. A quarter of a storage
+	// array would be disk reserved for records no company will ever write,
+	// and a quarter of a laptop would be the same number by coincidence.
+	//
+	// SMALLER THAN EVERY OTHER LOG'S FLOOR, deliberately: the broker grants
+	// a stream its whole ceiling when it creates it, so this number is free
+	// space a node must have before it can boot at all. See
+	// [DefaultChartLogMaxBytes] for the boot this cost at a gibibyte.
 	//
 	// It shares the state logs' one budget, and what the mutation log's
 	// field says about it holds here unchanged: the value is the one the
 	// stream is CREATED with, a derived value is scaled with the others to
 	// fit the broker and a set one is not, and crossing it refuses the
 	// append rather than shedding history.
-	ChartLogMaxBytes int64 `yaml:"chart_log_max_bytes,omitempty" json:"chart_log_max_bytes,omitempty" js:"min=1073741824;max=17179869184" desc:"Byte ceiling on the org chart's log; unset takes a flat 1 GiB, 1 GiB..16 GiB."`
+	ChartLogMaxBytes int64 `yaml:"chart_log_max_bytes,omitempty" json:"chart_log_max_bytes,omitempty" js:"min=67108864;max=17179869184" desc:"Byte ceiling on the org chart's log; unset takes a flat 64 MiB, 64 MiB..16 GiB."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it

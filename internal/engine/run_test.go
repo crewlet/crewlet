@@ -762,31 +762,39 @@ func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 	}
 }
 
-// A COMPANY'S RECORD IS NOT PUT ON AN IN-MEMORY STREAM, and the knowledge base
-// counts as much as the tracker.
+// A COMPANY'S RECORD IS NOT PUT ON AN IN-MEMORY STREAM, WHATEVER BACKENDS IT
+// NAMES.
 //
-// On the native backends an in-memory stream is not "queued events do not
-// survive a restart": the first restart recreates the log empty, and a node
-// whose rows are ahead of it stops serving for good. Measured on a company with
-// no native tracker whose pages were the engine's own: it booted, logged an
-// error, and after one restart its pages applier stopped on the recreated
-// stream and the node never admitted a seat again. The cross-tier rule asked
-// only about the tracker, and the knowledge base is native by default, so the
-// refusal is asserted here, at the door the engine itself goes through, for
-// the pairing the rule missed.
+// An in-memory stream is not "queued events do not survive a restart": the
+// first restart recreates the log empty, and a node whose rows are ahead of it
+// stops serving for good. Measured on a company with no native tracker whose
+// pages were the engine's own: it booted, logged an error, and after one
+// restart its pages applier stopped on the recreated stream and the node never
+// admitted a seat again.
+//
+// # The pairing that has no native backend at all
+//
+// The cross-tier rule asked which backends the company ran, so a company on
+// Jira AND Confluence was let through. That company still has an org chart,
+// which is a state-log domain like any other — so it started a chart log in
+// memory and lost its units and its seats on the first restart. Asserted here,
+// at the door the engine itself goes through, and with the vendor pairing
+// rather than a native one, because that is the case the old rule missed.
 func TestACompanysRecordIsNotPutOnAnInMemoryStream(t *testing.T) {
 	t.Parallel()
 	company := parsedCompany(t, companyDoc)
 	company.Tracker.Backend = config.TrackerNone
+	company.Knowledge.Backend = config.KnowledgeNone
 	_, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) { b.Stream.StoreDir = "" }),
 		Company:   company,
 	})
 	if err == nil {
-		t.Fatal("a company whose pages are the engine's own booted on an " +
-			"in-memory stream, which its first restart recreates empty")
+		t.Fatal("a company that configures no engine-native backend booted on " +
+			"an in-memory stream — it still has an org chart, and its first " +
+			"restart recreates that log empty")
 	}
-	for _, want := range []string{"stream.store_dir", "knowledge.backend: native"} {
+	for _, want := range []string{"stream.store_dir", "org chart"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q: %v", want, err)
 		}

@@ -218,10 +218,9 @@ func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 // to say about. A chart is hundreds of objects and changes when somebody is
 // hired, moved or promoted, so a fraction of a storage array would reserve disk
 // for records no company will ever write and a fraction of a laptop would land
-// on the same number by coincidence. The default is therefore the framework's
-// own minimum domain ceiling, flat — and the accessor takes no free-space
-// argument at all, because a parameter it ignored would be a signature claiming
-// a relationship that does not exist.
+// on the same number by coincidence. The default is therefore flat — and the
+// accessor takes no free-space argument at all, because a parameter it ignored
+// would be a signature claiming a relationship that does not exist.
 func TestTheChartCeilingIsFlatAndNotDerivedFromTheDisk(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
@@ -236,18 +235,71 @@ func TestTheChartCeilingIsFlatAndNotDerivedFromTheDisk(t *testing.T) {
 	if got < config.ChartLogMaxBytesFloor {
 		t.Errorf("the default %d is under the floor %d", got, config.ChartLogMaxBytesFloor)
 	}
-	// AND IT IS THE FRAMEWORK'S FLOOR, which is what the constant's own
-	// reasoning rests on: below a gibibyte the engine's shared-budget
-	// scaling will not take a log at all, so there is no smaller number
-	// worth having.
-	if got != gib {
-		t.Errorf("the default is %d, want a gibibyte — the framework's minimum "+
-			"domain ceiling is what the reasoning at the constant rests on", got)
-	}
 
 	s := config.Stream{ChartLogMaxBytes: 3 * gib}
 	if got, derived := s.ChartMaxBytes(); got != 3*gib || derived {
 		t.Errorf("set = (%d, derived %v), want the configured value", got, derived)
+	}
+}
+
+// AND IT IS WELL UNDER EVERY OTHER LOG'S FLOOR, which is a decision rather
+// than an accident.
+//
+// # What a ceiling costs before a byte is written
+//
+// The broker grants a stream its WHOLE ceiling when it creates it, so a
+// domain's ceiling is free space a node must have before it can boot at all.
+// This one took a gibibyte first, on the reasoning that a gibibyte is the
+// framework's minimum domain ceiling and there was no smaller number worth
+// having — and a fourth domain at that floor raised the disk a node needs by a
+// gibibyte, for a log that will not fill one this century. On a 3.4 GiB volume
+// where three domains fitted, the fourth made the node refuse to start.
+//
+// The floor it borrowed belongs to the logs it was written for: a mutation log
+// under a gibibyte really is a window that refuses appends within a week of a
+// company starting work. A chart's records are a few thousand a year.
+//
+// SO THE ASSERTION IS THE RELATION, not the number: this log must stay well
+// under the floor the corpus-sized logs take, because that is the property
+// that keeps adding a domain from raising what a deployment needs. The margin
+// is deliberately loose — what would be wrong is this creeping back up to the
+// others' floor, not its exact value.
+func TestTheChartLogCostsFarLessDiskThanACorpusSizedLog(t *testing.T) {
+	t.Parallel()
+
+	// THE THREE CORPUS-SIZED FLOORS, read through a slice rather than
+	// compared as constants: they are equal today, and `go vet` reads a
+	// constant comparison that cannot be false as a mistake.
+	corpus := map[string]int64{
+		"tracker_log_max_bytes":     config.TrackerLogMaxBytesFloor,
+		"pages_log_max_bytes":       config.PagesLogMaxBytesFloor,
+		"tracker_vectors_max_bytes": config.TrackerVectorsMaxBytesFloor,
+	}
+	corpusFloor := config.TrackerLogMaxBytesFloor
+	for name, floor := range corpus {
+		if floor != corpusFloor {
+			t.Fatalf("%s's floor is %d and the others take %d, so the "+
+				"corpus-sized logs no longer share one floor and this "+
+				"comparison has nothing to hold the chart against",
+				name, floor, corpusFloor)
+		}
+	}
+	if config.DefaultChartLogMaxBytes*4 > corpusFloor {
+		t.Errorf("the chart's log reserves %d bytes and a corpus-sized log's "+
+			"floor is %d.\n"+
+			"A ceiling is granted in full at create time, so this is free space "+
+			"every node must have before it boots — and a chart is a few "+
+			"thousand records a year, not a corpus. Keep it well under the "+
+			"floor the corpus logs take, or adding a domain raises what a "+
+			"deployment needs by a gibibyte apiece.",
+			config.DefaultChartLogMaxBytes, corpusFloor)
+	}
+	// AND THE FLOOR AN OPERATOR MAY SET IS THE DEFAULT, because there is no
+	// deployment a smaller chart log serves and the failure of one that is
+	// too small is severe: appends refused, so nobody can be hired.
+	if config.ChartLogMaxBytesFloor != config.DefaultChartLogMaxBytes {
+		t.Errorf("the floor %d and the default %d have come apart",
+			config.ChartLogMaxBytesFloor, config.DefaultChartLogMaxBytes)
 	}
 }
 
@@ -306,26 +358,33 @@ func TestTheVectorCeilingIsSizedForAModelChange(t *testing.T) {
 func TestTheByteCeilingsAreBounded(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
+	const mib = int64(1) << 20
 	for name, tc := range map[string]struct {
 		mutate func(*config.Bootstrap)
 		accept bool
 		says   string
 	}{
-		"a log below a gibibyte":     {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = gib - 1 }, false, "tracker_log_max_bytes"},
-		"a log at a gibibyte":        {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = gib }, true, ""},
-		"a log at a tebibyte":        {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = 1024 * gib }, true, ""},
-		"a log past a tebibyte":      {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = 1024*gib + 1 }, false, "tracker_log_max_bytes"},
-		"vectors below a gibibyte":   {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = gib - 1 }, false, "tracker_vectors_max_bytes"},
-		"vectors at 256 GiB":         {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 256 * gib }, true, ""},
-		"vectors past 256 GiB":       {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 257 * gib }, false, "tracker_vectors_max_bytes"},
-		"pages below a gibibyte":     {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib - 1 }, false, "pages_log_max_bytes"},
-		"pages at a gibibyte":        {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib }, true, ""},
-		"pages at 256 GiB":           {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256 * gib }, true, ""},
-		"pages past 256 GiB":         {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256*gib + 1 }, false, "pages_log_max_bytes"},
-		"the chart below a gibibyte": {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = gib - 1 }, false, "chart_log_max_bytes"},
-		"the chart at a gibibyte":    {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = gib }, true, ""},
-		"the chart at 16 GiB":        {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = 16 * gib }, true, ""},
-		"the chart past 16 GiB":      {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = 16*gib + 1 }, false, "chart_log_max_bytes"},
+		"a log below a gibibyte":   {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = gib - 1 }, false, "tracker_log_max_bytes"},
+		"a log at a gibibyte":      {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = gib }, true, ""},
+		"a log at a tebibyte":      {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = 1024 * gib }, true, ""},
+		"a log past a tebibyte":    {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = 1024*gib + 1 }, false, "tracker_log_max_bytes"},
+		"vectors below a gibibyte": {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = gib - 1 }, false, "tracker_vectors_max_bytes"},
+		"vectors at 256 GiB":       {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 256 * gib }, true, ""},
+		"vectors past 256 GiB":     {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 257 * gib }, false, "tracker_vectors_max_bytes"},
+		"pages below a gibibyte":   {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib - 1 }, false, "pages_log_max_bytes"},
+		"pages at a gibibyte":      {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib }, true, ""},
+		"pages at 256 GiB":         {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256 * gib }, true, ""},
+		"pages past 256 GiB":       {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256*gib + 1 }, false, "pages_log_max_bytes"},
+		// THE CHART'S FLOOR IS ITS OWN, well under the gibibyte the
+		// corpus-sized logs take: a ceiling is granted in full at
+		// create time, so a domain's floor is free space every node
+		// must have before it boots, and a chart is a few thousand
+		// records a year. See TestTheChartLogCostsFarLessDiskThanACorpusSizedLog.
+		"the chart below its floor": {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = mib*64 - 1 }, false, "chart_log_max_bytes"},
+		"the chart at its floor":    {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = mib * 64 }, true, ""},
+		"the chart at a gibibyte":   {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = gib }, true, ""},
+		"the chart at 16 GiB":       {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = 16 * gib }, true, ""},
+		"the chart past 16 GiB":     {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = 16*gib + 1 }, false, "chart_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()

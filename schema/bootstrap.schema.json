@@ -283,9 +283,9 @@
       "additionalProperties": false,
       "properties": {
         "chart_log_max_bytes": {
-          "description": "Byte ceiling on the org chart's log; unset takes a flat 1 GiB, 1 GiB..16 GiB.",
+          "description": "Byte ceiling on the org chart's log; unset takes a flat 64 MiB, 64 MiB..16 GiB.",
           "maximum": 17179869184,
-          "minimum": 1073741824,
+          "minimum": 67108864,
           "type": "integer"
         },
         "cluster": {

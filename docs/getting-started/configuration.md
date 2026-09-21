@@ -390,14 +390,14 @@ stream:
                                     #   an external server — the same client
                                     #   code either way, so it is a connection
                                     #   choice rather than a second backend
-  store_dir: "./crewlet-data/stream"  # empty = in-memory: right for a test,
-                                    #   and nothing published survives a
-                                    #   restart. A company on the engine's own
-                                    #   tracker or knowledge base (the
-                                    #   defaults) keeps every item and every
-                                    #   page there, so the engine refuses to
-                                    #   boot it on an in-memory stream rather
-                                    #   than lose them at the first restart
+  store_dir: "./crewlet-data/stream"  # REQUIRED. Empty = in-memory, and
+                                    #   nothing published survives a restart —
+                                    #   including this company's own org
+                                    #   chart, which every company keeps on a
+                                    #   state log whatever backends it names.
+                                    #   The engine refuses to boot without one
+                                    #   rather than lose it at the first
+                                    #   restart
   # store_max_bytes: 68719476736    # how much of that directory's volume the
                                     #   EMBEDDED broker may hold — the ONE number
                                     #   every stream ceiling on it is compared
@@ -1138,7 +1138,9 @@ tracker:
 
 Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#stream), or a decision the engine makes once for everybody.
 
-**A native tracker or knowledge base needs a stream that survives a restart.** Their write-ahead logs live on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. Either backend starts the log: a company on Jira whose knowledge base is the engine's own, the default without Confluence, is refused the same way. Only a company whose tracker and knowledge base are both a vendor's (or `none`) starts no log at all and is unaffected, which is why the rule needs both files to see.
+**Every company needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory — so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it when given both documents, and so does the engine at boot.
+
+It applies whatever backends a company names. A native tracker or knowledge base puts its items and its pages there, but the **org chart** — the company's units and seats — is a domain too, and nothing makes it optional. This rule used to ask about the backends and let a company on Jira and Confluence through; that company started a chart log in memory and lost its whole chart on the first restart, with nothing having warned. There is no company it can correctly let past, which is why it still needs both files to see.
 
 ---
 

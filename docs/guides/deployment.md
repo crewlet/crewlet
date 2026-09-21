@@ -254,26 +254,29 @@ Ctrl-C returns immediately. Every other error is returned at once: a bad subject
 a conflicting retention does not clear by waiting, and retrying would turn a
 config mistake into a half-minute hang with the same message at the end.
 
-**Set `store_dir`, or the fleet forgets.** Empty selects an in-memory member:
-a restart loses that member's replicas, and the same server holds the KV
-buckets carrying the fleet's shared records — the token counter, the
-completion ledger, open agent-to-agent asks, claimed scheduled fires, detached
-(and billed) sandbox runs. No node is an exception for its roles, an
-ingress-only one included: every node runs the engine, and an in-memory member
-creates every stream it provisions in memory. That is tolerable only for a
-company whose tracker and knowledge base are both a vendor's; on either native
-backend the engine refuses it outright, as the next paragraph describes.
+**`store_dir` is required, and the engine refuses to boot without one.**
+Empty selects an in-memory member: a restart loses that member's replicas, and
+the same server holds the KV buckets carrying the fleet's shared records — the
+token counter, the completion ledger, open agent-to-agent asks, claimed
+scheduled fires, detached (and billed) sandbox runs. No node is an exception
+for its roles, an ingress-only one included: every node runs the engine, and
+an in-memory member creates every stream it provisions in memory.
 
-**On the native backends it is the company's own record, and it is
-refused.** With `tracker.backend: native` or `knowledge.backend: native` (the
-defaults), every work item and every page lives in a log on that stream. An
-unset `store_dir` would mean the first restart recreates those logs empty, and
-a node whose rows are ahead of a log that restarted from nothing stops serving
-for good. So the engine refuses to boot that pairing, and `crewlet validate`
-refuses it when given both documents, naming `stream.store_dir`. Either
-backend is enough: a company on Jira whose knowledge base is the engine's own,
-which is the default without Confluence, is refused the same way. Only a
-company on vendors for both can run an in-memory member.
+**And the company's own records live there, whatever backends it names.**
+Every company keeps its **org chart** — its units and its seats — on a state
+log, and a domain's log is a stream. With `tracker.backend: native` or
+`knowledge.backend: native` (the defaults), its work items and its pages are
+there too. An unset `store_dir` means the first restart recreates those logs
+empty, and a node whose rows are ahead of a log that restarted from nothing
+stops serving for good. So the engine refuses to boot without one, and
+`crewlet validate` refuses it when given both documents, naming
+`stream.store_dir`.
+
+> This rule used to ask which backends a company ran, and a company on Jira
+> and Confluence was allowed an in-memory member. That company still has an
+> org chart — so it started a chart log in memory and lost the whole chart on
+> its first restart, with nothing having warned. There is no company the rule
+> can correctly let past.
 
 **Divide `store_max_bytes` when several engines share a filesystem.** Every
 stream ceiling on the embedded broker is a *reservation*: the broker refuses to

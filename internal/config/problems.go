@@ -683,36 +683,38 @@ func CheckTiers(boot *Bootstrap, company *Company) error {
 		return nil
 	}
 
-	// A NATIVE BACKEND ON AN IN-MEMORY STREAM IS UNRECOVERABLE, and that is
-	// why it is an error rather than the warning Tier A raises alone.
+	// A STATE LOG ON AN IN-MEMORY STREAM IS UNRECOVERABLE, and that is why
+	// it is an error rather than the warning Tier A raises alone.
 	//
-	// The engine's own tracker and its own knowledge base keep their
-	// write-ahead logs on the stream, and either one starts the node's state
-	// log ([Company.RunsStateLog]). An embedded server with no store
-	// directory keeps its streams in MEMORY, so a restart recreates them
-	// empty, and a node whose durable tables are ahead of a stream that has
-	// restarted from nothing cannot tell "the log was trimmed" from "the log
-	// is a different log", refuses to serve, and stays refused: every
-	// snapshot it could adopt is above the recreated stream too.
+	// A domain's write-ahead log lives on the stream. An embedded server
+	// with no store directory keeps its streams in MEMORY, so a restart
+	// recreates them empty — and a node whose durable tables are ahead of a
+	// stream that restarted from nothing cannot tell "the log was trimmed"
+	// from "the log is a different log", refuses to serve, and stays
+	// refused: every snapshot it could adopt is above the recreated stream
+	// too.
 	//
-	// THE KNOWLEDGE BASE AS MUCH AS THE TRACKER. This rule once asked only
-	// about the tracker, and the knowledge base is native by default: a
-	// company on Jira with no Confluence ran its pages on an in-memory log,
-	// passed, and lost the ability to serve on its first restart.
+	// # It applies to EVERY company now, and that is a change
 	//
-	// It is an error rather than a warning because there is no correct
-	// deployment it describes. A company whose tracker and knowledge base are
-	// both a vendor's starts no log at all and is unaffected, which is why
-	// the rule needs both documents.
-	if company.RunsStateLog() && boot.Stream.Type != StreamNATS &&
-		strings.TrimSpace(boot.Stream.StoreDir) == "" {
+	// This rule once asked whether the company ran the engine's own tracker
+	// or its own knowledge base, because those were the only domains and a
+	// company on Jira and Confluence started no log at all. The ORG CHART is
+	// a domain now, and nothing makes it optional: a company that configures
+	// no engine-native backend whatsoever still has units and seats, and
+	// they are rows a log is the write-ahead for. So there is no longer any
+	// company this rule can correctly let past.
+	//
+	// The narrower rule did not merely become redundant — it became WRONG in
+	// the silent direction. A company on a vendor's tracker and a vendor's
+	// wiki would have passed, started a chart log in memory, and lost its
+	// entire org chart on the first restart with nothing having warned.
+	if boot.Stream.Type != StreamNATS && strings.TrimSpace(boot.Stream.StoreDir) == "" {
 		p.add(field("stream.store_dir"), ErrMissing,
-			"this company runs the engine's own backends (tracker.backend: %s, "+
-				"knowledge.backend: %s), whose logs live on the stream, and an "+
-				"embedded stream with no store directory keeps its streams in "+
-				"memory: a restart recreates them empty and this node refuses to "+
-				"serve them permanently. Name a directory",
-			company.TrackerBackendFor(), company.KnowledgeBackendFor())
+			"every company keeps its org chart on the state log, whose records "+
+				"live on the stream, and an embedded stream with no store "+
+				"directory keeps its streams in memory: a restart recreates them "+
+				"empty and this node refuses to serve them permanently. Name a "+
+				"directory")
 	}
 	return p.err()
 }
