@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -166,65 +167,61 @@ func bodies(page chat.Transcript) []string {
 //     ever report it.
 func TestAMessageOnOneNodeWakesASeatOnAnotherAndBothNodesAgree(t *testing.T) {
 	noParallel(t)
-	c := startCluster(t, fleetSize)
-	c.hydrated(t)
-
-	// WHICH MEMBER HOLDS THE SEAT IS NOT DECIDED BY THIS TEST. Placement
-	// is a greedy claim, so the holder is whichever member got there
-	// first — and the whole point of the first arm is to post somewhere
-	// else, which means finding out rather than assuming.
-	// A STABLE HOLDER, not the first one seen. Placement claims greedily
-	// and converges, so a single poll can catch the seat mid-move: the
-	// member holding it when this line runs is not always the member
-	// holding it a second later, and everything below pins to whichever
-	// one this picks.
+	// ONE MEMBER THAT CANNOT HOLD A SEAT, and it is the one this case posts
+	// from. Everything below rests on the post happening somewhere the seat
+	// is not, and that is not something a case can OBSERVE its way to:
+	// placement converges while the fleet comes up, so the seat moves after
+	// any check that it has settled. This case was flaky through four
+	// attempts to pin it by observation — a single poll, then a stability
+	// window, then asserting on any member but the writer — and the last
+	// failure was the seat migrating ONTO the writer, where the wake then
+	// ran locally and correctly and crossed nothing:
 	//
-	// Getting that wrong does not look like a placement bug. The wake
-	// crosses correctly to wherever the seat actually went, that member
-	// runs the turn, and the case sits out its whole 90s budget watching
-	// the member the seat LEFT — reporting "the seat on the other member
-	// never ran a turn" while the diagnostic shows the other member's
-	// model running phases. Measured: `holder=node-1 saw []; writer=node-2
-	// saw [aux:persist aux:profile]`, which is that exactly.
+	//	writer=node-2; ceo is now on node-2; phases seen:
+	//	  node-0=[aux:knowledge onboarding onboarding]
+	//	  node-2=[aux:knowledge execute ... review]
 	//
-	// SAME HOLDER ON CONSECUTIVE POLLS is what "settled" means here. The
-	// policy converges in both directions and has no completion signal to
-	// wait on, so agreement across a span is the only evidence available.
-	var holder, writer *node
-	stableFor := 0
-	waitFor(t, "the ceo seat to settle on one member of the fleet", func() bool {
-		var now *node
-		for _, n := range c.nodes {
-			if slices.Contains(n.engine.Node().Host().Held(), "ceo") {
-				now = n
-				break
+	// Dropping [placement.RoleSeats] makes it a fact instead. node-0 runs
+	// no seats at all, so it is a valid writer for the life of the case and
+	// the seat cannot arrive on it — the premise holds by construction
+	// rather than by timing.
+	//
+	// IT KEEPS EVERY OTHER ROLE, because the case still needs it to accept
+	// the write and publish it: what is removed is the ability to RUN the
+	// seat, not to reach the fleet.
+	c := startCluster(t, fleetSize, func(b *config.Bootstrap) {
+		if b.Node.ID == chatWriterNode {
+			b.Node.Roles = []string{
+				string(placement.RoleIngress), string(placement.RoleWorkers),
 			}
 		}
-		if now == nil || now != holder {
-			holder, stableFor = now, 0
-			return false
-		}
-		stableFor++
-		return stableFor >= chatSeatSettled
 	})
+	c.hydrated(t)
+
+	// THE WRITER IS THE SEAT-LESS MEMBER, by name rather than by search:
+	// it is the one configured above to run no seats, so it is the only
+	// member guaranteed not to be holding the ceo seat at any point in this
+	// case.
+	var writer *node
 	for _, n := range c.nodes {
-		if n != holder {
+		if n.id == chatWriterNode {
 			writer = n
 		}
 	}
 	if writer == nil {
 		t.Fatalf("a fleet of %d left nobody to post from", fleetSize)
 	}
-	// AND EXACTLY ONE MEMBER HOLDS IT, which is the premise the whole
-	// first arm rests on. Checked rather than assumed because the way it
-	// fails is not a failure: with leases kept per node both members own
-	// the seat, both attach its mailbox, and the case then passes or
-	// fails on which consumer happened to win the one wake — a coin flip
-	// dressed as an assertion. See [buildMember]'s coordination note.
-	if slices.Contains(writer.engine.Node().Host().Held(), "ceo") {
-		t.Fatalf("both %s and %s hold the ceo seat, so there is no node this "+
-			"wake has to cross to — coordination is not shared across this "+
-			"fleet", holder.id, writer.id)
+	// AND THE WRITER REALLY IS HOLDING NOTHING, which the role above makes
+	// true and this confirms rather than assumes. It is the premise the
+	// whole first arm rests on, and the way it fails is not a failure: if
+	// the writer also held the seat, the wake would be served by its own
+	// mailbox and the case would pass or fail on which consumer won — a
+	// coin flip dressed as an assertion. Checked here because the shape
+	// that produced it once already was coordination NOT being shared
+	// across the fleet; see [buildMember]'s note.
+	if held := writer.engine.Node().Host().Held(); len(held) != 0 {
+		t.Fatalf("%s was configured to run no seats and holds %v — there is "+
+			"then no node this wake has to cross to", writer.id, held)
 	}
 
 	created := room(t, writer, person("founder"), chat.NewChannel{
@@ -248,19 +245,40 @@ func TestAMessageOnOneNodeWakesASeatOnAnotherAndBothNodesAgree(t *testing.T) {
 	second := say(t, writer, person("founder"), made.ID, "fleet-chat-2",
 		"and the node never drained")
 
-	// (1) THE SEAT THE OTHER MEMBER RUNS WAKES. Its own scripted endpoint
-	// is the evidence: each member has one, and only the member running
-	// the seat can have called it.
-	waitFor(t, "the seat on the other member to run a turn", func() bool {
-		return slices.Contains(holder.model.seen(), "execute")
+	// (1) THE SEAT WAKES ON A MEMBER THAT IS NOT THE ONE THAT POSTED. Each
+	// member has its own scripted endpoint, and only the member RUNNING the
+	// seat can have called it — so a turn on any member but the writer is
+	// the wake having crossed, which is the whole claim.
+	//
+	// ANY OTHER MEMBER, not the one that held the seat at setup. Pinning to
+	// that member is what made this case flaky, and the reason is worth
+	// keeping: placement converges while the fleet is still coming up, so
+	// the seat can move AFTER any check that it has settled. It moved twice
+	// here — once between the first poll and the post, and once past a
+	// three-poll stability window that was far too short against a lease
+	// round trip. Measured, from this case's own diagnostic:
+	// `holder=node-2 saw []; writer=node-1 saw []; ceo is now on node-0`,
+	// a third member neither of the two pinned names was watching.
+	//
+	// Widening it costs nothing the case was actually asserting. "The seat
+	// woke on the member holding it" is not the claim — that member is an
+	// implementation detail of placement, which this case does not test and
+	// must not depend on. "The wake crossed off the node that published it"
+	// is the claim, and it is exactly what this now reads.
+	waitFor(t, "the seat to run a turn on a member other than the writer", func() bool {
+		for _, n := range c.nodes {
+			if n != writer && slices.Contains(n.model.seen(), "execute") {
+				return true
+			}
+		}
+		return false
 	}, func() string {
-		// WHO HOLDS IT NOW, beside who held it at setup. If those differ
-		// the seat moved after this case pinned to it, and the turn ran
-		// somewhere neither of these two is watching — which reads
-		// identically to a wake that never crossed.
-		return fmt.Sprintf("holder=%s saw %v; writer=%s saw %v; ceo is now on %s",
-			holder.id, holder.model.seen(), writer.id, writer.model.seen(),
-			chatSeatHolder(c))
+		var saw []string
+		for _, n := range c.nodes {
+			saw = append(saw, fmt.Sprintf("%s=%v", n.id, n.model.seen()))
+		}
+		return fmt.Sprintf("writer=%s; ceo is now on %s; phases seen: %s",
+			writer.id, chatSeatHolder(c), strings.Join(saw, " "))
 	})
 
 	// (2) AND BOTH MEMBERS HOLD THE SAME TRANSCRIPT, sequence included.
@@ -955,16 +973,6 @@ func TestACommittedMessageReachesAWatchingSocket(t *testing.T) {
 	}
 }
 
-// chatSeatSettled is how many consecutive polls must agree before this case
-// treats placement as converged.
-//
-// THREE, at [waitFor]'s own 20ms cadence, so roughly 60ms of agreement. It is
-// deliberately small: the question is whether the seat is mid-MOVE, and a move
-// takes a lease round trip rather than microseconds — so a handful of polls
-// separates "settled" from "in flight" without adding a wait to the common
-// case, where it is already stable on the first three.
-const chatSeatSettled = 3
-
 // chatSeatHolder is the member holding the ceo seat right now, for a
 // diagnostic, or "nobody".
 func chatSeatHolder(c *cluster) string {
@@ -975,3 +983,12 @@ func chatSeatHolder(c *cluster) string {
 	}
 	return "nobody"
 }
+
+// chatWriterNode is the member the fleet wake case posts from.
+//
+// NAMED rather than discovered, because this case configures it to run no
+// seats — see the role amendment at the top of
+// [TestAMessageOnOneNodeWakesASeatOnAnotherAndBothNodesAgree]. The id is the
+// harness's own (`node-<i>`, minted in [buildMember]), and member zero is
+// chosen for no reason beyond being the one that always exists.
+const chatWriterNode = "node-0"
