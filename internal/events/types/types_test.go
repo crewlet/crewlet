@@ -25,7 +25,7 @@ func catalogue() []events.Payload {
 		// org.go
 		OrgStarted{}, OrgStopped{}, AgentSpawned{}, AgentTerminated{},
 		// config.go
-		ConfigRevisionActivated{}, ConfigRevisionApplied{},
+		ConfigRevisionActivated{}, ConfigRevisionApplied{}, ConfigRevisionScrubbed{},
 		// task.go
 		TaskAssigned{},
 		// schedule.go
@@ -83,6 +83,7 @@ var wireTypes = []string{
 	"compaction_requested",
 	"config_revision_activated",
 	"config_revision_applied",
+	"config_revision_scrubbed",
 	"counterparty_profile_updated",
 	"episode_written",
 	"external_notification",
@@ -272,6 +273,7 @@ var wireTags = map[string][]string{
 	"agent_terminated":                {"agent_id", "reason", "role"},
 	"config_revision_activated":       {"created_by", "revision_id", "revision_summary"},
 	"config_revision_applied":         {"applied_subsystems", "error", "revision_id", "status"},
+	"config_revision_scrubbed":        {"fields", "revision_id", "scrubbed_by"},
 	"task_assigned":                   {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
 	"scheduled_task_fired":            {"schedule_name", "scheduled_at", "scope_id", "scope_type", "target_handle"},
 	"external_notification":           {"addressed", "agent_id", "body", "context_requires_recon", "messages", "metadata", "notification_source", "recipient_email", "salient_body", "sender", "source_event_type", "subject"},

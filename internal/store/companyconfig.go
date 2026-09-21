@@ -36,6 +36,16 @@ type Revision struct {
 
 	Active      bool
 	ActivatedAt time.Time
+
+	// ScrubbedAt is when this revision's personal fields were erased, and
+	// the zero time means they were not.
+	//
+	// It narrows the "immutable snapshot" this table's own comment states,
+	// which is why it is a stamp rather than a silent rewrite: a diff
+	// across a scrub boundary shows a tombstone, and the next reader has
+	// to be able to tell that from corruption. See
+	// `0030_a_superseded_revision_can_be_scrubbed.sql`.
+	ScrubbedAt time.Time
 }
 
 // Configs is the versioned Tier B store.
@@ -49,7 +59,7 @@ type Configs struct{ db *DB }
 func (d *DB) Configs() *Configs { return &Configs{db: d} }
 
 const revisionColumns = `revision_id, parent_revision_id, created_at, created_by,
-	source, summary, payload, is_active, activated_at`
+	source, summary, payload, is_active, activated_at, scrubbed_at`
 
 // InsertActive writes a new revision and makes it the active one, returning
 // its id.
@@ -329,10 +339,10 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 	var parent sql.NullString
 	var payload string
 	var createdAt int64
-	var activatedAt sql.NullInt64
+	var activatedAt, scrubbedAt sql.NullInt64
 	var active int64
 	if err := rows.Scan(&r.ID, &parent, &createdAt, &r.CreatedBy, &r.Source,
-		&r.Summary, &payload, &active, &activatedAt); err != nil {
+		&r.Summary, &payload, &active, &activatedAt, &scrubbedAt); err != nil {
 		return Revision{}, fmt.Errorf("store: read config revision: %w", err)
 	}
 	r.ParentID = Text(parent)
@@ -340,5 +350,183 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 	r.Payload = json.RawMessage(payload)
 	r.Active = active != 0
 	r.ActivatedAt = TimeAt(activatedAt)
+	r.ScrubbedAt = TimeAt(scrubbedAt)
 	return r, nil
+}
+
+// ErrRevisionIsActive reports a scrub aimed at the revision the fleet serves.
+var ErrRevisionIsActive = errors.New(
+	"store: the active revision cannot be scrubbed")
+
+// Scrub replaces one SUPERSEDED revision's payload and stamps scrubbed_at.
+//
+// # The one write that edits a revision, and what bounds it
+//
+// Every other write here appends: importing writes a new row, activating
+// appends to the pointer, and that is what makes the history a record rather
+// than a claim. This one rewrites a row in place, because appending cannot
+// erase anything — a new revision with the address removed leaves the old row
+// holding it, which is the whole problem.
+//
+// So it is bounded twice. It reaches only what `crewlet config scrub` names —
+// personal fields, never a setting — and it REFUSES THE ACTIVE REVISION,
+// which is enforced by the statement rather than by the caller remembering
+// to: the fleet is serving that document, every node is holding it, and a
+// rewrite underneath them would be a config change nothing activated. An
+// operator who wants the address out of the live company edits the company.
+//
+// `0030_a_superseded_revision_can_be_scrubbed.sql` is where the narrowed
+// immutability is written down.
+func (c *Configs) Scrub(ctx context.Context, revisionID string, payload json.RawMessage, at time.Time) error {
+	result, err := c.db.sql.ExecContext(ctx,
+		`UPDATE company_config SET payload = ?, scrubbed_at = ?
+		 WHERE revision_id = ? AND is_active = 0`,
+		string(payload), EncodeTime(at), revisionID)
+	if err != nil {
+		return fmt.Errorf("store: scrub config revision %s: %w", revisionID, err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: scrub config revision %s: %w", revisionID, err)
+	}
+	if n == 0 {
+		// TWO CAUSES, ONE STATEMENT, and they are told apart by a read
+		// rather than by a second guarded write: asking first and updating
+		// after would be a race with an activation, and the clause above
+		// is what actually holds.
+		_, found, err := c.Get(ctx, revisionID)
+		switch {
+		case err != nil:
+			return err
+		case !found:
+			return fmt.Errorf("%w: %s", ErrNoRevision, revisionID)
+		default:
+			return fmt.Errorf("%w: %s", ErrRevisionIsActive, revisionID)
+		}
+	}
+	log.InfoContext(ctx, "config_revision_scrubbed", "revision", revisionID)
+	return nil
+}
+
+// Chain is the active revision and every ancestor it reaches through
+// parent_revision_id, newest first.
+//
+// WHAT THE RETENTION SWEEP MAY NOT DELETE, whatever its horizon. A revert
+// re-activates an older revision by id, and `crewlet config diff` walks the
+// chain — so a deleted ancestor turns both into an error naming a row that
+// used to exist. The chain is normally short: it is one revision per config
+// write, not per node and not per apply.
+//
+// STOPS AT THE FIRST BREAK rather than reporting one. A chain can already be
+// broken by a revision this node never adopted — a node joins a running fleet
+// and fetches the active revision alone — and that is an ordinary state
+// rather than damage, so the sweep protects what it can reach and lets the
+// horizon cover the rest.
+//
+// A VISITED SET, because a cycle in parent pointers would otherwise be an
+// infinite loop inside a maintenance tick. Nothing writes one, which is
+// exactly why nothing would notice it.
+func (c *Configs) Chain(ctx context.Context) ([]Revision, error) {
+	active, found, err := c.Active(ctx)
+	if err != nil || !found {
+		return nil, err
+	}
+	out := []Revision{active}
+	seen := map[string]bool{active.ID: true}
+	for at := active; at.ParentID != ""; {
+		if seen[at.ParentID] {
+			return out, nil
+		}
+		parent, found, err := c.Get(ctx, at.ParentID)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return out, nil
+		}
+		seen[parent.ID] = true
+		out = append(out, parent)
+		at = parent
+	}
+	return out, nil
+}
+
+// Purge deletes revisions older than cutoff, keeping the active one and its
+// unbroken parent chain, and reports how many went.
+//
+// # Why this table needs a sweep at all
+//
+// Every node keeps its OWN copy of every revision it ever met, in an
+// append-only table, and nothing deleted from it — so a company that edits
+// its configuration daily accumulates a row per edit per node for the life of
+// the deployment, and each row is a copy of the whole document. It is also
+// where a pre-split revision's `roles[].email` lives, which is why this ships
+// beside `crewlet config scrub`: the scrub erases what is inside a row it
+// keeps, and this is what eventually removes the row.
+//
+// # The chain is kept whatever its age
+//
+// Deleting an ancestor of the active revision breaks a revert and a diff, and
+// a company that has not changed its configuration for a year has an active
+// revision OLDER than any horizon worth setting. So the chain is excluded by
+// id rather than by date.
+func (c *Configs) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
+	chain, err := c.Chain(ctx)
+	if err != nil {
+		return 0, err
+	}
+	// BOUND PARAMETERS, one per kept revision, rather than an interpolated
+	// list: the chain is short and the ids are uuids this process wrote,
+	// but a query built by concatenation is a query somebody later feeds
+	// something else.
+	keep := make([]any, 0, len(chain))
+	placeholders := make([]byte, 0, 2*len(chain))
+	for i, rev := range chain {
+		if i > 0 {
+			placeholders = append(placeholders, ',')
+		}
+		placeholders = append(placeholders, '?')
+		keep = append(keep, rev.ID)
+	}
+	doomed := `created_at < ? AND is_active = 0`
+	if len(chain) > 0 {
+		doomed += ` AND revision_id NOT IN (` + string(placeholders) + `)`
+	}
+	args := append([]any{EncodeTime(cutoff)}, keep...)
+
+	var n int64
+	err = c.db.Tx(ctx, func(tx *sql.Tx) error {
+		// THE SURVIVORS' PARENT POINTERS FIRST, and this is not tidiness:
+		// parent_revision_id is a real foreign key and this database runs
+		// with `PRAGMA foreign_keys = ON`, so deleting a row something
+		// still points at FAILS. Off-chain revisions point at each other
+		// — a reverted branch is exactly that shape — so a bare delete
+		// aborts the whole tick on the first row whose child has not gone
+		// yet, and the table never shrinks while the log says the sweep
+		// ran.
+		//
+		// NULLING IT IS THE TRUTHFUL REPAIR rather than a way round the
+		// constraint: the ancestor is gone, so a pointer at it is a lie,
+		// and the column is already nullable because the first revision
+		// ever written has no parent. [Configs.Chain] stops at a break for
+		// this reason among others.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE company_config SET parent_revision_id = NULL
+			 WHERE parent_revision_id IN (
+			     SELECT revision_id FROM company_config WHERE `+doomed+`)`,
+			args...); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx,
+			`DELETE FROM company_config WHERE `+doomed, args...)
+		if err != nil {
+			return err
+		}
+		n, err = result.RowsAffected()
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("store: purge config revisions: %w", err)
+	}
+	return n, nil
 }

@@ -35,6 +35,21 @@ A few things worth knowing when deploying Crewlet:
 - **Config encryption at rest** is available and recommended when your
   company config carries secrets — see
   `docs/concepts/configuration.md#secrets`.
+- **Personal data in configuration revisions written before this release.**
+  Every node keeps its own copy of every company-config revision it has ever
+  met, in an append-only table that nothing deleted from and that is in every
+  backup of that node. The org chart used to live inside that document, so a
+  human seat's `email` and `contact` account ids are archived in every
+  revision that carried them — and removing the seat never reached them,
+  because the removal writes a *new* revision. Revisions written after the
+  chart moved onto its own log carry no chart at all, so nothing new enters
+  the archive. Run `crewlet config scrub` **on every node** to erase what is
+  already there; it refuses the active revision, which is edited instead. It
+  does not reach backups taken before the run, so treat those as still
+  holding the original revisions and apply your own retention to them. Going
+  forward the revision table is also swept: 400 days, plus the active
+  revision and its parent chain (see
+  `docs/guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach`).
 - **Sandbox isolation.** Coding-agent runs execute inside an isolated sandbox
   (E2B); the sandbox boundary — not the coding agent's own permission
   prompts — is the isolation model. Treat anything you inject into a sandbox

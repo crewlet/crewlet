@@ -172,6 +172,7 @@ var categories = map[string]placement{
 	"org_stopped":               {"lifecycle", RateEngine},
 	"config_revision_activated": {"lifecycle", RateAuthenticated},
 	"config_revision_applied":   {"lifecycle", RateAuthenticated},
+	"config_revision_scrubbed":  {"lifecycle", RateAuthenticated},
 
 	// Task: work reaching a seat — including a detached sandbox run, which
 	// is the execution of one, and a schedule firing, which creates one.

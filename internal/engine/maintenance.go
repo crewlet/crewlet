@@ -47,6 +47,12 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// what makes a single list of them honest rather than a
 		// coincidence: a node's short-horizon state IS its local index.
 		jobs = append(jobs, maintenance.StoreJobs(db)...)
+		// THE CONTROL PLANE'S OWN TABLE, named separately rather than
+		// folded into the store sweep: company_config is the one table
+		// here whose rows are configuration, and an operator reading
+		// the job list wants to see that it is swept at all — it was
+		// not, for the life of every deployment before this.
+		jobs = append(jobs, maintenance.ConfigJobs(db)...)
 		jobs = append(jobs, maintenance.LearningJobs(learning.NewDiary(db))...)
 		jobs = append(jobs, maintenance.CounterpartyJobs(learning.NewCounterparties(db))...)
 		jobs = append(jobs, maintenance.ScheduleJobs(sqlledger.New(db.SQL()))...)

@@ -50,6 +50,28 @@ const Marker = "[REDACTED:"
 // credential" into "the credential I could not see".
 const FieldMask = "__redacted__"
 
+// ScrubMask is what a personal field reads as once it has been ERASED from a
+// stored revision.
+//
+// # Why it is not [FieldMask]
+//
+// The two look alike and mean opposite things, and confusing them loses data
+// in the one direction nothing can undo. [FieldMask] means "this value exists
+// and you may not see it": every surface that serves configuration writes it,
+// and every write path RESTORES the real value from the row it patches, so a
+// document carrying it round-trips without loss. This one means "this value
+// is gone" — `crewlet config scrub` wrote it over somebody's email address in
+// a superseded revision, and there is nothing behind it to restore.
+//
+// A write path that read them as one marker would restore a scrubbed field
+// from a row that no longer holds it, which is a write that fails closed at
+// best; the other direction is worse, because a restore that found the value
+// would put the address back into the archive the scrub was run to clear.
+//
+// DISTINCT AND DISTINCTIVE, for [FieldMask]'s own reason doubled: it has to
+// be tellable from a real value, from an empty one, and from a mask.
+const ScrubMask = "__scrubbed__"
+
 type rule struct {
 	pattern *regexp.Regexp
 	with    string

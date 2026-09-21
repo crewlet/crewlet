@@ -1,0 +1,30 @@
+-- A superseded revision stops being an immutable copy of somebody's
+-- personal data.
+--
+-- company_config's own comment calls each row "an immutable snapshot of the
+-- whole Tier B document", and for a CONFIGURATION that is the property the
+-- table exists to have: the history is what makes a revert possible and an
+-- audit row meaningful. For a PERSON it is not. A human seat carries an
+-- `email` and a `contact` block of external account ids, so a company that
+-- has ever named somebody in its org chart has archived their personal data
+-- in an append-only table, on every node that met the revision, in every
+-- backup, for the life of the deployment. Removing the seat never reached it
+-- — the removal writes a NEW revision, and every older one still holds them.
+--
+-- So the property is NARROWED here rather than quietly broken: a revision
+-- stays immutable as a configuration and stops being immutable as a copy of
+-- somebody's personal data. `crewlet config scrub` rewrites the named fields
+-- of SUPERSEDED revisions with a tombstone and stamps this column. A diff
+-- across a scrub boundary therefore shows the tombstone, which is the change
+-- a reader must not read as corruption.
+--
+-- Revisions written after the org chart moved onto its own log carry no chart
+-- at all, so nothing new enters this archive. The scrub is for what is
+-- already there.
+ALTER TABLE company_config ADD COLUMN scrubbed_at INTEGER;
+
+-- NO INDEX, and no sweep index either. The retention sweep this ships beside
+-- selects on created_at, which company_config_created_at_idx already covers,
+-- and nothing ever asks "which revisions are scrubbed" — the column is read
+-- one row at a time, beside a revision somebody already named. An index over
+-- it would be a write cost per revision for a query nobody makes.

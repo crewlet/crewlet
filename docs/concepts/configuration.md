@@ -436,7 +436,10 @@ correctly-serving node out of a load balancer's rotation for being behind.
 
 ## Versioned Revisions
 
-`company_config` is an append-only table — every change is a new revision. The schema:
+`company_config` is an append-only table — every change is a new revision. It
+is swept and it can be scrubbed; both are described under [what a revision is
+not](#a-revision-is-immutable-as-a-configuration-not-as-an-archive-of-people)
+below. The schema:
 
 ```sql
 CREATE TABLE company_config (
@@ -449,7 +452,10 @@ CREATE TABLE company_config (
     payload            TEXT    NOT NULL,          -- the whole document as JSON, or the
                                                   -- sealed envelope when a keyring is set
     is_active          INTEGER NOT NULL DEFAULT 0,
-    activated_at       INTEGER
+    activated_at       INTEGER,
+    scrubbed_at        INTEGER                    -- when `crewlet config scrub`
+                                                  -- erased this revision's
+                                                  -- personal fields
 );
 
 -- At most one active revision, enforced by the database rather than by the
@@ -466,6 +472,50 @@ recently, the intersection of two drivers' dialects; the second driver is
 retired and the types are unchanged, because they were never the narrow part.
 
 A revert creates a *new* revision whose payload equals a prior one — the audit chain stays intact via `parent_revision_id`.
+
+### A revision is immutable as a configuration, not as an archive of people
+
+Two things narrow "append-only", and both are deliberate.
+
+**It is swept.** Every node keeps its own copy of every revision it has ever
+met, and nothing deleted from it — one row per config write, per node, each
+holding the whole document. The ordinary maintenance tick now keeps everything
+inside **400 days** plus the **active revision and its whole parent chain
+whatever their age**, and it runs on every node rather than under the fleet
+singleton, because each node owns its own copy. The chain is kept by id rather
+than by date: a revert re-activates an older revision and `crewlet config diff`
+walks it, so a swept ancestor turns both into an error naming a row that used
+to exist. See [Retention](../guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach)
+for where 400 days comes from and what its floor is.
+
+**It can be scrubbed.** The org chart used to live inside this document, so a
+human seat's `email` and `contact` account ids are inside every revision that
+carried them — on every node, in every backup, in a table nothing deleted
+from, and removing the seat never reached them because the removal writes a
+*new* revision. Revisions written after the chart moved onto its own log carry
+no chart at all, so nothing new enters the archive; `crewlet config scrub` is
+the one-time erasure for what is already there.
+
+```
+crewlet config scrub -dry-run     # which revisions hold personal data
+crewlet config scrub              # erase it from every superseded revision
+```
+
+It **refuses the active revision** — the fleet is serving that document and
+every node is holding it, so rewriting it underneath them would be a
+configuration change nothing activated, with no epoch, no apply and no event.
+To take an address out of the live company, edit the company: that writes a
+revision the scrub can then reach. It reaches **this node's copy only**, and
+backups taken before the run still hold the originals.
+
+The erased field reads as `__scrubbed__`, which is deliberately **not** the
+`__redacted__` a config read writes over a credential: that one means the
+value exists and is being withheld, and is restored from the row behind it by
+every write path; this one means the value is gone, and there is nothing
+behind it. So a `crewlet config diff` across a scrub **shows the tombstone** —
+that is a change, not damage. The row carries `scrubbed_at` and the run writes
+a `config_revision_scrubbed` audit event naming the revision and how many
+fields went, never which and never what they held.
 
 ### What a stored revision is held to
 

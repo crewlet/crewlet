@@ -34,6 +34,7 @@ subcommand below is served by it.
 | `crewlet config activate <UUID>` | Re-point the fleet at a revision; re-activating the current one mints a new epoch, which is how a rotated secret takes effect |
 | `crewlet config seal` | Encrypt the active revision as one document under the Tier A keyring (one-time migration off plaintext-at-rest) — see [Secrets](../concepts/configuration.md#secrets) |
 | `crewlet config rekey [-dry-run]` | Re-encrypt the active revision's config document under the active key (master-key rotation) |
+| `crewlet config scrub [<UUID>] [-dry-run]` | Erase personal data from superseded revisions — the one-time cleanup of an archive written before the org chart left the document |
 | `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `crewlet.yaml` snippet to install it |
 | `crewlet secrets set <NAME>` | Store an encrypted secret in the [secret store](../concepts/secret-store.md); the engine resolves `${NAME}` from it ahead of the environment |
 | `crewlet secrets list` | List stored secret names + metadata (never values) |
@@ -314,6 +315,26 @@ Rotates the master key: re-encrypts the active revision's config document under 
 Workflow: `crewlet secrets keygen -key-id <new>` → add the new key to `secrets.keys` and set `active_key_id: <new>` while keeping the old key → `crewlet config rekey` **and** `crewlet secrets rekey` → once both succeed, drop the old key from `crewlet.yaml`.
 
 `-dry-run` reports what would move by reading the key id off the envelope, decrypting nothing. Idempotent: a document already under the active key is skipped and says so. A **plaintext** revision is refused rather than silently sealed — "rotate the key this is under" and "start encrypting this at all" are different decisions, and the refusal points at `config seal`. Fails clearly, naming the key, if the document is sealed under one no longer in the keyring.
+
+### `crewlet config scrub`
+
+```
+crewlet config scrub [<UUID>] [-dry-run] [-config PATH]
+```
+
+Replaces every seat's `email` and `contact` account ids with `__scrubbed__` in **superseded** revisions — all of them by default, or the one named.
+
+The org chart used to live inside the company document, so a human seat's personal data is inside every revision that carried it: on every node, in every backup, in an append-only table nothing deleted from. Removing the seat never reached it, because the removal writes a *new* revision and every older one still holds them. Revisions written after the chart moved onto its own log carry no chart at all, so this is a **one-time** cleanup of what is already there; the [revision sweep](../guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach) is what eventually removes the rows.
+
+**It refuses the active revision.** The fleet is serving that document and every node is holding it, so rewriting it underneath them would be a configuration change nothing activated — no epoch, no apply, no event. To take an address out of the live company, edit the company; that writes a revision this can then reach.
+
+**It reaches this node's copy only.** Run it on every node. Backups taken before the run still hold the original revisions, and nothing here reaches them.
+
+**It is not reversible,** and `__scrubbed__` is deliberately not the `__redacted__` a config read writes over a credential: that one means the value exists and is being withheld, and every write path restores it from the row behind it; this one means the value is gone. So a [`crewlet config diff`](#crewlet-config-diff) across a scrub **shows the tombstone** — a change, not damage. The row carries a `scrubbed_at` stamp and the run writes a `config_revision_scrubbed` audit event naming the revision and how many fields went, never which and never what they held.
+
+`-dry-run` reports which revisions hold personal data and how much, writing nothing. Running it twice is a no-op and says so.
+
+---
 
 ---
 

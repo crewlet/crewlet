@@ -83,6 +83,45 @@ const (
 	// observes. Keeping every profile for ever costs unbounded growth on a
 	// table the fleet copies between nodes.
 	CounterpartyRetention = 180 * 24 * time.Hour
+
+	// RevisionRetention is how long a superseded company_config revision
+	// is kept.
+	//
+	// # The table had no horizon at all
+	//
+	// A node keeps its OWN copy of every revision it has ever met, in an
+	// append-only table, and nothing deleted from it — so a company that
+	// edits its configuration daily accumulates a row per edit per node
+	// for the life of the deployment, each row a copy of the whole
+	// document. It is also where a pre-split revision's `roles[].email`
+	// sits, which is why the sweep ships beside `crewlet config scrub`:
+	// the scrub erases what is inside a row it keeps, and this is what
+	// eventually removes the row.
+	//
+	// # The floor, which is a relation rather than a number
+	//
+	// An audit row that names a revision must still be able to open it, so
+	// this may never fall below [store.EventRetention] — the audit log's
+	// own horizon. That relation, not this value, is the thing to preserve
+	// if either moves; TestARevisionOutlivesTheAuditRowThatNamesIt is what
+	// holds it, because the two constants are in different packages and
+	// nothing else connects them.
+	//
+	// # Four hundred days, and why not a year
+	//
+	// The gestures that reach furthest back into configuration history are
+	// ANNUAL: a reorganisation repeated each year, a compliance review, a
+	// renewal that changes an integration. Exactly 365 days makes finding
+	// last year's revision a coin flip on the day the gesture is repeated
+	// — it is gone if this year's run is a day late. Four hundred days is
+	// that cycle plus five weeks, which is the margin an annual thing
+	// actually drifts by.
+	//
+	// It costs little: the active revision and its whole parent chain are
+	// kept whatever their age (see [store.Configs.Purge]), so what this
+	// bounds is abandoned branches, and a revision after the org chart's
+	// split is a few kilobytes rather than a whole company.
+	RevisionRetention = 400 * 24 * time.Hour
 )
 
 // StoreJobs is the sweep for everything in the main store.
@@ -119,6 +158,25 @@ func StoreJobs(db *store.DB) []Job {
 		// there is nothing left for a sweep to delete, and a job that
 		// swept an empty table every tick would only report that it had.
 	}
+}
+
+// ConfigJobs is the sweep for the company's stored configuration revisions.
+//
+// [NodeLocal], for the reason every job in [StoreJobs] is: this is the node's
+// own file, and each node adopts its own copy of every revision it meets. A
+// fleet singleton would tidy the node holding the duty and let the table grow
+// for ever on every other — which looks exactly like a sweep that works, to
+// the operator who checks the node it ran on.
+//
+// SEPARATE FROM [StoreJobs] because it is armed separately: this is the one
+// sweep whose rows are the CONTROL PLANE's, and a deployment reading the job
+// list wants to see it named rather than folded into a general store sweep.
+func ConfigJobs(db *store.DB) []Job {
+	if db == nil {
+		return nil
+	}
+	return []Job{Purge("company_config", NodeLocal, RevisionRetention,
+		db.Configs().Purge)}
 }
 
 // OpsLedger is the slice of a state-log applier this sweep calls. Declared

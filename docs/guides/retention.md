@@ -538,6 +538,70 @@ disk retains its copy until replay, adoption, replacement or destruction, and
 there is no duration to state. Saying "within 24 hours" would be a promise the
 architecture cannot keep.
 
+## The configuration archive, and the one thing a purge cannot reach
+
+Every node keeps its **own copy of every configuration revision it has ever
+met**, in `company_config`, and until this release nothing deleted from it.
+One row per config write, per node, each holding the whole document.
+
+Two things now bound it.
+
+**The revision sweep** is part of the ordinary maintenance tick and runs on
+**every node**, not under the fleet singleton: each node owns its own copy, so
+a singleton would tidy the node holding the duty and let the table grow for
+ever on every other — which looks exactly like a sweep that works, to whoever
+checks the node it ran on. It keeps everything inside **400 days**, plus the
+**active revision and its whole parent chain whatever their age**. The chain
+is kept by id rather than by date because a revert re-activates an older
+revision and `crewlet config diff` walks it, so a swept ancestor turns both
+into an error naming a row that used to exist — and a company that has not
+changed its configuration for a year has an active revision older than any
+horizon worth setting.
+
+Four hundred days is an annual cycle plus five weeks. The gestures that reach
+furthest back into configuration history are annual — a reorganisation
+repeated each year, a compliance review, a renewal — and exactly 365 days
+makes finding last year's revision a coin flip on the day the gesture is
+repeated. The floor is the **audit log's own horizon** (31 days): an audit row
+naming a revision must still be able to open it, so this can never be set
+below that.
+
+**`crewlet config scrub`** is the one-time erasure for what is already in the
+archive. The org chart used to live inside the company document, so a human
+seat's `email` and `contact` account ids are in every revision that ever
+carried them — on every node, in every backup, in a table nothing deleted
+from. Removing the seat never reached it: the removal writes a *new* revision
+and every older one still holds them. Revisions written after the [chart moved
+onto its own log](../concepts/configuration.md) carry no chart at all, so
+nothing new enters the archive.
+
+```
+crewlet config scrub -dry-run     # which revisions hold personal data
+crewlet config scrub              # erase it from every superseded revision
+crewlet config scrub <revision>   # or from one
+```
+
+Three things about it are not negotiable:
+
+- **It refuses the active revision.** The fleet is serving that document and
+  every node is holding it; rewriting it underneath them would be a
+  configuration change nothing activated — no epoch, no apply, no event. To
+  take an address out of the *live* company, edit the company; that writes a
+  revision the scrub can then reach.
+- **It is this node's copy only.** Run it on every node. Backups taken before
+  the run still hold the original revisions, and nothing here reaches them.
+- **It is not reversible.** The field is replaced with `__scrubbed__`, which
+  is deliberately not the `__redacted__` a config read writes over a
+  credential: that one means "this value exists and you may not see it" and is
+  restored from the row behind it, and this one means the value is gone.
+
+A revision stays immutable as a *configuration* and stops being immutable as a
+copy of somebody's personal data. So **a `crewlet config diff` across a scrub
+shows the tombstone**, which is a change rather than damage; the row carries a
+`scrubbed_at` stamp and the run writes a `config_revision_scrubbed` audit
+event recording the revision and how many fields went — never which, and never
+what they held.
+
 ## Old data is not cold data
 
 There is no tiering here, and the absence is a decision rather than an

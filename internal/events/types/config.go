@@ -1,6 +1,7 @@
 package types
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -12,6 +13,7 @@ import (
 func init() {
 	events.Register[ConfigRevisionActivated]()
 	events.Register[ConfigRevisionApplied]()
+	events.Register[ConfigRevisionScrubbed]()
 }
 
 // ConfigRevisionActivated is published when a new company_config revision is
@@ -92,4 +94,49 @@ func (e ConfigRevisionApplied) Summary() string {
 		reason = "unknown error"
 	}
 	return strings.Join([]string{"Config revision", e.RevisionID, "failed:", reason}, " ")
+}
+
+// ConfigRevisionScrubbed records that a SUPERSEDED revision's personal fields
+// were erased.
+//
+// # Why erasing something is worth an event
+//
+// Every other write to company_config appends, which is what makes the
+// history a record. A scrub rewrites a row in place — the only write that
+// does — so a diff across it shows a tombstone where an address used to be,
+// and a reader with no event to find would have to decide between "somebody
+// ran the scrub" and "this row is damaged". This is what makes that
+// answerable a year later.
+//
+// It names the revision and COUNTS the fields; it never names them, and it
+// certainly never carries what they held. An event that said which addresses
+// it removed would put them straight back into the audit log the scrub was
+// run to keep them out of — in a table this node also keeps, also on every
+// peer, and also in every backup.
+type ConfigRevisionScrubbed struct {
+	RevisionID string `json:"revision_id"`
+
+	// Fields is how many values were replaced with the tombstone. Zero
+	// means the revision was already clean, which is a different fact from
+	// not having been scrubbed and is why the event is published either
+	// way.
+	Fields int `json:"fields"`
+
+	// ScrubbedBy is the operator who ran it. The envelope owns `source`,
+	// so this does not restate it — see [ConfigRevisionActivated].
+	ScrubbedBy string `json:"scrubbed_by"`
+}
+
+// EventType is the "config_revision_scrubbed" wire type.
+func (ConfigRevisionScrubbed) EventType() string { return "config_revision_scrubbed" }
+
+// Summary says what happened to the revision, and reads as a no-op where it
+// was one: "scrubbed 0 fields" is the answer to "did this need it", and a
+// line that hid the difference would make a second run look like a first.
+func (e ConfigRevisionScrubbed) Summary() string {
+	if e.Fields == 0 {
+		return "Config revision " + e.RevisionID + " held no personal data to scrub"
+	}
+	return fmt.Sprintf("Config revision %s scrubbed: %d personal field(s) erased",
+		e.RevisionID, e.Fields)
 }

@@ -52,10 +52,12 @@ Usage:
   crewlet config activate ID       Re-point the fleet at a revision
   crewlet config seal              Encrypt a plaintext active revision under the keyring
   crewlet config rekey [-dry-run]  Re-seal the active revision under the active key
+  crewlet config scrub [ID] [-dry-run]
+                                   Erase personal data from superseded revisions
 
 Flags:
   -config PATH   Tier A config naming the store and its keyring (default %q)
-  -dry-run       Report what a rekey would do without writing
+  -dry-run       Report what a rekey or a scrub would do without writing
 
 A keyring rotation needs BOTH halves: "crewlet config rekey" moves the company
 document and "crewlet secrets rekey" moves the secret store. Run both before
@@ -71,6 +73,7 @@ becomes unreadable.
 // connects them.
 var configSubcommands = []string{
 	"import", "show", "export", "revisions", "diff", "activate", "seal", "rekey",
+	"scrub",
 }
 
 // defaultRevisionLimit is how many revisions `crewlet config revisions` lists.
@@ -151,6 +154,9 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	case "rekey":
 		fs.BoolVar(&dryRun, "dry-run", false,
 			"report what would be re-sealed without writing")
+	case "scrub":
+		fs.BoolVar(&dryRun, "dry-run", false,
+			"report which revisions hold personal data without erasing it")
 	}
 	if err := fs.Parse(rest); err != nil {
 		return err
@@ -196,6 +202,8 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		return sealConfig(ctx, cs, *bootstrapPath, stdout)
 	case "rekey":
 		return rekeyConfig(ctx, cs, *bootstrapPath, dryRun, stdout)
+	case "scrub":
+		return scrubConfig(ctx, cs, subject, dryRun, stdout)
 	default:
 		// Unreachable: the guard above admits only configSubcommands,
 		// `import` returned before the store was opened, and a test
@@ -214,6 +222,14 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 type configStore struct {
 	configs *store.Configs
 	cipher  secrets.Cipher
+
+	// events is where an erasure records that it happened.
+	//
+	// HELD HERE rather than reopened, because this handle is the one thing
+	// in this process that already owns the store file: the driver refuses
+	// a second opener, so a command that wanted an audit row and had no
+	// handle would have no way to write one.
+	events *store.EventLog
 
 	// activeKeyID is the key a fresh seal uses, carried from the same Tier
 	// A document the cipher was built from. Held rather than re-read: the
@@ -252,7 +268,7 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 				"this node and re-run.")
 	}
 	return &configStore{
-		configs: db.Configs(), cipher: cipher,
+		configs: db.Configs(), cipher: cipher, events: db.Events(),
 		activeKeyID: boot.Secrets.ActiveKeyID,
 	}, func() { _ = db.Close() }, nil
 }

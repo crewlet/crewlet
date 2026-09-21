@@ -59,6 +59,18 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// "did mine land" of. Both answer "recently" rather than "ever".
 		"chart_anchors",
 		"chart_ops",
+		// THE CONFIGURATION ARCHIVE, which had no horizon at all: every
+		// node adopts its own copy of every revision it has ever met,
+		// one row per config write holding the whole document, and
+		// nothing deleted from it. It is also where a pre-split
+		// revision's roles[].email sits, which is the half `crewlet
+		// config scrub` reaches — the scrub erases what is inside a row
+		// this keeps, and this is what eventually removes the row.
+		//
+		// PER NODE for the reason the ops ledgers below are: each node
+		// holds its own copy, so a singleton would tidy the node with
+		// the duty and let the table grow for ever on every other.
+		"company_config",
 		"conversation_sessions",
 		// Added the same way the diary was: the table shipped with a
 		// memsync entry that republishes every row to every peer on
