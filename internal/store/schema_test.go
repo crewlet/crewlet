@@ -110,8 +110,8 @@ func TestTheChartTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 		"chart_units": "former_keys_json",
 		"chart_seats": "email_index",
 		// And the additive column on a table this domain does not own,
-		// beside the epoch guard that stays and stays written until a
-		// later change moves that writer.
+		// which is the tracker's chart guard now that the writer has
+		// moved onto it.
 		"tracker_projects": "chart_position",
 	} {
 		if cols := columnsOf(t, db, table); !slices.Contains(cols, column) {
@@ -120,13 +120,14 @@ func TestTheChartTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 				"already run this one", table, column)
 		}
 	}
-	// The one it sits beside is still there. A column removed in the same
-	// change that adds its successor would leave the writer that fills it
-	// writing into nothing.
-	if cols := columnsOf(t, db, "tracker_projects"); !slices.Contains(cols, "chart_epoch") {
-		t.Error("tracker_projects no longer carries chart_epoch — the tracker's " +
-			"own ApplyChart reconcile is still its writer, and dropping it is a " +
-			"later change with a migration of its own")
+	// AND THE ONE IT REPLACED IS GONE. A guard column with no writer is
+	// worse than an absent one: it reads as a fact about the row, a later
+	// reconcile is tempted to compare it, and what it actually holds is a
+	// wall-clock reading from whichever node last ran the old build.
+	if cols := columnsOf(t, db, "tracker_projects"); slices.Contains(cols, "chart_epoch") {
+		t.Error("tracker_projects still carries chart_epoch — nothing writes it " +
+			"since the chart guard moved onto chart_position, and a column no " +
+			"writer fills is a value every reader is entitled to misread")
 	}
 }
 

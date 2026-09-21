@@ -346,14 +346,11 @@ in a fixed order, and names each stage it got through:
 3. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change.
 4. **`learning`**: rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting. The one exception is a node's **first** company: a node that booted with none has no reflect dispatcher to swap workers into, so this stage attaches it, and an attach that fails refuses the apply for the reason it fails a boot (a company served without it learns nothing while looking healthy).
 5. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows. **Conditional:** only where this node booted with a sandbox coordinator (see below).
-6. **`parties`** — rebuild the party index *before* the epoch is published, so a seat the revision **adds** is addressable the instant the epoch carrying it is current.
-7. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
+6. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
    On a node that booted with **no company** there is no inbound edge to rebuild: boot starts one only for a company it already has, because the inbound consumer group is fleet-wide and a node with no parsers would take deliveries its peers can route. So the node's first apply **starts** the edge here, through the same function boot runs, and every later apply reconciles it. A start that fails (the broker refuses the subscription) refuses the apply like a refused build, before the epoch is published, and takes down whatever it had brought up, so the retry starts from nothing.
-8. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
-9. **`seat_tools`**: rebuild the registry each seat this node *holds* runs against. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children themselves are deliberately untouched (they belong to the seat's lease, not to the epoch; see below), so what is rebuilt is the catalogue a turn is built against, never a process. Reported on every apply, including one where this node holds no seat with per-role children and there is nothing to rebuild.
-10. **`mailboxes`**: ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. When the new epoch has a model provider, this stage also releases every seat inbox the node paused while the company had none, after the seat tools are rebuilt, because the first thing a released inbox does is run a turn. **Conditional:** only where the engine has a node, because `crewlet validate` applies to nothing.
-11. **`learning_passes`**: hand the background learning loops (episode compaction, the skill curator, clustered synthesis and promotion) the passes this revision turns on, built from its models, credentials and knobs. **After** the swap, because the loops walk the current company's seats: handed over earlier they would run the new revision's passes over the previous company's roster, and a refusal later in the same apply would leave them there for a revision this node never served. The loops themselves are armed once per process and keep their clocks across an apply (see [Agent Learning](agent-learning.md#trigger-threshold-gated-on-a-slow-loop)), so this is also where a node that booted with no company, or a company that gained its first provider, starts running them. Reported on every apply, including one on a node with no store or no worker role, which has no loops to hand anything to.
-12. **`scheduler`**: re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
+7. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
+8. **`learning_passes`**: hand the background learning loops (episode compaction, the skill curator, clustered synthesis and promotion) the passes this revision turns on, built from its models, credentials and knobs. **After** the swap, because the loops walk the current company's seats: handed over earlier they would run the new revision's passes over the previous company's roster, and a refusal later in the same apply would leave them there for a revision this node never served. The loops themselves are armed once per process and keep their clocks across an apply (see [Agent Learning](agent-learning.md#trigger-threshold-gated-on-a-slow-loop)), so this is also where a node that booted with no company, or a company that gained its first provider, starts running them. Reported on every apply, including one on a node with no store or no worker role, which has no loops to hand anything to. Not part of the convergence below, because nothing it builds is derived from the org chart.
+9. — 15. **the convergence**: everything derived from the *published company itself*, brought up to it. These are not the apply's own stages: they are the same list a **chart write** runs, through the same function, because a hire publishes a company exactly as an activation does. They are described under [What follows a published company](#what-follows-a-published-company) below, and an apply names each of them in `applied_subsystems` in that order: `parties`, `seat_identities`, `seat_tools`, `tracker_projects`, `knowledge_containers`, `mailboxes`, `scheduler`, `published`.
 
 Then a `config_revision_applied` event is published on
 `crewlet.config.revision_applied` with `status`, the `applied_subsystems` list
@@ -371,10 +368,13 @@ detail lives on the event rather than on the operator surfaces reading the
 bucket. The active row stays active either way; the control plane records
 the outcome so peers can see it (see [Control Plane](control-plane.md)).
 
-**Read that list by name, never by number.** Two of the twelve stages are
-conditional, so a successful apply on a node that booted without a sandbox
-reports eleven names and the swap is the seventh of them. The numbering above is the order the code runs, not an index
-into what a node reports.
+**Read that list by name, never by number.** Two of the fifteen names are
+conditional — `sandbox` on a node that booted without a sandbox coordinator,
+`mailboxes` on an engine with no node — so a successful apply routinely reports
+fourteen and the swap is the sixth of them. The numbering above is the order
+the code runs, not an index into what a node reports. `published` is always
+last, because it is what tells every open socket the company changed and it
+must not say so until everything a socket reads has been rebuilt.
 
 **A stopping node applies nothing.** Stopping waits for an apply already
 running, which returns quickly on the cancelled context that asked for the
@@ -387,22 +387,32 @@ background learning passes, and on a node's first company the inbound edge.
 > validates, resolves the org and constructs the providers without reaching the
 > network, so stage 2 is the cheapest place to refuse and the one that costs
 > nothing at all. Past it the guarantee narrows. On a node that already serves
-> a company, **stage 5 is the last stage that can refuse**: stages 6 and 7
-> return no error there, and stage 8 is the swap. By the time it runs, three
-> things are already mutated: the resolver snapshot (stage 1), any shared MCP
-> child whose spec moved plus the skill variables (stage 3), and the reflection
-> workers (stage 4). So a sandbox-build refusal leaves this node's tool surface
-> and learning workers on the new company while it still *serves* the previous
-> epoch, and reports `error`. The party index and the trackers are not among
-> them: they are rebuilt after the last failure point, which is why they are
-> ordered there. A node's **first** company is the one exception, on both sides
-> of stage 5: stage 4 refuses it when the reflect dispatcher cannot attach, and
-> stage 7 when the inbound edge cannot start. Neither refusal has a previous
-> epoch to protect, so what it leaves behind (the shared MCP children, an
-> attached dispatcher, the party index) serves nothing until the retry the
-> refusal earns rebuilds it. Widening that window is what would make `degraded`
-> reachable, which is why everything an apply cannot un-apply stays behind the
-> swap.
+> a company, **stage 5 is the last stage that can refuse**: stage 6 returns no
+> error there, and stage 7 is the swap. By the time it runs, three things are
+> already mutated: the resolver snapshot (stage 1), any shared MCP child whose
+> spec moved plus the skill variables (stage 3), and the reflection workers
+> (stage 4). So a sandbox-build refusal leaves this node's tool surface and
+> learning workers on the new company while it still *serves* the previous
+> epoch, and reports `error`. The convergence is not among them: it runs after
+> the last failure point, which is why it is ordered there. A node's **first**
+> company is the one exception, on both sides of stage 5: stage 4 refuses it
+> when the reflect dispatcher cannot attach, and stage 6 when the inbound edge
+> cannot start. Neither refusal has a previous epoch to protect, so what it
+> leaves behind (the shared MCP children, an attached dispatcher) serves
+> nothing until the retry the refusal earns rebuilds it. Widening that window
+> is what would make `degraded` reachable, which is why everything an apply
+> cannot un-apply stays behind the swap.
+>
+> The one thing an apply does **before** the swap that the convergence also
+> does is rebuild the party index, and it is deliberately not named as a stage.
+> Indexing early is a choice between two brief windows: refreshing before the
+> swap leaves a seat the revision **removed** addressable for an instant, which
+> costs a recorded skip; refreshing only after it leaves a seat the revision
+> **added** unresolvable while the epoch carrying it is already current. During
+> a rollout the new company is the one being adopted, so the window that
+> favours it is the right one. An apply refused between that call and the swap
+> has indexed a company nobody can reach, which costs a rebuild and nothing
+> else.
 
 Two knobs are refused rather than applied live, because applying them would
 corrupt data rather than merely disrupt it:
@@ -437,22 +447,71 @@ published before the replacement files its own. Taking a leaking integration
 offline by deleting its `mcp_servers` entry therefore takes effect on the next
 turn, which is what the rest of this section already promised.
 
-**Per-role children are not on this path.** They belong to a seat's *lease*
-rather than to the epoch: the apply-time reconcile skips every non-shared
-server, and a role's `mcp_env` — which carries the per-agent Slack/GitHub
-credentials — is never part of a spec an apply compares. Such a child is
-spawned when its seat is claimed and torn down when it is released, so an
-`mcp_env` change reaches it when the seat next changes hands, not on the apply
-that carried it.
+**Per-role children are not on this path, and they are not on an apply's
+path at all.** They belong to a seat's *lease* rather than to the epoch: the
+apply-time reconcile above skips every non-shared server, and a role's
+`mcp_env` — which carries the per-agent Slack/GitHub credentials — is **org
+chart** content, so an apply never sees it move. Such a child is spawned when
+its seat is claimed, and it is reconciled by the `seat_tools` step of
+[the convergence](#what-follows-a-published-company): a chart write that adds,
+removes or re-credentials a server for a seat this node holds retires the
+children that are gone and starts the ones that arrived, in place, without
+releasing the seat and without touching the children the chart still names.
 
-What an apply *does* rebuild for a held seat is that seat's **registry** — the
-`seat_tools` stage above. The two are separate on purpose: the registry is a
-clone of the epoch's surface and goes stale the moment a new epoch is
-published, while the child is a running process holding that seat's
-credentials and must not be restarted for a config edit that did not name it.
-So an apply re-files the live children's catalogue into a fresh clone of the
-new epoch's builtins and shared servers, and the child never learns it
-happened.
+Two things go stale here and they go stale on different publishes, which is
+why the step does both. The **registry** is a clone of the epoch's surface, so
+it goes stale on a settings apply; the **children** are `mcp_env` and the
+seat's name, so they go stale on a chart write. A child the chart still names
+is neither stopped nor restarted — it never learns anything was published — so
+the credential re-handshake a restart would cost is paid only by the servers
+that actually changed.
+
+### What follows a published company
+
+A company is **published by two different gestures**. A config apply publishes
+one — an operator activated a revision. A chart write publishes one too —
+somebody was hired, moved, renamed, given a schedule or handed a credential —
+and that one arrives from an [ordered log](chart-domain.md) rather than from a
+document, on a completely different rhythm and with no activation anywhere in
+it.
+
+Everything derived from a company has to follow **both**. Written as two lists
+it followed one, and the failure was silent in a particular way: a seat hired
+this morning was in the org tree and nowhere else — not addressable, holding no
+vendor account, with no tool children of its own, no project, no mailbox, on no
+dashboard and firing no schedule — and then all of it corrected itself at once
+when somebody happened to change a provider, which is the shape that makes a
+cause impossible to find.
+
+So there is **one list**, and all three paths that publish a company run it:
+the apply, the chart view's rebuild, and the last step of boot. In order:
+
+| Step | What it brings up | Why a chart write needs it |
+|---|---|---|
+| `parties` | The party index every routing decision resolves a name through | A registry is derived from one org and answers for it permanently. Rebuilt only on an apply, every lookup of a new seat answers "nobody matches" — the same answer a stranger gets, so nothing fails and nothing is logged |
+| `seat_identities` | The vendor **account** each seat holds, re-resolved for Jira, GitLab and GitHub | A code host names a seat by an account, and which account a seat holds is read from the seat's own credential — which rides the chart. The lookups are keyed on the token and cached, so a company whose credentials did not move spends no requests |
+| `seat_tools` | Each held seat's registry, and its per-role MCP children | Both halves are described under [Shared MCP servers](#live-propagation) above |
+| `tracker_projects` | The projects the chart names, as objects | A project belongs to a **unit**, so the publish that first names one is usually a chart write. A create takes its key from the project's own counter, so a project that is not an object refuses every task filed into it |
+| `knowledge_containers` | The containers each unit's and seat's `space:` names | Same reason, one subsystem along |
+| `mailboxes` | A durable subscription per seat | Until one exists, every event published to that seat is **dropped** rather than retained. A convergence rather than a walk: it asks the broker what is missing and writes only that, so a company whose mailboxes all exist costs a comparison and no consumer proposals at all |
+| `scheduler` | The cron loop, armed or disarmed | A seat's `schedules:` ride the chart, so a founder giving somebody their first standup is a chart write — and a loop armed only on an apply fires nothing until the next one, which on a company nobody is reconfiguring is never |
+| `published` | The socket push that re-sends the roster, org tree, tool catalogue and schedules **whole** | The dashboard's company-derived screens come from the company, so no event will ever correct them and an overlay merge cannot express a seat going away. Wired to the apply alone, a founder hiring somebody watched the screen not change |
+
+**Every step notices for itself that there is nothing to do**, which is what
+makes running the list cheap enough to do on every committed chart record and
+on the view's own thirty-second timer: the registry compares the company it was
+built from, the identity lookups are token-keyed and cached, the mailbox pass
+compares its own set against the broker's, the tracker and the containers
+compare the row against what the chart says, and the scheduler arms or disarms
+rather than rebuilding. A gate in front of the whole list skips it outright
+when this exact company has already been through it, so a refresh that finds
+the view current costs one comparison.
+
+**The order is not arbitrary.** A released inbox runs a turn immediately, and
+that turn resolves parties, loads its tool surface and files work into a
+project — so everything a turn reads is converged before the mailboxes are
+ensured and any held mail is let through. `published` is last, because it tells
+every open dashboard what this node now serves.
 
 ### The API half
 

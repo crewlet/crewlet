@@ -1318,10 +1318,20 @@ says what the seat is doing (a spawn, a phase, a turn ending): a token meter
 report names every capped seat whether or not anything runs it, so it carries
 no state at all.
 
-The three config-derived sections are **re-sent on every config apply**, as
-`seats`, `org` and `tools` pushes. Nothing else would correct them: a
-revision that adds, renames or removes a role produces no event a projection
-could learn from, and an overlay merge cannot express a row going away.
+The three company-derived sections are **re-sent on every published company**,
+as `seats`, `org` and `tools` pushes (with `schedules`). Nothing else would
+correct them: a change that adds, renames or removes a seat produces no event a
+projection could learn from, and an overlay merge cannot express a row going
+away.
+
+**A published company is not the same thing as a config activation.** The org
+chart is a [log of its own](../concepts/chart-domain.md), so a hire, a move, a
+rename or a first schedule publishes a company with no revision anywhere in it
+— and these four pushes follow every one of them, as the last step of
+[the convergence](../concepts/configuration.md#what-follows-a-published-company).
+Each is a WHOLE payload that replaces its predecessor: the hub drops the
+oldest queued envelope without telling the client, so a delta it dropped would
+be unrecoverable.
 
 ### Live-state projection (`api/stream` + `LiveState`)
 
@@ -1688,11 +1698,11 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `snapshot` | First envelope after the upgrade succeeds, and again on reconnect. | Same payload as `GET /stream/snapshot` — agents carry their in-flight `live_call`, so a reconnect re-renders the live row. |
 | `event`    | Every engine event published to `crewlet.events.>`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, payload }` — the same shape as a `/events` row, plus the full event `payload` (from which the snapshot feed's `failed` flag is derived).  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; `agent_turn_progress` events (per tool-call round, tagged with `turn_id` / `phase` / `iteration`) stream the in-flight call before its phase record exists. |
 | `agents`   | After an event moved one or more agents. | The changed agents' overlays, each with its `role` — the *result* of applying the event, so a client merges them rather than running its own state machine over the raw stream. |
-| `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
+| `seats`    | After anything changed the company — a config activation, or a write to the org chart's own log such as a hire, a move or a rename. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a seat that has gone. |
 | `sandboxes`| After a detached sandbox run started, asked a question, or finished. | The full in-flight sandbox list. |
 | `tokens`   | On the shared 5-second tick, when a phase completed since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
 | `budget`   | After a node's token meter report is applied (every node reports every 15 seconds while anything is capped). | `{ meter_id, seq, org: { used, max, refused_at } }`, the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
-| `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
+| `org` / `tools` / `schedules` | On the same edge as `seats`: every published company, whether an activation or a chart write. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | `{ status, in_flight, shutting_down }`, cut from the [health envelope](#the-health-envelope)'s read. The whole envelope is the `stream` query. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
 | `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, or a coordination store it could not reach — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |

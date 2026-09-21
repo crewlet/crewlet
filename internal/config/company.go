@@ -1005,17 +1005,22 @@ func (c *Company) validateProviderKeys() error {
 	return p.err()
 }
 
-// DeclaresIntegration reports whether this company still uses the named
-// external surface at all.
+// DeclaresIntegration reports whether this company's SETTINGS still declare the
+// named external surface at all.
 //
-// # Why it lives on the whole document rather than on Integrations
+// # It answers for half a company, and the caller owns the other half
 //
-// For seven of the eight it IS a question about the `integrations:` block, and
-// putting it there would be tidier. For Slack it is not: every agent carries
-// its own app under `role.integrations.slack`, and the company-level `slack:`
-// block holds working-indicator settings that a company using Slack heavily
-// may never write. Asked of the block alone, a company with seven working
-// Slack apps answers "no".
+// For seven of the eight it is entirely a question about the `integrations:`
+// block. For SLACK it is not: every agent carries its own app under
+// `role.integrations.slack`, so a company with seven working Slack apps and no
+// company-level `slack:` block genuinely uses Slack — and a seat is ORG CHART
+// content, which a settings document does not contain at all.
+//
+// So this answers the settings half and the ENGINE composes the other, over
+// the seats of the company it is running ([engine.Company.DeclaresIntegration]).
+// Written here as a walk of `roles:` and `units:` it silently became a walk of
+// nothing the moment a stored revision stopped carrying them, and answered "no"
+// for every company on earth.
 //
 // That answer is not academic. Its one caller deletes a surface's fleet status
 // row on false, and Slack's row is the only place the engine records the public
@@ -1061,15 +1066,9 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 	case "atlassian":
 		return in.Atlassian != nil
 	case "slack":
-		if in.Slack != nil {
-			return true
-		}
-		for role := range c.EachRole() {
-			if role.Integrations.Slack != nil {
-				return true
-			}
-		}
-		return false
+		// THE COMPANY-LEVEL BLOCK ONLY. A seat's own app is chart
+		// content; see the doc above for who asks about that.
+		return in.Slack != nil
 	default:
 		// A SURFACE THIS BUILD DOES NOT KNOW, which on a rolling upgrade is
 		// a peer's. True rather than false, because the only caller deletes

@@ -97,14 +97,22 @@ func (e *Engine) RecheckGitHub() {
 //
 // It also tells the OPERATOR one thing: that an epoch with no model is now
 // current. See nomodels.go.
-func (e *Engine) installEpoch(c *Company) {
-	if c != nil && !e.indexes(c) {
-		e.refreshParties(c)
+//
+// It takes the settings epoch and the COMPOSITION the caller already derived
+// for it ([epoch.withView]), and returns the company a reader now loads —
+// which is that same value whenever this node's rows have not moved in
+// between. Two arguments because the composition has to exist BEFORE the
+// publish: the registry is indexed for the exact value readers will find, and
+// deriving a second one here would give that value a different identity from
+// the one every stage above wired against.
+func (e *Engine) installEpoch(c, view *Company) *Company {
+	if view != nil && !e.indexes(view) {
+		e.refreshParties(view)
 	}
 	// COMPOSED rather than stored: the company a reader loads is this
 	// settings epoch and this node's chart view together, and whichever
 	// half moves republishes the pair. See view.go.
-	e.epoch.setSettings(c)
+	published := e.epoch.setSettings(c, view)
 	if c != nil && c.Models == nil {
 		// Said here, once per epoch, because it is the only line that
 		// reaches the operator of a company nobody has messaged yet: with
@@ -121,6 +129,7 @@ func (e *Engine) installEpoch(c *Company) {
 		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
 	}
 	e.auditSkills()
+	return published
 }
 
 // indexes reports whether the live party registry was built from exactly this
@@ -212,12 +221,12 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// carries the SETTINGS and the org chart is a log of its own, so the
 	// company this apply just built has no seats in it at all — and every
 	// stage below wires against a roster. See [epoch.withView].
-	next = e.epoch.withView(next)
+	view := e.epoch.withView(next)
 	// Equipped before it is published, for the same reason as at boot: a
 	// turn can start the instant the pointer moves, and a revision that
 	// silently dropped every builtin would look like a model that stopped
 	// using its tools.
-	if err := e.equip(ctx, next); err != nil {
+	if err := e.equip(ctx, view); err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
 			"detail", "the revision built but could not be equipped with this "+
 				"node's tools; the previous epoch is still current")
@@ -231,7 +240,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// against a stale org is a far smaller wrong than not reflecting. The
 	// one refusal is a node's FIRST company, whose dispatcher is attached
 	// here and would otherwise not exist at all.
-	if err := e.reconfigureReflection(ctx, next); err != nil {
+	if err := e.reconfigureReflection(ctx, view); err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
 			"detail", "the reflect dispatcher could not be attached for this "+
 				"node's first company; the revision is not served here yet")
@@ -246,7 +255,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// a company whose sandbox-enabled seats plan around a box that will
 	// never be minted.
 	if e.sandboxCoordinator != nil {
-		manager, err := buildSandbox(next.Config, e.resolver(), e.sandboxOtel)
+		manager, err := buildSandbox(view.Config, e.resolver(), e.sandboxOtel)
 		if err != nil {
 			log.WarnContext(ctx, "config_apply_failed", "error", err,
 				"detail", "the revision's providers.sandbox could not be built; "+
@@ -266,27 +275,34 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// ADDED is unresolvable while the epoch that has it is already
 	// current — and during a rollout the new company is the one being
 	// adopted, so the window that favours it is the right one.
-	e.refreshParties(next)
-	applied = append(applied, "parties")
+	//
+	// IT IS NOT NAMED IN `applied` HERE, because the convergence below
+	// names it once for both paths — and it is the convergence's guarantee
+	// that the registry answers for the published company, not this
+	// call's. What this call buys is only which of the two windows the
+	// apply spends, and an apply refused between here and the publish has
+	// indexed a company nobody can reach, which costs a rebuild and
+	// nothing else.
+	e.refreshParties(view)
 	if e.inboundStarted() {
 		// The TRACKER is rebuilt on the same edge and for the same
 		// reason: its lead map is derived from the org, so a node that
 		// kept its boot-time parser would route the new revision's work
 		// items by the old company's org chart.
-		e.reconcileConfluence(next)
-		e.reconcileDatadog(ctx, next)
-		e.reconcileJira(ctx, next)
-		e.reconcileGitLab(ctx, next)
-		e.reconcileGitHub(ctx, next)
+		e.reconcileConfluence(view)
+		e.reconcileDatadog(ctx, view)
+		e.reconcileJira(ctx, view)
+		e.reconcileGitLab(ctx, view)
+		e.reconcileGitHub(ctx, view)
 		// AND THE TWO CHAT SURFACES, which had no reconciler at all:
 		// their parsers were assembled once at boot, so a company that
 		// connected either one after starting had every delivery
 		// verified at the edge and routed to nobody until the process
 		// was restarted. See [Engine.reconcileSlack] for why one rebuilds
 		// unconditionally and the other does not.
-		e.reconcileSlack(ctx, next)
-		e.reconcileMattermost(ctx, next)
-	} else if err := e.startInbound(ctx, next); err != nil {
+		e.reconcileSlack(ctx, view)
+		e.reconcileMattermost(ctx, view)
+	} else if err := e.startInbound(ctx, view); err != nil {
 		// A NODE THAT BOOTED WITH NO COMPANY has no inbound edge for
 		// the reconcilers above to rebuild, and each of them returns
 		// early without one. So its first company STARTS the edge, and
@@ -307,74 +323,43 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// the same reason. Their projectors, index, stores and feeds are NOT:
 	// those follow a coordination family, which a company revision does
 	// not change — see [Engine.reconcileNative].
-	e.reconcileNative(ctx, next)
+	e.reconcileNative(ctx, view)
 	// AND THE TOOL SKILLS' SOURCE, after the knowledge base's own reconcile
 	// above, because the Confluence source is read off the wiring it left
 	// running. See [Engine.reconcileSkills].
-	e.reconcileSkills(next)
+	e.reconcileSkills(view)
 	applied = append(applied, "integrations")
 
 	previous := e.Company()
-	e.installEpoch(next)
+	published := e.installEpoch(next, view)
 	applied = append(applied, "epoch")
 
-	// AFTER the epoch is published, because a seat registry is a clone of
-	// the CURRENT company's surface: rebuilding from `next` before it is
-	// current would hand every held seat the new revision's builtins while
-	// its turns still read the outgoing epoch — and an apply refused after
-	// this point would leave them cloned from a revision that never became
-	// current. The per-role CHILDREN are deliberately untouched: they
-	// belong to the seat's lease, not to the epoch.
-	e.refileSeatTools(ctx, next)
-	applied = append(applied, "seat_tools")
-
-	// AFTER the epoch is published, because this reads the seat list off
-	// the CURRENT company: a revision that adds a role adds a seat, and
-	// until something creates its mailbox every event published to it is
-	// dropped rather than retained. Nil on an engine built without a node
-	// — `crewlet validate` applies to nothing.
-	//
-	// A CONVERGENCE RATHER THAN A WALK, which is what makes it right to
-	// call here on every apply rather than only on one that changes the
-	// roster: it asks the broker what is missing and writes only that, so
-	// an apply over a company whose mailboxes all exist costs a listing
-	// and no consumer proposals at all. It is still called
-	// UNCONDITIONALLY, because "this revision changed no seat" is a
-	// comparison of two documents and a missing mailbox is a fact about
-	// the broker — the two disagree exactly when it matters, after a
-	// mailbox was lost under a revision nobody edited.
-	if e.node != nil {
-		e.node.EnsureMailboxes(ctx)
-		// AND THE MAIL A COMPANY WITH NO MODEL HELD BACK is let through
-		// once this epoch has one. Here, after the seat tools are refiled,
-		// because the first thing a released inbox does is run a turn, and
-		// that turn must find everything it reads already current.
-		if next.Models != nil {
-			e.releaseModelHolds(ctx)
-		}
-		applied = append(applied, "mailboxes")
-	}
 	// THE BACKGROUND PASSES follow the revision too, and after the swap:
 	// their loops walk the CURRENT epoch's roster, and the passes handed to
 	// them hold this revision's models and knobs. The loops keep running
 	// and keep their clocks. See [Engine.reconfigureLearningPasses].
-	e.reconfigureLearningPasses(ctx, next)
+	//
+	// IT IS NOT PART OF THE CONVERGENCE BELOW because nothing it builds is
+	// derived from the org chart: a pass is the learning block's knobs and
+	// this company's models, and the loops read the roster per tick off
+	// whatever company is current. A chart write changes neither.
+	e.reconfigureLearningPasses(ctx, published)
 	applied = append(applied, "learning_passes")
-	// AFTER the epoch is published too, and for a sharper version of the
-	// same reason: the tick reads schedules off the CURRENT company, so
-	// arming from `next` before it is current would open a window in which
-	// the loop fires the outgoing company's crons. A founder's first
-	// schedule starts the loop here; their last one removed stops it.
-	e.reconcileScheduler(ctx, next)
-	applied = append(applied, "scheduler")
+
+	// AND EVERYTHING DERIVED FROM THE COMPANY ITSELF — the parties, the
+	// seat tool surfaces, the tracker's projects, the knowledge
+	// containers, the mailboxes, the scheduler and the open sockets. All
+	// of it AFTER the pointer moves, each for its own reason and all for
+	// one: an apply refused later must not have rebuilt the derived state
+	// of an epoch that never became current.
+	//
+	// THE SAME LIST A CHART WRITE RUNS, through the same function, because
+	// a chart write publishes a company too. See [Engine.convergeOn].
+	applied = append(applied, e.convergeOn(ctx, published)...)
 
 	log.InfoContext(ctx, "config_applied",
-		"company", next.Config.Name, "seats", len(next.Seats()),
+		"company", published.Config.Name, "seats", len(published.Seats()),
 		"previous_seats", seatCount(previous))
-	// LAST, after the epoch is current and everything derived from it has
-	// been rebuilt, so a surface that reads the company on this signal
-	// reads the one now serving rather than the one being replaced.
-	e.notifyApplied(ctx)
 	return configplane.StatusOK, applied, nil
 }
 

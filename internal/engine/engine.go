@@ -60,6 +60,28 @@ type Company struct {
 	// than here: it belongs to the seat's LEASE, and an epoch is replaced
 	// wholesale by every apply. See the seatTools field in run.go.
 	Tools *tools.Registry
+
+	// ChartAt is the position on the org chart's log that [Company.Org]
+	// was derived from, PACKED — zero on a company whose chart came from
+	// the document rather than from rows.
+	//
+	// # Why the value carries it rather than the engine answering
+	//
+	// It is a property of THIS company and not of the node: an apply and a
+	// chart write each publish a new value, and a caller holding one of
+	// them has to be able to say which chart it is looking at without a
+	// second read that a later publish can land between. Everything
+	// derived from the chart and written somewhere durable is stamped with
+	// it — the tracker's chart-owned project fields are what needed it
+	// first — so that a node running BEHIND its peers can recognise that
+	// its own derivation is the older one rather than the newer.
+	//
+	// ZERO IS A REAL ANSWER and means "no rows were read": the
+	// `crewlet validate` engine, and the boot window before the first
+	// read. It loses to every real position, which is the correct
+	// direction — a derivation from the document is the one a derivation
+	// from rows should overwrite.
+	ChartAt int64
 }
 
 // NewCompany builds an epoch from a validated config.

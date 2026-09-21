@@ -897,10 +897,23 @@ func TestAnApplyLeavesADurableTrail(t *testing.T) {
 	if len(got.AppliedSubsystems) == 0 {
 		t.Fatal("applied_subsystems is empty on a successful apply")
 	}
+	// `published` is last because it is what tells every open socket the
+	// company changed, and it must not say so until everything a socket
+	// reads has been rebuilt.
 	if got.AppliedSubsystems[0] != "secrets" ||
-		got.AppliedSubsystems[len(got.AppliedSubsystems)-1] != "scheduler" {
-		t.Errorf("subsystems = %v, want the apply's own order from secrets to scheduler",
+		got.AppliedSubsystems[len(got.AppliedSubsystems)-1] != "published" {
+		t.Errorf("subsystems = %v, want the apply's own order from secrets to published",
 			got.AppliedSubsystems)
+	}
+	// AND EACH IS NAMED ONCE. The trail is what a degraded apply is read
+	// back from, and a stage appearing twice reads as a retry that
+	// happened rather than as one list stated in two places.
+	seen := map[string]bool{}
+	for _, name := range got.AppliedSubsystems {
+		if seen[name] {
+			t.Errorf("subsystems = %v, want %q named once", got.AppliedSubsystems, name)
+		}
+		seen[name] = true
 	}
 	if !slices.Contains(got.AppliedSubsystems, "epoch") {
 		t.Errorf("subsystems = %v, want the epoch publish among them", got.AppliedSubsystems)

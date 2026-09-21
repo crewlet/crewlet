@@ -7,14 +7,16 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
-	"github.com/crewlet/crewlet/internal/config"
-
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Gate G7's code-host half. The two things that only show up end to end are
@@ -321,8 +323,22 @@ func TestApplyingARevisionKeepsTheCodeHostIdentitiesWithoutReasking(t *testing.T
 
 // A ROTATED CREDENTIAL IS A CACHE MISS and costs exactly one request, which
 // is right: it may well be a different account, and answering from the cache
-// would keep routing that account's events to a seat that no longer holds
-// it.
+// would keep routing that account's events to a seat that no longer holds it.
+//
+// # The rotation is a CHART write, and that is the half this pins
+//
+// A seat's `mcp_env` belongs to the SEAT, and a seat is an object on the org
+// chart's own log — so rotating one is not a config activation at all. Driven
+// through an apply it now changes nothing: the apply's company is composed
+// with this node's chart rows, which still hold the old key, and the rotation
+// is silently discarded.
+//
+// Which makes this a case about the convergence rather than about the cache.
+// A chart write publishes a company, and everything derived from one has to
+// follow it — the party registry among them, where a code-host identity is
+// re-resolved from the seat's own credential. Following the apply alone, the
+// engine would go on routing `ceo-bot`'s events to the seat and know nothing
+// about the account it actually holds.
 func TestARotatedCredentialIsReresolved(t *testing.T) {
 	instance := fakeGitLab(t, map[string]string{
 		"glpat-ceo": "ceo-bot", "glpat-rotated": "ceo-bot-v2"})
@@ -330,14 +346,22 @@ func TestARotatedCredentialIsReresolved(t *testing.T) {
 	box := watchInbox(t, n, "ceo")
 	atBoot := instance.identityLookups()
 
-	rotated, err := config.ParseCompany([]byte(strings.Replace(
-		withSeatCredential(instance.url)(fmt.Sprintf(companyDoc, n.model.url)),
-		"glpat-ceo", "glpat-rotated", 1)))
-	if err != nil {
-		t.Fatalf("company config: %v", err)
-	}
-	if _, _, err := n.engine.Apply(t.Context(), rotated); err != nil {
-		t.Fatalf("Apply: %v", err)
+	rotateSeatToken(t, n, "ceo", "gitlab", "GITLAB_TOKEN", "glpat-rotated")
+
+	// WAITED FOR RATHER THAN ASSERTED AT ONCE: the view publishes and the
+	// convergence follows it, so the company carrying the new key is a
+	// moment before the lookup it earns. The count is checked again after
+	// the wait, which is what says the rotation cost ONE request rather
+	// than one per pass.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, ok := n.engine.Registry().ByExternalID(gitlab.Backend, "ceo-bot-v2"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the rotated account never reached the party registry")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	if got := instance.identityLookups(); got != atBoot+1 {
 		t.Fatalf("a rotation spent %d lookups, want exactly one", got-atBoot)
@@ -347,6 +371,67 @@ func TestARotatedCredentialIsReresolved(t *testing.T) {
 	if got := box.settled(t, 1); len(got) != 1 {
 		t.Fatalf("the new account was woken %d times", len(got))
 	}
+}
+
+// rotateSeatToken writes one seat's tool credentials to the ORG CHART and
+// waits for this node's published company to carry them.
+//
+// It publishes the seat's runtime document WHOLE, re-encoded from the seat the
+// engine is running: a content write replaces the object, so anything left out
+// would be a field the rotation silently cleared.
+func rotateSeatToken(t *testing.T, n *node, handle, server, key, token string) {
+	t.Helper()
+	writer := n.engine.ChartWriter()
+	if writer == nil {
+		t.Fatal("this node runs no chart writer")
+	}
+	seat := n.engine.Company().Org.Role(handle)
+	if seat == nil {
+		t.Fatalf("no seat %q in the published company", handle)
+	}
+	content := *seat
+	content.MCPEnv = org.MCPEnv{server: {key: token}}
+	runtime, err := org.SeatRuntime(&content)
+	if err != nil {
+		t.Fatalf("encode %s's runtime: %v", handle, err)
+	}
+	if _, err := writer.WriteSeat(t.Context(), "test:rotate:"+handle+":"+token,
+		chart.SeatContent{
+			Handle: handle, Kind: chart.SeatAgent, Unit: seatRowUnit(t, n, handle),
+			Name: seat.Name, Runtime: runtime,
+		}); err != nil {
+		t.Fatalf("rotate %s's credential: %v", handle, err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		got := n.engine.Company().Org.Role(handle)
+		if got != nil && got.MCPEnv[server][key] == token {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the rotation never reached this node's published company")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// seatRowUnit is the unit a seat's chart ROW places it in, which is what a
+// content write must state: the decide refuses a value that disagrees with
+// the stored one.
+func seatRowUnit(t *testing.T, n *node, handle string) string {
+	t.Helper()
+	rows, err := n.engine.Chart().Read(t.Context(),
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("read the chart: %v", err)
+	}
+	for _, row := range rows.Seats {
+		if row.Handle == handle {
+			return row.UnitKey
+		}
+	}
+	t.Fatalf("no chart row for seat %q", handle)
+	return ""
 }
 
 // AN INSTANCE THAT REFUSES A LOOKUP does not fail the boot: it may be

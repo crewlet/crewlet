@@ -111,7 +111,7 @@ stored verbatim (never case-mangled) and its *resolved* value is
 lowercased instead. A reference whose variable is unset counts as a
 declared identity for validation, but the identity is omitted wherever it
 is consumed until the variable resolves, so the raw `${VAR}` text is never
-emitted. The count of unresolved identities is logged on every apply
+emitted. The count of unresolved identities is logged on every published company
 (`parties_indexed`, field `unresolved`). A value that merely *embeds* a
 `${VAR}` inside a longer string (`"acme-${SUFFIX}"`) is rejected at
 validation, because substituting part of it would register a wrong
@@ -373,9 +373,10 @@ A seat's kind is ordinary configuration, applied like any other change
   An agent's id is derived from the company name and its handle
   (`org.DeriveAgentID`), so flipping the seat back to `agent` later
   reattaches its diary, episodes and onboarding marker.
-- Contact and availability edits take effect with the next epoch: every
-  apply builds a new party registry and reconciles the human contact IDs
-  into it.
+- Contact and availability edits take effect with the next **published
+  company**, which for a seat's own fields means the chart write that carried
+  them: every publish builds a new party registry and reconciles the human
+  contact IDs into it.
 
 ## Identity Resolution (party registry)
 
@@ -388,10 +389,17 @@ seat's declared address), or an external ID on a surface (`ByExternalID`).
 Each `Party` carries a `Human` flag, and the notification spine reads it to
 skip a human recipient rather than wake it.
 
-The seat indexes are built from the organization and never change: an apply
-builds a new registry rather than editing the one a running turn may be
-reading. The external-identity map is the part written at runtime, under a
-lock, and it holds two kinds of entry:
+The seat indexes are built from the organization and never change: every
+published company builds a new registry rather than editing the one a running
+turn may be reading. **Published, not activated** — a hire, a move or a rename
+is a write to the [org chart's own log](chart-domain.md) with no revision in
+it, and a registry rebuilt only on a config apply answers "nobody matches" for
+a seat hired this morning, which is the same answer a stranger gets, so nothing
+fails and nothing is logged. See
+[What follows a published company](configuration.md#what-follows-a-published-company).
+
+The external-identity map is the part written at runtime, under a lock, and it
+holds two kinds of entry:
 
 - **Human contact IDs** come from `contact` and are reconciled into each new
   registry (`ReconcileHumanContacts`). A pair the previous reconciliation
@@ -400,9 +408,13 @@ lock, and it holds two kinds of entry:
   a different seat is never taken over: the conflict is logged as
   `human_contact_id_conflict` naming both seats.
 - **Agent identities** are registered by the integrations: the code host's
-  and the tracker's are derived from each seat's credentials and rebuilt on
-  every apply, while the chat transports' bot IDs, resolved against the live
-  server at connect, are carried across into the new registry.
+  and the tracker's are derived from each seat's credentials, which ride the
+  chart, and are re-resolved and rebuilt on every published company — the
+  lookups are keyed on the credential and cached, so a company whose
+  credentials did not move spends no requests. The chat transports' bot IDs,
+  resolved against the live server at connect, are carried across into the
+  new registry instead: they are facts about a server rather than about the
+  company.
 
 External-ID resolution is plain index lookups, because it runs on every
 inbound notification for sender attribution. On each surface it consults

@@ -1841,18 +1841,25 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			"hint", "reads serve without a token on an address other machines "+
 				"can reach; set api.auth.allow_anonymous_read to false to close them")
 	}
-	// THE CONFIG-DERIVED SURFACES, re-sent whenever an apply changes them.
+	// THE COMPANY-DERIVED SURFACES, re-sent whenever a published company
+	// changes them.
 	//
 	// The roster, the org tree and the tool catalogue all come from the
-	// company document, so no event will ever correct them: a revision
-	// that adds, renames or removes a role produces nothing a projection
-	// could learn from, and an overlay merge cannot express a deletion at
-	// all. Without this an open dashboard renders the company it connected
-	// to until someone reloads.
+	// company, so no event will ever correct them: a change that adds,
+	// renames or removes a seat produces nothing a projection could learn
+	// from, and an overlay merge cannot express a deletion at all. Without
+	// this an open dashboard renders the company it connected to until
+	// someone reloads.
+	//
+	// A hire is one of those changes and is not a config apply at all —
+	// the org chart is a log of its own — so this fires on every company
+	// publish rather than on activation. WHOLE PAYLOADS, each replacing
+	// its predecessor: the hub drops the oldest queued envelope without
+	// telling the client, so a delta it dropped would be unrecoverable.
 	//
 	// Registered after the app exists, which is the whole reason it is a
-	// setter — see Engine.SetOnApplied.
-	e.SetOnApplied(func(context.Context) {
+	// setter — see Engine.SetOnCompanyPublished.
+	e.SetOnCompanyPublished(func(context.Context) {
 		app.Stream().Broadcast("seats", app.Stream().Roster())
 		app.Stream().Broadcast("org", app.Stream().Org())
 		app.Stream().Broadcast("tools", app.Stream().Tools())

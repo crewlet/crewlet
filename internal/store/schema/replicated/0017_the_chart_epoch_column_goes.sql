@@ -1,0 +1,30 @@
+-- `tracker_projects.chart_epoch` goes, now that nothing writes it.
+--
+-- The column held a WALL-CLOCK READING taken on whichever node was applying —
+-- `activatedAt.UTC().Unix()` — and the reconcile compared it to decide whether
+-- a project's chart-owned fields were already current. Two things were wrong
+-- with that, and the second is why a replacement had to exist before this file
+-- could:
+--
+--   * It answered the wrong question. The guard exists so that a node holding
+--     an OLDER chart cannot walk back what a node holding a newer one wrote,
+--     and a clock says which node wrote LAST — which during a rollout is
+--     routinely the node with the older view. 0015's `chart_position` answers
+--     it directly: both numbers are packed positions on the org chart's own
+--     log, so the higher one IS the later chart, on every node, with no
+--     agreement about time required.
+--   * It moved on every pass. A reconcile runs on every apply, every boot and
+--     now every chart write, and the stamp was a fresh reading each time — so
+--     a project whose three fields already said what the chart said was
+--     rewritten anyway, on every node, for ever.
+--
+-- IT IS DROPPED IN THE COMMIT THAT MOVES THE WRITER and not before. A column
+-- removed while its writer still fills it is an apply that fails on every node
+-- at once, which in a derived estate is a stalled log rather than one bad row.
+--
+-- The DATA is not migrated, and there is nothing to migrate: the value is a
+-- comparison input the next reconcile re-establishes. Every project's
+-- `chart_position` is 0 until the first reconcile after this lands, which is
+-- the state 0015 shipped it in, and a 0 loses to every real position — so the
+-- first pass writes each project once and every pass after it writes nothing.
+ALTER TABLE tracker_projects DROP COLUMN chart_epoch;

@@ -213,7 +213,19 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 				// during a boot.
 				return true
 			}
-			return company.Config.DeclaresIntegration(kind.String())
+			// NOR IS A CHART THIS NODE HAS NOT READ. Slack's answer
+			// depends on the seats, and a node whose applier has reached
+			// nothing has an EMPTY roster rather than a company with no
+			// Slack in it — so it would delete the row for every seat app
+			// in the fleet on the strength of not having looked yet. Its
+			// own position being zero is the one form of "behind" a node
+			// can establish without asking the fleet; being behind by a
+			// record it costs a status row that the next pass rewrites,
+			// which is the residue this guard does not cover.
+			if e.Chart() != nil && company.ChartAt == 0 {
+				return true
+			}
+			return company.DeclaresIntegration(kind.String())
 		},
 	})
 	if err != nil {

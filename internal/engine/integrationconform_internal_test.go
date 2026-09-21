@@ -121,5 +121,14 @@ providers:
 				"through to the unknown-surface default: add it to "+
 				"config.Company.DeclaresIntegration", kind)
 		}
+		// AND THE COMPOSED ANSWER TOO. The engine adds the half a
+		// document cannot hold — a seat's own app, which is org chart
+		// content — and it is what the reconcile loop actually asks, so
+		// a kind the composition got wrong is the one that deletes rows.
+		if empty.DeclaresIntegration(kind.String()) {
+			t.Errorf("a company that configures nothing declares %s once "+
+				"composed with its chart: add it to "+
+				"engine.Company.DeclaresIntegration", kind)
+		}
 	}
 }

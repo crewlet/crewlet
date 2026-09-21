@@ -91,12 +91,35 @@ type chartView struct {
 	pending    []chan struct{}
 }
 
-// setSettings publishes a new settings epoch, recomposing with the view this
-// node currently holds.
-func (e *epoch) setSettings(c *Company) *Company {
+// setSettings publishes a new settings epoch, and reports the company readers
+// will load.
+//
+// `composed` is what [epoch.withView] already derived for this same settings
+// epoch, and it is PUBLISHED AS IS when this node's rows have not moved since.
+// Nil says the caller derived nothing and this should compose one.
+//
+// # Why the caller's derivation is reused rather than repeated
+//
+// An apply has to have the composed value BEFORE it publishes: eleven stages
+// wire against a roster and the party registry is indexed for the exact value
+// a reader will load. Composing again here would produce an equal company with
+// a DIFFERENT identity — and identity is what [Engine.indexes] and
+// [Engine.convergeOn] compare, so everything indexed for the value the apply
+// built would read as indexed for nothing and be built a second time.
+//
+// The position check is what makes reuse safe rather than merely cheap: a
+// chart write can land between the two calls, and a company derived from the
+// rows before it is one this node has already moved past. Comparing the packed
+// positions catches exactly that, and falls through to a fresh composition
+// when it fires.
+func (e *epoch) setSettings(c, composed *Company) *Company {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.settings = c
+	if composed != nil && composed.ChartAt == e.rows.Position.Packed() {
+		e.current.Store(composed)
+		return composed
+	}
 	return e.compose()
 }
 
@@ -189,6 +212,7 @@ func (e *epoch) composed(settings *Company) *Company {
 	composed := *settings
 	view := org.FromRows(e.rows, config.OrgSettings(settings.Config))
 	composed.Org = view.Org
+	composed.ChartAt = e.rows.Position.Packed()
 	if len(view.Reparented) > 0 {
 		// SAID ON EVERY COMPOSITION rather than once: a cycle cannot
 		// reach the rows through the write path, so a build that finds
@@ -213,22 +237,10 @@ func (e *Engine) refreshChart(ctx context.Context) (org.ViewPosition, error) {
 		return org.ViewPosition{}, err
 	}
 
-	// AND WHAT FOLLOWS THE COMPANY FOLLOWS THIS TOO. A chart write publishes
-	// a new company exactly as a config apply does, so anything an apply
-	// reconciles against its new epoch has to be reconciled here, or it
-	// follows only half of what a company is. Two things do today.
-	//
-	// THE PARTY REGISTRY is derived from one org and answers for it
-	// permanently, so a company with a new seat needs a new one. A registry
-	// rebuilt only on an apply leaves a seat hired this morning
-	// unaddressable until somebody happens to change a provider — with
-	// nothing failing, because every lookup answers "nobody matches" the
-	// way it does for a stranger.
-	//
-	// THE SCHEDULER is the other. A seat's `schedules:` ride the chart, so
-	// a founder giving somebody their first standup is a chart write, and a
-	// loop armed only on an apply fires nothing until the next one — which
-	// on a company nobody is reconfiguring is never.
+	// AND WHAT FOLLOWS A PUBLISHED COMPANY FOLLOWS THIS TOO. A chart write
+	// publishes one exactly as a config apply does, so the same list of
+	// derived things has to be brought up to it — see [Engine.convergeOn]
+	// for what is on that list and why it is one list rather than two.
 	//
 	// # Why this runs on EVERY call and not only on a rebuild
 	//
@@ -237,19 +249,12 @@ func (e *Engine) refreshChart(ctx context.Context) (org.ViewPosition, error) {
 	// while one runs waits for the next pass, and one arriving after it
 	// returns early — so a hook inside the rebuild is a hook some callers
 	// never reach, on a pass another goroutine may still be finishing.
-	// Running it here makes the guarantee the same for all three exits.
+	// Calling it here makes the guarantee the same for all three exits,
+	// and the convergence's own gate makes the second caller free.
 	//
-	// Both are idempotent at an unchanged answer: the registry is skipped
-	// when it was built from exactly this company, and the scheduler is
-	// armed or disarmed rather than rebuilt. So the ordinary call costs two
-	// comparisons. It takes the rebuild's own context, which outlives any
-	// one request; [Engine.armSchedulerLocked] strips its cancellation.
-	if published := e.Company(); published != nil {
-		if !e.indexes(published) {
-			e.refreshParties(published)
-		}
-		e.reconcileScheduler(ctx, published)
-	}
+	// It takes the rebuild's own context, which outlives any one request;
+	// [Engine.armSchedulerLocked] strips its cancellation.
+	e.convergeOn(ctx, e.Company())
 	return at, nil
 }
 

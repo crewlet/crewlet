@@ -123,6 +123,18 @@ Crossing the ceiling **refuses the append** rather than dropping the oldest
 record. Nothing on this stream is derivable from anything else, so shedding
 history would be data loss with a tidy name.
 
+**A chart write takes effect on the next turn, everywhere the company reaches.**
+Publishing a chart record publishes a *company*, and every node that applies it
+brings the same list of things up to it that a config activation does — the
+party registry a mention resolves through, the vendor account a seat's
+credential names, the seat's own MCP children, the projects and knowledge
+containers its units declare, its mailbox, its schedules, and the payloads
+every open dashboard renders. Written as two lists it followed only the
+activation, and a seat hired this morning was in the org tree and nowhere else:
+unaddressable, with no mailbox, on no screen, firing no schedule, until
+somebody happened to change a provider. See
+[What follows a published company](configuration.md#what-follows-a-published-company).
+
 **A node behind on the chart does not serve turns.** The chart is a *readiness
 input*, which means a node that cannot keep up with it is not admitted to run
 seats. That is a stronger stance than the engine takes for the tracker or the

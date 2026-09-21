@@ -1037,13 +1037,24 @@ type Project struct {
 	Key string `json:"key"`
 
 	// Name, Purpose and Unit are CHART-OWNED: written and rewritten only
-	// by the chart apply, under the epoch guard below. A project genuinely
-	// can move between units, so Unit is not immutable — but it is not a
-	// field a tool writes either.
-	Name       string `json:"name"`
-	Purpose    string `json:"purpose,omitempty"`
-	Unit       string `json:"unit,omitempty"`
-	ChartEpoch int64  `json:"chart_epoch,omitempty"`
+	// by the chart apply, under the position guard below. A project
+	// genuinely can move between units, so Unit is not immutable — but it
+	// is not a field a tool writes either.
+	Name    string `json:"name"`
+	Purpose string `json:"purpose,omitempty"`
+	Unit    string `json:"unit,omitempty"`
+
+	// ChartPosition is the packed position on the ORG CHART's log of the
+	// state the three fields above were last derived from.
+	//
+	// A POSITION AND NOT A CLOCK. Its only job is to let the node that is
+	// BEHIND recognise that it is behind: two nodes derive the same chart
+	// from the same rows, so when their derivations disagree the one with
+	// the lower cursor is the one holding the older chart, and this is the
+	// number that says which. A wall clock cannot answer that — it says
+	// which node wrote last, which during a rollout is routinely the node
+	// with the older view.
+	ChartPosition int64 `json:"chart_position,omitempty"`
 
 	Fields          []FieldDef `json:"fields,omitempty"`
 	DefaultAssignee string     `json:"default_assignee,omitempty"`

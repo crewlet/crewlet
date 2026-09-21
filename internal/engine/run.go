@@ -111,10 +111,10 @@ type Engine struct {
 	// control plane. Nil publishes none — see [Engine.SetPosture].
 	posture atomic.Pointer[func(context.Context) string]
 
-	// onApplied is run after each apply publishes its epoch, for the
-	// surfaces derived from configuration. Nil runs nothing — see
-	// [Engine.SetOnApplied].
-	onApplied atomic.Pointer[func(context.Context)]
+	// onPublished is run after each published company is converged on, for
+	// the surfaces derived from the company itself. Nil runs nothing — see
+	// [Engine.SetOnCompanyPublished].
+	onPublished atomic.Pointer[func(context.Context)]
 
 	// ownsBackends says whether Stop closes them. Ownership is a separate
 	// fact from use: a borrowed Backends is still the one this engine
@@ -343,6 +343,22 @@ type Engine struct {
 	mcpMu     sync.Mutex
 	seatMCP   map[string]*mcp.Bridge
 	seatTools map[string]*tools.Registry
+
+	// converging serializes [Engine.convergeOn] and remembers the company
+	// it last ran for.
+	//
+	// A MUTEX RATHER THAN A COMPARE-AND-SWAP, because the steps are not
+	// safe to run alongside themselves: two goroutines refiling one seat's
+	// tools would race two retire-then-reconcile loops against each other,
+	// and two mailbox passes would each create what the other is about to.
+	// It is taken by a config apply and by the chart view's rebuild, which
+	// are genuinely concurrent.
+	converging   sync.Mutex
+	convergedFor *Company
+
+	// convergedSteps is what the last convergence ran, so a second caller
+	// for the same company reports the same trail rather than an empty one.
+	convergedSteps []string
 
 	// embeddings is the company's vector backend, swapped on apply. An
 	// atomic pointer rather than a mutex because it is read on the turn's
@@ -778,7 +794,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 					"its chart view builds; the periodic rebuild retries")
 		}
 	}
-	e.installEpoch(company)
+	// COMPOSED ONCE, here, and handed to the install: the registry is
+	// indexed for the value a reader will load, so that value has to exist
+	// before it is published. See [Engine.installEpoch].
+	e.installEpoch(company, e.epoch.withView(company))
 
 	// SET BEFORE the node, because the node is handed this exact value —
 	// two constructions of it would be two places to disagree about what
@@ -977,6 +996,24 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// the wiring startNotifications just built. This is the boot walk: an
 	// apply calls the same thing for every later epoch.
 	e.reconcileSkills(e.Company())
+
+	// AND THE CONVERGENCE, LAST, over the company this node is now
+	// serving: the same list an apply and a chart write run, through the
+	// same function. See [Engine.convergeOn].
+	//
+	// # It is a safety net here rather than the mechanism
+	//
+	// Boot brings each of these up by its own route and in its own order —
+	// the registry with the epoch, the mailboxes with the seat host, the
+	// scheduler with its loop — because each has a construction step this
+	// does not. What running the list anyway buys is that the three paths
+	// that publish a company cannot DISAGREE about what follows one: a step
+	// added to the convergence is a step boot takes too, without anybody
+	// remembering to add it here.
+	//
+	// It also records this company as converged, so the view's first tick
+	// after boot costs one comparison rather than the whole list.
+	e.convergeOn(ctx, e.Company())
 	booted = true
 	return e, nil
 }
@@ -1734,28 +1771,39 @@ func (e *Engine) SetAdmits(fn func() bool) {
 	e.notify.admits = fn
 }
 
-// SetOnApplied registers a hook run after every config apply publishes its
-// epoch, for surfaces that render the COMPANY rather than its activity.
+// SetOnCompanyPublished registers a hook run after every published company has
+// been converged on, for surfaces that render the COMPANY rather than its
+// activity.
 //
-// The dashboard's roster, org tree and tool catalogue are all derived from
-// configuration, so nothing that happens afterwards will correct them: a
-// revision that adds a role, renames one, or removes one changes all three
-// and produces no event a projection could learn from. Without this, an open
-// dashboard kept rendering the company it connected to until someone
-// reloaded the page — and the client cannot paper over a deletion either,
-// because an overlay merge has no way to express a row going away.
+// The dashboard's roster, org tree and tool catalogue are all derived from the
+// company, so nothing that happens afterwards will correct them: a change that
+// adds a seat, renames one or removes one changes all three and produces no
+// event a projection could learn from. Without this, an open dashboard kept
+// rendering the company it connected to until someone reloaded the page — and
+// the client cannot paper over a deletion either, because an overlay merge has
+// no way to express a row going away.
+//
+// # A COMPANY publish, not an apply
+//
+// It used to run on the config apply alone, which was the only thing that
+// published a company. The org chart is a log now and a hire publishes one
+// too — so a founder hiring somebody watched the dashboard not change, and it
+// stayed not-changed until the next config activation, which on a company
+// nobody is reconfiguring is never. It is called from the convergence
+// ([Engine.convergeOn]) for that reason, and therefore LAST: everything the
+// payloads are cut from has been rebuilt by the time it runs.
 //
 // A SETTER for the same reason SetPosture is one: the API half is built after
 // the engine, so there is no moment at construction when a real wiring could
 // pass one.
 //
 // Safe to call while the engine is running, and safe to leave unset — an
-// engine with no hook applies exactly as before.
-func (e *Engine) SetOnApplied(fn func(context.Context)) { e.onApplied.Store(&fn) }
+// engine with no hook publishes exactly as before.
+func (e *Engine) SetOnCompanyPublished(fn func(context.Context)) { e.onPublished.Store(&fn) }
 
-// notifyApplied runs the hook, if one is set.
-func (e *Engine) notifyApplied(ctx context.Context) {
-	if fn := e.onApplied.Load(); fn != nil && *fn != nil {
+// notifyCompanyPublished runs the hook, if one is set.
+func (e *Engine) notifyCompanyPublished(ctx context.Context) {
+	if fn := e.onPublished.Load(); fn != nil && *fn != nil {
 		(*fn)(ctx)
 	}
 }

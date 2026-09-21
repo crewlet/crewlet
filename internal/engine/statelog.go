@@ -1303,15 +1303,35 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 //     closes a database only nothing has open. Every waiter on them is told
 //     rather than released, so a read in flight refuses `behind` instead of
 //     reading rows below its position.
+//
 //  2. THE JOIN is the boot's own: what it needs, who can donate, fetch,
 //     verify, install. Nothing about it is different at runtime — that was
 //     the point of making the framework resolve its estate per call.
+//
 //  3. THE CONSUMERS ARE RESET to the checkpoint the artefact keeps, because
 //     the broker will not move a consumer's start and one left at the old
 //     position would deliver every record in between to be dropped.
+//
 //  4. THE APPLIERS START AGAIN, whatever happened: a join that found no
 //     donor leaves the node as it was, below the floor and refusing, and a
 //     node with no appliers at all would be worse than that.
+//
+//  5. AND THE CHART VIEW IS REBUILT AFTER THEY DO. An adoption REPLACES the
+//     replicated file wholesale, so this node's chart rows are now a donor's
+//     and no apply happened to say so: a node that waited for the next
+//     committed record would serve a view over rows it abandoned, for
+//     however long nobody is hired, while reporting itself caught up —
+//     because it IS caught up, its cursor having moved without its view.
+//     The periodic trigger would find it within its interval; doing it here
+//     means the node rejoins with a correct view rather than a wrong one for
+//     up to that long.
+//
+//     AFTER THE RELAUNCH AND NOT BEFORE IT, which is what makes it safe to
+//     do at all: rebuilding the view publishes a company, and everything
+//     that converges on a published company includes writes of its own — the
+//     tracker's projects, the knowledge containers. A write published while
+//     this node's appliers are halted waits out its budget for an apply that
+//     cannot happen, which would turn every rejoin into a stall.
 func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	log.WarnContext(ctx, "statelog_rejoin_started", "node", s.nodeID,
 		"detail", "this node is below the log's floor while running; its "+
@@ -1320,7 +1340,20 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	// ctx IS the state log's own run context here — [requestRejoin]
 	// starts this under it — so the relaunched appliers get the lifetime
 	// the boot launch gave them rather than a heartbeat tick's.
-	defer s.launchAppliers(ctx)
+	//
+	// ON EVERY EXIT, the failures included: a rejoin that found no donor
+	// changed no rows, so the rebuild finds its cursor where it left it and
+	// costs one comparison.
+	defer func() {
+		s.launchAppliers(ctx)
+		if _, err := e.refreshChart(ctx); err != nil {
+			log.WarnContext(ctx, "chart_view_unbuilt_after_rejoin",
+				"node", s.nodeID, "error", err.Error(),
+				"detail", "this node adopted a peer's rows and is still "+
+					"serving the view it built from its own; the periodic "+
+					"rebuild retries")
+		}
+	}()
 
 	logs := make(map[string]*jetstream.DomainLog, len(s.domains))
 	for name, running := range s.domains {
@@ -1358,25 +1391,6 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 					"the next fetch, so this costs redeliveries rather than "+
 					"correctness")
 		}
-	}
-	// THE CHART VIEW, AFTER THE CONSUMER RESET AND BEFORE THE APPLIERS
-	// RELAUNCH (the deferred launchAppliers above runs last).
-	//
-	// An adoption REPLACES the replicated file wholesale, so this node's
-	// chart rows are now a donor's and no apply calls happened to say so.
-	// A node that waited for the next committed record would serve a view
-	// over rows it abandoned — for however long nobody is hired, which may
-	// be days — while reporting itself caught up, because it IS caught up:
-	// its cursor moved without its view.
-	//
-	// The periodic trigger would find it within its interval; doing it
-	// here means the node rejoins with a correct view rather than with a
-	// wrong one for up to that long.
-	if _, err := e.refreshChart(ctx); err != nil {
-		log.WarnContext(ctx, "chart_view_unbuilt_after_rejoin",
-			"node", s.nodeID, "error", err.Error(),
-			"detail", "this node adopted a peer's rows and is still serving "+
-				"the view it built from its own; the periodic rebuild retries")
 	}
 	log.InfoContext(ctx, "statelog_rejoined", "node", s.nodeID)
 	return nil

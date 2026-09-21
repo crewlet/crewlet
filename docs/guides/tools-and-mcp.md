@@ -267,7 +267,7 @@ difference is a lifetime as much as a scope.
 | What it is | One child for the company | A **template**: one child per role that declares credentials for it |
 | Whose identity | Nobody's — it carries no seat's credentials | That seat's, from `role.mcp_env[name]` |
 | Who can call it | Every seat | Only the seat whose child it is |
-| Lifetime | The config **epoch** — started on apply, replaced on the next one | The seat's **lease** — spawned when this node claims the seat, killed when it releases it |
+| Lifetime | The config **epoch** — started on apply, replaced on the next one | The seat's **lease** — spawned when this node claims the seat, killed when it releases it, and reconciled in place when the org chart changes what the seat declares |
 | Use it for | A shared knowledge base, a read-only reference server | A tracker, a chat backend, a code host — anywhere the action must be attributable to *this* agent |
 
 **A shared `mcp_servers` edit takes effect on the next turn, not at the next
@@ -276,11 +276,22 @@ entry that did not change is left alone, and one that was added, removed or
 re-pointed starts, stops or restarts **only that child**. A seat mid-turn
 finishes on the tool surface it started with, and its next turn renders the new
 one, the same next-turn promise [tool skills](../concepts/tool-skills.md),
-embeddings and the org chart make. A per-role (`shared: false`) child is **not**
-on the apply path: it belongs to the seat's lease, so an apply rebuilds the
-catalogue each held seat's turns are built against (its builtins and shared
-servers) and leaves the running child alone. A change to a per-role template or
-to a seat's `mcp_env` reaches that child when the seat next changes hands.
+embeddings and the org chart make.
+
+**A per-role `mcp_env` edit takes effect on the next turn too, and it is not a
+config apply at all.** A seat's `mcp_env` is content on the
+[org chart's own log](../concepts/chart-domain.md), so changing one publishes a
+company without any revision in it — and the node holding that seat reconciles
+its children in place, as the `seat_tools` step of
+[the convergence](../concepts/configuration.md#what-follows-a-published-company):
+a server the chart no longer declares for the seat is retired, one it now
+declares is started, and one it still declares is neither stopped nor
+restarted, so the credential re-handshake a restart would cost is paid only by
+what actually changed. The seat keeps its lease throughout. A change to a
+shared `mcp_servers` template is the apply's own reconcile above; what an apply
+does for a held seat is rebuild the catalogue its turns are built against (its
+builtins and the shared servers), which is the half that goes stale on a new
+epoch.
 
 **A per-role child belongs to a seat, not to a node.** In a fleet each node
 claims a slice of the company, and it spawns children only for the seats it

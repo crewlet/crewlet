@@ -877,8 +877,12 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 				"detail", "the previous routing is still current")
 		}
 	}
-	e.applyChart(ctx, c)
-	e.applyContainers(ctx, c)
+	// THE PROJECTS AND THE CONTAINERS ARE NOT RECONCILED HERE. They are
+	// derived from the org CHART rather than from the parsers this function
+	// swaps, so they follow every published company and not just an
+	// activation — [Engine.convergeOn] is where they run, after the pointer
+	// moves. Running them here as well would write them twice per apply and
+	// once against a company that is not current yet.
 }
 
 // applyContainers makes the knowledge containers this company names exist.
@@ -1012,15 +1016,21 @@ func chartContainers(c *Company) []chartContainer {
 // they file at once. Deriving it from the chart makes it one arbitrated write
 // per project, on that project's own subject.
 //
-// # And on every apply rather than only at boot
+// # And on every company publish rather than only at boot
 //
-// A founder adds a unit with a new `project:` key and the seats in it start
+// A founder opens a unit with a new `project:` key and the seats in it start
 // filing immediately. A reconcile that only ran at boot would leave every one
 // of those refused with "project X is not on this node" until somebody
 // restarted the fleet — a failure whose remedy is invisible from the message.
-// After the first node has done it the apply is free: the operation id is
-// derived from the revision and the key, so the losers of the broker's
-// arbitration write nothing.
+// A unit is a CHART object, so the publish that carries a new one is usually a
+// chart write and not an apply at all: this runs from the convergence every
+// published company goes through ([Engine.convergeOn]).
+//
+// After the first node has done it every later pass is one local read per
+// project: the decide compares the three chart-owned fields against the row
+// and says nothing when they match. The operation id is derived from the chart
+// POSITION and the key, so two nodes reconciling one chart state mint the same
+// id and the ledger collapses the loser.
 //
 // # Best effort, and what that costs
 //
@@ -1037,7 +1047,7 @@ func (e *Engine) applyChart(ctx context.Context, c *Company) {
 	if len(chart) == 0 {
 		return
 	}
-	wrote, err := writer.ApplyChart(ctx, tracker.ChartEpochOf(time.Now()), chart)
+	wrote, err := writer.ApplyChart(ctx, c.ChartAt, chart)
 	if err != nil {
 		log.ErrorContext(ctx, "tracker_chart_not_applied",
 			"error", err.Error(), "wrote", wrote,
