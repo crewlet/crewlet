@@ -56,12 +56,12 @@ type cluster struct {
 
 // startCluster stands up n nodes, each an engine and its API, on one clustered
 // broker.
-func startCluster(t *testing.T, n int) *cluster {
+func startCluster(t *testing.T, n int, tune ...func(*config.Bootstrap)) *cluster {
 	t.Helper()
 	if n < 2 {
 		t.Fatalf("startCluster(%d): use start(t) for one node", n)
 	}
-	return startMesh(t, jetstreamtest.StartDirectMesh, n)
+	return startMesh(t, jetstreamtest.StartDirectMesh, n, tune...)
 }
 
 // startPartitionableCluster is [startCluster] on a mesh whose every route runs
@@ -85,7 +85,9 @@ func startPartitionableCluster(t *testing.T, n int) *cluster {
 // DIFFERENT NUMBERS." Retrying with the same numbers is retrying the question
 // somebody else already answered, so a genuinely lost port failed all three
 // attempts identically and with nothing to say which of the two causes it was.
-func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstreamtest.Relays, n int) *cluster {
+func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstreamtest.Relays,
+	n int, tune ...func(*config.Bootstrap)) *cluster {
+
 	t.Helper()
 	// BOUNDED IN WALL CLOCK AS WELL AS IN TRIES — see
 	// [jetstreamtest.ClusterStartBudget]. Three attempts at an unbounded
@@ -118,7 +120,7 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 		attemptCtx, cancelAttempt := context.WithDeadline(t.Context(),
 			jetstreamtest.StartAttemptEnd(time.Now(), deadline))
 		relays := mesh(attemptCtx, t, n)
-		c, err := startMeshOnce(attemptCtx, t, relays, n)
+		c, err := startMeshOnce(attemptCtx, t, relays, n, tune...)
 		cancelAttempt()
 		if err == nil {
 			return c
@@ -180,7 +182,9 @@ var errNotRetryable = errors.New("not fixable by another attempt")
 
 // ctx BOUNDS THIS ATTEMPT, and is not the test's own: see [startMesh] for why
 // a ceiling the member starts cannot observe bounds nothing.
-func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, n int) (*cluster, error) {
+func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, n int,
+	tune ...func(*config.Bootstrap)) (*cluster, error) {
+
 	t.Helper()
 	c := &cluster{relays: relays, nodes: make([]*node, n)}
 
@@ -202,7 +206,7 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 			// failure is carried back rather than raised here — a
 			// FailNow from another goroutine ends that goroutine and
 			// leaves the test running with a nil member.
-			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, relays, i, n)
+			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, relays, i, n, tune...)
 		}()
 	}
 	wg.Wait()
@@ -284,8 +288,8 @@ const clusterHost = "127.0.0.1"
 
 // ctx is the ATTEMPT's, so the retry loop's wall-clock ceiling can interrupt a
 // bring-up rather than only refuse the next one — see [startMesh].
-func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, i, n int) (
-	*node, []func(), error) {
+func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, i, n int,
+	tune ...func(*config.Bootstrap)) (*node, []func(), error) {
 
 	// THE TEARDOWN IS RETURNED, NOT REGISTERED WITH t.Cleanup, because an
 	// attempt that fails has to stop what it started BEFORE the next one
@@ -353,6 +357,11 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// one replica a publish is durable on the member that took it, and a
 	// case asserting a peer sees it would be asserting timing.
 	boot.Stream.Replicas = n
+	// LAST, so a case can amend anything above it — and before the engine,
+	// which is the only moment Tier A is read at all.
+	for _, amend := range tune {
+		amend(&boot)
+	}
 
 	e, err := engine.New(ctx, engine.Options{Bootstrap: &boot, Company: cfg})
 	if err != nil {

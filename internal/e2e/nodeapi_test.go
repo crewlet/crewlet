@@ -137,6 +137,12 @@ func wireAPI(
 			Events:  backends.Store.Events(),
 			Company: company,
 			NodeID:  nodeID,
+			// THE COMPANY'S OWN ROOMS. Every chat read is a registered
+			// question, so this is what mounts them on the socket and on
+			// the REST routes alike — and without it the whole surface is
+			// simply unregistered, which answers `unknown_query` and looks
+			// from a test exactly like a company with nothing to say.
+			Chat: chatReader(e),
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,
@@ -186,6 +192,28 @@ func wireAPI(
 	srv := httptest.NewServer(app)
 	stops = append(stops, srv.Close)
 	return app, srv, stops, nil
+}
+
+// chatReader is this node's chat read side as the query registry takes it, or
+// a NIL INTERFACE for a company running no native chat.
+//
+// The nil is the whole reason this is a function. [queries.Sources] registers
+// the chat questions on `s.Chat != nil`, and a typed nil pointer assigned into
+// an interface is not nil — so handing over [engine.Engine.Chat] directly
+// would register every chat question on a node that has no reader and answer
+// each of them with a panic.
+//
+// AND IT IS AHEAD OF cmd/crewlet, which is the one place this wiring is not
+// yet "the way `crewlet run` wires it": that process builds its
+// [api.Options] with no Chat reader, no ChatWriter and no ChatLive hub, so a
+// running node today mounts none of the chat surface — including the
+// `/chat/...` routes `crewlet chat` talks to. When it does, this is the line
+// that has to keep agreeing with it.
+func chatReader(e *engine.Engine) queries.ChatReader {
+	if reader := e.Chat(); reader != nil {
+		return reader
+	}
+	return nil
 }
 
 // stopInReverse runs a teardown in the reverse of the order it was built.

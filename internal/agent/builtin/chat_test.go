@@ -610,7 +610,7 @@ func TestEveryChatToolCarriesItsOwnAnnotations(t *testing.T) {
 		builtin.PostMessageTool:    shared,
 		builtin.ReplyInThreadTool:  shared,
 		builtin.SendDMTool:         shared,
-		builtin.ReactToMessageTool: tools.Annotations{
+		builtin.ReactToMessageTool: {
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
 		},

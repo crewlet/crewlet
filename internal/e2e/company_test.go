@@ -105,7 +105,16 @@ func start(t *testing.T) *node { return startWith(t, nil) }
 
 // startWith stands a node up over a company document the caller may amend, for
 // the cases whose subject is a config field rather than a turn.
-func startWith(t *testing.T, amend func(doc string) string) *node {
+//
+// tune amends TIER A, which a doc amendment cannot reach. VARIADIC rather than
+// a second required argument, so every caller whose subject is the company
+// document alone says nothing about the bootstrap — and so the cases that need
+// one (a credential bound to a seat is a Tier A token plus a Tier B binding,
+// and neither half works alone) can supply it without a second constructor
+// that would drift from this one.
+func startWith(t *testing.T, amend func(doc string) string,
+	tune ...func(*config.Bootstrap)) *node {
+
 	t.Helper()
 	model := newScriptedModel(t)
 
@@ -120,6 +129,12 @@ func startWith(t *testing.T, amend func(doc string) string) *node {
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	// AFTER THE PATHS AND BEFORE THE ENGINE, so an amendment can override
+	// a path as well as add to the document — and so nothing it sets is
+	// quietly overwritten by a default applied afterwards.
+	for _, amendBoot := range tune {
+		amendBoot(&boot)
+	}
 
 	e, err := engine.New(t.Context(), engine.Options{Bootstrap: &boot, Company: cfg})
 	if err != nil {
@@ -180,6 +195,14 @@ type scriptedModel struct {
 	// assertions elsewhere are written against a one-round executor.
 	searchQuery string
 	searched    bool
+
+	// chat scripts an executor that was woken in a room: which chat tool
+	// it reaches for, in what order, and how it answers the engine's own
+	// refusal of a delivery claim. Nil for every case whose subject is not
+	// the company's own chat. It lives in chat_test.go, beside the cases
+	// it serves — this field and the one branch below are all the shared
+	// endpoint has to know about it.
+	chat *chatScript
 }
 
 // engageOnExecute makes the next turn's executor call a tool.
@@ -265,6 +288,16 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 			"final_artifact": "Three PRs merged, one incident, zero regressions.",
 		})
 	case offered["submit_work"]:
+		if answer, ok := m.chatAnswer(raw); ok {
+			// A SEAT WOKEN IN A ROOM. Recorded as execute like every
+			// other round of this phase — what differs is that the
+			// script reads the WHOLE request, because the round it has
+			// to get right is the one after the engine refused a
+			// delivery claim. See [chatScript].
+			saw("execute")
+			reply = answer
+			break
+		}
 		if query, ok := m.shouldSearch(); ok {
 			saw("execute")
 			reply = toolUse("search_knowledge", map[string]any{"query": query})
