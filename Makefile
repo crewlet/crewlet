@@ -295,8 +295,26 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 # A bare `.NOTPARALLEL:` fixes it and costs too much: it is GLOBAL, so every
 # other parallel invocation of this file loses its concurrency to settle a
 # collision between two targets. Prerequisites on .NOTPARALLEL would scope it,
-# but that is GNU Make 4.4 and this repository pins no version (4.3 here).
-# Two lines in the recipe are portable, and they say the thing plainly.
+# but that is GNU Make 4.4 and this repository pins no version (4.3 here). A
+# recipe is portable, and it says the thing plainly.
+#
+# AND THE STATUS ACCUMULATES, which is the half two recipe LINES could not do.
+# Make stops a target at its first nonzero line, so a red parallel half meant
+# `make test-solo` never ran -- internal/e2e and every cluster-forming package
+# silently unexercised, while the output named one failing test and read as the
+# whole story. The verdict was right (check failed either way) and the coverage
+# was not, which is the worst pairing: whoever fixes the named test and pushes
+# has never run the fleet. Measured: one working-indicator race in
+# internal/api/stream ended a `check` with the solo partition untouched.
+#
+# `test-norace` said the gates could not hit this, "`check` invokes the two as
+# sub-makes, each of which must succeed". That confused each must SUCCEED with
+# both must RUN. They are one line now, sequenced by `;` rather than by being
+# separate lines, so the isolation above is unchanged and both halves report --
+# the same shape `test-cross` and `test-norace` already use, and the same thing
+# ci.yml gets for free by running `test (race)` and `end-to-end gates` as
+# separate jobs. A local gate that reports less than CI on a red run is the
+# Makefile lying in the direction nobody notices.
 #
 # It also fails faster: formatting, vet, lint and the build are all ahead of a
 # six-minute test run rather than beside it.
@@ -306,12 +324,14 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 # TestEveryNodeMintsIntoOneKeySpace with `ensure stream
 # CREWLET_NOTIFICATIONS: context deadline exceeded`, and passed alone.
 check: fmt-check tidy-check signoff-check signoff-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
-	@$(MAKE) test
-	@$(MAKE) test-solo
-	@echo
-	@echo "All local gates passed. One thing this did NOT cover, because it"
-	@echo "needs a service CI starts for itself:"
-	@echo "  - the release pipeline  ->  make snapshot"
+	@status=0; \
+	$(MAKE) test || status=1; \
+	$(MAKE) test-solo || status=1; \
+	[ $$status -eq 0 ] || exit $$status; \
+	echo; \
+	echo "All local gates passed. One thing this did NOT cover, because it"; \
+	echo "needs a service CI starts for itself:"; \
+	echo "  - the release pipeline  ->  make snapshot"
 
 fmt-check: ## fail if anything needs gofmt (ci: build + vet)
 	@unformatted="$$(gofmt -l .)"; \
@@ -438,10 +458,13 @@ test-solo: require-node ## the packages that need a runner to themselves (ci: en
 # below: as two separate recipe lines make stops at the first nonzero one, so a
 # failure in the parallel partition meant the solo partition — internal/e2e and
 # every cluster-forming package — was never run at all by a target documented
-# as the full suite. The gates cannot hit this (`check` invokes the two as
-# sub-makes, each of which must succeed), which is exactly why it went
-# unnoticed here: the escape hatch is the one place a partial run reports as a
-# whole one.
+# as the full suite. The gate HAD IT TOO, and the parenthetical that used to
+# stand here -- that `check` invokes the two as sub-makes, each of which must
+# succeed -- is why nobody looked: it confused each must SUCCEED with both must
+# RUN. Make stops a target at its first nonzero recipe line, so a red parallel
+# half ended `check` with the solo partition never run, under a verdict that
+# was correct and an output that named one test. Both accumulate now; see the
+# comment on `check`.
 test-norace: require-node ## the full suite without -race (faster; not a gate)
 	@status=0; \
 	echo "==> parallel partition"; \
