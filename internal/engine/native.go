@@ -365,6 +365,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// domain's vocabulary needs no dependency on config. A nil
 			// block answers the default rather than zero.
 			ThreadContext: c.Config.Chat.Native.ThreadContext(),
+			// AND THE VISIBILITY A CREATE THAT NAMES NONE GETS. Founder
+			// policy, converted here for the same reason: the domain
+			// decides what an unstated kind resolves to and the company
+			// decides which way. A nil block answers false — public —
+			// which is the field's own documented default.
+			DefaultPrivate: c.Config.Chat.Native.DefaultPrivate(),
 		}); err != nil {
 			return fmt.Errorf("engine: chat store: %w", err)
 		}

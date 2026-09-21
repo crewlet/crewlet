@@ -105,6 +105,10 @@ type Store struct {
 	// its own. A message has one — see ids.go — and does not come here.
 	newOpID func() string
 
+	// defaultPrivate resolves a create that states no visibility. See
+	// [Options.DefaultPrivate].
+	defaultPrivate bool
+
 	// threadContext is how many earlier lines of a thread a reply's
 	// snapshot carries. See [Options.ThreadContext]; it is held to
 	// [MaxThreadContext] at construction, so nothing downstream re-checks.
@@ -172,6 +176,16 @@ type Options struct {
 	// the thread it replies to cannot answer it and would answer anyway.
 	// [MaxThreadContext] is the ceiling whatever arrives here is held to.
 	ThreadContext int
+
+	// DefaultPrivate is what a create that states NO visibility resolves
+	// to: true makes such a room private, false public.
+	//
+	// A PLAIN BOOL converted at the engine's edge, exactly as
+	// ThreadContext is, so this package's vocabulary needs no dependency
+	// on config. Its zero value is the documented default rather than
+	// "unset", which is what the config field's own doc says: channels are
+	// public unless somebody says otherwise.
+	DefaultPrivate bool
 }
 
 // DefaultThreadContext is how many earlier thread lines a record carries when
@@ -211,7 +225,8 @@ func NewStore(opts Options) (*Store, error) {
 	s := &Store{
 		publisher: opts.Publisher, db: opts.DB, roster: opts.Roster,
 		now: opts.Now, newID: newOperationID, newOpID: newOperationID,
-		threadContext: opts.ThreadContext,
+		threadContext:  opts.ThreadContext,
+		defaultPrivate: opts.DefaultPrivate,
 	}
 	if s.now == nil {
 		s.now = nowUTC
@@ -417,7 +432,26 @@ func (s *Store) CreateChannel(ctx context.Context, actor Actor, in NewChannel) (
 			"alphanumerics and hyphens, starting with an alphanumeric, at most "+
 			"%d bytes", in.Name, MaxChannelName)
 	}
-	if !in.Kind.Named() {
+	// AN UNSTATED VISIBILITY IS THE COMPANY'S TO DECIDE, and this is the
+	// only place that decision is made. Every caller that omits the kind —
+	// the REST route, a seat's `post_message`-adjacent create, the operator
+	// surface, the CLI — arrives here with the empty value, so resolving it
+	// at this one point is what makes `chat.native.default_channel_private`
+	// mean the same thing on all of them.
+	//
+	// RESOLVED BEFORE THE GATE BELOW, not inside it: the gate's subject is
+	// "is this a kind a NAMED room can have", and an unresolved empty
+	// string is not an answer to that question. It used to reach the gate
+	// and be refused, which is why the config field had no reader at all —
+	// there was no way to ask for the default.
+	kind := in.Kind
+	if kind == "" {
+		kind = KindPublic
+		if s.defaultPrivate {
+			kind = KindPrivate
+		}
+	}
+	if !kind.Named() {
 		return Written{}, invalid("kind", "%q is not a kind a named room can "+
 			"have — a direct conversation is opened with OpenDirect, whose "+
 			"create arbitrates on the participants' own derived id rather than "+
@@ -427,7 +461,7 @@ func (s *Store) CreateChannel(ctx context.Context, actor Actor, in NewChannel) (
 	at := s.now()
 	opID := s.newOpID()
 	room := Channel{
-		V: DocumentVersion, ID: s.newID(), Kind: in.Kind, Name: name,
+		V: DocumentVersion, ID: s.newID(), Kind: kind, Name: name,
 		Topic: in.Topic, Purpose: in.Purpose, Unit: strings.TrimSpace(in.Unit),
 		RetentionDays: in.RetentionDays, CreatedAt: at,
 		CreatedBy: actor.Name(), CreatedByKind: actor.Kind,
@@ -439,7 +473,7 @@ func (s *Store) CreateChannel(ctx context.Context, actor Actor, in NewChannel) (
 		{Kind: TermChannel, ID: room.ID},
 	}}
 	payload := ChannelCreate{
-		V: DocumentVersion, ChannelID: room.ID, Kind: in.Kind, Name: name,
+		V: DocumentVersion, ChannelID: room.ID, Kind: kind, Name: name,
 		Unit: room.Unit, Topic: in.Topic, Purpose: in.Purpose,
 		Members: members, RetentionDays: in.RetentionDays,
 		CreatedBy: actor.Name(), CreatedByKind: actor.Kind,

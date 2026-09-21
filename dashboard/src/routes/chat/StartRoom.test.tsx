@@ -39,12 +39,12 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-function mount() {
+function mount(defaultPrivate = false) {
   const onClose = vi.fn();
   const onWrote = vi.fn();
   render(
     <Router>
-      <StartRoom people={[]} onClose={onClose} onWrote={onWrote} />
+      <StartRoom people={[]} defaultPrivate={defaultPrivate} onClose={onClose} onWrote={onWrote} />
     </Router>,
   );
   return { onClose, onWrote };
@@ -167,4 +167,42 @@ test("the create carries what the form holds, normalised", async () => {
 
   await waitFor(() => expect(made).toHaveBeenCalled());
   expect(made.mock.calls[0]![0]).toEqual({ name: "launch", kind: "public", topic: "shipping it" });
+});
+
+/**
+ * THE VISIBILITY SELECTOR OPENS ON WHAT WILL ACTUALLY HAPPEN.
+ *
+ * `chat.native.default_channel_private` is what the server gives a room created
+ * without a stated visibility. This form always states one, so the policy never
+ * reaches the server from here -- which means the only thing standing between a
+ * person and a room they did not intend is what this selector SHOWS them.
+ *
+ * It was hardcoded to "public". Under a company whose default is private, that
+ * told the person the opposite of the policy at the exact moment they were
+ * deciding it, and a wrong answer on a privacy control is not a cosmetic one.
+ *
+ * BOTH DIRECTIONS, because a default that can only be one value is not a
+ * default: asserting the private case alone would pass against a form that made
+ * everything private regardless.
+ */
+/**
+ * The visibility control, by the label the form wires to it.
+ *
+ * ASSERTED ON ITS TEXT rather than a `value`, because the design system's
+ * Select is a BUTTON that displays the chosen option's label — there is no
+ * form value to read, and the text is what the person actually sees, which is
+ * the whole subject of these two cases.
+ */
+function visibility(): HTMLElement {
+  return screen.getByLabelText(/who can read it/i);
+}
+
+test("the form opens on public for a company that asked for nothing", () => {
+  mount(false);
+  expect(visibility().textContent).toContain("Public");
+});
+
+test("the form opens on private for a company whose default is private", () => {
+  mount(true);
+  expect(visibility().textContent).toContain("Private");
 });

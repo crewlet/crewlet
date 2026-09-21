@@ -223,6 +223,20 @@ func (n *ChatNativeConfig) ThreadContext() int {
 	return n.ThreadContextMessages
 }
 
+// DefaultPrivate is whether a room created without a stated visibility is
+// private, with the nil block answering the documented default.
+//
+// AN ACCESSOR RATHER THAN THE FIELD, for [ChatNativeConfig.ThreadContext]'s
+// reason: `chat.native` is optional, so every reader would otherwise carry the
+// nil check, and a reader that forgot it would panic on the commonest company
+// there is — one that wrote no chat block at all.
+func (n *ChatNativeConfig) DefaultPrivate() bool {
+	if n == nil {
+		return false
+	}
+	return n.DefaultChannelPrivate
+}
+
 func (n *ChatNativeConfig) validate(path Path) error {
 	var p problems
 	if n == nil {

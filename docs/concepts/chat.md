@@ -64,7 +64,15 @@ from every other node's for good.
 
 ## What a company gets
 
-**Channels** are public, private, or a **unit's own room**. A unit that names a
+**Channels** are public, private, or a **unit's own room**. A create that names
+no visibility takes the company's default: `chat.native.default_channel_private`
+makes those rooms private, and the engine resolves it in one place, so the
+answer is the same whether the room came from the dashboard, the REST route, an
+agent's own tool or `crewlet chat`. A create that *does* name a visibility is
+never overridden — the setting is a default and not a lock, so a company that
+turns it on can still make a public room deliberately.
+
+A unit that names a
 channel in the org chart gets that room created for it, with every seat in the
 unit's subtree and its lead as members. Managed membership is a **floor**: the
 reconcile withdraws only the members it added, so a guest somebody invited by

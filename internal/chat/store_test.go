@@ -45,7 +45,11 @@ type writeRound struct {
 	consumed uint64
 }
 
-func newWriteRound(t *testing.T, roster chat.Roster) *writeRound {
+// tune amends the store's options, for the settings that are FOUNDER POLICY
+// rather than properties of the harness — a company's default visibility is
+// the only one so far, and it has two values that must both be exercised.
+func newWriteRound(t *testing.T, roster chat.Roster,
+	tune ...func(*chat.Options)) *writeRound {
 	t.Helper()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
 	if err != nil {
@@ -101,10 +105,14 @@ func newWriteRound(t *testing.T, roster chat.Roster) *writeRound {
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
-	rooms, err := chat.NewStore(chat.Options{
+	opts := chat.Options{
 		Publisher: publisher, DB: db, Roster: roster,
 		Now: func() time.Time { return chatAt },
-	})
+	}
+	for _, amend := range tune {
+		amend(&opts)
+	}
+	rooms, err := chat.NewStore(opts)
 	if err != nil {
 		t.Fatalf("build the store: %v", err)
 	}

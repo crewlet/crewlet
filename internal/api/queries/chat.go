@@ -275,6 +275,24 @@ type chatRail struct {
 	// present, a room a newer peer wrote included.
 	Unreadable int `json:"unreadable,omitempty"`
 
+	// DefaultPrivate is what a room created WITHOUT a stated visibility
+	// will be, from `chat.native.default_channel_private`.
+	//
+	// ON THE RAIL because the rail is the first thing the screen loads and
+	// the create form opens out of it, so this costs no round trip. It is
+	// policy rather than a property of the rooms listed, which is why it
+	// sits on the wrapper here and not on [chat.ChannelListing] — the
+	// domain type answers what exists, not what the company prefers.
+	//
+	// THE SCREEN NEEDS IT TO BE HONEST, which is the whole reason it is
+	// exposed. The composer's visibility selector has to open on what will
+	// actually happen; a form that showed "public" while the company
+	// default was private would be a privacy control the person is
+	// actively misled about. The SERVER still decides — an omitted kind is
+	// resolved in chat.Store.CreateChannel — so a stale or absent value
+	// here changes what the form SHOWS and never what it gets.
+	DefaultPrivate bool `json:"default_private,omitempty"`
+
 	// ReadState says the badges on these rows are a MEASUREMENT. False
 	// means the coordination record could not be read — the counts are
 	// then zero and the mutes absent, which is not "you have read
@@ -346,7 +364,8 @@ func (s Sources) chatChannels(ctx context.Context, p Params) (any, error) {
 	out := chatRail{
 		Served: listing.Served, Channels: rooms,
 		Truncated: listing.Truncated, Unreadable: listing.Unreadable,
-		ReadState: measured,
+		ReadState:      measured,
+		DefaultPrivate: s.chatDefaultPrivate(),
 	}
 	if measured && !state.DNDUntil.IsZero() {
 		until := state.DNDUntil
@@ -628,4 +647,22 @@ func (s Sources) chatSearch(ctx context.Context, p Params) (any, error) {
 		})
 	}
 	return out, nil
+}
+
+// chatDefaultPrivate is the company's default room visibility, or false when
+// there is no company to ask.
+//
+// READ PER CALL through [Sources.Company], for the reason every other source
+// here is: an apply replaces the epoch, and a value captured at boot would go
+// on telling the screen the old policy for the life of the process — on a
+// privacy control, for as long as nobody restarts the node.
+func (s Sources) chatDefaultPrivate() bool {
+	if s.Company == nil {
+		return false
+	}
+	c := s.Company()
+	if c == nil {
+		return false
+	}
+	return c.Chat.Native.DefaultPrivate()
 }

@@ -2779,6 +2779,19 @@ export interface ChatChannelsAnswer extends ChatServed {
   /** Rooms this build could not present — one a newer peer wrote. */
   unreadable?: number;
   /**
+   * What a room created WITHOUT a stated visibility will be, from
+   * `chat.native.default_channel_private`.
+   *
+   * IT IS FOR THE FORM TO BE HONEST WITH, not for the form to enforce. The
+   * server resolves an omitted kind itself, so this only decides what the
+   * visibility selector OPENS on — and it has to, because a form showing
+   * "public" while the company default is private misleads a person about a
+   * privacy control at the one moment they are deciding it.
+   *
+   * Absent means public, which is the field's own default.
+   */
+  default_private?: boolean;
+  /**
    * The badges on these rows are a MEASUREMENT.
    *
    * False means the coordination record could not be read: the counts are

@@ -292,7 +292,12 @@ export function Chat({ channel = "", view = "room" }: { channel?: string; view?:
           makes this list correct eventually, and a person who has just made a
           room is looking at the rail now. */}
       {gesture === "room" && (
-        <StartRoom people={people} onClose={() => setGesture("")} onWrote={rail.refetch} />
+        <StartRoom
+          people={people}
+          defaultPrivate={rail.data?.default_private ?? false}
+          onClose={() => setGesture("")}
+          onWrote={rail.refetch}
+        />
       )}
       {gesture === "direct" && (
         <StartDirect people={people} onClose={() => setGesture("")} onWrote={rail.refetch} />

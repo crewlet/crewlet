@@ -43,11 +43,23 @@ import { createChannel } from "./writes.ts";
 
 export function StartRoom({
   people,
+  defaultPrivate = false,
   onClose,
   onWrote,
 }: {
   /** Everybody who can be put in the room from the start, minus the author. */
   people: PersonOption[];
+  /**
+   * The company's `chat.native.default_channel_private`, which is what a room
+   * created without a stated visibility becomes.
+   *
+   * IT ONLY DECIDES WHAT THIS FORM OPENS ON. The server resolves an omitted
+   * kind itself, so nothing here can make a room more or less private than the
+   * policy allows — what it buys is that the selector shows the truth. Opening
+   * on "public" under a company whose default is private told the person the
+   * opposite of what would happen, on the one control where that matters.
+   */
+  defaultPrivate?: boolean;
   onClose: () => void;
   /** A write landed: the rail is asked again rather than waiting for the frame
    *  its own applier will raise a moment later. */
@@ -55,7 +67,7 @@ export function StartRoom({
 }) {
   const nav = useNavigator();
   const [typed, setTyped] = useState("");
-  const [kind, setKind] = useState<ChatKind>("public");
+  const [kind, setKind] = useState<ChatKind>(defaultPrivate ? "private" : "public");
   const [topic, setTopic] = useState("");
   const [members, setMembers] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
