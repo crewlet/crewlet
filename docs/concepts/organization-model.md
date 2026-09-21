@@ -21,6 +21,38 @@ Three things on this page are derived and therefore stored nowhere:
 - **Who manages a seat**, which is the other end of an edge only one end of
   which is authored.
 
+### The view is a function of rows and a position
+
+The tree every turn reads is **derived**, and where it is derived *from* is
+what the chart's split changed. It used to be a document: parse the YAML,
+normalise the tree in place, publish the pointer. It is now a pure function
+over the chart's rows — rows in, an immutable value out, carrying **the
+position those rows were read at**.
+
+Two properties come with that, and neither was available before:
+
+- **Two nodes at one position produce the identical view.** That is the whole
+  claim the replicated estate rests on, and a function can be tested for it
+  where a mutation could only be inspected.
+- **A view can say what it is true of.** A company derived from a document is
+  true of that document; one derived from a log is true as of a position, and
+  a screen that renders a chart can now say which.
+
+**It produces the same tree the document path does** — deliberately, and it is
+checked: the row derivation is compared against the document derivation over
+every example and fixture this repository ships, on the derivations that
+matter (the tree's shape, each unit's effective lead and channel, each seat's
+placement, every expanded `manages` list). The document side is normalised
+**twice**, because normalising in place is idempotent only by discipline and a
+comparison against one pass would certify less than the contract.
+
+**A cycle in the rows is broken and reported.** The write path refuses one —
+the batch validator replays every move and walks up from the new parent — but
+rows can predate that rule or be repaired by hand, and a build that recursed
+into one would not produce a wrong answer, it would not terminate. So a cyclic
+unit is re-parented to the root, ordered by key so every node breaks it the
+same way, and the units that moved are named.
+
 ### What a structural change is, and what it refuses
 
 A change to the *shape* of the company — a hire, a move, a promotion, a team

@@ -114,6 +114,15 @@ type Unit struct {
 	// declared one.
 	declared bool
 
+	// parentKey is the unit key this unit's ROW named as its parent, kept
+	// only while [FromRows] builds the tree.
+	//
+	// IT IS NOT THE TREE. The tree is Children, which is what every walk
+	// reads; this is the row's own reference, and it exists because the
+	// cycle check walks UP from a parent before the tree that would let it
+	// exists. A document-built org leaves it empty and nothing reads it.
+	parentKey string
+
 	// Project and Space are the unit's tracker and knowledge IDENTITY:
 	// inbound activity with no better recipient routes to the unit lead,
 	// and this is where the team files work and writes pages. Neither is an
