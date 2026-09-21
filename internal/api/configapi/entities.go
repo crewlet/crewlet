@@ -168,13 +168,13 @@ var entityKinds = map[string]entityAccess{
 	EntityUnits: {
 		ids: func(c *config.Company) []string {
 			var out []string
-			eachUnit(c, func(u *config.Unit) { out = append(out, u.Name) })
+			eachUnit(c, func(u *config.Unit) { out = append(out, unitID(u)) })
 			return sorted(out)
 		},
 		find: func(c *config.Company, id string) (any, bool) {
 			var found *config.Unit
 			eachUnit(c, func(u *config.Unit) {
-				if found == nil && u.Name == id {
+				if found == nil && unitID(u) == id {
 					found = u
 				}
 			})
@@ -187,7 +187,7 @@ var entityKinds = map[string]entityAccess{
 			var target *config.Unit
 			var at config.Path
 			eachUnitAt(c, func(p config.Path, u *config.Unit) {
-				if target == nil && u.Name == id {
+				if target == nil && unitID(u) == id {
 					target, at = u, p
 				}
 			})
@@ -198,11 +198,17 @@ var entityKinds = map[string]entityAccess{
 			if err != nil {
 				return err
 			}
-			// The same rule as a seat, and a unit's name is referenced from
-			// further away: every `manages:` entry that expands to it and
-			// every root-level seat whose `unit:` names it.
-			if incoming.Name != id {
-				return identityMismatch("name", id, incoming.Name)
+			// The same rule as a seat, and a unit's key is referenced
+			// from further away: every `manages:` entry that expands to
+			// it and every root-level seat whose `unit:` names it.
+			//
+			// Compared on the KEY rather than the display name, for
+			// [roleID]'s reason one field along: a body that changes
+			// the name alone is not a rename here — nothing resolves a
+			// unit by its name — while one that changes the id is, and
+			// it is the one an operator is least expecting to be one.
+			if got := unitID(&incoming); got != id {
+				return identityMismatch("id", id, got)
 			}
 			*target = incoming
 			return nil
@@ -592,6 +598,19 @@ func visitUnitAt(at config.Path, u *config.Unit, visit func(config.Path, *config
 // leaves it out — the same derivation the org model uses, so the id in this
 // URL is the handle every other surface shows.
 func roleID(r *config.Role) string { return r.Seat().Handle() }
+
+// unitID is a unit's address here: its KEY — its `id`, or its name where it
+// declares none — which is what a `manages:` entry and a seat's `unit:`
+// resolve, and what the stored-document walk already matched on
+// ([identityOfElement]).
+//
+// ONE DERIVATION, and this is what it cost when there were two. The listing,
+// the lookup and the replace keyed on the NAME while the splice keyed on the
+// key, so on any document whose units declare an id the two disagreed: the
+// lookup found the unit, the splice then found nothing under the same id, and
+// the branch that says "unreachable while stored and find agree" answered the
+// caller with a 500.
+func unitID(u *config.Unit) string { return u.IdentityKey() }
 
 func sorted(in []string) []string {
 	slices.Sort(in)

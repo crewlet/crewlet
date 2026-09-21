@@ -174,7 +174,11 @@ func TestDuplicateNamesAreServedStoredAndRefusedOnAWrite(t *testing.T) {
 		t.Parallel()
 		s := newSurface(t, nil)
 		s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
-		for _, path := range []string{"/config", "/config?format=yaml", "/config/units/Platform"} {
+		// THE UNIT IS ADDRESSED BY ITS KEY, and this document declares
+		// none — so the key is the one minted from its name when the
+		// revision is decoded, which is what makes a company written
+		// before the id rule addressable at all.
+		for _, path := range []string{"/config", "/config?format=yaml", "/config/units/platform"} {
 			if res := s.do(t, http.MethodGet, path, "", nil); res.Code != http.StatusOK {
 				t.Errorf("GET %s = %d, want 200: %s", path, res.Code, res.Body)
 			}

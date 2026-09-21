@@ -29,12 +29,23 @@ import (
 // channel, and the CEO manages the Engineering unit rather than its members.
 func derivedCompany() *config.Company {
 	return &config.Company{
-		Name:  "Acme",
-		Roles: []config.Role{{Name: "Chief Executive", Manages: []string{"Engineering"}}, {Name: "CTO", Unit: "Engineering"}},
+		Name: "Acme",
+		// A `manages:` entry and a `unit:` reference carry a unit's KEY,
+		// and a `lead:` carries a seat's HANDLE. The units declare ids
+		// that differ from their names on purpose: with the two the same
+		// a reference resolved either way and the fixture could not tell
+		// the rules apart.
+		Roles: []config.Role{
+			{Name: "Chief Executive", Manages: []string{"eng"}},
+			{Name: "CTO", Unit: "eng"},
+		},
 		Units: []config.Unit{{
-			Name: "Engineering", Lead: "CTO", Channel: "eng",
-			Roles:    []config.Role{{Name: "SRE"}},
-			Children: []config.Unit{{Name: "Platform", Roles: []config.Role{{Name: "Platform Engineer"}}}},
+			Name: "Engineering", ID: "eng", Lead: "cto", Channel: "eng",
+			Roles: []config.Role{{Name: "SRE"}},
+			Children: []config.Unit{{
+				Name: "Platform", ID: "plat",
+				Roles: []config.Role{{Name: "Platform Engineer"}},
+			}},
 		}},
 	}
 }
@@ -101,6 +112,14 @@ func TestTheOrgProjectionCarriesTheDerivedHierarchy(t *testing.T) {
 	if got := unitIn(t, derived, "Engineering"); got.Lead != "cto" ||
 		got.LeadInherited || !slices.Contains(got.Seats, "cto") {
 		t.Errorf("Engineering = %+v, want the CTO as its declared lead and a member", got)
+	}
+	// AND ITS KEY, which is what the CEO's `manages` entry beside it
+	// names. Without it a client holding that entry has nothing in the
+	// same response to resolve it against: it would match on the display
+	// name, which is a different value here, or call the reference broken.
+	if got := unitIn(t, derived, "Engineering"); got.ID != "eng" {
+		t.Errorf("Engineering's key = %q, want %q — the manages entry that names "+
+			"it resolves nothing otherwise", got.ID, "eng")
 	}
 	// The child unit sets neither, so both cascade, and the seat inside it
 	// is managed by the lead it inherited.

@@ -90,6 +90,20 @@ type OrgSeat struct {
 
 // OrgUnit is the public half of one unit, nesting to any depth.
 type OrgUnit struct {
+	// ID is the unit's KEY — what a `manages:` entry and a seat's `unit:`
+	// resolve — and it carries [config.Unit.IdentityKey] rather than the
+	// authored field, so a unit that declares no id answers with the name
+	// that is its key instead of with nothing.
+	//
+	// IT IS PUBLIC BECAUSE NOTHING ELSE HERE RESOLVES A REFERENCE. A seat's
+	// `manages` entry on this projection is the authored value, which may
+	// name a unit — and with only display names beside it a client had
+	// nothing in the same response to resolve that key against. It either
+	// matched on the name, which is a different value the moment a unit
+	// declares an id, or rendered the raw string and called the reference
+	// broken. Giving the client the id-or-name rule instead would be a
+	// second derivation of the one thing this engine keeps in one place.
+	ID        string    `json:"id,omitempty"`
 	Name      string    `json:"name"`
 	Type      string    `json:"type,omitempty"`
 	Purpose   string    `json:"purpose,omitempty"`
@@ -162,6 +176,7 @@ func orgUnits(units []config.Unit) []OrgUnit {
 	for i := range units {
 		u := &units[i]
 		out = append(out, OrgUnit{
+			ID:        u.IdentityKey(),
 			Name:      u.Name,
 			Type:      string(u.Type),
 			Purpose:   u.Purpose,

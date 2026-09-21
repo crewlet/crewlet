@@ -118,10 +118,18 @@ knowledge scope).
 
 ```
 PUT /config/roles/{handle}
-PUT /config/units/{name}
+PUT /config/units/{key}
 PUT /config/llm-providers/{key}
 PUT /config/mcp-servers/{name}
 ```
+
+Each is addressed by the thing the *document* resolves it by, never by its
+display name: a seat by its `handle` (derived from the name where it declares
+none) and a unit by its `key` (its `id`, or its name where it declares none —
+one is minted from the name when a document is imported). That is the same
+value a `manages:` entry and a seat's `unit:` carry, so the id in the URL is
+the id everything else in the company already uses. `GET` on the collection
+lists exactly those, which is the list to address from.
 
 Why bother, when `PUT /config` already works? Because that write makes every
 edit a company-wide one. Changing one seat's goal means sending back a

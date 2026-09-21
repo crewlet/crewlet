@@ -81,7 +81,7 @@ var roleFields = map[string]classified{
 // unitFields classifies every field of config.Unit.
 var unitFields = map[string]classified{
 	"Name":      {exposurePublic, "the unit's identity in the chart"},
-	"ID":        {exposureGuarded, "a durable key rather than a name: everything filed against the unit keys on it (org.Unit.Key) and nobody reads it, while the chart draws Name"},
+	"ID":        {exposurePublic, "the unit's KEY: a `manages:` entry and a seat's `unit:` resolve it, so a client reading this projection needs it to resolve a reference the projection itself carries. The chart still draws Name"},
 	"Type":      {exposurePublic, "an informational label"},
 	"Purpose":   {exposurePublic, "founder prose"},
 	"Lead":      {exposurePublic, "the structure the chart draws"},

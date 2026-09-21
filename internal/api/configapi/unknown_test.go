@@ -450,7 +450,7 @@ func TestAnEntityWriteKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 	for _, tc := range []struct{ kind, id string }{
 		{configapi.EntityRoles, "cto"},
 		{configapi.EntityRoles, "sre"},
-		{configapi.EntityUnits, "Engineering"},
+		{configapi.EntityUnits, "engineering"},
 		{configapi.EntityLLMProviders, "zulu"},
 		{configapi.EntityMCPServers, "tracker"},
 	} {

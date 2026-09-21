@@ -647,3 +647,86 @@ func TestAMistypedFieldInAnEntityBodyIsRefusedByName(t *testing.T) {
 		})
 	}
 }
+
+// A UNIT IS ADDRESSED BY ITS KEY EVERYWHERE THIS SURFACE TOUCHES IT.
+//
+// The listing, the lookup, the replace and the splice into the stored document
+// have to agree, and for one release they did not: three keyed on the display
+// name and the fourth on the key. On any document whose units declare an id
+// those are different values, so a PUT found its unit, then failed to find the
+// same unit in the bytes it was splicing into — and the branch whose own
+// comment calls itself unreachable answered the caller with a 500.
+func TestAUnitIsAddressedByItsKeyOnEveryPath(t *testing.T) {
+	t.Parallel()
+	const doc = `{"name":"Acme",
+	  "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["${K}"]}}},
+	  "units":[{"name":"Platform Engineering","id":"plat",
+	    "roles":[{"name":"Engineer","handle":"eng","llm":"zulu"}]}]}`
+
+	s := newSurface(t, nil)
+	s.seed(t, doc, nil)
+
+	// THE LISTING NAMES THE KEY, which is what a client then addresses.
+	ids, err := s.service().Entities(t.Context(), configapi.EntityUnits)
+	if err != nil {
+		t.Fatalf("Entities: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "plat" {
+		t.Fatalf("the listing names %v, want the unit's key", ids)
+	}
+
+	// THE LOOKUP ANSWERS UNDER IT, and not under the display name: a
+	// fixture whose key and name were the same could not tell the two
+	// apart, so this one's differ.
+	if res := s.do(t, http.MethodGet, "/config/units/plat", "", nil); res.Code != http.StatusOK {
+		t.Fatalf("GET by key = %d, want 200: %s", res.Code, res.Body)
+	}
+	byName := s.do(t, http.MethodGet, "/config/units/Platform%20Engineering", "", nil)
+	if byName.Code != http.StatusNotFound {
+		t.Errorf("GET by display name = %d, want 404 — nothing in the document "+
+			"resolves a unit by its name", byName.Code)
+	}
+
+	// AND THE REPLACE SPLICES INTO THE SAME ELEMENT. This is the path
+	// that answered 500: it found the unit by one identity and then could
+	// not find it by the other.
+	entity := s.do(t, http.MethodGet, "/config/units/plat", "", nil)
+	put := s.do(t, http.MethodPut, "/config/units/plat", entity.Body.String(),
+		map[string]string{"X-Summary": "round trip"})
+	if put.Code != http.StatusCreated {
+		t.Fatalf("PUT = %d, want 201: %s", put.Code, put.Body)
+	}
+}
+
+// AND A BODY THAT CHANGES THE KEY IS A RENAME, refused rather than applied —
+// while one that changes only the display name is an ordinary edit, because
+// nothing resolves a unit by its name.
+func TestAUnitBodyThatChangesItsKeyIsRefusedAndOneThatRenamesIsNot(t *testing.T) {
+	t.Parallel()
+	const doc = `{"name":"Acme",
+	  "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["${K}"]}}},
+	  "units":[{"name":"Platform Engineering","id":"plat",
+	    "roles":[{"name":"Engineer","handle":"eng","llm":"zulu"}]}]}`
+
+	s := newSurface(t, nil)
+	s.seed(t, doc, nil)
+
+	moved := s.do(t, http.MethodPut, "/config/units/plat",
+		`{"name":"Platform Engineering","id":"platform",
+		  "roles":[{"name":"Engineer","handle":"eng","llm":"zulu"}]}`,
+		map[string]string{"X-Summary": "rekey"})
+	if moved.Code != http.StatusBadRequest {
+		t.Errorf("a body changing the key = %d, want 400 — the URL would be left "+
+			"naming something that no longer exists: %s", moved.Code, moved.Body)
+	}
+
+	renamed := s.do(t, http.MethodPut, "/config/units/plat",
+		`{"name":"Platform","id":"plat",
+		  "roles":[{"name":"Engineer","handle":"eng","llm":"zulu"}]}`,
+		map[string]string{"X-Summary": "rename"})
+	if renamed.Code != http.StatusCreated {
+		t.Errorf("a body changing only the display name = %d, want 201 — a name "+
+			"is prose here and nothing resolves a unit by it: %s",
+			renamed.Code, renamed.Body)
+	}
+}

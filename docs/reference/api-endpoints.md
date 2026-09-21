@@ -345,7 +345,7 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
 - **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` name it is about, empty when neither), plus `from` and `to` as display text. Two kinds:
   - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead, a seat handle), `unit` (a root seat's `unit:`, a unit key), `manages` (one `manages` entry — a seat handle or a unit key — at the index it was written) or `gitlab_access_level` (a key under `integrations.gitlab.provisioning.access_levels` naming no seat).
   - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company stored before the rule answers with one, one beside each entity the violation names.
-- **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
+- **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its `id`, its effective type, lead and channel (and whether each was inherited). A unit's `id` is its **key** — what a `manages:` entry and a seat's `unit:` resolve — so a client can follow a reference it reads elsewhere in the same response rather than matching on a display name that is a different value. Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
 
 #### Dry runs
 
@@ -1875,6 +1875,13 @@ it. The same object is the `org` section of the [handshake
 snapshot](#what-the-handshake-snapshot-carries) and the body of every `org`
 push, so all three surfaces carry exactly one shape.
 
+Every reference in it is an **identity, not a display name**: a seat's
+`manages` entry carries another seat's `handle` or a unit's `id`, and a unit's
+`lead` carries a seat's `handle`. A unit therefore carries its `id` — its key,
+which is its `id` field or its name where it declares none — so a client can
+resolve a reference it reads here against something else in the same
+response.
+
 ```json
 {
   "name": "Nimbus",
@@ -1886,6 +1893,7 @@ push, so all three surfaces carry exactly one shape.
   ],
   "units": [
     {
+      "id": "engineering",
       "name": "Engineering",
       "type": "department",
       "purpose": "...",
@@ -1901,11 +1909,12 @@ push, so all three surfaces carry exactly one shape.
           "backstory": "...",
           "responsibilities": ["..."],
           "behavioral_guidelines": ["..."],
-          "manages": ["Platform"]
+          "manages": ["platform"]
         }
       ],
       "children": [
         {
+          "id": "platform",
           "name": "Platform",
           "purpose": "...",
           "roles": [{"name": "Platform Engineer", "goal": "..."}]

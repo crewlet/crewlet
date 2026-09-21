@@ -186,8 +186,10 @@ func TestADryRunAnswersTheBaseTheWarningsAndTheDerivedHierarchy(t *testing.T) {
 	s := newCountedSurface(t)
 	base := s.seed(t, companyDoc, nil)
 
+	// `manages` carries a seat's HANDLE or a unit's KEY, so the live entry
+	// is `cto` and the dangling one is a string nothing answers to.
 	res := s.do(t, http.MethodPatch, "/config?dry_run=true",
-		`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu", "manages": ["CTO", "Ghost"]},
+		`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu", "manages": ["cto", "Ghost"]},
 		            {"name": "CTO", "handle": "cto", "llm": "zulu"}]}`, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("dry run = %d, want 200: %s", res.Code, res.Body)

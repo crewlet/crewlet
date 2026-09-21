@@ -76,6 +76,27 @@ type DerivedSeat struct {
 type DerivedUnit struct {
 	// Path is where the unit was written. Omitted with a seat's.
 	Path string `json:"path,omitempty"`
+
+	// ID is the unit's KEY — its `id`, or its name where it declares none
+	// — and it is what every reference in the document resolves: a
+	// `manages:` entry, a seat's `unit:`, and the unit column on every
+	// stored row.
+	//
+	// IT IS ON THE PROJECTION BECAUSE NOTHING ELSE IN IT CARRIES ONE. A
+	// client reading a `manages` entry sees a key, and with only display
+	// names beside it there is nothing in the same response to resolve
+	// that key against — so it either matched on the name, which is a
+	// different value the moment a unit declares an id, or rendered the
+	// raw string and called the reference broken.
+	//
+	// SPELLED `id` ON THE WIRE, as the authored field and the public
+	// projection both spell it: this hierarchy travels in the same
+	// response as those, and one value under two names in one payload is
+	// a client picking whichever it happened to read first.
+	ID string `json:"id"`
+
+	// Name is what a person reads. It is display only: nothing in the
+	// document resolves a unit by it.
 	Name string `json:"name"`
 	// Type is the effective type: what the unit declares, or team.
 	Type string `json:"type"`
@@ -133,15 +154,18 @@ func Derive(c *Company) Derived {
 			seat.Manager = manager.Handle()
 		}
 		for m := range o.AllRoles() {
-			if slices.Contains(m.Manages, r.Name) {
+			// BY HANDLE, which is what a normalized manages list holds: an
+			// authored entry names a seat by handle, and a unit key has been
+			// expanded into the handles in it.
+			if slices.Contains(m.Manages, r.Handle()) {
 				seat.Managers = append(seat.Managers, m.Handle())
 			}
 		}
 		for _, report := range o.Reports(r) {
 			seat.Reports = append(seat.Reports, report.Handle())
 		}
-		for _, name := range r.AutoManaged {
-			if report := o.Role(name); report != nil {
+		for _, handle := range r.AutoManaged {
+			if report := o.Role(handle); report != nil {
 				seat.AutoReports = append(seat.AutoReports, report.Handle())
 			}
 		}
@@ -154,6 +178,7 @@ func Derive(c *Company) Derived {
 	for u := range o.AllUnits() {
 		unit := DerivedUnit{
 			Path:             x.units[u].String(),
+			ID:               u.Key(),
 			Name:             u.Name,
 			Type:             string(u.Type),
 			Channel:          u.Channel,
