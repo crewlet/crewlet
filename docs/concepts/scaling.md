@@ -184,6 +184,87 @@ has dropped — alive to its peers, deaf to its work. One connection makes
   state, or a local cache?
 - **The dashboard's live-state projection.** Each ingress node builds its own
   from the event stream, so any node can answer without a fan-out.
+- **The store's connection pool.** One file per node, opened by one process, so
+  the pool is a per-node resource and nothing about it is shared. Its default
+  is derived from the machine rather than fixed — see
+  [The admission semaphore, and the connection it cannot take](#the-admission-semaphore-and-the-connection-it-cannot-take)
+  below.
+
+---
+
+## The admission semaphore, and the connection it cannot take
+
+Two bounds sit between a room full of dashboards and this node's store, and
+they are deliberately different mechanisms.
+
+### The socket's admission semaphore
+
+One WebSocket may have **four queries running at once**
+(`stream.MaxInFlightQueries`). Queries run on their own goroutines so a store
+scan cannot stall the live feed, and the bound is a token pool taken **on the
+read loop's own goroutine**: a burst past it pauses the reader rather than
+piling up as blocked goroutines, so the backpressure is where it can be seen.
+Four is what one screen issues at once — the agent page opens with three.
+
+It is per SOCKET, not per node, and that is the load a company's store actually
+sees: three tabs is twelve concurrent scans.
+
+### The store's reserved connection
+
+A node's store pool is bounded, and **every reader on the node draws from it**:
+the dashboard's queries, the coverage probes, a seat's tool reads, the health
+body. Left unset, `store.max_open_conns` resolves to
+
+```
+max(8, GOMAXPROCS) readers  +  1 reserved  +  one per pinned writer
+```
+
+where the pinned writers are the state-log appliers on the replicated estate
+(see [Replication](../guides/replication.md)). The derivation and what the flat
+`4` it replaced cost are in
+[Deployment § The connection pool](../guides/deployment.md#the-connection-pool-and-the-one-connection-ordinary-work-cannot-take).
+
+**The reserved connection is the part that needs a mechanism.** Adding one to
+the bound buys nothing on its own: connections are handed out
+first-come-first-served, so a spare one nobody holds is taken by the first
+burst that wants it. So the store **draws that connection at open and holds
+it** for the life of the handle — the same move a
+[pinned writer](../guides/replication.md) makes, one layer over — and only
+work marked as **identity work** (resolving who is acting, before a route, a
+query or a tool call can decide anything) ever runs on it. Identity reads
+serialise on that one connection, which is exactly what "one connection's
+worth" means, and it is enough because an identity read is a keyed lookup
+rather than a scan.
+
+The failure it stops has the same shape as the one the pinned writers exist to
+break:
+
+1. A socket storm arrives: N dashboards, four concurrent queries each, every
+   one of them a scan.
+2. They take every connection.
+3. The identity lookup that would let those very requests be decided queues
+   behind all of them.
+4. The queue feeds itself — the reads that are waiting are the ones identity
+   has to clear.
+
+**Why held and not gated.** A semaphore in front of the pool would do the same
+job and break something else: it would bound ordinary work *below* the pool's
+own limit, so `database/sql` would never reach that limit, its wait counter
+would stop climbing, and the `pool_starved` alarm — whose entire input is that
+counter — would go quiet for good. Holding a connection moves no queue at all.
+Ordinary work still waits exactly where it waited before, and the alarm still
+sees it.
+
+A handle opened with an explicit `max_open_conns` owns its own arithmetic: the
+reserve comes out of the number given, and at `1` nothing is held back at all,
+because a handle with no connection left is a deadlock rather than a tight fit.
+A backup's own handle and an adoption's are both that case, and an identity
+read on such a handle queues with everybody else — which is where it was before
+the reserve existed.
+
+The knob to watch is the `pool_starved` alarm — see
+[Alarms](../reference/alarms.md). It means reads are queuing before they start,
+which is a pool to raise rather than a reserve to spend.
 
 ---
 

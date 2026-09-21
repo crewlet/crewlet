@@ -215,10 +215,14 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 		t.Fatalf("openPrepared: %v", err)
 	}
 	defer func() { _ = unset.Close() }()
-	if got := unset.Stats().MaxOpenConnections; got != defaultReaderConns {
+	// The derived default: the readers' budget PLUS the connection kept
+	// for identity work. Both terms, because a pool sized for the readers
+	// alone is a pool whose reserve is the first thing a read burst takes.
+	wantUnset := defaultReaderConns() + identityReserve
+	if got := unset.Stats().MaxOpenConnections; got != wantUnset {
 		t.Errorf("max open conns = %d, want the store default %d — an unset "+
 			"bound must reach the pool as \"you choose\", not as unbounded",
-			got, defaultReaderConns)
+			got, wantUnset)
 	}
 
 	// AND A DECLARED PIN WIDENS THE ESTATE THAT HOLDS IT, rather than being
@@ -236,7 +240,7 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 		t.Fatalf("openPrepared: %v", err)
 	}
 	defer func() { _ = pinned.Close() }()
-	if got, want := pinned.Stats().MaxOpenConnections, defaultReaderConns+3; got != want {
+	if got, want := pinned.Stats().MaxOpenConnections, wantUnset+3; got != want {
 		t.Errorf("max open conns with 3 pinned writers = %d, want %d: a pin "+
 			"has to be ADDED to the readers' bound, not carved out of it",
 			got, want)
@@ -247,9 +251,9 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 		t.Fatalf("openPrepared: %v", err)
 	}
 	defer func() { _ = node.Close() }()
-	if got := node.Stats().MaxOpenConnections; got != defaultReaderConns {
+	if got := node.Stats().MaxOpenConnections; got != wantUnset {
 		t.Errorf("the node estate widened to %d for pins it never holds, want %d",
-			got, defaultReaderConns)
+			got, wantUnset)
 	}
 	var busyMS int
 	if err := unset.QueryRowContext(t.Context(), `PRAGMA busy_timeout`).Scan(&busyMS); err != nil {

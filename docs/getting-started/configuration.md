@@ -666,9 +666,14 @@ store:
                                     #   only to put it on a different disk, and
                                     #   never onto the same file as `path`
   # max_open_conns: 0               #   connection-pool bound; 0 takes the
-                                    #   store's own default, which is four
-                                    #   readers plus one pinned connection per
-                                    #   state-log domain. Raise it if the
+                                    #   store's own default, which is
+                                    #   max(8, GOMAXPROCS) readers, plus ONE
+                                    #   connection reserved for identity work,
+                                    #   plus one pinned connection per
+                                    #   state-log domain. Setting it means you
+                                    #   own that arithmetic: the reserve and
+                                    #   the pins come OUT of the number rather
+                                    #   than being added to it. Raise it if the
                                     #   `pool_starved` alarm fires — see
                                     #   reference/alarms.md — which means reads
                                     #   are queuing before they start

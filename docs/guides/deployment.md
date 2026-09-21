@@ -799,6 +799,48 @@ here. Seat leases, the activation pointer and per-node apply status, the
 completion ledger, webhook dedupe, the rate valve and credential cooldowns are
 all in the [coordination slot](../concepts/coordination.md) instead.
 
+### The connection pool, and the one connection ordinary work cannot take
+
+`store.max_open_conns` bounds the pool. Left at `0` it is **derived**:
+
+```
+pool  = max(8, GOMAXPROCS) readers
+      + 1  reserved for identity work
+      + one per pinned writer   (the replicated estate only — one per
+                                 state-log domain this node applies)
+```
+
+**`max(8, GOMAXPROCS)`.** A read on this store is CPU-bound work inside this
+process — the database engine is embedded, so a query is not a round trip to a
+server — and a connection that cannot get a core buys queue depth rather than
+concurrency. GOMAXPROCS is therefore the honest ceiling, and 8 is the floor
+because the dashboard's socket admits four concurrent queries **per socket** and
+a company is routinely watched from more than one tab. It was a flat `4` before:
+a number describing one socket, on a host of any size, so three tabs offered
+twelve concurrent scans to a pool of four and the engine's own reads queued
+behind whichever four arrived first — on a 16-core node exactly as on a laptop.
+Nothing said so, and the only fix was to set this field by hand on every
+deployment that outgrew one tab.
+
+**The reserved connection is held, not merely counted.** Connections are handed
+out first-come-first-served, so a spare one nobody holds is taken by the first
+read burst that wants it. The store therefore **draws that connection at open
+and keeps it**, the same move a pinned writer makes, and only identity work
+ever runs on it — the one arrangement under which a socket storm cannot starve
+the lookups that answer who is acting. See
+[Scaling Out § The admission semaphore, and the connection it cannot take](../concepts/scaling.md#the-admission-semaphore-and-the-connection-it-cannot-take)
+for why it is held rather than defended by a semaphore: a gate in front of the
+pool would stop `database/sql` ever reaching its own limit, and the
+`pool_starved` alarm below reads exactly that.
+
+**Setting the field means you own the arithmetic.** An explicit value wins
+outright: the reserve and the pinned writers come *out* of the number you give
+rather than being added to it, and at `1` nothing is held back at all (a
+backup's own single-connection handle is exactly that case — an identity read
+there queues with everybody else). Raise it if the `pool_starved` alarm fires —
+see [Alarms](../reference/alarms.md) — which means reads are queuing before
+they start.
+
 The load-bearing tables:
 
 - **`agent_diary`** — vector-indexed, each agent's private observation log. Written by the reflect path, which embeds content on write. The `## Personal memory` prefetch reads it via hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is **not** stored here — natively it is rows in the replicated estate beside the vectors derived from them, and a Confluence knowledge base has no local copy at all; see [knowledge system](../concepts/knowledge-system.md).
