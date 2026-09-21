@@ -2219,6 +2219,18 @@ is one of the rules on this page applied to a tracker.
   a value it does not have: an undated, unassigned, unestimated task lines
   its status up with the task above it rather than pulling every later
   column one place left.
+- **A board draws every lane the scope admits, and a list draws only the
+  bands that hold something.** The engine mints the lanes: on a closed axis
+  — status, status group, priority — `work_items` carries every column the
+  query's own predicate could have put a row in, empty ones at `count: 0`,
+  so a young company's open work is three lanes with one card rather than
+  one lane in an empty page, and a Done lane appears only when finished
+  work was asked for. That is the histogram's rule (every bucket is drawn)
+  applied to a board, and the two shapes then differ only in the DRAWING,
+  as shapes must: a lane with room in it is what a board is, where a band
+  over nothing is a rule separating nothing from nothing. An empty scope
+  says which it is — nothing open yet, nothing finished yet, nothing filed
+  — and "Nothing matches" is reserved for a filter that is actually on.
 - **Nothing is drawn for the default.** `normal` priority is what a task gets
   when nobody said, so it is most of a board — a mark on every card is a mark
   that says nothing, and it buries the four that ARE urgent. A due date drops
@@ -2227,11 +2239,10 @@ is one of the rules on this page applied to a tracker.
 - **Reading an item does not lose the board.** A plain click opens a PEEK
   beside the rows; ⌘-click and middle-click follow the anchor to the item's
   own page, because a card that cannot be opened in a tab is not a link.
-  Below about 1500px it becomes a DRAWER over the board rather than a third
-  column, and that threshold is measured rather than guessed: the sidebar,
-  the rail and the peek are three panes and the board is what is left, so at
-  1280 — an ordinary laptop — one board column was left beside a detail
-  panel, which is not a board.
+  Under 1180px — `--peek-drawer-max`, the frame's own threshold — it becomes
+  a DRAWER over the board rather than a column beside it; the board's sheet
+  used to state a threshold of its own, around 1500, in a rule keyed on an
+  attribute nothing set, so what it described never ran.
 - **The charts answer the questions the numbers cannot.** A census bar says
   the shape of a project where three counts say only their sizes; a load bar
   is drawn against the HEAVIEST QUEUE on screen rather than an absolute
