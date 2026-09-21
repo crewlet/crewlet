@@ -88,7 +88,7 @@ does not run reaches for it and fails at the call.
 | `list_channels` | The rooms this seat is in, most recently active first — and where a room's id comes from when the seat only knows its name |
 | `search_messages` | Find a message by what it **says**, ranked across every room this seat may read. Registered where the node holds the chat index. `read_channel` is the other half: one room, in order, from a point you name |
 | `react_to_message` | Put one emoji on a message, or take yours back |
-| `join_channel` / `leave_channel` | Move this seat's own membership, and nobody else's. A private room cannot be joined this way, and a unit's own room cannot be left — its membership is the org chart's |
+| `join_channel` / `leave_channel` | Move this seat's own membership, and nobody else's. A private room cannot be joined this way, and a unit's own room can be neither joined nor left — its membership is the org chart's, and either gesture would be undone by the next apply |
 
 **Three of them count as a delivery** for the turn's did-this-reach-anybody
 gate — `post_message`, `reply_in_thread` and `send_dm` — and the obligation is

@@ -463,10 +463,14 @@ func readChannel(ctx context.Context, tx *sql.Tx, id string) (Channel, bool, err
 // never shrink.
 //
 // IT STOPS BEING TRUE THE DAY A PERSON CAN INVITE A GUEST INTO A UNIT ROOM,
-// which no record in this build expresses: a membership travels whole, with no
-// per-member provenance in it. That is the seam to widen — a `Source` on
-// [Member] — rather than a rule to add here, because only the writer knows
-// which half of a set it is restating.
+// and what keeps that day away is a rule rather than an accident:
+// [Store.Join], [Store.Leave] and [Store.SetMembers] all REFUSE a unit room,
+// so the chart's own writer ([Store.SetUnitMembers]) is the only thing that
+// ever sets one's membership and every member of it is therefore `org`.
+//
+// Should a guest ever be admitted, this derivation is what has to go first —
+// the seam to widen is a `Source` on [Member], rather than a rule to add here,
+// because only the writer knows which half of a set it is restating.
 func memberSource(kind Kind) string {
 	if kind == KindUnit {
 		return MemberSourceOrg

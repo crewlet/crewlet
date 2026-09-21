@@ -707,18 +707,42 @@ func (s *Store) SetMembers(ctx context.Context, actor Actor, channelID string,
 	if err := actor.validate(); err != nil {
 		return Written{}, err
 	}
-	return s.members(ctx, actor, channelID, func(Channel, []Member) ([]Member, error) {
+	return s.members(ctx, actor, channelID, func(room Channel, _ []Member) ([]Member, error) {
+		// A UNIT'S ROOM IS THE CHART'S, and this is the gesture that
+		// could overwrite it wholesale. It is refused here rather than
+		// filtered, because a caller who names a set is stating the
+		// WHOLE membership — there is no half of it this store could
+		// honour without inventing which half the caller meant.
+		//
+		// The engine's own reconcile does not come through here: it
+		// holds the store directly and calls [Store.SetUnitMembers],
+		// which is the one writer this refusal makes room for.
+		if room.Kind == KindUnit {
+			return nil, fmt.Errorf("%w: %s is a unit's own room and its "+
+				"membership comes from the org chart — a set written here "+
+				"would be undone by the next apply, with nothing to say so. "+
+				"Change the unit in the company document instead",
+				ErrForbidden, room.ID)
+		}
 		return members, nil
 	})
 }
 
 // Join puts the actor in a room.
 //
-// TWO KINDS REFUSE IT, and both for the same reason stated twice: a private
-// room's membership is the only way in, so joining one on your own authority
-// is letting yourself in — and a direct conversation's membership IS its
-// identity, so adding somebody does not widen the room, it names a different
-// one.
+// THREE KINDS REFUSE IT, each for its own reason: a private room's membership
+// is the only way in, so joining one on your own authority is letting yourself
+// in; a direct conversation's membership IS its identity, so adding somebody
+// does not widen the room, it names a different one; and a unit's room is the
+// ORG CHART'S, which is the rule [Store.Leave] already stated from the other
+// side.
+//
+// THE UNIT REFUSAL IS THE SAME SENTENCE AS LEAVE'S, and it has to be. Leave
+// refuses because "leaving it would be undone by the next apply, with nothing
+// to say so" — and a join is undone by exactly the same apply, for exactly the
+// same reason. Refusing one and admitting the other left a gesture that
+// appears to work and silently reverts, which is the failure Leave's refusal
+// exists to prevent.
 func (s *Store) Join(ctx context.Context, actor Actor, channelID string) (Written, error) {
 	if err := actor.validate(); err != nil {
 		return Written{}, err
@@ -728,6 +752,12 @@ func (s *Store) Join(ctx context.Context, actor Actor, channelID string) (Writte
 			return nil, fmt.Errorf("%w: %s is a private room, and its "+
 				"membership is the only way into it — somebody already in it "+
 				"adds you", ErrForbidden, room.ID)
+		}
+		if room.Kind == KindUnit {
+			return nil, fmt.Errorf("%w: %s is a unit's own room and its "+
+				"membership comes from the org chart — joining it would be "+
+				"undone by the next apply, with nothing to say so. Move the "+
+				"seat into the unit instead", ErrForbidden, room.ID)
 		}
 		return withMember(held, Member{Handle: actor.Name()}), nil
 	})
@@ -751,6 +781,44 @@ func (s *Store) Leave(ctx context.Context, actor Actor, channelID string) (Writt
 				ErrForbidden, room.ID)
 		}
 		return withoutMember(held, actor.Name()), nil
+	})
+}
+
+// SetUnitMembers replaces a unit room's membership from the org chart.
+//
+// THE ONE WRITER [Store.SetMembers] AND [Store.Join] REFUSE FOR. Those two
+// refuse a unit room because anything they wrote would be undone by the next
+// apply; this is the thing that would undo it, so it is the only caller whose
+// write survives. Keeping it a separate method rather than a flag on
+// SetMembers is what makes that readable at the call site: the engine's
+// reconcile names this, and nothing else can reach it by passing an argument.
+//
+// IT TAKES THE WHOLE SET, like SetMembers, because the chart states the whole
+// membership: a reconcile that added without removing would leave a seat in
+// its old team's room for ever after it moved, and one that diffed here would
+// be deciding from rows it read in another transaction.
+//
+// NO SPECIAL PATH THROUGH THE GUARDS. It goes through [Store.members] exactly
+// as every other membership write does, and needs no bypass: a unit room is
+// not private ([privateRoom]), so the reachability gate admits an actor that
+// is not in it, and the refusals above live in their own callers' closures
+// rather than in the shared path. The actor is [AuthorSystem]'s — the engine
+// narrating the room rather than a seat or an operator token, for the reason
+// that kind exists.
+func (s *Store) SetUnitMembers(ctx context.Context, actor Actor, channelID string,
+	members []Member) (Written, error) {
+
+	if err := actor.validate(); err != nil {
+		return Written{}, err
+	}
+	return s.members(ctx, actor, channelID, func(room Channel, _ []Member) ([]Member, error) {
+		if room.Kind != KindUnit {
+			return nil, fmt.Errorf("%w: %s is a %s room, and the org chart "+
+				"maintains only a %s room's membership — a set written here "+
+				"would take a room somebody else owns", ErrForbidden,
+				room.ID, room.Kind, KindUnit)
+		}
+		return members, nil
 	})
 }
 

@@ -155,9 +155,14 @@ CREATE INDEX chat_channel_names_channel_idx ON chat_channel_names (channel_id); 
 -- chat_members — who is in a channel.
 --
 -- `source` is `org` for a member the unit reconcile added and `explicit` for
--- one a person invited, and the reconcile withdraws only what IT added: a
--- managed membership is a FLOOR, so the next apply cannot evict a deliberately
--- invited guest with no trace.
+-- one a person invited. A unit room's membership is the ORG CHART'S ALONE --
+-- join, leave and set-members are all refused there, because any of them would
+-- be undone by the next apply with nothing to say so -- so every member of one
+-- is `org` and every member of any other room is `explicit`, and the column is
+-- derived from the room's kind rather than carried per member. It becomes a
+-- value a writer must state on the day a guest can be invited into a unit
+-- room; nothing in this build expresses that, and the refusals are what keep
+-- it true.
 --
 -- `follow_all` is the whole of the fan-out policy. A member with it set is
 -- woken by every message in the room; a member without it is woken only when

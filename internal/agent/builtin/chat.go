@@ -1027,7 +1027,9 @@ func (t *joinChannel) Name() string { return JoinChannelTool }
 func (t *joinChannel) Description() string {
 	return "Join a room, so that what is said there reaches you. Only yours " +
 		"to change: this adds you and nobody else. A private room is not " +
-		"joinable — somebody already in it adds you."
+		"joinable — somebody already in it adds you — and neither is a " +
+		"unit's own room: its membership is the org chart's, and the next " +
+		"apply would take you back out."
 }
 
 func (t *joinChannel) Parameters() map[string]any {

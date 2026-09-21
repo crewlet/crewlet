@@ -434,6 +434,10 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// AND THE CONTAINERS, for the same reason and on the same terms — see
 	// [Engine.applyContainers], and the bug it fixes.
 	e.applyContainers(ctx, c)
+	// AND THE UNIT ROOMS, which are the same projection into chat: a unit
+	// that names a `channel` gets it, with its subtree in it. Same terms
+	// again — best effort, per unit, retried by the next apply.
+	e.applyUnitRooms(ctx, c)
 	log.InfoContext(ctx, "native_backends_started",
 		"tracker", runTracker, "knowledge", wiki, "chat", rooms)
 	return nil
@@ -864,6 +868,7 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 	}
 	e.applyChart(ctx, c)
 	e.applyContainers(ctx, c)
+	e.applyUnitRooms(ctx, c)
 }
 
 // applyContainers makes the knowledge containers this company names exist.

@@ -72,11 +72,23 @@ agent's own tool or `crewlet chat`. A create that *does* name a visibility is
 never overridden — the setting is a default and not a lock, so a company that
 turns it on can still make a public room deliberately.
 
-A unit that names a
-channel in the org chart gets that room created for it, with every seat in the
-unit's subtree and its lead as members. Managed membership is a **floor**: the
-reconcile withdraws only the members it added, so a guest somebody invited by
-hand is never evicted by the next apply.
+A unit that names a `channel` in the org chart gets that room, created and
+maintained by the engine at boot and on every apply. Its members are every seat
+in the unit's **subtree** plus the lead that answers for it — a division's room
+is where its teams are reachable, and the alternative leaves a lead talking to
+an empty room while the people doing the work sit one level down. Every message
+in it wakes the unit's **own agent seats** and nobody else: a descendant's
+agents have their own room, and a person is addressable but runs no turn, so a
+message in a division's room is not a turn for every agent beneath it.
+
+**The chart is the only writer.** Joining, leaving and setting the membership
+of a unit room are all refused, because any of them would be undone by the next
+apply with nothing to say so — move the seat in the company document instead.
+The engine never *deletes* a room: a unit that drops its channel keeps what was
+said in it, because a transcript is the only copy of what people said and an
+org chart edit is not a request to destroy one. And it will not take over a
+room somebody already made by hand under that name; it reports the clash rather
+than handing a public room's transcript to a membership the chart decides.
 
 **Direct messages and small groups** have no name. Their identity is derived
 from the sorted handles of the people in them, so two seats opening the same
