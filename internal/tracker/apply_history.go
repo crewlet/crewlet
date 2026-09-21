@@ -83,9 +83,18 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	if len(applied) > 0 {
 		fields = jsonOf(applied)
 	} else if notify != nil {
-		// A COMMENT, A MENTION OR AN ASK carries fields no document
-		// comparison can produce, so the notification's own are kept
-		// wherever the apply found nothing to compare.
+		// THE RECORD'S OWN STATEMENT, wherever the apply found nothing
+		// to compare.
+		//
+		// The comment that stood here claimed "a comment, a mention or
+		// an ask carries fields no document comparison can produce",
+		// and that was never true: a comment's wake builds its deltas
+		// with [TaskDeltas] like every other, so this branch can carry
+		// no key the one above could not. What it is actually for is a
+		// record whose notification was built by a DIFFERENT build —
+		// the only way the two sets can differ — and a retired kind is
+		// gated before it ever reaches an apply, so on a current build
+		// the two agree or both are empty.
 		fields = jsonOf(notify.Fields)
 	}
 
