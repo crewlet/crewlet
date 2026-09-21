@@ -145,7 +145,7 @@ export function usePageCoverage(coverage: CoverageFacts | null | undefined): voi
   }, [level, complete, applied, seq, setCoverage]);
 }
 
-/** Which sidebar a workspace has, or none for the two full-bleed screens. */
+/** Which sidebar a workspace has, or none for the three full-bleed screens. */
 function useSidebar(workspace: Workspace | ""): SidebarSection[] | null {
   // EVERY HOOK RUNS, whatever the workspace. React's rules are not a style
   // preference here: calling six hooks conditionally would change the hook
@@ -176,7 +176,8 @@ function useSidebar(workspace: Workspace | ""): SidebarSection[] | null {
     default:
       // The Inbox and My work are two-pane screens whose scope lives in the
       // page itself — a sidebar of filters would be the grammar's first
-      // casualty.
+      // casualty. Chat is the third: its rooms ARE its tree, and they carry
+      // unread counts, mute state and a preview that no sidebar row can hold.
       return null;
   }
 }

@@ -1,11 +1,16 @@
 /**
  * How a screen asks the shell to stop scrolling and hand it the height.
  *
- * ONE SCREEN NEEDS THIS, and it needs it for part of its life: the org
+ * TWO SCREENS NEED THIS, and one of them for part of its life: the org
  * builder's chart lens is a canvas, and a canvas fills the box its screen
  * gives it rather than growing the page. A wheel turned over a page that
  * scrolls lands in a canvas half off screen, so the shell's scroller has to
  * stop being one while that lens is on.
+ *
+ * Chat asks for the whole of its life, and for the same reason one level
+ * worse: a transcript that scrolls inside a page that also scrolls is two
+ * scrollers under one wheel, and the one that moves is whichever the pointer
+ * is over — so a reader loses their place in a conversation by looking at it.
  *
  * WHY A REQUEST RATHER THAN A STYLESHEET. This used to be a rule the shell's
  * own sheet carried, matching a class deep inside the screen

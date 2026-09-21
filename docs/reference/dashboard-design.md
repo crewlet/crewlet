@@ -283,8 +283,8 @@ is where the collapsed rail and the phone's bottom bar send a reader — they ar
 kept in the chrome because a theme switch you can SEE is the reason either is
 there, and what was wrong was a rail too narrow to draw what it was drawing.
 
-`g` then a letter jumps to a workspace (`g i`, `g m`, `g w`, `g c`, `g k`,
-`g a`, `g o`, `g d`); `[` collapses the rail. A chord rather than a modifier,
+`g` then a letter jumps to a workspace (`g i`, `g m`, `g w`, `g c`, `g h`,
+`g k`, `g a`, `g o`, `g d`); `[` collapses the rail. A chord rather than a modifier,
 because every single-modifier combination worth having is already the browser's.
 
 ### The routes
@@ -303,6 +303,10 @@ because every single-modifier combination worth having is already the browser's.
 | `#/company/people` | **People** — the one directory, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/people/{handle}` | **Seat** — agent or human | agent: overview · work · turns · conversations · memory · cost · access · schedules; human: overview · work · access. `conversation=` opens one thread |
 | `#/company/units/{id}` | **Unit** — lead, purpose, goals, seats, sub-units | |
+| `#/chat` | **Chat** — the company's own rooms, with the rail of what you are in | |
+| `#/chat/mentions` | **Mentions** — every message that named you, across every room. The whole away story: the engine sends no email, no push and no SMS | |
+| `#/chat/search` | **Search chat** — ranked over every room you may READ, which is wider than your rail | `q=` · `in=` (narrowed to one room) |
+| `#/chat/{id}` | **Room** — the transcript, who is here, and the composer | `thread=` (which thread is open beside it, one level deep) |
 | `#/knowledge` | **Knowledge** — live search over the backend | `q=` |
 | `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` |
 | `#/knowledge/{CONTAINER}/{Title}` | **Page** | |

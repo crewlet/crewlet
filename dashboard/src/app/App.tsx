@@ -28,6 +28,7 @@ import { Shell } from "./Shell.tsx";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { useRoute } from "./router.tsx";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
+import { Chat } from "~/routes/chat/Chat.tsx";
 import { MyWork } from "~/routes/me/MyWork.tsx";
 import { Goal, Goals } from "~/routes/work/Goals.tsx";
 import { People } from "~/routes/company/People.tsx";
@@ -200,6 +201,16 @@ function Screen() {
       return <Inbox />;
     case "me":
       return <MyWork />;
+    // THE ROOM IS THE ONLY THING UNDER `chat` WITH AN ID, and the two words
+    // that are not one are reserved segments: a room is addressed by the uuid
+    // the engine minted for it, so a lowercase word can never be one. The
+    // thread is deliberately NOT a segment — it is `?thread=` on the room you
+    // are already in, because a thread is one level deep and has no life away
+    // from its room.
+    case "chat":
+      if (rest[0] === "mentions") return <Chat view="mentions" />;
+      if (rest[0] === "search") return <Chat view="search" />;
+      return <Chat channel={rest[0] ?? ""} />;
     case "work":
       return <WorkRoutes rest={rest} />;
     case "goals":

@@ -18,6 +18,9 @@
 
 import type {
   AgentRow,
+  ChatChange,
+  ChatPresenceFrame,
+  ChatReadState,
   FeedRow,
   EventEnvelope,
   HealthPush,
@@ -73,6 +76,70 @@ export const MAX_EVENTS = 400;
  */
 export const MAX_PHASES = 200;
 
+/**
+ * How many live chat frames a tab keeps FOR ONE ROOM.
+ *
+ * TWO HUNDRED, from the company census rather than from a feeling: the design
+ * is sized for 20,000 messages a day across a rail of about twenty rooms, so
+ * two hundred is roughly an hour of the busiest room in the company and a
+ * multiple of that everywhere else. A frame is small — no body ever travels on
+ * one — so the bound is about a tab that is left open for a week rather than
+ * about bytes on any one screen.
+ *
+ * Eviction is drop-oldest, per room, and it costs nothing a reader can see: a
+ * frame is EVIDENCE that something landed, and what a screen draws is the
+ * transcript it re-read because of it. An evicted frame is a refetch that
+ * already happened.
+ */
+export const MAX_CHAT_LIVE = 200;
+
+/**
+ * How many rooms a tab keeps live state for at once.
+ *
+ * `chat.MaxRailChannels` — two hundred and fifty-six, the cap the engine puts
+ * on one person's rail and on their read cursors. Frames arrive for every room
+ * the viewer may READ, which is wider than the rail (a public room and a
+ * unit's room are readable by any seat), so this is a ceiling on a set that
+ * genuinely can exceed the rail rather than a restatement of it. Past it the
+ * room whose newest frame is oldest is dropped, which is the room nobody is
+ * looking at.
+ */
+export const MAX_CHAT_ROOMS = 256;
+
+/**
+ * What this tab has seen happen in one room since it connected.
+ *
+ * NOT A TRANSCRIPT, and it must never become one: a frame carries no body, so
+ * everything rendered from this would be a second, poorer copy of the
+ * conversation, disagreeing with the transcript the first time an edit raced a
+ * reload. What it is for is deciding what to re-read.
+ */
+export interface ChatRoomLive {
+  /**
+   * The highest per-room message number any frame has announced.
+   *
+   * THE LIVE HIGH-WATER MARK, and the whole reason a screen can be cheap: a
+   * transcript that has rendered through 41 and sees 43 here knows it is
+   * behind without comparing any rows. It never moves backwards — a frame
+   * that arrives out of order is late, not new — and the FIRST frame for a
+   * room sets it rather than being measured against zero, because a tab that
+   * has just connected is not behind on a room it has never seen.
+   */
+  seq: number;
+
+  /** The broker's instant on the newest frame seen here, which is what orders
+   *  the eviction above. */
+  at: string;
+
+  /** The frames themselves, newest first, bounded by [MAX_CHAT_LIVE]. */
+  changes: ChatChange[];
+}
+
+/** Every room this tab has seen a frame for. */
+export interface ChatLive {
+  rooms: Record<string, ChatRoomLive>;
+}
+
 export interface StoreState {
   agents: AgentRow[];
   events: FeedRow[];
@@ -91,6 +158,35 @@ export interface StoreState {
   tokens: Rollup | null;
   budget: OrgBudget;
   schedules: ScheduleRow[] | null;
+  /**
+   * What the company's conversation has done since this tab connected.
+   *
+   * ITS OWN SLICE, and not part of what a snapshot replaces: the degraded
+   * REST snapshot carries no chat at all, so folding this into the snapshot
+   * would blank an open transcript every five seconds while the socket is
+   * down.
+   */
+  chat: ChatLive;
+  /**
+   * Who is looking at, typing in, or working on a message in the rooms this
+   * socket said it is watching — the server's current answer, whole.
+   *
+   * Its own slice because it MOVES ON A DIFFERENT CLOCK: presence is
+   * re-probed every few seconds whatever the conversation does, so a rail
+   * that woke on it would re-render the whole channel list on a tick.
+   */
+  chatPresence: ChatPresenceFrame;
+  /**
+   * Where this person has read to, what they have muted, and whether they are
+   * in do-not-disturb — or null when nothing has said.
+   *
+   * NULL IS NOT AN EMPTY CURSOR SET. The coordination record may be
+   * unreadable, and a zero cursor for every room is what "you have read
+   * nothing anywhere" looks like: a screen badging a whole company unread
+   * because a bucket read failed is the failure this distinction exists to
+   * prevent.
+   */
+  chatRead: ChatReadState | null;
   connected: boolean;
   /**
    * Whether the engine REFUSED this browser, as opposed to being unreachable.
@@ -105,7 +201,10 @@ export type Slice = keyof StoreState;
 
 // What a snapshot replaces. `phases` is deliberately absent: a snapshot carries
 // payload-free feed rows and no phase payloads, so emitting it here would wake
-// every phase reader for an answer that did not move.
+// every phase reader for an answer that did not move. THE THREE CHAT SLICES
+// are absent for a stronger reason: a snapshot carries no chat, so listing one
+// here would hand an open transcript an empty answer every time the degraded
+// poll ticks.
 const ALL_DATA_SLICES: Slice[] = [
   "agents",
   "events",
@@ -130,6 +229,9 @@ function emptyState(): StoreState {
     tokens: null,
     budget: {},
     schedules: null,
+    chat: { rooms: {} },
+    chatPresence: { rooms: {} },
+    chatRead: null,
     connected: false,
     authRejected: false,
   };
@@ -331,6 +433,92 @@ export class Store {
         this.emit("phases");
       }
     }
+  }
+
+  // ---- chat --------------------------------------------------------------
+
+  /**
+   * One committed chat record, as the socket announced it.
+   *
+   * ONE METHOD FOR SIX PUSH KINDS, because the frame already says which it is:
+   * `op` is the record's own word (`post`, `edit`, `react`, …) and the kind is
+   * a routing label the server derived FROM it. Taking the kind as well would
+   * be a second vocabulary for one fact, and the two would disagree on exactly
+   * the op somebody adds next.
+   *
+   * IT DERIVES NOTHING ABOUT WHAT A ROOM CONTAINS. A frame carries no body, so
+   * a transcript rendered from these would be a second copy of the
+   * conversation — the failure this store's own doc opens with. What is kept
+   * is the high-water mark a screen compares against what it has rendered, and
+   * the frames themselves, so a screen can tell a new message from a reaction
+   * without asking the engine which it was.
+   */
+  applyChatChange(change: ChatChange | null | undefined): void {
+    // A frame with no room cannot be filed and one with no op id cannot be
+    // recognised coming back, so neither is kept. Both are impossible from
+    // this engine; a frame from a NEWER one is not, and dropping it silently
+    // is better than filing it under "".
+    if (!change || !change.channel_id || !change.op_id) return;
+    const rooms = this.state.chat.rooms;
+    const room = rooms[change.channel_id] ?? { seq: 0, at: "", changes: [] };
+    // A REDELIVERY IS NOT A SECOND EVENT. The op id is the record's own
+    // idempotency key, so a frame that arrives twice — a reconnect that
+    // overlaps, a hub that re-sent — is the same record, and appending it
+    // would count one message as two everywhere a screen counts these.
+    if (room.changes.some((seen) => seen.op_id === change.op_id)) return;
+    const seq = typeof change.channel_seq === "number" ? change.channel_seq : 0;
+    rooms[change.channel_id] = {
+      // NEVER BACKWARDS. A frame that arrives out of order is late, not new,
+      // and a mark that moved down would make a screen re-read a room it is
+      // already ahead of, for ever.
+      seq: seq > room.seq ? seq : room.seq,
+      at: change.at > room.at ? change.at : room.at,
+      changes: [change, ...room.changes].slice(0, MAX_CHAT_LIVE),
+    };
+    this.evictChatRooms();
+    this.emit("chat");
+  }
+
+  /**
+   * Keep the live state to [MAX_CHAT_ROOMS] rooms, dropping the one whose
+   * newest frame is oldest.
+   *
+   * By the frame's own instant rather than by insertion order: a room that has
+   * been quiet for a week is the one nobody is looking at, whatever order this
+   * tab happened to hear about it in.
+   */
+  private evictChatRooms(): void {
+    const rooms = this.state.chat.rooms;
+    const ids = Object.keys(rooms);
+    if (ids.length <= MAX_CHAT_ROOMS) return;
+    const oldest = ids.reduce((worst, id) =>
+      (rooms[id]?.at ?? "") < (rooms[worst]?.at ?? "") ? id : worst,
+    );
+    delete rooms[oldest];
+  }
+
+  /** Who is in the rooms this socket is watching, whole. */
+  applyChatPresence(frame: ChatPresenceFrame | null | undefined): void {
+    // REPLACED RATHER THAN MERGED, because the frame is the whole answer for
+    // the rooms this socket asked about: a room that has gone quiet appears by
+    // being ABSENT, and merging would leave the last person who was typing
+    // there for the life of the tab.
+    this.state.chatPresence = frame?.rooms ? frame : { rooms: {} };
+    this.emit("chatPresence");
+  }
+
+  /**
+   * This person's own read state, from their flush or from another tab's.
+   *
+   * IT IS NEVER MERGED WITH WHAT IS ON SCREEN. The record is authoritative and
+   * whole — the engine advances cursors and ignores a value below what it
+   * holds — so the answer to a flush and the push another tab caused are the
+   * same fact, and the last one to arrive is the current one.
+   */
+  applyChatRead(state: ChatReadState | null | undefined): void {
+    if (!state) return;
+    this.state.chatRead = state;
+    this.emit("chatRead");
   }
 
   // ---- reads -------------------------------------------------------------

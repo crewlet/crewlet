@@ -10,6 +10,34 @@
 * starts rather than drawing the gap as quiet.
 */
 var MAX_EVENTS = 400;
+/**
+* How many live chat frames a tab keeps FOR ONE ROOM.
+*
+* TWO HUNDRED, from the company census rather than from a feeling: the design
+* is sized for 20,000 messages a day across a rail of about twenty rooms, so
+* two hundred is roughly an hour of the busiest room in the company and a
+* multiple of that everywhere else. A frame is small — no body ever travels on
+* one — so the bound is about a tab that is left open for a week rather than
+* about bytes on any one screen.
+*
+* Eviction is drop-oldest, per room, and it costs nothing a reader can see: a
+* frame is EVIDENCE that something landed, and what a screen draws is the
+* transcript it re-read because of it. An evicted frame is a refetch that
+* already happened.
+*/
+var MAX_CHAT_LIVE = 200;
+/**
+* How many rooms a tab keeps live state for at once.
+*
+* `chat.MaxRailChannels` — two hundred and fifty-six, the cap the engine puts
+* on one person's rail and on their read cursors. Frames arrive for every room
+* the viewer may READ, which is wider than the rail (a public room and a
+* unit's room are readable by any seat), so this is a ceiling on a set that
+* genuinely can exceed the rail rather than a restatement of it. Past it the
+* room whose newest frame is oldest is dropped, which is the room nobody is
+* looking at.
+*/
+var MAX_CHAT_ROOMS = 256;
 var ALL_DATA_SLICES = [
 	"agents",
 	"events",
@@ -33,6 +61,9 @@ function emptyState() {
 		tokens: null,
 		budget: {},
 		schedules: null,
+		chat: { rooms: {} },
+		chatPresence: { rooms: {} },
+		chatRead: null,
 		connected: false,
 		authRejected: false
 	};
@@ -181,6 +212,73 @@ var Store = class {
 				this.emit("phases");
 			}
 		}
+	}
+	/**
+	* One committed chat record, as the socket announced it.
+	*
+	* ONE METHOD FOR SIX PUSH KINDS, because the frame already says which it is:
+	* `op` is the record's own word (`post`, `edit`, `react`, …) and the kind is
+	* a routing label the server derived FROM it. Taking the kind as well would
+	* be a second vocabulary for one fact, and the two would disagree on exactly
+	* the op somebody adds next.
+	*
+	* IT DERIVES NOTHING ABOUT WHAT A ROOM CONTAINS. A frame carries no body, so
+	* a transcript rendered from these would be a second copy of the
+	* conversation — the failure this store's own doc opens with. What is kept
+	* is the high-water mark a screen compares against what it has rendered, and
+	* the frames themselves, so a screen can tell a new message from a reaction
+	* without asking the engine which it was.
+	*/
+	applyChatChange(change) {
+		if (!change || !change.channel_id || !change.op_id) return;
+		const rooms = this.state.chat.rooms;
+		const room = rooms[change.channel_id] ?? {
+			seq: 0,
+			at: "",
+			changes: []
+		};
+		if (room.changes.some((seen) => seen.op_id === change.op_id)) return;
+		const seq = typeof change.channel_seq === "number" ? change.channel_seq : 0;
+		rooms[change.channel_id] = {
+			seq: seq > room.seq ? seq : room.seq,
+			at: change.at > room.at ? change.at : room.at,
+			changes: [change, ...room.changes].slice(0, 200)
+		};
+		this.evictChatRooms();
+		this.emit("chat");
+	}
+	/**
+	* Keep the live state to [MAX_CHAT_ROOMS] rooms, dropping the one whose
+	* newest frame is oldest.
+	*
+	* By the frame's own instant rather than by insertion order: a room that has
+	* been quiet for a week is the one nobody is looking at, whatever order this
+	* tab happened to hear about it in.
+	*/
+	evictChatRooms() {
+		const rooms = this.state.chat.rooms;
+		const ids = Object.keys(rooms);
+		if (ids.length <= 256) return;
+		const oldest = ids.reduce((worst, id) => (rooms[id]?.at ?? "") < (rooms[worst]?.at ?? "") ? id : worst);
+		delete rooms[oldest];
+	}
+	/** Who is in the rooms this socket is watching, whole. */
+	applyChatPresence(frame) {
+		this.state.chatPresence = frame?.rooms ? frame : { rooms: {} };
+		this.emit("chatPresence");
+	}
+	/**
+	* This person's own read state, from their flush or from another tab's.
+	*
+	* IT IS NEVER MERGED WITH WHAT IS ON SCREEN. The record is authoritative and
+	* whole — the engine advances cursors and ignores a value below what it
+	* holds — so the answer to a flush and the push another tab caused are the
+	* same fact, and the last one to arrive is the current one.
+	*/
+	applyChatRead(state) {
+		if (!state) return;
+		this.state.chatRead = state;
+		this.emit("chatRead");
 	}
 	agentById(id) {
 		return this.state.agents.find((a) => a.id === id || a.role === id) ?? null;
@@ -379,6 +477,16 @@ var LiveSocket = class {
 	token = "";
 	/** Whether the shell has already been asked to collect a token. */
 	askedForToken = false;
+	/**
+	* Which room a tab has open, and whether somebody is typing in it.
+	*
+	* HELD RATHER THAN SENT AND FORGOTTEN, because it is state the SERVER keeps
+	* per socket: a reconnect gets a new socket that knows nothing, and a
+	* reader sitting in a room through a thirty-second backoff would come back
+	* invisible to everybody else in it and see nobody.
+	*/
+	focused = "";
+	typing = false;
 	authRejectedHandler = null;
 	constructor(store) {
 		this.store = store;
@@ -442,6 +550,34 @@ var LiveSocket = class {
 			this.sendQuery(entry);
 		});
 	}
+	/**
+	* Say which room this tab is looking at, and whether it is being typed in.
+	*
+	* THE ONE CLIENT-TO-SERVER FRAME THAT IS NOT A QUERY: it asks nothing and
+	* is answered by nothing. What it buys is that the fleet-wide presence
+	* probe is bounded to the rooms somebody actually has open — without it a
+	* node would have to ask its peers about every room in the company on every
+	* tick.
+	*
+	* It is not delivered while the socket is down and is not queued: presence
+	* is about now, and a probe from ten seconds ago is worse than none. The
+	* reconnect re-sends what this tab is looking at, which is the state above.
+	*/
+	focus(channelID, typing) {
+		this.focused = channelID;
+		this.typing = typing;
+		this.sendFocus();
+	}
+	sendFocus() {
+		if (!this.connected || !this.sock) return;
+		try {
+			this.sock.send(JSON.stringify({
+				kind: "chat_focus",
+				channel_id: this.focused,
+				typing: this.typing
+			}));
+		} catch {}
+	}
 	sendQuery(entry) {
 		if (!this.connected || !this.sock) return;
 		const frame = {
@@ -488,6 +624,7 @@ var LiveSocket = class {
 			this.stopFallback();
 			this.startPing();
 			this.flushQueries();
+			if (this.focused) this.sendFocus();
 		};
 		sock.onmessage = (e) => this.onMessage(String(e.data));
 		sock.onclose = (e) => {
@@ -618,6 +755,20 @@ var LiveSocket = class {
 				break;
 			case "health":
 				this.store.applyHealth(msg.data);
+				break;
+			case "chat_posted":
+			case "chat_edited":
+			case "chat_deleted":
+			case "chat_reacted":
+			case "chat_room_changed":
+			case "chat_membership_changed":
+				this.store.applyChatChange(msg.data);
+				break;
+			case "chat_presence":
+				this.store.applyChatPresence(msg.data);
+				break;
+			case "chat_cursor_moved":
+				this.store.applyChatRead(msg.data);
 				break;
 			case "result":
 				this.settle(msg.id, null, msg.data);
@@ -911,4 +1062,4 @@ var rest = {
 	})
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, onTokenChanged, onTokenRequested, requestToken, rest, storeToken };
+export { LiveSocket, MAX_CHAT_LIVE, MAX_CHAT_ROOMS, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, onTokenChanged, onTokenRequested, requestToken, rest, storeToken };
