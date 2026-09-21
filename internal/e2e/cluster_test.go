@@ -17,8 +17,6 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -395,28 +393,32 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 			"engine refuses: %w", errNotRetryable, i, err))
 	}
 
-	// THE HUB AHEAD OF THE ENGINE, as every other node builder here does:
-	// the chat applier takes its observer inside engine.New. A member whose
-	// applier announced to nothing would apply every record and push none,
-	// which on a fleet is the one failure mode a single node cannot show.
-	var e *engine.Engine
-	// NO CONTEXT TO PASS, and contextcheck cannot see why: the viewer
-	// resolution this builds IS context-threaded, but per SOCKET, at the
-	// moment a request arrives — [api.chatActorFor] returns a
-	// `func(context.Context)` and the hub calls it with the caller's own.
-	// What is built here is the long-lived hub, which outlives every
-	// context in this function including the attempt's.
-	//nolint:contextcheck // the viewer takes the request's context, not this one
-	chatLive := api.NewChatLive(api.ChatLiveOptions{
-		Company: func() *config.Company { return cfg },
-		Rooms:   func() stream.ChatRooms { return chatRooms(e) },
-		Peers:   func() stream.ChatPeers { return chatPeers(e) },
-		NodeID:  boot.Node.ID,
-	})
-
-	e, err = engine.New(ctx, engine.Options{
-		Bootstrap: &boot, Company: cfg, ChatLive: chatLive,
-	})
+	// NO LIVE HUB ON A CLUSTER MEMBER, deliberately, and this is the one
+	// place in this package that differs from how `crewlet run` wires a
+	// node.
+	//
+	// It had one briefly, on the reasoning that a member whose applier
+	// announced to nothing is a failure a single node cannot show. That
+	// reasoning does not survive contact with the suite: NO CLUSTER CASE
+	// ASSERTS A PUSH. The only one that does is
+	// [TestACommittedMessageReachesAWatchingSocket], which runs on the
+	// single-node harness, where the hub IS attached. So a hub here bought
+	// no coverage at all.
+	//
+	// What it cost is measurable. Each hub serves a presence subject and
+	// scatters to its peers every api/stream.ChatPresenceInterval — three
+	// extra responders and a periodic fan-out per member, arriving while
+	// the embedded brokers are still establishing routes. On a machine with
+	// room that is free; on a constrained runner it is not, and CI's
+	// `end-to-end gates` went from green to failing on cluster FORMATION
+	// the commit it was added: "connect: connection refused" on twenty
+	// route attempts and NO QUORUM on every stream, with this package
+	// taking 823s against the 448.6s measured at three members below.
+	//
+	// The applier applies every record with a nil observer — its
+	// documented no-op — so these cases assert exactly what they did
+	// before.
+	e, err := engine.New(ctx, engine.Options{Bootstrap: &boot, Company: cfg})
 	if err != nil {
 		return fail(fmt.Errorf("engine.New: %w", err))
 	}
@@ -441,7 +443,7 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// projector — serves for the whole case. The test's own context is
 	// that lifetime exactly: longer than the attempt, and still ended when
 	// the case is over, which [context.WithoutCancel] would not be.
-	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot, chatLive, nil) //nolint:contextcheck // see above
+	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot, nil, nil) //nolint:contextcheck // see above
 	stops = append(stops, apiStops...)
 	if err != nil {
 		return fail(fmt.Errorf("api: %w", err))
