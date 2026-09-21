@@ -542,6 +542,24 @@ order from the log, every node applies the same ones, and the rows plus this
 node's position on the log commit in a single transaction. There is no leader
 and no node whose copy is the real one.
 
+**Three schema rules hold over every replicated migration**, and they are one
+rule underneath: a statement that can abort inside an apply transaction aborts
+on every node at once, so what would be a rare anomaly on one node is a
+fleet-wide stalled log instead. **No foreign key** — a cascade is a delete
+nobody committed, and an applier removes a row's children in its own statement
+list, where the deletion is part of the record's effect. **No `UNIQUE` outside
+a primary key** — uniqueness a writer has to see whole is arbitrated on the
+record's subject at the broker, where exactly one of two writers wins and the
+loser is told; a unique index cannot tell anyone anything, it can only wedge
+every applier. **No `COLLATE`** — the default TEXT collation is BINARY, so an
+`ORDER BY` reproduces the Go comparison exactly, and the pinned driver accepts
+`COLLATE NOCASE`, which would silently collapse `A` and `a` against a
+normalisation Go already did once. The node estate is deliberately not governed
+by any of them: one file, one process, no applier and no peer, so a constraint
+there fails one statement for one caller, which is what a constraint is for.
+`internal/store.TestNoReplicatedMigrationDeclaresAConstraintTheApplyCannotSurvive`
+is what makes the three real, and it reads past the prose that names them.
+
 **Three writes in the engine are not records**, and each is a column or a row
 no record could own: the version reset after a log reanchor (the stream a
 record would go to is the one being replaced), the clear of a duplicate-rank

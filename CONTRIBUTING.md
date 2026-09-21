@@ -553,7 +553,14 @@ releases:
   keyed on the filename, so editing a file that already ran silently never
   re-runs it: a database that applied it keeps the old shape while the code
   assumes the new one. Reshape with a new numbered migration under
-  `internal/store/schema/`.
+  `internal/store/schema/`. A **replicated** migration also carries three
+  rules, checked by
+  `internal/store.TestNoReplicatedMigrationDeclaresAConstraintTheApplyCannotSurvive`:
+  no foreign key, no `UNIQUE` outside a primary key, and no `COLLATE`. Each
+  one aborts an apply transaction deterministically on every node, so a
+  constraint that would flag an anomaly on one machine stalls the whole
+  fleet's log instead; uniqueness a writer must see whole is arbitrated on the
+  record's subject. The node estate is not governed by them.
 - **A rolling upgrade puts two builds on one stream.** The event envelope
   evolves additive-only, because an unknown type must round-trip losslessly
   in both directions — a contract between peers, not between releases. The
