@@ -370,8 +370,8 @@ A seat's kind is ordinary configuration, applied like any other change
 - `agent` to `human`: the seat leaves the seat list, so the node holding it
   releases it, and its mailbox is retired after the grace period described
   in [Seat Ownership: The removed seat](seat-ownership.md#the-removed-seat).
-  An agent's id is derived from the company name and its handle
-  (`org.DeriveAgentID`), so flipping the seat back to `agent` later
+  An agent's id is derived from the company name and the handle it was
+  created under (`org.DeriveAgentID`), so flipping the seat back to `agent` later
   reattaches its diary, episodes and onboarding marker.
 - Contact and availability edits take effect with the next **published
   company**, which for a seat's own fields means the chart write that carried

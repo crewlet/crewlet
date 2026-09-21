@@ -319,7 +319,7 @@ identity.
    - A secret map that is populated but does not name this handle → `401`. That is a delivery for a seat with no Slack app, not a node that cannot check.
 4. The delivery is claimed fleet-wide on Slack's own `event_id`, which is stable across its retries — so a redelivery, or a message that arrives twice because the app subscribes to both `message.*` and `app_mention`, wakes the seat once.
 5. The API publishes to `crewlet.notifications.inbound` on the EventQueue.
-6. The notification service resolves the handle to its seat and publishes to `crewlet.agent.{handle}.inbox`.
+6. The notification service resolves the handle to its seat and publishes to that seat's own mailbox, `crewlet.agent.{seat-id}.inbox`.
 7. The agent's handler fires.
 
 #### Which events wake an agent

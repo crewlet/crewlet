@@ -29,8 +29,8 @@ A fleet's shape is a stream choice: clustered embedded members (`stream.cluster.
 ```text
 # Per-seat, durable. One consumer group per seat, so membership IS ownership:
 # the node that attaches is the node that gets that seat's work.
-crewlet.agent.{handle}.inbox         # Per-agent inbox — all work arrives here
-crewlet.agent.{handle}.control       # Sandbox starts and completions. Separate,
+crewlet.agent.{seat-id}.inbox        # Per-agent inbox — all work arrives here
+crewlet.agent.{seat-id}.control      # Sandbox starts and completions. Separate,
                                      #   because while a run holds the seat
                                      #   every inbox delivery is parked, and a
                                      #   completion riding the inbox would be
@@ -60,7 +60,7 @@ crewlet.config.revision_applied
 # A seat's memory, ONE SUBJECT PER ROW, on a stream that retains one message
 # per subject — so it holds the current value of every row rather than a log of
 # every write, and a node acquiring a seat replays it in a single pass
-crewlet.memory.{handle}.{table}.{key-digest}
+crewlet.memory.{seat-id}.{table}.{key-digest}
 
 # Dead letters, deliberately OUTSIDE the crewlet.* space so the dashboard's
 # crewlet.events.> stream cannot resurface poison as live traffic

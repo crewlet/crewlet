@@ -59,7 +59,7 @@ leaves the server's per-subject index stale. An empty answer is the one this
 estate cannot survive, since "no rows" is legitimate everywhere it is asked.
 
 That is why a **resource name is segmented**. A lease is named
-`seat:{handle}`, `node:{id}` or `worker:{duty}`, and the part before the colon
+`seat:{seat-id}`, `node:{id}` or `worker:{duty}`, and the part before the colon
 is the **class**; the key it becomes carries that class as a subject token of
 its own, so `seat` is a wildcard and the seats are addressable without the
 nodes. The two reads that pay for it run on a ticker: the membership read asks

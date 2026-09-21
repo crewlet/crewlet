@@ -472,3 +472,98 @@ func TestIdentityTellsTheFourCasesApart(t *testing.T) {
 		})
 	}
 }
+
+// A RENAMED SEAT HYDRATES ITS OWN DIARY.
+//
+// The changelog is COMPACTED — one message retained per subject — so a
+// subject IS a row's durable address. While those subjects carried the seat's
+// HANDLE, renaming one moved every one of them at once: the node that took
+// the seat next replayed an empty prefix and reported success, and everything
+// the seat had learned sat on the stream under an address nothing would ask
+// for again. The id is anchored on the handle the seat was CREATED under
+// (ADR-0019), so it does not move.
+func TestARenamedSeatHydratesItsOwnDiary(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	ctx := context.Background()
+
+	// The seat publishes under the handle it has now...
+	oldOwner := openStore(t)
+	seedMemory(t, oldOwner)
+	if _, err := syncerOn(t, oldOwner, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	// ...and is renamed. Its id does not move, which is the whole of what a
+	// node taking it over resolves.
+	const renamed = "swe-two"
+	newOwner := openStore(t)
+	carried, err := syncerOn(t, newOwner, conn).Hydrate(ctx, renamed)
+	if err != nil {
+		t.Fatalf("hydrate the renamed seat: %v", err)
+	}
+	if carried != len(tables) {
+		t.Fatalf("the renamed seat hydrated %d rows, want %d — everything it "+
+			"learned is on the changelog under an address nothing now asks for",
+			carried, len(tables))
+	}
+	var content string
+	if err := newOwner.SQL().QueryRowContext(ctx,
+		"SELECT content FROM agent_diary WHERE id = 'd1'").Scan(&content); err != nil {
+		t.Fatalf("the renamed seat did not arrive with its diary: %v", err)
+	}
+	if content != "the release train is thursdays" {
+		t.Errorf("the carried diary entry says %q", content)
+	}
+
+	// THE CONTROL, and it is the residue this change does NOT close: a
+	// table keyed on the HANDLE carries its rows under the name the seat
+	// had when it learned them. The rows travel and land — the subject is
+	// the id — but the seat reads them under an address it no longer
+	// answers to. See [seatRef]: closing that needs a rebuild of those
+	// five tables, because no statement can re-key a row on a hash the
+	// database cannot compute.
+	var handled string
+	if err := newOwner.SQL().QueryRowContext(ctx,
+		"SELECT agent_handle FROM episodes WHERE id = 'e1'").Scan(&handled); err != nil {
+		t.Fatalf("the episode did not travel at all: %v", err)
+	}
+	if handled == renamed {
+		t.Fatalf("a handle-keyed row arrived under the seat's NEW handle, so " +
+			"the residue this control describes is gone — say so and delete it")
+	}
+	if handled != seat.Handle {
+		t.Errorf("a handle-keyed row arrived under %q, want the handle the seat "+
+			"had when it learned it", handled)
+	}
+}
+
+// AND A SEAT WHOSE ID CHANGED HYDRATES NOTHING, which is what makes the case
+// above about the id rather than about the stream simply retaining rows.
+func TestASeatWhoseIDMovedFindsNoneOfItsMemory(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	ctx := context.Background()
+
+	oldOwner := openStore(t)
+	seedMemory(t, oldOwner)
+	if _, err := syncerOn(t, oldOwner, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	newOwner := openStore(t)
+	moved, err := New(newOwner, conn, func(string) string {
+		return "11111111-2222-4333-8444-555555555555"
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	carried, err := moved.Hydrate(ctx, seat.Handle)
+	if err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+	if carried != 0 {
+		t.Fatalf("a seat under a different id hydrated %d rows; the subjects "+
+			"are not keyed on the id at all", carried)
+	}
+}

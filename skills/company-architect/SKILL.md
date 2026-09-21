@@ -180,12 +180,16 @@ reinvent them:
 Get these wrong and the fix is expensive or lossy. The schema cannot
 catch most of them.
 
-**Handles are permanent.** An agent's durable id is
-`uuid5(ns, f"{org.name}:{handle}")`. Changing a seat's `handle` — or the
-company `name` — mints a new id and orphans that agent's diary,
-onboarding markers, and counterparty profiles. Its memory is gone.
-Settle `name` and each `handle` before the company runs, and warn the
-founder explicitly if they later ask to rename either.
+**The company `name` is permanent; a handle is not.** An agent's durable
+id is `uuid5(ns, f"{org.name}:{origin handle}")`, where the origin handle
+is the one the seat was **created** under and is frozen on its chart row.
+So renaming a seat later moves its address and nothing else: its mailbox,
+its lease, its diary, its onboarding markers and its scheduled work all
+stay where they are, and the handle it used to answer to goes on
+resolving for references somebody already wrote down. Changing the
+company `name` is the edit that does mint a new id for every agent and
+orphan every one of those things — settle it before the company runs, and
+warn the founder explicitly if they later ask to change it.
 
 **Nothing is referenced by a display name.** A `lead` and a `manages`
 entry name a seat by its **handle**; a `manages` entry and a root seat's

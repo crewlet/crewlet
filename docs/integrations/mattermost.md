@@ -558,7 +558,7 @@ FAIL  seat swe         agent-swe authenticates and opens a socket but has joined
 4. the Mattermost transport parses it, applies thread routing and loop
    suppression, and produces a notification.
 5. NotificationService resolves handle → agent and publishes to
-   `crewlet.agent.{handle}.inbox`.
+   `crewlet.agent.{seat-id}.inbox`.
 
 #### Which events wake an agent
 

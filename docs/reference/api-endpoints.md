@@ -1734,7 +1734,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `phases` | `{role, limit, before_time, before_id}` | The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision |
 | `tokens` | `{since, until, since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
 | `token_series` | `{group, bucket, since, until, previous, groups, agent_role, since_days}` | `GET /tokens/series`. THE SAME SPEND WITH A TIME AXIS, which the breakdown has no dimension for: every one of its rows is a sum over the whole window, so a runaway loop, a spike and a quiet weekend are the same number. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back. Bucketed by the ENGINE — the browser holds at most the live window's records, so an axis folded client-side would be right for a day and absent for every other range. An unknown `group` or `bucket` is refused naming what is accepted, never defaulted: a chart legended by one dimension over another's bands is worse than an error |
-| `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
+| `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `scope_id` is the scope's IDENTITY (a seat's agent id, a unit's origin key), which is what a `schedules` row carries and what the ledger keys on — hand back what that row gave you rather than the handle beside it. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read |
@@ -2949,7 +2949,8 @@ timezone, target → resolved runner handles, and a per-request `next_run`
 {
   "schedules": [
     {
-      "scope_type": "unit", "scope_id": "Backend", "name": "daily-standup",
+      "scope_type": "unit", "scope_id": "backend", "scope_name": "backend",
+      "name": "daily-standup",
       "cron": "30 9 * * 1-5", "timezone": "Europe/Amsterdam",
       "task": "Post your standup…", "target": "each",
       "enabled": true, "timeout_seconds": 180, "catchup": true,
@@ -2959,7 +2960,7 @@ timezone, target → resolved runner handles, and a per-request `next_run`
   ],
   "recent_runs": [
     {
-      "scope_type": "unit", "scope_id": "Backend",
+      "scope_type": "unit", "scope_id": "backend", "scope_name": "backend",
       "schedule_name": "daily-standup", "target_handle": "backend-dev",
       "scheduled_at": "2026-06-08T07:30:00+00:00",
       "fired_at": "2026-06-08T07:30:02+00:00", "outcome": "fired"
@@ -2971,6 +2972,13 @@ timezone, target → resolved runner handles, and a per-request `next_run`
 `recent_runs` is empty when the dispatch ledger cannot be read (the
 configured list and `next_run` still render). Disabled schedules return an
 empty `next_run`.
+
+`scope_id` is the scope's **identity** — a seat's agent id for a role schedule,
+a unit's origin key for a unit one — which is what the at-most-once ledger keys
+a fire on and what `schedule_runs` takes as its parameter. `scope_name` is the
+same scope as a person reads it (the handle, or the unit's key), resolved
+through the company this node is running: a renamed scope reads under the name
+it answers to now, on every row of its history.
 
 ---
 

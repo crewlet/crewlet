@@ -309,7 +309,7 @@ flowchart TD
     E --> F["confluence.Parser.Parse<br/>one Routed per recipient"]
     F --> G["Route:<br/>subscribers ∪ @mentions,<br/>else the space lead"]
     G --> H["Prompt.Build renders the<br/>tool-agnostic task description"]
-    H --> I["crewlet.agent.{handle}.inbox"]
+    H --> I["crewlet.agent.{seat-id}.inbox"]
     I --> J["The seat wakes, reads the page<br/>through its own MCP tools, acts"]
 ```
 

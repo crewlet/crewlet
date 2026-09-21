@@ -183,18 +183,25 @@ func decodeCell(cell any) (any, error) {
 
 // subject is the row's address on the changelog.
 //
-// The seat and the table are readable; the key is HASHED. A natural key can
-// be anything a counterparty is called on a chat platform — with dots,
-// spaces, wildcards — and every one of those is a token separator or a
-// pattern character in a subject. Hashing makes the address total, and the
-// row carries its own values anyway, so nothing needs to read it back out.
-func (t table) subject(handle string, values map[string]any) string {
+// THE SEAT IS ITS ID, never its handle. The changelog is COMPACTED — one
+// message retained per subject — so the subject IS a row's durable address,
+// and a handle is one somebody types: renaming a seat moved every one of its
+// subjects at once, which left the node that took the seat next replaying an
+// empty prefix and every row the seat had learned stranded under an address
+// nothing would ask for again. See ADR-0019.
+//
+// The table is readable; the key is HASHED. A natural key can be anything a
+// counterparty is called on a chat platform — with dots, spaces, wildcards —
+// and every one of those is a token separator or a pattern character in a
+// subject. Hashing makes the address total, and the row carries its own
+// values anyway, so nothing needs to read it back out.
+func (t table) subject(seat string, values map[string]any) string {
 	parts := make([]string, 0, len(t.key))
 	for _, column := range t.key {
 		parts = append(parts, fmt.Sprint(values[column]))
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return fmt.Sprintf("%s%s.%s.%x", topics.MemoryPrefix, handle, t.name, sum[:16])
+	return fmt.Sprintf("%s%s.%s.%x", topics.MemoryPrefix, seat, t.name, sum[:16])
 }
 
 // upsert writes one carried row into this node's store.
@@ -249,13 +256,27 @@ func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 }
 
 // seatRef is one seat, in both spellings the schema uses for it.
+//
+// TWO SPELLINGS, BOTH STABLE ACROSS NODES, and only ONE of them is stable
+// across a RENAME. The id is a UUIDv5 over (org name, ORIGIN handle) — see
+// ADR-0019 — so it is the same value on every node and after every rename,
+// which is why the changelog's subjects are built from it. The handle is the
+// seat's current address, and the tables that key on it (episodes,
+// counterparty profiles, the two skill tables, the conversation ledger) carry
+// rows a rename leaves behind: they still travel, and they still land, under
+// the name the seat had when it learned them.
+//
+// That residue is the remaining half of keying a seat's memory on its id, and
+// it cannot be closed by a rename of the column: the id is a hash the database
+// cannot compute, so no statement can re-key the rows already written. It
+// needs a rebuild of those five tables and every query over them.
 type seatRef struct {
 	Handle string
 
-	// AgentID is the derived UUIDv5 over (org name, handle). Derived
-	// rather than looked up, so every node computes the same value with no
-	// database and no running instance — which is exactly what makes a row
-	// written on one node addressable from another.
+	// AgentID is the derived UUIDv5 over (org name, origin handle).
+	// Derived rather than looked up, so every node computes the same value
+	// with no database and no running instance — which is exactly what
+	// makes a row written on one node addressable from another.
 	AgentID string
 }
 

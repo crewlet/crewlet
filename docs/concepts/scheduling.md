@@ -25,7 +25,7 @@ A single loop ticks on a short interval (default 10s). Each tick:
 3. Resolves the **runner(s)** for each due fire.
 4. Claims the fire in the fleet's `fires` slot (at-most-once) and
    publishes a `TaskAssigned` to each runner's inbox topic
-   (`crewlet.agent.{handle}.inbox`).
+   (`crewlet.agent.{seat-id}.inbox`).
 
 Because it reuses the existing `TaskAssigned` event, the agent runtime
 path is **unchanged** — a scheduled turn runs executor → reviewer like
@@ -45,7 +45,7 @@ flowchart TD
     LEAD --> C
     C{"Claim the fire in the fleet's fires slot"}
     C -->|"already claimed"| SKIP["Skip"]
-    C -->|"claimed"| P["Publish task_assigned to crewlet.agent.HANDLE.inbox<br/>and scheduled_task_fired"]
+    C -->|"claimed"| P["Publish task_assigned to crewlet.agent.SEAT-ID.inbox<br/>and scheduled_task_fired"]
     P --> TURN["An ordinary executor and reviewer turn<br/>under the schedule's wall-clock cap"]
 ```
 
@@ -206,6 +206,17 @@ identity is five separate components, and the key they are rendered into
 escapes each one, so a delimiter inside a unit or schedule name cannot
 make two different fires claim one key.
 
+`scope_id` is the scope's **identity**, not the name you wrote: a seat's
+agent id for a role schedule, a unit's origin key for a unit one. Neither
+moves when somebody retypes a handle or relabels a team, so a rename keeps
+a schedule's history in one place and keeps its dedup intact — and two
+teams that happen to share a display name can no longer share a fire,
+which while the key was that name meant one team's standup claimed the
+other's minute and the other never ran. Every surface that shows a scope
+shows `scope_name` beside it: the handle, or the unit's key, resolved
+through the company the node is running, so a renamed scope reads under
+the name it answers to **now** on every row of its history.
+
 The claim **fails closed**: a coordination store that cannot be read
 yields no dispatch and the tick is retried on the next one. That is the
 opposite polarity to the [completion ledger](seat-ownership.md#the-completion-ledger),
@@ -344,9 +355,9 @@ holds the `scheduler` fleet duty.
   and `recent_runs` (the 50 most recent `scheduled_runs` rows). The next-fire times tick as you watch: every relative time in the
   product reads one shared clock rather than being baked at render.
 - **`ScheduledTaskFired`** event (`crewlet.events.scheduled_task_fired`) is
-  emitted per dispatch with `scope_type`, `scope_id`, `schedule_name`,
-  `target_handle`, and `scheduled_at` — surfaced in the dashboard / event
-  store.
+  emitted per dispatch with `scope_type`, `scope_id`, `scope_name`,
+  `schedule_name`, `target_handle`, and `scheduled_at` — surfaced in the
+  dashboard / event store.
 - The coordination store's `fires` slot is the at-most-once claim; the
   node's `scheduled_runs` table is its own dispatch history.
 - Structured logs: `scheduler_armed`, `scheduler_disarmed`,

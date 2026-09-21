@@ -318,7 +318,11 @@ and the dashboard keep answering. See
 
 **Upgrade one node at a time, and let each one finish.** Seat leases
 carry a protocol version, and a node refuses to claim seats while any
-live lease is held at an older one. The rule is asymmetric on purpose:
+live lease is held at an older one. The current version is **4**: a v3
+node names a seat's lease and its mailbox after the seat's *handle* and a
+v4 node after its *id*, so the two would name different resources for one
+seat, each claim it, and both run it. The gate is what drains the fleet
+instead. The rule is asymmetric on purpose:
 older nodes keep working, newer ones wait — visibly, with
 `seat_claims_blocked_by_older_protocol` — until the last old lease lapses
 or is released. A rolling deploy converges because that is what a rolling

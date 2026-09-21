@@ -41,11 +41,14 @@ const consumerCleanupTimeout = 5 * time.Second
 // couple of pulls.
 const fetchBatch = 256
 
-// AgentIDFor derives a seat's stable id from its handle.
+// AgentIDFor resolves a seat's stable id from the handle it answers to.
 //
 // Injected rather than imported, because the derivation belongs to the
 // organization model and this package needs exactly one function from it —
-// the same rule every other seam in this tree follows.
+// the same rule every other seam in this tree follows. What it must answer is
+// the id ANCHORED ON THE SEAT'S ORIGIN (ADR-0019), because that is what the
+// changelog's subjects are built from: an implementation deriving from the
+// live handle would move every one of a seat's subjects on a rename.
 type AgentIDFor func(handle string) string
 
 // Syncer carries a seat's memory between the nodes that run it.
@@ -107,7 +110,7 @@ func (s *Syncer) Publish(ctx context.Context, handle string) (int, error) {
 			if err != nil {
 				return published, err
 			}
-			subject := spec.subject(handle, row.Values)
+			subject := spec.subject(ref.AgentID, row.Values)
 			if _, err := s.js.Publish(ctx, subject, body); err != nil {
 				return published, fmt.Errorf("memsync: publish a %s row for %s: %w",
 					spec.name, handle, err)
@@ -138,6 +141,7 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, hydrateWait)
 	defer cancel()
+	ref := s.seat(handle)
 
 	// CONTRACT 1 FIRST, before a single row is read.
 	//
@@ -156,7 +160,7 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	// next hydration wants the whole current picture again, not what has
 	// changed since some previous node read it.
 	consumer, err := s.js.CreateConsumer(ctx, topics.MemoryStream, jetstream.ConsumerConfig{
-		FilterSubject: topics.MemoryPrefix + handle + ".>",
+		FilterSubject: topics.MemoryPrefix + ref.AgentID + ".>",
 		DeliverPolicy: jetstream.DeliverAllPolicy,
 		AckPolicy:     jetstream.AckNonePolicy,
 	})

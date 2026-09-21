@@ -1,6 +1,8 @@
 # Seat Ownership
 
-A **seat** is a role in the org chart, addressed by its handle. **Seat ownership** is how a fleet of Crewlet nodes decides which node runs which seat — and, more importantly, how it guarantees that no two of them run the same one.
+A **seat** is a role in the org chart, addressed by its handle and identified by its id. **Seat ownership** is how a fleet of Crewlet nodes decides which node runs which seat — and, more importantly, how it guarantees that no two of them run the same one.
+
+The handle and the id are not the same thing, and the difference decides every name below. A handle is an **address**: what a founder types, what a `manages:` entry points at, what a screen shows. An id is an **identity**: a UUIDv5 over the company name and the handle the seat was *created* under, so a rename moves the address and never the id. Everything durable a seat owns is named by the id — because a rename that moved a mailbox would silently deliver its mail to a subject nobody is attached to, and a rename that moved a lease would let two nodes each hold "the seat" and both run it.
 
 The rule the whole design serves is one sentence: **a seat is not a thing you can half-own.** A node either holds a seat's lease, runs its agent, consumes its inbox and answers its sandbox completions, or it does none of those things.
 
@@ -8,7 +10,7 @@ The rule the whole design serves is one sentence: **a seat is not a thing you ca
 
 ## The problem
 
-Every seat has a durable inbox topic, `crewlet.agent.{handle}.inbox`, consumed under a **durable subscription** named `agent-{handle}`. A subscription is a competing-consumer group: each message goes to exactly one attached member.
+Every seat has a durable inbox topic, `crewlet.agent.{seat-id}.inbox`, consumed under a **durable subscription** named `agent-{seat-id}`. A subscription is a competing-consumer group: each message goes to exactly one attached member.
 
 That is exactly right when the members are one node's consumer. It is catastrophic when two nodes both attach: the broker splits the seat's traffic between them, so one agent's conversation runs as two interleaved turn streams on two processes, each unaware of the other. Turn exclusion is in-process state; neither node can see the collision, and nothing raises.
 
@@ -21,7 +23,7 @@ So attachment has to be exclusive, and exclusivity has to be provable across pro
 Ownership is a lease in the fleet's coordination store (`internal/coord`): a record with a TTL and a monotonic `epoch`. On a fleet (`coordination.type: embedded-kv`) the record lives in the `crewlet_leases` KV bucket, whose age limit is the lease TTL, and the epoch counter in the untimed `crewlet_epochs` bucket; a single node runs the in-memory twin of the same contract.
 
 ```
-seat:{handle}   owner=node-a:9f3c1e70   epoch=7   expires_at=…   preferred=node-a
+seat:{seat-id}   owner=node-a:9f3c1e70   epoch=7   expires_at=…   preferred=node-a
 ```
 
 Three properties carry everything above it:
@@ -151,6 +153,20 @@ node acquiring a seat replays that seat's subjects into its own store **before
 the mailbox attaches**, and a hydration that fails refuses the seat — a peer
 that can hydrate should take it instead, and a seat serving with amnesia
 produces work its own history contradicts.
+
+The subject carries the seat's **id**, not its handle. Compaction is why:
+because the stream keeps one message per subject, a subject IS a row's durable
+address — so while the handle was in it, renaming a seat moved every one of its
+subjects at once. The node that took the seat next replayed an empty prefix,
+reported a successful hydration of nothing, and everything the seat had learned
+sat on the stream under an address nothing would ask for again.
+
+Two of the tables still key a seat by the handle inside the row (`episodes`,
+`counterparty_profiles`, the two skill tables and the conversation ledger). Those
+rows travel and land — the subject is the id — but under the handle the seat had
+when it learned them, so a renamed seat reads them under a name it no longer
+answers to. Closing that needs those tables re-keyed on the id, which no
+statement can do: the id is a hash the database cannot compute.
 
 What travels: the diary, episodes, counterparty profiles, synthesized skills
 and their versions, onboarding markers, and the conversation ledger. What does
@@ -293,7 +309,7 @@ It does, because the **durable subscription** is what retains messages, and the 
 
 ## The removed seat
 
-A seat that leaves the company, because its role was deleted, renamed to a new handle or changed to a human seat, leaves its mailbox behind. Nothing consumes it again, and an interest-retained subscription keeps every event still addressed to the handle. Left alone, that mail is retained for the life of the deployment, and a seat later added under the same handle attaches to the old backlog and works it under a role definition that never wrote it.
+A seat that leaves the company, because its role was deleted or changed to a human seat, leaves its mailbox behind. (A **rename** does not: the mailbox is named by the seat's id, so it moves with the seat rather than being left for the sweep.) Nothing consumes it again, and an interest-retained subscription keeps every event still addressed to the handle. Left alone, that mail is retained for the life of the deployment, and a seat later added under the same handle attaches to the old backlog and works it under a role definition that never wrote it.
 
 So the mailbox is **retired**: once the seat has been absent from the active revision for **24 hours**, the maintenance duty deletes its inbox and its sandbox control subscription, and the mail they hold with them.
 
@@ -301,12 +317,12 @@ So the mailbox is **retired**: once the seat has been absent from the active rev
 |---|---|
 | Its mailbox (the inbox and the sandbox control subscription) | Kept, with its mail, for 24 hours after a sweep first sees the seat missing, then deleted |
 | Its [coding runs](code-sandbox.md) (running, parked on a question, re-seeding, or mid-resume) | Kept for the same 24 hours, then ended as part of the retirement and before the mailbox is deleted: each box is reclaimed, each loss is announced as a `sandbox_run_failed` event with reason `seat_removed`, and each run's record is deleted |
-| Its memory (diary, episodes, counterparty profiles, onboarding markers) | Kept. Memory is keyed by the handle or by the agent id derived from the company name and the handle, so a seat added again under the same handle reattaches to it |
+| Its memory (diary, episodes, counterparty profiles, onboarding markers) | Kept. Memory is keyed by the agent id, or by the handle the rows were written under, so a seat added again under the same handle reattaches to it |
 | Its seat lease | Released by the node that held it, on that node's next placement sweep after it applies the revision (`seat_released_role_gone`) |
 
 **Why a grace period rather than deleting on the apply.** A delete is the one change here that cannot be undone, and seats are removed by mistake: an edit that is reverted, a builder operation that is undone, an import of an older file. Twenty-four hours is long enough for a seat restored within a working day to come back to the mail it was sent while it was gone, and short enough that mail for a seat nobody runs is not kept for more than a day. The clock starts when a sweep first observes the absence, so a retirement is never early: at worst it is one maintenance tick (15 minutes) late, and later still while no node that runs worker duties has applied the current revision.
 
-**How the fleet knows a mailbox exists.** A mailbox's name is derived from its handle, so nothing needs to remember it while the seat is in the company. A removed handle is gone from the org, though, so every node records each seat in the coordination store's `mailboxes` bucket **before** it creates the subscription. That record carries what the retirement runs on: when the seat was first seen missing, whether a retirement is in flight, and the version every write is conditional on. A registration that fails is logged as `seat_mailbox_unregistered` and the mailbox is created anyway, because a seat in the company losing mail is worse than a mailbox the next sweep registers.
+**How the fleet knows a mailbox exists.** A mailbox's name is derived from the seat's id, so nothing needs to remember it while the seat is in the company. A removed seat is gone from the org, though, so every node records each seat in the coordination store's `mailboxes` bucket **before** it creates the subscription — filed under the seat's id, which is what the subscription is named by, with the handle beside it as the label a retirement log line reads. That record carries what the retirement runs on: when the seat was first seen missing, whether a retirement is in flight, and the version every write is conditional on. A registration that fails is logged as `seat_mailbox_unregistered` and the mailbox is created anyway, because a seat in the company losing mail is worse than a mailbox the next sweep registers.
 
 **The broker is the backstop.** A mailbox can exist with no record: a node's registration failed, or the seat was removed before the registry existed. So every sweep also asks the broker which seat mailboxes it holds (the queue contract's subscription listing), and registers each one belonging to a seat that is neither in the active revision nor in the registry, logged as `seat_mailbox_discovered`. Its absence is stamped on the tick that finds it, so it is retired 24 hours later like any other removed seat's. Only a subscription the mailbox grammar produces counts (the seat's inbox under its inbox group, or its control subject under its control group); a consumer on a seat's inbox under any other group is somebody else's and is left alone. A listing that fails only postpones the discovery; the registry's own records are judged regardless.
 
@@ -350,7 +366,7 @@ Single node or fleet, it is armed the same way. With one node no peer is waiting
 
 ## Sandbox control is owner-routed
 
-A detached coding run outlives the node that started it, so its completion has to reach whichever node owns the seat *now*. Each seat has a control topic, `crewlet.agent.{handle}.control`, attached and detached alongside the inbox — so routing emerges from who subscribes, exactly as it does for the inbox, rather than from any "which node" computation.
+A detached coding run outlives the node that started it, so its completion has to reach whichever node owns the seat *now*. Each seat has a control topic, `crewlet.agent.{seat-id}.control`, attached and detached alongside the inbox — so routing emerges from who subscribes, exactly as it does for the inbox, rather than from any "which node" computation.
 
 It cannot ride the inbox itself: while a run holds the seat, every inbox delivery is parked (requeued and acked), and a completion riding the inbox would be parked behind the very busy state it exists to clear.
 

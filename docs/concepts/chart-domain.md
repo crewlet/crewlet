@@ -147,10 +147,22 @@ gives is scoped by the chart.
 **A key is an address, not an identity.** A unit's key and a seat's handle are
 what people type — into `manages:`, into `lead:`, into a vendor mapping. When
 one changes, the old key goes on resolving to the same object, so references
-somebody already wrote down keep working. What does *not* follow a handle change
-is a seat's **memory**: its agent id is derived from the company name and the
-handle, so a seat that takes a new handle is a new agent as far as its diary and
-its onboarding markers are concerned. Settle handles before a company runs.
+somebody already wrote down keep working.
+
+The **identity** is separate and it is what everything durable is named by. Each
+row records the address it was created under — `origin_handle` on a seat,
+`origin_key` on a unit — written by the object's *first* rename, which is the
+last moment that address is still known, and never touched again. A seat's agent
+id is derived from the company name and its origin handle, so its mailbox, its
+seat lease, its memory changelog and its schedule history all stay where they
+were. A unit's origin key is what its scheduled work is keyed on, which is also
+what stops two teams that share a display name sharing one fire.
+
+Two alias sets sit beside them and do a different job. `former_keys_json` holds
+the addresses an object used to answer to, newest first and **capped**: it keeps
+a reference somebody typed resolving, and a reference nobody has followed in
+sixteen renames is not worth a row growing for ever. The origin is uncapped and
+is one value, because an identity a cap could drop would be no identity at all.
 
 **An unchanged revision is a no-op.** Re-activating a config revision the chart
 has already imported — which is the credential-rotation gesture, and therefore

@@ -209,7 +209,7 @@ This is what a wake becomes after the stream delivers it:
 flowchart TB
     subgraph seats["<b>seats</b> — run agents"]
         CLAIM["<b>Seat host</b><br/>claims seat leases, attaches the mailbox<br/><i>acquire → equip → THEN attach</i>"]
-        MBOX["<b>Per-seat mailbox</b><br/>durable consumer on<br/>crewlet.agent.HANDLE.inbox<br/>+ .control for sandbox resumes"]
+        MBOX["<b>Per-seat mailbox</b><br/>durable consumer on<br/>crewlet.agent.SEAT-ID.inbox<br/>+ .control for sandbox resumes"]
         BATCH["<b>Inbox batching</b><br/>drain · partition by conversation<br/>· one digest turn per partition"]
         TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>one per running turn, gated by<br/>node.max_concurrent</i>"]
         REG["<b>Per-seat tool registry + bridge</b><br/>the shared catalogue, CLONED,<br/>plus this role's own MCP children"]
@@ -333,11 +333,11 @@ sequenceDiagram
     R->>R: the third-party app's parser: who is this for?<br/>mention · assignee · watcher ·<br/>thread follow · project lead
     R->>R: resolve to a seat through the<br/>org-derived party registry
     R->>KV: notification valve — is this seat<br/>over its rate for the window?
-    R->>S: publish ExternalNotification →<br/>crewlet.agent.HANDLE.inbox
+    R->>S: publish ExternalNotification →<br/>crewlet.agent.SEAT-ID.inbox
 ```
 
 **Leg 3 — the node holding that seat.** Its mailbox is a durable consumer on
-`crewlet.agent.HANDLE.inbox`. Everything from there is the turn, and the reply
+`crewlet.agent.SEAT-ID.inbox`. Everything from there is the turn, and the reply
 leaves as the agent rather than back down the path it arrived on.
 
 ```mermaid
@@ -404,7 +404,7 @@ onward is identical for both.
 
 A schedule firing, an `a2a_ask` from a colleague and a sandbox run completing
 enter further down still: they publish straight to
-`crewlet.agent.HANDLE.inbox` (or `.control`), and everything from the mailbox
+`crewlet.agent.SEAT-ID.inbox` (or `.control`), and everything from the mailbox
 onward is identical again.
 
 ---
@@ -634,8 +634,11 @@ decision, not the broker's.
 
 **A seat's memory follows the seat.** Memory is written to the *node's* store,
 and placement moves seats — so every memory row also rides
-`crewlet.memory.HANDLE.TABLE.DIGEST`, one subject per row, on a stream that
-retains exactly one message per subject. A node acquiring a seat replays that
+`crewlet.memory.SEAT-ID.TABLE.DIGEST`, one subject per row, on a stream that
+retains exactly one message per subject. By the seat's **id** rather than its
+handle, because the stream is compacted: a subject IS a row's durable address,
+so a rename that moved one would leave everything the seat had learned under an
+address nothing would ask for again. A node acquiring a seat replays that
 seat's rows in a single pass and hydrates them **before** the mailbox is
 attached. Deletes deliberately do not travel: the lifecycle re-converges, and a
 tombstone protocol would be a second thing to keep correct forever.
