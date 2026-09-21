@@ -530,6 +530,111 @@ test("a saved view's grouping heads the list's columns by name", async () => {
   expect(container.querySelector(".work-band")?.textContent).not.toContain("ada");
 });
 
+/** A strip of one saved view carrying its own arrangement. */
+function savedWith(params: Record<string, string>) {
+  return {
+    views: [
+      {
+        id: "v-1",
+        key: "arranged",
+        name: "Arranged",
+        type: "list",
+        container: { kind: "workspace", id: "" },
+        builtin: false,
+        default: true,
+        params,
+      },
+    ],
+    complete: true,
+  };
+}
+
+/** The Display menu, opened. */
+async function openDisplay() {
+  const button = await screen.findByRole("button", {
+    name: /^(List|Board|Table|Calendar|Timeline)/,
+  });
+  fireEvent.click(button);
+  return button;
+}
+
+// THE PICKERS SHOW WHAT THE QUERY WAS SENT WITH, not what the address holds.
+// Built from the URL key alone they sat on "No grouping" over a list the
+// engine had grouped by assignee — and a reader looking for the control that
+// turned it off found one that already said it was off.
+test("a view's own arrangement is what the display controls show", async () => {
+  serving({
+    work_views: savedWith({ group_by: "assignee", group_by2: "priority", sort: "due" }),
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: { projects: [], total: 0, complete: true },
+  });
+  mountWork();
+  // THE BUTTON SAYS IT FIRST, because the arrangement has to be readable
+  // without opening anything.
+  await waitFor(() => expect(screen.getByRole("button", { name: /List · Assignee/ })).toBeTruthy());
+  await openDisplay();
+  expect(screen.getByRole("combobox", { name: "Group by" }).textContent).toContain("Assignee");
+  expect(screen.getByRole("combobox", { name: "Then by" }).textContent).toContain("Priority");
+  expect(screen.getByRole("combobox", { name: "Order by" }).textContent).toContain("Due soonest");
+});
+
+// AND TURNING ONE OFF IS A VALUE ON THE ADDRESS. `group_by=` is DELETED by the
+// router, after which the view supplies the axis again — so the option did
+// nothing at all, twice over: the control snapped back and the rows never
+// changed.
+test("turning a view's grouping off says so on the address and on the wire", async () => {
+  const query = serving({
+    work_views: savedWith({ group_by: "assignee", sort: "due" }),
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: { projects: [], total: 0, complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(asked(query).group_by).toBe("assignee"));
+  await openDisplay();
+  fireEvent.click(screen.getByRole("combobox", { name: "Group by" }));
+  fireEvent.mouseDown(await screen.findByRole("option", { name: "No grouping" }));
+  await waitFor(() => expect(location.hash).toContain("group_by=none"));
+  // AND `none` NEVER REACHES THE ENGINE: it is this dashboard's word for the
+  // absence of a key, not an axis the grammar has.
+  await waitFor(() => expect(asked(query).group_by).toBeUndefined());
+  expect(asked(query).sort).toBe("due");
+});
+
+// AN ORDINARY UNGROUPED LIST WRITES NOTHING, because there is nothing to
+// override: `group_by=none` on the address of a list no view arranged is a key
+// that says what the absence of it already said.
+test("turning off an arrangement nobody set leaves the address clean", async () => {
+  serving({
+    work_views: savedWith({}),
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: { projects: [], total: 0, complete: true },
+  });
+  mountWork();
+  await openDisplay();
+  fireEvent.click(screen.getByRole("combobox", { name: "Order by" }));
+  fireEvent.mouseDown(await screen.findByRole("option", { name: "Default order" }));
+  await waitFor(() => expect(screen.queryByRole("option", { name: "Default order" })).toBeNull());
+  expect(location.hash).not.toContain("sort=");
+});
+
+// A COLUMN NARROWING IS NAMED BY THE AXIS IT WAS CUT ON, and that axis can be
+// the view's: labelled from the URL key alone the chip read "Column is ada"
+// over a board whose own heading said "Assignee · Ada Okonkwo".
+test("a column chip takes its name from the effective axis", async () => {
+  location.hash = "#/work?group=ada";
+  serving({
+    work_views: savedWith({ group_by: "assignee" }),
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: { projects: [], total: 0, complete: true },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-chips")).toBeTruthy());
+  const chips = container.querySelector(".work-chips")?.textContent ?? "";
+  expect(chips).toContain("Assignee");
+  expect(chips).toContain("Ada Okonkwo");
+  expect(chips).not.toContain("Column");
+});
+
 // ---------------------------------------------------------------------------
 // The table, and the trash
 // ---------------------------------------------------------------------------

@@ -26,6 +26,8 @@ import {
   dayKey,
   defaultView,
   describeChange,
+  effectiveArrangement,
+  EXPLICIT_NONE,
   describeHistory,
   fieldValueText,
   filterPatchForGroup,
@@ -532,6 +534,90 @@ test("the calendar drops every grouping and asks for the grid's own range", () =
 test("no sort is sent unless somebody chose one", () => {
   expect(build({ shape: "list" }).sort).toBeUndefined();
   expect(build({ shape: "list", filters: { ...NO_FILTERS, sort: "due" } }).sort).toBe("due");
+});
+
+// ---------------------------------------------------------------------------
+// The arrangement: the reader's, the view's, or off
+// ---------------------------------------------------------------------------
+
+// AN ARRANGEMENT IS THREE-VALUED and an empty string is only two of them. The
+// reader's own choice, the saved view's where they made none, and OFF — which
+// `""` cannot say, because the router DELETES a key set to it and the view's
+// own value is then handed straight back. So there is a word for off, and one
+// resolver reads it for all three keys.
+test("an arrangement is the reader's, then the view's, then nothing", () => {
+  expect(effectiveArrangement("assignee", "status")).toBe("assignee");
+  expect(effectiveArrangement("", "status")).toBe("status");
+  expect(effectiveArrangement("", undefined)).toBe("");
+  expect(effectiveArrangement(EXPLICIT_NONE, "status")).toBe("");
+  // AND `none` NEVER REACHES THE WIRE: it is this dashboard's word for the
+  // absence of a key, not an axis or a sort the engine has.
+  expect(effectiveArrangement(EXPLICIT_NONE, undefined)).toBe("");
+});
+
+// A SAVED VIEW'S GROUPING IS IN FORCE UNTIL SOMEBODY TURNS IT OFF, and turning
+// it off has to be SAID. `group_by=` deleted the override and left the view
+// supplying the axis, so the one control for it could not do the one thing it
+// offered.
+test("a reader turns a view's own grouping off rather than deleting the key", () => {
+  const inherited = build({ shape: "list", view: { group_by: "assignee" } });
+  expect(inherited.group_by).toBe("assignee");
+
+  const blank = build({ shape: "list", view: { group_by: "assignee" }, filters: NO_FILTERS });
+  expect(blank.group_by).toBe("assignee");
+
+  const off = build({
+    shape: "list",
+    view: { group_by: "assignee" },
+    filters: { ...NO_FILTERS, groupBy: EXPLICIT_NONE },
+  });
+  expect(off.group_by).toBeUndefined();
+  expect(off.group_limit).toBeUndefined();
+});
+
+test("the second grouping and the order are turned off the same way", () => {
+  const view = { group_by: "status", group_by2: "priority", sort: "due" };
+
+  const inherited = build({ shape: "list", view });
+  expect(inherited.group_by2).toBe("priority");
+  expect(inherited.sort).toBe("due");
+
+  const off = build({
+    shape: "list",
+    view,
+    filters: { ...NO_FILTERS, groupBy2: EXPLICIT_NONE, sort: EXPLICIT_NONE },
+  });
+  expect(off.group_by).toBe("status");
+  expect(off.group_by2).toBeUndefined();
+  expect(off.sort).toBeUndefined();
+});
+
+// A TIMELINE'S DEFAULT ORDER IS ITS DATE AXIS rather than the engine's, so an
+// explicit "default order" over a view's own sort lands there and not on a
+// deleted key — the bars would otherwise arrive in whatever order the engine
+// prefers and zig-zag down the page.
+test("a timeline's own default order is what an explicit none resolves to", () => {
+  expect(build({ shape: "timeline", view: { sort: "due" } }).sort).toBe("due");
+  expect(
+    build({
+      shape: "timeline",
+      view: { sort: "due" },
+      filters: { ...NO_FILTERS, sort: EXPLICIT_NONE },
+    }).sort,
+  ).toBe("start");
+});
+
+// A BOARD IS ALWAYS GROUPED — it is what a board IS — so turning a view's axis
+// off lands on the status axis rather than on a board with no columns.
+test("a board turned off its view's axis falls back to status", () => {
+  expect(build({ shape: "board", view: { group_by: "assignee" } }).group_by).toBe("assignee");
+  expect(
+    build({
+      shape: "board",
+      view: { group_by: "assignee" },
+      filters: { ...NO_FILTERS, groupBy: EXPLICIT_NONE },
+    }).group_by,
+  ).toBe("status");
 });
 
 test("the quick filters map onto the grammar's own keys", () => {

@@ -68,6 +68,12 @@ const mount = () =>
     </Router>,
   );
 
+/** What `work_projects` was actually asked, which is the claim the segment makes. */
+function asked(query: ReturnType<typeof serving>): Record<string, unknown> {
+  const calls = query.mock.calls as unknown as [string, Record<string, unknown>?][];
+  return calls.findLast(([what]) => what === "work_projects")?.[1] ?? {};
+}
+
 /** The grid row whose key cell holds this project. */
 function rowFor(key: string): HTMLElement {
   const cell = screen.getByText(key);
@@ -212,29 +218,34 @@ test("the progress column carries one legend under the grid", async () => {
 // AN ARCHIVED PROJECT KEEPS ITS WORK AND STOPS TAKING NEW ITEMS, so it is not
 // what a reader means by "the projects" — but it is still reachable, because a
 // directory that hides half the company is not a directory.
+//
+// AND THE SEGMENT IS A QUESTION rather than a filter over the page. The engine
+// omits archived projects unless it is ASKED for them (`archived` in
+// `internal/tracker/projectsread.go`), so a segment that only hid rows this
+// client already held showed an empty Archived tab on every company that has
+// ever retired a project — the rows it was filtering were never in the answer.
 test("archived projects are behind their own segment", async () => {
-  serving({
+  const listing = {
     work_projects: {
       projects: [project(), project({ key: "OLD", name: "Retired", archived: true })],
       total: 2,
       complete: true,
     },
-  });
+  };
+  const query = serving(listing);
   mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(screen.queryByText("Retired")).toBeNull();
+  // THE ACTIVE SEGMENT ASKS FOR THE DEFAULT ANSWER, which is the active ones:
+  // sending `archived=false` would be a third state the grammar does not have.
+  expect(asked(query).archived).toBeUndefined();
   cleanup();
 
   location.hash = "#/work/projects?shown=all";
-  serving({
-    work_projects: {
-      projects: [project(), project({ key: "OLD", name: "Retired", archived: true })],
-      total: 2,
-      complete: true,
-    },
-  });
+  const both = serving(listing);
   mount();
   await waitFor(() => expect(screen.getByText("Retired")).toBeTruthy());
+  expect(asked(both).archived).toBe(true);
 });
 
 // A REFUSED READ IS NOT A COMPANY THAT HAS FILED NOTHING — the same rule the

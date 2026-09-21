@@ -59,7 +59,22 @@ export function Projects() {
 
   // EVERY PROJECT, which is what a directory is. The engine's own limit is
   // what bounds it, and the answer says when it stopped short.
-  const state = useQuery("work_projects", { limit: 200 }, { pollMs: 60_000 });
+  //
+  // `archived` IS ASKED FOR, never filtered out of an answer that never had
+  // them: the listing excludes archived rows unless the question says
+  // otherwise (`internal/tracker/projectsread.go` ANDs `p.archived = 0`), so a
+  // client-side narrowing over the default answer left the Archived segment
+  // permanently empty — and, on a company whose every project is archived, it
+  // said the company had filed nothing at all.
+  //
+  // IT WIDENS RATHER THAN SELECTS: the engine's flag INCLUDES the archived
+  // ones, so "archived only" is still this screen's own narrowing over the
+  // wider answer.
+  const state = useQuery(
+    "work_projects",
+    { limit: 200, ...(shown === "active" ? {} : { archived: true }) },
+    { pollMs: 60_000 },
+  );
   usePageCoverage(state.data);
 
   const all = useMemo(() => state.data?.projects ?? [], [state.data]);

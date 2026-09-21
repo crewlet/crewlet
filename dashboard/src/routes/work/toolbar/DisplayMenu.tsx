@@ -66,6 +66,20 @@ export interface DisplayMenuProps {
   workspace: boolean;
   /** What the shape would be with no `shape=` on the address — a view's own. */
   viewShape: Shape;
+  /**
+   * THE EFFECTIVE ARRANGEMENT, never the URL key.
+   *
+   * The reader's own `group_by` where they set one, the saved view's where
+   * they did not, and `""` where neither says anything — which is what
+   * [effectiveArrangement] answers and what the query was built from. Read off
+   * the address instead, these controls sat on "No grouping" over a list the
+   * engine had grouped, and a second grouping the view carried was never
+   * offered a way off at all.
+   *
+   * `""` OUT OF THE CALLBACKS MEANS OFF, and turning a view's own arrangement
+   * off is a value rather than a deletion — which is the screen's to write,
+   * since only it knows what the view carries.
+   */
   groupBy: string;
   groupBy2: string;
   sort: string;

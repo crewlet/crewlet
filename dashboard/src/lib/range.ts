@@ -408,12 +408,17 @@ export function barsOver(
   const counts = new Array<number>(cells).fill(0);
   for (const instant of at) {
     const ms = Date.parse(instant);
-    if (!Number.isFinite(ms) || ms < first || ms >= end) continue;
+    // THE UPPER EDGE IS INCLUSIVE AND THE LOWER ONE IS NOT, which is not a
+    // choice made here: it is the edge the ROWS came back on. The engine
+    // compiles a window to `h.created_at >= from AND h.created_at <= to`
+    // (`internal/tracker/activityread.go`), so a change made in the instant
+    // the window closed IS in the answer — and a chart that excluded it would
+    // draw fewer changes than the list under it, with nothing saying why.
+    if (!Number.isFinite(ms) || ms < first || ms > end) continue;
+    // WHICH IS WHY THE INDEX IS CLAMPED. That last instant divides to exactly
+    // `cells`, one past the final bucket, and the clamp is what puts it in the
+    // bucket it belongs to rather than off the end of the array.
     const index = Math.min(Math.floor((ms - first) / step), cells - 1);
-    // A ROW EXACTLY ON THE FINAL EDGE lands one past the last bucket, which is
-    // the same off-by-one every bucketing has: clamped rather than dropped,
-    // because a change made in the second the window closed is still in the
-    // answer the rows came from.
     counts[index] = (counts[index] ?? 0) + 1;
   }
   return counts.map((count, i) => ({ at: new Date(first + i * step).toISOString(), count }));

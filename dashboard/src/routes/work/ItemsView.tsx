@@ -69,6 +69,8 @@ import {
   countedLabel,
   dayKey,
   defaultView,
+  effectiveArrangement,
+  EXPLICIT_NONE,
   filterChips,
   filterPatchForGroup,
   gridRange,
@@ -182,8 +184,23 @@ export function ItemsView({ project = "" }: { project?: string }) {
   // through the segment that expresses it. [buildItemsParams] spreads a view's
   // params and then OVERWRITES that key from the scope, so seeding the segment
   // from the view is what makes the two agree.
-  const viewScope = seededScope(viewParams(chosenView, views));
+  const viewOwn = useMemo(() => viewParams(chosenView, views), [chosenView, views]);
+  const viewScope = seededScope(viewOwn);
   const [scope, setScope] = useParam("scope", viewScope);
+
+  // WHAT THE ARRANGEMENT ACTUALLY IS, which is not what the address holds: a
+  // saved view carries its own `group_by`, `group_by2` and `sort`, and the URL
+  // key OVERRIDES them rather than being them. The pickers are built from
+  // these, because a control that reads the raw key sits on "No grouping" over
+  // a list the engine grouped — and its "No grouping" option only deleted the
+  // key, after which the view's grouping was handed straight back.
+  const axis = effectiveArrangement(groupBy, viewOwn.group_by);
+  const axis2 = effectiveArrangement(groupBy2, viewOwn.group_by2);
+  const order = effectiveArrangement(sort, viewOwn.sort);
+  // TURNING ONE OFF IS A VALUE, not the absence of one — but only where there
+  // is something to override. Written unconditionally, an ordinary ungrouped
+  // list would carry `group_by=none` on its address for no reason.
+  const off = (inherited: unknown) => (inherited ? EXPLICIT_NONE : "");
 
   const filters: TrackerFilters = {
     q,
@@ -215,7 +232,7 @@ export function ItemsView({ project = "" }: { project?: string }) {
       buildItemsParams({
         container,
         shape,
-        view: viewParams(chosenView, views),
+        view: viewOwn,
         filters,
         range: weeks.length ? gridRange(weeks) : undefined,
       }),
@@ -333,7 +350,10 @@ export function ItemsView({ project = "" }: { project?: string }) {
     [route.path, route.query],
   );
 
-  const chips = filterChips(filters, labels);
+  // THE EFFECTIVE AXIS, for the same reason the pickers take it: a column
+  // narrowing is named by the axis it was cut on, and a view supplying that
+  // axis left the chip labelled "Column" over a board grouped by assignee.
+  const chips = filterChips({ ...filters, groupBy: axis }, labels);
 
   return (
     <>
@@ -395,21 +415,25 @@ export function ItemsView({ project = "" }: { project?: string }) {
           axis={String(params.group_by ?? "")}
           workspace={!project}
           viewShape={viewShape}
-          groupBy={groupBy}
-          groupBy2={groupBy2}
-          sort={sort}
+          groupBy={axis}
+          groupBy2={axis2}
+          sort={order}
           cols={cols}
           onShape={(next) => setShapeKey(next === viewShape ? "" : next)}
-          onGroupBy={(axis) => {
-            setGroupBy(axis);
+          onGroupBy={(next) => {
+            setGroupBy(next || off(viewOwn.group_by));
             // A COLUMN FILTER BELONGS TO ITS AXIS. Left behind when the axis
             // changes it narrows the list to a key the new axis has never
             // heard of, which answers nothing.
             setGroup("");
-            if (axis === "") setGroupBy2("");
+            // AND A SECOND AXIS WITHOUT A FIRST IS NOTHING THE ENGINE TAKES,
+            // so it goes with it — as a deletion rather than an override,
+            // since the key is inert either way and `none` on the address
+            // would outlive the grouping it was written against.
+            if (!next) setGroupBy2("");
           }}
-          onGroupBy2={setGroupBy2}
-          onSort={setSort}
+          onGroupBy2={(next) => setGroupBy2(next || off(viewOwn.group_by2))}
+          onSort={(next) => setSort(next || off(viewOwn.sort))}
           onCols={setCols}
         />
         <span className="work-summary">
@@ -487,7 +511,7 @@ export function ItemsView({ project = "" }: { project?: string }) {
                 groups={groups}
                 // THE AXIS THE QUERY WAS SENT ON, not the one in the URL: a
                 // saved view may carry `group_by`, which [buildItemsParams]
-                // resolves as `filters.groupBy || view.group_by`.
+                // resolves through [effectiveArrangement].
                 axis={String(params.group_by ?? "")}
                 subAxis={String(params.group_by2 ?? "")}
                 chrome={chrome}

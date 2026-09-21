@@ -341,7 +341,9 @@ describe("bars over a window this client holds", () => {
 
   // A ROW OUTSIDE THE WINDOW IS NOT DRAWN AT ALL rather than folded into the
   // nearest bar: a chart whose first column silently held everything older than
-  // it would be a chart that lies about when the work happened.
+  // it would be a chart that lies about when the work happened. Both ends,
+  // because the clamp that catches the final instant must not become a bucket
+  // that swallows anything later.
   it("instants outside the window are left out", () => {
     const bars = barsOver(
       ["2026-03-09T23:00:00Z", "2026-03-10T05:00:00Z"],
@@ -352,17 +354,38 @@ describe("bars over a window this client holds", () => {
     expect(bars.map((b) => b.count)).toEqual([0, 0]);
   });
 
-  // THE FINAL EDGE IS THE ONE OFF-BY-ONE EVERY BUCKETING HAS, and an instant
-  // exactly on it is clamped rather than dropped: a change made in the second the
-  // window closed is still in the answer the rows came from.
+  // THE UPPER EDGE IS INCLUSIVE, because that is the edge the ROWS came back
+  // on: the engine compiles a window to `created_at >= from AND created_at <=
+  // to`, so a change made in the instant the window closed is in the answer,
+  // and a chart that dropped it would draw fewer changes than the list under
+  // it. It divides to exactly one past the final bucket, which is what the
+  // clamp catches.
   it("an instant on the final edge lands in the last bucket", () => {
-    const bars = barsOver(
+    const upToTheEdge = barsOver(
       ["2026-03-10T01:59:59.999Z"],
       "2026-03-10T00:00:00Z",
       "2026-03-10T02:00:00Z",
       "hour",
     );
-    expect(bars.map((b) => b.count)).toEqual([0, 1]);
+    expect(upToTheEdge.map((b) => b.count)).toEqual([0, 1]);
+
+    const onTheEdge = barsOver(
+      ["2026-03-10T02:00:00Z"],
+      "2026-03-10T00:00:00Z",
+      "2026-03-10T02:00:00Z",
+      "hour",
+    );
+    expect(onTheEdge.map((b) => b.count)).toEqual([0, 1]);
+
+    // AND NOT ONE MILLISECOND PAST IT. The clamp exists for the edge itself,
+    // not as a bucket that collects whatever is later.
+    const past = barsOver(
+      ["2026-03-10T02:00:00.001Z"],
+      "2026-03-10T00:00:00Z",
+      "2026-03-10T02:00:00Z",
+      "hour",
+    );
+    expect(past.map((b) => b.count)).toEqual([0, 0]);
   });
 
   // BOUNDED, because a window and a bucket are two independent values and a

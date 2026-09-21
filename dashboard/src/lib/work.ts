@@ -295,6 +295,40 @@ export function axisLabel(axis: string, key: string, ctx: LabelContext = {}): st
   }
 }
 
+/**
+ * What an ARRANGEMENT control writes when the reader chooses none of it.
+ *
+ * THE EMPTY STRING MEANS "INHERIT", not "off", and the two are different
+ * answers wherever a saved view supplies a default. `buildItemsParams` resolves
+ * an arrangement as "the reader's, or the view's" — so a control writing `""`
+ * dropped the key and handed the question straight back to the view: a view
+ * grouping by assignee could not be ungrouped at all, because every attempt
+ * cleared the override and re-applied the view's own. The scope segment's
+ * third value has a name for exactly this reason; so does this.
+ *
+ * It never reaches the wire. `none` is not an axis or a sort key the engine
+ * has, and [buildItemsParams] resolves it to the absence of the key rather
+ * than sending it.
+ */
+export const EXPLICIT_NONE = "none";
+
+/**
+ * What an arrangement is actually set to: the reader's choice, the view's, or
+ * nothing.
+ *
+ * ONE RESOLVER for the grouping, the second grouping and the order, because
+ * all three are the same three-way question and a spelling per key is how one
+ * of them came to answer it differently. The PICKERS read this too, so the
+ * control shows what the query was sent with rather than what the URL happens
+ * to hold — which is the other half of the same defect: a saved view's
+ * grouping was in force while its picker sat on "No grouping".
+ */
+export function effectiveArrangement(asked: string, inherited: unknown): string {
+  if (asked === EXPLICIT_NONE) return "";
+  if (asked) return asked;
+  return typeof inherited === "string" ? inherited : "";
+}
+
 /** The axes a board may be cut on, with what each is called in the picker. */
 export const GROUP_AXES: { value: string; label: string }[] = [
   { value: "status", label: "Status" },
@@ -795,14 +829,19 @@ export function buildItemsParams(args: {
     else delete params[key];
   }
 
-  const axis = filters.groupBy || (typeof view.group_by === "string" ? view.group_by : "");
+  const axis = effectiveArrangement(filters.groupBy, view.group_by);
   // THE SECOND AXIS IS SENT ONLY BESIDE A FIRST, which is the engine's own
   // refusal (`group_by2 was passed without group_by`) rather than a rule of
   // ours — and it is dropped where it EQUALS the first, which the engine also
   // refuses, because every row would then be alone in its own band. The
   // control cannot offer the first axis as the second, so this covers a
   // hand-edited URL rather than a reachable state.
-  const axis2 = filters.groupBy2 || (typeof view.group_by2 === "string" ? view.group_by2 : "");
+  const axis2 = effectiveArrangement(filters.groupBy2, view.group_by2);
+  // AND THE ORDER IS THE SAME THREE-WAY QUESTION. A view's own `sort` is
+  // spread into `params` above, so the reader's choice has to overwrite it and
+  // their explicit "default order" has to DELETE it — where an empty string
+  // deleted the override instead and handed the view's sort back.
+  const order = effectiveArrangement(filters.sort, view.sort);
   const setSubAxis = () => {
     if (axis && axis2 && axis2 !== axis) params.group_by2 = axis2;
     else delete params.group_by2;
@@ -874,8 +913,9 @@ export function buildItemsParams(args: {
     // AND IT ARRIVES IN THE AXIS'S OWN ORDER unless the reader asked
     // otherwise, so the bars descend rather than zig-zag. The builtin view
     // carries the same value; this is what holds when a saved view or a
-    // filter change drops it.
-    params.sort = filters.sort || "start";
+    // filter change drops it — and what an explicit "default order" resolves
+    // to here, because a timeline's default IS its date axis.
+    params.sort = order || "start";
     return params;
   } else {
     // THE LIST AND THE TABLE ASK THE SAME QUESTION. They are two arrangements
@@ -899,8 +939,11 @@ export function buildItemsParams(args: {
   // THE SORT IS OMITTED where nobody asked for one, so the engine's own
   // default applies — the manual order inside a project and the most recently
   // touched across the company, which are two different right answers and
-  // neither is something a client should hard-code.
-  if (filters.sort) params.sort = filters.sort;
+  // neither is something a client should hard-code. A reader who chose that
+  // default over a view's own sort deletes the key the view spread in, which
+  // is what [EXPLICIT_NONE] is for.
+  if (order) params.sort = order;
+  else delete params.sort;
   return params;
 }
 
