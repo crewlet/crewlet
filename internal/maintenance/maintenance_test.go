@@ -614,3 +614,59 @@ func TestAnUnreadableGateIsReportedRatherThanReadAsNoWork(t *testing.T) {
 		t.Errorf("the job ran %d time(s) behind a gate that errored", ran)
 	}
 }
+
+// fakeChannels records what the idle job asked of the A2A surface.
+type fakeChannels struct {
+	cutoffs []time.Time
+	closed  int
+	purged  int64
+}
+
+func (f *fakeChannels) SweepIdle(_ context.Context, cutoff time.Time) (int, error) {
+	f.cutoffs = append(f.cutoffs, cutoff)
+	return f.closed, nil
+}
+
+func (f *fakeChannels) Purge(_ context.Context, _ time.Time) (int64, error) {
+	return f.purged, nil
+}
+
+// TestTheIdleChannelJobDrivesTheServiceThatAnnounces holds the one thing that
+// changed about this job's shape.
+//
+// It used to call a2a.Store.CloseIdle directly and DISCARD the channels it
+// returned — which is the only reason that method returns them rather than a
+// count, so a swept close published no event at all. An operator's single
+// signal that an ask went unanswered was silence: the requester's turn ended
+// when it asked, so a channel reaching this sweep means some turn never
+// finished. The job drives the SERVICE now, which owns what a close means on
+// the wire, and this is what stops it quietly going back to the store.
+func TestTheIdleChannelJobDrivesTheServiceThatAnnounces(t *testing.T) {
+	t.Parallel()
+	ch := &fakeChannels{closed: 3, purged: 5}
+	jobs := maintenance.ChannelJobs(ch)
+	if len(jobs) != 2 {
+		t.Fatalf("jobs = %d, want the idle close and the purge", len(jobs))
+	}
+	idle := jobs[0]
+	if idle.Name != "a2a_channels_idle" || idle.Scope != maintenance.Fleet {
+		t.Fatalf("job = %q scope %v", idle.Name, idle.Scope)
+	}
+	if idle.Horizon != maintenance.ChannelIdleTimeout {
+		t.Errorf("horizon = %v, want the idle timeout", idle.Horizon)
+	}
+	cutoff := base.Add(-maintenance.ChannelIdleTimeout)
+	n, err := idle.Run(context.Background(), base, cutoff)
+	if err != nil || n != 3 {
+		t.Fatalf("Run = (%d, %v), want the service's own count", n, err)
+	}
+	// THE CUTOFF AND NOT THE TICK'S `now`: the service reads its own clock
+	// for the close instant, so a channel's closed_at and the duration on
+	// the event it publishes come from one reading rather than two.
+	if len(ch.cutoffs) != 1 || !ch.cutoffs[0].Equal(cutoff) {
+		t.Errorf("the sweep saw cutoffs %v, want the tick's %v", ch.cutoffs, cutoff)
+	}
+	if n, err := jobs[1].Run(context.Background(), base, cutoff); err != nil || n != 5 {
+		t.Fatalf("purge Run = (%d, %v), want the store's count", n, err)
+	}
+}

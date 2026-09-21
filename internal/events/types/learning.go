@@ -533,6 +533,13 @@ func (SkillArchived) EventType() string { return "skill_archived" }
 // SkillRevived fires when a previously stale skill is used again. Distinct from
 // the two transitions above so the bidirectional churn is visible: a skill that
 // keeps staling and reviving is a threshold that is set wrong.
+//
+// TWO PRODUCERS, one of which has a turn and one of which does not, which is
+// why [SkillRevived.TurnID] is legitimately empty on some rows: the reflection
+// worker revives a skill a TURN was offered (internal/learning/skilluse.go),
+// while the curator revives one an operator restored by hand
+// (internal/learning/curator.go) and belongs to no turn at all. That is the
+// same shape skill_synthesized already has on its clustered path.
 type SkillRevived struct {
 	AgentHandle string `json:"agent_handle"`
 	SkillID     string `json:"skill_id"`
@@ -541,6 +548,14 @@ type SkillRevived struct {
 	// restored the row by hand.
 	PriorState     SkillState `json:"prior_state"`
 	TransitionedAt string     `json:"transitioned_at"`
+	// TurnID is the run whose reflection revived the skill, and empty for
+	// the curator's own transition — see the note above.
+	TurnID string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey string `json:"work_key,omitempty"`
 }
 
 // EventType is the "skill_revived" wire type.
@@ -558,6 +573,16 @@ type SkillTelemetryWriteFailed struct {
 	// it names an internal operation rather than a contract.
 	Kind  string `json:"kind"`
 	Error string `json:"error"`
+	// TurnID is the run whose reflection tried the write. Its siblings in
+	// the same worker have always carried it and this one did not, so the
+	// Turn screen's "what went wrong" panel could not draw the failure
+	// however it was banded — the turn query is `WHERE turn_id = ?`.
+	TurnID string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey string `json:"work_key,omitempty"`
 }
 
 // EventType is the "skill_telemetry_write_failed" wire type. Deliberately NOT

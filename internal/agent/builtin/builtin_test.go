@@ -336,6 +336,20 @@ func TestAnAskCarriesTheCallingSeatNotAnArgument(t *testing.T) {
 		t.Errorf("delegation = depth %d chain %v, want this turn's own depth "+
 			"and a chain naming the asker", got.DelegationDepth, got.DelegationChain)
 	}
+	// AND THE TURN THAT IS ASKING, which is what the three audit records
+	// this ask publishes are read back by: EventLog.Turn is
+	// `WHERE turn_id = ?`, so an ask that hands over no run id cannot
+	// appear on the page of the turn that made it — and the panel that
+	// names colleagues fails EMPTY rather than saying so.
+	//
+	// THE RUN, not the work key, and both travel. A redelivered trigger
+	// re-derives one work key across several runs, so a pointer naming the
+	// unit of work could not say which attempt did the asking. See
+	// ADR-0017.
+	if got.TurnID != "run-1" || got.WorkKey != "wk-1" {
+		t.Errorf("the ask names turn %q / work %q, want the asking turn's",
+			got.TurnID, got.WorkKey)
+	}
 }
 
 // ONE ASK IS ONE HOP, wherever the turn started.

@@ -3,6 +3,7 @@ package a2a_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -387,7 +388,9 @@ func TestClosingTwiceAnnouncesOnce(t *testing.T) {
 	id, _ := svc.Open(context.Background(), a2a.Ask{Requester: "alice", Target: "bob", Brief: "?"})
 	rec.sent = nil
 	for range 2 {
-		if err := svc.Close(context.Background(), id); err != nil {
+		if err := svc.Close(context.Background(), a2a.Closure{
+			ChannelID: id, ClosedBy: "bob",
+		}); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	}
@@ -476,7 +479,9 @@ func TestAnAskOpenedOnOneNodeIsAnsweredFromAnother(t *testing.T) {
 	// reads back. A channel closed on one node and still open on another
 	// is a second answer nothing refuses — one ask and one answer is the
 	// whole protocol.
-	if err := answering.Close(context.Background(), id); err != nil {
+	if err := answering.Close(context.Background(), a2a.Closure{
+		ChannelID: id, ClosedBy: "bob",
+	}); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if err := asking.Reply(context.Background(), a2a.Answer{
@@ -484,4 +489,227 @@ func TestAnAskOpenedOnOneNodeIsAnsweredFromAnother(t *testing.T) {
 	}); !errors.Is(err, a2a.ErrClosed) {
 		t.Errorf("a peer's close was invisible: err = %v, want ErrClosed", err)
 	}
+}
+
+// TestEveryAuditRecordNamesThePublishingTurn is the whole point of the turn
+// id on these three payloads.
+//
+// The Turn screen reads ONE query — EventLog.Turn, `WHERE turn_id = ?` — over
+// a column filled from the payload's own top-level `turn_id` field. All three
+// audit records went without one, so an A2A ask had never appeared on a turn
+// this engine ran, and the panel that advertised "colleagues" failed EMPTY:
+// indistinguishable from a turn that spoke to nobody.
+//
+// ASSERTED ON THE DECODED PAYLOAD rather than on the struct literal, because
+// the key is what the column is filled from: a field renamed in its tag would
+// satisfy a Go comparison and write an empty column exactly as before.
+func TestEveryAuditRecordNamesThePublishingTurn(t *testing.T) {
+	t.Parallel()
+	svc, _, rec := service(t, dir{"bob": true})
+	ctx := context.Background()
+	id, err := svc.Open(ctx, a2a.Ask{
+		Requester: "alice", Target: "bob", Brief: "can you review this?",
+		TurnID: "run-ask", WorkKey: "wk-ask",
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := svc.Reply(ctx, a2a.Answer{
+		ChannelID: id, Sender: "bob", Content: "looks good",
+		TurnID: "run-answer", WorkKey: "wk-answer",
+	}); err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	if err := svc.Close(ctx, a2a.Closure{
+		ChannelID: id, ClosedBy: "bob",
+		TurnID: "run-answer", WorkKey: "wk-answer",
+	}); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	opened := decodeOne[*types.A2AChannelOpened](t, rec, "a2a_channel_opened")
+	if opened.TurnID != "run-ask" || opened.WorkKey != "wk-ask" {
+		t.Errorf("the open record names turn %q / work %q, want the ASKING turn",
+			opened.TurnID, opened.WorkKey)
+	}
+	// TWO message records, and they name DIFFERENT turns: the brief belongs
+	// to the turn that asked and the reply to the turn that answered. One
+	// value for both would put the answer on the asker's page, where the
+	// asker's turn had already ended before it was written.
+	sent := decodeAll[*types.A2AMessageSent](t, rec, "a2a_message_sent")
+	if len(sent) != 2 {
+		t.Fatalf("message records = %d, want the brief and the reply", len(sent))
+	}
+	if sent[0].TurnID != "run-ask" || sent[0].WorkKey != "wk-ask" {
+		t.Errorf("the brief names turn %q / work %q, want the ASKING turn",
+			sent[0].TurnID, sent[0].WorkKey)
+	}
+	if sent[1].TurnID != "run-answer" || sent[1].WorkKey != "wk-answer" {
+		t.Errorf("the reply names turn %q / work %q, want the ANSWERING turn",
+			sent[1].TurnID, sent[1].WorkKey)
+	}
+	closed := decodeOne[*types.A2AChannelClosed](t, rec, "a2a_channel_closed")
+	if closed.TurnID != "run-answer" || closed.WorkKey != "wk-answer" {
+		t.Errorf("the close names turn %q / work %q, want the ANSWERING turn",
+			closed.TurnID, closed.WorkKey)
+	}
+	// AND WHO CLOSED IT. ClosedBy was declared and never written, so
+	// Summary's participant branch was dead and every close in this engine's
+	// history read as "system" — the wording reserved for the sweep.
+	if closed.ClosedBy != "bob" {
+		t.Errorf("closed_by = %q, want the participant who closed it", closed.ClosedBy)
+	}
+	if got := closed.Summary(); strings.HasPrefix(got, "system ") {
+		t.Errorf("Summary() = %q, want the participant rather than the sweep", got)
+	}
+}
+
+// TestTheWakeStillPointsAtTheTurnThatCausedIt holds the second landing of the
+// one field.
+//
+// TurnID feeds both the audit record's `turn_id` and the wake's envelope
+// ParentTurnID, and they are read by different things: one answers "what else
+// happened on this turn" and the other "what asked for this". A change that
+// stamped the payload and dropped the envelope would leave the completion
+// side of an exchange with no parent to attribute it to.
+func TestTheWakeStillPointsAtTheTurnThatCausedIt(t *testing.T) {
+	t.Parallel()
+	svc, _, rec := service(t, dir{"bob": true})
+	ctx := context.Background()
+	id, err := svc.Open(ctx, a2a.Ask{
+		Requester: "alice", Target: "bob", Brief: "?", TurnID: "run-ask",
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	wakes := rec.onlyTo(topics.AgentInbox("bob"))
+	if len(wakes) != 1 || wakes[0].ParentTurnID != "run-ask" {
+		t.Fatalf("the ask's wake points at %q, want the asking turn",
+			wakes[0].ParentTurnID)
+	}
+	if err := svc.Reply(ctx, a2a.Answer{
+		ChannelID: id, Sender: "bob", Content: "x", TurnID: "run-answer",
+	}); err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	replies := rec.onlyTo(topics.AgentInbox("alice"))
+	if len(replies) != 1 || replies[0].ParentTurnID != "run-answer" {
+		t.Fatalf("the answer's wake points at %q, want the answering turn",
+			replies[0].ParentTurnID)
+	}
+}
+
+// TestTheSweepAnnouncesEveryChannelItCloses is the close event that was never
+// published.
+//
+// [a2a.Store.CloseIdle] returns the channels it closed rather than a count
+// precisely so its caller can announce them, and the one caller — the
+// retention sweep — discarded the list. So a channel nobody answered ended
+// silently, although that is the case worth seeing: the requester's turn ended
+// when it asked, so a channel reaching the sweep means some turn never
+// finished. Three places described this event anyway — that method's contract,
+// the "system" branch of A2AChannelClosed.Summary, and the event-system doc.
+func TestTheSweepAnnouncesEveryChannelItCloses(t *testing.T) {
+	t.Parallel()
+	// A SERVICE OF ITS OWN, because the shared helper mints one fixed
+	// channel id: two asks under it are one row overwritten, which would
+	// assert the sweep's fan-out against a fleet of one.
+	st := a2a.NewCoordStore(memory.NewFleet())
+	rec := &recorder{}
+	n := 0
+	svc, err := a2a.New(st, rec, a2a.Options{
+		Directory: dir{"bob": true, "carol": true},
+		Now:       func() time.Time { return clock },
+		NewID:     func() string { n++; return fmt.Sprintf("a2a-%d", n) },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+	for _, target := range []string{"bob", "carol"} {
+		if _, err := svc.Open(ctx, a2a.Ask{
+			Requester: "alice", Target: target, Brief: "?", TurnID: "run-ask",
+		}); err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+	}
+	rec.sent = nil
+	// The pinned clock is the channels' own LastAt, so a cutoff after it is
+	// what makes both idle.
+	swept, err := svc.SweepIdle(ctx, clock.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("SweepIdle: %v", err)
+	}
+	if swept != 2 {
+		t.Fatalf("swept %d channels, want 2", swept)
+	}
+	closes := decodeAll[*types.A2AChannelClosed](t, rec, "a2a_channel_closed")
+	if len(closes) != 2 {
+		t.Fatalf("close announcements = %d, want one per swept channel (topics: %v)",
+			len(closes), rec.topics())
+	}
+	for _, closed := range closes {
+		// NEITHER A CLOSER NOR A TURN. A swept close is the statement that
+		// no turn finished, so naming this node's sweep as the closer would
+		// read as a participant, and a turn id would put the row on a turn
+		// page it has nothing to do with.
+		if closed.ClosedBy != "" {
+			t.Errorf("a swept close names closer %q, want nobody", closed.ClosedBy)
+		}
+		if closed.TurnID != "" || closed.WorkKey != "" {
+			t.Errorf("a swept close names turn %q / work %q, want neither",
+				closed.TurnID, closed.WorkKey)
+		}
+		if got := closed.Summary(); !strings.HasPrefix(got, "system ") {
+			t.Errorf("Summary() = %q, want the sweep's own wording", got)
+		}
+	}
+}
+
+// TestASweptChannelIsNotSweptTwice — the second tick must find nothing, or the
+// announcement it exists for becomes a duplicate close per tick for ever.
+func TestASweptChannelIsNotSweptTwice(t *testing.T) {
+	t.Parallel()
+	svc, _, rec := service(t, dir{"bob": true})
+	ctx := context.Background()
+	if _, err := svc.Open(ctx, a2a.Ask{
+		Requester: "alice", Target: "bob", Brief: "?",
+	}); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := svc.SweepIdle(ctx, clock.Add(time.Hour)); err != nil {
+		t.Fatalf("SweepIdle: %v", err)
+	}
+	rec.sent = nil
+	n, err := svc.SweepIdle(ctx, clock.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("second SweepIdle: %v", err)
+	}
+	if n != 0 || len(rec.sent) != 0 {
+		t.Errorf("the second sweep closed %d and published %v", n, rec.topics())
+	}
+}
+
+// decodeOne is the single event of a type, decoded, or a failure naming what
+// was published instead.
+func decodeOne[T events.Payload](t *testing.T, rec *recorder, wire string) T {
+	t.Helper()
+	all := decodeAll[T](t, rec, wire)
+	if len(all) != 1 {
+		t.Fatalf("%s records = %d, want 1 (topics: %v)", wire, len(all), rec.topics())
+	}
+	return all[0]
+}
+
+func decodeAll[T events.Payload](t *testing.T, rec *recorder, wire string) []T {
+	t.Helper()
+	var out []T
+	for _, ev := range rec.onlyTo(topics.Event(wire)) {
+		payload, ok := events.DataAs[T](ev)
+		if !ok {
+			t.Fatalf("a %s event does not carry its typed payload", wire)
+		}
+		out = append(out, payload)
+	}
+	return out
 }
