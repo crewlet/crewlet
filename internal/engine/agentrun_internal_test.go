@@ -313,22 +313,44 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 			}},
 		}},
 	}}
-	for _, name := range []string{"Nested", "Deep"} {
-		gate := seatSandbox(c, name)
+	// ADDRESSED BY HANDLE, derived from the name where the seat declares
+	// none — the same value every other surface addresses a seat by.
+	for _, handle := range []string{"nested", "deep"} {
+		gate := seatSandbox(c, handle)
 		if gate == nil {
-			t.Fatalf("seat %q inside a unit found no sandbox block", name)
+			t.Fatalf("seat %q inside a unit found no sandbox block", handle)
 		}
 		if !gate.Enabled {
-			t.Errorf("seat %q found a block that is not the one it wrote", name)
+			t.Errorf("seat %q found a block that is not the one it wrote", handle)
 		}
 	}
 	// The seat at depth keeps its own settings, not the shallower one's.
-	if deep := seatSandbox(c, "Deep"); deep.PauseTTLSeconds == nil || *deep.PauseTTLSeconds != 0 {
+	if deep := seatSandbox(c, "deep"); deep.PauseTTLSeconds == nil || *deep.PauseTTLSeconds != 0 {
 		t.Errorf("the nested seat's own settings were lost: %+v", deep)
 	}
-	// A seat with no block still answers nil, and a name nobody holds too.
-	if seatSandbox(c, "CEO") != nil || seatSandbox(c, "Nobody") != nil {
+	// A seat with no block still answers nil, and a handle nobody holds too.
+	if seatSandbox(c, "ceo") != nil || seatSandbox(c, "nobody") != nil {
 		t.Error("a seat with no block, or no such seat, answered a block")
+	}
+
+	// TWO SEATS OF ONE NAME GET THEIR OWN BLOCKS. A display name is an
+	// admission rule rather than a runnable one, so a revision stored
+	// before it runs with duplicates — and a walk matching on the name
+	// handed whichever came first. A seat that turned code work off would
+	// be given its namesake's setup steps, credentials and box.
+	namesakes := &Company{Config: &config.Company{
+		Roles: []config.Role{{Name: "Engineer", Handle: "plat-eng"}},
+		Units: []config.Unit{{
+			Name: "Product",
+			Roles: []config.Role{{Name: "Engineer", Handle: "prod-eng",
+				Sandbox: &config.RoleSandbox{Enabled: true}}},
+		}},
+	}}
+	if got := seatSandbox(namesakes, "plat-eng"); got != nil {
+		t.Errorf("the seat that wrote no block was handed %+v — its namesake's", got)
+	}
+	if got := seatSandbox(namesakes, "prod-eng"); got == nil || !got.Enabled {
+		t.Errorf("the seat that wrote a block found %+v", got)
 	}
 
 	// THE FIRST MATCH IS THE ANSWER, even when it wrote no block. Using the
@@ -343,7 +365,7 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 			Roles: []config.Role{{Name: "Twin", Sandbox: &config.RoleSandbox{Enabled: true}}},
 		}},
 	}}
-	if got := seatSandbox(shadowed, "Twin"); got != nil {
+	if got := seatSandbox(shadowed, "twin"); got != nil {
 		t.Errorf("the first seat named Twin wrote no block and was handed %+v", got)
 	}
 }

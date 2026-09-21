@@ -85,7 +85,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	}
 
 	company := e.Company()
-	gate := seatSandbox(company, l.seat.Name)
+	gate := seatSandbox(company, l.seat.Handle())
 	setup := manager.DefaultSetup()
 	var servers map[string]sandbox.MCPServer
 	if gate != nil {

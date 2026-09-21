@@ -866,7 +866,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		return sandbox.LaunchResult{}, err
 	}
 	company := e.Company()
-	gate := seatSandbox(company, seat.Name)
+	gate := seatSandbox(company, seat.Handle())
 	if gate == nil || !gate.Enabled {
 		// Belt and braces: the tool is only on a sandbox-enabled seat's
 		// surface, but the surface is built from a snapshot and a seat can
@@ -1091,7 +1091,17 @@ func pauseTTL(gate *config.RoleSandbox) *time.Duration {
 }
 
 // seatSandbox is a seat's sandbox gate, or nil.
-func seatSandbox(c *Company, roleName string) *config.RoleSandbox {
+//
+// KEYED ON THE HANDLE, which is what makes the answer single-valued. Two seats
+// may carry one display NAME — it is an admission rule, so a revision stored
+// before that rule runs with duplicates and a write merely cannot add one —
+// and a walk matching on it returned whichever came first. A seat with no
+// sandbox block would then be handed its namesake's, which is a coding run on
+// another seat's setup steps, its credentials and its box.
+//
+// A handle is unique by a RUNNABLE rule instead: a company carrying two is
+// refused outright, so there is no document on which this can be ambiguous.
+func seatSandbox(c *Company, handle string) *config.RoleSandbox {
 	if c == nil || c.Config == nil {
 		return nil
 	}
@@ -1114,7 +1124,7 @@ func seatSandbox(c *Company, roleName string) *config.RoleSandbox {
 	// that wrote none from a name nobody holds, so a later seat of the
 	// same name would have had its block returned for this one.
 	for role := range c.Config.EachRole() {
-		if role.Name == roleName {
+		if role.Seat().Handle() == handle {
 			return role.Sandbox
 		}
 	}
