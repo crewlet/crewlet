@@ -34,6 +34,11 @@ type roundTrip struct {
 	reader  *pages.Reader
 	waiter  *testWaiter
 
+	// verifier opens a record's frame, because this harness replays the
+	// log exactly as the framework's own loop does and that loop verifies
+	// before any domain decodes.
+	verifier *statelog.Verifier
+
 	consumed uint64
 }
 
@@ -86,7 +91,8 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	waiter := &testWaiter{}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: pages.Domain{}, Log: log, Rows: rows, Fence: fence,
-		Gates: pages.NewGates(db), Waiter: waiter, NodeID: "node-a",
+		Signer: testSigner(t, pages.Domain{}),
+		Gates:  pages.NewGates(db), Waiter: waiter, NodeID: "node-a",
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
@@ -119,6 +125,7 @@ func newRoundTrip(t *testing.T) *roundTrip {
 		t: t, db: db, log: log, store: kb,
 		applier: pages.NewApplier("node-a", nil, nil),
 		reader:  reader, waiter: waiter,
+		verifier: testVerifier(t, pages.Domain{}),
 	}
 }
 
@@ -141,7 +148,17 @@ func (r *roundTrip) drain() {
 		if !ok {
 			continue
 		}
-		env, err := pages.DecodeEnvelope(payload)
+		// THE FRAME FIRST, exactly as the framework's loop does it: a
+		// record is signed on its way to the appender, and what a
+		// domain decodes is the BODY. A replay that handed the
+		// domain's decoder these bytes would be reading the signature
+		// as JSON, which is what this harness did for one commit and
+		// what every reader of a signed log has to get right.
+		body, verdict := r.verifier.Open(payload)
+		if verdict != statelog.Verified {
+			r.t.Fatalf("record %d did not verify: %s", seq, verdict)
+		}
+		env, err := pages.DecodeEnvelope(body)
 		if err != nil {
 			r.t.Fatalf("decode record %d: %v", seq, err)
 		}
@@ -157,7 +174,7 @@ func (r *roundTrip) drain() {
 			Position: statelog.Position{
 				Stream: spec.Name, Generation: env.Gen, Seq: seq,
 			},
-			Payload:  payload,
+			Payload:  body,
 			StoredAt: storedAt,
 		}
 		if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
@@ -284,3 +301,29 @@ func agent(handle string) pages.Actor {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// testSigner is this suite's record signer.
+//
+// EVERY RECORD ON EVERY STATE LOG IS SIGNED, so a write authority built
+// without one is refused at construction rather than producing records the
+// fleet would refuse one at a time, on every node, for ever. The key is a
+// fixture: what these cases are about is what the domain writes, and the
+// signature's own rules are certified in [statelog].
+func testSigner(t *testing.T, d statelog.Domain) *statelog.Signer {
+	t.Helper()
+	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	return signer
+}
+
+// testVerifier opens what [testSigner] sealed.
+func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
+	t.Helper()
+	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	return verifier
+}

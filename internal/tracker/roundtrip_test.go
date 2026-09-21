@@ -38,6 +38,11 @@ type roundTrip struct {
 	metrics  *metrics.Recorder
 	consumed uint64
 
+	// verifier opens a record's frame, because this harness replays the
+	// log exactly as the framework's own loop does and that loop verifies
+	// before any domain decodes.
+	verifier *statelog.Verifier
+
 	// at is the writer's AUTHORED clock, which a case moves when it is
 	// about the order of instants somebody typed. It defaults to
 	// `wednesday` so every case that is not about time sees one instant.
@@ -129,7 +134,8 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	r.metrics = recorder
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: tracker.Domain{}, Log: log, Rows: rows, Fence: fence,
-		Gates: tracker.NewGates(db), Waiter: waiter, NodeID: "node-a",
+		Signer: testSigner(t, tracker.Domain{}),
+		Gates:  tracker.NewGates(db), Waiter: waiter, NodeID: "node-a",
 		Metrics:       recorder,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
@@ -167,6 +173,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	}
 	r.writer, r.applier = writer, tracker.NewApplier("node-a")
 	r.reader, r.waiter = reader, waiter
+	r.verifier = testVerifier(t, tracker.Domain{})
 	return r
 }
 
@@ -225,6 +232,22 @@ func (r *roundTrip) redeliver(seq uint64) {
 	r.consumed = consumed
 }
 
+// open unwraps one record's signature frame and hands back its body.
+//
+// THE FRAME COMES FIRST, exactly as the framework's own loop does it: a record
+// is signed on its way to the appender, so what a domain decodes is the BODY.
+// A replay that handed the domain's decoder the bytes the log holds would be
+// reading the signature as JSON — the mistake every reader of a signed log
+// has to get right, and the one this harness made for a commit.
+func (r *roundTrip) open(seq uint64, framed []byte) []byte {
+	r.t.Helper()
+	body, verdict := r.verifier.Open(framed)
+	if verdict != statelog.Verified {
+		r.t.Fatalf("record %d did not verify: %s", seq, verdict)
+	}
+	return body
+}
+
 func (r *roundTrip) apply(from, last uint64) {
 	r.t.Helper()
 	for seq := from; seq <= last; seq++ {
@@ -235,7 +258,7 @@ func (r *roundTrip) apply(from, last uint64) {
 		if !ok {
 			continue
 		}
-		env, err := tracker.DecodeEnvelope(payload)
+		env, err := tracker.DecodeEnvelope(r.open(seq, payload))
 		if err != nil {
 			r.t.Fatalf("decode record %d: %v", seq, err)
 		}
@@ -252,7 +275,7 @@ func (r *roundTrip) apply(from, last uint64) {
 			Position: statelog.Position{
 				Stream: tracker.Domain{}.Stream().Name, Generation: env.Gen, Seq: seq,
 			},
-			Payload:  payload,
+			Payload:  r.open(seq, payload),
 			StoredAt: storedAt,
 		}
 		if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
@@ -327,7 +350,7 @@ func (r *roundTrip) scopeOfLastRecord() statelog.ScopeSet {
 	if err != nil || !ok {
 		r.t.Fatalf("read record %d: %v", last, err)
 	}
-	env, err := tracker.DecodeEnvelope(payload)
+	env, err := tracker.DecodeEnvelope(r.open(last, payload))
 	if err != nil {
 		r.t.Fatalf("decode record %d: %v", last, err)
 	}
@@ -627,4 +650,30 @@ func TestASecondWriteBehindIsRefusedRatherThanWaitingForEver(t *testing.T) {
 	if _, err := r.writer.CreateTask(t.Context(), "op-2", newTask("t-2"), nil); err != nil {
 		t.Fatalf("the same create after the drain: %v", err)
 	}
+}
+
+// testSigner is this suite's record signer.
+//
+// EVERY RECORD ON EVERY STATE LOG IS SIGNED, so a write authority built
+// without one is refused at construction rather than producing records the
+// fleet would refuse one at a time, on every node, for ever. The key is a
+// fixture: what these cases are about is what the domain writes, and the
+// signature's own rules are certified in [statelog].
+func testSigner(t *testing.T, d statelog.Domain) *statelog.Signer {
+	t.Helper()
+	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	return signer
+}
+
+// testVerifier opens what [testSigner] sealed.
+func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
+	t.Helper()
+	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	return verifier
 }

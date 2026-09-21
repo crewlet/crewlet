@@ -317,7 +317,7 @@ func (r *roundTrip) lastWake() *tracker.Notify {
 	if err != nil || !ok {
 		r.t.Fatalf("read record %d: %v", last, err)
 	}
-	record, err := tracker.Decode(payload)
+	record, err := tracker.Decode(r.open(last, payload))
 	if err != nil {
 		r.t.Fatalf("decode record %d: %v", last, err)
 	}

@@ -414,7 +414,7 @@ func (r *roundTrip) wakes(t *testing.T) []*tracker.Notify {
 		if err != nil || !ok {
 			continue
 		}
-		record, err := tracker.Decode(payload)
+		record, err := tracker.Decode(r.open(seq, payload))
 		if err != nil || record.Notify == nil {
 			continue
 		}

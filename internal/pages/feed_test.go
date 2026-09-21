@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE WAKE PATH, END TO END: a committed record becomes a notification for the
@@ -142,13 +143,23 @@ func (r *roundTrip) lastRecord() []byte {
 	return r.recordAt(last)
 }
 
+// recordAt is one record's BODY, frame opened.
+//
+// The wake feed is handed the body rather than the bytes off the stream: the
+// framework verifies before any domain decodes, so what travels on a change
+// record is what the domain published. A harness handing on the framed bytes
+// would be testing a translator against something no translator is ever given.
 func (r *roundTrip) recordAt(seq uint64) []byte {
 	r.t.Helper()
 	_, payload, _, ok, err := r.log.At(r.t.Context(), seq)
 	if err != nil || !ok {
 		r.t.Fatalf("read record %d: %v (present %v)", seq, err, ok)
 	}
-	return payload
+	body, verdict := r.verifier.Open(payload)
+	if verdict != statelog.Verified {
+		r.t.Fatalf("record %d did not verify: %s", seq, verdict)
+	}
+	return body
 }
 
 // A LEAD WHO IS NO LONGER A SEAT IS NOT THE ANSWER TO "nobody was named".
