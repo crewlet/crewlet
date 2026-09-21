@@ -361,7 +361,7 @@ mcp_servers:
 roles:
   - name: Founder
     kind: human
-    manages: [CEO]
+    manages: [ceo]
     contact: {slack_user_id: U0FOUNDER}
   - name: CEO
     handle: ceo
@@ -370,7 +370,8 @@ roles:
       - {name: standup, cron: "0 9 * * 1-5", task: post a status note}
 units:
   - name: Core
-    lead: CTO
+    id: core
+    lead: cto
     mcp_env: {gitlab: {GITLAB_TOKEN: "${GL_SHARED}"}}
     project: ENG
     roles:

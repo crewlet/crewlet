@@ -121,7 +121,7 @@ func TestAUnitErrorCarriesItsUnitAndField(t *testing.T) {
 	fanOut := &Unit{Name: "Humans", Roles: []*Role{human()}, Schedules: []Schedule{
 		{Name: "standup", Cron: "0 9 * * *", Task: "post"},
 	}}
-	ledByAPerson := &Unit{Name: "Design", Lead: "Sarah Chen", Roles: []*Role{human(), {Name: "Dev"}},
+	ledByAPerson := &Unit{Name: "Design", Lead: "sarah-chen", Roles: []*Role{human(), {Name: "Dev"}},
 		Schedules: []Schedule{
 			{Name: "digest", Cron: "0 9 * * *", Task: "post", Target: TargetEach},
 			{Name: "roundup", Cron: "0 17 * * 5", Task: "post", Target: TargetLead},

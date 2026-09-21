@@ -17,7 +17,7 @@ var (
 	//
 	// A nameless seat derives no handle, and therefore no agent id and no
 	// inbox — it is in the chart and unreachable from everywhere else. A
-	// nameless unit can be neither a lead scope nor a manages target.
+	// nameless unit has nothing to render and nothing to mint a key from.
 	ErrMissingName = errors.New("name must not be empty")
 
 	// ErrUnknownKind reports a seat whose kind is neither agent nor human.
@@ -43,10 +43,13 @@ var (
 
 	// ErrDuplicateSeatName reports two seats carrying one name.
 	//
-	// A seat is referenced BY NAME: a unit's lead and every manages entry
-	// resolve to the first seat of that name, so a second one is silently
-	// unreachable through either. Two seats can differ in handle and still
-	// collide here, which is why the handle rule does not cover it.
+	// A seat's name is DISPLAY — the document references a seat by handle —
+	// and this is about what reads prose. A model addressing a colleague
+	// types the name it remembers, and the colleague lookup answers an exact
+	// role-name match with one seat or an honest list; two seats of one name
+	// are permanently that list, on every ask and every roster row. Two
+	// seats can differ in handle and still collide here, which is why the
+	// handle rule does not cover it.
 	//
 	// An ADMISSION rule (see [Organization.ValidateAdmission]): refused on
 	// a document somebody submits, reported as a warning on a stored
@@ -56,20 +59,22 @@ var (
 	// ErrDuplicateUnitName reports two units carrying one name, anywhere in
 	// the tree.
 	//
-	// A unit is referenced BY NAME: a manages entry naming it expands to the
-	// first unit of that name, a root seat's unit reference moves the seat
-	// into it, and a masked credential is restored against it. Two teams
-	// called "Platform" under different departments read as distinct on
-	// every screen while each of those resolves one of them.
+	// A unit is referenced BY KEY, and a name IS the key on a unit that
+	// declares no id: a manages entry keying it expands to the first unit
+	// answering to it, a root seat's unit reference moves the seat into it,
+	// and a masked credential is restored against it. Two teams called
+	// "Platform" under different departments read as distinct on every
+	// screen while each of those resolves one of them.
 	//
 	// Compared FOLDED, unlike a seat name: a name is prose, "Platform" and
 	// "platform" are one team, and a reader who cannot tell two units apart
 	// files one team's work under the other the first time they write the
-	// case they remember. Every reference does resolve a unit name as
+	// case they remember. Every reference does resolve a unit key as
 	// written, which is what makes that collision quiet rather than what
-	// makes it safe. A seat name is compared exactly because a seat's key
-	// is its handle, which is unique by a runnable rule; a unit's name IS
-	// its key wherever it declares no id.
+	// makes it safe. A seat name is compared exactly because a seat's
+	// identity is its handle, which is unique by a runnable rule and is
+	// what every reference resolves; a unit's name IS its key wherever it
+	// declares no id.
 	//
 	// The rule that reports this measures a name against other units' IDS
 	// under the same fold, because an id is a lowercase key by rule while a
@@ -118,13 +123,13 @@ var (
 	ErrDuplicateIdentity = errors.New("duplicate contact identity")
 
 	// ErrMisplacedUnitRef reports a seat declared inside a unit whose `unit:`
-	// reference names a different unit.
+	// reference keys a different unit.
 	//
 	// The reference PLACES a seat declared at the root: normalization moves
 	// such a seat into the unit it names. A seat already declared inside a
 	// unit is never moved, so on it the reference reads as a placement and
 	// does nothing, and the seat stays where it was written while its author
-	// believes it sits elsewhere. Repeating the enclosing unit's own name
+	// believes it sits elsewhere. Repeating the enclosing unit's own key
 	// says nothing wrong and is accepted.
 	//
 	// An ADMISSION rule, like [ErrDuplicateSeatName]: nothing refused the
@@ -268,8 +273,8 @@ type DuplicateError struct {
 	Seats []*Role
 	Units []*Unit
 	// Err is the grouped message, wrapping ErrDuplicateHandle,
-	// ErrDuplicateSeatName, ErrDuplicateIdentity, or ErrDuplicateUnitName
-	// and ErrDuplicateUnit together.
+	// ErrDuplicateSeatName, ErrDuplicateIdentity, or
+	// ErrDuplicateUnitName and ErrDuplicateUnit together.
 	Err error
 }
 

@@ -164,9 +164,14 @@ func TestAVerboseBrokerIsQuietOnceSomethingRecordsIt(t *testing.T) {
 	}
 }
 
-// A UNIT WITH NO ID IS KEYED ON ITS NAME, and the warning names BOTH halves —
-// because giving it an id fixes one of them and not the other.
-func TestAUnitWithNoIDIsWarnedAboutInBothHalves(t *testing.T) {
+// A UNIT WITH NO ID IS REFUSED ON A WRITE AND WARNED ABOUT ON A STORED
+// REVISION, which is what an ADMISSION rule is: a unit is referenced by its
+// key, so a new document may not leave a team keyed on prose, while a company
+// stored before the rule still boots on its name.
+//
+// It was an advisory once, and reporting it in both channels would have put
+// one mistake in front of an operator twice.
+func TestAUnitWithNoIDIsRefusedAndWarnedAbout(t *testing.T) {
 	t.Parallel()
 	c := &config.Company{
 		Name: "Acme",
@@ -175,11 +180,25 @@ func TestAUnitWithNoIDIsWarnedAboutInBothHalves(t *testing.T) {
 			Roles: []config.Role{{Name: "SWE", Handle: "swe"}},
 		}},
 	}
+	// A SUBMITTED DOCUMENT IS REFUSED, and a running one is not: the key
+	// falls back to the name, which is exactly how every company behaved
+	// before the field.
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "units[0].id") {
+		t.Errorf("Validate() = %v, want a refusal naming units[0].id", err)
+	}
+	// The fixture is a bare struct rather than the defaults, so the
+	// runnable half has its own complaints; what matters is that the
+	// missing id is not one of them.
+	if err := c.ValidateRunnable(); err != nil && strings.Contains(err.Error(), "units[0].id") {
+		t.Errorf("ValidateRunnable() = %v: a stored revision with no unit ids "+
+			"still runs, keyed on its names", err)
+	}
+
 	warnings := c.Warnings()
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want one about the unit", warnings)
 	}
-	for _, want := range []string{"unit \"Platform\"", "no `id`", "renaming it moves", "re-onboarding"} {
+	for _, want := range []string{"unit \"Platform\"", "has no id", "`manages:`", "id: platform"} {
 		if !strings.Contains(warnings[0].Message, want) {
 			t.Errorf("warning does not say %q: %q", want, warnings[0].Message)
 		}
@@ -188,15 +207,18 @@ func TestAUnitWithNoIDIsWarnedAboutInBothHalves(t *testing.T) {
 	// prose: `units[0].id` is the line an editor opens and the node a
 	// dashboard marks, and the unit is named for a reader with no document
 	// in front of them.
-	if w := warnings[0]; w.Kind != config.WarningAdvisory || w.Path != "units[0].id" ||
+	if w := warnings[0]; w.Kind != config.WarningAdmission || w.Path != "units[0].id" ||
 		!reflect.DeepEqual(w.Segments, config.Path{"units", 0, "id"}) || w.Unit != "Platform" {
-		t.Errorf("warning = %+v, want an advisory at units[0].id naming the unit", w)
+		t.Errorf("warning = %+v, want an admission warning at units[0].id naming the unit", w)
 	}
 
-	// AND AN ID SILENCES IT.
+	// AND AN ID SILENCES IT, in both channels.
 	c.Units[0].ID = "platform"
 	if got := c.Warnings(); len(got) != 0 {
 		t.Errorf("a unit with an id still warned: %v", got)
+	}
+	if err := c.Validate(); err != nil && strings.Contains(err.Error(), "units[0].id") {
+		t.Errorf("a unit with an id was refused at its id: %v", err)
 	}
 }
 
@@ -219,11 +241,11 @@ func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %+v, want one about the child unit alone", warnings)
 	}
-	if w := warnings[0]; w.Kind != config.WarningAdvisory ||
+	if w := warnings[0]; w.Kind != config.WarningAdmission ||
 		w.Path != "units[1].children[0].id" ||
 		!reflect.DeepEqual(w.Segments, config.Path{"units", 1, "children", 0, "id"}) ||
 		w.Unit != "Platform" {
-		t.Errorf("warning = %+v, want an advisory at units[1].children[0].id", w)
+		t.Errorf("warning = %+v, want an admission warning at units[1].children[0].id", w)
 	}
 }
 

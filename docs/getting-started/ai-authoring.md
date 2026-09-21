@@ -175,7 +175,7 @@ check them by reading:
 
 | Gap | Why the schema can't |
 |---|---|
-| `lead` / `manages` naming a role or unit that exists | Reference integrity across the document — not expressible in JSON Schema |
+| `lead` / `manages` naming a seat handle or unit key that exists | Reference integrity across the document — not expressible in JSON Schema |
 | Real IANA timezone | Needs the timezone database |
 | Cron *semantics* (`99 * * * *` has the right shape) | Needs a cron parser |
 
@@ -206,16 +206,16 @@ crewlet validate company.yaml -json
       "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider: providers.llm has primary. A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" },
     { "path": "units[0].roles[0].name", "segments": ["units", 0, "roles", 0, "name"],
       "kind": "conflict", "seat": "software-engineer",
-      "message": "duplicate seat name \"Software Engineer\": 2 seats carry it (handle \"software-engineer\" in unit \"Engineering\"; handle \"software-engineer-2\" in unit \"Engineering\"). A unit's lead and every manages entry name exactly one seat, and resolve to the first seat of that name, so give each of these seats its own name" },
+      "message": "duplicate seat name \"Software Engineer\": 2 seats carry it (handle \"software-engineer\" in unit \"Engineering\"; handle \"software-engineer-2\" in unit \"Engineering\"). A colleague named in prose is resolved by this name, so an agent asking for it is offered both of them every time; give each of these seats its own name" },
     { "path": "units[0].roles[1].name", "segments": ["units", 0, "roles", 1, "name"],
       "kind": "conflict", "seat": "software-engineer-2",
-      "message": "duplicate seat name \"Software Engineer\": 2 seats carry it (handle \"software-engineer\" in unit \"Engineering\"; handle \"software-engineer-2\" in unit \"Engineering\"). A unit's lead and every manages entry name exactly one seat, and resolve to the first seat of that name, so give each of these seats its own name" }
+      "message": "duplicate seat name \"Software Engineer\": 2 seats carry it (handle \"software-engineer\" in unit \"Engineering\"; handle \"software-engineer-2\" in unit \"Engineering\"). A colleague named in prose is resolved by this name, so an agent asking for it is offered both of them every time; give each of these seats its own name" }
   ],
   "warnings": [
     { "kind": "dangling_reference", "ref": "lead",
       "path": "units[0].lead", "segments": ["units", 0, "lead"],
-      "seat": "", "unit": "Engineering", "from": "Engineering", "to": "Tech Lead",
-      "message": "unit \"Engineering\" names lead \"Tech Lead\", which is no seat, so the unit and every descendant inheriting its lead run with no lead. Correct the lead or add a seat with that name" }
+      "seat": "", "unit": "Engineering", "from": "Engineering", "to": "tech-lead",
+      "message": "unit \"Engineering\" names lead \"tech-lead\", which is no seat's handle, so the unit and every descendant inheriting its lead run with no lead. Correct the handle or add a seat that derives it" }
   ]
 }
 ```
@@ -253,8 +253,9 @@ seat**, each at the name that seat wrote, so `problems` can hold more entries
 than the prose output has lines (which leads such a message with every path
 it applies to).
 
-`warnings` are references that resolve to nothing: a unit `lead`, a root
-seat's `unit`, a `manages` entry, or a GitLab access level naming no seat.
+`warnings` are references that resolve to nothing: a unit `lead` (a seat
+handle), a root seat's `unit` (a unit key), a `manages` entry (either), or a
+GitLab access level naming no seat.
 The engine runs a company with one (live configuration assembles an
 organization in pieces), so a warning never fails validation, but one that
 survives a finished document is a misspelling nothing else will report.
@@ -274,11 +275,11 @@ and a second copy is what makes the loop's log unreadable.
 so a complete config validates *before any secret exists*. You can draft
 and check an entire company offline.
 
-Validation is deep: it builds the `Organization`, so duplicate seat and unit
-names, bad cron expressions, invalid timezones, human seats with no contact
-identity, and a knowledge scope with no backend behind it all fail here
-rather than at run time, and a unit lead naming no seat is reported as a
-warning.
+Validation is deep: it builds the `Organization`, so duplicate seat names,
+duplicate unit keys, bad cron expressions, invalid timezones, human seats
+with no contact identity, and a knowledge scope with no backend behind it all
+fail here rather than at run time, and a unit lead that is no seat's handle
+is reported as a warning.
 
 `-tier auto` (the default) picks the tier from the document's **keys**, not
 its filename: the one thing this has to get right is the case where the file

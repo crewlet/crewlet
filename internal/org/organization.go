@@ -90,21 +90,41 @@ func (o *Organization) AllUnits() iter.Seq[*Unit] {
 	}
 }
 
-// Role returns the seat with this name from anywhere in the company, or
+// Role returns the seat with this HANDLE from anywhere in the company, or
 // nil. Root seats are checked first.
-func (o *Organization) Role(name string) *Role {
+//
+// THE HANDLE IS WHAT A DOCUMENT REFERENCES a seat by — a unit's `lead:`,
+// every `manages:` entry — and it is the identity every layer outside the
+// org model already addresses the seat by. A seat's name is prose a founder
+// edits, so resolving one by name made every reference to it break on a
+// rename, and made two derivations of "which seat is this" that disagreed
+// wherever an operator declared a handle.
+func (o *Organization) Role(handle string) *Role {
+	if handle == "" {
+		return nil
+	}
 	for r := range o.AllRoles() {
-		if r.Name == name {
+		if r.Handle() == handle {
 			return r
 		}
 	}
 	return nil
 }
 
-// Unit returns the unit with this name from anywhere in the tree, or nil.
-func (o *Organization) Unit(name string) *Unit {
+// Unit returns the unit answering to this KEY from anywhere in the tree, or
+// nil.
+//
+// THE KEY, for the reason [Organization.Role] resolves a handle: a unit's
+// name is what people read and therefore what gets renamed, while its key
+// ([Unit.Key], its id) is chosen once. A `manages:` entry naming a unit and a
+// root seat's `unit:` both resolve here, so a team can be renamed without
+// anything that points at it going dark.
+func (o *Organization) Unit(key string) *Unit {
+	if key == "" {
+		return nil
+	}
 	for u := range o.AllUnits() {
-		if u.Name == name {
+		if u.Key() == key {
 			return u
 		}
 	}
@@ -162,17 +182,11 @@ func (o *Organization) AgentSeatByHandle(handle string) *Role {
 // that skipped them would silently drop every mention of a human colleague.
 //
 // Handles are unique across both kinds, so there is no ambiguity to resolve.
-func (o *Organization) SeatByHandle(handle string) *Role {
-	if handle == "" {
-		return nil
-	}
-	for r := range o.AllRoles() {
-		if r.Handle() == handle {
-			return r
-		}
-	}
-	return nil
-}
+//
+// [Organization.Role] IS this lookup — the handle is how the document itself
+// names a seat — so this is a name for the caller's question rather than a
+// second walk that could answer differently.
+func (o *Organization) SeatByHandle(handle string) *Role { return o.Role(handle) }
 
 // SeatByOperatorID returns the seat an api.auth token id is bound to, or nil.
 //
@@ -277,7 +291,7 @@ func (o *Organization) AgentSeatByID(id uuid.UUID) *Role {
 //
 // In order, because the order is load-bearing:
 //
-//  1. A root seat naming a unit MOVES into it. A seat added through the
+//  1. A root seat naming a unit KEY moves into it. A seat added through the
 //     per-entity config API arrives at the root with a unit: reference; a
 //     seat that stayed there would miss the unit's MCP credentials and be
 //     invisible to the unit lead, so the move has to precede both.
@@ -287,13 +301,13 @@ func (o *Organization) AgentSeatByID(id uuid.UUID) *Role {
 //     whose own values win per variable. Human seats inherit none.
 //  4. A unit lead AUTO-MANAGES any direct member that no direct member of
 //     the same unit already manages.
-//  5. A manages entry naming a UNIT expands to the seats in it.
+//  5. A manages entry naming a UNIT KEY expands to the handles in it.
 //
 // Steps 4 and 5 both read manages through ONE resolver ([managesIndex]),
 // built once after step 1 has settled who sits where. Auto-management runs
 // before the expansion rewrites the lists, so it has to see each entry the
 // way the expansion will leave it: a direct member that manages its own unit
-// (or an ancestor) by name shields the members that reference reaches,
+// (or an ancestor) by key shields the members that reference reaches,
 // exactly as if it had listed them one by one. Reading the entry as written
 // instead let the lead claim those members too, giving each a second
 // manager, and claim the member itself when the reference reached the lead,
@@ -316,9 +330,9 @@ func (o *Organization) Normalize() {
 	}
 }
 
-// attachRootSeats moves each root seat carrying a unit: reference into that
-// unit's members. A reference naming no unit leaves the seat at the root —
-// see [Organization.DanglingRefs].
+// attachRootSeats moves each root seat carrying a unit: reference into the
+// unit answering to that KEY. A reference naming no unit leaves the seat at
+// the root — see [Organization.DanglingRefs].
 func (o *Organization) attachRootSeats() {
 	if len(o.Units) == 0 || len(o.Roles) == 0 {
 		return
@@ -395,12 +409,12 @@ func (o *Organization) inheritMCPEnv() {
 // because neither step moves a seat between units, so the membership it
 // captures is the membership both of them see.
 type managesIndex struct {
-	// seats is every seat name in the company.
+	// seats is every seat HANDLE in the company.
 	seats map[string]struct{}
-	// unitSeats is each unit's seat names, descendants included, in
-	// [Unit.AllRoles] order. The FIRST unit carrying a name owns it, the
+	// unitSeats is each unit KEY's seat handles, descendants included, in
+	// [Unit.AllRoles] order. The FIRST unit answering to a key owns it, the
 	// same answer [Organization.Unit] gives: a stored revision can still
-	// hold two units of one name, and an expansion that read the last one
+	// hold two units on one key, and an expansion that read the last one
 	// while every lookup read the first would manage one team while
 	// reporting another.
 	unitSeats map[string][]string
@@ -412,28 +426,30 @@ func (o *Organization) managesIndex() managesIndex {
 		unitSeats: make(map[string][]string),
 	}
 	for r := range o.AllRoles() {
-		index.seats[r.Name] = struct{}{}
+		index.seats[r.Handle()] = struct{}{}
 	}
 	for u := range o.AllUnits() {
-		if _, claimed := index.unitSeats[u.Name]; claimed {
+		key := u.Key()
+		if _, claimed := index.unitSeats[key]; claimed {
 			continue
 		}
-		names := make([]string, 0, len(u.Roles))
+		handles := make([]string, 0, len(u.Roles))
 		for r := range u.AllRoles() {
-			names = append(names, r.Name)
+			handles = append(handles, r.Handle())
 		}
-		index.unitSeats[u.Name] = names
+		index.unitSeats[key] = handles
 	}
 	return index
 }
 
-// resolve returns the names one manages entry of manager stands for.
+// resolve returns the HANDLES one manages entry of manager stands for.
+// manager is the managing seat's own handle.
 //
-// A name that is BOTH a seat and a unit stays a seat reference. The seat is
-// the more specific reading, and an operator who named a person means that
-// person; expanding it would silently hand them a whole team.
+// A token that is BOTH a seat handle and a unit key stays a seat reference.
+// The seat is the more specific reading, and an operator who named a person
+// means that person; expanding it would silently hand them a whole team.
 //
-// A unit name stands for every seat in that unit's subtree except manager
+// A unit key stands for every seat in that unit's subtree except manager
 // itself: a seat inside the unit it manages does not manage itself.
 //
 // An entry matching neither stands for itself, verbatim. Live config
@@ -450,20 +466,20 @@ func (x managesIndex) resolve(manager, entry string) []string {
 		return []string{entry}
 	}
 	out := make([]string, 0, len(members))
-	for _, name := range members {
-		if name != manager {
-			out = append(out, name)
+	for _, handle := range members {
+		if handle != manager {
+			out = append(out, handle)
 		}
 	}
 	return out
 }
 
-// managed is the set of names r's manages entries resolve to.
+// managed is the set of handles r's manages entries resolve to.
 func (x managesIndex) managed(r *Role) map[string]struct{} {
 	out := make(map[string]struct{}, len(r.Manages))
 	for _, entry := range r.Manages {
-		for _, name := range x.resolve(r.Name, entry) {
-			out[name] = struct{}{}
+		for _, handle := range x.resolve(r.Handle(), entry) {
+			out[handle] = struct{}{}
 		}
 	}
 	return out
@@ -482,7 +498,7 @@ func (x managesIndex) managed(r *Role) map[string]struct{} {
 //
 // Every guard reads manages RESOLVED ([managesIndex.resolve]), so an entry
 // naming a unit counts for each seat it reaches. A member that manages its
-// own unit (or an ancestor) by name shields the members that reference
+// own unit (or an ancestor) by key shields the members that reference
 // reaches, and is itself never claimed when the reference reaches the lead.
 //
 // THE SHIELD IS THE UNIT'S OWN DIRECT MEMBERS' manages, never the whole
@@ -508,36 +524,40 @@ func (o *Organization) autoManageByLead(index managesIndex) {
 		managedBy := make(map[*Role]map[string]struct{}, len(u.Roles))
 		for _, r := range u.Roles {
 			managedBy[r] = index.managed(r)
-			for name := range managedBy[r] {
-				shielded[name] = struct{}{}
+			for handle := range managedBy[r] {
+				shielded[handle] = struct{}{}
 			}
 		}
 		byLead := index.managed(lead)
 
 		for _, r := range u.Roles {
-			if r.Name == u.Lead {
+			handle := r.Handle()
+			if handle == u.Lead {
 				continue
 			}
-			if _, taken := shielded[r.Name]; taken {
+			if _, taken := shielded[handle]; taken {
 				continue
 			}
-			if _, already := byLead[r.Name]; already {
+			if _, already := byLead[handle]; already {
 				continue
 			}
 			if _, managesLead := managedBy[r][u.Lead]; managesLead {
 				continue
 			}
-			lead.Manages = append(lead.Manages, r.Name)
-			lead.AutoManaged = append(lead.AutoManaged, r.Name)
-			byLead[r.Name] = struct{}{}
+			lead.Manages = append(lead.Manages, handle)
+			lead.AutoManaged = append(lead.AutoManaged, handle)
+			byLead[handle] = struct{}{}
 		}
 	}
 }
 
-// expandManages replaces each manages entry with the seats it resolves to,
-// so an operator can write one team name instead of five people. See
-// [managesIndex.resolve] for the reading, and [Organization.Normalize] for
-// why auto-management shares it.
+// expandManages replaces each manages entry with the seat HANDLES it
+// resolves to, so an operator can write one unit key instead of five people.
+// See [managesIndex.resolve] for the reading, and [Organization.Normalize]
+// for why auto-management shares it.
+//
+// Afterwards every entry of every manages list is a handle, which is what
+// [Organization.Manager] and [Organization.Reports] read.
 func (o *Organization) expandManages(index managesIndex) {
 	for r := range o.AllRoles() {
 		if len(r.Manages) == 0 {
@@ -546,12 +566,12 @@ func (o *Organization) expandManages(index managesIndex) {
 		expanded := make([]string, 0, len(r.Manages))
 		seen := make(map[string]struct{}, len(r.Manages))
 		for _, entry := range r.Manages {
-			for _, name := range index.resolve(r.Name, entry) {
-				if _, dup := seen[name]; dup {
+			for _, handle := range index.resolve(r.Handle(), entry) {
+				if _, dup := seen[handle]; dup {
 					continue
 				}
-				expanded = append(expanded, name)
-				seen[name] = struct{}{}
+				expanded = append(expanded, handle)
+				seen[handle] = struct{}{}
 			}
 		}
 		r.Manages = expanded
@@ -564,11 +584,12 @@ func (o *Organization) expandManages(index managesIndex) {
 type RefKind string
 
 const (
-	// RefLead is a unit whose own lead names no seat in the org.
+	// RefLead is a unit whose own lead is no seat's handle.
 	RefLead RefKind = "lead"
-	// RefUnit is a root seat whose unit: names no unit in the org.
+	// RefUnit is a root seat whose unit: is no unit's key.
 	RefUnit RefKind = "unit"
-	// RefManages is a manages entry naming neither a seat nor a unit.
+	// RefManages is a manages entry that is neither a seat's handle nor a
+	// unit's key.
 	RefManages RefKind = "manages"
 	// RefGitLabAccessLevel is a key of
 	// integrations.gitlab.provisioning.access_levels naming no seat's
@@ -583,11 +604,12 @@ const (
 // DanglingRef is a name that resolved to nothing.
 type DanglingRef struct {
 	Kind RefKind
-	// From is what carries the reference: the unit (for a lead), the seat
-	// (for a unit reference or a manages entry), or the document path of
-	// the map (for a GitLab access level).
+	// From is what carries the reference, by the DISPLAY name a person
+	// reads: the unit (for a lead), the seat (for a unit reference or a
+	// manages entry), or the document path of the map (for a GitLab access
+	// level).
 	From string
-	// To is the name that resolved to nothing.
+	// To is the handle or key, as written, that resolved to nothing.
 	To string
 	// Seat and Unit are the entity carrying the reference, when it is one:
 	// the seat for a unit reference or a manages entry, the unit for a lead.
@@ -603,17 +625,17 @@ type DanglingRef struct {
 func (d DanglingRef) Message() string {
 	switch d.Kind {
 	case RefLead:
-		return fmt.Sprintf("unit %q names lead %q, which is no seat, so the unit "+
-			"and every descendant inheriting its lead run with no lead. "+
-			"Correct the lead or add a seat with that name", d.From, d.To)
+		return fmt.Sprintf("unit %q names lead %q, which is no seat's handle, so "+
+			"the unit and every descendant inheriting its lead run with no lead. "+
+			"Correct the handle or add a seat that derives it", d.From, d.To)
 	case RefUnit:
-		return fmt.Sprintf("seat %q names unit %q, which does not exist, so the "+
-			"seat stays at the root. Correct its unit or add a unit with that name",
+		return fmt.Sprintf("seat %q names unit %q, which is no unit's key, so the "+
+			"seat stays at the root. Correct the key or add a unit with that id",
 			d.From, d.To)
 	case RefManages:
-		return fmt.Sprintf("seat %q manages %q, which is neither a seat nor a "+
-			"unit, so the entry manages nobody. Correct the entry or add a seat "+
-			"or unit with that name", d.From, d.To)
+		return fmt.Sprintf("seat %q manages %q, which is neither a seat's handle "+
+			"nor a unit's key, so the entry manages nobody. Correct the entry or "+
+			"add a seat or unit answering to it", d.From, d.To)
 	case RefGitLabAccessLevel:
 		return fmt.Sprintf("%s names handle %q, which no seat has, so a seat "+
 			"added later with that handle would be given this access level. "+
@@ -643,17 +665,21 @@ func (d DanglingRef) Message() string {
 // WHAT WAS WRITTEN, ONCE. A lead is reported on the unit that declares it
 // ([Unit.DeclaredLead]), never on the descendants that inherited it: they
 // wrote nothing, and naming them sent an operator to fix units whose authors
-// had nothing to fix. A manages entry is reported when it names neither a
-// seat nor a unit. One naming a unit with no seats resolves to nobody, but it
-// is not a misspelling, so it is not reported.
+// had nothing to fix. A manages entry is reported when it is neither a seat's
+// handle nor a unit's key. One naming a unit with no seats resolves to
+// nobody, but it is not a misspelling, so it is not reported.
+//
+// EVERY REFERENCE IS RESOLVED THE WAY THE ENGINE RESOLVES IT: seats by
+// handle, units by key. Checking a different identity here would report a
+// misspelling the engine does not have, or miss the one it does.
 func (o *Organization) DanglingRefs() []DanglingRef {
 	seats := make(map[string]struct{})
 	for r := range o.AllRoles() {
-		seats[r.Name] = struct{}{}
+		seats[r.Handle()] = struct{}{}
 	}
 	units := make(map[string]struct{})
 	for u := range o.AllUnits() {
-		units[u.Name] = struct{}{}
+		units[u.Key()] = struct{}{}
 	}
 
 	var out []DanglingRef
@@ -727,34 +753,35 @@ func (o *Organization) Validate() error {
 // ValidateAdmission reports every ADMISSION rule the company breaks, joined:
 // duplicate seat names, two units answering to one key (a duplicate name, or
 // an id that is another unit's key), and a unit reference on a seat declared
-// inside a different unit. See the class note above [Organization.Validate].
+// inside a unit of a different key. See the class note above [Organization.Validate].
 // It assumes [Organization.Normalize] has run, so a root seat moved into its
 // unit is counted once, where it now sits.
 func (o *Organization) ValidateAdmission() error {
-	return errors.Join(o.validateSeatNames(), o.validateUnitKeys(), o.validateUnitRefs())
+	return errors.Join(o.validateSeatNames(), o.validateUnitKeys(),
+		o.validateUnitRefs())
 }
 
 // validateUnitRefs refuses a `unit:` reference on a seat that sits inside a
-// unit the reference does not name. See [ErrMisplacedUnitRef].
+// unit the reference does not key. See [ErrMisplacedUnitRef].
 //
 // Read after normalization, which is what makes one comparison enough: a
-// root seat whose reference resolved now sits in the unit it names, so its
+// root seat whose reference resolved now sits in the unit it keys, so its
 // reference matches, and one whose reference resolved to nothing is still at
 // the root, where [Organization.DanglingRefs] reports it. Every other member
-// carrying a reference that differs from its unit's name was declared there.
+// carrying a reference that differs from its unit's key was declared there.
 // Compared as the exact string a reference resolves by.
 func (o *Organization) validateUnitRefs() error {
 	var errs []error
 	for u := range o.AllUnits() {
 		for _, r := range u.Roles {
-			if r.UnitRef == "" || r.UnitRef == u.Name {
+			if r.UnitRef == "" || r.UnitRef == u.Key() {
 				continue
 			}
 			errs = append(errs, &SeatError{Seat: r, Field: []any{"unit"}, Err: fmt.Errorf(
-				"role %q: %w: it is declared in unit %q, and `unit: %s` places only a "+
-					"seat declared at the root, so here it moves nothing. Remove the "+
-					"reference, or declare the seat in unit %q or at the root",
-				r.Name, ErrMisplacedUnitRef, u.Name, r.UnitRef, r.UnitRef)})
+				"role %q: %w: it is declared in unit %q (key %q), and `unit: %s` places "+
+					"only a seat declared at the root, so here it moves nothing. Remove "+
+					"the reference, or declare the seat in the unit keyed %q or at the root",
+				r.Name, ErrMisplacedUnitRef, u.Name, u.Key(), r.UnitRef, r.UnitRef)})
 		}
 	}
 	return errors.Join(errs...)
@@ -789,16 +816,26 @@ func (o *Organization) validateHandles() error {
 
 // validateSeatNames enforces org-wide seat name uniqueness.
 //
-// Compared as the EXACT string, because that is how [Organization.Role]
-// resolves a lead or a manages entry: two names differing only in case or
-// spacing are distinct references there, so they are distinct here. A unit
-// key is folded instead (see validateUnitKeys below), and the two rules are
-// not in disagreement: a seat's key is its HANDLE, held unique by a runnable
-// rule, so nothing is ever filed under a seat's name, and a pair differing
-// only in case derives ONE handle unless it declares two, which is where that
-// rule reports it. A unit derives nothing of the sort: its name IS its key
-// wherever it declares no id. A name that is empty or blank is skipped, since
-// [Role.Validate] already refuses it.
+// A seat's name is DISPLAY, and this rule is about what reads it. Nothing in
+// the document resolves a seat by name any more — a unit's `lead:` and every
+// `manages:` entry are handles — so a duplicate no longer makes a seat
+// unreachable through a reference. What it still does is make the seat
+// unaddressable by the one party that types prose: a model reaching a
+// colleague names what it remembers, and the colleague lookup answers an
+// exact role-name match with one seat or an honest list. Two seats of one
+// name are permanently that list, on every ask, every mention and every
+// roster row a lead reads.
+//
+// Compared as the EXACT string, because that is how an exact role-name match
+// is made: two names differing only in case or spacing are distinct there, so
+// they are distinct here. A unit key is folded instead (see validateUnitKeys
+// below), and the two rules are not in disagreement: a seat's identity is its
+// HANDLE, held unique by a runnable rule, so nothing is ever filed or
+// referenced under a seat's name, and a pair differing only in case derives
+// ONE handle unless it declares two, which is where that rule reports it. A
+// unit derives nothing of the sort: its name IS its key wherever it declares
+// no id. A name that is empty or blank is skipped, since [Role.Validate]
+// already refuses it.
 func (o *Organization) validateSeatNames() error {
 	groups := groupBy(o.placedSeats(), func(s placedSeat) string {
 		if strings.TrimSpace(s.role.Name) == "" {
@@ -811,9 +848,9 @@ func (o *Organization) validateSeatNames() error {
 		errs = append(errs, &DuplicateError{
 			Kind: DuplicateSeatName, Key: g.key, Seats: seatsOf(g.members),
 			Err: fmt.Errorf(
-				"%w %q: %d seats carry it (%s). A unit's lead and every manages "+
-					"entry name exactly one seat, and resolve to the first seat of "+
-					"that name, so give each of these seats its own name",
+				"%w %q: %d seats carry it (%s). A colleague named in prose is "+
+					"resolved by this name, so an agent asking for it is offered "+
+					"both of them every time; give each of these seats its own name",
 				ErrDuplicateSeatName, g.key, len(g.members), describeSeats(g.members, false)),
 		})
 	}
@@ -991,7 +1028,7 @@ func (o *Organization) validateUnitKeys() error {
 					"declares one and its name otherwise, and a manages entry or a "+
 					"seat's unit reference resolves to the first unit answering to "+
 					"it, so one team's work, routing and pages are filed under "+
-					"another. Give each of these units its own name or id",
+					"another. Give each of these units its own id",
 				key, len(g.members), describeUnits(g.members, g.key)),
 		})
 	}

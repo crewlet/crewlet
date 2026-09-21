@@ -315,7 +315,8 @@ func (x *identityIndex) place(leaf error) *located {
 		l := &located{err: leaf, text: text}
 		for _, r := range dup.Seats {
 			field := "name"
-			if dup.Kind == org.DuplicateHandle && r.DeclaredHandle != "" {
+			switch {
+			case dup.Kind == org.DuplicateHandle && r.DeclaredHandle != "":
 				// The handle is written, so that is the line to change; a
 				// derived one is changed by renaming the seat.
 				field = "handle"
@@ -515,39 +516,18 @@ func (c *Company) ReferenceWarnings() []Warning {
 // AdvisoryWarnings is everything valid about this company that its author
 // should still know.
 //
-// Located at the field they would ADD rather than at the entity in prose: a
-// unit with no id is reported at units[i].id, which is the line an editor
-// jumps to and the node a dashboard marks, and the unit is named in Unit for
-// a reader who has no document in front of them.
-func (c *Company) AdvisoryWarnings() []Warning {
-	o, x := c.organization()
-	var out []Warning
-
-	// A UNIT WITH NO ID IS KEYED ON ITS NAME, and a name is prose: it gets
-	// renamed for the reasons prose does. Two different things follow, and
-	// the warning names both because fixing one does not fix the other.
-	//
-	// THE MESSAGE NAMES THE UNIT, as every unit-scoped line in this engine
-	// does ([org.DanglingRef.Message] opens `unit "Platform" names lead`).
-	// The path is an index now rather than the name it used to be, and a
-	// prose reader gets the path and the message and nothing else: without
-	// the name in the sentence they would have to count units in their own
-	// file to find out which one this is about.
-	for u := range o.AllUnits() {
-		if strings.TrimSpace(u.ID) != "" {
-			continue
-		}
-		w := advisory(at(x.units[u], "id"), fmt.Sprintf(
-			"unit %q has no `id`, so everything durable is keyed on its NAME, "+
-				"and renaming it moves what is filed under it. Giving it an id "+
-				"fixes that, and does NOT stop a rename re-onboarding the seats "+
-				"beneath it: onboarding turns on the name, because the name is "+
-				"what an agent reads as its team", u.Name))
-		w.Unit = u.Name
-		out = append(out, w)
-	}
-	return out
-}
+// A UNIT WITH NO ID USED TO BE ONE OF THESE, and it is now an ADMISSION rule
+// instead: a unit is referenced by its key, so a document leaving a team
+// keyed on prose is refused rather than advised. The warning survives where
+// a warning is what an admission violation becomes — on a STORED revision
+// ([Company.AdmissionWarnings]) — and it is located at the same
+// `units[i].id`, so nothing about what an operator sees moved except the
+// class. Reporting both would have put one mistake in front of them twice.
+//
+// Nothing else is advisory on this tier today. The method stays because the
+// three warning channels are one vocabulary and a caller asks for each of
+// them by name; the next advisory setting belongs here.
+func (c *Company) AdvisoryWarnings() []Warning { return nil }
 
 // Warnings is everything valid about this bootstrap that its author should
 // still know.

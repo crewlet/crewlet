@@ -458,6 +458,12 @@ type RoleSandbox struct {
 // callers compare seats by identity, so a copy would be a different seat
 // that looks the same.
 type Role struct {
+	// Name is DISPLAY, plus the source of the derived handle when the seat
+	// declares none. Nothing in the document resolves a seat by it — a
+	// unit's `lead:` and every `manages:` entry are handles — so renaming a
+	// seat moves nothing that points at it. What still reads it is prose: a
+	// roster row, and a colleague a model addresses by the name it
+	// remembers.
 	Name string   `yaml:"name" json:"name"`
 	Kind RoleKind `yaml:"kind,omitempty" json:"kind,omitempty"`
 
@@ -477,28 +483,30 @@ type Role struct {
 
 	Email string `yaml:"email,omitempty" json:"email,omitempty"`
 
-	// UnitRef is a SOFT reference to the unit this seat belongs to, used
-	// when the seat is declared at the org root rather than nested inside
-	// the unit — which is how the per-entity config API adds one.
-	// [Organization.Normalize] moves such a seat into the named unit so
-	// that everything downstream can treat it as unit-scoped; without the
-	// move it would miss the unit's MCP inheritance and be invisible to the
-	// unit lead. Empty for a genuinely org-wide seat.
+	// UnitRef is a SOFT reference, by unit KEY ([Unit.Key]), to the unit
+	// this seat belongs to, used when the seat is declared at the org root
+	// rather than nested inside the unit — which is how the per-entity
+	// config API adds one. [Organization.Normalize] moves such a seat into
+	// the keyed unit so that everything downstream can treat it as
+	// unit-scoped; without the move it would miss the unit's MCP
+	// inheritance and be invisible to the unit lead. Empty for a genuinely
+	// org-wide seat.
 	UnitRef string `yaml:"unit,omitempty" json:"unit,omitempty"`
 
 	Goal             string   `yaml:"goal,omitempty" json:"goal,omitempty"`
 	Backstory        string   `yaml:"backstory,omitempty" json:"backstory,omitempty"`
 	Responsibilities []string `yaml:"responsibilities,omitempty" json:"responsibilities,omitempty"`
 
-	// Manages is the seats this one manages. An entry naming a UNIT
-	// expands to every seat in it, descendants included, except this seat
-	// itself (see [Organization.Normalize]). Read after normalisation,
-	// every entry is a seat name bar one that named neither a seat nor a
-	// unit: that entry is kept verbatim, because the seat it names may not
-	// have been added yet, and [Organization.DanglingRefs] reports it.
+	// Manages is the HANDLES of the seats this one manages. An entry that is
+	// a UNIT KEY expands to every seat handle in it, descendants included,
+	// except this seat itself (see [Organization.Normalize]). Read after
+	// normalisation, every entry is a seat handle bar one that was neither a
+	// handle nor a unit key: that entry is kept verbatim, because the seat
+	// it names may not have been added yet, and
+	// [Organization.DanglingRefs] reports it.
 	Manages []string `yaml:"manages,omitempty" json:"manages,omitempty"`
 
-	// AutoManaged is the seats [Organization.Normalize] added to Manages
+	// AutoManaged is the handles [Organization.Normalize] added to Manages
 	// because this seat leads their unit and nobody else in it manages them,
 	// in the order they were added. Every one of them is also in Manages.
 	//

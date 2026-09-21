@@ -94,6 +94,7 @@
   "units": [
     {
       "path": "units[0]",
+      "id": "engineering",
       "name": "Engineering",
       "type": "division",
       "lead": "vp-engineering",
@@ -106,6 +107,7 @@
     },
     {
       "path": "units[0].children[0]",
+      "id": "backend",
       "name": "Backend",
       "type": "team",
       "lead": "vp-engineering",
@@ -118,6 +120,7 @@
     },
     {
       "path": "units[0].children[0].children[0]",
+      "id": "storage",
       "name": "Storage",
       "type": "team",
       "lead": "vp-engineering",
@@ -130,6 +133,7 @@
     },
     {
       "path": "units[0].children[1]",
+      "id": "infrastructure",
       "name": "Infrastructure",
       "type": "team",
       "lead": "sre",
@@ -142,6 +146,7 @@
     },
     {
       "path": "units[0].children[2]",
+      "id": "security",
       "name": "Security",
       "type": "team",
       "lead": "",

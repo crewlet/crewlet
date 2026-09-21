@@ -30,8 +30,9 @@ The team channel is configured on the unit (`channel`), and it is integration-ne
 ```yaml
 units:
   - name: Core Engineering
+    id: core-engineering         # the unit's key; `name` above is display
     type: team
-    lead: CTO
+    lead: cto                    # the lead seat's handle
     channel: core-engineering    # the team's channel on the chat surface
     roles:
       - name: CTO

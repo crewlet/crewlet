@@ -60,10 +60,12 @@ func (c *Company) Redact() *Company {
 // Only the marker is substituted. A field the caller actually changed keeps
 // their value, and a field they cleared stays cleared.
 //
-// Every member that can name itself is matched by that name, and a seat or a
-// unit is matched ANYWHERE in the prior document (see [documentIdentified]).
-// A mask that cannot be matched to exactly one prior member is left standing,
-// and [Company.Validate] names the field.
+// Every member that can name itself is matched by that identity, and a seat
+// or a unit is matched ANYWHERE in the prior document (see
+// [documentIdentified]) — a seat by its handle, a unit by its key, which is
+// the same identity every other consumer resolves them by. A mask that cannot
+// be matched to exactly one prior member is left standing, and
+// [Company.Validate] names the field.
 func (c *Company) RestoreRedacted(prior *Company) {
 	if c == nil || prior == nil {
 		return
@@ -151,7 +153,7 @@ type identified interface{ IdentityKey() string }
 
 // documentIdentified is a member whose identity is unique across the WHOLE
 // document rather than within its own list: a seat (its handle) and a unit
-// (its name).
+// (its key).
 //
 // Both MOVE. A seat goes from the root into a unit, from one unit to another,
 // or back to the root; a unit goes under another unit. Its credentials move
@@ -184,8 +186,8 @@ type restorer struct {
 // document, at any depth, by identity.
 //
 // AN IDENTITY THAT IS EMPTY OR NOT UNIQUE IS NOT IN THE INDEX. Two units
-// called "Platform" in a stored revision (which a build before the name rules
-// admitted) are two members with no identity between them: picking either
+// answering to the key "platform" in a stored revision (which a build before
+// the key rules admitted) are two members with no identity between them: picking either
 // hands one team's credentials to the other, and so does falling back to
 // position, which is exactly what the previous restore did for a duplicated
 // or empty identity. Left out, their masks stay standing and validation names

@@ -205,10 +205,11 @@ func (c *Company) ValidateRunnable() error {
 
 // ValidateAdmission reports only the ADMISSION rules: the rules a submitted
 // document is refused for and a stored revision is merely warned about.
-// Today they are the org's duplicate seat names, duplicate unit names and a
-// unit reference on a seat declared inside another unit (see
-// [org.Organization.ValidateAdmission]), duplicate sandbox setup step names
-// within one list, and a GitHub App on a human seat.
+// Today they are the org's duplicate seat names, duplicate seat ids,
+// duplicate unit keys and a unit reference on a seat declared inside a unit
+// of a different key (see [org.Organization.ValidateAdmission]), a unit with
+// no id, duplicate sandbox setup step names within one list, and a GitHub App
+// on a human seat.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -217,8 +218,19 @@ func (c *Company) ValidateAdmission() error {
 // validateAdmission is [Company.ValidateAdmission] over an organization the
 // caller already built.
 func (c *Company) validateAdmission(o *org.Organization) error {
-	return errors.Join(o.ValidateAdmission(), c.validateSetupStepNames(),
-		c.validateHumanSeatApps())
+	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
+		c.validateSetupStepNames(), c.validateHumanSeatApps())
+}
+
+// validateUnitIDs requires an id on every authored unit, at any depth. See
+// [Unit.requireIDs] for why this is an admission rule rather than a runnable
+// one.
+func (c *Company) validateUnitIDs() error {
+	var p problems
+	for i := range c.Units {
+		p.wrap(c.Units[i].requireIDs(idx(field("units"), i)))
+	}
+	return p.err()
 }
 
 // validateHumanSeatApps refuses a per-seat GitHub App on a human seat.

@@ -87,6 +87,7 @@
   "units": [
     {
       "path": "units[0]",
+      "id": "product",
       "name": "Product",
       "type": "team",
       "lead": "product-lead",
@@ -101,6 +102,7 @@
     },
     {
       "path": "units[1]",
+      "id": "hiring",
       "name": "Hiring",
       "type": "team",
       "lead": "",

@@ -2549,7 +2549,7 @@ rendered idle from the first phase to the last.
   moment earlier.
 - **The hierarchy is the engine's, too.** A seat's handle, the unit a root
   seat's `unit:` reference moved it into, a unit's inherited lead, what a unit
-  name in `manages` expands to, automatic management by a lead and which of
+  key in `manages` expands to, automatic management by a lead and which of
   several managers is primary are all rules of the engine, and the `org`
   projection carries their result in its `derived` block. `lib/seats.ts`
   indexes that block over the authored tree and implements none of the rules:
@@ -2904,7 +2904,7 @@ to.
   that is what an operation edits. Every derived fact comes from the last
   check's `derived` block, read through the document that check was sent: a
   root seat the engine placed in a unit by its `unit:` reference is drawn in
-  that unit and marked "Placed by unit reference", a reference that names no
+  that unit and marked "Placed by unit reference", a reference that keys no
   unit stays at the root marked with the engine's warning, a unit with no lead
   of its own shows the lead it inherits, and a seat shows its primary manager.
   A derived fact is shown only while the draft still holds the values the
@@ -2963,7 +2963,7 @@ to.
   measured height. The problem count, which is the current draft's and so is
   absent while the check of every edit is out, has a slot of its own on the
   same first line, which is as tall with it as without it. A mark the engine
-  gave (a lead or a unit reference that names nothing) is held by the chart
+  gave (a lead or a unit reference that resolves to nothing) is held by the chart
   like a placement, while the node still writes what the check warned about,
   rather than leaving with each check and coming back with its answer.
 - **The outline is a treegrid of rows.** The same structure as rows with

@@ -311,14 +311,18 @@ func (n *Node) reportInterrupted(ctx context.Context) {
 
 // alarmMissingMailbox reports a seat this node could not give a mailbox.
 //
-// ONE LEASE TTL, and the threshold is not this alarm's own. A mailbox that
-// cannot be created on one tick is retried on the next, nine times inside a
-// shipped lease, and an alarm on the first failure would fire twelve times a
-// minute for a condition that clears itself. What is worth an operator's
-// attention is a seat that has been without a mailbox for as long as the fleet
-// already tolerates a seat being unserved — the same number that decides when
-// its lease lapses and its work moves — because past that point its mail is
-// being dropped and nothing else in the engine will say so.
+// ONE LEASE TTL, and the threshold is not this alarm's own — that is ADR-0015.
+// A mailbox that cannot be created on one tick is retried on the next, nine
+// times inside a shipped lease, and an alarm on the first failure would fire
+// twelve times a minute for a condition that clears itself. What is worth an
+// operator's attention is a seat that has been without a mailbox for as long
+// as the fleet already tolerates a seat being unserved — the same number that
+// decides when its lease lapses and its work moves — because past that point
+// its mail is being dropped and nothing else in the engine will say so.
+//
+// READ FROM THE HOST rather than copied from [seat.SeatLeaseTTL], which is the
+// ADR's second clause and a real property here: a deployment that shortens its
+// lease shortens this with it, in the same setting, with nobody remembering to.
 //
 // Re-raised on that same interval rather than on every tick, for the reason
 // [seat.UndeadAlarmInterval] gives about the other seat-level alarm: the

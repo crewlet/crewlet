@@ -966,7 +966,14 @@ func chartProjects(o *org.Organization) []tracker.ChartProject {
 		})
 	}
 	for unit := range o.AllUnits() {
-		add(unit.Project, unit.Name, unit.Purpose, unit.Name)
+		// THE UNIT'S KEY in the unit field and its NAME in the display
+		// one, because the two are different values the moment a unit
+		// declares an id and the field is READ as a key: it is what
+		// [chartUnits.ResolveUnit] is handed and what a task's own unit
+		// fields hold ([UnitOfSeat]). Writing the name here filed every
+		// project under a value the resolver could not find, so a board
+		// showed the raw string beside `resolved: false`.
+		add(unit.Project, unit.Name, unit.Purpose, unit.Key())
 	}
 	for role := range o.AllRoles() {
 		// EVERY seat, not just the root-level ones: `Organization.Roles`
@@ -980,7 +987,7 @@ func chartProjects(o *org.Organization) []tracker.ChartProject {
 		// so the project still says where in the company it sits.
 		var home string
 		if unit := o.UnitFor(role); unit != nil {
-			home = unit.Name
+			home = unit.Key()
 		}
 		add(role.Project, role.Name, "", home)
 	}
@@ -1246,11 +1253,21 @@ func ChartUnits(o *org.Organization) tracker.Units { return chartUnits{org: o} }
 
 type chartUnits struct{ org *org.Organization }
 
-func (c chartUnits) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
+// ResolveUnit answers the display name and lead of the unit a stored row
+// KEYS.
+//
+// THE KEY IS WHAT ARRIVES HERE — it is what [UnitOfSeat] stamps on a task and
+// what the project record holds — so the chart is asked for the unit
+// answering to that key ([org.Organization.Unit]). It used to be asked for a
+// unit of that NAME, which is a different value the moment a unit declares an
+// id: every row filed by a unit with one resolved to nothing, and the board
+// rendered the raw key beside `resolved: false` for a team that is right
+// there in the chart.
+func (c chartUnits) ResolveUnit(key string) (string, tracker.LeadRef, bool) {
 	if c.org == nil {
 		return "", tracker.LeadRef{}, false
 	}
-	unit := c.org.Unit(name)
+	unit := c.org.Unit(key)
 	if unit == nil {
 		return "", tracker.LeadRef{}, false
 	}
@@ -1259,14 +1276,15 @@ func (c chartUnits) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
 	// where this unit declares none — because that is who actually hears
 	// about the project's work, and rendering `none` beside a unit whose
 	// parent has a lead sends a founder looking for a gap there is not.
+	//
+	// IT RESOLVES THE HANDLE `lead:` HOLDS, so the seat it answers is the
+	// seat the engine runs. Deriving one from the lead's display name was a
+	// SECOND derivation, and it disagreed with the first on every seat whose
+	// operator declared a handle: a unit led by "Ada Okonkwo" with
+	// `handle: ada` resolved to `ada-okonkwo`, which is nobody — so the lead
+	// could not be looked up in the chart, filtered on, asked, or opened as
+	// a person.
 	if role := c.org.EffectiveLead(unit); role != nil {
-		// THE SEAT'S OWN HANDLE, through the accessor every other namer
-		// of a seat goes through. Slugifying the display name here was a
-		// SECOND derivation, and it disagreed with the first on every
-		// seat whose operator declared a handle: a unit led by "Ada
-		// Okonkwo" with `handle: ada` resolved to `ada-okonkwo`, which
-		// is nobody — so the lead could not be looked up in the chart,
-		// filtered on, asked, or opened as a person.
 		lead.Handle = role.Handle()
 		lead.Kind = tracker.AuthorAgent
 		if role.IsHuman() {
@@ -1279,8 +1297,8 @@ func (c chartUnits) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
 // liveUnits resolves against the epoch current when the tool RUNS.
 type liveUnits struct{ engine *Engine }
 
-func (l liveUnits) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
-	return ChartUnits(l.engine.Company().Org).ResolveUnit(name)
+func (l liveUnits) ResolveUnit(key string) (string, tracker.LeadRef, bool) {
+	return ChartUnits(l.engine.Company().Org).ResolveUnit(key)
 }
 
 // liveSeats resolves a people field's value to exactly one handle, against the
@@ -1314,23 +1332,22 @@ func (l liveLeads) ProjectLead(project string) string {
 	return projectLeads(l.engine.Company().Org)[strings.ToUpper(project)]
 }
 
-// UnitLead is who hears about work routed to a unit.
+// UnitLead is who hears about work routed to a unit, keyed the way a row
+// holds it.
+//
+// THROUGH [org.Organization.Unit], which resolves a unit's KEY — the value
+// [UnitOfSeat] stamps on a task. The walk here compared the stored value
+// against each unit's `id` FIELD instead, and a key is not that field: a unit
+// declaring no id keys on its name, so every company that had not adopted ids
+// had a unit lead that answered nobody, and unassigned work routed to no one
+// while looking correctly filed.
 func (l liveLeads) UnitLead(unit string) string {
-	if unit == "" {
-		return ""
-	}
 	chart := l.engine.Company().Org
-	if chart == nil {
+	if unit == "" || chart == nil {
 		return ""
 	}
-	for u := range chart.AllUnits() {
-		if !strings.EqualFold(u.ID, unit) {
-			continue
-		}
-		if lead := chart.EffectiveLead(u); lead != nil {
-			return lead.Handle()
-		}
-		return ""
+	if lead := chart.EffectiveLead(chart.Unit(unit)); lead != nil {
+		return lead.Handle()
 	}
 	return ""
 }

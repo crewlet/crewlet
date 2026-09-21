@@ -113,7 +113,7 @@ roles:
     handle: swe
     email: swe@example.com
     goal: ship
-    manages: [Junior]
+    manages: [junior]
     token_budget: 1000
     mcp_env:
       gitlab:
@@ -210,12 +210,13 @@ func TestOrganizationNormalisesTheHierarchy(t *testing.T) {
 name: Acme
 roles:
   - name: Contractor
-    unit: Core
+    unit: core
     mcp_env:
       gitlab: {GITLAB_HOST: contractor.example}
 units:
   - name: Core
-    lead: CTO
+    id: core
+    lead: cto
     mcp_env:
       gitlab: {GITLAB_TOKEN: "${SHARED}", GITLAB_HOST: gitlab.com}
     roles:
@@ -230,14 +231,14 @@ units:
 	if len(o.Roles) != 0 {
 		t.Fatalf("the root seat should have moved into its unit; root holds %d", len(o.Roles))
 	}
-	unit := o.Unit("Core")
-	if unit == nil || unit.Role("Contractor") == nil {
+	unit := o.Unit("core")
+	if unit == nil || unit.Role("contractor") == nil {
 		t.Fatal("the moved seat is not a member of its unit")
 	}
 
 	// Inheritance merges per VARIABLE: a seat overriding one entry must
 	// not silently drop the token beside it.
-	contractor := o.Role("Contractor")
+	contractor := o.Role("contractor")
 	if got := contractor.MCPEnv["gitlab"]["GITLAB_TOKEN"]; got != "${SHARED}" {
 		t.Fatalf("the moved seat missed the unit's shared credential: %q", got)
 	}
@@ -247,8 +248,8 @@ units:
 
 	// The lead auto-manages what nobody else does, which is what makes a
 	// roster complete without listing every report twice.
-	cto := o.Role("CTO")
-	if !slices.Contains(cto.Manages, "Engineer") || !slices.Contains(cto.Manages, "Contractor") {
+	cto := o.Role("cto")
+	if !slices.Contains(cto.Manages, "engineer") || !slices.Contains(cto.Manages, "contractor") {
 		t.Fatalf("lead manages = %v", cto.Manages)
 	}
 }
@@ -261,10 +262,11 @@ func TestOrganizationDoesNotMutateTheConfig(t *testing.T) {
 	cfg := mustCompany(t, `
 name: Acme
 roles:
-  - {name: Contractor, unit: Core}
+  - {name: Contractor, unit: core}
 units:
   - name: Core
-    lead: CTO
+    id: core
+    lead: cto
     mcp_env: {gitlab: {GITLAB_TOKEN: "${SHARED}"}}
     roles:
       - {name: CTO}
@@ -318,19 +320,20 @@ integrations:
 roles:
   - name: Founder
     kind: human
-    manages: [CEO, Ghost]
+    manages: [ceo, ghost]
     contact: {gitlab_username: founder}
   - name: CEO
 units:
   - name: Platform
-    lead: Tech Lead
+    id: platform
+    lead: tech-lead
     roles:
       - name: Tech Lead
       - name: Site Reliability
         handle: sre
 `)
 	want := []org.DanglingRef{
-		{Kind: org.RefManages, From: "Founder", To: "Ghost"},
+		{Kind: org.RefManages, From: "Founder", To: "ghost"},
 		{Kind: org.RefGitLabAccessLevel, From: "integrations.gitlab.provisioning.access_levels", To: "former-engineer"},
 	}
 	// Compared by what they name: the seat pointer belongs to an

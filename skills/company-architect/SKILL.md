@@ -57,7 +57,8 @@ one of `missing`, `out_of_range`, `conflict`, `shape`, `unknown_field`,
 the problem is about a seat, a unit, or a line the parser pointed at. Two
 seats sharing a name are one problem beside each seat. A **warning** never
 fails validation, but it is a reference that resolves to nothing (a `lead`,
-a `unit:`, a `manages` entry, a GitLab access level): fix every one before you
+a `unit:`, a `manages` entry, a GitLab access level — each a handle or a
+key that matches nothing): fix every one before you
 report the company finished, since nothing else will ever point at it.
 
 **2. No `crewlet`, but you can run code** (catches nearly everything):
@@ -85,11 +86,12 @@ you didn't run.
 These survive a clean schema pass, so check them yourself on every
 config — rungs 2 and 3 especially:
 
-- **`lead` names a role that exists.** A unit whose `lead` doesn't match
-  any role name silently gets no lead (it's only a warning even in
-  `crewlet validate`, because roles can be added incrementally).
-- **Every `manages` entry names a real role or unit.** Same class of
-  silent miss.
+- **`lead` is the HANDLE of a seat that exists.** A unit whose `lead`
+  doesn't match any seat's handle silently gets no lead (it's only a
+  warning even in `crewlet validate`, because roles can be added
+  incrementally). A display name there resolves to nobody.
+- **Every `manages` entry is a real seat handle or unit key.** Same class
+  of silent miss.
 - **Timezones are real IANA names** (`Europe/Amsterdam`, not `CET` or
   `Mars/Olympus`).
 - **Cron expressions are semantically valid.** The schema only checks
@@ -185,13 +187,27 @@ onboarding markers, and counterparty profiles. Its memory is gone.
 Settle `name` and each `handle` before the company runs, and warn the
 founder explicitly if they later ask to rename either.
 
-**Seat names and unit names are unique across the whole company.** A
-`lead` and a `manages` entry name a seat, a `manages` entry and a root
-seat's `unit:` name a unit, and each resolves to the first match anywhere
-in the tree. Two teams called `Platform` under different departments, or
-two seats called `Software Engineer` with different handles, are refused by
-`crewlet validate` and by every config write. Give each its own name
-(`Payments Platform`, `Software Engineer 2`).
+**Nothing is referenced by a display name.** A `lead` and a `manages`
+entry name a seat by its **handle**; a `manages` entry and a root seat's
+`unit:` name a unit by its **key** (its `id`, or its name where it
+declares none). A `name` on a seat or a unit is prose a founder edits, so
+writing one into a reference is how a chart comes apart on the first
+rename. Write handles and keys, and set both explicitly.
+
+**Every unit needs an `id`, and it is minted from the name if you leave
+it out.** The id is the unit's key — lowercase letters, digits, `-` and
+`_`, starting with a letter — chosen once and read by nobody, so it can be
+short and dull (`engineering`, `platform`). Write it yourself when the
+name is long or likely to change.
+
+**Seat names and unit keys are unique across the whole company.** Each
+reference resolves to the first match anywhere in the tree, so two units
+answering to one key silently share one team's work, routing and pages.
+Two seats called `Software Engineer` are refused too: a colleague named in
+prose is resolved by that name, so an agent asking for one is offered both
+every time. Both are refused by `crewlet validate` and by every config
+write. Give each its own name and key (`Payments Platform` /
+`id: payments-platform`, `Software Engineer 2`).
 
 **Secrets are `${VAR}` references, never literals.** Every string field
 supports `${ENV_VAR}`. Put the reference in the YAML and the value in
@@ -238,12 +254,12 @@ env vars for `stdio` servers, HTTP headers for `http` ones. A unit's
 `mcp_env` is inherited by its direct agent roles, with the role's own value
 winning per key. Human seats inherit none and may not declare one.
 
-**`manages` accepts unit names as well as role names.** A unit name
-expands to every role in it and its descendants. If a name matches both,
-the role wins. A unit lead auto-manages every direct member that no other
-direct member of that unit already manages (a unit name in a member's
-`manages` counts for every seat it reaches), and a child unit with no
-`lead` inherits its parent's.
+**`manages` accepts unit keys as well as seat handles.** A unit key
+expands to every seat in it and its descendants. If one token is both a
+handle and a key, the seat wins. A unit lead auto-manages every direct
+member that no other direct member of that unit already manages (a unit
+key in a member's `manages` counts for every seat it reaches), and a
+child unit with no `lead` inherits its parent's.
 
 **Put the founder in the chart.** A human seat at the root, above the
 top agent, so escalation terminates at a person and agents recognise
@@ -253,7 +269,7 @@ their activity in chat / the tracker / the code host:
 roles:
   - name: Jane Founder
     kind: human
-    manages: [CEO]
+    manages: [ceo]          # the CEO seat's handle, never its display name
     contact: { mattermost_user_id: "${MATTERMOST_FOUNDER_USERNAME}" }
 ```
 

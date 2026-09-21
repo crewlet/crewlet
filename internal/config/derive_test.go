@@ -83,7 +83,7 @@ func TestTheDerivedHierarchyMatchesItsGoldenFiles(t *testing.T) {
 // guarded one's paths.
 func TestTheDerivedHierarchyWithoutPaths(t *testing.T) {
 	t.Parallel()
-	cfg := parsed(t, "name: Acme\nroles:\n  - name: Designer\n    unit: Product\nunits:\n  - name: Product\n")
+	cfg := parsed(t, "name: Acme\nroles:\n  - name: Designer\n    unit: product\nunits:\n  - name: Product\n")
 	full := config.Derive(cfg)
 	public := full.WithoutPaths()
 	raw, err := json.Marshal(public)

@@ -256,9 +256,8 @@ func TestRunRefusesABadConfigBeforeStartingAnything(t *testing.T) {
 //
 // WITH A KEYRING, because every record on every state log is signed under one
 // and a node that has none refuses to start. It is not in
-// [config.DefaultBootstrap] and must not be: a default key is a key every
-// deployment in the world shares, which is the opposite of what signing a
-// record buys.
+// [config.DefaultBootstrap]: a default key would be a key every deployment in
+// the world shares, which is the opposite of what signing a record buys.
 func bootstrapFor(t *testing.T, port int) *config.Bootstrap {
 	t.Helper()
 	dir := t.TempDir()
@@ -1140,7 +1139,7 @@ func TestTheJSONOutputLocatesAnOrgRuleAtEachSeat(t *testing.T) {
 func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 	t.Parallel()
 	doc := strings.Replace(companyYAML, "  - name: CTO\n", "  - name: CEO\n", 1) +
-		"units:\n  - name: Platform\n    lead: Ghost\n"
+		"units:\n  - name: Platform\n    lead: ghost\n"
 	path := writeYAML(t, "company.yaml", doc)
 	var out, errOut bytes.Buffer
 	err := run([]string{"validate", path}, &out, &errOut)
@@ -1163,14 +1162,15 @@ func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 // written, and it fails nothing: the engine runs a company assembled in
 // pieces, and a gate refusing one would refuse every intermediate state.
 //
-// AN ADVISORY RIDES THE SAME LIST (a unit written with no id is valid and
-// still worth knowing before it is applied), and the two are told apart by
-// Kind, so a consumer branches on the field rather than on the prose. They
-// arrive in [config.Company.Warnings]' own order: what is broken first, what
-// could be better after it.
+// EACH CARRIES ITS Kind, so a consumer branches on the field rather than on
+// the prose, and they arrive in [config.Company.Warnings]' own order: what is
+// broken first, what could be better after it.
+//
+// THE LEAD IS A HANDLE, which is what makes `ghost` a misspelling rather than
+// a name somebody wrote: nothing resolves a seat by its display name.
 func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
 	got, raw, _ := validateJSON(t, doc)
 	if !got.Valid {
 		t.Fatalf("a dangling lead failed validation: %s", raw)
@@ -1178,11 +1178,7 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	want := []config.Warning{{
 		Kind: config.WarningDanglingReference, Ref: "lead",
 		Path: "units[0].lead", Segments: config.Path{"units", 0, "lead"},
-		Unit: "Platform", From: "Platform", To: "Ghost",
-	}, {
-		Kind: config.WarningAdvisory,
-		Path: "units[0].id", Segments: config.Path{"units", 0, "id"},
-		Unit: "Platform",
+		Unit: "Platform", From: "Platform", To: "ghost",
 	}}
 	if len(got.Warnings) != len(want) {
 		t.Fatalf("warnings = %+v, want %d: %s", got.Warnings, len(want), raw)
@@ -1215,7 +1211,7 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 // edit.
 func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate", "-json"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {
@@ -1244,22 +1240,21 @@ func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	want := []string{
 		config.WarningAdvisory + " retention.backup_owner",
 		config.WarningDanglingReference + " units[0].lead",
-		config.WarningAdvisory + " units[0].id",
 	}
 	if !slices.Equal(located, want) {
 		t.Errorf("warnings = %v, want %v\n%s", located, want, out.String())
 	}
 }
 
-// AN OPERATOR CAN TELL THE TWO APART IN PROSE. Both tiers' advisories share
-// the warning list with the references now, and under one undifferentiated
+// AN OPERATOR CAN TELL THE KINDS APART IN PROSE. Both tiers' advisories
+// share the warning list with the references, and under one undifferentiated
 // `warning:` line a dangling lead, which is broken and has to be corrected,
-// reads exactly like a unit with no id, which is a choice with a consequence.
+// reads exactly like a declined fsync, which is a choice with a consequence.
 // The kind leads the line, so the list can be skimmed by a person and grepped
 // by a CI step.
 func TestTheProseOutputNamesEachWarningsKind(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {
@@ -1268,7 +1263,6 @@ func TestTheProseOutputNamesEachWarningsKind(t *testing.T) {
 	for _, want := range []string{
 		"warning (advisory): retention.backup_owner: ",
 		"warning (dangling reference): units[0].lead: ",
-		"warning (advisory): units[0].id: ",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the output does not carry %q:\n%s", want, out.String())

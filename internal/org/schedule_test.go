@@ -166,7 +166,7 @@ func TestFanOutNeedsADirectAgentMember(t *testing.T) {
 		{
 			name: "a lead target does not fan out at all",
 			unit: &Unit{
-				Name: "Dept", Lead: "Dev",
+				Name: "Dept", Lead: "dev",
 				Schedules: []Schedule{{Name: "report", Cron: "0 17 * * 5", Task: "report", Target: TargetLead}},
 				Children:  []*Unit{{Name: "Team", Roles: []*Role{{Name: "Dev"}}}},
 			},

@@ -444,10 +444,12 @@ func TestAUnitReferenceOnANestedSeatIsAnAdmissionRule(t *testing.T) {
 name: Acme
 units:
   - name: Engineering
+    id: engineering
     roles:
       - name: Dev
-        unit: Product
+        unit: product
   - name: Product
+    id: product
 `
 	if _, err := config.ParseCompany([]byte(doc)); err == nil {
 		t.Fatal("a submitted document with a stray unit reference was accepted")

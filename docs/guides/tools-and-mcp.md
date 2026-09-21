@@ -237,8 +237,9 @@ A unit declares its tracker project and knowledge container *identity* under `pr
 ```yaml
 units:
   - name: Backend
+    id: backend                     # the unit's key; `name` above is display
     type: team
-    lead: Tech Lead
+    lead: tech-lead                 # the lead seat's handle
     project: "BACK"                 # the unit's tracker project (integration identity)
     mcp_env:
       atlassian:

@@ -9,9 +9,10 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// A UNIT'S KEY IS ITS ID WHEN IT HAS ONE, and its name otherwise — which is
-// what makes the field optional rather than a migration. A company that sets
-// no ids behaves exactly as it did.
+// A UNIT'S KEY IS ITS ID WHEN IT HAS ONE, and its name otherwise. An
+// authored document always carries an id (one is minted at import), so the
+// fallback is what keeps a tree built in Go, and a revision stored before the
+// field existed, addressable at all.
 func TestAUnitsKeyIsItsIdentityOrItsName(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -49,7 +50,11 @@ func TestAUnitIDIsShapedLikeAKey(t *testing.T) {
 		"upper case":            {"Platform", false},
 		"with a space":          {"platform core", false},
 		"with a dot":            {"platform.core", false},
-		"unset":                 {"", true},
+		// REQUIRED, because a unit is referenced by its key: a `manages:`
+		// entry and a seat's `unit:` both resolve one. A document read
+		// through the parser never reaches this — every unit is minted a
+		// key — so what it refuses is a unit assembled in Go with neither.
+		"unset": {"", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := unitsCompany(config.Unit{Name: "Platform", ID: tc.id})
@@ -78,26 +83,26 @@ func TestTwoUnitsCannotShareAKey(t *testing.T) {
 			{Name: "Product", ID: "core"},
 		},
 		"an id equal to another unit's name": {
-			{Name: "Platform"},
+			{Name: "Platform", ID: "plat"},
 			{Name: "Product", ID: "platform"},
 		},
 		"two units with one name": {
-			{Name: "Platform"},
-			{Name: "platform"},
+			{Name: "Platform", ID: "platform-a"},
+			{Name: "platform", ID: "platform-b"},
 		},
 		// THE EXACT SAME NAME TWICE is the collision that looks least
 		// like one and is caught by nothing else: Organization.Unit
 		// resolves a name to the FIRST unit carrying it, so the second
 		// team's work goes to the first team, silently, for ever.
 		"two units with the identical name": {
-			{Name: "Platform"},
-			{Name: "Platform"},
+			{Name: "Platform", ID: "plat-a"},
+			{Name: "Platform", ID: "plat-b"},
 		},
 		// AND DEPTH IS NOT A NAMESPACE. A child unit is addressed by the
 		// same key as a root one, so nesting hides nothing.
 		"a child colliding with a root unit": {
-			{Name: "Engineering", Children: []config.Unit{{Name: "Platform"}}},
-			{Name: "Platform"},
+			{Name: "Engineering", ID: "eng", Children: []config.Unit{{Name: "Platform", ID: "plat-a"}}},
+			{Name: "Platform", ID: "plat-b"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -120,6 +125,54 @@ func TestTwoUnitsCannotShareAKey(t *testing.T) {
 	)
 	if err := c.Validate(); err != nil {
 		t.Fatalf("distinct keys were refused: %v", err)
+	}
+}
+
+// AN ID IS MINTED FROM THE NAME AT IMPORT, so a founder never writes one and
+// every document the engine reads has a key that a rename cannot move. It is
+// derived rather than random, so re-importing the same file mints the same
+// key rather than a second identity for one team.
+func TestAUnitWithNoIDIsMintedOneAtImport(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		unitName string
+		want     string
+	}{
+		"a plain name":            {"Platform", "platform"},
+		"words and punctuation":   {"R&D / Tooling", "r-d-tooling"},
+		"a name starting a digit": {"2nd Line", "unit-2nd-line"},
+		"a name that slugs empty": {"!!!", "unit"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := config.MintUnitID(tc.unitName); got != tc.want {
+				t.Errorf("MintUnitID(%q) = %q, want %q", tc.unitName, got, tc.want)
+			}
+		})
+	}
+
+	// Through the parser, at any depth, and only where the document
+	// declares none.
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+units:
+  - name: Engineering
+    children:
+      - name: Platform Squad
+      - name: Storage
+        id: stor
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	eng := cfg.Units[0]
+	if eng.ID != "engineering" {
+		t.Errorf("top-level unit id = %q, want engineering", eng.ID)
+	}
+	if got := eng.Children[0].ID; got != "platform-squad" {
+		t.Errorf("child unit id = %q, want platform-squad", got)
+	}
+	if got := eng.Children[1].ID; got != "stor" {
+		t.Errorf("a declared id was overwritten: %q", got)
 	}
 }
 

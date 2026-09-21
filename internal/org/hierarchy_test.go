@@ -13,12 +13,12 @@ func hierarchyOrg() *Organization {
 		Name: "Acme AI",
 		Units: []*Unit{
 			{
-				Name: "Engineering", Type: UnitTypeDepartment, Lead: "VP Engineering",
+				Name: "Engineering", Type: UnitTypeDepartment, Lead: "vp-engineering",
 				Children: []*Unit{{
-					Name: "Backend", Type: UnitTypeTeam, Lead: "VP Engineering",
+					Name: "Backend", Type: UnitTypeTeam, Lead: "vp-engineering",
 					Roles: []*Role{
-						{Name: "VP Engineering", Manages: []string{"Tech Lead"}},
-						{Name: "Tech Lead", Manages: []string{"Senior Engineer A", "Senior Engineer B", "Junior Engineer"}},
+						{Name: "VP Engineering", Manages: []string{"tech-lead"}},
+						{Name: "Tech Lead", Manages: []string{"senior-engineer-a", "senior-engineer-b", "junior-engineer"}},
 						{Name: "Senior Engineer A"},
 						{Name: "Senior Engineer B"},
 						{Name: "Junior Engineer"},
@@ -28,7 +28,7 @@ func hierarchyOrg() *Organization {
 			{
 				Name: "Product", Type: UnitTypeDepartment,
 				Children: []*Unit{{
-					Name: "PM Team", Type: UnitTypeTeam, Lead: "Product Manager",
+					Name: "PM Team", Type: UnitTypeTeam, Lead: "product-manager",
 					Roles: []*Role{{Name: "Product Manager"}},
 				}},
 			},
@@ -43,11 +43,11 @@ func TestManagerAndReports(t *testing.T) {
 		seat string
 		want string // "" for no manager
 	}{
-		{"Senior Engineer A", "Tech Lead"},
-		{"Junior Engineer", "Tech Lead"},
-		{"Tech Lead", "VP Engineering"},
-		{"VP Engineering", ""},
-		{"Product Manager", ""},
+		{"senior-engineer-a", "Tech Lead"},
+		{"junior-engineer", "Tech Lead"},
+		{"tech-lead", "VP Engineering"},
+		{"vp-engineering", ""},
+		{"product-manager", ""},
 	} {
 		t.Run(tc.seat, func(t *testing.T) {
 			t.Parallel()
@@ -61,13 +61,13 @@ func TestManagerAndReports(t *testing.T) {
 		})
 	}
 
-	reports := roleNames(o.Reports(o.Role("Tech Lead")))
+	reports := roleNames(o.Reports(o.Role("tech-lead")))
 	slices.Sort(reports)
 	want := []string{"Junior Engineer", "Senior Engineer A", "Senior Engineer B"}
 	if !slices.Equal(reports, want) {
 		t.Errorf("Reports(Tech Lead) = %v, want %v", reports, want)
 	}
-	if got := o.Reports(o.Role("Junior Engineer")); len(got) != 0 {
+	if got := o.Reports(o.Role("junior-engineer")); len(got) != 0 {
 		t.Errorf("Reports(Junior Engineer) = %v, want none", roleNames(got))
 	}
 }
@@ -77,9 +77,9 @@ func TestReportsSkipsUnwiredNames(t *testing.T) {
 	// Half-wired is normal mid-bootstrap; the roster simply omits what has
 	// not arrived.
 	o := normalized(&Organization{Name: "T", Roles: []*Role{
-		{Name: "CEO", Manages: []string{"Ghost", "CTO"}}, {Name: "CTO"},
+		{Name: "CEO", Manages: []string{"ghost", "cto"}}, {Name: "CTO"},
 	}})
-	if got := roleNames(o.Reports(o.Role("CEO"))); !slices.Equal(got, []string{"CTO"}) {
+	if got := roleNames(o.Reports(o.Role("ceo"))); !slices.Equal(got, []string{"CTO"}) {
 		t.Errorf("Reports(CEO) = %v, want only CTO", got)
 	}
 }
@@ -87,11 +87,11 @@ func TestReportsSkipsUnwiredNames(t *testing.T) {
 func TestAncestorsClimbToTheTop(t *testing.T) {
 	t.Parallel()
 	o := hierarchyOrg()
-	got := roleNames(o.Ancestors(o.Role("Junior Engineer")))
+	got := roleNames(o.Ancestors(o.Role("junior-engineer")))
 	if !slices.Equal(got, []string{"Tech Lead", "VP Engineering"}) {
 		t.Errorf("Ancestors(Junior Engineer) = %v", got)
 	}
-	if got := o.Ancestors(o.Role("VP Engineering")); len(got) != 0 {
+	if got := o.Ancestors(o.Role("vp-engineering")); len(got) != 0 {
 		t.Errorf("Ancestors(VP Engineering) = %v, want none", roleNames(got))
 	}
 }
@@ -101,11 +101,11 @@ func TestAncestorsClimbToTheTop(t *testing.T) {
 func TestAncestorsSurviveACycle(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{Name: "T", Roles: []*Role{
-		{Name: "A", Manages: []string{"B"}},
-		{Name: "B", Manages: []string{"C"}},
-		{Name: "C", Manages: []string{"A"}},
+		{Name: "A", Manages: []string{"b"}},
+		{Name: "B", Manages: []string{"c"}},
+		{Name: "C", Manages: []string{"a"}},
 	}})
-	got := roleNames(o.Ancestors(o.Role("A")))
+	got := roleNames(o.Ancestors(o.Role("a")))
 	if !slices.Equal(got, []string{"C", "B"}) {
 		t.Errorf("Ancestors(A) = %v, want the chain to stop at the repeat", got)
 	}
@@ -117,12 +117,12 @@ func TestAncestorsClimbThroughARootSeat(t *testing.T) {
 	// seat manage into a unit with no entry anywhere near it.
 	o := normalized(&Organization{
 		Name:  "T",
-		Roles: []*Role{{Name: "CEO", Manages: []string{"VP"}}},
-		Units: []*Unit{{Name: "Eng", Lead: "VP", Roles: []*Role{
-			{Name: "VP", Manages: []string{"Dev"}}, {Name: "Dev"},
+		Roles: []*Role{{Name: "CEO", Manages: []string{"vp"}}},
+		Units: []*Unit{{Name: "Eng", Lead: "vp", Roles: []*Role{
+			{Name: "VP", Manages: []string{"dev"}}, {Name: "Dev"},
 		}}},
 	})
-	got := roleNames(o.Ancestors(o.Role("Dev")))
+	got := roleNames(o.Ancestors(o.Role("dev")))
 	if !slices.Equal(got, []string{"VP", "CEO"}) {
 		t.Errorf("Ancestors(Dev) = %v", got)
 	}
@@ -136,8 +136,8 @@ func TestUnitForAndUnitChain(t *testing.T) {
 		wantUnit  string
 		wantChain []string
 	}{
-		{"Senior Engineer A", "Backend", []string{"Engineering", "Backend"}},
-		{"Product Manager", "PM Team", []string{"Product", "PM Team"}},
+		{"senior-engineer-a", "Backend", []string{"Engineering", "Backend"}},
+		{"product-manager", "PM Team", []string{"Product", "PM Team"}},
 	} {
 		t.Run(tc.seat, func(t *testing.T) {
 			t.Parallel()
@@ -164,13 +164,13 @@ func TestUnitChainReachesEveryLevel(t *testing.T) {
 		Children: []*Unit{{
 			Name: "Engineering", Type: UnitTypeDepartment,
 			Children: []*Unit{{
-				Name: "Platform", Lead: "Platform Lead",
+				Name: "Platform", Lead: "platform-lead",
 				Roles: []*Role{{Name: "Platform Lead"}, {Name: "Platform Dev"}},
 			}},
 		}},
 	}}})
 	var chain []string
-	for _, u := range o.UnitChainFor(o.Role("Platform Dev")) {
+	for _, u := range o.UnitChainFor(o.Role("platform-dev")) {
 		chain = append(chain, u.Name)
 	}
 	if !slices.Equal(chain, []string{"Technology", "Engineering", "Platform"}) {
@@ -182,10 +182,10 @@ func TestRootSeatHasNoUnit(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{
 		Name:  "T",
-		Roles: []*Role{{Name: "CEO", Manages: []string{"Dev"}}},
-		Units: []*Unit{{Name: "Team", Lead: "Dev", Roles: []*Role{{Name: "Dev"}}}},
+		Roles: []*Role{{Name: "CEO", Manages: []string{"dev"}}},
+		Units: []*Unit{{Name: "Team", Lead: "dev", Roles: []*Role{{Name: "Dev"}}}},
 	})
-	ceo := o.Role("CEO")
+	ceo := o.Role("ceo")
 	if got := o.UnitFor(ceo); got != nil {
 		t.Errorf("UnitFor(CEO) = %v, want nil", got)
 	}
@@ -202,16 +202,16 @@ func TestLeadDepthRanksAuthority(t *testing.T) {
 	o := hierarchyOrg()
 	// VP Engineering leads the department AND the team inside it; the
 	// wider authority is the one that matters.
-	if got := o.LeadDepth(o.Role("VP Engineering")); got != 0 {
+	if got := o.LeadDepth(o.Role("vp-engineering")); got != 0 {
 		t.Errorf("LeadDepth(VP Engineering) = %d, want 0", got)
 	}
-	if got := o.LeadDepth(o.Role("Product Manager")); got != 1 {
+	if got := o.LeadDepth(o.Role("product-manager")); got != 1 {
 		t.Errorf("LeadDepth(Product Manager) = %d, want 1", got)
 	}
-	if got := o.LeadDepth(o.Role("Junior Engineer")); got != -1 {
+	if got := o.LeadDepth(o.Role("junior-engineer")); got != -1 {
 		t.Errorf("LeadDepth(Junior Engineer) = %d, want -1", got)
 	}
-	if !o.IsUnitLead(o.Role("VP Engineering")) || o.IsUnitLead(o.Role("Junior Engineer")) {
+	if !o.IsUnitLead(o.Role("vp-engineering")) || o.IsUnitLead(o.Role("junior-engineer")) {
 		t.Error("IsUnitLead disagrees with LeadDepth")
 	}
 }
@@ -227,14 +227,14 @@ func TestEffectiveLeadResolvesEveryPlacement(t *testing.T) {
 		{
 			name: "a direct member",
 			org: &Organization{Name: "T", Units: []*Unit{{
-				Name: "Backend", Lead: "Lead", Roles: []*Role{{Name: "Lead"}, {Name: "Dev"}},
+				Name: "Backend", Lead: "lead", Roles: []*Role{{Name: "Lead"}, {Name: "Dev"}},
 			}}},
 			unit: "Backend", want: "Lead",
 		},
 		{
 			name: "a seat in a descendant unit",
 			org: &Organization{Name: "T", Units: []*Unit{{
-				Name: "Engineering", Lead: "Dev Lead",
+				Name: "Engineering", Lead: "dev-lead",
 				Children: []*Unit{{Name: "Backend", Roles: []*Role{{Name: "Dev Lead"}, {Name: "Dev"}}}},
 			}}},
 			unit: "Engineering", want: "Dev Lead",
@@ -244,7 +244,7 @@ func TestEffectiveLeadResolvesEveryPlacement(t *testing.T) {
 			// the case the unit-local lookup cannot answer.
 			name: "a lead inherited from an ancestor",
 			org: &Organization{Name: "T", Units: []*Unit{{
-				Name: "Engineering", Lead: "VP Eng", Roles: []*Role{{Name: "VP Eng"}},
+				Name: "Engineering", Lead: "vp-eng", Roles: []*Role{{Name: "VP Eng"}},
 				Children: []*Unit{{Name: "Backend", Roles: []*Role{{Name: "Dev A"}}}},
 			}}},
 			unit: "Backend", want: "VP Eng",
@@ -276,10 +276,10 @@ func TestInheritedLeadIsAFullLead(t *testing.T) {
 	// Nothing downstream distinguishes an inherited lead from a declared
 	// one — that is the point of the cascade.
 	o := normalized(&Organization{Name: "T", Units: []*Unit{{
-		Name: "Engineering", Lead: "VP Eng", Roles: []*Role{{Name: "VP Eng"}},
+		Name: "Engineering", Lead: "vp-eng", Roles: []*Role{{Name: "VP Eng"}},
 		Children: []*Unit{{Name: "Backend", Roles: []*Role{{Name: "Dev"}}}},
 	}}})
-	vp := o.Role("VP Eng")
+	vp := o.Role("vp-eng")
 	backend := o.Unit("Backend")
 	if !o.IsUnitLead(vp) {
 		t.Error("an inherited lead does not read as a unit lead")
@@ -287,7 +287,7 @@ func TestInheritedLeadIsAFullLead(t *testing.T) {
 	if !backend.IsLedBy(vp) {
 		t.Error("the child unit does not report its inherited lead")
 	}
-	if !slices.Contains(vp.Manages, "Dev") {
+	if !slices.Contains(vp.Manages, "dev") {
 		t.Errorf("the inherited lead does not manage the child's members: %v", vp.Manages)
 	}
 }
@@ -303,23 +303,23 @@ func TestUnitAccessors(t *testing.T) {
 		t.Errorf("Child(Nowhere) = %v, want nil", got)
 	}
 	backend := o.Unit("Backend")
-	if got := backend.Role("Tech Lead"); got == nil {
+	if got := backend.Role("tech-lead"); got == nil {
 		t.Error("Role(Tech Lead) = nil")
 	}
-	if got := backend.Role("Nobody"); got != nil {
+	if got := backend.Role("nobody"); got != nil {
 		t.Errorf("Role(Nobody) = %v, want nil", got)
 	}
 	// A unit's own walk covers its descendants.
 	if got := len(roleNames(slices.Collect(eng.AllRoles()))); got != 5 {
 		t.Errorf("Engineering AllRoles() covered %d seats, want 5", got)
 	}
-	if eng.FindRole("Junior Engineer") == nil {
+	if eng.FindRole("junior-engineer") == nil {
 		t.Error("FindRole does not reach a descendant")
 	}
 	if eng.FindUnit("Engineering") != eng {
 		t.Error("FindUnit does not include the unit itself")
 	}
-	if eng.FindRole("Nobody") != nil || eng.FindUnit("Nowhere") != nil {
+	if eng.FindRole("nobody") != nil || eng.FindUnit("Nowhere") != nil {
 		t.Error("a missing name resolved to something")
 	}
 	// A unit whose lead names nobody in its own subtree resolves to no

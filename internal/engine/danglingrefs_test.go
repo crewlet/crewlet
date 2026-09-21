@@ -35,10 +35,11 @@ roles:
   - name: CEO
     handle: ceo
     llm: zulu
-    manages: [Engineering, Nobody]
+    manages: [engineering, nobody]
 units:
   - name: Engineering
-    lead: Ghost
+    id: engineering
+    lead: ghost
     roles:
       - name: Dev
         handle: dev
@@ -114,8 +115,8 @@ func TestDanglingReferencesAreLoggedOncePerAppliedEpoch(t *testing.T) {
 		}
 	}
 	want := []danglingLine{
-		{Epoch: first, Ref: "lead", From: "Engineering", To: "Ghost"},
-		{Epoch: first, Ref: "manages", From: "CEO", To: "Nobody"},
+		{Epoch: first, Ref: "lead", From: "Engineering", To: "ghost"},
+		{Epoch: first, Ref: "manages", From: "CEO", To: "nobody"},
 	}
 	if got := danglingLines(t, &logs); !slices.Equal(got, want) {
 		t.Fatalf("after three ticks on one epoch, logged %+v, want %+v", got, want)
@@ -126,8 +127,8 @@ func TestDanglingReferencesAreLoggedOncePerAppliedEpoch(t *testing.T) {
 		t.Fatal(err)
 	}
 	want = append(want,
-		danglingLine{Epoch: second, Ref: "lead", From: "Engineering", To: "Ghost"},
-		danglingLine{Epoch: second, Ref: "manages", From: "CEO", To: "Nobody"},
+		danglingLine{Epoch: second, Ref: "lead", From: "Engineering", To: "ghost"},
+		danglingLine{Epoch: second, Ref: "manages", From: "CEO", To: "nobody"},
 	)
 	if got := danglingLines(t, &logs); !slices.Equal(got, want) {
 		t.Fatalf("after a re-activation, logged %+v, want %+v", got, want)

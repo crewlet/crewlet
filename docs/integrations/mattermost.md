@@ -231,8 +231,9 @@ mcp_servers:
 
 units:
   - name: Core
+    id: core                             # the unit's key; `name` above is display
     type: team
-    lead: Engineer
+    lead: engineer                       # the lead seat's handle
     roles:
       - name: Engineer
         integrations:                              # per-agent transport identity
@@ -752,7 +753,7 @@ name and the name is what an agent has to write for the mention to render:
 roles:
   - name: Jane Founder
     kind: human
-    manages: [CEO]
+    manages: [ceo]        # by handle
     contact:
       mattermost_user_id: jane
 ```

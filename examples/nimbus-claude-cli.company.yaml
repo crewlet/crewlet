@@ -691,7 +691,9 @@ roles:
     responsibilities:
       - "Final approval on strategy, roadmap trade-offs, and high-impact bets"
       - "Unblock anything the Agent CEO escalates"
-    manages: ["Agent CEO"]
+    manages: [agent-ceo]                       # BY HANDLE: `manages:` names seats by their
+                                               #   handle and units by their key, so the
+                                               #   chart survives every rename
     contact:
       # Mattermost identifies people by username, not an opaque ID — this
       # is the account you sign in as.  `founder` is what
@@ -714,13 +716,19 @@ roles:
 # contain roles directly and/or child units.
 units:
   - name: Leadership
+    id: leadership                         # the unit's KEY: what `manages:` and a root
+                                           #   seat's `unit:` resolve.  The name above is
+                                           #   display, so renaming the team moves nothing
+                                           #   that points at it.  Minted from the name at
+                                           #   import when unset
     type: department
-    lead: Agent CEO
+    lead: agent-ceo                        # the LEAD'S HANDLE, never its display name
     channel: town-square                   # inherited by children that set none
     children:
       - name: Executives
+        id: executives
         type: team
-        lead: Agent CEO
+        lead: agent-ceo
         # ``channel`` is the unit's home on the company's chat surface and
         # the one thing that reaches a seat's identity prompt ("Team
         # channel: town-square").  It is inherited from Leadership above,
@@ -753,7 +761,7 @@ units:
               your PM on prioritization, but you hold final authority on what ships and when.
               You communicate through writing, and you never let strategic context stay only in
               your head.
-            manages: ["Agent CTO", "Agent PM"]
+            manages: [agent-cto, agent-pm]
             responsibilities:
               - "Set and communicate Nimbus's product vision and quarterly OKRs in the leadership channel"
               - "Prioritize initiatives across product and engineering based on strategic impact, customer demand, and competitive pressure"
@@ -805,7 +813,7 @@ units:
               implications beyond engineering. You believe in writing decisions down where the
               team can read them, keeping technical debt visible rather than quietly carried,
               and never letting an engineer stay blocked for more than a few hours.
-            manages: ["Agent SWE", "Agent Frontend SWE", "Agent AI Systems Engineer"]
+            manages: [agent-swe, agent-frontend-swe, agent-ai-systems-engineer]
             responsibilities:
               - "Own the technical architecture across both the control plane (nimbuscore, nimbusk0s) and the Phase-2 AI framework — ensure they evolve together, not in conflict"
               - "Turn what the PM asks for into concrete engineering work with clear acceptance criteria and technical guidance, and say in the channel who is taking it"
@@ -831,18 +839,20 @@ units:
                 channel: engineering
 
   - name: Product
+    id: product
     type: department
-    lead: Agent PM
+    lead: agent-pm
     channel: product
     children:
       - name: Product Management
+        id: product-management
         type: team
-        lead: Agent PM
+        lead: agent-pm
         project: "PROD"                        # unit's tracker + wiki identity (routing + write home)
         space: "PROD"
         roles:
           - name: Agent PM
-            manages: ["Agent DevRel"]
+            manages: [agent-devrel]
             goal: "Drive Nimbus's product strategy — understand the composable infrastructure and AI-framework markets, propose the highest-impact work across both the control plane and the Phase-2 framework, and keep the team pointed at the two-phase vision"
             backstory: >
               Seasoned product manager with deep expertise in Kubernetes fleet management,
@@ -880,8 +890,9 @@ units:
                 channel: product
 
       - name: Developer Relations
+        id: developer-relations
         type: team
-        # No explicit lead — inherits ``Agent PM`` from the parent ``Product``
+        # No explicit lead — inherits ``agent-pm`` from the parent ``Product``
         # department.  Shares the ``product`` channel with Product Management:
         # PM and DevRel collaborate tightly (drafts ↔ review), so splitting
         # them across two channels would only make the handoff harder to read.
@@ -925,13 +936,15 @@ units:
                 channel: product
 
   - name: Engineering
+    id: engineering
     type: department
-    lead: Agent CTO
+    lead: agent-cto
     channel: engineering
     children:
       - name: Core
+        id: core
         type: team
-        lead: Agent CTO
+        lead: agent-cto
         project: "ENG"                         # unit's tracker + wiki identity (routing + write home)
         space: "ENG"
         # Unit-scoped recurring work — one schedule per delivery mode.

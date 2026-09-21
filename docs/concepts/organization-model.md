@@ -18,7 +18,14 @@ Organization
 │                                           knowledge read scope)
 ├── Roles []*Role                          (root-level org-wide seats)
 └── Units []*Unit
-    ├── Name string; Type UnitType; Purpose, Lead string; Goals []string
+    ├── Name string                         (DISPLAY only: nothing references a
+    │                                        unit by it)
+    ├── ID string                           (`id`: the unit's KEY — what a
+    │                                        `manages:` entry and a root seat's
+    │                                        `unit:` resolve. Minted from the name
+    │                                        at import when unset)
+    ├── Type UnitType; Purpose string; Goals []string
+    ├── Lead string                         (the HANDLE of the seat leading it)
     ├── KnowledgeRefs []string
     ├── Channel string                     (team channel on the company's chat
     │                                       surface, inherited by children)
@@ -41,7 +48,13 @@ Organization
 
 Role (a SEAT: can live at root level OR inside a unit)
 ├── Kind RoleKind                      (agent | human; default agent)
-├── Name string; Responsibilities, BehavioralGuidelines []string
+├── Name string                        (DISPLAY, plus the source of the derived
+│                                       handle: nothing references a seat by it)
+├── ID string                          (`id`: a stable identity for a record
+│                                       outside this document to bind to. NOT
+│                                       what references the seat — that is the
+│                                       handle)
+├── Responsibilities, BehavioralGuidelines []string
 ├── Contact *HumanContact              (human seats: slack_user_id,
 │                                       mattermost_user_id, atlassian_account_id,
 │                                       github_login, gitlab_username,
@@ -50,9 +63,11 @@ Role (a SEAT: can live at root level OR inside a unit)
 ├── Backstory string                   (personality, background, expertise)
 ├── Goal string                        (individual mission)
 ├── DeclaredHandle string              (the `handle` override; Role.Handle()
-│                                       derives the slug when empty)
+│                                       derives the slug when empty. THE HANDLE
+│                                       is what `lead:` and `manages:` resolve)
 ├── Email string                       (indexed so an address resolves to the seat)
-├── Manages []string                   (seat names or unit names this seat manages)
+├── Manages []string                   (seat HANDLES or unit KEYS this seat
+│                                       manages)
 ├── MCPEnv MCPEnv                      (per-server tool credentials: env vars for
 │                                       stdio servers, headers for http servers
 │                                       like the remote GitHub MCP. Tool creds
@@ -102,34 +117,39 @@ The root is also where the **founder** belongs — as a [human seat](humans-in-t
 roles:
   - name: "Jane Founder"
     kind: human
-    manages: ["CEO"]
+    manages: [ceo]            # handles, not display names
     contact: { slack_user_id: U0FOUNDER }
   - name: "CEO"
+    handle: ceo
     goal: "Set company direction"
-    manages: ["VP Engineering", "VP Product"]
+    manages: [vp-eng, vp-product]
 ```
 
 ```yaml
 roles:
   - name: "CEO"
     goal: "Set company direction"
-    manages: ["VP Engineering", "VP Product"]
+    manages: [vp-eng, vp-product]
 
 units:
   - name: "Engineering"
+    id: engineering           # the unit's key: what `manages:` and `unit:` resolve
     type: department
-    lead: "VP Engineering"
+    lead: vp-eng              # the lead seat's handle
     roles:
       - name: "VP Engineering"
-        manages: ["Backend Lead"]
+        handle: vp-eng
+        manages: [backend-lead]
     children:
       - name: "Backend"
+        id: backend
         type: team
-        lead: "Backend Lead"
+        lead: backend-lead
         roles: [...]
   - name: "Product"
+    id: product
     type: department
-    lead: "VP Product"
+    lead: vp-product
     roles: [...]
 ```
 
@@ -147,11 +167,13 @@ Root-level roles differ from unit roles in a few ways:
 ```yaml
 units:
   - name: "Product Team"
+    id: product-team
     type: team
-    lead: "Founder"
+    lead: founder
     roles:
       - name: "Founder"
-        manages: ["Dev 1", "Dev 2"]
+        handle: founder
+        manages: [dev-1, dev-2]
       - name: "Dev 1"
       - name: "Dev 2"
 ```
@@ -161,23 +183,28 @@ units:
 ```yaml
 units:
   - name: "Engineering"
+    id: engineering
     type: department
-    lead: "VP Engineering"
+    lead: vp-eng
     children:
       - name: "Backend"
+        id: backend
         type: team
-        lead: "Backend Lead"
+        lead: backend-lead
         roles: [...]
       - name: "Frontend"
+        id: frontend
         type: team
-        lead: "Frontend Lead"
+        lead: frontend-lead
         roles: [...]
   - name: "Product"
+    id: product
     type: department
     children:
       - name: "Product Management"
+        id: product-management
         type: team
-        lead: "PM"
+        lead: pm
         roles: [...]
 ```
 
@@ -188,20 +215,25 @@ When only the top-level unit has a lead, it cascades down via [lead inheritance]
 ```yaml
 units:
   - name: "Technology"
+    id: technology
     type: division
-    lead: "CTO"
+    lead: cto
     roles:
       - name: "CTO"
+        handle: cto
     children:
       - name: "Engineering"
-        type: department          # inherits CTO as lead
+        id: engineering
+        type: department          # inherits cto as lead
         children:
           - name: "Platform"
+            id: platform
             type: team
-            lead: "Platform Lead" # explicit — overrides inherited CTO
+            lead: platform-lead   # explicit — overrides inherited cto
             roles: [...]
           - name: "Application"
-            type: team            # inherits CTO as lead
+            id: application
+            type: team            # inherits cto as lead
             roles: [...]
 ```
 
@@ -210,16 +242,19 @@ units:
 ```yaml
 units:
   - name: "Infrastructure Tribe"
+    id: infra-tribe
     type: tribe
-    lead: "Tribe Lead"
+    lead: tribe-lead
     children:
       - name: "Provisioning Squad"
+        id: provisioning-squad
         type: squad
-        lead: "Squad Lead"
+        lead: provisioning-lead
         roles: [...]
       - name: "Networking Squad"
+        id: networking-squad
         type: squad
-        lead: "Squad Lead 2"
+        lead: networking-lead
         roles: [...]
 ```
 
@@ -228,16 +263,18 @@ units:
 ```yaml
 units:
   - name: "Auth Pod"
+    id: auth-pod
     type: pod
-    lead: "Auth Lead"
+    lead: auth-lead
     roles:
       - name: "Auth Lead"
-        manages: ["Auth Dev", "Auth Designer"]
+        manages: [auth-dev, auth-designer]
       - name: "Auth Dev"
       - name: "Auth Designer"
   - name: "Billing Pod"
+    id: billing-pod
     type: pod
-    lead: "Billing Lead"
+    lead: billing-lead
     roles: [...]
 ```
 
@@ -281,7 +318,7 @@ Marcus Rivera       marcus-rivera
 Alex Kim            alex-kim
 ```
 
-Handles are the canonical identity for notification routing and external system mappings (e.g. a Jira assignee, a GitLab service account). A seat's `email` is matched too — inbound Jira and GitHub payloads identify people by address, and a plus-addressed form (`notif+sarah-chen@co.com`) resolves back to the handle. You can set a custom handle:
+Handles are the canonical identity **inside the document as well as outside it**: a unit's `lead:` and every `manages:` entry name a seat by its handle, and so do notification routing and external system mappings (e.g. a Jira assignee, a GitLab service account). A name is prose a founder edits; an identity is not, so nothing references a seat by its `name`. A seat's `email` is matched too — inbound Jira and GitHub payloads identify people by address, and a plus-addressed form (`notif+sarah-chen@co.com`) resolves back to the handle. You can set a custom handle:
 
 ```yaml
 roles:
@@ -297,21 +334,21 @@ Three identities must each name exactly one thing in the whole company:
 
 | Identity | Unique across | Why |
 |---|---|---|
-| Seat **handle** | Every seat, agent and human | It names the seat's inbox, its derived agent id and its external accounts. Two seats on one handle share an inbox, or an agent absorbs a person's activity. |
-| Seat **name** | Every seat, at any depth | A unit's `lead` and every `manages` entry name a seat and resolve to the first seat of that name. A second seat called the same is unreachable through either, even when its handle differs. |
-| Unit **name** | Every unit in the tree, not only siblings | A `manages` entry naming a unit and a root seat's `unit:` reference search the whole tree and resolve to the first match. Two teams called `Platform` under different departments read as distinct on every screen while each reference reaches only one of them. |
+| Seat **handle** | Every seat, agent and human | It names the seat's inbox, its derived agent id, its external accounts — and it is what a unit's `lead` and every `manages` entry resolve. Two seats on one handle share an inbox, or an agent absorbs a person's activity. |
+| Seat **name** | Every seat, at any depth | The name is display, and a colleague named in prose is resolved by it: a model reaching a teammate types the name it remembers, and an exact role-name match answers with one seat or an honest list. Two seats of one name are permanently that list, on every ask and every roster row. |
+| Unit **key** (`id`, or the name where none is declared) | Every unit in the tree, not only siblings | A `manages` entry naming a unit and a root seat's `unit:` reference search the whole tree and resolve to the first unit answering to the key. Two units on one key read as distinct on every screen while each reference reaches only one of them. |
 
-Names are compared as the exact string, the same way a reference resolves them: `Platform` and `platform` are two different units. A seat or unit with no name (or a name that derives no handle) is refused by its own rule and is never reported as a duplicate of another. A refusal names every entity that shares the key, in one message per key, and where each one sits:
+Seat names are compared as the exact string, the way an exact role-name match is made: `Dev` and `dev` are two different names. Unit keys are compared **folded**, ids and names alike, because a name is prose and a reader who cannot tell two teams apart files one team's work under the other. A seat or unit with no name (or a name that derives no handle) is refused by its own rule and is never reported as a duplicate of another. A refusal names every entity that shares the key, in one message per key, and where each one sits:
 
 ```
-duplicate unit name "Platform": 2 units carry it (under unit "Engineering"; under unit "Product"). ...
+duplicate unit key "Platform": 2 units answer to it (under unit "Engineering"; under unit "Product"). ...
 ```
 
 #### Companies stored before the name rules
 
-Handle uniqueness has always been enforced. Seat name and unit name uniqueness are **admission rules**: they were added after companies existed, and a company that breaks one still runs exactly as it did before. The same holds for a [`unit:` reference on a seat declared inside another unit](#a-seats-unit-reference). So they are enforced where a document is *submitted* and reported where a stored one is *applied*:
+Handle uniqueness has always been enforced. Seat name, seat `id` and unit key uniqueness are **admission rules**: they were added after companies existed, and a company that breaks one still runs exactly as it did before. The same holds for a [`unit:` reference on a seat declared inside another unit](#a-seats-unit-reference). So they are enforced where a document is *submitted* and reported where a stored one is *applied*:
 
-- **Refused on every write.** `PUT /config`, `PATCH /config`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) all refuse a document with a duplicate seat or unit name, including a write to a company whose stored revision already carries one and a write that does not touch the duplicates. The write that corrects them is accepted.
+- **Refused on every write.** `PUT /config`, `PATCH /config`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) all refuse a document with a duplicate seat name, seat id or unit key, including a write to a company whose stored revision already carries one and a write that does not touch the duplicates. The write that corrects them is accepted.
 - **Applied with a warning.** A stored revision carrying a duplicate name (written by an earlier build, or activated by an older peer during a rolling upgrade) is applied by every node, a node boots on it (including one started with `-company` or `-import-company` naming a file that is that revision, or a `-company` file the store's own company outranks), and `POST /config/reload`, a `/setup` credential rotation (which reloads) and a revert to it still work. The vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`) read such a file too. Each node logs `org_admission_warning` once for every violation when it applies the epoch, naming the revision and the entities, with the document path of each under `paths`.
 - **Always readable.** `GET /config`, the revision reads, diffs, `crewlet config show` and `crewlet config export` serve the stored document as it is, so the duplicates can be seen and corrected.
 
@@ -322,40 +359,42 @@ Hierarchy is encoded through `manages` relationships on roles. A Team Lead manag
 - **Permissions** flow from hierarchy — a manager can assign tasks to reports, knowledge access is scoped, and the agent's identity prompt names the manager so handoffs (a Slack mention, a Jira comment, or `a2a_ask` during Execute) reach the right person
 - **Task assignment** is the unit lead's responsibility — the lead agent reasons about its members and assigns tasks
 
-#### Managing by unit name
+#### Managing by unit key
 
-The `manages` list accepts both **role names** and **unit names**. When an entry matches an OrgUnit name (and does not match any role name), it is expanded to all roles contained in that unit, including roles in descendant child units. This avoids listing every agent individually when a role manages an entire team or department.
+The `manages` list accepts both **seat handles** and **unit keys**. When an entry matches a unit's key (and does not match any seat's handle), it is expanded to all roles contained in that unit, including roles in descendant child units. This avoids listing every agent individually when a role manages an entire team or department.
 
 ```yaml
 roles:
   - name: "CEO"
-    manages: ["Engineering", "Product"]   # unit names — expands to all roles in each unit
+    manages: [engineering, product]   # unit keys — expand to every seat in each unit
 
 units:
   - name: "Engineering"
+    id: engineering
     type: team
-    lead: "Tech Lead"
+    lead: tech-lead
     roles:
       - name: "Tech Lead"
       - name: "Dev A"
       - name: "Dev B"
   - name: "Product"
+    id: product
     type: team
-    lead: "PM"
+    lead: pm
     roles:
       - name: "PM"
       - name: "Designer"
 ```
 
-After expansion the CEO manages: `Tech Lead`, `Dev A`, `Dev B`, `PM`, `Designer`.
+After expansion the CEO manages: `tech-lead`, `dev-a`, `dev-b`, `pm`, `designer` — handles, because that is what a manages list holds once it is normalized.
 
-You can mix role names and unit names freely:
+You can mix handles and unit keys freely:
 
 ```yaml
-manages: ["CTO", "Backend"]   # CTO is a role, Backend is a unit
+manages: [cto, backend]   # cto is a seat handle, backend is a unit key
 ```
 
-If a name matches both a role and a unit, the **role takes priority** (no expansion happens for that entry). A unit name expands to every seat in that unit's subtree **except the seat that lists it**: a lead that manages its own team by name does not manage itself. A name matching neither a role nor a unit is kept as written, so a seat that has not been added yet can already be named, and the engine reports it as a [dangling reference](#dangling-references).
+If one token is both a seat's handle and a unit's key, the **seat takes priority** (no expansion happens for that entry). A unit key expands to every seat in that unit's subtree **except the seat that lists it**: a lead that manages its own team by key does not manage itself. A token matching neither is kept as written, so a seat that has not been added yet can already be named, and the engine reports it as a [dangling reference](#dangling-references).
 
 ### Unit Lead
 
@@ -365,30 +404,33 @@ A unit may designate a lead via the `lead` field. The lead is responsible for:
 - Acting as the single point of contact for the unit
 - Reasoning about members' profiles (background, goal, responsibilities) to assign tasks to the right individual
 
-When a unit has direct roles and a lead is set, the lead **auto-manages** every direct member that no direct member of the same unit already manages. Three rules decide what counts as already managed, and all three read each `manages` entry the way [unit-name expansion](#managing-by-unit-name) resolves it, so a unit name counts for every seat it reaches:
+When a unit has direct roles and a lead is set, the lead **auto-manages** every direct member that no direct member of the same unit already manages. Three rules decide what counts as already managed, and all three read each `manages` entry the way [unit-key expansion](#managing-by-unit-key) resolves it, so a unit key counts for every seat it reaches:
 
-- **A member another direct member manages keeps that manager.** A tech lead who lists `Dev A`, or who lists the unit `Backend` that `Dev A` sits in, shields `Dev A` from the unit lead.
+- **A member another direct member manages keeps that manager.** A tech lead who lists `dev-a`, or who lists the unit key `backend` that `dev-a` sits in, shields `dev-a` from the unit lead.
 - **A member the lead already manages is not listed twice.**
-- **A member that manages the lead is never claimed.** An engineering manager who manages their own unit by name reaches the unit lead too, and claiming them back would make a two-seat management cycle.
+- **A member that manages the lead is never claimed.** An engineering manager who manages their own unit by key reaches the unit lead too, and claiming them back would make a two-seat management cycle.
 
 ```yaml
 units:
   - name: "Engineering"
-    lead: "VP Engineering"
+    id: engineering
+    lead: vp-eng
     roles:
       - name: "VP Engineering"
+        handle: vp-eng
     children:
-      - name: "Backend"              # inherits VP Engineering as lead
+      - name: "Backend"              # inherits vp-eng as lead
+        id: backend
         roles:
           - name: "Tech Lead"
-            manages: ["Backend"]     # Dev A and Dev B, by unit name
+            manages: [backend]       # Dev A and Dev B, by unit key
           - name: "Dev A"
           - name: "Dev B"
 ```
 
-Here VP Engineering auto-manages only `Tech Lead`. `Dev A` and `Dev B` report to Tech Lead alone.
+Here VP Engineering auto-manages only `tech-lead`. `dev-a` and `dev-b` report to Tech Lead alone.
 
-**Only the unit's own direct members shield.** A seat outside the unit that manages it, such as a root-level CEO with `manages: ["Backend"]`, lists every seat in `Backend` but does not stop `Backend`'s lead from auto-managing those seats as well. That scope is deliberate: management is stored on the manager, so a CEO managing a whole division by name would otherwise leave every lead inside it with an empty roster. The consequence is that such a member has **two managers**. `org.Organization.Manager` reports the first seat in walk order that lists it, and root-level seats are walked first, so the CEO is the one an identity prompt names. To keep the unit lead as the primary manager, have the outside seat manage the lead (`manages: ["Backend Lead"]`) rather than the unit.
+**Only the unit's own direct members shield.** A seat outside the unit that manages it, such as a root-level CEO with `manages: [backend]`, lists every seat in `Backend` but does not stop `Backend`'s lead from auto-managing those seats as well. That scope is deliberate: management is stored on the manager, so a CEO managing a whole division by key would otherwise leave every lead inside it with an empty roster. The consequence is that such a member has **two managers**. `org.Organization.Manager` reports the first seat in walk order that lists it, and root-level seats are walked first, so the CEO is the one an identity prompt names. To keep the unit lead as the primary manager, have the outside seat manage the lead (`manages: [backend-lead]`) rather than the unit.
 
 The lead can be a **human seat** — a human manager running an AI team is a first-class pattern: agents escalate to the human with their own Slack/Jira tools (an @-mention), and the human assigns work in the PM tool. See [Humans in the Org Chart](humans-in-the-org.md).
 
@@ -401,19 +443,23 @@ When a child unit has no `lead` set, it automatically inherits the lead from its
 ```yaml
 units:
   - name: "Engineering"
+    id: engineering
     type: department
-    lead: "VP Engineering"          # ← set here
+    lead: vp-eng                    # ← set here
     roles:
       - name: "VP Engineering"
+        handle: vp-eng
     children:
       - name: "Backend"
-        type: team                  # no lead — inherits "VP Engineering"
+        id: backend
+        type: team                  # no lead — inherits vp-eng
         roles:
           - name: "Dev A"
           - name: "Dev B"
       - name: "Frontend"
+        id: frontend
         type: team
-        lead: "Frontend Lead"       # explicit — NOT overwritten
+        lead: frontend-lead         # explicit — NOT overwritten
         roles:
           - name: "Frontend Lead"
           - name: "Dev C"
@@ -421,8 +467,8 @@ units:
 
 In this example:
 
-- **Backend** has no lead, so it inherits `VP Engineering`. VP Engineering auto-manages `Dev A` and `Dev B`.
-- **Frontend** has an explicit lead (`Frontend Lead`), so the parent's lead is ignored.
+- **Backend** has no lead, so it inherits `vp-eng`. VP Engineering auto-manages `dev-a` and `dev-b`.
+- **Frontend** has an explicit lead (`frontend-lead`), so the parent's lead is ignored.
 
 Inherited leads work the same as explicit leads for auto-management, task routing, `org.Organization.IsUnitLead`, and the Jira project-key mapping. The only difference is that the lead role lives in an ancestor unit rather than the current one. Use `org.Organization.EffectiveLead` to resolve the lead seat in code.
 
@@ -433,43 +479,46 @@ Roles can be placed at the org root or directly in any unit. A department-level 
 ```yaml
 roles:
   - name: "CEO"
-    manages: ["VP Engineering"]
+    manages: [vp-eng]
 
 units:
   - name: "Engineering"
+    id: engineering
     type: department
     roles:
       - name: "VP Engineering"
-        manages: ["Backend Lead", "Frontend Lead"]
+        handle: vp-eng
+        manages: [backend-lead, frontend-lead]
     children:
       - name: "Backend"
+        id: backend
         type: team
-        lead: "Backend Lead"
+        lead: backend-lead
         roles: [...]
 ```
 
 #### A seat's `unit` reference
 
-A seat declared at the **root** can name the unit it belongs to with `unit:`, which is how the per-entity configuration API adds a seat to a unit. The engine moves such a seat into that unit before anything else is derived, so it inherits the unit's tool credentials and is auto-managed by the unit's lead exactly as a seat written inside the unit is. A seat moved this way is still reported, and edited, where it was written.
+A seat declared at the **root** can name the unit it belongs to with `unit:`, **by that unit's key**, which is how the per-entity configuration API adds a seat to a unit. The engine moves such a seat into that unit before anything else is derived, so it inherits the unit's tool credentials and is auto-managed by the unit's lead exactly as a seat written inside the unit is. A seat moved this way is still reported, and edited, where it was written.
 
-The reference places a root seat and nothing else. A seat declared **inside** a unit is never moved by one, so a `unit:` on it that names a different unit reads as a placement and does nothing: the seat stays where it is written while the document says it belongs elsewhere. A document carrying one is refused at that seat's `unit`; repeating the name of the unit the seat is declared in is accepted. This is an [admission rule](#companies-stored-before-the-name-rules): a stored company that already carries such a reference still runs exactly as it did.
+The reference places a root seat and nothing else. A seat declared **inside** a unit is never moved by one, so a `unit:` on it that keys a different unit reads as a placement and does nothing: the seat stays where it is written while the document says it belongs elsewhere. A document carrying one is refused at that seat's `unit`; repeating the key of the unit the seat is declared in is accepted. This is an [admission rule](#companies-stored-before-the-name-rules): a stored company that already carries such a reference still runs exactly as it did.
 
 ### Dangling references
 
-A `lead`, a root seat's `unit`, or a `manages` entry names another entity by name, and that name may resolve to nothing: a misspelling, a seat that was removed, or a seat that has not been added yet. None of these refuses the revision. Live configuration changes build an organization in pieces (a unit can be added before the seat that leads it, and every node applies each intermediate revision), so refusing a partly wired organization would make that sequence impossible. Every reader treats the reference as absent instead: a unit whose lead is dangling runs with no lead, a seat whose `unit` names nothing stays at the root, and a `manages` entry naming nothing manages nobody.
+A `lead`, a root seat's `unit`, or a `manages` entry names another entity — a seat by its handle, a unit by its key — and that reference may resolve to nothing: a misspelling, a seat that was removed, or a seat that has not been added yet. None of these refuses the revision. Live configuration changes build an organization in pieces (a unit can be added before the seat that leads it, and every node applies each intermediate revision), so refusing a partly wired organization would make that sequence impossible. Every reader treats the reference as absent instead: a unit whose lead is dangling runs with no lead, a seat whose `unit` keys nothing stays at the root, and a `manages` entry naming nothing manages nobody.
 
 The engine reports them rather than letting them pass silently. **Each node logs every dangling reference once for each epoch it applies**, as a warning named `org_dangling_reference`, and never for a revision it refused. A reference that is still logged after the organization is fully wired is a misspelling nothing else will report.
 
 | `ref` | Reported when | `from` | `to` |
 |---|---|---|---|
-| `lead` | A unit's own `lead` names no seat | The unit | The lead as written |
-| `unit` | A root seat's `unit` names no unit | The seat | The unit as written |
-| `manages` | A `manages` entry names neither a seat nor a unit | The seat | The entry as written |
+| `lead` | A unit's own `lead` is no seat's handle | The unit | The handle as written |
+| `unit` | A root seat's `unit` is no unit's key | The seat | The key as written |
+| `manages` | A `manages` entry is neither a seat's handle nor a unit's key | The seat | The entry as written |
 | `gitlab_access_level` | A key of `integrations.gitlab.provisioning.access_levels` is no seat's handle | `integrations.gitlab.provisioning.access_levels` | The handle |
 
 Each line also carries `epoch`, `revision` and a `detail` sentence saying what the engine does meanwhile and how to resolve it.
 
-**What was written is reported, once.** A dangling lead is reported on the unit that declares it, never on the child units that inherit it: they wrote nothing, and there is nothing to fix on them. A child unit that writes the same name itself is reported separately, because it is a second place to correct. A `manages` entry naming a unit that holds no seats resolves to nobody but is not a misspelling, so it is not reported.
+**What was written is reported, once.** A dangling lead is reported on the unit that declares it, never on the child units that inherit it: they wrote nothing, and there is nothing to fix on them. A child unit that writes the same name itself is reported separately, because it is a second place to correct. A `manages` entry keying a unit that holds no seats resolves to nobody but is not a misspelling, so it is not reported.
 
 **A stale GitLab access level is worth removing promptly.** Access level overrides are looked up by handle when a seat's service account is provisioned, so the entry left behind by a removed seat grants its level to the next seat that derives the same handle. It is reported whether or not GitLab is currently enabled, since re-enabling it is exactly when the stale grant would take effect.
 

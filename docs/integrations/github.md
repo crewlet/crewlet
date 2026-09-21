@@ -911,12 +911,13 @@ mcp_servers:
 
 units:
   - name: Backend
+    id: backend                 # the unit's key; `name` above is display
     type: team
-    lead: Tech Lead
+    lead: tech-lead             # the lead seat's handle
     roles:
       - name: Tech Lead
         goal: "Ship backend features on time with high quality"
-        manages: ["Senior Engineer", "Junior Engineer"]
+        manages: [senior-engineer, junior-engineer]   # handles, not display names
       - name: Senior Engineer
         mcp_env:
           github: { Authorization: "Bearer ${GITHUB_TOKEN_SENIOR}" }

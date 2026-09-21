@@ -341,9 +341,9 @@ integrations:
         former.engineer: maintainer
 roles:
   - name: CEO
-    manages: [Eng, Ghost]
+    manages: [eng, ghost]
   - name: Dev
-    unit: Nowhere
+    unit: nowhere
 units:
   - name: Eng
     roles:
@@ -351,7 +351,7 @@ units:
       - name: Engineer
     children:
       - name: Platform
-        lead: Phantom
+        lead: phantom
 `)
 	type want struct {
 		ref, path, seat, unit, from, to string
@@ -365,10 +365,10 @@ units:
 		got = append(got, want{w.Ref, w.Path, w.Seat, w.Unit, w.From, w.To, w.Segments})
 	}
 	expected := []want{
-		{"unit", "roles[1].unit", "dev", "", "Dev", "Nowhere", config.Path{"roles", 1, "unit"}},
-		{"lead", "units[0].children[0].lead", "", "Platform", "Platform", "Phantom",
+		{"unit", "roles[1].unit", "dev", "", "Dev", "nowhere", config.Path{"roles", 1, "unit"}},
+		{"lead", "units[0].children[0].lead", "", "Platform", "Platform", "phantom",
 			config.Path{"units", 0, "children", 0, "lead"}},
-		{"manages", "roles[0].manages[1]", "ceo", "", "CEO", "Ghost", config.Path{"roles", 0, "manages", 1}},
+		{"manages", "roles[0].manages[1]", "ceo", "", "CEO", "ghost", config.Path{"roles", 0, "manages", 1}},
 		{"gitlab_access_level", "integrations.gitlab.provisioning.access_levels.former.engineer", "", "",
 			"integrations.gitlab.provisioning.access_levels", "former.engineer",
 			config.Path{"integrations", "gitlab", "provisioning", "access_levels", "former.engineer"}},

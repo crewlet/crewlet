@@ -1153,7 +1153,7 @@
           "type": "string"
         },
         "handle": {
-          "description": "Canonical slug. Effectively permanent: it derives the seat's durable id.",
+          "description": "Canonical slug, and how lead and manages name this seat. Effectively permanent: it derives the seat's durable id.",
           "pattern": "^[a-z0-9][a-z0-9-]*$",
           "type": "string"
         },
@@ -1344,7 +1344,7 @@
           ]
         },
         "manages": {
-          "description": "Seats or units this seat manages; a unit expands to its seats.",
+          "description": "Seat handles or unit keys this seat manages; a unit key expands to its seats.",
           "items": {
             "type": "string"
           },
@@ -1361,7 +1361,7 @@
           "type": "object"
         },
         "name": {
-          "description": "Unique seat name; also the source of the auto-derived handle.",
+          "description": "Seat name, shown to people; also the source of the auto-derived handle. Nothing references a seat by it.",
           "type": "string"
         },
         "placement": {
@@ -1400,7 +1400,7 @@
           "type": "integer"
         },
         "unit": {
-          "description": "Home unit for a root-level seat; the seat is moved into it.",
+          "description": "Key (id) of the home unit for a root-level seat; the seat is moved into it.",
           "type": "string"
         },
         "workers": {
@@ -2093,7 +2093,7 @@
           "type": "array"
         },
         "id": {
-          "description": "Stable identity for this unit, so a rename does not move what is keyed on it. Lowercase, starts with a letter.",
+          "description": "Stable identity for this unit, and how lead, manages and unit references key it. Minted from the name at import when unset. Lowercase, starts with a letter.",
           "pattern": "^[a-z][a-z0-9_-]{0,63}$",
           "type": "string"
         },
@@ -2105,7 +2105,7 @@
           "type": "array"
         },
         "lead": {
-          "description": "Seat leading this unit; inherited from the parent when empty.",
+          "description": "Handle of the seat leading this unit; inherited from the parent when empty.",
           "type": "string"
         },
         "mcp_env": {
@@ -2119,7 +2119,7 @@
           "type": "object"
         },
         "name": {
-          "description": "Unit name; also what a manages entry can reference.",
+          "description": "Unit name, shown to people. Nothing references a unit by it.",
           "type": "string"
         },
         "project": {

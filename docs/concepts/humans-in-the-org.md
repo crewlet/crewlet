@@ -22,8 +22,9 @@ engine→human notification channel.
 ```yaml
 units:
   - name: Core Engineering
+    id: core-eng
     type: team
-    lead: Sarah Chen              # a human can lead an AI team
+    lead: sarah-chen              # a human can lead an AI team, named by handle
     roles:
       - name: Sarah Chen
         kind: human
@@ -303,7 +304,8 @@ roles:
     kind: human
     goal: "Own direction; final call on what ships"
     responsibilities: ["Approvals", "Unblock the CEO"]
-    manages: [CEO]            # top agents only — lead inheritance does the rest
+    manages: [ceo]            # handles: top agents only — lead inheritance
+                              # does the rest
     contact:
       slack_user_id: U0FOUNDER
       atlassian_account_id: 5b10ac8d-...

@@ -57,13 +57,15 @@ roles:
 # all, which is what these two exercise end to end.
 units:
   - name: Engineering
+    id: engineering
     purpose: builds and runs the product
     project: ENG
-    lead: CEO
+    lead: ceo
   - name: Operations
+    id: operations
     purpose: keeps the lights on
     project: OPS
-    lead: CEO
+    lead: ceo
 turn_engine:
   max_iterations: 1
   max_tool_rounds: 3

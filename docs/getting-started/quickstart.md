@@ -87,6 +87,17 @@ api:
     tokens:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
+
+secrets:                  # REQUIRED. Every record on every state log — the
+                          #   tracker's, the knowledge base's — is signed
+                          #   under this keyring, because the broker has no
+                          #   auth of its own and a record is whatever the
+                          #   next node applies. `crewlet secrets keygen`
+                          #   mints one and prints the export line
+  active_key_id: "2026-01"
+  keys:
+    - id: "2026-01"
+      material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
 ## 2. Write the Tier B company (`company.yaml`)
@@ -123,7 +134,9 @@ roles:
   # `manages` to the top seat so you aren't copied on everything.
   - name: Your Name
     kind: human
-    manages: [CEO]
+    manages: [ceo]              # BY HANDLE. A `manages:` entry names a seat by
+                                # its handle and a unit by its key — never by a
+                                # display name, which is prose you will edit
     contact:
       # One identity per surface you connect. Swap this for
       # `slack_user_id` (a `U…` member ID) if Slack is your chat.
@@ -133,7 +146,7 @@ roles:
     handle: ceo                 # see the note under this block — set these now
     goal: "Set product vision, prioritize initiatives, and make final calls"
     backstory: "Experienced founder who balances speed with quality"
-    manages: [CTO, PM]
+    manages: [cto, pm]
     # A zero-integration way to see your first agent turn: a scheduled task.
     # Delete this once you have real integrations delivering work.
     schedules:
@@ -144,8 +157,12 @@ roles:
 # Flexible org structure — use any nesting depth and unit types.
 units:
   - name: Product Management
+    id: pm-team                 # the unit's KEY: what a `manages:` entry and a
+                                # root seat's `unit:` resolve. The name above is
+                                # display. Leave it out and one is minted from
+                                # the name at import (`product-management` here)
     type: team
-    lead: PM
+    lead: pm                    # the lead seat's HANDLE
     purpose: "Define what gets built and why"
     # A unit's identity on the tracker and the knowledge base. Both default
     # to the engine's own backends, so these two keys are all it takes to
@@ -160,11 +177,12 @@ units:
         handle: pm
         goal: "Turn business goals into clear specs and prioritized backlogs"
         backstory: "Data-driven product manager who writes crisp requirements"
-        manages: [Engineer]
+        manages: [eng]
 
   - name: Core Engineering
+    id: eng-team
     type: team
-    lead: CTO
+    lead: cto
     purpose: "Build and ship the product"
     project: ENG
     space: ENG
@@ -176,7 +194,7 @@ units:
         handle: cto
         goal: "Set technical direction, make architecture decisions, unblock engineers"
         backstory: "Senior architect with deep distributed systems experience"
-        manages: [Engineer]
+        manages: [eng]
 
       - name: Engineer
         handle: eng
@@ -184,12 +202,15 @@ units:
         backstory: "Full-stack engineer who writes clean, tested code"
 ```
 
-> **Set `handle` now, and keep it.** An agent's durable id is a UUIDv5
-> over `"<company name>:<handle>"` (`org.DeriveAgentID`), so changing a
-> handle, *or the company `name`*, mints a new id and orphans that seat's
-> diary, onboarding markers, and counterparty profiles. It keeps working, but it
-> has lost its memory. Leaving `handle` unset auto-derives it from the
-> role name, which ties the id to a label you may well rename later. See
+> **Set `handle` now, and keep it.** The handle is the seat's identity twice
+> over: an agent's durable id is a UUIDv5 over `"<company name>:<handle>"`
+> (`org.DeriveAgentID`), and it is also what every `lead:` and `manages:` in
+> the chart above resolves. So changing a handle, *or the company `name`*,
+> mints a new id and orphans that seat's diary, onboarding markers and
+> counterparty profiles. It keeps working, but it has lost its memory.
+> Leaving `handle` unset auto-derives it from the role name, which ties the id
+> to a label you may well rename later. A seat's `name` is display and is
+> referenced by nothing, so renaming one is free. See
 > [Agent Runtime](../concepts/agent-runtime.md#seat-definition-and-the-runner).
 
 ### LLM options
@@ -266,10 +287,12 @@ token_budget: 500000  # org-wide limit (0 or omit = unlimited)
 
 units:
   - name: Core
+    id: core
     type: team
-    lead: CTO
+    lead: cto
     roles:
       - name: CTO
+        handle: cto
         token_budget: 100000  # per-agent limit
       - name: Engineer
         token_budget: 50000
@@ -295,6 +318,8 @@ crash loop.)
 ## 3. Run it
 
 ```bash
+crewlet secrets keygen -key-id 2026-01   # prints the export line below
+export CREWLET_SECRET_KEY_2026_01="<the base64 key it printed>"
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."          # embeddings
@@ -525,8 +550,8 @@ each), then wire them in:
   surface you connect (`mattermost_user_id`, `atlassian_account_id`,
   `gitlab_username`, …) so escalations land in your DMs and agents recognise
   your activity
-- Encrypt your config at rest — add a Tier A keyring (`crewlet secrets keygen`)
-  and run `crewlet config seal` so the **entire** company config is stored
+- Encrypt your config at rest — you already have the keyring, so this is one
+  command: run `crewlet config seal` and the **entire** company config is stored
   encrypted in the DB as one opaque blob. See
   [Configuration § Secrets](../concepts/configuration.md#secrets)
 - Stop exporting a variable per credential — with that keyring in place,

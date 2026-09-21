@@ -796,9 +796,16 @@ optional — you can have root-level roles only, units only, or both.
 roles:                                    # optional — org-wide agents
   - name: CEO
     goal: "Set company direction"
-    manages: [VP Engineering, PM Lead]
+    manages: [vp-eng, pm-lead]            # seat HANDLES, or a unit's KEY
     # ... same role fields as unit roles (see table below)
 ```
+
+A `manages:` entry is a **handle or a unit key**, never a display name. A
+seat's handle is `handle:` where it declares one and the slug of its name
+where it does not; a unit's key is its `id`. Both survive a rename, which a
+display name is exactly what does not — so `manages: [VP Engineering]` broke
+the moment somebody retitled that seat, silently, leaving a hierarchy link
+pointing at nobody.
 
 Root-level roles participate fully in the `manages[]` hierarchy and task
 routing. Their knowledge is scoped to the org (visible to all agents).
@@ -815,7 +822,7 @@ units:
   - name: Engineering                   # required — unit name, and what people
                                         #   read: in a prompt, on a board, in a
                                         #   channel topic
-    id: engineering                     # optional — the unit's STABLE IDENTITY.
+    id: engineering                     # the unit's KEY and STABLE IDENTITY.
                                         #   Lowercase letters, digits, `-` and
                                         #   `_`, starting with a letter. A name
                                         #   is prose and gets renamed; an id is
@@ -833,14 +840,24 @@ units:
                                         #   is what an agent reads as its team,
                                         #   so changing the name changes the
                                         #   context those seats were introduced
-                                        #   with, id or no id
+                                        #   with, id or no id.
+                                        #   WRITE ONE. Omitted, the engine mints
+                                        #   it from the name when the document
+                                        #   is read — deterministically, so a
+                                        #   re-import mints the same key rather
+                                        #   than a second identity for one team
+                                        #   — and warns on a stored revision
+                                        #   that predates the field
     type: department                    # optional — unit type (default: "team")
-    lead: CTO                           # optional — inherited from parent if omitted
+    lead: cto                           # optional — the lead seat's HANDLE;
+                                        #   inherited from the parent if omitted
     purpose: "Build and ship the product"  # optional
     children:                           # optional — nested child units
       - name: Backend                   # required
+        id: backend                     # the child unit's key — same rules
         type: team                      # optional
-        lead: Tech Lead                 # optional — inherited from parent if omitted
+        lead: tl                        # optional — the lead seat's HANDLE;
+                                        #   inherited from the parent if omitted
         goals:                          # optional
           - "Ship features on 2-week cadence"
         channel: backend                # optional — the team's chat channel, inherited
@@ -859,7 +876,8 @@ units:
             token_budget: 200000        # optional — per-agent token limit
             handle: tl                   # optional — custom handle (default: auto-slugified)
             email: tl@company.com       # optional — agent email
-            manages: [Engineer A, Engineer B]  # optional — hierarchy links
+            manages: [eng-a, eng-b]     # optional — hierarchy links, by seat
+                                        #   HANDLE or unit key
             responsibilities:           # optional
               - "Review all PRs"
             behavioral_guidelines:      # optional
@@ -883,7 +901,7 @@ units:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | yes | Unique seat identity |
+| `name` | string | yes | The seat's display name — what people read. It is NOT how anything refers to this seat: `manages:` and a unit's `lead:` both take the `handle` below |
 | `kind` | `agent` \| `human` | no | Who holds the seat (default `agent`). `human` marks a [human seat](../concepts/humans-in-the-org.md) — addressable, never spawned; rejects every runtime-only field below and requires at least one `contact` identity |
 | `contact` | dict | human seats | External identities: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`, `crewlet_operator_id`. Each accepts a literal ID or exactly one whole-value `${VAR}` env reference, resolved at use time; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). **No two seats may declare the same identity** — an external account belongs to one person, and a duplicate is refused rather than silently sending one of them somebody else's mail. `crewlet_operator_id` is the odd one: it names one of Tier A's `api.auth.tokens[].id`, binding that credential to this seat so a person writing through the dashboard or the API acts as **themselves** rather than as a token. It is an attribution and never an address — the engine never sends as itself — so it is left out of rosters and colleague cards, and a seat carrying only this one is reachable through their dashboard queue rather than by an @-mention |
 | `availability` | string | no | Human seats only — free-text availability rendered into rosters and `lookup_colleague` results |
@@ -896,7 +914,7 @@ units:
 | `token_budget` | int | no | Per-agent token limit (0 = unlimited) |
 | `handle` | string | no | Custom identity slug (default: auto-derived) |
 | `email` | string | no | Agent email address |
-| `manages` | list[string] | no | Names of roles this agent manages |
+| `manages` | list[string] | no | Seat **handles** or unit **keys** this agent manages; a unit key expands to that unit's seats. Never a display name — a name is prose that gets renamed and a handle is not |
 | `responsibilities` | list[string] | no | Role responsibilities |
 | `behavioral_guidelines` | list[string] | no | Behavioral rules |
 | `mcp_env` | dict | no | Per-agent MCP server credentials, keyed by server name — env vars for `stdio` servers, HTTP headers for `http` servers (e.g. `atlassian.JIRA_USERNAME` / `atlassian.JIRA_API_TOKEN`, `confluence.CONFLUENCE_USERNAME` / `confluence.CONFLUENCE_API_TOKEN`, `slack.SLACK_MCP_XOXB_TOKEN`, `mattermost.MATTERMOST_TOKEN`, `github.Authorization: "Bearer …"`). The per-agent tool-credential surface only — scope a server via its own filter (`JIRA_PROJECTS_FILTER` / `CONFLUENCE_SPACES_FILTER`) if needed. The unit's project / space identity is `project` and `space` (below), not here |
@@ -948,8 +966,9 @@ cron analogue). Each entry fires a task on its cron expression; see the
 ```yaml
 units:
   - name: Backend
+    id: backend
     type: team
-    lead: Backend Lead
+    lead: backend-lead
     schedules:
       # unit schedule, target defaults to `each` → every direct member runs it
       - name: daily-standup

@@ -589,7 +589,9 @@ roles:
     responsibilities:
       - "Final approval on strategy, roadmap trade-offs, and high-impact bets"
       - "Unblock anything the Agent CEO escalates"
-    manages: ["Agent CEO"]
+    manages: [agent-ceo]                       # BY HANDLE: `manages:` names seats by their
+                                               #   handle and units by their key, so the
+                                               #   chart survives every rename
     contact:
       # Mattermost identifies people by username, not an opaque ID — this
       # is the account you sign in as.  `founder` is what
@@ -608,12 +610,18 @@ roles:
 # contain roles directly and/or child units.
 units:
   - name: Leadership
+    id: leadership                             # the unit's KEY: what `manages:` and a
+                                               #   root seat's `unit:` resolve.  The name
+                                               #   above is display, so renaming the team
+                                               #   moves nothing that points at it.  Minted
+                                               #   from the name at import when unset
     type: department
-    lead: Agent CEO
+    lead: agent-ceo                            # the LEAD'S HANDLE, never its display name
     children:
       - name: Executives
+        id: executives
         type: team
-        lead: Agent CEO
+        lead: agent-ceo
         # Tracker + knowledge identity — the project this unit files work
         # in and the container it writes pages to.  Inbound activity with
         # no better recipient (unassigned items, page changes nobody was
@@ -643,7 +651,7 @@ units:
               your PM on backlog prioritization, but you hold final authority on what ships and
               when. You communicate through writing, keep decisions visible on the work items, and never
               let strategic context stay only in your head.
-            manages: ["Agent CTO", "Agent PM"]
+            manages: [agent-cto, agent-pm]
             responsibilities:
               - "Set and communicate Nimbus's product vision and quarterly OKRs"
               - "Prioritize initiatives across product and engineering based on strategic impact, customer demand, and competitive pressure"
@@ -694,7 +702,7 @@ units:
               has strategic implications beyond engineering. You believe in writing ADRs for
               significant decisions, keeping technical debt visible in the backlog, and
               never letting an engineer stay blocked for more than a few hours.
-            manages: ["Agent SWE", "Agent Frontend SWE", "Agent AI Systems Engineer"]
+            manages: [agent-swe, agent-frontend-swe, agent-ai-systems-engineer]
             responsibilities:
               - "Own the technical architecture across both the control plane (nimbuscore, nimbusk0s) and the Phase-2 AI framework — ensure they evolve together, not in conflict"
               - "Translate product epics from the PM into well-scoped engineering stories with clear acceptance criteria and technical guidance"
@@ -723,17 +731,19 @@ units:
                 bot_token: "${MATTERMOST_TOKEN_CTO}"
 
   - name: Product
+    id: product
     type: department
-    lead: Agent PM
+    lead: agent-pm
     children:
       - name: Product Management
+        id: product-management
         type: team
-        lead: Agent PM
+        lead: agent-pm
         project: "PROD"                        # unit's tracker + wiki identity (routing + write home)
         space: "PROD"
         roles:
           - name: Agent PM
-            manages: ["Agent DevRel"]
+            manages: [agent-devrel]
             goal: "Drive Nimbus's product strategy by researching the composable infrastructure and AI-framework markets, proposing high-impact user stories across both the control plane and the Phase-2 framework, and maintaining a prioritized backlog aligned with Nimbus's two-phase vision"
             backstory: >
               Seasoned product manager with deep expertise in Kubernetes fleet management,
@@ -774,8 +784,9 @@ units:
                 bot_token: "${MATTERMOST_TOKEN_PM}"
 
       - name: Developer Relations
+        id: developer-relations
         type: team
-        # No explicit lead — inherits ``Agent PM`` from the parent ``Product`` department.
+        # No explicit lead — inherits ``agent-pm`` from the parent ``Product`` department.
         # Shares the ``PROD`` tracker + wiki identity with Product Management:
         # PM and DevRel collaborate tightly (drafts ↔ review), so isolating
         # them into separate projects would force unnecessary cross-project linking.
@@ -829,12 +840,14 @@ units:
                 bot_token: "${MATTERMOST_TOKEN_DEVREL}"
 
   - name: Engineering
+    id: engineering
     type: department
-    lead: Agent CTO
+    lead: agent-cto
     children:
       - name: Core
+        id: core
         type: team
-        lead: Agent CTO
+        lead: agent-cto
         project: "ENG"                         # unit's tracker + wiki identity (routing + write home)
         space: "ENG"
         # Unit-scoped recurring work — one schedule per delivery mode.

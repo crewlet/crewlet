@@ -97,10 +97,18 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 		t.Errorf("seats = %v, want both engineers running", seats)
 	}
 
+	// SIX: the two duplicates, and one per unit with no id.
+	//
+	// A unit's id is its KEY — what a `manages:` entry and a seat's
+	// `unit:` resolve — and an import mints one from the name. A revision
+	// stored before that rule has none on any unit, which is precisely
+	// what this fixture is, so the id warning fires once per unit. It is
+	// the same class as the two below it: applied as it stands, refused on
+	// the next write, located at the field to change.
 	warnings := logs.records(t, "org_admission_warning")
-	if len(warnings) != 2 {
-		t.Fatalf("%d admission warnings, want one per violation (seat name and unit name): %v",
-			len(warnings), warnings)
+	if len(warnings) != 6 {
+		t.Fatalf("%d admission warnings, want one per violation — the seat name, "+
+			"the unit name, and one per unit with no id: %v", len(warnings), warnings)
 	}
 	// Each line names every place its violation is about, in the paths the
 	// config package located it at: both seats, and both units.
@@ -136,8 +144,8 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("second tick: %v", err)
 	}
-	if got := len(logs.records(t, "org_admission_warning")); got != 2 {
-		t.Errorf("%d admission warnings after a second tick on the same epoch, want still 2", got)
+	if got := len(logs.records(t, "org_admission_warning")); got != 6 {
+		t.Errorf("%d admission warnings after a second tick on the same epoch, want still 6", got)
 	}
 }
 

@@ -73,8 +73,9 @@ mcp_servers:
 
 units:
   - name: Core
+    id: core                                              # the unit's key; `name` above is display
     type: team
-    lead: Engineer
+    lead: engineer                                        # the lead seat's handle
     roles:
       - name: Engineer
         integrations:                                     # per-agent transport identity

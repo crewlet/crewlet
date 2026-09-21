@@ -117,11 +117,13 @@ roles:
     handle: pm
 units:
   - name: Product
-    lead: PM
+    id: product
+    lead: pm
     project: PROD
     space: PROD
   - name: Content
-    lead: PM
+    id: content
+    lead: pm
     project: PROD
     space: PROD
 `)

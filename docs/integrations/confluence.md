@@ -87,9 +87,10 @@ A unit declares the Confluence space it **owns** under `space`. This is *integra
 ```yaml
 units:
   - name: Engineering
+    id: engineering   # the unit's key; `name` above is display
     type: department
-    lead: CTO
-    space: "ENG"   # unit identity: routing + write home (NOT read scope)
+    lead: cto         # the lead seat's handle
+    space: "ENG"      # unit identity: routing + write home (NOT read scope)
     roles:
       - name: CTO
         mcp_env:
@@ -99,8 +100,9 @@ units:
           atlassian: { CONFLUENCE_API_TOKEN: "${ARCHITECT_CONFLUENCE_TOKEN}" }
 
   - name: Product
+    id: product
     type: department
-    lead: VP Product
+    lead: vp-product
     space: "PROD"
     roles:
       - name: VP Product

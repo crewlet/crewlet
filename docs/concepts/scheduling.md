@@ -111,8 +111,9 @@ matches.
 ```yaml
 units:
   - name: Backend
+    id: backend                          # the unit's key; `name` above is display
     type: team
-    lead: Backend Lead
+    lead: backend-lead                   # the lead seat's handle
     channel: C_BACKEND
     schedules:
       # target defaults to `each` → every direct member posts their own update

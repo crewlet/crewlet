@@ -105,8 +105,9 @@ Declare the unit's Jira project under `project` (its integration identity), and 
 ```yaml
 units:
   - name: Core
+    id: core                     # the unit's key; `name` above is display
     type: team
-    lead: CTO
+    lead: cto                    # the lead seat's handle
     project: "ENG"               # the unit's Jira project (integration identity)
     roles:
       - name: CTO

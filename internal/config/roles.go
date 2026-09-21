@@ -23,9 +23,11 @@ import (
 // surfaces); the runtime one carries what is convenient to READ, and every
 // consumer of a seat gets exactly one shape to reason about.
 type Role struct {
-	// Name is the seat's unique identity, and the source of the derived
-	// handle.
-	Name string `yaml:"name" json:"name" js:"required" desc:"Unique seat name; also the source of the auto-derived handle."`
+	// Name is DISPLAY, and the source of the derived handle when the seat
+	// declares none. Nothing REFERENCES a seat by it: a unit's `lead:` and
+	// every `manages:` entry name a seat by its handle, so renaming a seat
+	// moves nothing that points at it.
+	Name string `yaml:"name" json:"name" js:"required" desc:"Seat name, shown to people; also the source of the auto-derived handle. Nothing references a seat by it."`
 
 	// Kind is agent (the default, a spawned runtime seat) or human (an
 	// addressable-only seat that is never spawned and needs at least one
@@ -41,30 +43,34 @@ type Role struct {
 	// ~4h".
 	Availability string `yaml:"availability,omitempty" json:"availability,omitempty" desc:"Human seats: free-text availability shown in rosters."`
 
-	// Handle is the canonical identity slug, derived from Name when empty.
+	// Handle is the canonical identity slug, derived from Name when empty,
+	// and WHAT EVERY REFERENCE TO THIS SEAT RESOLVES: a unit's `lead:` and
+	// every `manages:` entry.
 	//
 	// EFFECTIVELY PERMANENT: the seat's durable id is derived from the
 	// company name and this handle, so changing either orphans that seat's
 	// diary, onboarding markers and counterparty profiles.
-	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug. Effectively permanent: it derives the seat's durable id."`
+	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug, and how lead and manages name this seat. Effectively permanent: it derives the seat's durable id."`
 
 	Email string `yaml:"email,omitempty" json:"email,omitempty" desc:"Seat email; plus-addressing derives from the handle."`
 
-	// Unit is a home-unit reference for a ROOT-level seat, resolved into
-	// that unit's members before anything else runs. It is what
-	// PUT /config/roles/{handle} writes; a hand-authored config normally nests the
-	// seat under its unit directly. On a seat nested inside a unit it moves
-	// nothing, and one naming a different unit is refused on admission
-	// (org.ErrMisplacedUnitRef).
-	Unit string `yaml:"unit,omitempty" json:"unit,omitempty" desc:"Home unit for a root-level seat; the seat is moved into it."`
+	// Unit is a home-unit reference for a ROOT-level seat, BY THE UNIT'S
+	// KEY (its `id`), resolved into that unit's members before anything else
+	// runs. It is what PUT /config/roles/{handle} writes; a hand-authored
+	// config normally nests the seat under its unit directly. On a seat
+	// nested inside a unit it moves nothing, and one keying a different unit
+	// is refused on admission (org.ErrMisplacedUnitRef).
+	Unit string `yaml:"unit,omitempty" json:"unit,omitempty" desc:"Key (id) of the home unit for a root-level seat; the seat is moved into it."`
 
 	Goal             string   `yaml:"goal,omitempty" json:"goal,omitempty" desc:"What this seat is for; reaches its prompt."`
 	Backstory        string   `yaml:"backstory,omitempty" json:"backstory,omitempty" desc:"Who this seat is; reaches its prompt."`
 	Responsibilities []string `yaml:"responsibilities,omitempty" json:"responsibilities,omitempty" desc:"What this seat owns."`
 
-	// Manages names seats OR units this seat manages; a unit name expands
-	// to every seat in it and its descendants.
-	Manages []string `yaml:"manages,omitempty" json:"manages,omitempty" desc:"Seats or units this seat manages; a unit expands to its seats."`
+	// Manages names the seats this seat manages BY HANDLE, and the units it
+	// manages BY KEY (their `id`); a unit key expands to every seat in it
+	// and its descendants. Never a display name — those are what a founder
+	// edits, and a chart wired to them comes apart on the first rename.
+	Manages []string `yaml:"manages,omitempty" json:"manages,omitempty" desc:"Seat handles or unit keys this seat manages; a unit key expands to its seats."`
 
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty" desc:"How this seat should work; reaches its prompt."`
 
@@ -507,6 +513,10 @@ func (m *RoleMattermost) validate(path Path) error {
 
 func (r *Role) validate(path Path) error {
 	var p problems
+	// The SHAPE of a declared id, here beside the unit's, because both are
+	// the same key grammar and the published schema carries the same
+	// pattern. Optional, unlike a unit's: nothing mints one, and nothing in
+	// the engine resolves a seat by it.
 	if g := r.Integrations.GitHub; g != nil {
 		p.wrap(g.validate(at(path, "integrations.github")))
 	}
@@ -620,17 +630,26 @@ func (Role) identityIsDocumentWide() {}
 
 // Unit is the AUTHORED shape of one `units:` entry, nesting to any depth.
 type Unit struct {
-	Name string `yaml:"name" json:"name" js:"required" desc:"Unit name; also what a manages entry can reference."`
+	// Name is DISPLAY: what a person reads in a prompt, on a board, in a
+	// channel topic. Nothing references a unit by it — that is the `id`.
+	Name string `yaml:"name" json:"name" js:"required" desc:"Unit name, shown to people. Nothing references a unit by it."`
 
-	// ID is this unit's stable identity — see [org.Unit.ID]. A name is
-	// read by people and therefore renamed; an id is not read by anybody
-	// and therefore survives.
+	// ID is this unit's stable identity — see [org.Unit.ID] — and WHAT
+	// REFERENCES IT: a `manages:` entry naming a unit and a root seat's
+	// `unit:` both resolve by it. A name is read by people and therefore
+	// renamed; an id is not read by anybody and therefore survives.
+	//
+	// REQUIRED on an authored unit, and MINTED FROM THE NAME when the
+	// document does not carry one ([MintUnitID], applied by
+	// [ParseCompanyNode]) — so a founder never has to write one and every
+	// document the engine reads has a key that a rename cannot move. The
+	// rule is what refuses a unit assembled in Go with neither.
 	//
 	// THE PATTERN IS ON THE FIELD as well as in the validator, because the
 	// generator emits it into the published schema — and a schema that
 	// accepts ids the engine refuses is exactly the drift the schema-diff
 	// test cannot see.
-	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[a-z][a-z0-9_-]{0,63}$" desc:"Stable identity for this unit, so a rename does not move what is keyed on it. Lowercase, starts with a letter."`
+	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[a-z][a-z0-9_-]{0,63}$" desc:"Stable identity for this unit, and how lead, manages and unit references key it. Minted from the name at import when unset. Lowercase, starts with a letter."`
 
 	// Type is an informational label — department, team, squad, pod, or
 	// anything else. Nothing in the engine behaves differently for one.
@@ -638,11 +657,12 @@ type Unit struct {
 
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty" desc:"What this unit is for."`
 
-	// Lead names the seat that leads this unit: routing work within it,
-	// acting as its point of contact, and auto-managing any direct member
-	// that no direct member of this unit already manages. A unit with no
-	// lead of its own inherits its parent's, cascading to any depth.
-	Lead string `yaml:"lead,omitempty" json:"lead,omitempty" desc:"Seat leading this unit; inherited from the parent when empty."`
+	// Lead is the HANDLE of the seat that leads this unit: routing work
+	// within it, acting as its point of contact, and auto-managing any
+	// direct member that no direct member of this unit already manages. A
+	// unit with no lead of its own inherits its parent's, cascading to any
+	// depth.
+	Lead string `yaml:"lead,omitempty" json:"lead,omitempty" desc:"Handle of the seat leading this unit; inherited from the parent when empty."`
 
 	Goals []string `yaml:"goals,omitempty" json:"goals,omitempty" desc:"What this unit is working toward."`
 
@@ -692,12 +712,28 @@ type Unit struct {
 	Schedules []org.Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty" desc:"Recurring work owned by this unit."`
 }
 
-// IdentityKey is the unit's name, which is what a `manages:` entry and a root
-// seat's `unit:` reference address it by. A `lead:` is not one of them: it is
-// written on a unit and names a seat, by the seat's name.
-func (u Unit) IdentityKey() string { return u.Name }
+// IdentityKey is the unit's KEY — its id, or its name where it declares none
+// — which is what a `manages:` entry and a root seat's `unit:` reference
+// address it by, and what [org.Unit.Key] answers. A `lead:` is not one of
+// them: it is written on a unit and names a seat, by the seat's handle.
+//
+// THE KEY RATHER THAN THE NAME, because this is what matches a unit to its
+// previous self across a write ([RestoreRedacted], [CarryUnknown]). A name is
+// prose a founder edits; matching on it handed a renamed unit's masked
+// credentials to whichever unit had taken its old name, which on a document
+// that merely swapped two teams' display names is the other team's secrets.
+// Following the key is following the same identity every other consumer does.
+//
+// A VALUE receiver, like [Role.IdentityKey], because the redaction walker
+// holds the prior document by value.
+func (u Unit) IdentityKey() string {
+	if id := strings.TrimSpace(u.ID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(u.Name)
+}
 
-// identityIsDocumentWide marks the name as unique across the whole tree, so a
+// identityIsDocumentWide marks the key as unique across the whole tree, so a
 // unit's masked credentials follow it when it moves under another unit. See
 // documentIdentified.
 func (Unit) identityIsDocumentWide() {}
@@ -706,7 +742,7 @@ func (Unit) identityIsDocumentWide() {}
 // rules (its name, its schedules) are the org model's, like a seat's.
 func (u *Unit) validate(path Path) error {
 	var p problems
-	if id := strings.TrimSpace(u.ID); id != "" && !unitID.MatchString(id) {
+	if id := strings.TrimSpace(u.ID); id != "" && !entityID.MatchString(id) {
 		p.add(at(path, "id"), ErrShape,
 			"%q is not a unit id: lowercase letters, digits, `-` and `_`, "+
 				"starting with a letter, up to 64 characters. It is chosen once "+
@@ -721,13 +757,90 @@ func (u *Unit) validate(path Path) error {
 	return p.err()
 }
 
-// unitID is what a unit id may look like.
+// entityID is what a unit's or a seat's id may look like.
 //
 // Narrow on purpose. The id is a KEY — it appears in durable rows, in filter
 // arguments a model types, and in a subject token path — so the character set
 // is the intersection of what every one of those carries safely rather than
 // what a name may contain.
-var unitID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+//
+// ONE pattern for both, because they are the same kind of thing and a second
+// regexp differing by one character is how a schema starts accepting what the
+// engine refuses.
+var entityID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+
+// MintUnitID is the id a unit gets when its document declares none: its name,
+// reduced to the key grammar [entityID] accepts.
+//
+// DERIVED FROM THE NAME rather than random, so the minted key is one a person
+// reading the document recognises, and so re-importing the same file mints the
+// same key rather than a second identity for one team.
+//
+// A name that is nothing but punctuation yields nothing, and a name starting
+// with a digit yields a key that would not parse, so both take the `unit-`
+// prefix: the alternative is minting a key the validator then refuses, which
+// blames the operator for a field they did not write.
+func MintUnitID(name string) string {
+	slug := org.Slugify(name)
+	switch {
+	case slug == "":
+		slug = "unit"
+	case slug[0] < 'a' || slug[0] > 'z':
+		slug = "unit-" + slug
+	}
+	if len(slug) > 64 {
+		slug = strings.TrimRight(slug[:64], "-_")
+	}
+	return slug
+}
+
+// requireIDs reports every unit in this subtree that declares no id.
+//
+// AN ADMISSION RULE rather than a runnable one (see
+// [org.Organization.Validate] for the class), and the distinction is the
+// whole reason it is not beside the shape check in [Unit.validate]. A unit
+// with no id is addressable — [org.Unit.Key] falls back to its name, which is
+// exactly how every company behaved before the field — so a revision stored
+// by an earlier build must still boot, reload and be reverted to. What may
+// not happen is a NEW document leaving a team keyed on prose somebody will
+// rename, so a submitted one is refused.
+//
+// Unreachable from any document read through [ParseCompanyNode], which mints
+// one from the name. What it catches is a unit assembled in Go, a name that
+// yields no id at all, and a stored revision a write is trying to keep.
+// Skipped where the unit has no NAME either: the org model already reports
+// that, and reporting both puts one mistake in front of an operator twice.
+func (u *Unit) requireIDs(path Path) error {
+	var p problems
+	if strings.TrimSpace(u.ID) == "" && strings.TrimSpace(u.Name) != "" {
+		p.add(at(path, "id"), ErrMissing,
+			"unit %q has no id, and a unit is referenced by it: a `manages:` "+
+				"entry and a seat's `unit:` both resolve the key. One is minted "+
+				"from the name on import, so set `id: %s` (or any short, dull "+
+				"lowercase key) to say it yourself",
+			u.Name, MintUnitID(u.Name))
+	}
+	for i := range u.Children {
+		p.wrap(u.Children[i].requireIDs(idx(at(path, "children"), i)))
+	}
+	return p.err()
+}
+
+// MintUnitIDs gives every unit in the tree, at any depth, an id minted from
+// its name where it declares none.
+//
+// Applied at the ONE place a Tier B document is decoded ([ParseCompanyNode]),
+// so every document the engine reads carries a key for every unit whatever
+// door it came in by — a file, the config write surface, a per-entity splice.
+// Idempotent: a unit that already has an id keeps it.
+func MintUnitIDs(units []Unit) {
+	for i := range units {
+		if strings.TrimSpace(units[i].ID) == "" {
+			units[i].ID = MintUnitID(units[i].Name)
+		}
+		MintUnitIDs(units[i].Children)
+	}
+}
 
 // Unit transforms the authored unit into the runtime one, recursively.
 //
