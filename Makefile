@@ -192,8 +192,28 @@ crewlet: ## build the engine binary into ./crewlet
 install: ## go install the engine onto your PATH
 	$(GO) install ./cmd/crewlet
 
-fmt: ## rewrite everything gofmt would change
-	gofmt -w .
+# -s, AND THAT IS NOT THE SAME FLAG `fmt-check` OMITS.
+#
+# This repository gates formatting TWICE, at two different standards, and only
+# one of them is `gofmt -l .`: ci.yml's build+vet job runs that, which
+# `fmt-check` mirrors exactly and must keep mirroring, while the golangci-lint
+# job enables the `gofmt` FORMATTER, whose `simplify` setting is on by default.
+# So a redundant composite-literal type passes `gofmt -l .`, passes
+# `make fmt-check`, and fails the lint job.
+#
+# A FIXER IS NOT A GATE, which is what makes this safe: nothing in ci.yml runs
+# `make fmt`, so reaching FURTHER than the check it is paired with creates no
+# divergence — it only closes the hole where the documented remedy could not
+# repair what a gate reported. `make fmt && make check` failing on formatting
+# is the one outcome a contributor cannot act on.
+#
+# It still does not reach everything the lint job's formatters do: `goimports`
+# is enabled there too, with `local-prefixes`, and no gofmt flag groups
+# imports. `golangci-lint fmt` applies both — named here rather than run here,
+# because `fmt` is the target you reach for when the linter is the thing you
+# have not installed.
+fmt: ## rewrite everything gofmt -s would change (see `golangci-lint fmt` for imports)
+	gofmt -s -w .
 
 tidy: ## tidy go.mod / go.sum
 	$(GO) mod tidy

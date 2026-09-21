@@ -80,6 +80,14 @@ cd dashboard && npm run build && git diff --exit-code -- ../static/dashboard
 cd dashboard && npm run typecheck && npm test                 # dashboard-test
 ```
 
+**Two of those gates judge formatting, at two standards.** `gofmt -l .` is one
+of them; `golangci-lint run` is the other, because `.golangci.yml` enables the
+`gofmt` *formatter* too and its `simplify` pass is on — so a redundant
+composite-literal type passes the first and fails the second. `make fmt`
+repairs both (it runs `gofmt -s -w .`); `golangci-lint fmt` repairs those plus
+the `goimports` grouping the lint job also enforces. Reach for one of those two
+rather than plain `gofmt -w .`, which cannot fix what the linter reports.
+
 The race detector is not optional here: the engine's concurrency model is
 real parallelism, and every "atomic because it is single-threaded" assumption
 is a data race until proven otherwise — so every package runs under it, in
