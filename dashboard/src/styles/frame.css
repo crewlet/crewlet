@@ -187,38 +187,45 @@
   flex: 0 0 auto;
 }
 
-/* THE MARK IS 3:2, NOT A SQUARE. `crewlet-icon.svg` is 1467×978 in its own
-   viewBox and meets its box rather than filling it, so a 24px SQUARE drew the
-   mark 24px across 16px of art and letterboxed the other 8 — the declared
-   size was never the size anybody saw. In a cell 96px wide and
-   `--page-bar-h` tall that left the brand a 24×16 speck with 36px of empty
-   panel on either side of it.
+/* THE MARK IS BOUNDED, NEVER SIZED. `crewlet-icon.svg` is 1467×978 — a 3:2
+   mark, and it MEETS its box rather than filling it, so any box whose own
+   ratio is not 3:2 draws the mark smaller than the box and letterboxes the
+   rest. A 24px SQUARE drew it 24px across 16px of art and padded the other 8,
+   which in a cell 96px wide and `--page-bar-h` tall left a 24×16 speck.
 
-   So the mark takes ONE axis and derives the other from the file. HEIGHT is
-   the one it takes, at the control step of the band it stands in:
-   `.rail-brand`, `.side-head`, `.peek-bar` and `.page-bar` are all one
-   `--page-bar-h` band, and `--control-h` is what a control standing in one
-   of them measures — so the mark is as tall as the chrome beside it and
-   scales with `--density` for the same reason that does. At the default
-   density that is 48×32 of actual art where there were 24×16.
+   So NEITHER axis is given a size. Both are given a MAXIMUM over the file's
+   own intrinsic 1467×978, and whichever binds decides the box while the other
+   derives from the ratio — which is what keeps the ratio in the FILE rather
+   than restated as a `calc(… * 3 / 2)` here, where it would be a second
+   declaration of the mark's shape that nothing holds against the first.
 
-   WIDTH IS THE CLAMP, and it is what lets ONE rule serve both columns. The
-   rail is `--rail-w` open and `--rail-w-collapsed` — 48px — narrow, and 48px
-   of art in a 48px column touches both its edges. `max-width` on a replaced
-   element rescales the height with it (CSS 2.1 § 10.4 gives
-   `h = max-width × h/w` for exactly this constraint), so the ratio survives
-   the clamp and the narrow column gets 40×27 without a second declaration.
+   `max-height` is `--control-h`, the step every control in this band
+   measures: `.rail-brand`, `.side-head`, `.peek-bar` and `.page-bar` are one
+   `--page-bar-h` band, so the mark stands as tall as the chrome beside it and
+   scales with `--density` for the same reason that does. `max-width` is the
+   column less the inset `.rail-rows` already takes. Open, the height binds and
+   the mark is 48×32; in the 48px column the width binds and it is 39×26.
 
-   A CLAMP RATHER THAN A `[data-collapsed]` RULE, because that attribute is
-   REACT STATE and the 48px column is also a BREAKPOINT: at 960 and below the
-   grid already hands the rail `--rail-w-collapsed` with `collapsed` still
-   false. That gap is exactly how `.rail-engine > .truncate` came to render
-   61px of word inside a 48px column and spill out of both sides of it. A
-   clamp reads the width it was actually given, so it cannot miss the half it
-   was not told about. */
+   A MAXIMUM ON BOTH AXES RATHER THAN A SIZE ON ONE AND A CLAMP ON THE OTHER,
+   because the clamp does NOT carry through a definite size: `height:
+   var(--control-h)` with `max-width` gave a 39×32 box in the narrow column,
+   ratio 1.219, and the mark letterboxed inside it exactly as it had in the
+   square. CSS 2.1 § 10.4's table rescales the other axis only where that axis
+   was itself derived — a height the author stated is a used value the clamp
+   never revisits. Measured in Chromium at 1200px: 39.00×26.00 here against
+   39.00×32.00 with the clamp.
+
+   And a maximum rather than a `[data-collapsed]` rule, because that attribute
+   is REACT STATE while the 48px column is also a BREAKPOINT: at 960 and below
+   the grid already hands the rail `--rail-w-collapsed` with `collapsed` still
+   false. That gap is how `.rail-engine > .truncate` came to render 61px of
+   word inside a 48px column and spill out of both sides of it. A maximum
+   reads the width it was actually given, so it cannot miss the half nothing
+   told it about. */
 .rail-brand img {
   width: auto;
-  height: var(--control-h);
+  height: auto;
+  max-height: var(--control-h);
   max-width: calc(100% - 2 * var(--space-1));
 }
 

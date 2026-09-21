@@ -308,19 +308,30 @@ is where the collapsed rail and the phone's bottom bar send a reader — they ar
 kept in the chrome because a theme switch you can SEE is the reason either is
 there, and what was wrong was a rail too narrow to draw what it was drawing.
 
-**The mark takes one axis and derives the other.** `crewlet-icon.svg` is
-1467×978 — a 3:2 mark, not a square — and it meets its box rather than filling
-it, so the 24px SQUARE it used to be given drew the mark 24px across 16px of
-art and letterboxed the other 8: the declared size was never the size anybody
-saw, and a cell 96px wide held a 24×16 speck. It now stands `--control-h` tall,
-the step every control in the same `--page-bar-h` band takes, and reads its
-width from the file. The width is a `max-width` CLAMP rather than a second rule
-keyed on the collapsed rail, because the 48px column is React state AND a
-breakpoint — under 960 the grid hands the rail `--rail-w-collapsed` with
-`collapsed` still false, which is how `.rail-engine > .truncate` once rendered
-61px of word inside 48px of column — and on a replaced element a clamped width
-rescales the height with it, so the narrow column gets the same mark smaller
-instead of the same mark spilling.
+**The brand mark is bounded, never sized.** `crewlet-icon.svg` is 1467×978 —
+a 3:2 mark — and it *meets* its box rather than filling it, so any box whose
+own ratio is not 3:2 draws the mark smaller than the box and pads the rest. It
+was given a 24px SQUARE, which drew 24px of mark across 16px of art and
+letterboxed the other 8: a cell 96px wide held a 24×16 speck. Neither axis is
+given a size now. Both are given a MAXIMUM over the file's intrinsic size —
+`max-height` at `--control-h`, the step every control in the same
+`--page-bar-h` band takes, and `max-width` at the column less the inset
+`.rail-rows` already takes — so whichever binds decides the box and the other
+derives from the ratio. Open, the height binds and the mark is 48×32; in the
+48px column the width binds and it is 39×26.
+
+A maximum on *both* axes rather than a size on one and a clamp on the other,
+because a clamp does not carry through a definite size: `height:
+var(--control-h)` with a `max-width` gave a 39×32 box at ratio 1.219 in the
+narrow column and letterboxed the mark inside it exactly as the square had.
+CSS 2.1 § 10.4's table rescales the other axis only where that axis was itself
+derived; a height the author stated is a used value the clamp never revisits.
+And a maximum rather than a rule keyed on the collapsed rail, because the 48px
+column is React state AND a breakpoint — under 960 the grid hands the rail
+`--rail-w-collapsed` with `collapsed` still false, which is how
+`.rail-engine > .truncate` once rendered 61px of word inside 48px of column.
+`styles/frame.test.ts` holds the shape: no definite width, no definite height,
+a maximum on both.
 
 `g` then a letter jumps to a workspace (`g i`, `g m`, `g w`, `g c`, `g k`,
 `g a`, `g o`, `g d`); `[` collapses the rail. A chord rather than a modifier,
