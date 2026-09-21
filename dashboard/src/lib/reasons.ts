@@ -1,7 +1,7 @@
 /**
- * The nineteen wake reasons, as English, written once.
+ * The eighteen wake reasons, as English, written once.
  *
- * The applier records, per change and per recipient, the ONE reason of nineteen
+ * The applier records, per change and per recipient, the ONE reason of eighteen
  * under which that person heard about it — `internal/tracker/recipients.go`,
  * in the precedence order that decided it. Nothing has ever drawn it, and it
  * is the fact no commercial tracker records: Linear, Jira and ClickUp can all
@@ -9,7 +9,7 @@
  *
  * ONE TABLE, because two would disagree. `asked` on an inbox row and `asked`
  * on an item's routing tab must mean the same thing in the same words, and
- * twenty raw snake_case values rendered directly read like a log file rather
+ * eighteen raw snake_case values rendered directly read like a log file rather
  * than like a sentence about a person.
  *
  * A reason this build does not know renders as ITSELF rather than vanishing,
@@ -84,11 +84,6 @@ const PHRASES: Record<string, { short: string; about: string; why: string }> = {
     short: "you collaborate on it",
     about: "collaborator",
     why: "you were brought onto this task",
-  },
-  goal_owner: {
-    short: "under your goal",
-    about: "owns the goal",
-    why: "you own a goal this work counts towards",
   },
   watcher: { short: "you watch it", about: "watching", why: "you follow this task" },
   unwatched: {

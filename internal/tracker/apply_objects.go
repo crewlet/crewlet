@@ -12,9 +12,9 @@ import (
 
 // The whole-document objects, and why they take one upsert each.
 //
-// A view, a goal, a tag set, a person, a project and the two catalogues are
-// small enough to travel as FULL POST-STATE — one document
-// field, one upsert, and no patch semantics to get wrong. What that buys is
+// A view, a tag set, a person, a project and the two catalogues are small
+// enough to travel as FULL POST-STATE — one document field, one upsert, and no
+// patch semantics to get wrong. What that buys is
 // that a replay of one of them is a single statement whose result cannot
 // depend on what the row held before, which is the property a task's patch has
 // to work for.
@@ -42,8 +42,8 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 	// a redelivery, or a record this build retained and reprocessed at its
 	// original position after a newer one had already applied. The explode
 	// below DELETES and re-inserts, and until this guard existed it did so
-	// unconditionally: a stale reprocess left the goal's document saying
-	// one thing and its targets saying another, with nothing to notice.
+	// unconditionally: a stale reprocess left the document saying one
+	// thing and its child rows saying another, with nothing to notice.
 	//
 	// Zero rows affected is exactly "this record did not write the
 	// document", because an upsert that runs always affects one.
@@ -53,8 +53,8 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 			return 0, err
 		}
 	}
-	// A PROJECT, A VIEW, A PERSON OR A GOAL — none of which has an
-	// item key or a containing project, so both are honestly empty.
+	// A PROJECT, A VIEW OR A PERSON — none of which has an item key or a
+	// containing project, so both are honestly empty.
 	history, err := a.writeHistory(ctx, tx, c, subjectKeys{}, nil)
 	if err != nil {
 		return 0, err
@@ -66,8 +66,8 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 //
 // A TABLE PER KIND rather than one polymorphic document table, because every
 // one of them is FILTERED differently: a saved view is found by its container,
-// a goal by its group, a person by their handle. One table would make every
-// one of those a scan.
+// a tag set and a project by their key, a person by their handle. One table
+// would make every one of those a scan.
 func documentTable(s Subject) (table, key string, err error) {
 	switch s.Kind {
 	case KindProject:
@@ -78,8 +78,6 @@ func documentTable(s Subject) (table, key string, err error) {
 		return "tracker_catalogues", s.ID, nil
 	case KindView:
 		return "tracker_views", s.ID, nil
-	case KindGoal:
-		return "tracker_goals", s.ID, nil
 	case KindPerson:
 		return "tracker_persons", s.ID, nil
 	}
@@ -180,28 +178,6 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 			string(view.Type), view.Owner, boolInt(view.Protected),
 			boolInt(view.Default), string(view.Rank), view.Icon,
 			jsonOf(view.Params), c.packed, []byte(c.record.Mutation))
-	case "tracker_goals":
-		var goal Goal
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := decodePayload(c.record.Mutation, &goal); err != nil {
-			return 0, fmt.Errorf("tracker: decode the goal at %s: %w", c.position, err)
-		}
-		res, err = tx.ExecContext(ctx, `
-			INSERT INTO tracker_goals
-				(id, name, owners_json, group_label, start_at, due_at, health,
-				 archived, created_at, updated_at, version, document)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-			ON CONFLICT (id) DO UPDATE SET
-				name = excluded.name, owners_json = excluded.owners_json,
-				group_label = excluded.group_label, start_at = excluded.start_at,
-				due_at = excluded.due_at, health = excluded.health,
-				archived = excluded.archived, updated_at = excluded.updated_at,
-				version = excluded.version, document = excluded.document
-			WHERE excluded.version > tracker_goals.version`,
-			key, goal.Name, jsonOf(goal.Owners), goal.Group,
-			nullableTime(goal.StartAt), nullableTime(goal.DueAt), goal.Health,
-			boolInt(goal.Archived), store.EncodeTime(goal.CreatedAt),
-			store.EncodeTime(goal.UpdatedAt), c.packed, []byte(c.record.Mutation))
 	case "tracker_persons":
 		var person Person
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml

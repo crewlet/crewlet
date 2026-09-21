@@ -1225,8 +1225,6 @@ func (a *Applier) explode(ctx context.Context, tx *sql.Tx, subject Subject,
 			})
 	case KindCatalogue:
 		return a.explodeCatalogue(ctx, tx, subject.ID, c)
-	case KindGoal:
-		return a.explodeGoal(ctx, tx, subject.ID, c)
 	case KindView:
 		return a.settleDefaultView(ctx, tx, subject.ID, c)
 	}
@@ -1386,97 +1384,6 @@ func (a *Applier) settleFieldVisibility(ctx context.Context, tx *sql.Tx,
 		written += n
 	}
 	return written, nil
-}
-
-// explodeGoal writes a goal's owners, targets and target references.
-func (a *Applier) explodeGoal(ctx context.Context, tx *sql.Tx, id string,
-	c applyContext) (int, error) {
-
-	var goal Goal
-	if err := decodePayload(c.record.Mutation, &goal); err != nil {
-		return 0, err
-	}
-	for _, table := range []string{
-		"tracker_goal_owners", "tracker_goal_targets", "tracker_goal_target_refs",
-	} {
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM `+table+` WHERE goal_id = ?`, id); err != nil {
-			return 0, fmt.Errorf("tracker: clear %s for %s: %w", table, id, err)
-		}
-	}
-	written := 0
-	// AN ORDERED PAIR RATHER THAN A MAP, because a map's iteration order is
-	// random and the rows would leave in a different order on every apply.
-	// The upsert's MIN makes the RESULT order-independent either way — but
-	// a statement whose row order is a coin flip is one nobody can compare
-	// between two nodes when they disagree.
-	for _, group := range []struct {
-		member  int
-		handles []string
-	}{{0, goal.Owners}, {1, goal.Members}} {
-		n, err := insertMany(ctx, tx, c.maxVariables,
-			`INSERT INTO tracker_goal_owners (goal_id, handle, member) VALUES`,
-			`(?,?,?)`,
-			`ON CONFLICT (goal_id, handle) DO UPDATE SET
-				member = MIN(tracker_goal_owners.member, excluded.member)`,
-			group.handles, func(h string) []any {
-				return []any{id, h, group.member}
-			})
-		if err != nil {
-			return 0, fmt.Errorf("tracker: write the owners of %s: %w", id, err)
-		}
-		written += n
-	}
-	// THE TARGETS ARE ONE COLLECTION AND THEIR REFERENCES ANOTHER, so the
-	// targets go out first and every target's references after them,
-	// rather than interleaved a target at a time. Nothing reads across the
-	// two inside this transaction and neither table carries a foreign key,
-	// so the only difference the reordering makes is the statement count.
-	n, err := insertMany(ctx, tx, c.maxVariables, `
-		INSERT INTO tracker_goal_targets
-			(goal_id, target_id, name, type, start, goal, current, unit, done)
-		VALUES`,
-		`(?,?,?,?,?,?,?,?,?)`, "",
-		goal.Targets, func(target GoalTarget) []any {
-			return []any{id, target.ID, target.Name, target.Type, target.Start,
-				target.Goal, target.Current, target.Unit, boolInt(target.Done)}
-		})
-	if err != nil {
-		return 0, fmt.Errorf("tracker: write a target of %s: %w", id, err)
-	}
-	written += n
-	for _, target := range goal.Targets {
-		// TASKS THEN PROJECTS, ordered for the reason the owners are.
-		refs := make([]goalTargetRef, 0, len(target.Tasks)+len(target.Projects))
-		for _, ref := range target.Tasks {
-			refs = append(refs, goalTargetRef{kind: "task", ref: ref})
-		}
-		for _, ref := range target.Projects {
-			refs = append(refs, goalTargetRef{kind: "project", ref: ref})
-		}
-		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		n, err := insertMany(ctx, tx, c.maxVariables,
-			`INSERT INTO tracker_goal_target_refs (goal_id, target_id, kind, ref) VALUES`,
-			`(?,?,?,?)`,
-			`ON CONFLICT (goal_id, target_id, kind, ref) DO NOTHING`,
-			refs, func(r goalTargetRef) []any {
-				return []any{id, target.ID, r.kind, r.ref}
-			})
-		if err != nil {
-			return 0, fmt.Errorf("tracker: write a target reference of %s: %w",
-				id, err)
-		}
-		written += n
-	}
-	return written, nil
-}
-
-// goalTargetRef is one row of [tracker_goal_target_refs] before it is bound:
-// the two kinds a target names are one collection here, so they are one
-// statement rather than two.
-type goalTargetRef struct {
-	kind string
-	ref  string
 }
 
 // writeThread writes the rows a record's own payload carries, as against the

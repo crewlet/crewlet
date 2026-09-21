@@ -179,7 +179,7 @@ test("no module spells an absent value with a dash of its own", async () => {
  * `SeatCell` drew its own 22px `.seat-mark` circle holding a robot glyph while
  * the board, the list, the roster and every seat chip drew `Avatar` — so the
  * same engineer was "FE" on the board and an identical generic robot on
- * Search and on a goal's Owners panel. Two badges for one seat, and the robot
+ * Search and on a project's Lead panel. Two badges for one seat, and the robot
  * half was the one saying nothing: it drew the KIND, which the roster gives at
  * a glance, in the slot that should have been saying WHO.
  */

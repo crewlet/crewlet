@@ -221,7 +221,7 @@ export function relTime(ts: string | null | undefined, now: number): string {
  * That last clause is what this did not have, while the comment above it claimed
  * it did. Backwards, a relative reading stops counting days at thirty and prints
  * the date; forwards it ran on for ever, so "in 341d" was the whole of what a
- * yearly schedule's next run said and a goal due next quarter had no date on its
+ * yearly schedule's next run said and a task due next quarter had no date on its
  * screen at all.
  *
  * A relative time is the better answer only while the reader can still hold the

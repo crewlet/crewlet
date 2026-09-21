@@ -230,13 +230,14 @@ function elements(text: string, tag: string): { at: number; text: string }[] {
  * CONSTRUCTION, not short in today's data. Four tiles joined names a founder
  * writes: the goals screen's at-risk tile, both of the schedules screen's, and
  * Live now's "working now". The goals one shipped reading "Console reads
- * honestly under uncertainty, Console reads hon…" — cut mid-word, naming a goal
- * that does not exist, beside neighbours reading "not archived" and "across
- * every goal on screen".
+ * honestly under uncertainty, Console reads hon…" — cut mid-word, naming an
+ * outcome that does not exist, beside neighbours reading "not archived" and
+ * "across every goal on screen". (That screen left with goals; the gate is
+ * what stops the next tile repeating it.)
  *
  * BOUNDING THE COUNT IS THE WRONG FIX and is why this is a gate rather than four
- * corrected lines: a goal name is bounded at 256 characters
- * (`tracker.MaxGoalName`), so ONE of them overflows a third-of-a-column tile and
+ * corrected lines: a name a founder writes is bounded at 256 characters
+ * (`tracker.MaxTitle`), so ONE of them overflows a third-of-a-column tile and
  * "first two, +N more" keeps the same cut. The caption has to be a derived
  * qualifier — a split, a relative time, a pointer at the list that does hold the
  * names — which is what the other fifty-odd tiles in this tree write.

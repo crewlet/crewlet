@@ -134,9 +134,9 @@ export interface AuditEntry {
  * A FEED OF UUIDS IS A FEED NOBODY READS, which is the tracker's own rule
  * about its own history — and this screen broke it the moment it showed
  * anything but a task. A task carries a key and a project and a person carry
- * their own names, so those three read fine; a GOAL and a SAVED VIEW are
- * addressed by uuid, so five rows in a row read `6dd4b0df-f455-448e-80e9-…`
- * with nothing saying what they were.
+ * their own names, so those three read fine; a SAVED VIEW is addressed by
+ * uuid, so five rows in a row read `6dd4b0df-f455-448e-80e9-…` with nothing
+ * saying what they were.
  *
  * So a subject with no key is named by its KIND and linked to the page that
  * holds it, with the id shortened to the part a person would actually use to
@@ -156,8 +156,6 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
     };
   }
   switch (kind) {
-    case "goal":
-      return { subject: `goal ${short(id)}`, path: ["goals", id] };
     case "view":
       return { subject: `view ${short(id)}`, path: ["work", "views", id] };
     case "person":

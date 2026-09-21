@@ -43,7 +43,7 @@ function fixed(workspace: Parameters<typeof destinationsOf>[0]): SidebarRow[] {
 }
 
 /**
- * Work: every project, the goals and the saved views.
+ * Work: every project and the saved views.
  *
  * A PROJECT IS A LEAF. Its board, list and calendar are tabs of the project —
  * they are views OF the object you are on, and a sidebar row for each is what
@@ -51,7 +51,6 @@ function fixed(workspace: Parameters<typeof destinationsOf>[0]): SidebarRow[] {
  */
 export function useWorkSidebar(): SidebarSection[] {
   const projects = useQuery("work_projects", { limit: 200 }, { pollMs: 120_000 });
-  const goals = useQuery("work_goals", undefined, { pollMs: 120_000 });
   const views = useQuery("work_views", { container: "workspace" }, { pollMs: 300_000 });
 
   return useMemo(() => {
@@ -67,13 +66,6 @@ export function useWorkSidebar(): SidebarSection[] {
         p.task_counts?.open == null
           ? undefined
           : { value: p.task_counts.open, of: "open items — the engine's own maintained count" },
-    }));
-
-    const goalRows: SidebarRow[] = (goals.data?.goals ?? []).map((g) => ({
-      key: g.id,
-      label: g.name,
-      path: ["goals", g.id],
-      sub: g.group || undefined,
     }));
 
     // SAVED VIEWS ONLY. The builtin rows a container has without anybody
@@ -96,7 +88,6 @@ export function useWorkSidebar(): SidebarSection[] {
         rows: projectRows,
         empty: "No project has been created yet.",
       },
-      { key: "goals", label: "Goals", rows: goalRows, empty: "No goal has been set." },
       {
         key: "views",
         label: "Saved views",
@@ -104,7 +95,7 @@ export function useWorkSidebar(): SidebarSection[] {
         empty: "Nobody has saved a view yet.",
       },
     ];
-  }, [projects.data, goals.data, views.data]);
+  }, [projects.data, views.data]);
 }
 
 /** Company: the charter, the directory and the unit tree. */

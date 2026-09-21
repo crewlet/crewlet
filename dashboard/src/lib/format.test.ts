@@ -111,7 +111,7 @@ describe("relative time", () => {
   // `inTime`'s own doc said "the same rules, forward" and it was one rule short:
   // backwards, a relative reading stops at thirty days and prints the date;
   // forwards, it counted days for ever. "in 341d" is a number nobody converts
-  // back into a month, and it is why a goal due next quarter had no date
+  // back into a month, and it is why a task due next quarter had no date
   // anywhere on its screen.
   test("a distant future instant reaches a DATE, exactly as a distant past one does", () => {
     const far = "2027-01-01T12:00:00Z";

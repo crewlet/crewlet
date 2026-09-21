@@ -310,7 +310,7 @@ func TestAnAnswerWakesTheAsker(t *testing.T) {
 	}
 }
 
-// THE TWENTY REASONS, AND THE EIGHT THAT OBLIGE AN ANSWER.
+// THE EIGHTEEN REASONS, AND THE EIGHT THAT OBLIGE AN ANSWER.
 //
 // AND THE OTHER EIGHT ARE A DIFFERENT EIGHT. [tracker.DefaultPrimaryReasons]
 // is which reasons lead a PERSON's inbox, and it is not this list — the two
@@ -319,8 +319,8 @@ func TestAnAnswerWakesTheAsker(t *testing.T) {
 // the other belongs, and nothing failed when they did.
 func TestTheReasonsAreAClosedSetAndTheTwoEightsAreNotTheSame(t *testing.T) {
 	t.Parallel()
-	if len(tracker.Reasons) != 19 {
-		t.Fatalf("%d reasons are enumerated; there are nineteen", len(tracker.Reasons))
+	if len(tracker.Reasons) != 18 {
+		t.Fatalf("%d reasons are enumerated; there are eighteen", len(tracker.Reasons))
 	}
 	addressed := 0
 	for _, r := range tracker.Reasons {
@@ -332,7 +332,7 @@ func TestTheReasonsAreAClosedSetAndTheTwoEightsAreNotTheSame(t *testing.T) {
 		}
 	}
 	if addressed != 8 {
-		t.Fatalf("%d reasons oblige an answer; the split is eight and twelve", addressed)
+		t.Fatalf("%d reasons oblige an answer; the split is eight and ten", addressed)
 	}
 	if tracker.Reason("overridden").Valid() {
 		t.Error("a reason nothing writes is valid")

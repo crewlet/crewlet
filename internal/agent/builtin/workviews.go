@@ -144,7 +144,7 @@ func (t *saveWorkView) Parameters() map[string]any {
 					"four of its arguments: " + AliasSentence() + ". A " +
 					"custom field is `f.<ref>`. Everything else — assignee, " +
 					"type, priority, due, updated, created, reporter, " +
-					"watcher, unit, goal, sort, limit, preset — is " +
+					"watcher, unit, sort, limit, preset — is " +
 					"the same word. Refused if any key does not parse, and " +
 					"`view`, `cursor`, `read_level`, `max_lag_seconds`, " +
 					"`max_lag_seq` and `min_position` are refused " +
@@ -232,8 +232,8 @@ func containerParameter() map[string]any {
 // or returns the refusal the model is shown.
 //
 // A REFUSAL STRING RATHER THAN AN ERROR, which is what every other argument
-// reader on this surface returns (`goalTargets`, `catalogueFields`,
-// `resolveHandle`): both callers render this straight into [failed] and
+// reader on this surface returns (`catalogueFields`, `resolveHandle`): both
+// callers render this straight into [failed] and
 // neither compares it, wraps it or propagates it, so the only reader is the
 // model. Shaped as an `error` it was prose no `errors.Is` would ever ask
 // about, written in a sentence style the error-string convention forbids.
