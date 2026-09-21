@@ -13,11 +13,8 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
-	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE STATE LOGS' STREAM CEILINGS: what each log's stream is created with, and
@@ -104,21 +101,13 @@ const MinDomainCeiling int64 = 1 << 30
 // capped only by the disk, because sizing it from the steady state would refuse
 // the one operation it exists to survive.
 func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (domainCeiling, error) {
-	switch domain.Name() {
-	case tracker.Domain{}.Name():
-		bytes, derived := stream.LogMaxBytes(free)
-		return domainCeiling{Bytes: bytes, Field: "stream.tracker_log_max_bytes", Explicit: !derived}, nil
-	case search.Domain{}.Name():
-		bytes, _ := stream.VectorsMaxBytes(free)
-		return domainCeiling{Bytes: bytes, Field: "stream.tracker_vectors_max_bytes",
-			Explicit: stream.TrackerVectorsMaxBytes > 0}, nil
-	case pages.Domain{}.Name():
-		bytes, derived := stream.PagesMaxBytes(free)
-		return domainCeiling{Bytes: bytes, Field: "stream.pages_log_max_bytes", Explicit: !derived}, nil
+	entry, found := registrationFor(domain.Name())
+	if !found || entry.Ceiling == nil {
+		return domainCeiling{}, fmt.Errorf("engine: domain %q is registered and Tier A "+
+			"declares no ceiling for its stream, so it would reserve its own default "+
+			"outside the budget every other state log is sized into", domain.Name())
 	}
-	return domainCeiling{}, fmt.Errorf("engine: domain %q is registered and Tier A "+
-		"declares no ceiling for its stream, so it would reserve its own default "+
-		"outside the budget every other state log is sized into", domain.Name())
+	return entry.Ceiling(stream, free), nil
 }
 
 // ceilingsFor sizes every registered domain's stream ceiling from Tier A and

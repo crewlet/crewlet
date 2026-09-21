@@ -22,11 +22,9 @@ import (
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
-	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -325,6 +323,17 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 			"what the eviction gate compares against")
 	}
 
+	// THE REGISTER IS CHECKED FIRST, before a stream is sized or a
+	// connection is opened, because every failure it can raise is a fact
+	// about this BUILD rather than about this deployment: a domain
+	// declared with no applier, no write authority or no ceiling is wrong
+	// on every node, every time, and saying so before anything is
+	// provisioned is the difference between a refusal that names the
+	// domain and a half-started node that fails later somewhere else.
+	if err := checkRegister(register()); err != nil {
+		return nil, err
+	}
+
 	// SIZED BEFORE ANYTHING IS STARTED, so the one failure here that is a
 	// declaration rather than a broker (a registered domain Tier A has no
 	// ceiling for) has nothing to unwind.
@@ -490,15 +499,6 @@ func (s *stateLog) haltAppliers() {
 	}
 	stop()
 	s.applyDone.Wait()
-}
-
-// registeredDomains is every domain this build runs, in a FIXED order.
-//
-// The list is here rather than in a registry each domain writes itself into,
-// because the order is load-bearing for the operator surfaces and an
-// init-order registration is exactly the thing nobody can read off the source.
-func registeredDomains() []statelog.Domain {
-	return []statelog.Domain{tracker.Domain{}, search.Domain{}, pages.Domain{}}
 }
 
 // provisionAll provisions every registered domain's stream, in the register's
@@ -669,43 +669,18 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 		// as safely stale.
 		Generation: func() uint32 { return runner.Committed().Generation },
 	}
-	var evicted func(context.Context) (bool, error)
-	switch domain.Name() {
-	case tracker.Domain{}.Name():
-		rows, err := tracker.NewRows(s.db)
-		if err != nil {
-			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
-		}
-		fence := tracker.NewFence(s.db, s.nodeID)
-		fence.Cursor = runner.Committed
-		fence.Floor = s.trimFloor(domain.Name(), func() uint32 { return runner.Committed().Generation })
-		deps.Rows, deps.Fence, deps.Gates = rows, fence, tracker.NewGates(s.db)
-		evicted = fence.Evicted
-	case search.Domain{}.Name():
-		rows, err := search.NewRows(s.db)
-		if err != nil {
-			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
-		}
-		// NO EVICTION READER, and that is the domain rather than an
-		// omission: the vectors are DERIVED and compacted, so there is no
-		// tombstone table to read and nothing an evicted node could serve
-		// that a re-embed would not replace.
-		deps.Rows, deps.Fence, deps.Gates = rows, search.NewFence(), search.NewGates()
-	case pages.Domain{}.Name():
-		rows, err := pages.NewRows(s.db)
-		if err != nil {
-			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
-		}
-		fence := pages.NewFence(s.db, s.nodeID)
-		fence.Cursor = runner.Committed
-		fence.Floor = s.trimFloor(domain.Name(), func() uint32 { return runner.Committed().Generation })
-		deps.Rows, deps.Fence, deps.Gates = rows, fence, pages.NewGates(s.db)
-		evicted = fence.Evicted
-	default:
+	entry, found := registrationFor(domain.Name())
+	if !found || entry.NewSeams == nil {
 		return nil, nil, fmt.Errorf("engine: domain %q is registered and has no "+
 			"write authority, so nothing could ever append to its log",
 			domain.Name())
 	}
+	seams, err := entry.NewSeams(s, runner)
+	if err != nil {
+		return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
+	}
+	deps.Rows, deps.Fence, deps.Gates = seams.Rows, seams.Fence, seams.Gates
+	evicted := seams.Evicted
 	publisher, err := statelog.NewPublisher(deps)
 	if err != nil {
 		return nil, nil, fmt.Errorf("engine: build %s's write authority: %w", domain.Name(), err)
@@ -717,7 +692,7 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 // ladder, the coverage probe and the quorum-committed barrier a linearizable
 // read waits through.
 //
-// # Why the barrier encoder is a switch and not a method on Domain
+// # Why the barrier encoder is on the register's entry, not on Domain
 //
 // A barrier is the framework's append and the DOMAIN's record — the read
 // index decides when one goes out and what its acknowledgement proves, and
@@ -726,6 +701,11 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 // which is the correct answer for one whose reads make no freshness claim
 // rather than a gap: the vectors are derived and compacted, so "as of a
 // position" is not a question about them.
+//
+// It reads off [registration] rather than a switch here because that answer
+// has to be DECLARED: absent and deliberately-absent looked identical in a
+// switch, and this was the register's one arm where forgetting a domain
+// produced a working node that quietly refused its strongest read level.
 //
 // Until this existed [statelog.NewReader] and [statelog.NewReadIndex] were
 // constructed only by their own tests. Every domain reader read its rows
@@ -738,13 +718,8 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainLog,
 	runner *statelog.Runner, running *runningDomain) (*statelog.Reader, error) {
 
-	var encode func(statelog.Envelope) ([]byte, error)
-	switch domain.Name() {
-	case tracker.Domain{}.Name():
-		encode = tracker.EncodeBarrier
-	case pages.Domain{}.Name():
-		encode = pages.EncodeBarrier
-	}
+	entry, _ := registrationFor(domain.Name())
+	encode := entry.Barrier
 
 	deps := statelog.ReaderDeps{
 		Domain: domain,
@@ -1054,31 +1029,26 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	return health, nil
 }
 
-// applierFor is the state machine each domain declares.
+// applierFor is the state machine each domain declares, out of the register.
 //
-// A SWITCH RATHER THAN A METHOD on the domain, because an applier is not part
-// of the declaration: the declaration is what a snapshot, a claim and a sweep
+// ON THE ENTRY RATHER THAN ON THE DOMAIN, because an applier is not part of
+// the declaration: the declaration is what a snapshot, a claim and a sweep
 // read, and it must be answerable by a build that cannot construct the applier
-// at all. What this costs is that a new domain fails HERE, at boot, naming
+// at all. What this costs is that a new domain fails at the BOOT CHECK naming
 // itself — rather than being registered with no state machine and applying
 // nothing.
 func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) {
-	switch domain.Name() {
-	case tracker.Domain{}.Name():
-		return tracker.NewApplier(s.nodeID), nil
-	case search.Domain{}.Name():
-		return search.NewApplier(), nil
-	case pages.Domain{}.Name():
-		// THE PARSER AND THE NUDGE COME FROM HERE, because the apply is
-		// what notices a tool-skill page arriving or leaving and there is
-		// no other delivery to hang the resync off. The nudge is safe to
-		// take before the native runtime exists: it is a non-blocking
-		// send that returns when there is nothing to send to.
-		return pages.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
+	entry, found := registrationFor(domain.Name())
+	if !found || entry.NewApplier == nil {
+		return nil, fmt.Errorf("engine: domain %q is registered and has no applier, "+
+			"so its records would be consumed and produce no rows on this node",
+			domain.Name())
 	}
-	return nil, fmt.Errorf("engine: domain %q is registered and has no applier, "+
-		"so its records would be consumed and produce no rows on this node",
-		domain.Name())
+	applier, err := entry.NewApplier(s)
+	if err != nil {
+		return nil, fmt.Errorf("engine: build %s's applier: %w", domain.Name(), err)
+	}
+	return applier, nil
 }
 
 // Epoch is the per-epoch configuration every registered domain's applier
