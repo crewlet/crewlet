@@ -127,6 +127,32 @@ type OpsLedger interface {
 	// PurgeOps deletes this node's operation rows applied before cutoff,
 	// reporting how many went.
 	PurgeOps(ctx context.Context, cutoff time.Time) (int64, error)
+
+	// PurgeAnchors deletes this node's arbitration anchors below the
+	// domain's published trim floor, reporting how many went.
+	//
+	// KEYED ON THE FLOOR AND NOT ON A CUTOFF, which is why it does not
+	// take one: an anchor answers what a subject's last record expects,
+	// and a row above the floor must stay however old it is, because an
+	// anchor read as absent hands the next writer an expectation the
+	// broker refuses for ever. The caller has no floor to pass — the
+	// domain publishes its own — so the seam asks for none.
+	PurgeAnchors(ctx context.Context) (int64, error)
+}
+
+// OpsHorizon is one domain's operation-ledger horizon, declared at its
+// registration entry.
+//
+// PER DOMAIN, because the question the ledger answers is "did my operation
+// land", asked by a RETRYING CLIENT: a seat told to carry an op id forward and
+// re-ask on its next wake, after a weekend. That client is the same for every
+// domain today, which is why they all take the framework's default — but the
+// horizon is the domain's to state, so a domain whose writers re-ask on a
+// different rhythm says so where it is declared rather than changing a
+// constant every other domain reads.
+type OpsHorizon struct {
+	Ledger    OpsLedger
+	Retention time.Duration
 }
 
 // StatelogJobs sweeps each registered domain's operation ledger.
@@ -144,9 +170,9 @@ type OpsLedger interface {
 // — which looks exactly like a sweep that is working, to the operator who
 // checks the node it ran on. For a long time this was the ONLY job that said
 // so, while six others needed to; see [Scope].
-func StatelogJobs(ledgers map[string]OpsLedger, retention time.Duration) []Job {
-	names := make([]string, 0, len(ledgers))
-	for name := range ledgers {
+func StatelogJobs(domains map[string]OpsHorizon) []Job {
+	names := make([]string, 0, len(domains))
+	for name := range domains {
 		names = append(names, name)
 	}
 	// SORTED, so the log's job order is the same on every node and every
@@ -154,13 +180,31 @@ func StatelogJobs(ledgers map[string]OpsLedger, retention time.Duration) []Job {
 	// like a different sweep from its peer's.
 	slices.Sort(names)
 
-	jobs := make([]Job, 0, len(names))
+	jobs := make([]Job, 0, 2*len(names))
 	for _, name := range names {
-		ledger := ledgers[name]
+		domain := domains[name]
 		jobs = append(jobs, Job{
-			Name: name + "_ops", Scope: NodeLocal, Horizon: retention,
+			Name: name + "_ops", Scope: NodeLocal, Horizon: domain.Retention,
 			Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
-				return ledger.PurgeOps(ctx, cutoff)
+				return domain.Ledger.PurgeOps(ctx, cutoff)
+			},
+		}, Job{
+			// AND THE ANCHORS, which had no sweep at all:
+			// `0001_the_state_log_lands.sql` ships
+			// `statelog_anchor_swept_idx` and states that the sweep
+			// needs it, and nothing ever wrote the delete. One row
+			// per arbitrated subject, for the life of the
+			// deployment, in the replicated estate and therefore in
+			// every snapshot artefact and every backup.
+			//
+			// NO HORIZON, because this one is not keyed on a clock:
+			// the cutoff is the domain's own published trim floor,
+			// which the ledger reads for itself. A horizon here
+			// would be a second opinion about what a log still
+			// holds.
+			Name: name + "_anchors", Scope: NodeLocal,
+			Run: func(ctx context.Context, _, _ time.Time) (int64, error) {
+				return domain.Ledger.PurgeAnchors(ctx)
 			},
 		})
 	}

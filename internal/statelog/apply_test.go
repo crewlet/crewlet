@@ -1912,3 +1912,67 @@ func probeSeal(body []byte) []byte {
 	}
 	return signer.Seal(body)
 }
+
+// THE ARBITRATION ANCHORS ARE SWEPT, and nothing swept them.
+//
+// `0001_the_state_log_lands.sql` creates `statelog_anchor_swept_idx` and says
+// in so many words that the SWEEP needs it, because without the index a range
+// delete scans every subject in the company. Then nothing anywhere in the tree
+// ever wrote that delete: one row per arbitrated subject, kept for the life of
+// the deployment, in the replicated estate and therefore in every snapshot
+// artefact and every backup.
+//
+// THE CUTOFF IS THE PUBLISHED TRIM FLOOR, never a clock. An anchor answers
+// "what does this subject's last record expect", so a row above the floor has
+// to stay however old it is — read as absent, it hands the next writer an
+// expectation of "this subject holds nothing", which the broker refuses for
+// ever against a subject that does. Below the floor there is no record left to
+// replay, so there is nothing for the anchor to be the anchor of.
+func TestTheArbitrationAnchorsAreSwept(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	for seq := uint64(1); seq <= 6; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", fmt.Sprintf("o%d", seq),
+			fmt.Sprintf("op-%d", seq), 1))
+	}
+	if err := h.run(6); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	floorAt := func(seq uint64) statelog.Position {
+		return statelog.Position{Stream: probeStream, Generation: 1, Seq: seq}
+	}
+
+	// A FLOOR OF ZERO SWEEPS NOTHING, which is what a log that has never
+	// trimmed publishes: a statement per tick that deletes nothing is
+	// still a statement per tick.
+	if swept, err := h.runner.PurgeAnchors(t.Context(), floorAt(0)); err != nil || swept != 0 {
+		t.Fatalf("a floor of zero swept %d anchor(s) (%v), want none", swept, err)
+	}
+
+	// A FLOOR PART WAY UP removes only what is below it. This is the
+	// control that matters: a sweep that took everything would delete the
+	// anchors the next writer's expectation is formed from.
+	swept, err := h.runner.PurgeAnchors(t.Context(), floorAt(4))
+	if err != nil {
+		t.Fatalf("PurgeAnchors: %v", err)
+	}
+	if swept != 3 {
+		t.Errorf("a floor at 4 swept %d anchor(s), want the 3 below it — a sweep that "+
+			"took more would remove what the next writer's expectation is formed "+
+			"from", swept)
+	}
+
+	// AND THE SURVIVORS ARE STILL THE ANCHORS. Reading one back as absent
+	// is the failure this bounds, so it is asserted rather than assumed.
+	if _, held, err := h.runner.Op(t.Context(), "op-5"); err != nil || !held {
+		t.Errorf("op-5's ledger row went with the anchors (held=%v, %v)", held, err)
+	}
+
+	// A SECOND SWEEP AT THE SAME FLOOR IS A NO-OP, so a tick on a log that
+	// has not trimmed costs one empty statement rather than repeating work.
+	if swept, err := h.runner.PurgeAnchors(t.Context(), floorAt(4)); err != nil || swept != 0 {
+		t.Errorf("a repeated sweep at the same floor took %d more (%v), want none",
+			swept, err)
+	}
+}

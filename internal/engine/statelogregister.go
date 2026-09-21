@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -91,6 +92,20 @@ type registration struct {
 	// ceiling for would reserve its own default outside the budget every
 	// other state log is sized into.
 	Ceiling func(stream config.Stream, free int64) domainCeiling
+
+	// OpsRetention is how long this domain's operation ledger keeps a row.
+	//
+	// ON THE ENTRY rather than one constant every domain shares, because
+	// the question the ledger answers is "did my operation land", asked by
+	// a RETRYING CLIENT — a seat told to carry an op id forward and re-ask
+	// on its next wake, after a weekend. Every domain's writers re-ask on
+	// the same rhythm today, so every entry takes the framework's default;
+	// what the field buys is that a domain whose writers do not says so
+	// where it is declared, rather than by moving a constant the others
+	// read.
+	//
+	// Zero takes [statelog.OpsRetention].
+	OpsRetention time.Duration
 }
 
 // writeSeams is what one domain's write authority is built from: the three
@@ -129,7 +144,8 @@ func register() []registration {
 				return writeSeams{Rows: rows, Fence: fence,
 					Gates: tracker.NewGates(s.db), Evicted: fence.Evicted}, nil
 			},
-			Barrier: tracker.EncodeBarrier,
+			Barrier:      tracker.EncodeBarrier,
+			OpsRetention: statelog.OpsRetention,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.LogMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
@@ -153,7 +169,8 @@ func register() []registration {
 			// another domain owns and compacted to one message per
 			// source, so a read of them makes no claim about a position
 			// and there is nothing a barrier could prove.
-			NoBarrier: true,
+			NoBarrier:    true,
+			OpsRetention: statelog.OpsRetention,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, _ := stream.VectorsMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
@@ -184,7 +201,8 @@ func register() []registration {
 				return writeSeams{Rows: rows, Fence: fence,
 					Gates: pages.NewGates(s.db), Evicted: fence.Evicted}, nil
 			},
-			Barrier: pages.EncodeBarrier,
+			Barrier:      pages.EncodeBarrier,
+			OpsRetention: statelog.OpsRetention,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.PagesMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
@@ -227,6 +245,13 @@ func checkRegister(entries []registration) error {
 			return fmt.Errorf("engine: the state-log register's entry for %q declares no "+
 				"Tier A ceiling for its stream, so it would reserve its own default "+
 				"outside the budget every other state log is sized into", name)
+		}
+		if entry.OpsRetention <= 0 {
+			return fmt.Errorf("engine: the state-log register's entry for %q declares an "+
+				"operation-ledger horizon of %s — a domain's ledger row answers a "+
+				"retrying client, and a horizon of zero or less would sweep a row "+
+				"the client has not had a chance to re-ask with",
+				name, entry.OpsRetention)
 		}
 		if (entry.Barrier == nil) == !entry.NoBarrier {
 			return fmt.Errorf("engine: the state-log register's entry for %q must state "+

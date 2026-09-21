@@ -2406,15 +2406,64 @@ func (s *stateLog) domainOf(stream string) string {
 // of building it here: a domain added to [statelogDomains] and forgotten in a
 // sweep list is a table that grows for ever with nothing to notice, and that
 // is exactly how these two came to be unswept.
-func (s *stateLog) opsLedgers() map[string]maintenance.OpsLedger {
+func (s *stateLog) opsLedgers() map[string]maintenance.OpsHorizon {
 	if s == nil {
 		return nil
 	}
-	out := make(map[string]maintenance.OpsLedger, len(s.domains))
+	out := make(map[string]maintenance.OpsHorizon, len(s.domains))
 	for name, running := range s.domains {
-		if running != nil && running.runner != nil {
-			out[name] = running.runner
+		if running == nil || running.runner == nil {
+			continue
+		}
+		entry, found := registrationFor(name)
+		if !found {
+			continue
+		}
+		out[name] = maintenance.OpsHorizon{
+			Ledger: domainLedger{
+				name:   name,
+				runner: running.runner,
+				floor: s.trimFloor(name,
+					func() uint32 { return running.runner.Committed().Generation }),
+				generation: func() uint32 { return running.runner.Committed().Generation },
+				stream:     entry.Domain.Stream().Name,
+			},
+			Retention: entry.OpsRetention,
 		}
 	}
 	return out
+}
+
+// domainLedger is one domain's two node-local sweeps, with the anchor half's
+// cutoff resolved where the floor is known.
+//
+// THE FLOOR IS READ PER TICK rather than captured, for [stateLog.readerFor]'s
+// reason: the trim moves it while the process runs, and a sweep against a
+// captured one would keep deleting the same nothing after the log had trimmed
+// past it.
+type domainLedger struct {
+	name       string
+	stream     string
+	runner     *statelog.Runner
+	floor      func(context.Context) (uint64, error)
+	generation func() uint32
+}
+
+func (l domainLedger) PurgeOps(ctx context.Context, cutoff time.Time) (int64, error) {
+	return l.runner.PurgeOps(ctx, cutoff)
+}
+
+func (l domainLedger) PurgeAnchors(ctx context.Context) (int64, error) {
+	seq, err := l.floor(ctx)
+	if err != nil {
+		// AN UNREADABLE FLOOR SWEEPS NOTHING, and says why. Deleting
+		// on a floor nobody could establish is deleting on a guess,
+		// and the rows it would remove are what the next writer's
+		// expectation is formed from.
+		return 0, fmt.Errorf("engine: the anchor sweep could not read %s's trim floor: %w",
+			l.name, err)
+	}
+	return l.runner.PurgeAnchors(ctx, statelog.Position{
+		Stream: l.stream, Generation: l.generation(), Seq: seq,
+	})
 }

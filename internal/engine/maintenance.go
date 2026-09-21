@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -134,7 +133,7 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 			// see [maintenance.StatelogJobs].
 			if e.native.log != nil {
 				jobs = append(jobs, maintenance.StatelogJobs(
-					e.native.log.opsLedgers(), statelog.OpsRetention)...)
+					e.native.log.opsLedgers())...)
 			}
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its
 			// absence is a consequence rather than an omission. Its

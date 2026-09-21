@@ -439,6 +439,16 @@ func (r *Runner) PurgeOps(ctx context.Context, cutoff time.Time) (int64, error) 
 	return r.tables.purgeOps(ctx, r.db, cutoff)
 }
 
+// PurgeAnchors removes this domain's arbitration anchors below floor.
+//
+// PER NODE, like the operation ledger's sweep and unlike a fleet singleton's:
+// every node holds its own copy of these rows, so a singleton would tidy one
+// node's table and leave every other growing — which looks exactly like a
+// sweep that works to whoever checks the node it ran on.
+func (r *Runner) PurgeAnchors(ctx context.Context, floor Position) (int64, error) {
+	return r.tables.purgeAnchors(ctx, r.db, floor)
+}
+
 // Op answers where an operation was applied on this node.
 func (r *Runner) Op(ctx context.Context, opID string) (Position, bool, error) {
 	var p Position

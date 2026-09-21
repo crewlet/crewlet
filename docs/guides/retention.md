@@ -553,6 +553,22 @@ but a seat carries an operation id forward and re-asks on its next wake, hours
 or a weekend later. An operation id older than that resolves `unknown` rather
 than `applied`, which is the honest answer once the row is gone.
 
+That horizon belongs to the **domain** rather than to the framework. Every
+domain takes the same 30 days today, because the client that re-asks is the
+same for all of them; what the per-domain declaration buys is that a domain
+whose writers re-ask on a different rhythm says so where it is declared,
+instead of moving a constant every other domain reads.
+
+Each domain's **arbitration anchors** — one row per subject any writer has ever
+contended on, holding what that subject's last record expects — are swept at
+the log's own **published trim floor**, and never on a clock. An anchor above
+the floor has to stay however old it is: read as absent, it hands the next
+writer an expectation of "this subject holds nothing", which the broker refuses
+for ever against a subject that does. Below the floor there is no record left
+to replay, so there is nothing left for the anchor to be the anchor of. Two
+nodes reading their own wall clocks would delete different rows, which is why
+this one term is a position and not a duration.
+
 A person's **inbox** — one row per routed change per recipient — is swept at
 `tracker.native.inbox_retention_days`, **365 days** by default and settable
 between 30 and 3650. It is the one horizon here that deletes something a person

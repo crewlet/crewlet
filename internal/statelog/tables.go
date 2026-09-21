@@ -248,6 +248,60 @@ func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int6
 	}
 }
 
+// purgeAnchors removes arbitration anchors below the published trim floor.
+//
+// THE TABLE HAD NO DELETE ANYWHERE IN THE TREE. `0001_the_state_log_lands.sql`
+// ships `statelog_anchor_swept_idx` and says in so many words that the SWEEP
+// needs it — and then nothing swept. One row per arbitrated subject, kept for
+// the life of the deployment: every task, every page, every subject any writer
+// ever contended on, in the replicated estate, in every snapshot artefact and
+// in every backup. It bites the tracker and the knowledge base today; a domain
+// whose subjects are per session would only make it fatal sooner.
+//
+// # Why the trim floor is the right cutoff, and an age would not be
+//
+// An anchor's whole job is to answer "what does this subject's last record
+// expect", and a record below the floor is one no node can replay any more.
+// Above the floor the row must stay however old it is, because an anchor read
+// as absent hands the next writer an expectation of "this subject holds
+// nothing" — which the broker refuses for ever against a subject that does.
+// So this is keyed on the same published floor the trim itself moves, never on
+// a clock: two nodes reading their own wall clocks would delete different rows.
+//
+// BATCHED, as purgeOps is and for the same reason: one unbounded DELETE over a
+// company's whole subject space holds the writer for as long as it takes.
+func (t tables) purgeAnchors(ctx context.Context, db Estate, floor Position) (int64, error) {
+	if floor.Seq == 0 {
+		// NOTHING IS BELOW ZERO, and a floor of zero is what a log
+		// that has never trimmed publishes. Sweeping on it would be a
+		// statement per tick that deletes nothing.
+		return 0, nil
+	}
+	var total int64
+	for {
+		var deleted int64
+		err := db.Tx(ctx, func(tx *sql.Tx) error {
+			res, err := tx.ExecContext(ctx, `
+				DELETE FROM statelog_anchor WHERE rowid IN (
+					SELECT rowid FROM statelog_anchor
+					WHERE stream = ? AND anchor < ? LIMIT ?)`,
+				t.stream, floor.Packed(), OpsPurgeBatch)
+			if err != nil {
+				return err
+			}
+			deleted, err = res.RowsAffected()
+			return err
+		})
+		if err != nil {
+			return total, fmt.Errorf("statelog: sweep the anchors on %s: %w", t.stream, err)
+		}
+		total += deleted
+		if deleted < OpsPurgeBatch {
+			return total, nil
+		}
+	}
+}
+
 // op answers where an operation was applied on this node.
 func (t tables) op(ctx context.Context, tx *sql.Tx, opID string) (Position, bool, error) {
 	if t.ops == "" {
