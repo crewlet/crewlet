@@ -1,6 +1,7 @@
 package coordtest
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -27,7 +28,7 @@ import (
 // this state lived on the node's own database: a valve that counted per node,
 // a claim a peer could not see, a completion ledger a redelivery to another
 // node walked straight past.
-func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
+func RunFleet(t *testing.T, newFleet func(t *testing.T, ages FleetAges) coord.Fleet) {
 	t.Helper()
 	groups := []struct {
 		name  string
@@ -35,6 +36,8 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 	}{
 		{"valve", valveCases},
 		{"claims", claimCases},
+		{"setup_states", setupCases},
+		{"attempts", attemptCases},
 		{"ledger", ledgerCases},
 		{"cooldowns", cooldownCases},
 		{"budgets", budgetCases},
@@ -55,7 +58,8 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 			for _, c := range g.cases {
 				t.Run(c.name, func(t *testing.T) {
 					t.Parallel()
-					f := newFleet(t)
+					ages := c.ages.orLong()
+					f := newFleet(t, ages)
 					if f == nil {
 						t.Fatal("newFleet returned a nil backend")
 					}
@@ -65,7 +69,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 					// that are still mid-call at that point.
 					ctx, cancel := context.WithTimeout(context.Background(), stallBudget)
 					t.Cleanup(cancel)
-					c.fn(&fleetHarness{t: t, ctx: ctx, f: f})
+					c.fn(&fleetHarness{t: t, ctx: ctx, f: f, ages: ages})
 				})
 			}
 		})
@@ -74,7 +78,69 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 
 type fleetCase struct {
 	name string
-	fn   func(h *fleetHarness)
+
+	// ages is what this case's backend is built with. The zero value is
+	// [LongAges], which is how every case that does not reason about a
+	// horizon gets one long enough that nothing lapses underneath it.
+	ages FleetAges
+
+	fn func(h *fleetHarness)
+}
+
+// FleetAges are the bucket ages a backend must be built with for one case.
+//
+// # Why the suite dictates them instead of asking for a TTL
+//
+// Because a record here expires with its BUCKET — see [coord.Claims] — so
+// "how long does this claim live" is a question answered at construction and
+// not at the call. A case that must watch a record lapse therefore needs a
+// backend built short, and every other case needs one built long; a single
+// fleet cannot be both, and the suite builds one per case anyway.
+//
+// A backend translates these into whatever its own configuration calls them.
+// A field left zero takes its [LongAges] value.
+type FleetAges struct {
+	// Claim is the delivery-claim bucket's age.
+	Claim time.Duration
+
+	// Setup is the setup-state bucket's age.
+	Setup time.Duration
+
+	// Attempt is the authentication-attempt window, which is both how
+	// long a record lives and the span a count is judged over — one
+	// number, because on a KV it is one bucket's age.
+	Attempt time.Duration
+}
+
+// LapseAge is the bucket age a case asks for when it intends to WATCH a
+// record expire, and it is paid in real time: a claim's expiry is the store's
+// own (a count can be filtered on the caller's clock and a mutual-exclusion
+// record cannot — two nodes each deciding a record had lapsed would both win
+// it), so a real backend only lapses one by the clock running out.
+//
+// 500ms rather than the broker's own 100ms floor on a bucket age: at the
+// floor there is nothing between the deadline and the reaping for a loaded
+// runner's scheduling to fit into, and a case that must see a record GONE
+// cannot distinguish "not expired yet" from "expiry is broken". Half a second
+// plus [lapseMargin] is under a second per lapsing case, and the lapsing
+// cases run in parallel with everything else.
+const LapseAge = 500 * time.Millisecond
+
+// LongAges is what every case that does not reason about a horizon gets: far
+// longer than a case takes, so nothing lapses under a case that did not ask
+// it to, and short enough that a backend sizing real buckets from it is not
+// reserving anything a test run would notice.
+func LongAges() FleetAges {
+	return FleetAges{Claim: 10 * time.Minute, Setup: 10 * time.Minute, Attempt: 10 * time.Minute}
+}
+
+// orLong fills the zero fields from [LongAges].
+func (a FleetAges) orLong() FleetAges {
+	long := LongAges()
+	a.Claim = cmp.Or(a.Claim, long.Claim)
+	a.Setup = cmp.Or(a.Setup, long.Setup)
+	a.Attempt = cmp.Or(a.Attempt, long.Attempt)
+	return a
 }
 
 // fleetHarness is a backend plus the assertions the cases are written in.
@@ -82,6 +148,10 @@ type fleetHarness struct {
 	t   *testing.T
 	ctx context.Context
 	f   coord.Fleet
+
+	// ages is what this case's backend was built with, so a case can
+	// travel exactly as far as the horizon it is reasoning about.
+	ages FleetAges
 }
 
 // now is the suite's base instant.
@@ -103,13 +173,59 @@ func (h *fleetHarness) allow(bucket string, limit int, window time.Duration, at 
 	return ok
 }
 
-func (h *fleetHarness) claim(key string, ttl time.Duration, at time.Time) bool {
+func (h *fleetHarness) claim(key string, at time.Time) bool {
 	h.t.Helper()
-	ok, err := h.f.Claim(h.ctx, key, ttl, at)
+	ok, err := h.f.Claim(h.ctx, key, at)
 	if err != nil {
 		h.t.Fatalf("Claim(%s): %v", key, err)
 	}
 	return ok
+}
+
+func (h *fleetHarness) claimSetup(key string, at time.Time) bool {
+	h.t.Helper()
+	ok, err := h.f.ClaimSetup(h.ctx, key, at)
+	if err != nil {
+		h.t.Fatalf("ClaimSetup(%s): %v", key, err)
+	}
+	return ok
+}
+
+func (h *fleetHarness) fail(subject string, at time.Time) int {
+	h.t.Helper()
+	n, err := h.f.Fail(h.ctx, subject, at)
+	if err != nil {
+		h.t.Fatalf("Fail(%s): %v", subject, err)
+	}
+	return n
+}
+
+func (h *fleetHarness) failures(subject string, at time.Time) int {
+	h.t.Helper()
+	n, err := h.f.Failures(h.ctx, subject, at)
+	if err != nil {
+		h.t.Fatalf("Failures(%s): %v", subject, err)
+	}
+	return n
+}
+
+func (h *fleetHarness) flush(subject string) {
+	h.t.Helper()
+	if err := h.f.Flush(h.ctx, subject); err != nil {
+		h.t.Fatalf("Flush(%s): %v", subject, err)
+	}
+}
+
+// report hands the errors a shared check found to the test.
+//
+// The checks are functions returning errors rather than case bodies for the
+// reason [CheckClaimExpiresWithItsBucket] gives: a body that can only fail a
+// *testing.T is a body nothing in this package can prove fails at all.
+func (h *fleetHarness) report(errs []error) {
+	h.t.Helper()
+	for _, err := range errs {
+		h.t.Error(err)
+	}
 }
 
 func (h *fleetHarness) worked(scope string, keys ...string) map[string]bool {
@@ -280,10 +396,10 @@ var claimCases = []fleetCase{{
 	name: "only the first caller claims a delivery",
 	fn: func(h *fleetHarness) {
 		at := h.now()
-		if !h.claim("gitlab|abc123", time.Minute, at) {
+		if !h.claim("gitlab|abc123", at) {
 			h.t.Fatal("the first claim was refused")
 		}
-		if h.claim("gitlab|abc123", time.Minute, at) {
+		if h.claim("gitlab|abc123", at) {
 			h.t.Fatal("a second caller claimed the same delivery")
 		}
 	},
@@ -291,8 +407,8 @@ var claimCases = []fleetCase{{
 	name: "different deliveries do not collide",
 	fn: func(h *fleetHarness) {
 		at := h.now()
-		h.claim("gitlab|abc123", time.Minute, at)
-		if !h.claim("gitlab|def456", time.Minute, at) {
+		h.claim("gitlab|abc123", at)
+		if !h.claim("gitlab|def456", at) {
 			h.t.Fatal("one delivery's claim suppressed another")
 		}
 	},
@@ -303,11 +419,11 @@ var claimCases = []fleetCase{{
 	name: "a released claim can be made again",
 	fn: func(h *fleetHarness) {
 		at := h.now()
-		h.claim("plane|xyz", time.Minute, at)
+		h.claim("plane|xyz", at)
 		if err := h.f.Release(h.ctx, "plane|xyz"); err != nil {
 			h.t.Fatalf("Release: %v", err)
 		}
-		if !h.claim("plane|xyz", time.Minute, at) {
+		if !h.claim("plane|xyz", at) {
 			h.t.Fatal("a released delivery could not be claimed again")
 		}
 	},
@@ -319,6 +435,25 @@ var claimCases = []fleetCase{{
 		}
 	},
 }, {
+	// THE BUCKET IS THE ONLY CLOCK. This is the case that could not exist
+	// while Claim took a ttl: the twin honoured the argument, the KV
+	// validated it and let the bucket decide, no case ever travelled past
+	// a deadline, and the divergence was certified clean for as long as
+	// both backends existed. What it cost was a fifteen-minute claim
+	// against a five-minute bucket — a setup state that went replayable
+	// ten minutes before anything believed it could.
+	name: "a claim expires with its bucket",
+	ages: FleetAges{Claim: LapseAge},
+	fn: func(h *fleetHarness) {
+		h.report(CheckClaimExpiresWithItsBucket(h.ctx, h.f, h.ages.Claim, h.now()))
+	},
+}, {
+	// FAILS OPEN is the caller's polarity, and it only works if a lost
+	// race and a store that could not answer are distinguishable. An empty
+	// key is the one argument fault a backend can catch locally.
+	name: "an unnamed record is an error, not a race somebody else won",
+	fn:   func(h *fleetHarness) { h.report(CheckUnnamedRecordsAreRefused(h.ctx, h.f, h.now())) },
+}, {
 	name: "exactly one of many concurrent callers claims",
 	fn: func(h *fleetHarness) {
 		at := h.now()
@@ -326,7 +461,7 @@ var claimCases = []fleetCase{{
 		won := make(chan bool, 16)
 		for range 16 {
 			wg.Go(func() {
-				ok, err := h.f.Claim(h.ctx, "mattermost|race", time.Minute, at)
+				ok, err := h.f.Claim(h.ctx, "mattermost|race", at)
 				won <- err == nil && ok
 			})
 		}
@@ -340,6 +475,208 @@ var claimCases = []fleetCase{{
 		}
 		if winners != 1 {
 			h.t.Fatalf("%d callers claimed one delivery, want exactly 1", winners)
+		}
+	},
+}}
+
+// ---- the setup-callback states ------------------------------------------ //
+
+var setupCases = []fleetCase{{
+	// The state on a setup callback is the ONLY authorization that route
+	// has, and it travels in a query string — which is where browser
+	// history and every ingress access log keep it. Spending it is what
+	// stops it being a bearer credential that works as often as it is
+	// presented.
+	name: "only the first caller spends a setup state",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		if !h.claimSetup("github-app-state:abc", at) {
+			h.t.Fatal("the first caller could not spend the state")
+		}
+		if h.claimSetup("github-app-state:abc", at) {
+			h.t.Fatal("a replay spent the same state twice")
+		}
+	},
+}, {
+	// TWO REGISTRIES, TWO BUCKETS, and this is what says so from the
+	// outside. A backend serving both from one bucket would give the setup
+	// states the delivery claims' horizon — which is the defect this pair
+	// of contracts exists to end — and every other case here would still
+	// pass.
+	name: "a setup state and a delivery claim of the same name do not collide",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		if !h.claim("shared-name", at) {
+			h.t.Fatal("the delivery claim was refused")
+		}
+		if !h.claimSetup("shared-name", at) {
+			h.t.Fatal("a delivery claim suppressed a setup state of the same name: " +
+				"the two are separate registries because their horizons differ")
+		}
+	},
+}, {
+	// The setup bucket exists because its horizon is three times the
+	// delivery claims', so the horizon has to be the BUCKET's here too: a
+	// spent state that lapses early is a state that can be presented
+	// twice, which is the only thing this record is for.
+	name: "a spent setup state expires with its bucket",
+	ages: FleetAges{Setup: LapseAge},
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		if !h.claimSetup("github-app-state:lapsing", at) {
+			h.t.Fatal("the first caller could not spend the state")
+		}
+		if err := reclaimed(func(at time.Time) (bool, error) {
+			return h.f.ClaimSetup(h.ctx, "github-app-state:lapsing", at)
+		}, "ClaimSetup", "github-app-state:lapsing", h.ages.Setup, at); err != nil {
+			h.t.Fatal(err)
+		}
+	},
+}}
+
+// ---- the authentication attempts ---------------------------------------- //
+
+var attemptCases = []fleetCase{{
+	// A guessing run reaches whichever ingress node a load balancer picks,
+	// so a per-process counter is one the attacker divides by the number
+	// of nodes without knowing it: five tries per node is twenty per
+	// fleet, and the fleet counted five.
+	name: "a failed attempt counts for every node",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		if got := h.fail("token:op-1", at); got != 1 {
+			h.t.Fatalf("Fail returned %d for the first attempt, want 1", got)
+		}
+		if got := h.fail("token:op-1", at); got != 2 {
+			h.t.Fatalf("Fail returned %d for the second attempt, want 2", got)
+		}
+		if got := h.failures("token:op-1", at); got != 2 {
+			h.t.Fatalf("Failures = %d, want the 2 that Fail just reported — a throttle "+
+				"reads this BEFORE it validates anything, so a count only the "+
+				"writer can see throttles nobody", got)
+		}
+	},
+}, {
+	name: "one caller's attempts do not count against another",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		h.fail("token:op-1", at)
+		h.fail("token:op-1", at)
+		if got := h.failures("token:op-2", at); got != 0 {
+			h.t.Fatalf("Failures for an untouched subject = %d, want 0", got)
+		}
+	},
+}, {
+	// A FLUSH IS FLEET-VISIBLE, which is the half a per-process throttle
+	// cannot do: the credential that proves the caller is not who the
+	// lockout was protecting against has to lift the lockout everywhere,
+	// or an operator who has just authenticated is still refused by the
+	// next node the balancer picks.
+	name: "a successful authentication flushes the window for every reader",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		h.fail("token:op-1", at)
+		h.fail("token:op-1", at)
+		h.flush("token:op-1")
+		if got := h.failures("token:op-1", at); got != 0 {
+			h.t.Fatalf("Failures after a flush = %d, want 0", got)
+		}
+		// AND THE RECORD IS USABLE AGAIN. A flush that left a tombstone
+		// nothing could write past would make the next failed attempt
+		// uncountable — the throttle switched off by the one gesture
+		// that is supposed to reset it.
+		if got := h.fail("token:op-1", at); got != 1 {
+			h.t.Fatalf("Fail after a flush returned %d, want 1", got)
+		}
+	},
+}, {
+	name: "flushing a subject nobody has failed against is not an error",
+	fn: func(h *fleetHarness) {
+		h.flush("token:never-seen")
+		if got := h.failures("token:never-seen", h.now()); got != 0 {
+			h.t.Fatalf("Failures = %d for a subject nobody touched, want 0", got)
+		}
+	},
+}, {
+	// THE WINDOW AGES OUT. A window that never ended would lock a caller
+	// out for the life of the deployment over two typos, and nothing here
+	// sweeps a counter or resets one: the record's own instant is what
+	// leaves it behind.
+	name: "an attempt outside the window no longer counts",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		h.fail("token:op-1", at)
+		h.fail("token:op-1", at)
+		inside := at.Add(h.ages.Attempt - time.Second)
+		if got := h.failures("token:op-1", inside); got != 2 {
+			h.t.Fatalf("Failures a second before the window closes = %d, want 2", got)
+		}
+		outside := at.Add(h.ages.Attempt + time.Second)
+		if got := h.failures("token:op-1", outside); got != 0 {
+			h.t.Fatalf("Failures a second after the window closes = %d, want 0", got)
+		}
+	},
+}, {
+	// THE CAP DISCARDS THE OLDEST, and the count is the only place that
+	// shows which one went. Both policies saturate at the cap while
+	// everything is inside the window, so this ages the FIRST attempt out
+	// and asks again: a record that kept the newest has coord.AttemptCap
+	// attempts left, one that kept the oldest has one fewer. One apart —
+	// and the one that is wrong is a caller who stops being throttled
+	// under the flood that filled the record.
+	name: "the cap discards the oldest attempt, not the newest",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		h.fail("token:flood", at)
+		later := at.Add(h.ages.Attempt / 2)
+		for range coord.AttemptCap {
+			h.fail("token:flood", later)
+		}
+		if got := h.failures("token:flood", later); got != coord.AttemptCap {
+			h.t.Fatalf("Failures with %d attempts recorded = %d, want the cap (%d)",
+				coord.AttemptCap+1, got, coord.AttemptCap)
+		}
+		// The first attempt is outside the window now and the rest are
+		// not, so what is left says which one the cap dropped.
+		past := at.Add(h.ages.Attempt + time.Second)
+		switch got := h.failures("token:flood", past); got {
+		case coord.AttemptCap:
+			// The oldest went. Correct.
+		case coord.AttemptCap - 1:
+			h.t.Fatalf("Failures = %d once the oldest attempt aged out, want %d: the "+
+				"record kept the OLDEST attempt and refused the newest, so a caller "+
+				"being hammered stops being counted as its old attempts expire",
+				got, coord.AttemptCap)
+		default:
+			h.t.Fatalf("Failures = %d, want %d: %d attempts were recorded against a cap "+
+				"of %d", got, coord.AttemptCap, coord.AttemptCap+1, coord.AttemptCap)
+		}
+	},
+}, {
+	// Two nodes refusing the same caller in the same instant record two
+	// attempts. A counter they had to agree on would lose one of them,
+	// which is the per-process throttle's own arithmetic wearing a fleet's
+	// clothes.
+	name: "concurrent failures all count",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		var wg sync.WaitGroup
+		errs := make(chan error, 8)
+		for range 8 {
+			wg.Go(func() {
+				_, err := h.f.Fail(h.ctx, "token:concurrent", at)
+				errs <- err
+			})
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				h.t.Fatalf("a concurrent Fail failed: %v", err)
+			}
+		}
+		if got := h.failures("token:concurrent", at); got != 8 {
+			h.t.Fatalf("Failures after 8 concurrent attempts = %d, want 8", got)
 		}
 	},
 }}
@@ -2361,7 +2698,7 @@ func (h *fleetHarness) integrationNames() []string {
 }
 
 var integrationCases = []fleetCase{
-	{"a recorded status reads back byte for byte", func(h *fleetHarness) {
+	{name: "a recorded status reads back byte for byte", fn: func(h *fleetHarness) {
 		// The value is OPAQUE to this store: internal/integration
 		// marshals a phase, an actor, a sentence and a findings list into
 		// it, and a backend that re-encoded on the way through would
@@ -2376,7 +2713,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"a surface with no status is absent rather than empty", func(h *fleetHarness) {
+	{name: "a surface with no status is absent rather than empty", fn: func(h *fleetHarness) {
 		// The loop reads a missing key as "never reconciled, so due now".
 		// A backend that answered with a zero-length value instead would
 		// make that surface parse as a status whose phase is the empty
@@ -2387,7 +2724,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"the last write wins", func(h *fleetHarness) {
+	{name: "the last write wins", fn: func(h *fleetHarness) {
 		// No compare-and-set, deliberately — but NOT because the worker
 		// duty makes one node the only writer, which is the reason this
 		// used to give and is not true: the dashboard records a pass's
@@ -2402,7 +2739,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"every recorded surface is listed", func(h *fleetHarness) {
+	{name: "every recorded surface is listed", fn: func(h *fleetHarness) {
 		h.putIntegration("gitlab", `{}`)
 		h.putIntegration("slack", `{}`)
 		h.putIntegration("datadog", `{}`)
@@ -2412,7 +2749,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"a deleted status is gone and the rest survive", func(h *fleetHarness) {
+	{name: "a deleted status is gone and the rest survive", fn: func(h *fleetHarness) {
 		h.putIntegration("gitlab", `{}`)
 		h.putIntegration("slack", `{}`)
 		if err := h.f.DeleteIntegrationStatus(h.ctx, "gitlab"); err != nil {
@@ -2424,7 +2761,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"deleting a status that is not there is the outcome asked for", func(h *fleetHarness) {
+	{name: "deleting a status that is not there is the outcome asked for", fn: func(h *fleetHarness) {
 		// The loop forgets every surface the company no longer declares,
 		// on every tick, so this is the common path rather than an edge
 		// case. Raising here would fill an operator's log with warnings
@@ -2434,7 +2771,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"a surface name that is not a bare word survives the round trip", func(h *fleetHarness) {
+	{name: "a surface name that is not a bare word survives the round trip", fn: func(h *fleetHarness) {
 		// The KV backend escapes a key on the way in and unescapes it on
 		// the way out, and the mapping has to be injective in both
 		// directions. Nothing in integration.Kinds needs escaping today,
@@ -2447,7 +2784,7 @@ var integrationCases = []fleetCase{
 		}
 	}},
 
-	{"a status the caller mutates afterwards does not change the store", func(h *fleetHarness) {
+	{name: "a status the caller mutates afterwards does not change the store", fn: func(h *fleetHarness) {
 		// A caller reusing its marshalling buffer is ordinary, and a
 		// backend that kept the caller's slice would have the next
 		// reader see whatever that buffer holds by then.

@@ -462,7 +462,10 @@ func (r *Receiver) claim(ctx context.Context, d delivery) bool {
 	if d.key == "" {
 		return true
 	}
-	won, err := r.claims.Claim(ctx, claimKey(d), coord.ClaimTTL, r.now())
+	// THE HORIZON IS THE BUCKET'S — coord.ClaimTTL, fixed when it was
+	// created — rather than anything this call gets to name: see
+	// [coord.Claims].
+	won, err := r.claims.Claim(ctx, claimKey(d), r.now())
 	if err != nil {
 		log.WarnContext(ctx, "delivery_dedupe_unavailable", "source", d.source, "error", err,
 			"detail", "handling the delivery, which may duplicate one a peer took")

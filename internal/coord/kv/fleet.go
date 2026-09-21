@@ -72,7 +72,7 @@ const positionsSuffix = "_statelog_positions"
 // taken from the caller, because the read-back at the end runs precisely when
 // that deadline has expired — see [jsprovision.Settle].
 func openBucket(ctx context.Context, js jetstream.JetStream,
-	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
+	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, bucketFacts, error) {
 
 	// A BREADCRUMB, because without one this is the silent step. A boot
 	// opens eighteen of these in a row and logs nothing between them, so a
@@ -119,8 +119,8 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		stop()
 		// ON ctx, NOT lookupCtx: a slow lookup can leave its own
 		// deadline spent, and the observation would then fail on a
-		// bucket it had just found. observeReplicas owns its own term.
-		return bucket, observeReplicas(ctx, bucket, cfg)
+		// bucket it had just found. observeBucket owns its own term.
+		return observeBucket(ctx, bucket, cfg)
 	case errors.Is(err, jetstream.ErrBucketNotFound):
 		// TOLD it is absent. Create it below.
 	case jsprovision.Unanswered(ctx, err):
@@ -135,7 +135,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 				"and it comes back as a peer's win and its replicas are read")
 	default:
 		stop()
-		return nil, err
+		return nil, bucketFacts{}, err
 	}
 	// WithTimeout only ever shortens against the parent, so a caller that
 	// already set a tighter deadline keeps it — which is also what makes
@@ -151,9 +151,14 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	bucket, createErr = createKeyValue(createCtx, js, clustered, cfg)
 	stop()
 	if createErr == nil {
-		// THIS NODE MADE IT, at the count it asked for. Nothing to
-		// observe, and no round trip spent observing it.
-		return bucket, nil
+		// THIS NODE MADE IT, at what it asked for — and it is READ BACK
+		// anyway, because the create's own return says what was sent
+		// rather than what is in force. One metadata read against a
+		// group that has just answered, and the alternative is a
+		// retention nobody ever compared on the one path where it
+		// could still be wrong (a server ceiling, a clamp, a bucket
+		// whose stream a peer had resized between the lookup and now).
+		return observeBucket(ctx, bucket, cfg)
 	}
 	if jsprovision.OutOfCapacity(createErr) {
 		// THE BROKER HAS NO ROOM. Nothing frees capacity by being
@@ -195,7 +200,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		// refusal fell through to the read-back below and came back as
 		// a bucket that is "not there", which is the one reading that
 		// sends an operator to the wrong subsystem.
-		return nil, createErr
+		return nil, bucketFacts{}, createErr
 	}
 	if jsprovision.NoApplicableLimit(createErr) {
 		// NO LIMIT APPLIES TO THIS BUCKET AT ALL, which is not the arm
@@ -210,7 +215,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		// fell through and reported a bucket that is "not there", which
 		// of everything on a boot path is the sentence most likely to
 		// be read as corruption.
-		return nil, fmt.Errorf("%w%s", createErr,
+		return nil, bucketFacts{}, fmt.Errorf("%w%s", createErr,
 			jsprovision.NoApplicableLimitDetail(cfg.Replicas))
 	}
 	if jsprovision.Unplaceable(createErr) {
@@ -226,7 +231,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		// Nothing was placed here either, so there is nothing to read
 		// back and a not-found would only obscure the refusal that says
 		// what is actually wrong.
-		return nil, createErr
+		return nil, bucketFacts{}, createErr
 	}
 	// A PEER MAY HAVE WON THE RACE between the read above and this
 	// create, and it says so in two shapes.
@@ -254,16 +259,17 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		// THE CREATE'S ERROR IS WHAT IS REPORTED, with the read-back's
 		// beside it: the first says what went wrong and the second only
 		// confirms the create really did fail.
-		return nil, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
+		return nil, bucketFacts{}, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
 	}
 	// THE PEER MADE IT, so it is the peer's replica count that is in force
 	// and this node has to agree with it — the same question the adopt
 	// path above asks, for the same reason.
-	return bucket, observeReplicas(ctx, bucket, cfg)
+	return observeBucket(ctx, bucket, cfg)
 }
 
-// observeReplicas refuses a bucket replicated below what this node is
-// configured for.
+// observeBucket reads back what is IN FORCE on a bucket and returns it: the
+// replica count, which it REFUSES to run short of, and the age, which the
+// caller reports on.
 //
 // # Why a booting node refuses rather than resizing
 //
@@ -275,46 +281,43 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 // exists (see openBucket's doc for what CreateOrUpdate cost), so a mismatch is
 // an operator gesture, not a write.
 //
-// # Why it is the one bucket field worth refusing over
+// # Why replication is the one bucket field worth refusing over
 //
-// The rest are reported instead — the lease TTL in force is warned about in
-// [Open], for the reason recorded there. Replication is different in kind:
-// every other difference changes how this store BEHAVES and is visible in
-// what it does, while this one changes only what survives losing a node, and
-// is visible in nothing at all until that happens. A fleet raised from one
-// replica to three, whose buckets were all made at one, goes on holding every
-// lease, every fencing epoch and the company's SECRETS on a single disk while
-// each node reports itself correctly configured.
+// The rest are reported instead — the age by [reportRetention], and the lease
+// bucket's by [Open], which says what it costs this store's own arithmetic.
+// Replication is different in kind: every other difference changes how this
+// store BEHAVES and is visible in what it does, while this one changes only
+// what survives losing a node, and is visible in nothing at all until that
+// happens. A fleet raised from one replica to three, whose buckets were all
+// made at one, goes on holding every lease, every fencing epoch and the
+// company's SECRETS on a single disk while each node reports itself correctly
+// configured.
 //
 // Equal or higher passes, so a single-replica development node against a
 // three-replica fleet's buckets still starts.
 //
-// ctx IS THE BOOT'S and the term is derived here, for the reason
-// [jsprovision.Settle] gives: the per-create deadline may be spent by the time
-// this runs — a slow lookup is enough — and an observation handed it fails
-// instantly on a bucket that was just found. [jsprovision.ReadBack] rather
-// than a create's budget, because this is an ordinary metadata read against a
-// group that has already answered.
-func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
-	cfg jetstream.KeyValueConfig) error {
+// # It reads at ONE replica too, where it used to skip the round trip
+//
+// The saving was real and it bought a blind spot: at one replica there is
+// nothing to be short of, so the read was skipped — and with it the only
+// chance to notice that the bucket a node adopted is not aged the way that
+// node asked for. That is the single-node and the small-fleet shape, which is
+// to say most of them. One metadata read per bucket per boot is what knowing
+// costs.
+//
+// ctx IS THE BOOT'S and the term is derived inside [readBucket], for the
+// reason [jsprovision.Settle] gives: the per-create deadline may be spent by
+// the time this runs — a slow lookup is enough — and an observation handed it
+// fails instantly on a bucket that was just found.
+func observeBucket(ctx context.Context, bucket jetstream.KeyValue,
+	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, bucketFacts, error) {
 
-	want := max(cfg.Replicas, 1)
-	if want <= 1 {
-		// Nothing to be short of, and no round trip spent asking.
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, jsprovision.ReadBack)
-	defer cancel()
-	status, err := bucket.Status(ctx)
+	facts, err := readBucket(ctx, bucket)
 	if err != nil {
-		return fmt.Errorf("read %s status: %w", cfg.Bucket, err)
+		return nil, bucketFacts{}, err
 	}
-	got, ok := status.(*jetstream.KeyValueBucketStatus)
-	if !ok || got.StreamInfo() == nil {
-		return fmt.Errorf("coord/kv: %s reported no backing stream", cfg.Bucket)
-	}
-	if live := got.StreamInfo().Config.Replicas; live < want {
-		return fmt.Errorf(
+	if want := max(cfg.Replicas, 1); facts.replicas < want {
+		return nil, bucketFacts{}, fmt.Errorf(
 			"coord/kv: the running bucket %q is replicated %dx and this node is "+
 				"configured for %dx: it holds leases, fencing epochs and this "+
 				"company's secrets on fewer copies than stream.replicas promises, "+
@@ -322,9 +325,49 @@ func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
 				"that already exists, so this is an operator gesture: align "+
 				"stream.replicas across the fleet, or resize this bucket's stream "+
 				"deliberately (a bucket IS a stream: nats stream update --replicas)",
-			cfg.Bucket, live, want)
+			cfg.Bucket, facts.replicas, want)
 	}
-	return nil
+	return bucket, facts, nil
+}
+
+// reportRetention warns when the age in force on a bucket is not the one this
+// node asked for.
+//
+// # Why this is reported and not applied
+//
+// A bucket that exists is ADOPTED (see [openBucket]), so the age in force is
+// whichever member created it, and a booting node rewriting one would be the
+// silent overwrite this package removed everywhere else — decided by boot
+// order, against a metadata group that is still electing, by the node that
+// came up LAST. The remedy is an operator's: align the configuration across
+// the fleet and delete the bucket while the fleet is down, so the next boot
+// re-creates it.
+//
+// THE ONE EXCEPTION IS THE DUTY BUCKET, whose age is raised and never lowered
+// because it is a CEILING on the TTLs the bucket can honour rather than a
+// preference — see [openDuties], which is why that bucket reports nothing
+// here: an age above coord.MaxDutyTTL is its healthy adopted state, and a
+// warning on a healthy state is one nobody reads twice.
+//
+// # Why a warning is worth a line at all
+//
+// Because every one of these differences is silent in exactly the way the
+// bucket table warns about: a claims bucket adopted at a peer's five minutes
+// under a node configured for fifteen expires a claim ten minutes before its
+// caller believes it does, and nothing says so — not the write, not the read,
+// not the caller. The only moment the two numbers are ever in one place is
+// this one.
+func reportRetention(ctx context.Context, name string, want time.Duration, facts bucketFacts) {
+	if facts.age == want {
+		return
+	}
+	log.WarnContext(ctx, "bucket_retention_mismatch", "bucket", name,
+		"in_force", facts.age, "this_node", want,
+		"detail", "a peer created this bucket with a different age and a booting "+
+			"node adopts a bucket rather than rewriting it, so every record here "+
+			"expires on the age in force",
+		"remedy", "make the retention agree across the fleet, or delete the bucket "+
+			"while the fleet is down so the next boot re-creates it")
 }
 
 // createKeyValue makes the bucket, waiting out a cluster that has not yet seen
@@ -358,7 +401,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why FIFTEEN buckets and not one
+// # Why SEVENTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -370,6 +413,21 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	claims     the dedupe window, minutes: long enough to cover a
 //	           third-party app's retries and an operator's replay, short
 //	           enough that a deliberate re-send later is not swallowed
+//	setup      a browser round trip and two clicks, a quarter of an hour:
+//	           the same first-claim-wins record as claims on THREE TIMES
+//	           its horizon, which is the whole reason it is a bucket of
+//	           its own — a claim taken for longer than the bucket it lands
+//	           in does not last longer, it lapses with the bucket and says
+//	           nothing, and a spent callback state that lapses early is a
+//	           replayable one
+//	attempts   the throttle's window, a quarter of an hour, plus the one
+//	           EXPLICIT MESSAGE CAP in this estate: History caps a caller's
+//	           record at coord.AttemptCap attempts and discards the OLDEST
+//	           when it overflows. A KV bucket's stream is DiscardNew, so
+//	           the cap it has by default refuses the NEWEST write, and a
+//	           throttled record that stops accepting attempts un-throttles
+//	           its caller as the old ones age out — under exactly the
+//	           flood that filled it
 //	ledger     turn-completion retention, days: it has to outlast the
 //	           redelivery horizon and the scheduler's catchup floor
 //	cooldowns  the longest credential cooldown, an hour
@@ -431,6 +489,8 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 const (
 	rateSuffix         = "_rate"
 	claimsSuffix       = "_claims"
+	setupSuffix        = "_setup_once"
+	attemptsSuffix     = "_iam_attempts"
 	ledgerSuffix       = "_ledger"
 	cooldownSuffix     = "_cooldowns"
 	statusSuffix       = "_status"
@@ -467,6 +527,19 @@ type FleetConfig struct {
 
 	// ClaimTTL is how long a webhook delivery stays claimed.
 	ClaimTTL time.Duration
+
+	// SetupOnceRetention is how long a spent setup-callback state stays
+	// recorded. Its own bucket because it is three times ClaimTTL, and a
+	// claim cannot outlive the bucket it is written to.
+	SetupOnceRetention time.Duration
+
+	// AttemptWindow is how long one failed authentication counts against
+	// the caller that made it. The bucket's age IS the window: each
+	// attempt is a record of its own and the broker's expiry is what ends
+	// it, so nothing here sweeps a counter. The CAP on one caller's record
+	// is coord.AttemptCap rather than a field here — see its doc for why
+	// it is not configuration.
+	AttemptWindow time.Duration
 
 	// LedgerRetention is how long a turn completion is remembered.
 	LedgerRetention time.Duration
@@ -521,6 +594,7 @@ func (c *FleetConfig) normalize() error {
 		value time.Duration
 	}{
 		{"RateWindow", c.RateWindow}, {"ClaimTTL", c.ClaimTTL},
+		{"SetupOnceRetention", c.SetupOnceRetention}, {"AttemptWindow", c.AttemptWindow},
 		{"LedgerRetention", c.LedgerRetention}, {"FireRetention", c.FireRetention},
 		{"FollowRetention", c.FollowRetention},
 		{"CooldownMax", c.CooldownMax},
@@ -549,6 +623,8 @@ func (c *FleetConfig) normalize() error {
 type FleetStore struct {
 	rate         jetstream.KeyValue
 	claims       jetstream.KeyValue
+	setup        jetstream.KeyValue
+	attempts     jetstream.KeyValue
 	ledger       jetstream.KeyValue
 	cooldowns    jetstream.KeyValue
 	status       jetstream.KeyValue
@@ -573,18 +649,14 @@ type FleetStore struct {
 	// projector; only their key grammar outlived them, in coord/keys.go.
 	positions jetstream.KeyValue
 
-	// js is the JetStream context, held so a feed can create the durable
-	// consumer a bucket's own KeyValue handle cannot: a watch is
-	// ephemeral by construction, and a feed's position has to be the
-	// FLEET's rather than this process's.
-	js jetstream.JetStream
-
-	// bucketPrefix names the buckets, so a feed can address the stream
-	// behind one by its conventional name.
-	bucketPrefix string
-
 	rateWindow time.Duration
 	freshness  time.Duration
+
+	// attemptWindow is the age the attempts bucket was created with, held
+	// so the read filters on the SAME number the broker reaps on. Two
+	// sources for one window is how a record outlives the window it is
+	// counted in, or is counted after the bucket has dropped its peers.
+	attemptWindow time.Duration
 }
 
 var _ coord.Fleet = (*FleetStore)(nil)
@@ -602,7 +674,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, fifteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, seventeen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -627,66 +699,85 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		jsprovision.Clustered(cfg.Clustered).SequenceBudget())
 	defer cancel()
 
-	open := func(suffix, describe string, ttl time.Duration) (jetstream.KeyValue, error) {
+	open := func(suffix, describe string, ttl time.Duration, history uint8) (jetstream.KeyValue, error) {
 		name := cfg.BucketPrefix + suffix
-		bucket, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
-			Bucket: name, Description: describe, TTL: ttl, Replicas: cfg.Replicas,
+		bucket, facts, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
+			Bucket: name, Description: describe, TTL: ttl,
+			History: history, Replicas: cfg.Replicas,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("coord/kv: open %s: %w", name, err)
 		}
+		// EVERY BUCKET, because a retention this node did not get is
+		// invisible in behaviour until the day it matters — see
+		// [reportRetention]. The leases bucket is the one that reports
+		// its own, in [Open], because there the age is also this
+		// store's arithmetic.
+		reportRetention(ctx, name, ttl, facts)
 		return bucket, nil
 	}
 
 	store := &FleetStore{
-		js: js, bucketPrefix: cfg.BucketPrefix,
 		rateWindow: cfg.RateWindow, freshness: cfg.StatusFreshness,
+		attemptWindow: cfg.AttemptWindow,
 	}
 	for _, bucket := range []struct {
 		into     *jetstream.KeyValue
 		suffix   string
 		describe string
 		ttl      time.Duration
+		// history is the per-record message cap, and only the attempts
+		// bucket sets one: zero means the KV default of 1, which is the
+		// last-write-wins register every other bucket here holds.
+		history uint8
 	}{
 		{&store.rate, rateSuffix,
 			"Crewlet notification-valve windows; the bucket TTL reaps a closed window",
-			cfg.RateWindow * rateBucketFactor},
+			cfg.RateWindow * rateBucketFactor, 0},
 		{&store.claims, claimsSuffix,
 			"Crewlet inbound-delivery claims; the bucket TTL is the dedupe window",
-			cfg.ClaimTTL},
+			cfg.ClaimTTL, 0},
+		{&store.setup, setupSuffix,
+			"Crewlet spent setup-callback states; the bucket TTL is how long a minted state is valid",
+			cfg.SetupOnceRetention, 0},
+		{&store.attempts, attemptsSuffix,
+			"Crewlet failed-authentication attempts; the bucket TTL is the throttle's window and " +
+				"the history is the per-caller cap, which discards the oldest attempt rather than " +
+				"refusing the newest",
+			cfg.AttemptWindow, coord.AttemptCap},
 		{&store.ledger, ledgerSuffix,
 			"Crewlet turn completions; the bucket TTL is the retention horizon",
-			cfg.LedgerRetention},
+			cfg.LedgerRetention, 0},
 		{&store.cooldowns, cooldownSuffix,
 			"Crewlet credential cooldowns; each value carries its own end instant",
-			cfg.CooldownMax},
+			cfg.CooldownMax, 0},
 		{&store.status, statusSuffix,
 			"Crewlet per-node config-apply status; a node that stops reporting ages out",
-			cfg.StatusFreshness},
+			cfg.StatusFreshness, 0},
 		{&store.config, configSuffix,
-			"Crewlet activation pointer; NO TTL — its revision IS the epoch", 0},
+			"Crewlet activation pointer; NO TTL — its revision IS the epoch", 0, 0},
 		{&store.budgets, budgetSuffix,
-			"Crewlet token counters; NO TTL — a cap is a ceiling for the deployment's life", 0},
+			"Crewlet token counters; NO TTL — a cap is a ceiling for the deployment's life", 0, 0},
 		{&store.channels, channelSuffix,
-			"Crewlet agent-to-agent channels; NO TTL — an open ask must outlive any clock", 0},
+			"Crewlet agent-to-agent channels; NO TTL — an open ask must outlive any clock", 0, 0},
 		{&store.follows, followsSuffix,
 			"Crewlet chat thread-follows; the bucket TTL is the last-activity horizon",
-			cfg.FollowRetention},
+			cfg.FollowRetention, 0},
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
-			cfg.FireRetention},
+			cfg.FireRetention, 0},
 		{&store.runs, runsSuffix,
-			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0},
+			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0, 0},
 		{&store.secrets, secretsSuffix,
-			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0},
+			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0, 0},
 		{&store.integrations, integrationsSuffix,
-			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0},
+			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0, 0},
 		{&store.mailboxes, mailboxesSuffix,
-			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0},
+			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0, 0},
 		{&store.positions, positionsSuffix,
-			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
+			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0, 0},
 	} {
-		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
+		got, err := open(bucket.suffix, bucket.describe, bucket.ttl, bucket.history)
 		if err != nil {
 			return nil, err
 		}
@@ -800,23 +891,43 @@ func mustEncodeRate(count int) []byte {
 // ---- the delivery claims ----------------------------------------------- //
 
 // Claim records a key and reports whether this caller was first.
-func (f *FleetStore) Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error) {
+func (f *FleetStore) Claim(ctx context.Context, key string, now time.Time) (bool, error) {
+	return claimOnce(ctx, f.claims, "claim the delivery", key, now)
+}
+
+// ClaimSetup records a spent setup-callback state and reports whether this
+// caller was first.
+//
+// THE SAME MECHANISM ON A DIFFERENT BUCKET, and that is the entire difference:
+// the horizon a claim lapses on is the bucket's age, so a caller wanting
+// coord.SetupOnceRetention rather than coord.ClaimTTL needs the bucket rather
+// than an argument. Written as an argument it was accepted, ignored, and
+// lapsed ten minutes early.
+func (f *FleetStore) ClaimSetup(ctx context.Context, key string, now time.Time) (bool, error) {
+	return claimOnce(ctx, f.setup, "claim the setup state", key, now)
+}
+
+// claimOnce is first-claim-wins against one bucket.
+//
+// ONE IMPLEMENTATION for both registries, because the only thing that differs
+// between them is which bucket — and therefore which age — the record lands
+// in. Two copies would be two places for the create-not-put rule to be
+// forgotten.
+func claimOnce(ctx context.Context, bucket jetstream.KeyValue, what, key string,
+	now time.Time) (bool, error) {
+
 	if key == "" {
 		return false, errors.New("coord/kv: a claim needs a key")
 	}
-	if ttl <= 0 {
-		return false, errors.New("coord/kv: a claim needs a positive ttl")
-	}
-	encoded := encodeKey(key)
 	// Create is the whole mechanism: it fails when the key exists, so the
 	// FIRST caller wins and every other gets ErrKeyExists. Expiry is the
 	// bucket's, which means the server decides when a claim lapses and no
 	// node compares its own clock to a peer's deadline.
-	if _, err := f.claims.Create(ctx, encoded, []byte(now.UTC().Format(time.RFC3339Nano))); err != nil {
+	if _, err := bucket.Create(ctx, encodeKey(key), []byte(now.UTC().Format(time.RFC3339Nano))); err != nil {
 		if errors.Is(err, jetstream.ErrKeyExists) {
 			return false, nil
 		}
-		return false, unavailable("claim the delivery", err)
+		return false, unavailable(what, err)
 	}
 	return true, nil
 }
@@ -832,6 +943,105 @@ func (f *FleetStore) Release(ctx context.Context, key string) error {
 	if err := f.claims.Purge(ctx, encodeKey(key)); err != nil &&
 		!errors.Is(err, jetstream.ErrKeyNotFound) {
 		return unavailable("release the delivery claim", err)
+	}
+	return nil
+}
+
+// ---- the authentication attempts ---------------------------------------- //
+
+// Fail records one failed authentication and reports how many are in the
+// window.
+//
+// TWO ROUND TRIPS, and the second is the answer rather than a courtesy: a
+// throttle decides on the count its own failure produced ("that was the
+// fifth"), and making the caller read it back on the NEXT request would give
+// it a number from before the attempt it is judging. The path is a failed
+// authentication, which is rare by construction — the cost lands on the
+// caller getting it wrong.
+func (f *FleetStore) Fail(ctx context.Context, subject string, now time.Time) (int, error) {
+	if subject == "" {
+		return 0, errors.New("coord/kv: an attempt needs a subject")
+	}
+	// PUT, NOT CREATE: every attempt is a new REVISION of the subject's
+	// record, which is what makes the bucket's own history the cap. Create
+	// would refuse the second attempt, and a throttle that cannot record
+	// the attempts it exists to count is no throttle at all.
+	if _, err := f.attempts.Put(ctx, encodeKey(subject),
+		[]byte(now.UTC().Format(time.RFC3339Nano))); err != nil {
+		return 0, unavailable("record the failed attempt", err)
+	}
+	return f.Failures(ctx, subject, now)
+}
+
+// Failures reports how many attempts against subject are still in the window.
+func (f *FleetStore) Failures(ctx context.Context, subject string, now time.Time) (int, error) {
+	if subject == "" {
+		return 0, errors.New("coord/kv: an attempt needs a subject")
+	}
+	// HISTORY, which is an ephemeral ordered consumer over ONE subject —
+	// two metadata proposals on a clustered bucket, the cost this package's
+	// doc names for a listing. It is paid here because the alternative
+	// answers a different question: a stream's per-subject message count is
+	// one request and no consumer, but it carries no instants, so the
+	// window could only ever be the broker's reaping and the `now` a caller
+	// passes would be a parameter one backend honoured and the other
+	// ignored — which is the defect the whole of this file's claim handling
+	// was just rid of. The contract keeps it off the path of every request
+	// instead; see [coord.Attempts.Failures].
+	history, err := f.attempts.History(ctx, encodeKey(subject))
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		// NOTHING RECORDED, which is the ordinary answer: a clean
+		// caller, or one whose attempts have all aged out of the
+		// bucket.
+		return 0, nil
+	}
+	if err != nil {
+		return 0, unavailable("read the failed attempts", err)
+	}
+	cutoff := now.Add(-f.attemptWindow)
+	live := 0
+	for _, entry := range history {
+		// A PURGE MARKER IS NOT AN ATTEMPT. Flush rolls the record up
+		// and the marker it leaves is a message on the same subject, so
+		// counting entries rather than puts would have a successful
+		// authentication leave one failure behind it.
+		if entry.Operation() != jetstream.KeyValuePut {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, string(entry.Value()))
+		if err != nil {
+			// UNREADABLE IS STILL AN ATTEMPT. Something wrote a
+			// record here, and the direction that cannot be
+			// defended is the one where a value nobody can parse
+			// un-throttles the caller it was written against.
+			live++
+			continue
+		}
+		// THE INSTANT DECIDES, the way a cooldown's does: the bucket's
+		// age is what keeps the record set finite and the broker reaps
+		// on its own clock, while the WINDOW is judged against the
+		// caller's now so every node counts the same attempts. A claim
+		// cannot be read this way — see [claimOnce] — because two nodes
+		// each deciding a record has lapsed would both win it; a count
+		// has nothing to win.
+		if at.After(cutoff) {
+			live++
+		}
+	}
+	return live, nil
+}
+
+// Flush forgets every attempt against subject.
+func (f *FleetStore) Flush(ctx context.Context, subject string) error {
+	if subject == "" {
+		return errors.New("coord/kv: an attempt needs a subject")
+	}
+	// Purge, not Delete, for [FleetStore.Release]'s reason and one more:
+	// Delete appends a marker and leaves every prior revision in place, so
+	// the attempts it is meant to forget would still be there to count.
+	if err := f.attempts.Purge(ctx, encodeKey(subject)); err != nil &&
+		!errors.Is(err, jetstream.ErrKeyNotFound) {
+		return unavailable("forget the failed attempts", err)
 	}
 	return nil
 }

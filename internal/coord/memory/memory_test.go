@@ -192,5 +192,13 @@ func TestUnencodableMetaIsRefusedNotDropped(t *testing.T) {
 // so a divergence between it and the store a fleet runs on would be a
 // behaviour that only appears on the second node.
 func TestFleetContract(t *testing.T) {
-	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet { return memory.NewFleet() })
+	coordtest.RunFleet(t, func(t *testing.T, ages coordtest.FleetAges) coord.Fleet {
+		// THE AGES THE CASE ASKED FOR, because a record here lapses with
+		// its bucket exactly as it does on the KV — which is the whole
+		// property the suite could not see while a claim carried a TTL
+		// of its own.
+		return memory.NewFleetWithAges(memory.FleetAges{
+			Claim: ages.Claim, Setup: ages.Setup, Attempt: ages.Attempt,
+		})
+	})
 }

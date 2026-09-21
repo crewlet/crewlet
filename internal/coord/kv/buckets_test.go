@@ -1,10 +1,14 @@
 package kv
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // THE TABLE, THE RATIONALE AND EVERY COUNT IN THE FILE ARE ONE ASSERTION.
@@ -89,4 +93,52 @@ func section(text, start, end string) (string, bool) {
 		return "", false
 	}
 	return text[i : i+j], true
+}
+
+// A BUCKET THAT ALREADY EXISTS IS ADOPTED, AND THE READ-BACK SAYS SO.
+//
+// This is the fact every `bucket_retention_mismatch` line is computed from,
+// and the reason the line exists at all: create-else-observe cannot apply a
+// changed retention, so a node configured for one age against a bucket a peer
+// made at another RUNS AT THE PEER'S — silently, in every direction that
+// matters. A claim bucket adopted at five minutes under a node configured for
+// fifteen expires a claim ten minutes before its caller believes it does, and
+// nothing about the write, the read or the caller says so.
+//
+// Both halves are asserted because they are two different failures: the age in
+// force coming back as the one this node ASKED for would make every mismatch
+// invisible, and openBucket rewriting the bucket would be the silent overwrite
+// this package removed everywhere else — decided by boot order, by the node
+// that came up last.
+func TestAnAdoptedBucketKeepsItsOwnAgeAndReportsIt(t *testing.T) {
+	nc := embeddedNATS(t)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	name := fmt.Sprintf("adopt%d", bucketSeq.Add(1))
+	const made, wanted = time.Minute, 5 * time.Minute
+
+	if _, facts, err := openBucket(t.Context(), js, false, jetstream.KeyValueConfig{
+		Bucket: name, TTL: made, Replicas: 1,
+	}); err != nil {
+		t.Fatalf("creating %s: %v", name, err)
+	} else if facts.age != made {
+		t.Fatalf("the bucket this node just created reports an age of %v, want %v: a "+
+			"read-back that cannot see what it asked for cannot see a mismatch either",
+			facts.age, made)
+	}
+
+	_, facts, err := openBucket(t.Context(), js, false, jetstream.KeyValueConfig{
+		Bucket: name, TTL: wanted, Replicas: 1,
+	})
+	if err != nil {
+		t.Fatalf("adopting %s: %v", name, err)
+	}
+	if facts.age != made {
+		t.Errorf("the age in force on the adopted bucket reads as %v, want the %v it was "+
+			"created with: this node asked for %v and a booting node does not rewrite "+
+			"a bucket, so believing its own number is how a record's real horizon "+
+			"stops being knowable", facts.age, made, wanted)
+	}
 }

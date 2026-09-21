@@ -753,7 +753,7 @@ func TestAStoreOutageDoesNotSwallowTheWake(t *testing.T) {
 // unreachableClaims is a claim registry whose store cannot be reached.
 type unreachableClaims struct{}
 
-func (unreachableClaims) Claim(context.Context, string, time.Duration, time.Time) (bool, error) {
+func (unreachableClaims) Claim(context.Context, string, time.Time) (bool, error) {
 	return false, errors.New("the coordination store could not be reached")
 }
 

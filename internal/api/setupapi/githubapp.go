@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -62,11 +63,19 @@ const completeDeadline = 2 * time.Minute
 
 // manifestTTL is how long a begun app creation stays valid.
 //
-// GitHub expires the one-time code at one hour, so a state that outlived it
-// would let somebody complete a flow whose code is already dead: the operator
-// sees a failure naming the code rather than the wait. Fifteen minutes is the
-// span of the actual task, which is a browser round trip and two clicks.
-const manifestTTL = 15 * time.Minute
+// IT IS [coord.SetupOnceRetention] RATHER THAN A NUMBER BESIDE IT. The state
+// is spent by a record in the fleet's setup-state bucket, and that record
+// expires with the BUCKET — so a manifestTTL longer than the bucket's age
+// would leave the token still validating after the thing that spends it is
+// gone, which is a bearer credential that works as often as it is presented.
+// Written as two numbers it was exactly that: a fifteen-minute claim taken
+// against a five-minute bucket, replayable for the last ten.
+//
+// The value's own reasons live at that constant: a quarter of an hour is the
+// span of the task (a browser round trip to GitHub and two clicks), and it is
+// under GitHub's one-hour life for the one-time code a conversion returns, so
+// a link that expires says so rather than failing later on a dead code.
+const manifestTTL = coord.SetupOnceRetention
 
 // tokenDomain separates these tokens from every other signed URL this engine
 // issues, so a token minted for the OTLP receiver cannot be replayed here.
@@ -87,15 +96,22 @@ type AppFlow struct {
 // twice.
 //
 // The consumer's own interface, one method wide: this package needs
-// first-claim-wins and nothing else. The fleet's [coord.Claims] satisfies it,
-// and reading it here INVERTS that type's documented policy on purpose.
-// Webhook dedupe fails OPEN, because a push suppressed by a store blip is a
-// wake nobody notices. This is an authorization check, so it fails CLOSED: a
+// first-claim-wins and nothing else. The fleet's [coord.SetupClaims] satisfies
+// it, and reading it here INVERTS the polarity of the sibling registry beside
+// it. Webhook dedupe fails OPEN, because a push suppressed by a store blip is
+// a wake nobody notices. This is an authorization check, so it fails CLOSED: a
 // store that cannot answer is not evidence that a state is unspent, and the
 // cost of refusing is that an operator clicks again.
+//
+// IT IS THE SETUP REGISTRY AND NOT THE DELIVERY ONE, which is a different
+// bucket rather than a different argument: how long a claim lasts is the age
+// of the bucket it lands in, so this flow's quarter-hour horizon needed an
+// estate of its own. Asked for as a TTL it was accepted and ignored.
 type StateClaims interface {
-	// Claim records key and reports whether THIS caller was first.
-	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
+	// ClaimSetup records key and reports whether THIS caller was first. It
+	// lapses [manifestTTL] after it is written, by that bucket's own
+	// expiry.
+	ClaimSetup(ctx context.Context, key string, now time.Time) (bool, error)
 }
 
 // newAppFlow builds the completer the webhook mux serves. See
@@ -123,13 +139,14 @@ func (s *Service) AppFlow() *AppFlow { return s.appFlow }
 // and the state IS the credential on this route, so writing it there would
 // put a live bearer token in a store read by every node.
 //
-// The claim outlives the token deliberately — the same TTL the state was
-// minted for, measured from the moment it is spent — so a token cannot be
-// replayed at any point while it would still validate.
+// The claim outlives the token deliberately — the bucket's age is the TTL the
+// state was minted for, and the record's clock starts at the moment it is
+// spent — so a token cannot be replayed at any point while it would still
+// validate.
 func (f *AppFlow) spend(ctx context.Context, state string) error {
 	digest := sha256.Sum256([]byte(state))
 	key := "github-app-state:" + hex.EncodeToString(digest[:])
-	first, err := f.spent.Claim(ctx, key, manifestTTL, f.service.now())
+	first, err := f.spent.ClaimSetup(ctx, key, f.service.now())
 	if err != nil {
 		// CLOSED. See [StateClaims]: a registry that could not answer has
 		// not told us this state is unspent.

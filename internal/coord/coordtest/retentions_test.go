@@ -49,6 +49,59 @@ func TestTheRetentionsOutlastWhatTheyCover(t *testing.T) {
 			coord.FireRetention, schedule.DefaultCatchupMax)
 	}
 
+	// The setup-state window is bounded from BOTH sides, and neither bound
+	// is a number this engine chooses. Above it is GitHub's: the one-time
+	// code a manifest conversion returns dies at an hour, so a state valid
+	// for longer lets somebody complete a flow whose code is already gone
+	// — and the failure they are shown names the code rather than the
+	// wait, which sends them to the wrong place entirely. Below it is a
+	// person at a browser: a window that closes during a round trip to
+	// GitHub and two clicks refuses the operator who did exactly what was
+	// asked.
+	//
+	// It is checked here rather than in internal/api/setupapi because the
+	// record is what enforces it: the claim that spends a state expires
+	// with its bucket, so a manifestTTL longer than this retention would
+	// be a token still validating after the record that spends it is gone
+	// — which is the replay the record exists to stop. setupapi's
+	// manifestTTL IS this constant for that reason.
+	if coord.SetupOnceRetention >= time.Hour {
+		t.Errorf("coord.SetupOnceRetention %v outlives GitHub's one-hour one-time code, so "+
+			"a setup link can be completed after the code behind it is dead and the "+
+			"operator is shown a failure naming the code rather than the wait",
+			coord.SetupOnceRetention)
+	}
+	if coord.SetupOnceRetention < 5*time.Minute {
+		t.Errorf("coord.SetupOnceRetention %v can close during the task it covers — a "+
+			"browser round trip to the vendor and two clicks — so the operator who "+
+			"did exactly what was asked is refused", coord.SetupOnceRetention)
+	}
+
+	// The authentication window and its cap are one decision in two
+	// numbers, and the direction each must not drift in is what can be
+	// checked. A window shorter than the interval a guessing run can wait
+	// out between attempts is not a throttle; a cap at or below a
+	// threshold anything would refuse at saturates before the throttle can
+	// see the difference between "at the limit" and "far past it".
+	if coord.AttemptWindow < time.Minute {
+		t.Errorf("coord.AttemptWindow %v is short enough for a guessing run to wait out "+
+			"between attempts and still make progress, which is a throttle that only "+
+			"slows somebody down to its own window", coord.AttemptWindow)
+	}
+	if coord.AttemptCap < 5 {
+		t.Errorf("coord.AttemptCap %d is at or below a lockout threshold anything would "+
+			"refuse at, so the count a throttle reads saturates before it can tell "+
+			"a caller at the limit from one far past it", coord.AttemptCap)
+	}
+	// 64 is the broker's own ceiling on a per-record history, and the cap
+	// IS that history on the KV backend: a value above it is a bucket
+	// nobody can create, which fails at boot rather than here.
+	if coord.AttemptCap > 64 {
+		t.Errorf("coord.AttemptCap %d exceeds the 64-message ceiling a KV bucket's "+
+			"per-record history has, so the attempts bucket cannot be created at all",
+			coord.AttemptCap)
+	}
+
 	// The thread-follow horizon is the one here that is not sized from
 	// another subsystem's cadence — it is sized from a fact about chat
 	// products, that a quarter-old thread is reachable only through search

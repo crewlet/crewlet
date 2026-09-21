@@ -65,7 +65,7 @@ type claims struct {
 
 func newClaims() *claims { return &claims{held: map[string]bool{}} }
 
-func (c *claims) Claim(_ context.Context, key string, _ time.Duration, _ time.Time) (bool, error) {
+func (c *claims) Claim(_ context.Context, key string, _ time.Time) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++
@@ -254,7 +254,7 @@ func TestARedeliveredChangeIsPublishedOnce(t *testing.T) {
 
 	// Replaying the FIRST change's id through the claim is what a
 	// redelivery does.
-	if won, err := cl.Claim(t.Context(), changefeed.ClaimKey("work", "u1"), time.Minute, time.Now()); err != nil || won {
+	if won, err := cl.Claim(t.Context(), changefeed.ClaimKey("work", "u1"), time.Now()); err != nil || won {
 		t.Errorf("the first change's claim was not held: won=%v err=%v", won, err)
 	}
 }

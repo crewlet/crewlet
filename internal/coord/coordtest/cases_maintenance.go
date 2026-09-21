@@ -14,7 +14,7 @@ import (
 // Every case here names a schedule that admitted a publisher while a resize
 // was unresolved, which is the whole failure the mode exists to prevent.
 var maintenanceCases = []fleetCase{
-	{"two coordinators cannot both open a window", func(h *fleetHarness) {
+	{name: "two coordinators cannot both open a window", fn: func(h *fleetHarness) {
 		// FIRST-WRITER-WINS, and the loser has to be able to tell "my
 		// own earlier attempt won" from "somebody else's operation is
 		// here": the id is minted once and reused across create
@@ -55,7 +55,7 @@ var maintenanceCases = []fleetCase{
 		}
 	}},
 
-	{"a stale coordinator's write is refused by the revision", func(h *fleetHarness) {
+	{name: "a stale coordinator's write is refused by the revision", fn: func(h *fleetHarness) {
 		// NOT BY THE OPERATION ID. A successor RESUMES the same id, so
 		// an id comparison checks the one quantity guaranteed not to
 		// change — and a coordinator that read `opened`, lost its lease
@@ -92,7 +92,7 @@ var maintenanceCases = []fleetCase{
 		}
 	}},
 
-	{"an interrupted activation is not mistaken for completed cleanup", func(h *fleetHarness) {
+	{name: "an interrupted activation is not mistaken for completed cleanup", fn: func(h *fleetHarness) {
 		// THE EXCLUSION IS THE RECORD. Held as two, a crash after the
 		// exclusion and before the operation is byte-identical to a
 		// finished resize whose cleanup was interrupted — and any rule
@@ -119,8 +119,8 @@ var maintenanceCases = []fleetCase{
 		}
 	}},
 
-	{"closing is conditional, so an interrupted delete cannot take a successor's window",
-		func(h *fleetHarness) {
+	{name: "closing is conditional, so an interrupted delete cannot take a successor's window",
+		fn: func(h *fleetHarness) {
 			opened, _, err := h.f.OpenMaintenance(h.ctx, window("op-1"))
 			if err != nil {
 				h.t.Fatalf("OpenMaintenance: %v", err)
@@ -157,7 +157,7 @@ var maintenanceCases = []fleetCase{
 			}
 		}},
 
-	{"an operation that says nothing is refused", func(h *fleetHarness) {
+	{name: "an operation that says nothing is refused", fn: func(h *fleetHarness) {
 		for _, c := range []struct {
 			name string
 			op   coord.MaintenanceOperation
@@ -184,8 +184,8 @@ var maintenanceCases = []fleetCase{
 		}
 	}},
 
-	{"an admission round-trips and is withdrawn only by its own incarnation",
-		func(h *fleetHarness) {
+	{name: "an admission round-trips and is withdrawn only by its own incarnation",
+		fn: func(h *fleetHarness) {
 			// A POSITIVE RECORD FROM EACH SIDE. A coordinator checking
 			// for the ABSENCE of a publisher is back to check-then-act:
 			// a node that read the operation absent and started in the
@@ -229,8 +229,8 @@ var maintenanceCases = []fleetCase{
 			}
 		}},
 
-	{"an acknowledgement round-trips and never reads back as anything else",
-		func(h *fleetHarness) {
+	{name: "an acknowledgement round-trips and never reads back as anything else",
+		fn: func(h *fleetHarness) {
 			// FOUR OTHER KEY CLASSES SHARE THIS BUCKET, so the filters
 			// are what make it safe. An acknowledgement decoded as a
 			// positions row is a node that has applied nothing, and a
@@ -278,7 +278,7 @@ var maintenanceCases = []fleetCase{
 			}
 		}},
 
-	{"an acknowledgement that establishes nothing is refused", func(h *fleetHarness) {
+	{name: "an acknowledgement that establishes nothing is refused", fn: func(h *fleetHarness) {
 		for _, c := range []struct {
 			name string
 			ack  coord.MaintenanceAck

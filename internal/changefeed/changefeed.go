@@ -72,16 +72,6 @@ import (
 
 var log = logging.Get("changefeed")
 
-// ClaimTTL is how long a handled change stays claimed.
-//
-// Five minutes, matching the webhook edge's delivery dedupe and sized for the
-// same thing: a redelivery after a node died mid-handle, and an operator's
-// replay. It is deliberately NOT the retention of the change record — that is
-// a year — because the claim answers "did somebody already publish this
-// wake", which stops mattering as soon as no consumer could still be holding
-// the message.
-const ClaimTTL = 5 * time.Minute
-
 // nakDelay is how long a failed handle waits before coming back.
 //
 // Two seconds: long enough that a broker reconnect or a leader election
@@ -209,7 +199,7 @@ type Publisher interface {
 // "publish anyway", which is the opposite of what a naive reading suggests.
 // See the package doc.
 type Claims interface {
-	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
+	Claim(ctx context.Context, key string, now time.Time) (bool, error)
 	Release(ctx context.Context, key string) error
 }
 
@@ -407,7 +397,14 @@ func (f *Feed) claim(ctx context.Context, id string) bool {
 	if f.claims == nil {
 		return true
 	}
-	won, err := f.claims.Claim(ctx, ClaimKey(f.translator.Source().Name, id), ClaimTTL, f.now())
+	// HOW LONG IT STAYS CLAIMED IS THE BUCKET'S, coord.ClaimTTL — the same
+	// five minutes as the webhook edge's delivery dedupe, because this
+	// claim is sized for the same thing: a redelivery after a node died
+	// mid-handle, and an operator's replay. It is deliberately NOT the
+	// retention of the change record itself — that is a year — because the
+	// claim answers "did somebody already publish this wake", which stops
+	// mattering as soon as no consumer could still be holding the message.
+	won, err := f.claims.Claim(ctx, ClaimKey(f.translator.Source().Name, id), f.now())
 	if err != nil {
 		log.WarnContext(ctx, "changefeed_claim_unavailable", "change", id,
 			"error", err.Error(),

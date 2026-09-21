@@ -92,14 +92,16 @@ func TestAListingThatEndsEarlyIsUnavailableRatherThanShort(t *testing.T) {
 func openFleetForTest(t *testing.T, nc *nats.Conn, prefix string) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), nc, FleetConfig{
-		BucketPrefix:    prefix,
-		RateWindow:      time.Minute,
-		ClaimTTL:        10 * time.Minute,
-		LedgerRetention: 10 * time.Minute,
-		FireRetention:   10 * time.Minute,
-		FollowRetention: 10 * time.Minute,
-		CooldownMax:     time.Hour,
-		StatusFreshness: 10 * time.Minute,
+		BucketPrefix:       prefix,
+		RateWindow:         time.Minute,
+		ClaimTTL:           10 * time.Minute,
+		SetupOnceRetention: 10 * time.Minute,
+		AttemptWindow:      10 * time.Minute,
+		LedgerRetention:    10 * time.Minute,
+		FireRetention:      10 * time.Minute,
+		FollowRetention:    10 * time.Minute,
+		CooldownMax:        time.Hour,
+		StatusFreshness:    10 * time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)

@@ -415,7 +415,12 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("coord/kv: jetstream context: %w", err)
 	}
 
-	leases, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
+	// THE FACTS COME BACK WITH THE BUCKET, resolved once here where nothing
+	// is concurrent yet: openBucket reads every bucket back, so the age and
+	// the replica count in force are known without a second round trip. See
+	// lane.stream for why the stream is not read per call, and this
+	// function's doc for why the age is read back rather than assumed.
+	leases, leaseFacts, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 		Bucket:      cfg.BucketPrefix + leasesSuffix,
 		Description: "Crewlet seat and presence leases; the bucket TTL is the lease TTL and its expiry is the arbiter",
 		TTL:         cfg.TTL,
@@ -425,12 +430,12 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("coord/kv: open %s: %w", cfg.BucketPrefix+leasesSuffix, err)
 	}
 
-	duties, err := openDuties(ctx, js, cfg)
+	duties, dutyFacts, err := openDuties(ctx, js, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	epochs, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
+	epochs, epochFacts, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 		Bucket: cfg.BucketPrefix + epochsSuffix,
 		Description: "Crewlet fencing epochs and placement hints; NO TTL, this must survive " +
 			"the lease key's expiry or the counter resets",
@@ -439,18 +444,14 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: open %s: %w", cfg.BucketPrefix+epochsSuffix, err)
 	}
-
-	// Resolved once, here, where nothing is concurrent yet. See lane.stream
-	// for why the stream is not read per call, and this function's doc for
-	// why the age is read back rather than assumed.
-	leaseFacts, err := readBucket(ctx, leases)
-	if err != nil {
-		return nil, err
-	}
-	dutyFacts, err := readBucket(ctx, duties)
-	if err != nil {
-		return nil, err
-	}
+	// THE SHARPEST RETENTION IN THIS STORE, and until this line nothing
+	// compared it: an epoch bucket with an age at all is a fencing counter
+	// that resets, which hands the next owner of a resource a token a
+	// zombie from the previous tenure is still writing under. A peer that
+	// created it with one is reported here rather than refused, for
+	// [reportRetention]'s reason — a booting node does not rewrite a bucket
+	// — and the remedy it names is the one that fixes this.
+	reportRetention(ctx, epochs.Bucket(), 0, epochFacts)
 
 	// THE TTL IN FORCE, which is the bucket's and not this node's config
 	// whenever a peer created it first. Reported at WARN rather than
@@ -515,7 +516,7 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 // once. Raising it is safe in the only direction that matters, and it is ONLY
 // ever raised, because an age longer than a duty's TTL costs nothing: no duty
 // record is judged by the age, every one carries its own deadline.
-func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstream.KeyValue, error) {
+func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstream.KeyValue, bucketFacts, error) {
 	name := cfg.BucketPrefix + dutiesSuffix
 	want := jetstream.KeyValueConfig{
 		Bucket: name,
@@ -524,24 +525,26 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 		TTL:      coord.MaxDutyTTL,
 		Replicas: cfg.Replicas,
 	}
-	bucket, err := openBucket(ctx, js, cfg.Clustered, want)
+	// NOTHING IS REPORTED BY [reportRetention] FOR THIS BUCKET, because an
+	// age ABOVE coord.MaxDutyTTL is its healthy adopted state — a peer on a
+	// build with a longer ceiling made it — and a warning on a healthy
+	// state is one nobody reads twice. What this bucket does with a
+	// difference is the exception the rest of the store does not have: it
+	// raises it, below.
+	bucket, facts, err := openBucket(ctx, js, cfg.Clustered, want)
 	if err != nil {
-		return nil, fmt.Errorf("coord/kv: open %s: %w", name, err)
-	}
-	facts, err := readBucket(ctx, bucket)
-	if err != nil {
-		return nil, err
+		return nil, bucketFacts{}, fmt.Errorf("coord/kv: open %s: %w", name, err)
 	}
 	// An age of zero is no age at all, which already outlives every duty:
 	// raising it would SHORTEN it.
 	if facts.age == 0 || facts.age >= coord.MaxDutyTTL {
-		return bucket, nil
+		return bucket, facts, nil
 	}
 	// THE REPLICA COUNT IN FORCE, never this node's. openBucket has already
 	// refused a bucket replicated below what this node asked for, so the only
 	// difference left here is a bucket replicated ABOVE it, and an update
 	// carrying this node's number would shrink it, which is the durability
-	// loss observeReplicas exists to refuse.
+	// loss observeBucket exists to refuse.
 	want.Replicas = facts.replicas
 	// ITS OWN BUDGET AND ITS OWN RE-ASK, because this is a replicated
 	// stream-configuration write against the same metadata group as every
@@ -559,12 +562,16 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 			return e
 		}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("coord/kv: raise the age of %s from %v to %v so it can hold a "+
-			"duty lease for its full TTL: %w", name, facts.age, coord.MaxDutyTTL, err)
+		return nil, bucketFacts{}, fmt.Errorf("coord/kv: raise the age of %s from %v to %v so it "+
+			"can hold a duty lease for its full TTL: %w", name, facts.age, coord.MaxDutyTTL, err)
 	}
 	log.InfoContext(ctx, "coord_kv_duty_bucket_age_raised", "bucket", name,
 		"from", facts.age, "to", coord.MaxDutyTTL)
-	return updated, nil
+	// THE AGE IN FORCE IS NOW THE ONE JUST WRITTEN; the stream behind the
+	// bucket and its replica count are what they were, and the update
+	// carried both forward deliberately (see want.Replicas above).
+	facts.age = coord.MaxDutyTTL
+	return updated, facts, nil
 }
 
 // bucketFacts is what one status read tells the boot path about a bucket:

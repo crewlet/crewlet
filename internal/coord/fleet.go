@@ -12,11 +12,12 @@ import (
 
 // The FLEET-SHARED state, beyond ownership.
 //
-// A lease answers "who runs this seat". These eight answer the other questions
-// a fleet has to agree on, and they are here — beside [Backend], certified by
-// the same suite — for one reason: THEY WERE ON THE NODE'S OWN DATABASE, and
-// internal/store is documented "one file, one process". Every one of them was
-// therefore per-node while its own comments described a fleet:
+// A lease answers "who runs this seat". The contracts below answer the other
+// questions a fleet has to agree on, and MOST of them are here — beside
+// [Backend], certified by the same suite — for one reason: THEY WERE ON THE
+// NODE'S OWN DATABASE, and internal/store is documented "one file, one
+// process". Each of the seven was therefore per-node while its own comments
+// described a fleet:
 //
 //   - The notification valve called itself "the shared fixed-window counter",
 //     so a company on four nodes ran four valves and a seat could emit four
@@ -45,6 +46,14 @@ import (
 // None of these is a lease: nothing here is owned, held or fenced. They are
 // counters, claims and records, and the coordination store is simply where a
 // fleet keeps what a fleet has to share.
+//
+// The rest never lived on a node's own database and are here because the
+// question they answer is a company's from the start: the company's sealed
+// [Secrets], the [Follows] a chat thread is routed by, the [Mailboxes] a seat
+// may still have, the [PositionRegister] and its neighbours the state log
+// trims against, the [SetupClaims] that spend a setup callback exactly once,
+// and the [Attempts] a login throttle counts. The list above is the migration,
+// not the estate.
 //
 // # Every contract here fails in a stated direction
 //
@@ -83,6 +92,40 @@ const (
 	// Too long is visible in one direction only: a deliberate replay ten
 	// minutes later vanishes into a claim nothing will clear.
 	ClaimTTL = 5 * time.Minute
+
+	// SetupOnceRetention is how long a spent setup-callback state is
+	// remembered, and therefore how long the state a setup flow mints may
+	// be valid for: the record is what stops a second presentation of the
+	// same state, so a token that outlived it would be replayable while
+	// its signature still validates. internal/api/setupapi's manifestTTL
+	// IS this constant for that reason.
+	//
+	// Fifteen minutes is the span of the task it covers — a browser round
+	// trip to GitHub and two clicks — and it is bounded from above by a
+	// fact at the vendor rather than by anything here: GitHub expires the
+	// one-time code a manifest conversion returns at an hour, so a longer
+	// window would let somebody complete a flow whose code is already
+	// dead, and the failure they would see names the code rather than the
+	// wait.
+	//
+	// Its own bucket rather than a long claim against [ClaimTTL]'s: the
+	// horizon is three times that one, and a claim taken for longer than
+	// the bucket it lands in does not last longer — it lapses with the
+	// bucket, silently, which is exactly the bug this constant exists to
+	// end.
+	SetupOnceRetention = 15 * time.Minute
+
+	// AttemptWindow is how long a failed authentication counts against the
+	// caller that made it, and therefore the attempts bucket's age: each
+	// attempt is one record and the bucket's own expiry is what ends the
+	// window, so nothing sweeps and no node compares its clock to a peer's.
+	//
+	// Fifteen minutes is the interval a throttle actually has to reason
+	// over: long enough that a guessing run cannot wait it out between
+	// attempts and still make progress at any useful rate, short enough
+	// that an operator who fat-fingered a token is not locked out of the
+	// one surface an incident is fixed from for the rest of the hour.
+	AttemptWindow = 15 * time.Minute
 
 	// LedgerRetention is how long a turn completion is remembered. It has
 	// to outlast both the queue's redelivery horizon and the scheduler's
@@ -162,6 +205,30 @@ const (
 	ReconcileInterval = 15 * time.Second
 )
 
+// AttemptCap is how many failed authentications one caller's record keeps.
+//
+// NOT A RETENTION AND NOT CONFIGURATION. It is the attempts bucket's
+// per-record message cap, and the one thing it decides is what happens when a
+// caller overflows it: the OLDEST attempt is discarded and the newest is
+// kept. The other direction is what a KV bucket does by default — its stream
+// is created DiscardNew, so a full record refuses the newest write — and for
+// a throttle that is the one failure that cannot be survived: the record
+// would freeze at the oldest attempts, they would age out of [AttemptWindow]
+// one by one, and the caller would be un-throttled in the middle of exactly
+// the flood the cap was reached by.
+//
+// Sixteen is comfortably above any threshold a throttle would refuse at (a
+// lockout that tolerates more than a handful of failures in a quarter of an
+// hour is not a throttle), so the count a caller reads is a real count rather
+// than a saturation, and it is small enough that the whole estate an
+// unauthenticated stranger can grow is sixteen instants per name they can
+// reach. The broker's own ceiling on a per-record history is 64.
+//
+// A constant rather than a field on either backend's config: the twin and the
+// KV must cap identically or the contract suite certifies two different
+// contracts, and no deployment has a reason to differ.
+const AttemptCap = 16
+
 // Counter is the fleet's shared fixed-window counter, behind the notification
 // valve.
 //
@@ -180,20 +247,133 @@ type Counter interface {
 	Allow(ctx context.Context, bucket string, limit int, window time.Duration, now time.Time) (bool, error)
 }
 
-// Claims is the fleet's first-claim-wins registry with a TTL, behind webhook
+// Claims is the fleet's first-claim-wins registry behind webhook
 // deduplication.
+//
+// # A claim expires with its BUCKET
+//
+// There is no per-claim TTL here, and the absence is the contract rather than
+// an omission. A claim lapses because the record's bucket is [ClaimTTL] old
+// and the store reaps it — the same mechanism as every other retention in
+// this package — so the deadline is the store's and no node compares its own
+// clock to a peer's. A KV cannot offer anything else: a per-key TTL there is
+// create-only and an update clears it (see internal/coord/kv's package doc for
+// the measurement), which is why the parameter this once took was honoured by
+// the twin and validated-then-ignored by the backend a fleet runs on. The
+// suite could not see the divergence, because no case ever travelled past a
+// deadline — and the live consequence was a fifteen-minute claim taken
+// against a five-minute bucket, lapsing ten minutes before its caller thought
+// it did.
+//
+// A caller that needs a different horizon therefore needs a different bucket,
+// not a different argument: [SetupClaims] is that, and it is the whole reason
+// it exists.
+//
+// The `now` these verbs take is the instant a record is MADE AT, never a
+// deadline: it is what the record carries, and it is what a store with no
+// clock of its own — the in-process twin — measures the bucket's age from. A
+// store that has one reaps on that instead, which is why a caller may not
+// infer from a travelled clock that a record has gone.
 type Claims interface {
-	// Claim records key and reports whether THIS caller was first.
+	// Claim records key and reports whether THIS caller was first. It
+	// lapses [ClaimTTL] after it is written, by the bucket's own expiry.
 	//
 	// FAILS OPEN — an error yields (false, err) and the caller must
 	// PROCESS the delivery. A third-party app's push suppressed because the
 	// store blinked is a wake that never happens, and nothing else will
 	// notice; a duplicated wake is a turn the completion ledger collapses.
-	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
+	//
+	// An empty key is an ERROR rather than (false, nil): a caller that
+	// named nothing has not lost a race to anybody, and answering "somebody
+	// else took it" would drop the delivery.
+	Claim(ctx context.Context, key string, now time.Time) (bool, error)
 
 	// Release drops a claim, so a deliberate replay of the same delivery
 	// is not suppressed by the first attempt's own record.
 	Release(ctx context.Context, key string) error
+}
+
+// SetupClaims is the fleet's one-shot registry behind a setup flow's callback
+// state.
+//
+// The same first-claim-wins mechanism as [Claims] on a bucket of its own,
+// because the horizon is a different one — [SetupOnceRetention] rather than
+// [ClaimTTL] — and a horizon is a property of the bucket here.
+//
+// The POLARITY is the other difference, and it belongs to the caller rather
+// than to this store: webhook dedupe fails open because a suppressed push is
+// a wake nobody notices, while a callback state is an AUTHORIZATION check and
+// its caller fails closed — a registry that could not answer has not said the
+// state is unspent, and the cost of refusing is one more click.
+type SetupClaims interface {
+	// ClaimSetup records key and reports whether THIS caller was first. It
+	// lapses [SetupOnceRetention] after it is written, by the bucket's own
+	// expiry, and an empty key is an error for [Claims.Claim]'s reason.
+	ClaimSetup(ctx context.Context, key string, now time.Time) (bool, error)
+}
+
+// Attempts is the fleet's failed-authentication window, behind the API's
+// login throttle.
+//
+// # Why the company has to agree on it
+//
+// A guessing run reaches whichever ingress node a load balancer picks, so a
+// per-process counter is one the attacker divides by the number of nodes
+// without knowing it: five tries per node is twenty per fleet, and the fleet
+// counted five. It is the notification valve's lesson on a surface where the
+// cost of getting it wrong is a credential rather than a duplicate message.
+//
+// # Both bounds are the bucket's
+//
+// An attempt is one record that expires [AttemptWindow] after it is written,
+// and a caller's record keeps at most [AttemptCap] of them, the oldest
+// discarded. Neither is arithmetic anybody here performs: nothing sweeps,
+// nothing resets a counter, and two nodes recording a failure in the same
+// instant record two attempts rather than racing over one number.
+//
+// # It fails OPEN, and the asymmetry is deliberate
+//
+// Every read here answers what it could see; an unreachable store yields the
+// error and a caller that treats it as "not throttled". That is the opposite
+// of [Counter], whose valve fails closed, and the reason is what the two
+// refusals cost: a valve that opens delays a notification, while a throttle
+// that closes locks every operator out of /config, /secrets and the dashboard
+// — the one surface an incident is fixed from — at the moment the
+// coordination store is already unwell. What the open window leaves is a
+// guessing run against a constant-time comparison with a high-entropy token
+// on the other side of it, which is the protection the throttle is defence in
+// depth over rather than a replacement for.
+type Attempts interface {
+	// Fail records one failed authentication against subject and reports
+	// how many are still inside the window ending at now, this one
+	// included — saturating at [AttemptCap], which is what the record
+	// keeps.
+	//
+	// An empty subject is an error for [Claims.Claim]'s reason: a count
+	// nobody can be throttled by reads exactly like a caller with a clean
+	// record.
+	Fail(ctx context.Context, subject string, now time.Time) (int, error)
+
+	// Failures reports how many attempts against subject are still inside
+	// the window, WITHOUT recording one — what a caller asks to decide
+	// whether a subject is locked out.
+	//
+	// NOT ON THE PATH OF EVERY REQUEST. This is a round trip, and on the
+	// KV backend it is an ephemeral consumer over the subject's own record
+	// (internal/coord/kv's package doc says what that costs on a clustered
+	// bucket). The comparison a guard makes first is a constant-time one
+	// against bytes it already holds, so a credential that matches is
+	// answered without asking this at all; reading it in front of every
+	// request would put the coordination store's latency under every API
+	// call and its availability under the whole surface — which is the
+	// trade [Cooldowns.Since] refuses for the same reason one layer down.
+	Failures(ctx context.Context, subject string, now time.Time) (int, error)
+
+	// Flush forgets every attempt against subject — what a SUCCESSFUL
+	// authentication does, fleet-wide, so the lockout a caller earned on
+	// one node is lifted on all of them by the credential that proves the
+	// caller is who the throttle was protecting against.
+	Flush(ctx context.Context, subject string) error
 }
 
 // Ledger is the fleet's record of work already done, behind the
@@ -1026,6 +1206,8 @@ type Mailboxes interface {
 type Fleet interface {
 	Counter
 	Claims
+	SetupClaims
+	Attempts
 	Ledger
 	Cooldowns
 	Budgets

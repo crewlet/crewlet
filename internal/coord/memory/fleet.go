@@ -19,8 +19,13 @@ import (
 // A SEMANTIC twin, held to the same suite as the KV backend, which means it
 // has to model the things a naive map would not:
 //
-//   - Expiry against a stored deadline, so a claim that has lapsed is gone
-//     whether or not anything has swept.
+//   - Expiry against the BUCKET's age rather than a per-write TTL, because
+//     that is the only expiry a KV has (see internal/coord/kv) and a twin
+//     that honoured a caller's own TTL would certify a contract the backend a
+//     fleet runs on cannot keep. A record carries the instant it was written
+//     and lapses when [FleetAges] says, judged against the clock the caller
+//     passes in — which is this twin's one honest divergence: it has no store
+//     of its own to ask.
 //   - A monotonic activation epoch that survives every write, because the
 //     epoch is a fencing token: a counter that restarted would hand a node a
 //     number an older revision already used.
@@ -30,8 +35,15 @@ import (
 type Fleet struct {
 	mu sync.Mutex
 
+	// ages is what expires an aged record here, standing in for the
+	// bucket a KV gives the same record. Set once at construction and
+	// never written again, so it needs no lock.
+	ages FleetAges
+
 	windows      map[windowKey]int
 	claims       map[string]time.Time
+	setup        map[string]time.Time
+	attempts     map[string][]time.Time
 	worked       map[string]workedEntry
 	cooldowns    map[string]time.Time
 	applies      map[string]coord.NodeApply
@@ -78,11 +90,54 @@ type workedEntry struct {
 
 var _ coord.Fleet = (*Fleet)(nil)
 
-// NewFleet returns an empty twin.
-func NewFleet() *Fleet {
+// FleetAges are the bucket ages this twin expires its aged records on.
+//
+// THE CONTRACT SUITE IS WHY THIS IS SETTABLE. A record here lapses with its
+// bucket exactly as it does on the KV, so a case that must outlast one cannot
+// travel around it — and waiting out a production horizon is fifteen minutes
+// of test. A backend built for the suite is built at the suite's advertised
+// ages; everything else takes [DefaultFleetAges].
+type FleetAges struct {
+	// Claim is the delivery-claim bucket's age — coord.ClaimTTL.
+	Claim time.Duration
+
+	// Setup is the setup-state bucket's age — coord.SetupOnceRetention.
+	Setup time.Duration
+
+	// Attempt is the authentication-attempt window — coord.AttemptWindow.
+	// It is both the age of the records and the window a count is judged
+	// over, because on the KV those are one number (the bucket's) and a
+	// twin with two would answer differently.
+	Attempt time.Duration
+}
+
+// DefaultFleetAges are the horizons coord itself declares: what every caller
+// but the contract suite runs at.
+func DefaultFleetAges() FleetAges {
+	return FleetAges{
+		Claim:   coord.ClaimTTL,
+		Setup:   coord.SetupOnceRetention,
+		Attempt: coord.AttemptWindow,
+	}
+}
+
+// NewFleet returns an empty twin at [DefaultFleetAges].
+func NewFleet() *Fleet { return NewFleetWithAges(DefaultFleetAges()) }
+
+// NewFleetWithAges returns an empty twin whose aged records expire on ages.
+// A zero field takes its [DefaultFleetAges] value, so a caller may name only
+// the horizon it cares about.
+func NewFleetWithAges(ages FleetAges) *Fleet {
+	defaults := DefaultFleetAges()
+	ages.Claim = cmp.Or(ages.Claim, defaults.Claim)
+	ages.Setup = cmp.Or(ages.Setup, defaults.Setup)
+	ages.Attempt = cmp.Or(ages.Attempt, defaults.Attempt)
 	return &Fleet{
+		ages:         ages,
 		windows:      map[windowKey]int{},
 		claims:       map[string]time.Time{},
+		setup:        map[string]time.Time{},
+		attempts:     map[string][]time.Time{},
 		worked:       map[string]workedEntry{},
 		cooldowns:    map[string]time.Time{},
 		applies:      map[string]coord.NodeApply{},
@@ -128,22 +183,40 @@ func (f *Fleet) Allow(_ context.Context, bucket string, limit int, window time.D
 }
 
 // Claim records a key, reporting whether this caller was first.
-func (f *Fleet) Claim(_ context.Context, key string, ttl time.Duration, now time.Time) (bool, error) {
+func (f *Fleet) Claim(_ context.Context, key string, now time.Time) (bool, error) {
+	return f.claimOnce(f.claims, f.ages.Claim, key, now)
+}
+
+// ClaimSetup records a spent setup-callback state, reporting whether this
+// caller was first.
+//
+// A MAP OF ITS OWN, which is this twin's whole model of a second bucket: the
+// two registries differ in their horizon and in nothing else, and a twin that
+// shared one map would certify a backend that put both in one bucket — which
+// is the mistake the setup bucket exists to end.
+func (f *Fleet) ClaimSetup(_ context.Context, key string, now time.Time) (bool, error) {
+	return f.claimOnce(f.setup, f.ages.Setup, key, now)
+}
+
+// claimOnce is first-claim-wins against one register with one age.
+func (f *Fleet) claimOnce(into map[string]time.Time, age time.Duration,
+	key string, now time.Time) (bool, error) {
+
 	if key == "" {
 		return false, errors.New("coord/memory: a claim needs a key")
-	}
-	if ttl <= 0 {
-		return false, errors.New("coord/memory: a claim needs a positive ttl")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if until, held := f.claims[key]; held && until.After(now) {
+	// THE BUCKET'S AGE, never a TTL the caller passed: what is stored is
+	// when the claim was made, and it lapses when the bucket would have
+	// reaped it.
+	if at, held := into[key]; held && now.Sub(at) < age {
 		return false, nil
 	}
 	// A LAPSED claim is re-claimable, which is what makes a deliberate
 	// replay work: the record is not a tombstone, it is a window.
-	f.claims[key] = now.Add(ttl)
+	into[key] = now
 	return true, nil
 }
 
@@ -152,6 +225,60 @@ func (f *Fleet) Release(_ context.Context, key string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.claims, key)
+	return nil
+}
+
+// Fail records one failed authentication and reports how many are in the
+// window.
+func (f *Fleet) Fail(_ context.Context, subject string, now time.Time) (int, error) {
+	if subject == "" {
+		return 0, errors.New("coord/memory: an attempt needs a subject")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	kept := append(f.attempts[subject], now)
+	// DISCARD THE OLDEST, which is what the KV bucket's per-record history
+	// does when it overflows. The other direction — refusing the newest —
+	// would leave the record frozen at attempts that then age out, and the
+	// caller un-throttled under the flood that filled it.
+	if over := len(kept) - coord.AttemptCap; over > 0 {
+		kept = append(kept[:0], kept[over:]...)
+	}
+	f.attempts[subject] = kept
+	return f.live(subject, now), nil
+}
+
+// Failures reports how many attempts against subject are in the window.
+func (f *Fleet) Failures(_ context.Context, subject string, now time.Time) (int, error) {
+	if subject == "" {
+		return 0, errors.New("coord/memory: an attempt needs a subject")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.live(subject, now), nil
+}
+
+// live counts the attempts still inside the window. Held under the lock.
+func (f *Fleet) live(subject string, now time.Time) int {
+	cutoff := now.Add(-f.ages.Attempt)
+	count := 0
+	for _, at := range f.attempts[subject] {
+		if at.After(cutoff) {
+			count++
+		}
+	}
+	return count
+}
+
+// Flush forgets every attempt against subject.
+func (f *Fleet) Flush(_ context.Context, subject string) error {
+	if subject == "" {
+		return errors.New("coord/memory: an attempt needs a subject")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.attempts, subject)
 	return nil
 }
 

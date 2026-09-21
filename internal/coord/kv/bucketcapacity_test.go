@@ -105,7 +105,7 @@ func TestAStorageRefusalOnABucketIsTerminalAndNotAMissingBucket(t *testing.T) {
 			js := refusingBroker(t, tc.refusal)
 
 			started := time.Now()
-			bucket, err := openBucket(t.Context(), js, tc.clustered,
+			bucket, _, err := openBucket(t.Context(), js, tc.clustered,
 				jetstream.KeyValueConfig{
 					Bucket: "t_capacity", TTL: time.Minute, Replicas: 1,
 				})
@@ -187,7 +187,7 @@ func TestAPlacementRefusalIsRetriedAndThenReportedWithoutAReadBack(t *testing.T)
 	ctx, cancel := context.WithTimeout(t.Context(), 4*jsprovision.PlacementRetry)
 	defer cancel()
 
-	bucket, err := openBucket(ctx, js, true, jetstream.KeyValueConfig{
+	bucket, _, err := openBucket(ctx, js, true, jetstream.KeyValueConfig{
 		Bucket: "t_unplaceable", TTL: time.Minute, Replicas: 3,
 	})
 	if err == nil {
@@ -235,7 +235,7 @@ func TestABucketWithNoApplicableLimitNamesTheClassAndIsNotAMissingBucket(t *test
 	js := refusingBroker(t, refusal)
 
 	started := time.Now()
-	bucket, err := openBucket(t.Context(), js, true, jetstream.KeyValueConfig{
+	bucket, _, err := openBucket(t.Context(), js, true, jetstream.KeyValueConfig{
 		Bucket: "t_nolimit", TTL: time.Minute, Replicas: 3,
 	})
 	elapsed := time.Since(started)

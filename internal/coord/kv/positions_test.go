@@ -124,14 +124,16 @@ func rowFor(rows []coord.NodePositions, node string) (coord.NodePositions, bool)
 func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), nc, FleetConfig{
-		BucketPrefix:    fmt.Sprintf("p%d", bucketSeq.Add(1)),
-		RateWindow:      ttl,
-		ClaimTTL:        ttl,
-		LedgerRetention: ttl,
-		FireRetention:   ttl,
-		FollowRetention: ttl,
-		CooldownMax:     ttl,
-		StatusFreshness: ttl,
+		BucketPrefix:       fmt.Sprintf("p%d", bucketSeq.Add(1)),
+		RateWindow:         ttl,
+		ClaimTTL:           ttl,
+		SetupOnceRetention: ttl,
+		AttemptWindow:      ttl,
+		LedgerRetention:    ttl,
+		FireRetention:      ttl,
+		FollowRetention:    ttl,
+		CooldownMax:        ttl,
+		StatusFreshness:    ttl,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)

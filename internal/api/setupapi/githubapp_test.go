@@ -162,7 +162,7 @@ func TestAnUnreadableClaimRegistryRefusesTheCallback(t *testing.T) {
 // blindClaims is a registry that cannot answer.
 type blindClaims struct{}
 
-func (blindClaims) Claim(context.Context, string, time.Duration, time.Time) (bool, error) {
+func (blindClaims) ClaimSetup(context.Context, string, time.Time) (bool, error) {
 	return false, errors.New("the coordination store could not be reached")
 }
 

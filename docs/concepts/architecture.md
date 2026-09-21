@@ -585,7 +585,7 @@ exceptions are `adr/0002`, held by
 | **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
 | **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
 | **`crewlet_status`** | One key per node: which revision it applied |
-| **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
+| **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` · `crewlet_setup_once` · `crewlet_iam_attempts` | Turn completions, webhook delivery claims, scheduled-fire claims, one-shot setup states, and the fleet-wide window a login throttle counts failures in |
 | **`crewlet_budgets`** · `crewlet_rate` · `crewlet_cooldowns` | The token counter, the notification valve, benched credentials |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
 | `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |

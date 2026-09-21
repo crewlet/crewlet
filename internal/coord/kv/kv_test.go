@@ -406,20 +406,23 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 // is the epoch — and those do not vary with the retention.
 func TestFleetContract(t *testing.T) {
 	nc := embeddedNATS(t)
-	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet {
+	coordtest.RunFleet(t, func(t *testing.T, ages coordtest.FleetAges) coord.Fleet {
 		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
 		store, err := OpenFleet(context.Background(), nc, FleetConfig{
 			BucketPrefix: prefix,
-			// Every one of these is above the broker's 100 ms floor and
-			// far longer than a case takes, so nothing lapses under a
-			// case that did not ask it to.
-			RateWindow:      time.Minute,
-			ClaimTTL:        10 * time.Minute,
-			LedgerRetention: 10 * time.Minute,
-			FireRetention:   10 * time.Minute,
-			FollowRetention: 10 * time.Minute,
-			CooldownMax:     time.Hour,
-			StatusFreshness: 10 * time.Minute,
+			// THE AGES THE CASE ASKED FOR go to the buckets the suite
+			// reasons about; the rest are above the broker's 100 ms
+			// floor and far longer than a case takes, so nothing lapses
+			// under a case that did not ask it to.
+			ClaimTTL:           ages.Claim,
+			SetupOnceRetention: ages.Setup,
+			AttemptWindow:      ages.Attempt,
+			RateWindow:         time.Minute,
+			LedgerRetention:    10 * time.Minute,
+			FireRetention:      10 * time.Minute,
+			FollowRetention:    10 * time.Minute,
+			CooldownMax:        time.Hour,
+			StatusFreshness:    10 * time.Minute,
 		})
 		if err != nil {
 			t.Fatalf("OpenFleet: %v", err)
@@ -442,6 +445,7 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
 	store, err := OpenFleet(context.Background(), nc, FleetConfig{
 		RateWindow: time.Minute, ClaimTTL: time.Minute,
+		SetupOnceRetention: time.Minute, AttemptWindow: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute,
 		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
@@ -803,6 +807,7 @@ func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), nc, FleetConfig{
 		RateWindow: time.Minute, ClaimTTL: time.Minute,
+		SetupOnceRetention: time.Minute, AttemptWindow: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute,
 		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
