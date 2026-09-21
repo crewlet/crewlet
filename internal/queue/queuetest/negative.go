@@ -116,9 +116,10 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		}
 	})
 
-	t.Run("ensure_subscription_on_an_existing_one_keeps_its_mail", func(t *testing.T) {
+	t.Run("ensure_subscription_on_an_existing_one_keeps_its_mail_and_proposes_nothing", func(t *testing.T) {
 		t.Parallel()
 		backlog := s.needBacklog(t)
+		proposals := s.optionalProposals(t)
 		q := s.start(ctx, t)
 		const topic, group = "crewlet.agent.bob.inbox", "agent-bob"
 
@@ -131,6 +132,10 @@ func (s *suite) runNegativePaths(t *testing.T) {
 			return len(backlog(q, topic, group)) == 2
 		})
 		before := s.snapshot(t, q, topic, group)
+		var proposedBefore int
+		if proposals != nil {
+			proposedBefore = proposals(q)
+		}
 
 		// Declaring a seat's inbox at boot must be a no-op when it is
 		// already there. "Ensure" that re-creates is indistinguishable
@@ -141,6 +146,32 @@ func (s *suite) runNegativePaths(t *testing.T) {
 			t.Fatalf("EnsureSubscription on an existing one = (%v, %v), want (false, nil)", created, err)
 		}
 		s.assertUntouched(t, q, topic, group, before, "re-declaring an existing subscription")
+
+		// AND IT MUST NOT HAVE ASKED. The two halves are one case because
+		// they are one decision: a backend gets both by looking the
+		// consumer up and returning, and gets neither by sending the
+		// create and letting the broker sort it out. Split in two, the
+		// cheap half reads as an optimisation somebody may undo for
+		// safety, when undoing it is how a node comes to spend a
+		// replicated write per seat on every boot and every config
+		// apply — and how a wrong repair comes to wipe the mail.
+		//
+		// A POSITIVE lookup only. A backend that could not tell whether
+		// the consumer was there must still propose the create: a
+		// mailbox is a seat's mail, and skipping it on an unanswered
+		// probe drops that mail with nothing to say so. That arm is not
+		// reachable from here — nothing in this suite can make a healthy
+		// broker decline to answer — so it is stated rather than
+		// certified, and it is why this case asserts the count only for
+		// a subscription the previous call proved exists.
+		if proposals != nil {
+			if spent := proposals(q) - proposedBefore; spent != 0 {
+				t.Errorf("re-declaring an existing subscription asked the broker for %d "+
+					"consumer create(s), want 0: on a replicated broker each one is a "+
+					"proposal through the metadata group, so a company's every mailbox "+
+					"is re-proposed on every boot and every config apply", spent)
+			}
+		}
 	})
 
 	t.Run("delete_subscription_leaves_a_neighbouring_group_untouched", func(t *testing.T) {

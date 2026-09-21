@@ -743,6 +743,7 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 	stream := spec.name
 	consCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
+	q.noteConsumerProposal()
 	cons, err := q.js.CreateOrUpdateConsumer(consCtx, stream, jetstream.ConsumerConfig{
 		FilterSubject: pattern,
 		// From here on, not from the beginning: a live feed that

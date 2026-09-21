@@ -11,6 +11,12 @@
 //
 // That ordering is the whole point, and it is why the fleet suite exercises
 // this package rather than the seat host directly.
+//
+// The second thing that belongs here for the same reason is that every seat in
+// the COMPANY has a mailbox, whether or not this node will ever run it — the
+// queue knows about subscriptions and nothing about seats, the seat host knows
+// about seats and nothing about subscriptions. See [Node.EnsureMailboxes],
+// which converges that rather than re-creating it.
 package node
 
 import (
@@ -25,7 +31,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -152,6 +157,13 @@ type Node struct {
 	// the seat host calls hooks from its own goroutines.
 	mu       sync.Mutex
 	attached map[string]struct{}
+
+	// mail is what this node knows about the company's mailboxes, and the
+	// convergence loop's own lifetime. See mailboxes.go.
+	mail   *mailboxes
+	loopMu sync.Mutex
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // New builds a node.
@@ -171,6 +183,7 @@ func New(cfg Config) (*Node, error) {
 		cfg:      cfg,
 		log:      logging.Get("node").With("node_id", cfg.NodeID),
 		attached: map[string]struct{}{},
+		mail:     newMailboxes(),
 		turns:    newGate(cfg.MaxConcurrent),
 	}
 
@@ -214,126 +227,37 @@ func (n *Node) Owner() string { return n.cfg.Owner }
 // Start begins claiming seats and consuming their mail.
 //
 // The mailboxes come up BEFORE the claiming, and that ordering is the point —
-// see [Node.EnsureMailboxes].
+// see [Node.EnsureMailboxes]. The loop that keeps them converged starts AFTER
+// the host, because the first pass has already run here and a second one
+// racing the host's own first sweep would buy nothing.
 func (n *Node) Start(ctx context.Context) error {
 	if err := n.cfg.Queue.Start(ctx); err != nil {
 		return fmt.Errorf("node: start queue: %w", err)
 	}
 	n.EnsureMailboxes(ctx)
 	n.host.Start(ctx)
+
+	// The goroutine's lifetime belongs to this node: it is cancelled by
+	// Stop and waited for there, so a stopped node is one that has
+	// finished converging rather than one still holding a broker call.
+	n.loopMu.Lock()
+	defer n.loopMu.Unlock()
+	if n.cancel != nil {
+		return nil
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	n.cancel = cancel
+	n.wg.Go(func() { n.converge(loopCtx) })
 	return nil
-}
-
-// EnsureMailboxes creates the durable subscription behind every agent seat in
-// the company — not just the ones this node claims.
-//
-// A DURABLE SUBSCRIPTION IS A SEAT'S MAILBOX: it exists without a consumer and
-// retains what is published while nothing is attached. Its absence is not an
-// error anybody sees, because publishing to a topic no subscription covers
-// DROPS THE EVENT SILENTLY. The queue contract documents EnsureSubscription
-// for exactly this and nothing in the engine ever called it, so a seat's mail
-// existed only from the moment some node happened to attach a consumer to it.
-//
-// That is a whole class of quiet loss. A company's seats are claimed a few at
-// a time across successive sweeps, so every webhook, notification and
-// scheduled trigger aimed at a seat this fleet had not reached yet went
-// nowhere — during boot, during a rollout, and permanently for any seat no
-// live node's placement matches.
-//
-// EVERY seat, not this node's share: a mailbox is a fact about the company,
-// and the node that ends up serving a seat may not be this one. Creating one
-// is idempotent, so every node doing it costs a no-op.
-//
-// Best effort, per seat. A subscription that cannot be created is logged and
-// the rest still get theirs — the alternative is a node that refuses to start
-// because one topic was unreachable, which loses strictly more mail.
-//
-// Exported so a config apply can run it again: a revision that ADDS a role
-// adds a seat, and that seat's mail is dropped until somebody makes it a
-// mailbox.
-//
-// REGISTERED FIRST. Each seat's mailbox is recorded with the fleet before it is
-// created, because once the seat leaves the company the handle is gone from the
-// org every node derives the name from, and the record is what the retirement
-// of that mailbox runs on. A registration that fails is logged and the mailbox
-// is created anyway, since a seat in the company losing mail is worse than a
-// mailbox the maintenance sweep registers on its next tick, whether the seat is
-// still in the company or, found through the broker's subscription listing,
-// already gone.
-func (n *Node) EnsureMailboxes(ctx context.Context) {
-	// ONE CEILING OVER THE WHOLE PASS, because this is one replicated
-	// create PER SEAT in a row and each carries its own per-create budget.
-	// A company of thirty seats on a wedged metadata group would otherwise
-	// hold the boot for thirty of them, serially — the product again,
-	// which is the bound [jsprovision.SequenceBudget] exists to replace.
-	//
-	// It reads the topology off the queue, so a solo node keeps the short
-	// one and nothing here has to be told which it is.
-	if c, ok := n.cfg.Queue.(interface {
-		Clustered() jsprovision.Clustered
-	}); ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.Clustered().SequenceBudget())
-		defer cancel()
-	}
-
-	created := 0
-	// ONE READ of the seat list for the walk and the line that reports it. Two
-	// reads straddled an apply that changed the seats, and the log then
-	// claimed a count the walk never covered.
-	seats := n.cfg.Seats()
-	for _, seat := range seats {
-		inbox, group := topics.AgentInbox(seat.Handle), topics.AgentInboxGroup(seat.Handle)
-		if inbox == "" || group == "" {
-			continue
-		}
-		if n.cfg.Mailboxes != nil {
-			if err := n.cfg.Mailboxes.Register(ctx, seat.Handle); err != nil {
-				if ctx.Err() != nil {
-					n.log.Warn("seat_mailboxes_interrupted", "error", ctx.Err(),
-						"detail", "the walk stopped before every seat's mailbox was created; "+
-							"the next apply or start runs it again")
-					return
-				}
-				n.log.Warn("seat_mailbox_unregistered", "handle", seat.Handle, "error", err,
-					"detail", "the mailbox is created anyway; until the maintenance sweep "+
-						"registers it, it cannot be retired if this seat is removed")
-			}
-		}
-		made, err := n.cfg.Queue.EnsureSubscription(ctx, inbox, group)
-		if errors.Is(err, queue.ErrNotLive) {
-			// The queue is not up yet, which is not a fault: the boot
-			// apply runs before Start and Start does this again a moment
-			// later. Returning rather than continuing, because every
-			// remaining seat would report the same thing — one honest
-			// line beats seven identical warnings about a state that is
-			// about to resolve itself.
-			n.log.Debug("seat_mailboxes_deferred",
-				"detail", "the broker client is not started yet; the node's "+
-					"own start creates these")
-			return
-		}
-		if err != nil {
-			n.log.Warn("seat_mailbox_unavailable", "handle", seat.Handle, "error", err,
-				"detail", "mail published to this seat before it is claimed is "+
-					"dropped rather than retained")
-			continue
-		}
-		if made {
-			created++
-		}
-	}
-	// "provisioned" RATHER THAN "created", because on a fleet booting
-	// together this counts what THIS node found absent and then made —
-	// and two members that create one mailbox in the same instant are
-	// both handed it, with no way to tell which one's create did it. See
-	// [queue.EventQueue.EnsureSubscription]. Reading these lines across a
-	// fleet, the counts can sum to more than the company has seats.
-	n.log.Info("seat_mailboxes_ready", "seats", len(seats), "provisioned", created)
 }
 
 // Stop gives up every seat and stops consuming.
 func (n *Node) Stop(ctx context.Context) {
+	// THE CONVERGENCE FIRST, and waited for: it talks to the broker, and
+	// a pass still in flight while the host releases its seats would be
+	// creating mailboxes for a company this process has stopped serving.
+	n.stopConverging()
+
 	// The seat host's own stop releases every held seat, and each release
 	// detaches that seat's mailbox through OnRelease — so by the time this
 	// returns the node consumes nothing.
@@ -345,6 +269,23 @@ func (n *Node) Stop(ctx context.Context) {
 	// Stopping it here took the broker down through a layer that had no
 	// way to know it was not the owner.
 	n.host.Stop(ctx)
+}
+
+// stopConverging cancels the mailbox loop and waits for it.
+//
+// UNDER loopMu FOR THE WHOLE OF IT, including the wait: a WaitGroup may not be
+// counted up from zero concurrently with a Wait, and [Node.Start] adds to this
+// one under the same lock. The loop itself never takes it, so there is nothing
+// for the wait to deadlock against — what it costs is that a Start racing a
+// Stop queues behind it, which is the correct order for those two anyway.
+func (n *Node) stopConverging() {
+	n.loopMu.Lock()
+	defer n.loopMu.Unlock()
+	if n.cancel != nil {
+		n.cancel()
+		n.cancel = nil
+	}
+	n.wg.Wait()
 }
 
 // drainLogInterval is how often a drain says how much work is left.

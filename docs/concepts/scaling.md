@@ -34,7 +34,7 @@ node:
 |---|---|
 | `ingress` | Serves the HTTP API — every integration's webhooks, the dashboard, the REST and WebSocket read surface |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns, and serves their agent-mode tool bridge when `CREWLET_MCP_BRIDGE_URL` is set |
-| `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the sandbox waiter, the maintenance sweep (retention and removed-seat mailbox retirement), the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion). These read their work list from the **org**, never from the node's own seats: a `workers` node runs no seats at all, so a duty that iterated the local seats would cover nothing. Creating every seat's mailbox is not among them: every node does that at start and on each apply |
+| `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the sandbox waiter, the maintenance sweep (retention and removed-seat mailbox retirement), the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion). These read their work list from the **org**, never from the node's own seats: a `workers` node runs no seats at all, so a duty that iterated the local seats would cover nothing. Creating every seat's mailbox is not among them: every node converges those, at start, on each apply and on its own seat sweep — see [What a mailbox costs](#what-a-mailbox-costs) for why running it everywhere is affordable |
 
 ```mermaid
 flowchart TB
@@ -204,7 +204,7 @@ way would.
 
 | What a handover rests on | What the backend does |
 |---|---|
-| Creating a seat's mailbox | A durable consumer created with **nothing attached**, at `DeliverAll` — **1.7 ms**, a plain client call, which is what makes it affordable for every node to create every seat's mailbox at boot |
+| Creating a seat's mailbox | A durable consumer created with **nothing attached**, at `DeliverAll` — **1.7 ms**, a plain client call, which is what makes it affordable for every node to create every seat's mailbox at boot. It is also a **proposal through the metadata Raft group**, which is why a node asks before it creates: see [What a mailbox costs](#what-a-mailbox-costs) |
 | Handing a seat over cleanly | The loser NAKs its unfinished partition (a `Defer`); the successor sees it in **about a millisecond** |
 | Losing a node with no handoff | Nothing NAKs, so those deliveries wait out the ack window — **30 minutes** — before they are redelivered |
 | Prefetch a consumer can hold | **None.** Pull consumers fetch one message, or one drain's worth, when they are ready to run it |
@@ -262,6 +262,45 @@ What each one decides:
   makes a supervisor's restart log say what happened. It is also
   why correctness against zombies comes from epoch fencing rather than from
   waiting for anything to time out.
+
+---
+
+## What a mailbox costs
+
+Creating a seat's mailbox is cheap in wall-clock time and is **not** free in
+the cluster. A durable consumer is a replicated object: the create goes to the
+broker's metadata Raft group and is ordered there, whether or not the consumer
+it names is already present. So the question is not how fast one is, it is how
+many a node sends.
+
+A node therefore **asks before it creates**. It reads the broker's own
+subscription listing over the seat-inbox subject space — one listing, a read —
+diffs it against the company's seats, and creates only what is missing. The
+measurement, on the embedded broker, over a company whose mailboxes all exist:
+
+| | One apply over a 10-seat company whose mailboxes exist | Hiring one seat into that company |
+|---|---|---|
+| **Before** — one create per seat, unconditionally | **10** consumer proposals | **10**: the new seat's, plus nine for mailboxes that were already there |
+| **After** — one listing, then creates for the difference | **0** consumer proposals | **1**: the new seat's mailbox, and nothing else |
+
+Both columns are **per node**, and that is the multiplier that made the old
+shape expensive: every node ensures every seat, so a fleet of three paid the
+metadata group `seats × nodes` writes on every boot and every configuration
+change. A hire now costs the fleet one proposal per node that reaches the
+create before a peer's has landed — at most one each, against `seats` each
+before, and in practice one in total, because nodes apply a revision on their
+own reconcile ticks rather than together: by the time the second node lists,
+the first node's mailbox is there and it writes nothing.
+
+What a converged node spends per [seat sweep](seat-ownership.md#the-unowned-seat)
+in the steady state is **nothing**: with every seat in its set and the set
+younger than a lease, the pass makes no broker call at all. The listing comes
+back when there is something to look up — a boot, a revision that adds a seat,
+a create that failed — or when the set is older than the **seat lease TTL**,
+which is the interval at which a node re-asks rather than trusting itself.
+That last one is what makes the convergence survive a recreated stream: the
+consumers are gone, nothing announces it, and a node reading its own memory
+would leave every seat silently dropping its mail.
 
 ---
 

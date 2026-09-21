@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -288,6 +289,15 @@ type Queue struct {
 	// inFlight counts handler invocations, which is the number an
 	// operator watches converge to zero during a drain.
 	inFlight queue.Inflight
+
+	// consumerProposals counts the consumer CREATES and UPDATES this
+	// client has asked the broker for. See [Queue.ConsumerProposals].
+	//
+	// Atomic rather than under mu, because it is written from inside the
+	// retry closures the provisioning helpers drive — which run on the
+	// caller's goroutine but under a context the caller may cancel, and
+	// which must never take the lock the attach path holds.
+	consumerProposals atomic.Int64
 }
 
 type attachKey struct{ topic, group string }
@@ -979,6 +989,13 @@ func (q *Queue) AddPublishListener(l queue.PublishListener) {
 // publishes to the subject: the agent and notification streams use interest
 // retention, so a message published to a subject no consumer covers is
 // dropped, which is the contract's stated behaviour rather than a surprise.
+//
+// A MAILBOX THAT EXISTS COSTS A LOOKUP AND NOTHING ELSE. The create is a
+// proposal through the metadata Raft group whatever it would find there, so a
+// caller ensuring N seats whose mailboxes are all already there used to spend
+// N replicated writes to learn nothing — every boot, and every config apply.
+// It now spends N lookups, which are reads. Counted by
+// [Queue.ConsumerProposals].
 func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bool, error) {
 	if group == "" {
 		return false, fmt.Errorf("%w: empty group", ErrSubject)
@@ -990,7 +1007,9 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 	name := consumerName(topic, group)
 
 	// Reporting whether THIS call created it is part of the contract, so
-	// look first rather than inferring from an upsert.
+	// look first rather than inferring from an upsert. The lookup also
+	// DECIDES the call: a consumer the broker says it holds is returned
+	// from here, unproposed. See the switch below.
 	//
 	// ITS OWN DEADLINE, and it is a LOOKUP's rather than a create's — see
 	// [jsprovision.LookupBudget]. With no deadline of its own (an engine
@@ -1019,20 +1038,47 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 				"fleet that is a metadata group that has not settled, and the "+
 				"create has not been attempted yet")
 	})
+	var found jetstream.Consumer
 	getErr := jsprovision.Ask(lookupCtx, q.Clustered().AskTerm(),
 		func(ctx context.Context) error {
-			_, e := q.js.Consumer(ctx, stream, name)
+			var e error
+			found, e = q.js.Consumer(ctx, stream, name)
 			return e
 		}, nil)
 	stopLookup()
-	// EXISTED MEANS THIS NODE WAS TOLD IT WAS THERE, never merely "the
-	// lookup did not fail". An unanswered probe leaves it false and the
-	// create below decides: the returned bool is `!existed && won`, and
-	// won is the authority on which node's create actually made it.
-	existed := getErr == nil
+	// THE THREE ANSWERS, and only the FIRST of them ends the call here.
+	//
+	// A create is a PROPOSAL through the metadata Raft group, whatever it
+	// finds when it gets there — so issuing one for a mailbox the broker
+	// has just said it holds spends a replicated write per seat, on every
+	// boot and on every config apply, for a company whose mailboxes all
+	// already exist. That is the whole cost this early return removes; see
+	// docs/concepts/scaling.md for the measured numbers.
+	//
+	// WHY ONLY THE POSITIVE ARM. "Told it is not there" and "did not
+	// answer" are different facts, and a return on the second would be the
+	// single most expensive bug this file can carry: a durable subscription
+	// IS a seat's mailbox, so a node that skipped the create because it
+	// could not tell would leave that seat's mail being dropped silently,
+	// with no error anywhere. Both of those arms fall through to the create
+	// below, exactly as before.
 	switch {
-	case getErr == nil, errors.Is(getErr, jetstream.ErrConsumerNotFound):
-		// Told, either way.
+	case getErr == nil:
+		// TOLD IT IS THERE. Nothing to create, nothing to report: the
+		// bool means "this call found it absent AND then provisioned
+		// it", which this call did not.
+		//
+		// The stamp stays, because it is the one write this arm may
+		// still owe — a mailbox made before consumers carried their
+		// pair is the mailbox ListSubscriptions exists to find, and
+		// [Queue.stampSubscriptionPair] writes nothing at all to one
+		// that already carries it. So the steady state is still zero
+		// writes, and the legacy mailbox is still repaired on the
+		// first boot that meets it rather than on none.
+		q.stampSubscriptionPair(ctx, stream, found, topic, group)
+		return false, nil
+	case errors.Is(getErr, jetstream.ErrConsumerNotFound):
+		// Told it is NOT there. The create below makes it.
 	case jsprovision.Unanswered(ctx, getErr):
 		q.log.WarnContext(ctx, "jetstream_consumer_lookup_unanswered",
 			"stream", stream, "consumer", name, "error", getErr.Error(),
@@ -1064,12 +1110,15 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 	if err != nil {
 		return false, fmt.Errorf("ensure consumer %s: %w", name, err)
 	}
-	// BOTH HALVES, because either alone misreports. The lookup says this
-	// node did not already see it; won says this node's own create is what
-	// put it there. Without won, a consumer recovered by the read-back —
-	// a peer's, or this node's from an earlier boot — was reported as
-	// created by THIS call, so on a fleet booting together every member
-	// claimed to have made every mailbox.
+	// WON IS THE WHOLE ANSWER, because the lookup half is already spent:
+	// the only way to reach here is a lookup that said "not there" or said
+	// nothing at all, so "this node did not already see it" is true by
+	// construction and `!existed` was a constant. What is left is the
+	// question only the create can answer — whether THIS node's create is
+	// what put the consumer there. Without it, a consumer recovered by the
+	// read-back (a peer's, or this node's from an earlier boot) was
+	// reported as created by this call, so on a fleet booting together
+	// every member claimed to have made every mailbox.
 	//
 	// One ambiguity is the broker's and cannot be closed here: a create
 	// whose configuration exactly matches an existing consumer returns
@@ -1079,7 +1128,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 	if !won {
 		q.stampSubscriptionPair(ctx, stream, cons, topic, group)
 	}
-	return !existed && won, nil
+	return won, nil
 }
 
 // stampSubscriptionPair records the pair on a consumer this call FOUND rather
@@ -1137,6 +1186,7 @@ func (q *Queue) stampSubscriptionPair(ctx context.Context, stream string,
 	// five-second default.
 	writeCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
 	defer cancel()
+	q.noteConsumerProposal()
 	if _, err := q.js.UpdateConsumer(writeCtx, stream, config); err != nil {
 		q.log.WarnContext(ctx, "jetstream_subscription_pair_unstamped",
 			"stream", stream, "topic", topic, "group", group, "error", err.Error(),
@@ -1207,6 +1257,7 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	// bought this call nothing, because the one condition it exists to
 	// wait out was the one condition this create did not wait on.
 	createErr := jsprovision.Place(createCtx, q.Clustered().AskTerm(), func(ctx context.Context) error {
+		q.noteConsumerProposal()
 		var e error
 		cons, e = q.js.CreateConsumer(ctx, stream, cfg)
 		return e
@@ -1448,6 +1499,30 @@ func pairOf(info *jetstream.ConsumerInfo) (queue.Subscription, pairVerdict) {
 	}
 	return queue.Subscription{}, pairUnprovable
 }
+
+// noteConsumerProposal records one consumer create or update about to be
+// sent. Counted BEFORE the call and per ATTEMPT, because a proposal the
+// metadata group refuses, or never answers, cost the group exactly as much as
+// one it committed — and a retry loop that sent five is what this number
+// exists to make visible.
+func (q *Queue) noteConsumerProposal() { q.consumerProposals.Add(1) }
+
+// ConsumerProposals reports how many consumer creates and updates THIS client
+// has asked the broker for since it was opened.
+//
+// Every one of them goes through the metadata Raft group, which is what makes
+// the number worth having: a consumer create is not a local write, and a node
+// that issues one per seat on every apply is replicating a decision the
+// cluster already took. It counts attempts rather than commits, and it counts
+// creates that turned out to be no-ops, because both are proposals the group
+// had to order.
+//
+// DIAGNOSTIC, and deliberately not on [queue.EventQueue]: nothing in the
+// engine branches on it, it means nothing on a backend with no consensus
+// layer, and the contract has no business promising a number that is an
+// artefact of how one broker replicates. The conformance suite reads it
+// through a capability, which is where a backend-specific observable belongs.
+func (q *Queue) ConsumerProposals() int { return int(q.consumerProposals.Load()) }
 
 // InFlightCount reports handler invocations currently mid-flight.
 func (q *Queue) InFlightCount() int { return q.inFlight.Count() }

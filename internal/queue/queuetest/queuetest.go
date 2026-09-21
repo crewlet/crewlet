@@ -222,7 +222,8 @@ type Capabilities struct {
 	// correct baseline, the operation writes, the second read has not caught up,
 	// before equals after, and the case passes. Verified by running a lagging
 	// view together with a real corruption — EnsureSubscription wiping the mail
-	// it must keep — and ensure_subscription_on_an_existing_one_keeps_its_mail
+	// it must keep — and
+	// ensure_subscription_on_an_existing_one_keeps_its_mail_and_proposes_nothing
 	// reported PASS with the wipe in place.
 	//
 	// So the hazard is worse than "the group goes quiet". The group gets LOUD
@@ -308,6 +309,34 @@ type Capabilities struct {
 	// quiesce is invisible from outside until someone attaches, which is
 	// what let one sit unnoticed long enough to strand a seat.
 	Quiescing func(q queue.EventQueue, topic, group string) bool
+
+	// ConsumerProposals reports how many consumer creates THIS client has
+	// asked the broker for since it was built — the cost side of
+	// EnsureSubscription, which the contract deliberately says nothing
+	// about.
+	//
+	// It exists because "ensure" has two halves and only one of them is
+	// observable through the contract. The contract's half is that
+	// re-ensuring keeps the mail. The other half is that re-ensuring must
+	// not ASK: on the broker this engine ships a consumer create is a
+	// proposal through the metadata Raft group whether or not it turns
+	// out to be a no-op, so a node ensuring a company's mailboxes at
+	// every boot and every config apply replicated one write per seat to
+	// be told what it had just read. Nothing in the contract can see that,
+	// and a backend that quietly went back to proposing would pass every
+	// other case here.
+	//
+	// SCOPED TO THE CLIENT UNDER TEST, never to an inspection client: the
+	// number describes who did the asking, and a capability that read it
+	// off an admin connection would report zero for ever.
+	//
+	// Deliberately NOT part of [subscriptionState]: that struct is the
+	// state of one (topic, group) pair and this is a client-wide counter,
+	// so an assertUntouched over it would be comparing a number to itself
+	// on a case that never touched a consumer. The requirement written
+	// there — that a new observable of a SUBSCRIPTION is added to it —
+	// still stands and this is not one.
+	ConsumerProposals func(q queue.EventQueue) int
 
 	// History reports every event published through this backend, for the
 	// one assertion that has to distinguish "not delivered" from "not
@@ -1172,6 +1201,21 @@ func (s *suite) optionalBacklog(t *testing.T) func(q queue.EventQueue, topic, gr
 	return func(q queue.EventQueue, topic, group string) []*events.Event {
 		return s.caps.Backlog(t, q, topic, group)
 	}
+}
+
+// optionalProposals is the consumer-proposal counter, or nil when the backend
+// does not keep one.
+//
+// OPTIONAL rather than a skip, deliberately: the case that reads it also
+// certifies that re-ensuring a mailbox keeps the mail, which is the contract
+// itself and must not be skipped over a missing observable. A backend that
+// cannot count proposals still has to answer the half that is written down.
+func (s *suite) optionalProposals(t *testing.T) func(q queue.EventQueue) int {
+	t.Helper()
+	if s.caps.ConsumerProposals == nil {
+		return nil
+	}
+	return s.caps.ConsumerProposals
 }
 
 func (s *suite) needDeadLetters(t *testing.T) func(q queue.EventQueue, topic, group string) []*events.Event {

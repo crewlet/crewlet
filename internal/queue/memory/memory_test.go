@@ -68,6 +68,16 @@ func TestConformance(t *testing.T) {
 			Quiescing: func(q queue.EventQueue, topic, group string) bool {
 				return q.(*memory.Queue).Quiescing(topic, group)
 			},
+			// Declared although a create here is a map insert rather than
+			// a replicated write: what the case asserts is that the
+			// second ensure never REACHED the create, which is the same
+			// question on a twin as on a broker — and the twin is the
+			// backend every other package's tests run on, so a regression
+			// that only the broker could see is one the fleet suite would
+			// certify green.
+			ConsumerProposals: func(q queue.EventQueue) int {
+				return q.(*memory.Queue).ConsumerProposals()
+			},
 			History: func(q queue.EventQueue) []*events.Event {
 				return q.(*memory.Queue).History()
 			},

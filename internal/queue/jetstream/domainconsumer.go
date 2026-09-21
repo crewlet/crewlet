@@ -202,6 +202,7 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 		// the stream it reads, so "no suitable peers" is transient here
 		// too and the budget above is worth nothing without the retry.
 		err = jsprovision.Place(createCtx, q.Clustered().AskTerm(), func(ctx context.Context) error {
+			q.noteConsumerProposal()
 			var e error
 			cons, e = q.js.CreateConsumer(ctx, stream, config)
 			return e
@@ -351,6 +352,7 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	var cons jetstream.Consumer
 	err := jsprovision.Place(createCtx, c.q.Clustered().AskTerm(),
 		func(ctx context.Context) error {
+			c.q.noteConsumerProposal()
 			var e error
 			cons, e = c.q.js.CreateConsumer(ctx, c.stream, config)
 			return e
@@ -395,6 +397,7 @@ func (c *DomainConsumer) consumerFor(ctx context.Context) (jetstream.Consumer, e
 	var cons jetstream.Consumer
 	err := jsprovision.Place(createCtx, c.q.Clustered().AskTerm(),
 		func(ctx context.Context) error {
+			c.q.noteConsumerProposal()
 			var e error
 			cons, e = c.q.js.CreateConsumer(ctx, c.stream, c.want)
 			return e
@@ -440,6 +443,7 @@ func (q *Queue) alignDomainConsumer(ctx context.Context, stream string,
 	}
 	config.MaxAckPending = domainConsumerMaxAckPending
 	config.AckWait = domainConsumerAckWait
+	q.noteConsumerProposal()
 	updated, err := q.js.UpdateConsumer(ctx, stream, config)
 	if err != nil {
 		return nil, fmt.Errorf("raise the consumer's in-flight ceiling to %d: %w",

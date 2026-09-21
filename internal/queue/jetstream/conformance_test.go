@@ -167,6 +167,15 @@ func capabilities() queuetest.Capabilities {
 			return q.(*Queue).Quiescing(topic, group)
 		},
 
+		// THE QUEUE UNDER TEST, never the inspector: this counts what the
+		// client being certified asked the broker for, and the admin
+		// connection asked for none of it. Reading it through inspector()
+		// the way the two mail reads do would report zero for ever and
+		// pass the case vacuously.
+		ConsumerProposals: func(q queue.EventQueue) int {
+			return q.(*Queue).ConsumerProposals()
+		},
+
 		// Deliberately NOT declared, each for a measured reason:
 		//
 		// InlineDispatch — pull consumers fetch on their own schedule, so

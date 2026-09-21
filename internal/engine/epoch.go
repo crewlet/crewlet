@@ -322,6 +322,16 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// until something creates its mailbox every event published to it is
 	// dropped rather than retained. Nil on an engine built without a node
 	// — `crewlet validate` applies to nothing.
+	//
+	// A CONVERGENCE RATHER THAN A WALK, which is what makes it right to
+	// call here on every apply rather than only on one that changes the
+	// roster: it asks the broker what is missing and writes only that, so
+	// an apply over a company whose mailboxes all exist costs a listing
+	// and no consumer proposals at all. It is still called
+	// UNCONDITIONALLY, because "this revision changed no seat" is a
+	// comparison of two documents and a missing mailbox is a fact about
+	// the broker — the two disagree exactly when it matters, after a
+	// mailbox was lost under a revision nobody edited.
 	if e.node != nil {
 		e.node.EnsureMailboxes(ctx)
 		// AND THE MAIL A COMPANY WITH NO MODEL HELD BACK is let through

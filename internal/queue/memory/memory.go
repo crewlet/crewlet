@@ -55,6 +55,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -332,6 +333,15 @@ type Queue struct {
 	pauses    map[subKey]map[string]struct{}
 	quiescing map[subKey]struct{}
 	listeners []queue.PublishListener
+
+	// subscriptionCreates counts the durable subscriptions this client
+	// has asked the broker to make. See [Queue.ConsumerProposals].
+	//
+	// Atomic rather than under broker.mu, because it is read by a test
+	// while another client of the same broker may be writing it, and a
+	// read that took the broker mutex would be a second reason to hold
+	// it that nothing in the contract needs.
+	subscriptionCreates atomic.Int64
 
 	// inFlight counts running handlers and is what a drain waits on.
 	//
@@ -759,14 +769,35 @@ func (q *Queue) EnsureSubscription(_ context.Context, topic, group string) (bool
 	}
 	if _, ok := q.broker.subs[subKey{topic, group}]; ok {
 		q.broker.mu.Unlock()
+		// LOOKED UP AND LEFT ALONE, which is the half of this verb that
+		// is not about this backend at all: a durable subscription IS a
+		// seat's mailbox, so an "ensure" that re-created one would wipe
+		// the mail an unowned seat is holding. Counted as nothing,
+		// because nothing was created.
 		return false, nil
 	}
+	q.subscriptionCreates.Add(1)
 	q.broker.ensureLocked(topic, group)
 	q.broker.mu.Unlock()
 
 	log.Info("subscription_created", "topic", topic, "group", group)
 	return true, nil
 }
+
+// ConsumerProposals reports how many durable subscriptions THIS client has
+// asked the broker to create since it was minted.
+//
+// The twin's answer to the number the JetStream backend reports under the same
+// name, and the reason the conformance suite can certify "ensuring a mailbox
+// that exists proposes nothing" on both backends rather than on the one where
+// it is expensive. Here a create costs a map insert rather than a replicated
+// write, so the number is not about cost — it is about whether the second
+// ensure REACHED the create at all, which is the same question on both.
+//
+// DIAGNOSTIC, and deliberately not on [queue.EventQueue]: see the JetStream
+// backend's method for why a consensus-layer observable does not belong in a
+// contract two backends share.
+func (q *Queue) ConsumerProposals() int { return int(q.subscriptionCreates.Load()) }
 
 // DeleteSubscription destroys the subscription and its retained mail.
 //

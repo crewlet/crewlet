@@ -187,6 +187,7 @@ func (q *Queue) peek(
 	from uint64,
 	limit int,
 ) ([]*events.Event, error) {
+	q.noteConsumerProposal()
 	cons, err := q.js.CreateConsumer(ctx, stream, jetstream.ConsumerConfig{
 		FilterSubject: subject,
 		// By sequence rather than DeliverAll, so a caller that knows what
