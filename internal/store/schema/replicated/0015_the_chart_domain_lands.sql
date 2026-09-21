@@ -129,8 +129,12 @@ CREATE TABLE chart_seats (
     handle               TEXT    NOT NULL PRIMARY KEY,
     -- The handles this seat used to answer to. See chart_units.former_keys_json
     -- for why this is a column. What a former handle keeps working is the
-    -- REFERENCES; a seat's memory does not follow it, because the agent id is
-    -- derived from the company name and the handle.
+    -- REFERENCES somebody wrote down -- a `manages:` entry, a `lead:` -- for as
+    -- long as the capped list holds them. The seat's own durable state needs
+    -- none of it: its mailbox, lease, diary and schedule ledger key on the id
+    -- derived from `origin_handle` in the document, which no rename moves.
+    -- (A COMMENT ONLY. Nothing about the shape this file creates has changed,
+    -- and nothing may: an applied migration is history.)
     former_keys_json     TEXT    NOT NULL DEFAULT '[]',
     -- agent or human. An agent seat has an inbox, a turn loop and a model
     -- chain; a human seat participates in the same hierarchy and is

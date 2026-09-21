@@ -1124,7 +1124,8 @@ func pauseTTL(gate *org.RoleSandbox) *time.Duration {
 //
 // A handle is unique by a RUNNABLE rule instead: a company carrying two is
 // refused outright, so there is no document on which this can be ambiguous.
-// AN INDEX, NOT A WALK, because the seat is what carries the block now.
+// ONE LOOKUP, NOT A WALK OF ITS OWN, because the seat is what carries the
+// block now.
 //
 // It used to walk the company DOCUMENT — first only the top-level `roles:`,
 // which answered nil for every seat in a unit and refused each of them with
@@ -1134,10 +1135,11 @@ func pauseTTL(gate *org.RoleSandbox) *time.Duration {
 // walk returned nil for EVERY seat and code work became silently unavailable
 // to the whole company.
 //
-// The seat's own [org.Role] holds it, so this is a map lookup on the org the
-// company is running — and the "two seats with one handle" hazard the walk
-// had to reason about cannot arise, because a handle is the seat's identity
-// in that index.
+// The seat's own [org.Role] holds it, so this asks the org the company is
+// running, through the one lookup every other layer resolves a handle with —
+// aliases and all. The "two seats with one handle" hazard the walk had to
+// reason about cannot arise there, because that lookup answers a live handle
+// before any retired one and a company carrying two live ones is refused.
 func seatSandbox(c *Company, handle string) *org.RoleSandbox {
 	if c == nil || c.Org == nil {
 		return nil

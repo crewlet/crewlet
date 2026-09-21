@@ -16,20 +16,30 @@ import (
 )
 
 // ChainHash is the stable identity of where a seat sits in the org: the
-// company name, every unit above the seat outermost-first, then the seat's
-// own role name.
+// company name, the ORIGIN KEY of every unit above the seat outermost-first,
+// then the seat's own ORIGIN HANDLE.
 //
 // It is what an onboarding marker is stamped with, and it is the entire
-// re-onboarding trigger. A seat that moves between teams, gains an ancestor
-// unit, or whose division is renamed hashes differently; its stored marker
-// stops matching, and the first-turn pass fires again for the structure the
-// seat is actually in now. Content changes are deliberately NOT in it — an
-// edited Onboarding page is the seat's own business to re-read, and hashing
-// page content would re-run a full pass every time somebody fixed a typo.
+// re-onboarding trigger. A seat that moves between teams or gains an ancestor
+// unit hashes differently; its stored marker stops matching, and the
+// first-turn pass fires again for the structure the seat is actually in now.
+// Content changes are deliberately NOT in it — an edited Onboarding page is
+// the seat's own business to re-read, and hashing page content would re-run a
+// full pass every time somebody fixed a typo.
 //
-// Renaming the seat itself needs no help from this hash: the agent id is
-// derived from (org name, handle) through [org.DeriveAgentID], so a rename
-// lands on a different row entirely and the old marker is simply orphaned.
+// IDENTITIES AND NOT DISPLAY NAMES, which is ADR-0019 reaching one more thing
+// a rename used to cost. Hashing the names meant relabelling a division put
+// every seat under it through a full onboarding turn, and renaming one person
+// put that person through one, although nobody had moved and nothing about
+// the structure had changed. A restructure is a seat sitting somewhere else,
+// and an origin is exactly the address that does not move when somebody
+// retypes a label.
+//
+// THE COMPANY NAME STAYS AS WRITTEN, because it is the one part that is an
+// identity here: it is an input to [org.Organization.AgentIDFor] as well, so
+// renaming the company re-derives every seat's id and orphans its whole
+// estate — the marker included. Folding it in under a second rule would be
+// this hash disagreeing with the derivation beside it.
 //
 // Empty for a nil org or seat. Both entry points that take a chain hash
 // refuse an empty one, so a nil can never become a marker nothing matches.
@@ -44,9 +54,9 @@ func ChainHash(o *org.Organization, r *org.Role) string {
 	parts := make([]string, 0, 4)
 	parts = append(parts, o.Name)
 	for _, u := range o.UnitChainFor(r) {
-		parts = append(parts, u.Name)
+		parts = append(parts, u.Origin())
 	}
-	parts = append(parts, r.Name)
+	parts = append(parts, r.Origin())
 	return hashChain(parts)
 }
 

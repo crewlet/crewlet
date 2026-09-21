@@ -112,9 +112,10 @@ six false statements by the time anybody checked.
 | [0010](0010-tracing-is-configured-by-the-standard-otel-environment.md) | Tracing is configured by the standard OTel environment, not by Tier A | nothing — declared |
 | [0011](0011-tier-a-is-the-root-of-trust.md) | Tier A resolves from the environment and nothing else | `TestTierAIsNeverResolvedFromTheSecretStore` |
 | [0012](0012-a-wake-is-derived-not-published.md) | A wake is derived from a durable record, never published by the writer | `TestAnUnreachableClaimStorePublishesAnyway` |
-| [0013](0013-a-seats-identity-is-derived.md) | A seat's identity is derived, never looked up | `TestDeriveAgentIDIsStable` |
+| [0013](0013-a-seats-identity-is-derived.md) | A seat's identity is derived, never looked up — **superseded by 0019** | `TestDeriveAgentIDIsStable` |
 | [0014](0014-a-compacted-changelog-is-the-fourth-answer.md) | A compacted changelog is the fourth answer to "who has to agree on it?" | `TestASeatsMemoryCrossesToANodeThatHasNeverRunIt` |
 | [0015](0015-an-alarm-borrows-its-threshold.md) | An alarm fires at a threshold another decision already made | `TestTheBackupAlarmFiresAtTheAgeThePolicyNames` |
 | [0016](0016-a-protocol-bump-refuses-where-an-envelope-round-trips.md) | A coordination protocol bump refuses where an event envelope round-trips | nothing — declared |
 | [0017](0017-a-turn-id-names-one-run.md) | A turn id names one RUN; the work key names the unit of work | `TestARedeliveredTriggerRunsUnderItsOwnIdentity` |
 | [0018](0018-every-state-log-record-is-signed.md) | Every state-log record is signed, and the framework verifies before a domain decodes | `TestATamperedRecordIsRefusedPermanently` |
+| [0019](0019-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md) | A seat's identity is derived from the handle it was CREATED under, so a rename moves only its address | `TestARenameKeepsTheIDTheLeaseTheMailboxAndTheDiary` |

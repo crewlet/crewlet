@@ -49,6 +49,30 @@ type Unit struct {
 	// apply has to keep in step.
 	FormerKeys []string `json:"former_keys,omitempty"`
 
+	// OriginKey is the address this unit was CREATED under, and it is the
+	// unit's identity where [Unit.Key] is only its address.
+	//
+	// EMPTY MEANS NEVER RENAMED, which is a meaningful zero rather than a
+	// missing value: a unit that has never been rekeyed still answers to the
+	// key it was created under, so [Unit.Origin] reads Key. It is written
+	// exactly once — by the FIRST rekey, which is the last moment the create
+	// address is still known — and never touched again.
+	//
+	// DERIVED BY THE APPLY FROM THE RECORD'S OWN FORMER KEY rather than
+	// stated by a writer, for the reason a writer may not state history: the
+	// origin is a fact about what already happened to this row, so a record
+	// carrying one would be a writer asserting what it read in another
+	// transaction. Every node applies the same record to the same row and
+	// reaches the same origin.
+	//
+	// IN THE DOCUMENT AND NOT A COLUMN, deliberately. Nothing queries by it
+	// and nothing has to hold it unique — a chart address is unclaimable for
+	// ever once used, because a create arbitrates on the object's own subject
+	// and a rekey on the address's, so no second object can ever reach an
+	// origin another one holds. A column would be an index bought for a read
+	// nobody makes and a uniqueness rule something else already keeps.
+	OriginKey string `json:"origin_key,omitempty"`
+
 	Name    string   `json:"name,omitempty"`
 	Type    string   `json:"type,omitempty"`
 	Purpose string   `json:"purpose,omitempty"`
@@ -97,13 +121,23 @@ type Seat struct {
 	// FormerHandles are the handles this seat used to answer to. See
 	// [Unit.FormerKeys] for why they are a list on the row.
 	//
-	// A SEAT'S MEMORY DOES NOT FOLLOW THEM, and that is worth knowing here
-	// rather than discovering: the agent id is derived from the company
-	// name and the handle, so a rekeyed seat is a different agent as far as
-	// its diary and its onboarding markers are concerned. What a former
-	// handle keeps working is the REFERENCES — a `manages:` entry, a
-	// `lead:`, a vendor mapping somebody already wrote down.
+	// WHAT THEY KEEP WORKING IS THE REFERENCES — a `manages:` entry, a
+	// `lead:`, a vendor mapping somebody already wrote down — for as long as
+	// the list holds them. The seat's own durable state does not need them
+	// at all: it is keyed on the id [Seat.OriginHandle] anchors, which no
+	// rename and no cap can move.
 	FormerHandles []string `json:"former_handles,omitempty"`
+
+	// OriginHandle is the handle this seat was CREATED under — the seat's
+	// IDENTITY, where [Seat.Handle] is only its address. See [Unit.OriginKey]
+	// for the zero-value rule, who writes it and why it is not a column.
+	//
+	// THE AGENT ID IS DERIVED FROM IT, which is what makes a rename keep the
+	// seat's mailbox, its lease, its diary and its schedule ledger: those are
+	// all keyed on the id, and the id is a UUIDv5 over (company name, origin
+	// handle). A handle is prose somebody types, so it could never be the
+	// anchor of anything durable.
+	OriginHandle string `json:"origin_handle,omitempty"`
 
 	Kind SeatKind `json:"kind"`
 
@@ -187,6 +221,28 @@ type Change struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
+// Origin is the address this unit was created under: [Unit.OriginKey] where a
+// rekey has recorded one, and [Unit.Key] where none has, because a unit that
+// was never rekeyed still answers to the key it was created under.
+//
+// ONE READING, so nothing above this package has to remember the zero-value
+// rule or gets it half right.
+func (u Unit) Origin() string {
+	if u.OriginKey != "" {
+		return u.OriginKey
+	}
+	return u.Key
+}
+
+// Origin is [Unit.Origin] for a seat: the handle it was created under, which
+// is what its agent id is derived from.
+func (s Seat) Origin() string {
+	if s.OriginHandle != "" {
+		return s.OriginHandle
+	}
+	return s.Handle
+}
+
 // Delta is one field's before and after, as text.
 type Delta struct {
 	From string `json:"from"`
@@ -227,6 +283,11 @@ func (u Unit) Validate() error {
 			return err
 		}
 	}
+	if u.OriginKey != "" {
+		if err := checkKey("origin_key", u.OriginKey); err != nil {
+			return err
+		}
+	}
 	if len(u.Name) > MaxName {
 		return invalid("name", "%d bytes and the cap is %d", len(u.Name), MaxName)
 	}
@@ -252,6 +313,11 @@ func (s Seat) Validate() error {
 	}
 	for _, handle := range s.FormerHandles {
 		if err := checkKey("former_handles", handle); err != nil {
+			return err
+		}
+	}
+	if s.OriginHandle != "" {
+		if err := checkKey("origin_handle", s.OriginHandle); err != nil {
 			return err
 		}
 	}

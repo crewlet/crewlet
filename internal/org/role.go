@@ -615,6 +615,25 @@ type Role struct {
 	// this field is the config, not the identity.
 	DeclaredHandle string `yaml:"handle,omitempty" json:"handle,omitempty"`
 
+	// OriginHandle is the handle this seat was CREATED under, and
+	// FormerHandles are the handles it has answered to since, newest first.
+	// Both come from the seat's chart row; a seat built from a document has
+	// neither, because a document has no rename history.
+	//
+	// THEY ARE TWO DIFFERENT JOBS, which is why one list does not serve for
+	// both. FormerHandles is what keeps a REFERENCE somebody wrote — a
+	// `manages:` entry, a `lead:` — resolving after a rename, and it is
+	// capped, because a reference nobody has followed in sixteen renames is
+	// not worth a row growing for ever. OriginHandle is the seat's
+	// IDENTITY: [Role.Origin] is what the agent id is derived from, and an
+	// identity that a cap could drop would be no identity at all.
+	//
+	// Not part of the wire form on either side: a document neither carries
+	// nor may author them, and the runtime blob a chart row holds must not
+	// either, because the row itself is where they live.
+	OriginHandle  string   `yaml:"-" json:"-"`
+	FormerHandles []string `yaml:"-" json:"-"`
+
 	Email string `yaml:"email,omitempty" json:"email,omitempty"`
 
 	// UnitRef is a SOFT reference, by unit KEY ([Unit.Key]), to the unit
@@ -784,6 +803,26 @@ func (r *Role) Handle() string {
 		return r.DeclaredHandle
 	}
 	return Slugify(r.Name)
+}
+
+// Origin is the handle this seat was created under — its IDENTITY, where
+// [Role.Handle] is only its address. A seat that has never been renamed
+// answers to the handle it was created under, so an empty [Role.OriginHandle]
+// reads as the current handle.
+//
+// EVERYTHING DURABLE IS KEYED ON WHAT THIS ANCHORS — the mailbox, the seat
+// lease, the diary, the schedule ledger — through [Organization.AgentIDFor].
+// A handle is prose a founder types and re-types, so it could never be that
+// anchor: keying on it made every rename a new seat with no memory, no
+// mailbox and no history.
+func (r *Role) Origin() string {
+	if r == nil {
+		return ""
+	}
+	if r.OriginHandle != "" {
+		return r.OriginHandle
+	}
+	return r.Handle()
 }
 
 // humanForbidden is the runtime-only surface a human seat must not carry,

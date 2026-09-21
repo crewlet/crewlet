@@ -222,6 +222,13 @@ func (a *Applier) rekeyUnit(ctx context.Context, tx *sql.Tx, at applyContext,
 		// none of them can act on.
 		return 0, nil
 	}
+	// THE ORIGIN IS FROZEN BY THE FIRST REKEY AND NEVER AGAIN, which is the
+	// one moment the create address is still known: a unit that has been
+	// rekeyed before already carries it, and one that has not is answering
+	// to the key it was created under right now. See [Unit.OriginKey].
+	if unit.OriginKey == "" {
+		unit.OriginKey = former
+	}
 	unit.Key = key
 	unit.FormerKeys = retire(unit.FormerKeys, former)
 	unit.UpdatedAt = at.brokerAt
@@ -313,6 +320,12 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	if !found {
 		return 0, nil
+	}
+	// FROZEN BY THE FIRST REKEY, for the reason [Applier.rekeyUnit] gives —
+	// and here it is what keeps the seat's mailbox, lease, diary and
+	// schedule ledger, all of which key on the id derived from it.
+	if seat.OriginHandle == "" {
+		seat.OriginHandle = former
 	}
 	seat.Handle = handle
 	seat.FormerHandles = retire(seat.FormerHandles, former)

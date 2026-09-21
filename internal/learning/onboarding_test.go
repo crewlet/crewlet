@@ -96,13 +96,13 @@ func TestTheChainHashMovesWithTheStructureAndOnlyWithIt(t *testing.T) {
 		seat    string
 	}{
 		{"the company is renamed", "Acme Inc", []string{"Platform", "Ops"}, "eng"},
-		{"an ancestor is renamed", "Acme", []string{"Infra", "Ops"}, "eng"},
-		{"the seat's own unit is renamed", "Acme", []string{"Platform", "SRE"}, "eng"},
+		{"an ancestor is replaced", "Acme", []string{"Infra", "Ops"}, "eng"},
+		{"the seat's own unit is replaced", "Acme", []string{"Platform", "SRE"}, "eng"},
 		{"the seat moves up a level", "Acme", []string{"Platform"}, "eng"},
 		{"the seat moves to the root", "Acme", nil, "eng"},
 		{"an ancestor is inserted", "Acme", []string{"Platform", "Core", "Ops"}, "eng"},
 		{"the units swap order", "Acme", []string{"Ops", "Platform"}, "eng"},
-		{"the role is renamed", "Acme", []string{"Platform", "Ops"}, "sre"},
+		{"the seat is a different one", "Acme", []string{"Platform", "Ops"}, "sre"},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
@@ -113,6 +113,48 @@ func TestTheChainHashMovesWithTheStructureAndOnlyWithIt(t *testing.T) {
 				t.Errorf("hash unchanged after %s", tc.what)
 			}
 		})
+	}
+}
+
+// A RENAME IS NOT A RESTRUCTURE, and this is the half the case above cannot
+// state: every entry there changes an IDENTITY, because the helper gives each
+// unit and seat its key as its name. Relabelling one moves nothing.
+//
+// It used to. Hashing display names put every seat under a relabelled division
+// through a full onboarding turn — reading pages it had already read, for a
+// team it had not left — and put a person through one for changing their own
+// name. See ADR-0019.
+func TestRelabellingAUnitOrASeatDoesNotReOnboardAnybody(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Engineer", DeclaredHandle: "eng"}
+	ops := &org.Unit{Name: "Operations", ID: "ops", Roles: []*org.Role{seat}}
+	o := &org.Organization{Name: "Acme", Units: []*org.Unit{
+		{Name: "Platform", ID: "platform", Children: []*org.Unit{ops}}}}
+	before := learning.ChainHash(o, seat)
+	if before == "" {
+		t.Fatal("the seat has no chain hash to begin with")
+	}
+
+	// The unit and the seat are both renamed: new display names, new
+	// addresses, and each keeps the identity it was created under.
+	ops.Name, ops.ID = "Site Reliability", "sre"
+	ops.OriginKey, ops.FormerKeys = "ops", []string{"ops"}
+	seat.Name, seat.DeclaredHandle = "Senior Engineer", "senior-eng"
+	seat.OriginHandle, seat.FormerHandles = "eng", []string{"eng"}
+
+	if after := learning.ChainHash(o, seat); after != before {
+		t.Errorf("the chain hash moved from %s to %s over a pair of renames. "+
+			"Nobody moved team and nothing about the structure changed, so "+
+			"every seat under the renamed unit re-onboards for nothing",
+			before, after)
+	}
+
+	// THE CONTROL: the seat actually moving still moves the hash, so the
+	// case above is about renames rather than about the hash being inert.
+	o.Units[0].Children, o.Units[0].Roles = nil, []*org.Role{seat}
+	if moved := learning.ChainHash(o, seat); moved == before {
+		t.Error("the hash did not move when the seat left its unit, so this " +
+			"case cannot tell a rename from a restructure")
 	}
 }
 

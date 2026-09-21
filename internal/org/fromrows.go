@@ -291,6 +291,8 @@ func unitFrom(row chart.Unit) *Unit {
 
 	unit.Name = row.Name
 	unit.ID = row.Key
+	unit.OriginKey = row.Origin()
+	unit.FormerKeys = slices.Clone(row.FormerKeys)
 	unit.Type = UnitType(row.Type)
 	unit.Purpose = row.Purpose
 	unit.Goals = row.Goals
@@ -318,6 +320,11 @@ func seatFrom(row chart.Seat, manages []string) *Role {
 	seat.Name = row.Name
 	seat.Kind = RoleKind(row.Kind)
 	seat.DeclaredHandle = row.Handle
+	// THE ORIGIN IS RESOLVED HERE, so nothing above the view has to know the
+	// row's zero-value rule: a seat that has never been rekeyed carries its
+	// own handle as its origin.
+	seat.OriginHandle = row.Origin()
+	seat.FormerHandles = slices.Clone(row.FormerHandles)
 	seat.Email = row.Email
 	seat.Backstory = row.Backstory
 	seat.Goal = row.Goal

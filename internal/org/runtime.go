@@ -47,6 +47,8 @@ var seatRowFields = map[string]string{
 	"Name":                 "the row's `name` column",
 	"Kind":                 "the row's `kind` column",
 	"DeclaredHandle":       "the row's primary key",
+	"OriginHandle":         "the row's `origin_handle`, frozen by the first rekey and written by nothing else",
+	"FormerHandles":        "the row's `former_keys_json`",
 	"Email":                "the row's `email` column, plus the derived `email_index`",
 	"Backstory":            "the row's `backstory` column",
 	"Goal":                 "the row's `goal` column",
@@ -63,6 +65,8 @@ var seatRowFields = map[string]string{
 var unitRowFields = map[string]string{
 	"Name":            "the row's `name` column",
 	"ID":              "the row's primary key",
+	"OriginKey":       "the row's `origin_key`, frozen by the first rekey and written by nothing else",
+	"FormerKeys":      "the row's `former_keys_json`",
 	"Type":            "the row's `type` column",
 	"Purpose":         "the row's `purpose` column",
 	"Goals":           "the row's own column",
@@ -93,6 +97,7 @@ func SeatRuntime(r *Role) (json.RawMessage, error) {
 	content.Responsibilities, content.BehavioralGuidelines = nil, nil
 	content.Project, content.Space = "", ""
 	content.Manages, content.AutoManaged, content.UnitRef = nil, nil, ""
+	content.OriginHandle, content.FormerHandles = "", nil
 
 	body, err := json.Marshal(content)
 	if err != nil {
@@ -127,6 +132,7 @@ func UnitRuntime(u *Unit) (json.RawMessage, error) {
 	content.Project, content.Space, content.KnowledgeRefs = "", "", nil
 	content.Lead = ""
 	content.DeclaredLead, content.DeclaredChannel = "", ""
+	content.OriginKey, content.FormerKeys = "", nil
 	content.Roles, content.Children = nil, nil
 
 	body, err := json.Marshal(content)

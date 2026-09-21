@@ -1,6 +1,7 @@
 # ADR-0013 — A seat's identity is derived, never looked up
 
-- **Status:** accepted
+- **Status:** superseded
+- **Superseded-by:** ADR-0019
 - **Authority:** `internal/org`
 - **Enforced-by:** `internal/org.TestDeriveAgentIDIsStable`
 - **Measured:** a UUIDv5 over `(org name, handle)` — `uuid.NewSHA1`, one hash, no allocation that matters and no I/O at all, against a store read on a node that by construction holds none of that seat's rows.
