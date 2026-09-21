@@ -791,8 +791,11 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// A GROUPED ANSWER HAS NO FLAT ROWS BY CONSTRUCTION, so the empty
 	// message has to ask about the groups too — a board with five columns
 	// reported as "no work items match" is a seat about to file the
-	// duplicate.
-	if len(answer.Rows) == 0 && len(answer.Groups) == 0 && answer.Complete {
+	// duplicate. AND HAVING COLUMNS IS NOT HAVING WORK: a closed axis
+	// carries every column the query admits whether or not anything is in
+	// it (see internal/tracker's grouping doc), so the question is whether
+	// any column COUNTS anything.
+	if len(answer.Rows) == 0 && boardEmpty(answer.Groups) && answer.Complete {
 		return tools.Result{Output: "No work items match that filter."}, nil
 	}
 	result := map[string]any{"count": len(answer.Rows), "items": answer.Rows}
@@ -2394,3 +2397,15 @@ var seatReadLevel = statelog.DefaultReadLevel(statelog.SurfaceSeat)
 // a wake carried was waited for before the turn opened (read-your-trigger),
 // so there is nothing left for a tool call to name.
 var seatRead = statelog.Freshness{Level: seatReadLevel}
+
+// boardEmpty reports whether a grouped answer holds no task at all — which,
+// on a closed axis, is a board of columns every one of which counts zero, and
+// on a flat answer is no groups at all.
+func boardEmpty(groups []tracker.Group) bool {
+	for _, group := range groups {
+		if group.Count > 0 {
+			return false
+		}
+	}
+	return true
+}

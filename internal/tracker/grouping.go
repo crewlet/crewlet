@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -42,6 +43,22 @@ import (
 // statement run once per group. A single windowed query would rank every row
 // in the corpus to return a handful per column, which is the cost a board
 // pays on every poll.
+//
+// # A closed axis draws every column the query admits
+//
+// A `GROUP BY` emits one row per value PRESENT. On a company with one task
+// that answered one column, and a board with one lane reads as a board that
+// did not load: nothing on it says whether "In review" is empty or missing.
+// So the FIRST axis, where it is a closed set — status, status group and
+// priority, the three with a declared [groupAxis.Order] — carries every value
+// the query's own predicate admits, the absent ones at count 0 with no rows.
+// The rule is the histogram's (every bucket is drawn, empty ones included,
+// because a quiet hour is a fact about the company rather than a gap in the
+// chart), and the admission is the predicate's own: an open-work board draws
+// To do, In progress and In review and never Done, because the query excluded
+// finished work, and a Done lane on it would claim "nothing is done" about a
+// set that was never asked. [admittedColumns] names the filters that decide
+// it, and why an open axis and the second axis are left as they are.
 
 // MaxGroups bounds how many columns one answer draws.
 //
@@ -513,9 +530,17 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	if err != nil {
 		return grouped{}, err
 	}
+	groups = fillColumns(groups, admittedColumns(q, axis))
 	groupLabels(groups, q.GroupBy, fields)
 
 	for i := range groups {
+		if groups[i].Count == 0 {
+			// A COLUMN THE FILL ADDED HOLDS NOTHING BY CONSTRUCTION — see
+			// [admittedColumns] — so neither its rows nor its lanes are
+			// read: a statement per empty column would cost a board with
+			// one task as much as one with six.
+			continue
+		}
 		rows, err := groupRows(ctx, tx, axis, groups[i].Key, where, args,
 			terms, rowsPer, q.DayStart)
 		if err != nil {
@@ -595,6 +620,134 @@ func declaredOrder[T ~string](values []T) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
 		out = append(out, string(value))
+	}
+	return out
+}
+
+// admittedColumns is the closed axis's values THIS query could hold, in the
+// axis's declared order — the columns a board draws whether or not anything is
+// in them. Nil for an open axis, which keeps only the values present.
+//
+// ONLY THE COLUMNS THE PREDICATE ADMITS. An empty column is honest exactly
+// where a row could have landed in it, so the same filters that narrow the
+// predicate narrow this set, in the terms [compileWhere] writes them: the
+// `status` and `status!` keys, `status_group`, the finished-work default that
+// `show_closed` lifts, and the overdue alias that carries an open-status
+// condition of its own. The `group=` column filter narrows the whole query to
+// one value, so it narrows this to one column — an empty one is still that
+// column, which is what the reader who followed "N more →" into it is looking
+// at. A disjunction's arms can only narrow further, so the top-level keys
+// bound what any arm can produce.
+//
+// CLOSED AXES ONLY. An open axis — assignee, tag, type, a custom field — has no
+// set to fill from: every seat in the company as an empty column is a roster
+// rather than a board, and a field's option list is a catalogue read this
+// statement does not make. [groupAxis.Order] is what marks an axis closed, and
+// compileGroup sets it on exactly these three; an axis that gains an order
+// without gaining an arm here is caught by the internal test that walks
+// groupKeys.
+//
+// NOT THE SECOND AXIS. A swimlane is a split of one column's rows — the
+// grammar refuses `group_by2` without `group_by` for that reason — and an
+// empty lane inside every column would multiply exactly the cells
+// [MaxGroupsWithSubgroups] exists to bound.
+func admittedColumns(q Query, axis groupAxis) []string {
+	if len(axis.Order) == 0 {
+		return nil
+	}
+	var admitted []string
+	switch q.GroupBy {
+	case "status":
+		admitted = declaredOrder(admittedStatuses(q))
+	case "status_group":
+		held := map[StatusGroup]bool{}
+		for _, s := range admittedStatuses(q) {
+			held[s.Group()] = true
+		}
+		for _, group := range StatusGroups {
+			if held[group] {
+				admitted = append(admitted, string(group))
+			}
+		}
+	case "priority":
+		for _, p := range Priorities {
+			if len(q.Priorities) > 0 && !slices.Contains(q.Priorities, p) {
+				continue
+			}
+			admitted = append(admitted, string(p))
+		}
+	default:
+		return nil
+	}
+	if q.Group == "" {
+		return admitted
+	}
+	if slices.Contains(admitted, q.Group) {
+		return []string{q.Group}
+	}
+	return nil
+}
+
+// admittedStatuses is every status the query's own predicate could match.
+//
+// THE FINISHED-WORK RULE IS [compileWhere]'S, restated in the same three terms
+// so the two cannot disagree: finished work is excluded unless `show_closed`
+// asks for it, and the overdue alias ANDs the open condition back on whatever
+// `show_closed` said.
+func admittedStatuses(q Query) []Status {
+	finished := q.ShowClosed.All || q.ShowClosed.Recent > 0
+	for _, filter := range q.Dates {
+		if filter.Overdue {
+			finished = false
+		}
+	}
+	var out []Status
+	for _, s := range Statuses {
+		switch {
+		case len(q.Status) > 0 && !slices.Contains(q.Status, s):
+		case slices.Contains(q.StatusNot, s):
+		case len(q.StatusGroups) > 0 && !slices.Contains(q.StatusGroups, s.Group()):
+		case !finished && !s.Group().Open():
+		default:
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// fillColumns lays the present columns over the admitted set, in the admitted
+// order, minting an empty column for every admitted value nothing was counted
+// under.
+//
+// AN EMPTY COLUMN CARRIES AN EMPTY LIST, never nil: `rows` is not `omitempty`,
+// so nil would reach the wire as `null`, and a renderer that maps a column's
+// rows — every one of them — would fall over on exactly the column this
+// exists to draw. A present value the admitted set does not name — a status a
+// newer peer's record wrote — keeps its place at the end rather than
+// vanishing: the predicate admitted it, and a column with rows in it is never
+// the one to drop.
+func fillColumns(present []Group, admitted []string) []Group {
+	if len(admitted) == 0 {
+		return present
+	}
+	held := make(map[string]int, len(present))
+	for i, group := range present {
+		held[group.Key] = i
+	}
+	out := make([]Group, 0, len(admitted)+len(present))
+	used := make([]bool, len(present))
+	for _, key := range admitted {
+		if i, ok := held[key]; ok {
+			out = append(out, present[i])
+			used[i] = true
+			continue
+		}
+		out = append(out, Group{Key: key, Rows: []TaskRow{}})
+	}
+	for i, group := range present {
+		if !used[i] {
+			out = append(out, group)
+		}
 	}
 	return out
 }
