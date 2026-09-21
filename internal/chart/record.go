@@ -23,6 +23,11 @@ const RecordVersion = 1
 // repairs it. So [OpRemove]'s payload is pinned at 1 and never evolves — a
 // field it needs that it cannot have is a field that belongs on the structural
 // record that accompanies it.
+//
+// [OpEviction] is pinned at the same version for the same shape of reason one
+// layer up: a node that deferred an eviction goes on applying records every
+// peer is dropping, and the rows it writes from them have no later record that
+// corrects them.
 const GateRecordVersion = 1
 
 // OpKind is what a record does.
@@ -81,11 +86,24 @@ const (
 
 	// OpBarrier is the read index's payload-free append.
 	OpBarrier OpKind = "barrier"
+
+	// OpEviction gates a node's records on this log, or readmits it. Its
+	// subject is [KindEviction].
+	//
+	// PINNED AT [GateRecordVersion], like [OpRemove] and for the same
+	// reason one layer up: a node that deferred an eviction goes on
+	// applying records every peer is dropping, and there is no later
+	// record that repairs the rows it wrote from them.
+	OpEviction OpKind = "eviction"
+
+	// OpGeneration is a reanchor's own record, on [KindGeneration].
+	OpGeneration OpKind = "generation"
 )
 
-// OpKinds are the six, in the order they are documented.
+// OpKinds are the eight, in the order they are documented.
 var OpKinds = []OpKind{
 	OpPlace, OpImport, OpRemove, OpUpsert, OpRekey, OpBarrier,
+	OpEviction, OpGeneration,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -148,11 +166,16 @@ type RecordEnvelope struct {
 // that cannot decode the payload: it is what turns an unknown version into a
 // STOP rather than a deferral.
 //
-// ON THE OP AND NOT ON A KIND, which is the whole of it here — this domain has
-// no gate KIND at all. A removal rides the ordinary structure subject, so a
-// reader that keyed on the kind would defer it, and a deferred removal is a
-// node that goes on serving a unit every other node has dropped.
-func (e RecordEnvelope) InstallsGate() bool { return e.Op == OpRemove }
+// ON THE OP AND NOT ON A KIND, and a removal is why: it rides the ORDINARY
+// STRUCTURE SUBJECT, so a reader that keyed on the kind would defer it, and a
+// deferred removal is a node that goes on serving a unit every other node has
+// dropped. An eviction has a kind of its own and could have been read either
+// way; it is read here so that the question is asked once, in one place, for
+// both — a gate rule written twice is a record that stops the applier on the
+// write side and is filed for later on the read side.
+func (e RecordEnvelope) InstallsGate() bool {
+	return e.Op == OpRemove || e.Op == OpEviction
+}
 
 // MutationRecord is one committed mutation: the envelope plus everything a
 // build at this version may read.

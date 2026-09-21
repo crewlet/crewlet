@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
@@ -144,6 +145,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		tracker.Domain{}.Name(),
 		search.Domain{}.Name(),
 		pages.Domain{}.Name(),
+		chart.Domain{}.Name(),
 	}
 	got := []string{}
 	for _, domain := range registeredDomains() {

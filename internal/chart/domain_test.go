@@ -144,10 +144,12 @@ func TestOnlyARemovalInstallsAGate(t *testing.T) {
 			t.Fatalf("envelope a %s record: %v", op, err)
 		}
 		got := chart.Domain{}.InstallsGate(env)
-		if want := op == chart.OpRemove; got != want {
+		want := op == chart.OpRemove || op == chart.OpEviction
+		if got != want {
 			t.Errorf("InstallsGate for %s = %v, want %v — a deferred removal is "+
-				"a node that goes on serving a unit every other node has dropped",
-				op, got, want)
+				"a node that goes on serving a unit every other node has "+
+				"dropped, and a deferred eviction is a node that goes on "+
+				"applying records every peer is throwing away", op, got, want)
 		}
 	}
 }
@@ -263,6 +265,10 @@ func suiteID(kind chart.ObjectKind) string {
 		return ""
 	case chart.KindSeat:
 		return "sarah-chen"
+	case chart.KindEviction:
+		return "node-b"
+	case chart.KindGeneration:
+		return "2"
 	}
 	return "engineering"
 }
@@ -335,6 +341,15 @@ func suitePayload(kind chart.ObjectKind, id string) (chart.OpKind, any, chart.Sc
 		}, chart.BatchScope([]chart.ScopeTerm{{Kind: chart.TermUnit, ID: id}})
 	case chart.KindBarrier:
 		return chart.OpBarrier, nil, chart.ScopeSet{Subject: true}
+	case chart.KindEviction:
+		return chart.OpEviction, chart.Eviction{
+			V: chart.GateRecordVersion, NodeID: id, By: "suite",
+		}, chart.ScopeSet{Subject: true}
+	case chart.KindGeneration:
+		return chart.OpGeneration, chart.Generation{
+			V: chart.DocumentVersion, Generation: 2, PrevLastSeqSeen: 41,
+			By: "suite",
+		}, chart.ScopeSet{Subject: true}
 	}
 	return chart.OpUpsert, nil, chart.ScopeSet{Subject: true}
 }

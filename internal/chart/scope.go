@@ -317,6 +317,21 @@ func subjectPath(s Subject, unit string) string {
 		// that intersected anything would make every linearizable read
 		// wait behind every other.
 		return statelog.BarrierScope
+	case KindEviction, KindGeneration:
+		// A GATE IS ABOUT THE WHOLE DOMAIN, and it is the one place the
+		// root term is the honest answer rather than a widening. Neither
+		// writes an object row at all; what each does is decide whether
+		// records on EVERY subject count, so anything narrower would be
+		// a claim the record does not make.
+		//
+		// The cost that makes the root term dangerous elsewhere is not
+		// paid here for an eviction: it installs a gate, so a version
+		// this build cannot read STOPS the applier rather than being
+		// filed at this path where every read would queue behind it. A
+		// generation does pay it, and correctly — a node that cannot
+		// decode a record saying this log was reanchored cannot certify
+		// any read over it either.
+		return pathDomain
 	}
 	// THE STRUCTURE, A KEY CLAIM, AND ANY KIND THIS BUILD DOES NOT KNOW.
 	// None of the three names a row, so there is no narrower path to give:

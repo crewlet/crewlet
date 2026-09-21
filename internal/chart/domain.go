@@ -70,7 +70,7 @@ func (Domain) Stream() statelog.StreamSpec {
 		MaxBytes:      ChartLogMaxBytes,
 		Duplicates:    ChartLogDuplicates,
 		Replay:        statelog.ReplayStrict,
-		// FOUR OF THE FIVE KINDS. A barrier shares one subject across
+		// SIX OF THE SEVEN KINDS. A barrier shares one subject across
 		// the whole domain, so an expectation there would serialise
 		// every linearizable read behind every other one and write an
 		// anchor row per read into the transaction holding this store's
@@ -79,7 +79,7 @@ func (Domain) Stream() statelog.StreamSpec {
 	}
 }
 
-// arbitratedKinds is the four, derived from the enum rather than typed again —
+// arbitratedKinds is the six, derived from the enum rather than typed again —
 // a list written twice is a kind that arbitrates in one place and not the
 // other, which wedges that subject the first time a gate drops a record.
 func arbitratedKinds() []string {
@@ -119,15 +119,17 @@ func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
 // Answered from the envelope alone, because that is all a node has when it
 // cannot decode the payload.
 //
-// ON THE OP AND NOT ON A KIND, and this domain has no gate KIND at all — which
-// is the one place it differs from its two strict siblings and is worth stating
-// where a reader will look for their shape. A removal rides the ordinary
-// structure subject, so a reader that keyed on the kind would defer it, and a
-// deferred removal is a node that goes on serving a unit every other node has
-// dropped, with no inverse that repairs it: nothing ever names a removed object
-// again.
+// ON THE OP AND NOT ON A KIND, and a removal is why. A removal rides the
+// ORDINARY STRUCTURE SUBJECT, so a reader that keyed on the kind would defer
+// it — and a deferred removal is a node that goes on serving a unit every
+// other node has dropped, with no inverse that repairs it, because nothing
+// ever names a removed object again. An eviction does have a kind of its own
+// and is answered through the same op, so the two gates are one question
+// asked once: it is [RecordEnvelope.InstallsGate], read rather than restated,
+// because a rule written twice is a record that installs a gate on the write
+// side and is deferred on the read side.
 func (Domain) InstallsGate(env statelog.Envelope) bool {
-	return OpKind(env.Op) == OpRemove
+	return RecordEnvelope{Op: OpKind(env.Op)}.InstallsGate()
 }
 
 // Tables is every durable table this domain writes, with its class.

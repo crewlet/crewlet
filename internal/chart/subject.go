@@ -3,6 +3,7 @@ package chart
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -110,9 +111,30 @@ const (
 	// reason [KindTree] does not: a key is an address, and the object that
 	// takes it is what the apply writes. The record enumerates that object.
 	KindRekey ObjectKind = "rekey"
+
+	// KindEviction is a node's removal from THIS log, or its readmission.
+	//
+	// ONE SUBJECT PER NODE, so two operators evicting two nodes never
+	// contend and two evicting one do. It is the domain's own copy of the
+	// gate every state log installs: the record states a POSITION, and
+	// every node then reaches the same verdict about every record with no
+	// clock, no coordination read and no agreement beyond the order they
+	// already share — which is what makes it the fence that still holds
+	// when coordination cannot be reached at all.
+	KindEviction ObjectKind = "eviction"
+
+	// KindGeneration is a reanchor's own record, create-only at an
+	// expectation of zero on a fresh stream.
+	//
+	// It is what makes a reanchor reproducible rather than an event that
+	// happened to a fleet: the new stream's first record says which
+	// generation it opens, what the previous one's last seen sequence was,
+	// and who asked — so a replay writes the audit row rather than a
+	// recovery having to be remembered.
+	KindGeneration ObjectKind = "generation"
 )
 
-// ObjectKinds are the five, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the seven, and THE ORDER IS LOAD-BEARING.
 //
 // [statelogtest] publishes the FIRST THREE a domain declares, twice each, in
 // order — so the declaration decides what the framework's own suite certifies,
@@ -126,6 +148,7 @@ const (
 // replay — so any other order would certify a failure rather than a domain.
 var ObjectKinds = []ObjectKind{
 	KindTree, KindUnit, KindSeat, KindBarrier, KindRekey,
+	KindEviction, KindGeneration,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -134,7 +157,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// FOUR OF FIVE DO. The barrier shares one subject across the whole domain, so
+// SIX OF SEVEN DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
 // other one and write an anchor row per read into the transaction holding this
 // store's only writer.
@@ -143,13 +166,17 @@ func (k ObjectKind) Arbitrated() bool { return k != KindBarrier }
 // SentinelScoped reports whether a record on this kind may state the
 // exactly-the-subject sentinel as its scope.
 //
-// THREE OF FIVE MAY, and for two different reasons. A unit and a seat are rows
-// the scope alphabet renders, so "exactly the object my subject names" is a
-// path. The BARRIER may too, and its sentinel resolves to the framework's own
+// FIVE OF SEVEN MAY, and for three different reasons. A unit and a seat are
+// rows the scope alphabet renders, so "exactly the object my subject names" is
+// a path. The BARRIER may too, and its sentinel resolves to the framework's own
 // [statelog.BarrierScope] rather than to anything in this alphabet — which is
 // the whole point of it, since a barrier writes no row and a scope that
 // intersected anything would make every linearizable read wait behind every
-// other.
+// other. An EVICTION and a GENERATION may because each writes exactly one row
+// keyed on its own subject, and neither touches an object in the chart at all:
+// what their sentinel resolves to is the whole chart, which is honest — a gate
+// that drops a node's records concerns every object that node might have
+// written.
 //
 // The STRUCTURE and a KEY CLAIM may not. Neither names a row, so a sentinel on
 // one of them has no narrower path than the whole chart — and a record that
@@ -163,7 +190,11 @@ func (k ObjectKind) Arbitrated() bool { return k != KindBarrier }
 // kind that is sentinel-scoped in one place and not the other, and the two
 // disagree the first time a writer takes the shorter path.
 func (k ObjectKind) SentinelScoped() bool {
-	return k == KindUnit || k == KindSeat || k == KindBarrier
+	switch k {
+	case KindUnit, KindSeat, KindBarrier, KindEviction, KindGeneration:
+		return true
+	}
+	return false
 }
 
 // Subject is the object a record arbitrates over.
@@ -213,6 +244,27 @@ func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
 // is written.
 func RekeySubject(key string) Subject {
 	return Subject{Kind: KindRekey, ID: NormalizeKey(key)}
+}
+
+// EvictionSubject names one node's gate on this log.
+//
+// ONE SUBJECT PER NODE, so two operators evicting two nodes never contend and
+// two evicting one do — which is the arbitration an eviction actually needs.
+// The id is NOT normalised: a node id is not an address a person types, it is
+// what that node published as its own writer, and folding it here would make
+// the gate miss every record the node wrote.
+func EvictionSubject(nodeID string) Subject {
+	return Subject{Kind: KindEviction, ID: nodeID}
+}
+
+// GenerationSubject names one reanchor.
+//
+// The id is the generation number, which is what makes the record create-only:
+// a second reanchor to one generation is the same subject at an expectation
+// that is no longer zero, and the broker refuses it.
+func GenerationSubject(generation uint32) Subject {
+	return Subject{Kind: KindGeneration,
+		ID: strconv.FormatUint(uint64(generation), 10)}
 }
 
 // String renders the subject's own path — what the framework appends to the

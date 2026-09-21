@@ -139,6 +139,36 @@ file, and nothing here is in the coordination store.
 | `chart_leads` | One unit's authored lead, as an edge. Lead *inheritance* means the effective lead of a team is an ancestor's authored row, so this is walked rather than read |
 | `chart_history` | One row per change: what happened, to what, by whom, from which config revision, and when |
 | `chart_import_ledger` | Which config revision produced which position on the log, and how many objects it placed. This is what makes a re-activation a no-op, and it is where you look to answer "which revision is this company's structure actually running" |
+| `chart_removed` | What the chart no longer names, with the record that removed it and the reason given. A removal is the one operation here with no inverse — nothing ever names a removed object again — so the row is what stops a redelivery writing the object back, and it **outlives the record**: a removal below the trim floor has nothing on the log left to prove it happened |
+| `chart_evictions` | Which nodes the fleet has stopped counting on this log, and from which position. Every node reaches the same verdict about every record from it, with no clock and no coordination read — which is what makes it the fence that still holds when coordination cannot be reached at all |
+| `chart_log_generations` | One row per reanchor: which generation the new stream opened at, what the previous one's high-water mark was, and who asked |
+
+### What the applier writes, and what it deliberately does not
+
+A **unit and a seat each have two writers**, on two different subjects: the
+object's own content, and its placement in the tree. They arbitrate separately
+and land in either order, so each apply reads the row, changes **only its own
+half**, and writes the whole thing back. A content record that could set a
+parent would reparent a team from a change that never mentioned the tree; a
+placement that could set a name would revert a rename nobody made. The same
+rule is why a placement for an object whose content has not arrived yet is
+**normal rather than broken**: an import publishes the structure first, and
+each object's content follows on its own subject.
+
+**Nothing here is derived.** There is no table of effective leads, no expanded
+`manages:` set, no "who manages whom" the applier computes. Every one of those
+is a function of the tree at the moment it is read, and a derived value written
+down is a second answer that goes stale the moment an ancestor moves — with
+nothing to recompute it, because the change that moved the ancestor never named
+the row that went stale. The engine derives them on the way out instead; see
+[Organization Model](organization-model.md).
+
+**A rename moves the structure and leaves the text alone.** When a unit's key
+changes, every child's parent and every seat's unit follow it in the same
+commit, so no read ever sees a reference to a key nothing answers to. A
+`manages:` entry naming the old key is **not** rewritten: it is what somebody
+typed, the retired key goes on resolving, and editing it here would change a
+document nobody edited — which the next config apply would undo anyway.
 
 Both edge tables store **what was authored**, including an entry that resolves
 to nothing. A `manages:` naming a seat nobody has added yet is kept as written:

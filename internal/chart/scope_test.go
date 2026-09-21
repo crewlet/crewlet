@@ -19,13 +19,22 @@ import (
 // reads names a path and not a reason. The alphabet is designed so the widest
 // thing an ordinary record can say is "this unit and the seats in it".
 //
-// THE ONE EXCEPTION IS A BATCH PAST [chart.MaxScopeTerms], which is the case
+// THE FIRST EXCEPTION IS A BATCH PAST [chart.MaxScopeTerms], which is the case
 // below: an import that rewrites more than sixty-four objects IS a
 // reorganisation of the company, and the root term is the honest blast radius
 // for one rather than an enumeration that cannot be stated.
 //
+// THE SECOND IS THE TWO GATE KINDS, which are listed here rather than skipped
+// by a predicate: an eviction and a generation write no object row at all, and
+// what each decides is whether records on EVERY subject count — so the root is
+// what they mean rather than what they widened to. An eviction does not even
+// pay the cost that makes the root dangerous, because it installs a gate: a
+// version this build cannot read stops the applier instead of being filed at
+// this path. A generation does pay it, and correctly, for the reason the
+// alphabet gives at [chart.KindGeneration].
+//
 // This walks the DECLARED kinds rather than a list of its own, so a kind added
-// later is covered by adding it to the enum and nothing else.
+// later is covered by adding it to the enum and a verdict here.
 func TestNoRecordKindProducesTheRootScope(t *testing.T) {
 	t.Parallel()
 
@@ -36,6 +45,13 @@ func TestNoRecordKindProducesTheRootScope(t *testing.T) {
 	}
 	if len(chart.ObjectKinds) == 0 {
 		t.Fatal("the domain declares no kinds, so this guard walks nothing")
+	}
+
+	// THE EXPECTATION IS WRITTEN OUT rather than read from the alphabet,
+	// for the reason the sentinel case gives: asking the code what it
+	// expects makes the walk pass for whatever the code happens to say.
+	saysRoot := map[chart.ObjectKind]bool{
+		chart.KindEviction: true, chart.KindGeneration: true,
 	}
 
 	for _, kind := range chart.ObjectKinds {
@@ -52,12 +68,20 @@ func TestNoRecordKindProducesTheRootScope(t *testing.T) {
 					"record makes nothing stale, which is the one claim a record " +
 					"no build may be able to read cannot make")
 			}
-			if slices.Contains(paths, root) {
+			at := slices.Contains(paths, root)
+			if want := saysRoot[kind]; at != want {
+				if want {
+					t.Errorf("a %s record resolves to %v and not the root %q — "+
+						"a gate decides whether records on every subject count, "+
+						"and a narrower scope is a claim it does not make",
+						kind, paths, root)
+					return
+				}
 				t.Errorf("a %s record resolves to %q, the root of the whole "+
 					"chart — while it is deferred, every read and every write in "+
-					"the company is behind it. Only a batch past %d terms may say "+
-					"that, and it says so deliberately: see BatchScope",
-					kind, root, chart.MaxScopeTerms)
+					"the company is behind it. Only a batch past %d terms and "+
+					"the two gate kinds may say that, and each says so "+
+					"deliberately: see BatchScope", kind, root, chart.MaxScopeTerms)
 			}
 		})
 	}
@@ -198,11 +222,17 @@ func TestAnUnreadableScopeWidensToTheWholeChart(t *testing.T) {
 // THE SENTINEL IS REFUSED WHERE IT WOULD WIDEN SILENTLY.
 //
 // A unit and a seat are rows the alphabet renders, and the barrier's sentinel
-// resolves to the framework's own scope. The structure and a key claim name no
-// row at all — so a sentinel there has no narrower path than the whole chart,
-// and a writer that took the shortcut would produce a record that blocks the
-// company while looking, in the row an operator reads, like one that touched
-// one seat.
+// resolves to the framework's own scope. An eviction and a generation are the
+// two whose sentinel DOES resolve to the whole chart and are allowed it
+// anyway, because that is what a gate is about — each decides whether records
+// on every subject count, so anything narrower would be a claim the record
+// does not make.
+//
+// The structure and a key claim name no row at all — so a sentinel there has
+// no narrower path than the whole chart either, and there it is a widening
+// rather than a statement: a writer that took the shortcut would produce a
+// record that blocks the company while looking, in the row an operator reads,
+// like one that touched one seat.
 func TestTheSentinelIsRefusedOnASubjectThatNamesNoRow(t *testing.T) {
 	t.Parallel()
 
@@ -212,11 +242,13 @@ func TestTheSentinelIsRefusedOnASubjectThatNamesNoRow(t *testing.T) {
 	// expects makes the case pass for every value the predicate could take,
 	// including "true for everything".
 	want := map[chart.ObjectKind]bool{
-		chart.KindUnit:    true,
-		chart.KindSeat:    true,
-		chart.KindBarrier: true,
-		chart.KindTree:    false,
-		chart.KindRekey:   false,
+		chart.KindUnit:       true,
+		chart.KindSeat:       true,
+		chart.KindBarrier:    true,
+		chart.KindEviction:   true,
+		chart.KindGeneration: true,
+		chart.KindTree:       false,
+		chart.KindRekey:      false,
 	}
 	if len(want) != len(chart.ObjectKinds) {
 		t.Fatalf("this case classifies %d kinds and the domain declares %d — a "+
@@ -332,6 +364,10 @@ func canonical(kind chart.ObjectKind) (chart.Subject, chart.ScopeSet) {
 		return chart.RekeySubject("platform"), chart.BatchScope([]chart.ScopeTerm{
 			{Kind: chart.TermUnit, ID: "platform"},
 		})
+	case chart.KindEviction:
+		return chart.EvictionSubject("node-b"), chart.ScopeSet{Subject: true}
+	case chart.KindGeneration:
+		return chart.GenerationSubject(2), chart.ScopeSet{Subject: true}
 	}
 	panic(fmt.Sprintf("chart: the scope guard has no canonical record for kind %q "+
 		"— a kind added to the enum without one would be skipped rather than "+

@@ -395,6 +395,12 @@ var allowedReplicatedWriter = []allowance{
 			"claim no identity, but they are still written only from a " +
 			"committed record.",
 	},
+	{
+		Prefix: "internal/chart/apply", Kind: mechanism,
+		Why: "The org chart's applier, across the files it is split over: " +
+			"the record and its two gates, the object rows, the structure " +
+			"and the history.",
+	},
 
 	{
 		Prefix: "internal/learning/memsync/codec.go", Kind: notReplicated,

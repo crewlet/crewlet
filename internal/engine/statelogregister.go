@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
@@ -228,6 +229,48 @@ func register() []registration {
 				bytes, derived := stream.PagesMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
 					Field: "stream.pages_log_max_bytes", Explicit: !derived}
+			},
+		},
+		{
+			Domain: chart.Domain{},
+			NewApplier: func(s *stateLog) (statelog.Applier, error) {
+				// NO REBUILD LISTENER YET, and nil is what the applier
+				// documents as "nobody is listening" rather than a wire
+				// somebody forgot. The company view a turn reads is
+				// derived from these rows and is what will take this
+				// seam; until the engine holds one, the applier's own
+				// change set is drained and dropped, which is precisely
+				// what an unobserved domain should cost.
+				//
+				// It cannot be the change feed instead: a feed relays a
+				// record to ONE node, and a derived view is held by
+				// every node — so the rest would go on serving a chart
+				// they had already applied and could not see they had.
+				return chart.NewApplier(s.nodeID, nil), nil
+			},
+			NewSeams: func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
+				rows, err := chart.NewRows(s.db)
+				if err != nil {
+					return writeSeams{}, err
+				}
+				fence := chart.NewFence(s.db, s.nodeID)
+				fence.Cursor = runner.Committed
+				fence.Floor = s.trimFloor(chart.Domain{}.Name(),
+					func() uint32 { return runner.Committed().Generation })
+				return writeSeams{Rows: rows, Fence: fence,
+					Gates: chart.NewGates(s.db), Evicted: fence.Evicted}, nil
+			},
+			Barrier:      chart.EncodeBarrier,
+			OpsRetention: statelog.OpsRetention,
+			Participates: everyNode,
+			// THE ONE CEILING THAT IGNORES THE FREE BYTES, and the
+			// signature keeps the parameter so the table stays one
+			// shape: a chart is sized from the corpus rather than from
+			// the operator's disk — see [config.Stream.ChartMaxBytes].
+			Ceiling: func(stream config.Stream, _ int64) domainCeiling {
+				bytes, derived := stream.ChartMaxBytes()
+				return domainCeiling{Bytes: bytes,
+					Field: "stream.chart_log_max_bytes", Explicit: !derived}
 			},
 		},
 	}

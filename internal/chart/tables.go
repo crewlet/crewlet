@@ -45,6 +45,20 @@ var ReproducibleTables = []string{
 	// And the import ledger: which company revision produced which
 	// position on this log.
 	"chart_import_ledger",
+
+	// THE THREE GATE TABLES, which are not the objects a record writes but
+	// the state an apply reads BEFORE it writes anything — and each is
+	// reproducible for the same reason its gate is trustworthy: the record
+	// that installs it is on this log, in this order, and every node
+	// reaches the same verdict from it with no clock and no coordination
+	// read.
+	//
+	// They also OUTLIVE the records that wrote them. A removal below the
+	// trim floor has no record left on the log to prove it happened, and
+	// `chart_removed` is what still says so — which is what a replay from a
+	// snapshot reproduces and what a write fence reads before publishing at
+	// an expectation of zero.
+	"chart_evictions", "chart_log_generations", "chart_removed",
 }
 
 // MachineryTables are the log's own, excluded from the audit and from the

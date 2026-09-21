@@ -2,6 +2,25 @@
 
 The organization model (`internal/org`) is the foundational data structure representing the company hierarchy. It determines how agents communicate, what knowledge they can access, who they report to, and how tasks flow.
 
+**This page is about what you author and what the engine derives from it.** Where
+the authored chart is *stored* — as an ordered log with one SQL copy per node,
+rather than as a nested object inside the company document — is
+[The Org Chart Domain](chart-domain.md). The division is the same one that runs
+through this whole page: those tables hold what somebody wrote, and every
+derivation below is computed from them on the way out rather than written down
+beside them. A derived value written down is a second answer that goes stale the
+moment an ancestor moves, with nothing to recompute it — because the change that
+moved the ancestor never named the row that went stale.
+
+Three things on this page are derived and therefore stored nowhere:
+
+- **A unit's effective lead**, which is a walk up the tree from the unit that
+  declares none. Only the *authored* lead is a row.
+- **What a `manages:` entry expands to**, when it names a unit: every seat in
+  that unit's subtree, as the subtree stands when the entry is read.
+- **Who manages a seat**, which is the other end of an edge only one end of
+  which is authored.
+
 ---
 
 ## Flexible Hierarchy
@@ -50,10 +69,6 @@ Role (a SEAT: can live at root level OR inside a unit)
 ├── Kind RoleKind                      (agent | human; default agent)
 ├── Name string                        (DISPLAY, plus the source of the derived
 │                                       handle: nothing references a seat by it)
-├── ID string                          (`id`: a stable identity for a record
-│                                       outside this document to bind to. NOT
-│                                       what references the seat — that is the
-│                                       handle)
 ├── Responsibilities, BehavioralGuidelines []string
 ├── Contact *HumanContact              (human seats: slack_user_id,
 │                                       mattermost_user_id, atlassian_account_id,

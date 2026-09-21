@@ -3,6 +3,7 @@ package chart
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -242,6 +243,62 @@ type RekeyPayload struct {
 	FormerKey string `json:"former_key"`
 }
 
+// Eviction gates one node's records on this log, or readmits it. Its subject is
+// [KindEviction].
+//
+// PINNED AT [GateRecordVersion], like [RemovePayload]: see [OpEviction].
+//
+// THE POSITION IS NOT ON THE PAYLOAD, and that is the whole design of the gate.
+// The window is the EVICTION RECORD'S OWN position on this log, which every
+// node already has and none of them has to agree about — so there is no clock,
+// no coordination read, and no field a writer could set wrong. A payload
+// carrying its own position would be a second answer to a question the log
+// already answers, and the two would differ exactly when the record was
+// republished by a reanchor.
+type Eviction struct {
+	V int `json:"v"`
+
+	// NodeID is the node whose records are dropped. NOT folded: a node id
+	// is what that node published as its own writer rather than an address
+	// a person types, and normalising it here would make the gate miss
+	// every record it was installed for.
+	NodeID string `json:"node_id"`
+
+	// Readmit turns the record into the INVERSE COMMIT rather than a
+	// delete, so an eviction's whole history survives a replay and a node
+	// that was evicted, readmitted and evicted again reads correctly rather
+	// than as one long absence.
+	Readmit bool `json:"readmit,omitempty"`
+
+	// By is the operator who asked, for the row an operator reads later.
+	By string `json:"by,omitempty"`
+}
+
+// Generation is a reanchor's own record, on [KindGeneration]: create-only at an
+// expectation of zero on the new stream.
+//
+// IT IS WHAT MAKES A REANCHOR REPRODUCIBLE rather than an event that happened
+// to a fleet. A replay of the new stream writes this audit row, so a node that
+// joined afterwards knows the recovery took place and what it covered, without
+// anybody having to have remembered it.
+type Generation struct {
+	V int `json:"v"`
+
+	// Generation is the number the new stream opens at.
+	Generation uint32 `json:"generation"`
+
+	// PrevLastSeqSeen is the last sequence any node reported having applied
+	// on the PREVIOUS stream — the high-water mark the reanchor preserved.
+	PrevLastSeqSeen uint64 `json:"prev_last_seq_seen,omitempty"`
+
+	// NewStreamCreatedAt is the broker's creation instant for the new
+	// stream, which is what a node compares against to tell a stream that
+	// was recreated from one it merely lost its place on.
+	NewStreamCreatedAt time.Time `json:"new_stream_created_at,omitzero"`
+
+	By string `json:"by,omitempty"`
+}
+
 // DecodeMutation reads the typed payload for one record.
 //
 // THE DISPATCH IS ON (kind, op) AND NOTHING ELSE, so a record whose pair this
@@ -261,6 +318,10 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[SeatPayload](rec)
 	case rec.Subject.Kind == KindRekey && rec.Op == OpRekey:
 		return decodePayload[RekeyPayload](rec)
+	case rec.Subject.Kind == KindEviction && rec.Op == OpEviction:
+		return decodePayload[Eviction](rec)
+	case rec.Subject.Kind == KindGeneration && rec.Op == OpGeneration:
+		return decodePayload[Generation](rec)
 	case rec.Subject.Kind == KindBarrier && rec.Op == OpBarrier:
 		// THE ONE PAYLOAD-FREE RECORD, and nil is its value rather than
 		// an absence: the applier's switch has a case for it that writes

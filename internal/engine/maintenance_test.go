@@ -53,6 +53,12 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// every recall scanned, forever.
 		"agent_diary",
 		"agent_diary_long",
+		// THE CHART'S TWO, on the same terms as every other domain's:
+		// the anchor table a strict domain writes one row per arbitrated
+		// subject into, and the operation ledger a retrying writer asks
+		// "did mine land" of. Both answer "recently" rather than "ever".
+		"chart_anchors",
+		"chart_ops",
 		"conversation_sessions",
 		// Added the same way the diary was: the table shipped with a
 		// memsync entry that republishes every row to every peer on
