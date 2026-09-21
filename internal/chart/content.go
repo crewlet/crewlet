@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -16,7 +16,7 @@ import (
 //
 // Every HTTP surface that serves a chart masks its credentials — a read that
 // returned them would publish the company's secrets to anyone who could read
-// its configuration. The mask is a distinctive literal ([config.Redacted])
+// its configuration. The mask is a distinctive literal ([redact.FieldMask])
 // rather than an empty string, because an operator who deliberately CLEARED a
 // credential has said something and a round trip that erased the difference
 // would turn "no credential" into "the credential I could not see".
@@ -234,7 +234,7 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 func (w *Writer) resolveMasked(ctx context.Context, object ObjectRef,
 	field, value, prior string) (string, error) {
 
-	if value != config.Redacted {
+	if value != redact.FieldMask {
 		return w.sealValue(ctx, object, field, value)
 	}
 	if prior == "" {
@@ -243,7 +243,7 @@ func (w *Writer) resolveMasked(ctx context.Context, object ObjectRef,
 			"it where a credential belongs, and clearing the field would "+
 			"undo a value you did not mean to touch. Send the value, or "+
 			"leave the field out: %w",
-			field, object, config.Redacted, ErrRefused)
+			field, object, redact.FieldMask, ErrRefused)
 	}
 	// THE STORED VALUE, VERBATIM. It is already a reference or already a
 	// sealed literal's reference, so it is not re-sealed: sealing it again

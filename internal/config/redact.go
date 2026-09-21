@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // Redacted is what a masked credential reads as on every HTTP surface.
@@ -15,7 +16,13 @@ import (
 // would let a round trip turn "no credential" into "the credential I could
 // not see". It is also what [RestoreRedacted] looks for, so the marker is a
 // contract rather than decoration.
-const Redacted = "__redacted__"
+//
+// IT IS AN ALIAS NOW, and the value lives in [redact.FieldMask]. The org
+// chart's own write path has to recognise the marker to restore it, and that
+// path cannot import this package: the chart is read by the organization
+// model, which this layer is built on. Spelled twice it would drift, and the
+// drift is a working credential replaced by twelve characters.
+const Redacted = redact.FieldMask
 
 // secretTag marks a field that holds a credential.
 //
