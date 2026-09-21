@@ -442,6 +442,47 @@ describe("the frame's layout", () => {
     ).toBeGreaterThan(css.indexOf("@media (max-width: 960px)"));
   });
 
+  // THE BRAND MARK IS BOUNDED, NEVER SIZED.
+  //
+  // `crewlet-icon.svg` is 1467x978 and MEETS its box, so a box whose own ratio
+  // is not 3:2 draws the mark smaller than the box and pads the rest. It has
+  // been given such a box TWICE: a 24px square, which drew 24x16 of mark in a
+  // cell 96px wide; and then `height: var(--control-h)` with a `max-width`,
+  // which looks like it preserves the ratio and does not — the clamp shrinks
+  // the width and leaves a height the author stated, so the 48px column got a
+  // 39x32 box at ratio 1.219 and the mark letterboxed inside it again.
+  //
+  // What holds is a MAXIMUM on each axis over the file's own intrinsic size:
+  // whichever binds decides the box and the other derives from the ratio. So
+  // the invariant is not a number, it is the SHAPE of the rule — no definite
+  // width and no definite height, and a maximum on both. A definite size on
+  // either axis is the bug, whatever value it carries.
+  //
+  // Asserted in the SHEET because there is nowhere else: jsdom computes no
+  // layout, so every suite that renders the rail stays green through all of
+  // it, and the ratio is the SVG's own rather than anything the DOM exposes.
+  // Measured in Chromium at 1200px: 48.00x32.00 open and 39.00x26.00 in the
+  // 48px column, against 39.00x32.00 under the clamp.
+  test("the rail's brand mark is bounded on both axes, and sized on neither", () => {
+    const b = block(sheet("frame.css"), ".rail-brand img");
+    // BOTH maxima, or the axis without one is unbounded: no `max-height` and
+    // the mark takes the whole intrinsic 978px of the band; no `max-width` and
+    // the 48px column gets a mark wider than the column.
+    expect(b, "the band no longer bounds the mark's height").toMatch(
+      /max-height:\s*var\(--control-h\)/,
+    );
+    expect(b, "the column no longer bounds the mark's width").toMatch(/max-width:\s*calc\(/);
+    // AND NEITHER AXIS IS SIZED. `auto` is the only value that lets the other
+    // maximum transfer through the intrinsic ratio; anything definite is a
+    // used value the clamp on the other axis never revisits.
+    expect(b, "a definite width stops the height deriving from the file").toMatch(
+      /(^|;)\s*width:\s*auto/,
+    );
+    expect(b, "a definite height is what letterboxed the 48px column").toMatch(
+      /(^|;)\s*height:\s*auto/,
+    );
+  });
+
   // A RESET DOES NOT TAKE THE FOCUS RING WITH IT.
   //
   // `all: unset` is how a <button> becomes a plain box, and `all` is every
