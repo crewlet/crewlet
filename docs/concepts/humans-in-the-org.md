@@ -165,7 +165,9 @@ sharing one would misattribute the person's activity to the agent.
 - **Lead roster**: a human member renders with its handle and a
   **human teammate** marker, its background, goal and responsibilities,
   its resolved contact IDs, its availability, and hand-off guidance
-  (assign in the PM tool and mention; no engine turn expected).
+  (assign in the PM tool and mention; no engine turn expected). On a
+  large team that full block may not fit — see
+  [a capped roster](#a-capped-roster-still-names-the-people-on-it) below.
 - **`## Human colleagues` contract block**: appears in the executor prompt
   *only when the org contains human seats*. Reach humans on external
   surfaces, never through `a2a_ask`; they reply asynchronously, so leave
@@ -184,6 +186,30 @@ sharing one would misattribute the person's activity to the agent.
   `Sarah Chen (sarah-chen, human colleague)` instead of an opaque account
   ID. Counterparty profiles accrue for humans like anyone else (they are
   keyed by handle).
+
+### A capped roster still names the people on it
+
+A lead's roster and its `Direct reports:` line share one **1,000-token
+allowance** — see [the roster allowance](turn-engine.md#the-roster-allowance)
+for why, and for the full ladder. A human seat is the most expensive thing a
+roster renders (~193 tokens against an agent's ~119, because a person also
+carries contact IDs, availability and hand-off guidance), so on a team of any
+size some of them will be past the first rung. What a lead sees then:
+
+| Where the seat falls | What the lead is told about them |
+|---|---|
+| **Full profile** | Everything in the list above |
+| **Name and handle only** | `- **Sarah Chen** (sarah-chen) — **human teammate**`. The marker survives the cap deliberately: without it Sarah reads as an agent that can simply be asked, and the lead waits for a turn that is never coming. What it loses is her background, her contact IDs and her availability — so the lead knows *who* to hand the work to and calls `lookup_colleague` for *how* to reach her |
+| **Past the cap** | Counted in ``and N more — `lookup_colleague` names them``. She is still a colleague, still managed, still resolvable by name, handle or contact ID — she is simply not described in this prompt |
+
+Two things are deliberately not affected. **The cap is rendering, never
+authorization**: a human report the roster had no room to describe is still
+managed, still in `manages`, still in every walk of the chart, and still on
+the dashboard's own org chart. And **`lookup_colleague` is uncapped**: it
+resolves any seat in the company and answers a human match with the contact
+IDs, the reminder that they are reached with a mention and answer
+asynchronously, and that `a2a_ask` will not reach them — which is exactly what
+a roster line that fell to rung 2 or 3 stopped saying.
 
 ---
 

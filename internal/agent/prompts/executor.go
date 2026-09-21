@@ -203,13 +203,20 @@ const workersPreamble = "Short-lived workers you can hand narrowly-scoped work "
 // actor met an unforeseen choice with no policy, no roster and no mission to
 // make it against.
 func BuildExecutor(seat Seat, in ExecutorInput) string {
+	// ONE counter for BOTH renderings of this seat's direct reports — the
+	// identity line's name list and the roster's profiles. Planned once,
+	// here, because the two sections are two views of one team and a cap
+	// each would let them disagree about who is on it while the prompt paid
+	// for both budgets. See [planRoster].
+	reports := planRoster(seat, newRosterAllowance(rosterAllowanceTokens))
+
 	body := joinSections(
-		BuildIdentitySection(seat),
+		BuildIdentitySection(seat, reports),
 		BuildOrgMissionVisionSection(seat),
 		BuildRoleProfileSection(seat),
 		BuildUnitContextSection(seat),
 		BuildPoliciesSection(seat),
-		BuildRosterSection(seat),
+		BuildRosterSection(seat, reports),
 		BuildHumanColleaguesNote(seat),
 	)
 

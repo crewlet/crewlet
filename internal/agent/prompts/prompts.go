@@ -8,8 +8,11 @@
 // "## Personal memory" / "## Relevant knowledge" prefetch blocks.
 //
 //   - Executor — identity + role profile + unit context + org mission/vision +
-//     full policies + roster (with team-member profiles for leads) +
-//     tool-skills catalogue + tool catalogue + the executor's contract.
+//     full policies + roster (team-member profiles for leads, for as many
+//     reports as the ONE roster allowance pays for; then names; then a line
+//     naming the tool that finds the rest — see rosterAllowanceTokens, the
+//     only budget in this package the prompt itself enforces) + tool-skills
+//     catalogue + tool catalogue + the executor's contract.
 //   - Review — one-line identity + the round's evidence + the decision enum.
 //     No policies, no roster, no catalogue: the reviewer judges one round's
 //     record and needs nothing else.

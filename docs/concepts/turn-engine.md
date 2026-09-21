@@ -114,7 +114,29 @@ In both, the flat question is the answer — so the check is strictly stricter t
 
 `no_action` is narrowly scoped: it means **"nobody was actually asking the agent to do anything"** — informational triggers, passing references, broadcasts where the addressee was clearly someone else. When the agent *was* directly asked / @mentioned / assigned but is declining (out of scope, wrong owner, already handled, deferring), it must instead post a brief explanation via the originating channel's reply tool and report that as `delivered`. A direct request answered with silence looks like the ping was lost; the one-line decline closes the loop. The executor's contract enforces this in prose, the decoder enforces it in code, and each third-party app's notification prompt carries the same rule on the triage side.
 
-The per-phase headers are deliberately verbose — each rule traces to an observed turn-ending failure, and `internal/agent/prompts/budget_test.go` holds them under explicit token budgets (executor < 2,200, review < 750, and the whole turn < 3,000) so the prose can't grow unchecked. The repeated cost of re-sending these static headers on every round of the tool loop is absorbed by **[provider prompt caching](overview.md#llm-provider)**, not by trimming the guidance: the `system + tools` prefix is byte-stable within a phase and across an agent's turns, so it is cached and re-read cheaply rather than re-billed each round. Slimming a header to save tokens is therefore the wrong trade — it re-opens the incidents the rules were added to close, for a saving caching already captures.
+The per-phase headers are deliberately verbose — each rule traces to an observed turn-ending failure, and `internal/agent/prompts/budget_test.go` holds them under explicit token budgets (executor < 2,200, review < 800, and the whole turn < 4,000) so the prose can't grow unchecked. The repeated cost of re-sending these static headers on every round of the tool loop is absorbed by **[provider prompt caching](overview.md#llm-provider)**, not by trimming the guidance: the `system + tools` prefix is byte-stable within a phase and across an agent's turns, so it is cached and re-read cheaply rather than re-billed each round. Slimming a header to save tokens is therefore the wrong trade — it re-opens the incidents the rules were added to close, for a saving caching already captures.
+
+---
+
+## The roster allowance
+
+One section does not grow with the diff — it grows with the company. A lead's direct reports are rendered **twice**: as a name list on the identity block's `Direct reports:` line, and as a profile block each under `## Your Team`. Both used to render every report, and neither stopped. A full agent profile measures ~119 tokens and a human's ~193 (a person also carries contact IDs, availability and hand-off guidance), so a lead of 25 measures ~4,028 tokens of roster alone — more than the *whole turn's* budget was. **A lead of an ordinary unit could not be prompted at all.**
+
+The two renderings now share **one allowance of 1,000 tokens**, spent from a single counter. One counter and not one each, because two caps of a thousand let the prompt pay two thousand: neither knows what the other spent, and nothing above them adds the two up. The counter is charged for *both* renderings of every report it admits, which is also why the two sections can never name different people.
+
+What the counter buys is a ladder, and a lead reads it in this order:
+
+| Rung | What renders | What it buys |
+|---|---|---|
+| **1 — full profile** | name, handle, background, goal, responsibilities; for a human, contact IDs, availability and hand-off guidance | What a lead actually assigns work from. Capped at **half** the allowance, because a profile costs 119–193 tokens against 7–12 for a name: undivided, it buys six profiles and then cannot afford the seventh colleague's *name* |
+| **2 — name and handle** | `- **Ana Ruiz** (ana-ruiz)`, and `— **human teammate**` where the seat is a person | That the team does not end at the last profile. The human marker survives the cap deliberately: it is how the lead knows this colleague answers asynchronously rather than taking an engine turn |
+| **3 — the closing line** | ``and 461 more — `lookup_colleague` names them`` | The only rung that gives the lead a **move**. It names the tool because a model told only that colleagues were omitted has nothing to do about it, and invents the missing names instead. Its cost is reserved *before* the first profile, so a truncated roster can never claim to be the whole team |
+
+The ladder only ever descends: a report that will not fit at rung 1 sends every later one to rung 2, so the profiles are the head of the chart's own order rather than whichever colleagues happened to have a short backstory. What this costs in practice: a lead of 25 gets three full profiles and **names every one of its reports**; a lead of 500 gets three full profiles, ~36 more names, and a lookup for the rest.
+
+**The allowance caps rendering, never authorization.** `manages` is untouched — it is read from the chart on every lookup, a seat still manages every report the allowance had no room to describe, `lookup_colleague` resolves any of them, and the dashboard's own chart still shows the whole team. A cap read as an authorization cap would be a lead silently stripped of reports it is still accountable for; `TestCappingTheRosterDoesNotCapManages` exists to keep that reading from ever becoming true.
+
+The whole turn's budget rose from 3,000 to 4,000 for this, and the raise **is** the allowance: the turn's own prose measures ~2,806 with a 100-tool catalogue, a mixed company pays another ~152 for the `## Human colleagues` note, and a lead of 500 now measures ~3,838. The review prompt is unmoved — it renders a one-line identity naming the reviewer's *manager*, not its reports, so a lead of 500 and a lead of one measure the same 771.
 
 ---
 

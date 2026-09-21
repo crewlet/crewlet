@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -148,3 +149,62 @@ func (c *fakeCatalogue) Render(text string) string {
 	}
 	return text
 }
+
+// profiledReports is a lead with n direct reports, each carrying the kind of
+// profile a real company writes — two sentences of background, a goal and
+// three responsibilities — and every other seat held by a human, so both
+// renderings of a roster member are exercised.
+//
+// IT IS THE FIXTURE THE ROSTER ALLOWANCE WAS MEASURED AGAINST. The prose
+// below is what rosterAllowanceTokens' per-profile figures were read off, and
+// what every roster number in budget_test.go is a measurement of: editing it
+// moves all of them at once.
+func profiledReports(n int) *org.Organization {
+	lead := &org.Role{
+		Name:           "Engineering Lead",
+		DeclaredHandle: "lead",
+		Goal:           "Lead the engineering team.",
+	}
+	roles := []*org.Role{lead}
+	for i := range n {
+		name := fmt.Sprintf("Report %03d", i)
+		report := &org.Role{
+			Name: name,
+			Backstory: "Ten years building payment and ledger systems at " +
+				"high-volume marketplaces, most recently owning settlement " +
+				"for a two-sided market. Joined to make reconciliation " +
+				"something nobody downstream has to think about.",
+			Goal: "Keep the ledger correct and the settlement window under one hour.",
+			Responsibilities: []string{
+				"Own the ledger service and its schema",
+				"Review every migration that touches money",
+				"Carry the settlement pager one week in four",
+			},
+		}
+		if i%2 == 1 {
+			report.Kind = org.KindHuman
+			report.Contact = &org.HumanContact{SlackUserID: fmt.Sprintf("U0REPORT%03d", i)}
+			report.Availability = "CET business hours; replies within about four hours"
+		} else {
+			report.DeclaredHandle = fmt.Sprintf("report-%03d", i)
+		}
+		lead.Manages = append(lead.Manages, name)
+		roles = append(roles, report)
+	}
+	o := &org.Organization{
+		Name: "Acme",
+		Units: []*org.Unit{{
+			Name:  "Eng Team",
+			Type:  org.UnitTypeTeam,
+			Lead:  "Engineering Lead",
+			Roles: roles,
+		}},
+	}
+	o.Normalize()
+	return o
+}
+
+// bigLead is the seat every roster-allowance case is written against: a lead
+// whose team cannot possibly fit, so all three rungs of the ladder are
+// reachable and none of them is reached by accident.
+func bigLead(n int) Seat { return seatIn(profiledReports(n), "Engineering Lead") }
