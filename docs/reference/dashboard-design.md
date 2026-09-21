@@ -1816,18 +1816,36 @@ Four rules replace it, and each one names what it fixes.
    naming it in a band is a promise the wire cannot keep. It fails **empty**,
    which is the one way a panel cannot say it is broken: a turn that asked
    three colleagues renders exactly like a turn that spoke to nobody. Eight
-   types were banded that way. The loudest were the three A2A audit records —
-   *What else it did* advertised "colleagues" on their behalf, and an ask has
-   never once been drawn under that heading — and the rest were quieter
-   versions of the same thing: the scheduler's cron fire (the *trigger* of a
-   turn, already on the screen as the brief), the two records that say **no**
-   turn ran at all, the curator promoting a skill off a cluster of many turns,
-   and one reflection worker that holds the turn id and does not stamp it. The
-   bands name only turn-scoped types now, and the engine holds them there:
+   types were banded that way, and they split two ways once each was read
+   against its publisher.
+
+   **Four were the engine's omission, and were fixed there.** The loudest were
+   the three A2A audit records — *What else it did* advertised "colleagues" on
+   their behalf, and an ask had never once been drawn under that heading —
+   published from inside the asking turn's own tool loop by code already
+   holding its id. The fourth was a reflection worker stamping the turn id
+   onto every sibling record but not that one. All four carry `turn_id` and
+   `work_key` now and are back in their bands, so an ask finally appears on
+   the turn that made it.
+
+   **Four are facts about the event and stay out.** The scheduler's cron fire
+   is the *trigger* of a turn rather than work a turn did — it precedes every
+   turn id there could be, and the screen already renders it as the brief. Two
+   more are the records that say **no** turn ran at all. The last is the
+   curator promoting a skill off a cluster of many seats' turns, which names
+   none because there is no single right one to name.
+
+   The engine holds the line either way:
    `internal/events/types/turnbands_client_test.go` reads the dashboard's own
    declarations and fails the build both ways — on a band entry that can never
    fill, and on a kept-out type that has since *gained* a `turn_id` and is
-   therefore ready to come back.
+   therefore ready to come back, which is how the four repairs above announced
+   themselves. It covers the **absorbed** map too, on the same terms and for
+   the same reason: those rows are drawn, in the inventory below, so a type
+   there that the query cannot return is a line that never appears. The one
+   exception is declared rather than assumed — the live progress event is
+   stream-only and in no table, which is a different fact from a repair
+   somebody owes, and is kept on a roster of its own that says so.
 
    A band is not a rendering, though, and *What the turn was given* was
    rendering half of its own. `prompt.size` — a row of integers per phase,
