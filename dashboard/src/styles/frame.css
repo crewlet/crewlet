@@ -60,19 +60,30 @@
   /* Below this the detail rail becomes a drawer. The measured quantity is the
      LIST FLOOR: 444px is under the width a work row needs for a key, a title
      and an assignee. The threshold is that floor plus the chrome in front of
-     it, with the sidebar OPEN — 97 rail + 236 sidebar + 420 peek = 753, so
-     444px of list wants 1197. Narrower chrome reaches the same floor at a
-     narrower window, which is why the drawer threshold is not simply "small
-     screen" — it is this sum.
+     it, with the sidebar OPEN: the peek is 420px and the sidebar 236, so the
+     window has to carry those plus the rail plus the floor.
+
+     DERIVED AT THE WIDEST DENSITY, which is the half a single measurement
+     misses. `--rail-w` composes `2 * --space-2`, and every spacing token is
+     `calc(Npx * var(--density))` — so the rail is 94.11px compact, 97px
+     normal and 99.23px comfortable, and the sum it feeds is 1194.11, 1197
+     and 1199.23. A media query cannot read `--density` any more than it can
+     read `--peek-drawer-max`, so one number has to serve all three, and only
+     the LARGEST is safe: at 1197 a comfortable-density reader got the peek as
+     a column over a list of 441px between 1198 and 1199, which is the same
+     defect this paragraph exists to record, one density over. 1200 clears
+     the comfortable sum and is at most 6px conservative on compact — a drawer
+     where a column would just have fitted costs a reader nothing, and a
+     column over a list too narrow to read is the bug.
 
      IT WAS 1180, DERIVED WHEN `--rail-w` WAS A FLAT 80px. The rail became
-     `--rail-foot-w + 2 * --space-2 + 1px` above — 97px — and this sum was not
-     re-derived, so between 1181 and 1197 the peek stayed a column over a list
-     of 427–443px: below the floor this number exists to hold, at seventeen
-     widths of window, with nothing to report it. The floor is what was
-     measured; the threshold is arithmetic over it and the chrome, and it has
-     to be redone whenever either moves. */
-  --peek-drawer-max: 1197px;
+     `--rail-foot-w + 2 * --space-2 + 1px` above and this sum was not redone,
+     so between 1181 and 1200 the peek stayed a column over a list of
+     427–443px: below the floor this number exists to hold, at twenty widths
+     of window, with nothing to report it. The floor is what was measured; the
+     threshold is arithmetic over it, the chrome AND the density, and it has
+     to be redone whenever any of the three moves. */
+  --peek-drawer-max: 1200px;
 }
 
 /* ---- The application grid ------------------------------------------------
@@ -123,10 +134,10 @@
    explicitly sized track — so an unconditional fourth track reserved 420px
    of empty page at exactly the widths the drawer exists to rescue, and at
    ≤960 it also out-specified the two-column reset and kept the empty sidebar
-   track as well. 1198 rather than a `calc()` off the token because a custom
+   track as well. 1201 rather than a `calc()` off the token because a custom
    property cannot be read in a media query; `frame.test.ts` holds the two
    numbers against each other so they move together. */
-@media (min-width: 1198px) {
+@media (min-width: 1201px) {
   .app[data-peek="true"] {
     grid-template-columns:
       var(--rail-w) var(--sidebar-w) minmax(0, 1fr)
@@ -1087,8 +1098,8 @@
    widths with no peek column AND no drawer. Three numbers say one thing —
    `--peek-drawer-max`, that guard, and this — so `frame.test.ts` holds all
    three against each other. It held only two when the threshold moved from
-   1180 to 1197, which would have left 1181–1197 with neither. */
-@media (max-width: 1197px) {
+   1180 to 1200, which would have left 1181–1200 with neither. */
+@media (max-width: 1200px) {
   .peek-veil {
     display: block;
     position: fixed;

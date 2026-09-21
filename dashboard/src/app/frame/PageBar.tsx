@@ -38,9 +38,30 @@ export interface Crumb {
   mono?: boolean;
 }
 
+/**
+ * The trail, and it is a SCROLLPORT — so it is a tab stop.
+ *
+ * `.crumbs` scrolls sideways past its floor rather than clipping the ancestry
+ * as a box (see frame.css), and its scrollbar is not drawn, because on a bar
+ * this short it would sit on the baseline the trail is written on. Both of
+ * those together are what make the tab stop load-bearing rather than
+ * decorative: a pointer can drag a hidden scrollport and a trackpad can swipe
+ * it, but a keyboard reaches a scroll container's arrow keys only once it can
+ * be FOCUSED, and there is no other route to the overflowed crumbs — the links
+ * inside it are focusable and scroll into view, but the deepest trail this
+ * route table builds overflows on its ancestor SPANS, which are not links and
+ * take no focus of their own.
+ *
+ * `tabIndex={0}` on a region with no interactive role is the documented way to
+ * do it, and it is a stop the reader only meets where it does something: a
+ * trail that fits is not scrollable, so the browser gives focus and the arrow
+ * keys have nowhere to go. The `aria-label` was already here, which is what
+ * makes the stop announce itself as the breadcrumb rather than as a bare
+ * group.
+ */
 export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
   return (
-    <nav className="crumbs" aria-label="Breadcrumb">
+    <nav className="crumbs" aria-label="Breadcrumb" tabIndex={0}>
       {crumbs.map((crumb, i) => {
         const last = i === crumbs.length - 1;
         return (
