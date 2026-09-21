@@ -400,6 +400,13 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// applier announced to nothing would apply every record and push none,
 	// which on a fleet is the one failure mode a single node cannot show.
 	var e *engine.Engine
+	// NO CONTEXT TO PASS, and contextcheck cannot see why: the viewer
+	// resolution this builds IS context-threaded, but per SOCKET, at the
+	// moment a request arrives — [api.chatActorFor] returns a
+	// `func(context.Context)` and the hub calls it with the caller's own.
+	// What is built here is the long-lived hub, which outlives every
+	// context in this function including the attempt's.
+	//nolint:contextcheck // the viewer takes the request's context, not this one
 	chatLive := api.NewChatLive(api.ChatLiveOptions{
 		Company: func() *config.Company { return cfg },
 		Rooms:   func() stream.ChatRooms { return chatRooms(e) },
