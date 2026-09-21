@@ -59,44 +59,6 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 
 | Method | Path | Description |
 |--------|------|-------------|
-> **Auth.** Writes and every `/config`, `/secrets` and `/setup` route require
-> `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside those three)
-> serve without one unless `api.auth.allow_anonymous_read: false` is set, at
-> which point they need the same token — `/ws/stream` included, and it accepts
-> `?token=…` too since browsers cannot set headers on a WebSocket. Only there:
-> a token in the query string of any other route authenticates nobody, because
-> a URL lands in proxy logs and browser history. Never guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, `/mcp/*`, and the
-> dashboard shell (`/`, `/dashboard`, `/static/*`). See
-> [Configuration § Auth](../concepts/configuration.md#auth).
->
-> **A token that is present and wrong is refused even where reads are open.**
-> Sending a credential says you meant to be somebody, so `/ws/stream` answers
-> `401` rather than quietly serving you as anonymous — which is how a revoked
-> token goes on appearing to work. The practical consequence is that a stale
-> token in a browser breaks a dashboard that would have connected with none at
-> all; the dashboard detects that and offers to forget it (see below).
->
-> **`GET /ws/stream` without an `Upgrade` header** answers `401` for a refused
-> credential and `426 Upgrade Required` for an accepted one. That pairing is a
-> contract, not an accident: a browser is told nothing about why a WebSocket
-> handshake failed — no status, and no close code, because a connection that
-> never opened sends no close frame — so the dashboard re-asks over plain HTTP
-> to tell "your token is wrong" from "the engine is down". Without it a reader
-> holding a stale token sees "retrying" for ever.
->
-> **The guard is always mounted**, whether or not Tier A is present. An API
-> built without `api.auth` configuration has no token, and a route that needs
-> one is therefore refused rather than served: reads work, every write and the
-> whole of `/config`, `/secrets` and `/setup` answers `401`. There is no way to start a
-> process that serves those writes without a guard in front of them.
->
-> **Every `/webhooks/*` route fails closed.** They are exempt from the bearer
-> token because each verifies its provider's signature instead — so a route
-> whose secret is not configured has nothing to verify with, and answers `503`
-> with `Retry-After` rather than accepting the delivery. The sender retries and
-> the delivery flows once the secret is set; nothing is discarded, and nothing
-> unsigned is ever recorded, published, or shown on the dashboard.
-
 | `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain (see [During a drain](#during-a-drain)); use `/ready` to steer traffic |
 | `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, or on a `shed` or `stuck` posture, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, in that order of precedence |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
@@ -158,6 +120,44 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
 | `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Absent where the company runs neither native backend |
+
+> **Auth.** Writes and every `/config`, `/secrets` and `/setup` route require
+> `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside those three)
+> serve without one unless `api.auth.allow_anonymous_read: false` is set, at
+> which point they need the same token — `/ws/stream` included, and it accepts
+> `?token=…` too since browsers cannot set headers on a WebSocket. Only there:
+> a token in the query string of any other route authenticates nobody, because
+> a URL lands in proxy logs and browser history. Never guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, `/mcp/*`, and the
+> dashboard shell (`/`, `/dashboard`, `/static/*`). See
+> [Configuration § Auth](../concepts/configuration.md#auth).
+>
+> **A token that is present and wrong is refused even where reads are open.**
+> Sending a credential says you meant to be somebody, so `/ws/stream` answers
+> `401` rather than quietly serving you as anonymous — which is how a revoked
+> token goes on appearing to work. The practical consequence is that a stale
+> token in a browser breaks a dashboard that would have connected with none at
+> all; the dashboard detects that and offers to forget it (see below).
+>
+> **`GET /ws/stream` without an `Upgrade` header** answers `401` for a refused
+> credential and `426 Upgrade Required` for an accepted one. That pairing is a
+> contract, not an accident: a browser is told nothing about why a WebSocket
+> handshake failed — no status, and no close code, because a connection that
+> never opened sends no close frame — so the dashboard re-asks over plain HTTP
+> to tell "your token is wrong" from "the engine is down". Without it a reader
+> holding a stale token sees "retrying" for ever.
+>
+> **The guard is always mounted**, whether or not Tier A is present. An API
+> built without `api.auth` configuration has no token, and a route that needs
+> one is therefore refused rather than served: reads work, every write and the
+> whole of `/config`, `/secrets` and `/setup` answers `401`. There is no way to start a
+> process that serves those writes without a guard in front of them.
+>
+> **Every `/webhooks/*` route fails closed.** They are exempt from the bearer
+> token because each verifies its provider's signature instead — so a route
+> whose secret is not configured has nothing to verify with, and answers `503`
+> with `Retry-After` rather than accepting the delivery. The sender retries and
+> the delivery flows once the secret is set; nothing is discarded, and nothing
+> unsigned is ever recorded, published, or shown on the dashboard.
 
 Plus the four always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up) and [`/operator/mcp`](#operatormcp--your-own-assistant). `/setup` is guarded on its READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack.
 
@@ -1677,6 +1677,16 @@ REST route calls, so the two surfaces cannot diverge:
 | `viewer` | `{}` | `GET /viewer`. `{operator_id, operator, handle, name, kind}`. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. Answers three states apart — anonymous (`operator_id` empty), bound (`handle` set), and presented-but-unbound (an id with no handle), which is an ordinary state rather than a refusal |
 | `work_person` | `{handle}` | `GET /work/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own seat, somebody else's needs an operator credential. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person, which is how a lead's authority is made visible — every notification this domain carries is task-shaped, so one attached to a person record would render no card and reach nobody |
 | `work_views` | `{container, viewer}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first, and it takes the [personal scope rule](#whose-record-a-personal-question-answers-for): your own seat, or an operator credential for anybody else's. Absent is the shared strip — no pins and no personal views but the shared ones — which is what a screen asks for before it knows who is looking, and it needs no credential. Every row carries `builtin`, which is what tells the six nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names — this channel's, not the `list_work_items` TOOL's, which renames four of them for a model — so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it |
+| `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything |
+| `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title` |
+| `containers` | `{}` | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
+| `page_activity` | `{page, container, kinds, actor_kinds, since, cursor, limit}` | What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds and `actor_kinds` of the three author kinds (`agent`, `human`, `operator`), the latter refused when it names one this build does not have — `work_activity`'s note says why. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not |
+| `page_revision` | `{page, version}` | One revision's own body, message and author. Revision N is the body AT version N — including the newest — so a reader comparing two versions asks for both rather than for one and the head |
+| `stream` | `{}` | The [health envelope](#the-health-envelope), from the builder `GET /health` answers with. Named `stream` rather than `health` so a query never shares a name with a push kind: the `health` push carries three of those fields, and a reader of the protocol should not have to know which direction a frame travelled to know what it holds |
+| `config` | `{}` | `GET /config` *(operator token required)* |
+| `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
+| `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(operator token required)* |
+| `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of the Configuration screen, whose write half is `PUT /config/{kind}/{id}` *(operator token required)* |
 
 **Every tracker answer carries how far this node had got, and both halves
 matter.** `read_level` is the level the read was ACTUALLY served at, never the
@@ -1730,16 +1740,6 @@ listing's `position` included; a position in a *parameter* is the token
 rows that should have gone may still be present, and the totals were computed
 over the incomplete set. That is a different fact from staleness, and a client
 that renders `read_level` and swallows `complete` looks confidently right.
-| `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything |
-| `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title` |
-| `containers` | `{}` | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
-| `page_activity` | `{page, container, kinds, actor_kinds, since, cursor, limit}` | What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds and `actor_kinds` of the three author kinds (`agent`, `human`, `operator`), the latter refused when it names one this build does not have — `work_activity`'s note says why. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not |
-| `page_revision` | `{page, version}` | One revision's own body, message and author. Revision N is the body AT version N — including the newest — so a reader comparing two versions asks for both rather than for one and the head |
-| `stream` | `{}` | The [health envelope](#the-health-envelope), from the builder `GET /health` answers with. Named `stream` rather than `health` so a query never shares a name with a push kind: the `health` push carries three of those fields, and a reader of the protocol should not have to know which direction a frame travelled to know what it holds |
-| `config` | `{}` | `GET /config` *(operator token required)* |
-| `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
-| `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(operator token required)* |
-| `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of the Configuration screen, whose write half is `PUT /config/{kind}/{id}` *(operator token required)* |
 
 ### Whose record a personal question answers for
 
