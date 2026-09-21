@@ -137,33 +137,6 @@ func bodies(page chat.Transcript) []string {
 	return out
 }
 
-// fleetCoordination puts this fleet's LEASES where a fleet's leases go.
-//
-// [config.CoordinationLocal] is the default and this harness has always taken
-// it, which for a cluster case is exactly what the config layer refuses by
-// name: leases kept in this process mean every member holds every lease and
-// runs every seat, so a two-member fleet has TWO nodes owning `ceo` and two
-// consumers on one mailbox. Measured here, with both members reporting
-// `Held() == [ceo]` and each one's `ListLive(ClassNode)` naming only itself.
-//
-// A case whose subject is which node a wake reaches therefore cannot be
-// written against the default, and one written anyway would pass or fail on
-// which consumer happened to win — so this asks for the replicated KV the
-// engine really coordinates through.
-//
-// It is ONE case's amendment rather than the harness's default, and that is a
-// deferral rather than a decision: every other cluster case's subject is the
-// state log, which is shared either way, so none of them notices — but the
-// harness itself is standing up a shape `crewlet validate` refuses, and moving
-// it is a decision about [fleetSize] too, because the config layer permits
-// embedded-kv at ONE node or at THREE and refuses two by name (two members
-// have no coordination quorum, so the fleet stops serving the moment either
-// restarts). This amendment takes the two-member shape anyway, which is honest
-// for a case that never restarts a member and would not be for the harness.
-func fleetCoordination(boot *config.Bootstrap) {
-	boot.Coordination.Type = config.CoordinationEmbeddedKV
-}
-
 // ---- a message written on one node, and a fleet that agrees about it --- //
 
 // A MESSAGE POSTED ON ONE NODE WAKES A SEAT OWNED BY ANOTHER, BOTH NODES END
@@ -192,7 +165,7 @@ func fleetCoordination(boot *config.Bootstrap) {
 //     ever report it.
 func TestAMessageOnOneNodeWakesASeatOnAnotherAndBothNodesAgree(t *testing.T) {
 	noParallel(t)
-	c := startCluster(t, fleetSize, fleetCoordination)
+	c := startCluster(t, fleetSize)
 	c.hydrated(t)
 
 	// WHICH MEMBER HOLDS THE SEAT IS NOT DECIDED BY THIS TEST. Placement
@@ -222,7 +195,7 @@ func TestAMessageOnOneNodeWakesASeatOnAnotherAndBothNodesAgree(t *testing.T) {
 	// fails is not a failure: with leases kept per node both members own
 	// the seat, both attach its mailbox, and the case then passes or
 	// fails on which consumer happened to win the one wake — a coin flip
-	// dressed as an assertion. See [fleetCoordination].
+	// dressed as an assertion. See [buildMember]'s coordination note.
 	if slices.Contains(writer.engine.Node().Host().Held(), "ceo") {
 		t.Fatalf("both %s and %s hold the ceo seat, so there is no node this "+
 			"wake has to cross to — coordination is not shared across this "+
