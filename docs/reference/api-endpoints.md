@@ -141,6 +141,24 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply |
+| `GET` | `/chat/channels` | The company's own chat: the rooms this person is in, newest activity first, each with the last thing said, this viewer's unread count and whether they have muted it — the read state rides the rail rather than being a question of its own, because a badge and the room it belongs to are read together or not at all. Served only where `chat.backend` is `native`. **Every chat route always needs a token**, reads included, and resolves the viewer server-side — see [below](#chat--the-companys-own-conversation) |
+| `GET` | `/chat/channels/{channel_id}` | One room's topic, purpose, retention and membership, and whether the viewer is in it. A room this person may not read answers `404`, exactly as one that does not exist — a private room's EXISTENCE is information |
+| `GET` | `/chat/channels/{channel_id}/messages` | A page of one room's transcript, newest first. `?limit=` bounds it and `?cursor=` pages it — the room's own contiguous `channel_seq`, never a log position, because an edit moves a row's version and a keyset on it would skip the message somebody just fixed |
+| `GET` | `/chat/channels/{channel_id}/threads/{root_id}` | One thread from the message it hangs off: its root, its replies oldest first, and who has spoken in it. A thread is one level deep by construction, so this is a range in one room rather than a walk |
+| `GET` | `/chat/mentions` | The viewer's own @-mention feed, newest first. Cursored by a LOG POSITION written `<stream>@<generation>:<sequence>`, which is what lets a cursor span a reanchor with no gap and no repeat |
+| `POST` | `/chat/read` | Move the viewer's own read state, which lives in the [coordination store](../concepts/coordination.md) rather than on the log — a cursor is a fact about one reader's attention that nobody replays. Cursors are ADVANCED, never set, so two tabs racing produce the same record whichever lands first; `muted` replaces the whole list when present and omitting it leaves it alone; `dnd_until` replaces when present, including with the zero instant, which is how do-not-disturb is cleared. Answers the resulting state, and pushes `chat_cursor_moved` to that person's own sockets and nobody else's |
+| `GET` | `/chat/search` | Messages ranked by what they SAY, over every room the viewer may read. `?q=` is what somebody typed, `?channel_id=` narrows to one room, `?author=` to one speaker, `?limit=` bounds the page. Keyword only — chat has no semantic index at all, deliberately (see [Chat § Search](../concepts/chat.md#search)) |
+| `POST` | `/chat/channels` | Create a named room: `{name, kind, topic, purpose, unit, members, retention_days}`. The create arbitrates on the NAME, so two people typing `#launch` contend and exactly one wins. There is no rename — a channel's name is the address its create claimed |
+| `POST` | `/chat/dms` | Open a direct conversation or a small group: `{participants}`. Its id is DERIVED from the sorted handles, so two people opening the same conversation from two nodes converge on one room; `created` says whether this call made it. The author is always one of the participants and is added server-side |
+| `POST` | `/chat/channels/{channel_id}/patch` | Change a room's `topic`, `purpose`, `archived` or `retention_days`. A patch that changes nothing publishes nothing and reports `applied` |
+| `POST` | `/chat/channels/{channel_id}/members` | Replace a room's membership WHOLE: `{members: [{handle, follow_all}]}`. A delta cannot rebuild a row on a replay from zero, and membership is what a private room's readability IS |
+| `POST` | `/chat/channels/{channel_id}/join` · `/leave` | Move the CALLER's own membership and nobody else's. A private room refuses a join — its membership is the only way in — and a unit's room refuses a leave, because that membership is the org chart's and the next apply would undo it |
+| `POST` | `/chat/channels/{channel_id}/messages` | Say something: `{body, links, mentions, collective, operation_id}`. `operation_id` is REQUIRED and is the caller's own idempotency key — a post arbitrates nothing at the broker, so nothing else can tell a resubmission from a second remark |
+| `POST` | `/chat/channels/{channel_id}/messages/{message_id}/replies` | Answer a message in its thread. The ROOT is resolved from the message being answered, never taken from the caller |
+| `POST` | `/chat/channels/{channel_id}/messages/{message_id}/edit` · `/delete` | Rewrite a message in place, or tombstone it — the row survives with its body blanked, so a thread does not lose its first line. Both are author-only, or an operator's |
+| `POST` | `/chat/channels/{channel_id}/messages/{message_id}/react` · `/unreact` | Put one emoji on a message or take it back: `{emoji}`. A reaction never wakes anybody and never counts as an answer, and it takes the room's own membership rule like every other write |
+| `POST` | `/chat/channels/{channel_id}/erase` | Destroy message rows permanently: `{message_ids, reason}`, at most 250 per gesture. `?confirm=` repeats the COUNT, `reason` is required and is the only account of the rows that survives them, and the record is written as an OPERATOR's act under the caller's own seat |
+| `POST` | `/chat/channels/{channel_id}/prune` | Destroy everything the room said before an instant: `?cutoff=` as RFC 3339, echoed in `?confirm=`. A cutoff on the log rather than a local delete, so every node deletes exactly the same rows |
 | `GET` | `/viewer` | **Who is asking.** The presented credential's operator id, whether it is an operator one, and the seat that binds it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no credential at all, a credential no seat claims, and a bound one. An unbound token is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
@@ -1622,6 +1640,11 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `budget`   | After a node's token meter report is applied (every node reports every 15 seconds while anything is capped). | `{ meter_id, seq, org: { used, max, refused_at } }`, the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
+| `chat_posted` / `chat_edited` / `chat_deleted` / `chat_reacted` | After the chat applier COMMITS a record about a message, on every node. | `{ channel_id, op, op_id, message_id, channel_seq, thread_root, author, author_kind, at, position, excerpt, mentions, channel_name, channel_kind }` — evidence that something landed, never a copy of the message: the transcript is what a reload shows and a second rendering path would disagree with it the first time an edit raced one. `channel_seq` is contiguous per room, so a client holding 41 and handed 43 asks for 42 rather than for the room. `excerpt` and `mentions` are the record's own and are absent where it woke nobody. **Every one of these is filtered by the recipient's own visibility before it leaves** — see [below](#chat--the-companys-own-conversation). |
+| `chat_room_changed` | A room created, patched, archived, erased or pruned. | The same envelope. ONE kind for all five, because what a client does with them is one thing: read the room again. |
+| `chat_membership_changed` | A room's membership set replaced, which includes a join and a leave. | The same envelope. |
+| `chat_cursor_moved` | After `POST /chat/read`. | The resulting read state. It reaches THAT PERSON'S own sockets and nobody else's: a badge cleared in one window has to clear in the other, and there is no other reader it could have. |
+| `chat_presence` | On a focus change, and on a 3-second idle tick, when the merged view of a room actually changed. | `{ rooms: { "<channel>": { viewing, typing, working: [{handle, thread, status}] } } }` — who has the room open, who is composing, and which seats are running a turn against a message in it. IN-FLIGHT STATE: no record, no applier, no coordination key. It rides the queue's ephemeral scatter on one fleet-wide subject, and a room the socket cannot open produces no entry at all. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
 | `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
 | `pong`     | Reply to a client `ping`. | `null` |
@@ -1632,6 +1655,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 |--------|---------|
 | `ping` | Keepalive; server replies with `pong`. |
 | `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params, token? }` — `id` is any client-chosen value echoed back on the reply, and `token` carries the operator bearer token that the `config`-family queries require (validated with the same constant-time comparison the `/config` middleware performs). Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows. |
+| `chat_focus` | Where this tab is looking: `{ kind: "chat_focus", channel_id, typing }`. It asks nothing and is answered by nothing — what it buys is that the fleet-wide presence probe is bounded to the rooms somebody actually has open, so an idle company's broker sees no presence traffic at all. A client re-sends it while somebody types; the flag expires on its own after six seconds, and closing the socket withdraws it at once. Naming a room this credential cannot open is not an error and learns nothing: the answer is filtered exactly as a message is. |
 
 **Queries** (`what`), each answered by the *same* function the matching
 REST route calls, so the two surfaces cannot diverge:
@@ -2052,6 +2076,86 @@ per-run token in its own path is what authenticates it instead. Mounting a
 writable company surface under the same prefix would have put it behind no
 credential at all. `/operator` is its own always-guarded prefix, alongside
 `/config` and `/secrets`.
+
+## Chat — the company's own conversation
+
+The `/chat/*` routes read and write the engine's own chat, and they are served
+only where `chat.backend` is `native` (see [Chat](../concepts/chat.md)). A
+company on Slack or Mattermost has no native conversation here: the reads
+answer `unknown_query` / `404` for the same reason the board's do, and the
+write routes are **absent** rather than refusing, because an endpoint that
+exists and answers `503` to everything reads as broken.
+
+Every route here **always needs a token**, reads included, and is registered
+that way rather than following `allow_anonymous_read`. The personal questions
+under `/work/` are scoped instead, because their scope rule has an arm for a
+caller with no credential — your own seat. Chat has no such arm: the seat IS
+the credential, so a caller with none is not somebody this surface can answer
+about, and a transcript is not a thing to leave to a posture.
+
+### The viewer is resolved by the server, on every call
+
+A person in chat **is** a `kind: human` seat whose
+`contact.crewlet_operator_id` names one of Tier A's `api.auth.tokens`. The
+server walks that chain per request and the resolved seat is both the author a
+write is recorded under and the viewer a read is served as. **A caller may
+never name a seat** — there is no parameter for it and no body field that
+moves it.
+
+A body that tries is **refused, not ignored**, naming the field: ignoring one
+would let a script believe it had posted on a colleague's behalf while the
+message landed under its own operator's seat, with nothing anywhere to say the
+attempt was made. Every other unknown field on a write body is refused too,
+which is the opposite of the socket's query channel and deliberate: a key this
+build does not know is either a caller saying something it will not get
+(`colective`) or a caller claiming something it may not have, and both are
+silent when dropped.
+
+**A token bound to no seat gets nothing, reads included**, and the refusal is
+a `403` naming `contact.crewlet_operator_id` rather than a `401`: the
+credential was accepted and what is missing is an identity in the company, so
+the remedy is a line of the company document. This is stricter than every
+other personal surface — `/work/people/{handle}` is *scoped*, not
+operator-only — and it is the one place that strictness is right. A transcript
+is the most sensitive thing a deployment holds and a pipeline's credential is
+not a person.
+
+### A write answers its own three-valued outcome
+
+Every write here is a record on the fleet's log, and the framework answers
+three different facts about one. A `200`/`500` pair collapses two of them, so
+each gets its own status:
+
+| Outcome | Status | What it means |
+|---------|--------|----------------|
+| `applied` | `200` | Durable AND applied here: the rows you are about to read are the rows it produced. |
+| `pending` | `202` | Durable at its position, unresolved *on this node*. Every other node will apply it. A caller told `200` would read the room here, not find its message, and say it again. |
+| `unknown` | `504` | Nothing can be established from this node — it may have landed and it may not. Deliberately not the `503` this API uses for "ask me again in a moment", which promises the opposite. |
+
+Every answer carries `outcome`, `op_id` and `position`, and **retrying under
+the same `op_id` is the only safe retry**: a fresh one defeats the ledger that
+exists for exactly this case, and on a message it derives a second message id
+and says the same thing twice. That is also why `operation_id` is required on
+a post and a reply — a post arbitrates nothing at the broker, so there is
+nothing else that could tell a resubmission from a second remark.
+
+Refusals carry a code and, where the message was written for a person, the
+reason: `invalid` (`400`), `not_found` (`404`), `forbidden` (`403`),
+`archived`, `name_taken`, `room_exists` and `conflict` (`409`). A room the
+caller may not read answers `not_found` exactly as one that does not exist.
+
+### Every live frame is filtered by the recipient's own visibility
+
+The chat pushes do not use the dashboard's shared fan-out. A health tick or a
+token rollup is a fact about the company that any socket may see; a transcript
+is not, so each chat frame is decided **per socket**, against the seat that
+socket's credential resolved to, using the same `Visible` rule the reads
+apply. A socket bound to no seat is not a chat watcher at all.
+
+The same filter covers presence. A tab may name any room in a `chat_focus`
+frame — it is saying where it is looking, not claiming a permission — so it
+learns nothing about a room it cannot open, **and** it does not appear in that
+room to the people who can.
 
 ## The native tracker and knowledge base
 
