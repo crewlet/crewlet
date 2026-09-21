@@ -230,8 +230,15 @@ const DefaultResolveBudget = 5 * time.Second
 
 // Deps is everything a publisher needs that it does not own.
 type Deps struct {
-	Domain     Domain
-	Log        Appender
+	Domain Domain
+	Log    Appender
+
+	// Signer signs every record this authority appends. REQUIRED: the
+	// broker has no auth of its own, so an unsigned record on this log is
+	// an instruction anyone who can reach the cluster port may write. See
+	// [signature.go].
+	Signer *Signer
+
 	Rows       Rows
 	Fence      Fence
 	Gates      Gates
@@ -275,6 +282,12 @@ func NewPublisher(d Deps) (*Publisher, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
+	// SIGNED AT THE APPENDER rather than at each call site, so the append
+	// somebody adds next is signed by construction rather than by review.
+	log, err := signing(d.Log, d.Signer, d.Domain.Name())
+	if err != nil {
+		return nil, err
+	}
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -287,7 +300,7 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		domain:        d.Domain,
 		stream:        spec.Name,
 		prefix:        spec.SubjectPrefix,
-		log:           d.Log,
+		log:           log,
 		rows:          d.Rows,
 		fence:         d.Fence,
 		gates:         d.Gates,

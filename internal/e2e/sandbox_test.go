@@ -238,6 +238,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		t.Fatalf("company config: %v", err)
 	}
 	boot := config.DefaultBootstrap()
+	withKeyring(t, &boot)
 	boot.Store.Path = dbPath
 	boot.Stream.StoreDir = streamDir
 

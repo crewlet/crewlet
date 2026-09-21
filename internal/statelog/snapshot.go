@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -587,14 +588,26 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 		}
 	}
 
-	newest, found, err := s.newest()
+	newest, covers, found, err := s.newest()
 	if err != nil {
 		return err
 	}
 	if found && s.now().Sub(newest) < s.deps.Interval {
-		return &ErrSkipped{Reason: SkipRecent, Detail: fmt.Sprintf(
-			"the newest local snapshot is %s old, inside the %s interval",
-			s.now().Sub(newest).Round(time.Second), s.deps.Interval)}
+		// YOUNG IS NOT ENOUGH; it must also be adoptable. A recent
+		// artefact short of a domain this node runs suppresses nothing,
+		// because no joiner could use it and the trim must not count it.
+		if missing := missingFrom(covers, s.domainNames()); len(missing) > 0 {
+			s.log.Info("statelog_snapshot_recent_but_short",
+				"taken_at", newest, "covers", covers, "missing", missing,
+				"detail", "taking a complete one now rather than waiting out the "+
+					"interval: an artefact that names no position for a domain "+
+					"this node runs is refused wholesale by every joiner")
+		} else {
+			return &ErrSkipped{Reason: SkipRecent, Detail: fmt.Sprintf(
+				"the newest local snapshot is %s old, inside the %s interval, "+
+					"and covers every domain this node runs",
+				s.now().Sub(newest).Round(time.Second), s.deps.Interval)}
+		}
 	}
 
 	free, storeSize, err := s.space()
@@ -630,20 +643,31 @@ func (s *Snapshotter) scrubList() []string {
 	return slices.Compact(out)
 }
 
-// newest is when this node's newest complete snapshot was taken.
+// newest is when this node's newest complete snapshot was taken, and which
+// domains it names.
 //
 // COMPLETE, which is what the manifest means: a copy with no manifest beside
 // it is the debris of a run that did not finish, and treating it as a snapshot
 // would let one crashed attempt suppress every later one.
-func (s *Snapshotter) newest() (time.Time, bool, error) {
+//
+// THE DOMAIN SET COMES BACK TOO, because "recent" is not a fact about time
+// alone. An artefact taken by the build before a domain was added names every
+// domain THAT build ran and none of the new one, and [Offer.Usable] refuses
+// such an artefact WHOLESALE — so on the day a domain is added, every node in
+// the fleet is holding a young artefact that no joiner can adopt. Judged on
+// the instant alone, each node then suppresses its first complete take for a
+// whole interval, and the trim keeps counting those artefacts as snapshots
+// the whole time.
+func (s *Snapshotter) newest() (time.Time, []string, bool, error) {
 	entries, err := os.ReadDir(s.deps.Dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return time.Time{}, false, nil
+		return time.Time{}, nil, false, nil
 	}
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("statelog: read %s: %w", s.deps.Dir, err)
+		return time.Time{}, nil, false, fmt.Errorf("statelog: read %s: %w", s.deps.Dir, err)
 	}
 	var newest time.Time
+	var covers []string
 	var found bool
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -655,9 +679,32 @@ func (s *Snapshotter) newest() (time.Time, bool, error) {
 		}
 		if !found || m.TakenAt.After(newest) {
 			newest, found = m.TakenAt, true
+			covers = slices.Sorted(maps.Keys(m.Domains))
 		}
 	}
-	return newest, found, nil
+	return newest, covers, found, nil
+}
+
+// domainNames is every domain this node runs, which is the set an artefact has
+// to name to be adoptable anywhere.
+func (s *Snapshotter) domainNames() []string {
+	out := make([]string, 0, len(s.deps.Domains))
+	for _, d := range s.deps.Domains {
+		out = append(out, d.Domain.Name())
+	}
+	return out
+}
+
+// missingFrom is the domains this node runs that an artefact does not name,
+// which is exactly what makes it unadoptable.
+func missingFrom(covers []string, running []string) []string {
+	var missing []string
+	for _, name := range running {
+		if !slices.Contains(covers, name) {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 // rotate removes every snapshot but the newest SnapshotsKept.

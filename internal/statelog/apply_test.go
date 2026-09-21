@@ -127,12 +127,16 @@ func (f *probeFetch) afterFetch(n int, hook func()) {
 
 func newProbeFetch() *probeFetch { return &probeFetch{acked: map[uint64]int{}} }
 
-// offer queues one record at seq, encoded as the probe domain's envelope.
+// offer queues one record at seq, encoded as the probe domain's envelope and
+// SIGNED, because what a broker hands an applier is what a publisher wrote and
+// the framework signs every one of those. A fixture that offered an unsigned
+// record would be testing the refusal rather than the path.
 func (f *probeFetch) offer(seq uint64, env statelog.Envelope) {
 	body, err := json.Marshal(env)
 	if err != nil {
 		panic(err)
 	}
+	body = probeSeal(body)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.queue = append(f.queue, statelog.Message{
@@ -260,6 +264,7 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain:     domain,
+		Verifier:   testVerifier(t, domain),
 		Applier:    applier,
 		Fetch:      fetch,
 		DB:         db.Replicated(),
@@ -296,6 +301,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 	h.metrics = recorder
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain:          domain,
+		Verifier:        testVerifier(h.t, domain),
 		Applier:         h.applier,
 		Fetch:           h.fetch,
 		DB:              h.db.Replicated(),
@@ -1854,6 +1860,7 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 	flaky := &flakyEstate{inner: h.db.Replicated(), refusals: 3}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain:     probeDomain{},
+		Verifier:   testVerifier(t, probeDomain{}),
 		Applier:    h.applier,
 		Fetch:      h.fetch,
 		DB:         flaky,
@@ -1893,4 +1900,15 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 	if err := runner.Stopped(); err != nil {
 		t.Errorf("the applier reports itself stopped after recovering: %v", err)
 	}
+}
+
+// probeSeal signs a fixture's record under the same keyring the harness
+// verifies with. It panics rather than returning an error: a fixture that
+// cannot sign is a broken test file, not a case.
+func probeSeal(body []byte) []byte {
+	signer, err := statelog.NewSigner(probeDomain{}.Name(), testRing())
+	if err != nil {
+		panic(err)
+	}
+	return signer.Seal(body)
 }

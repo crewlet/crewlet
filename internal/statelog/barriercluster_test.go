@@ -51,7 +51,7 @@ func TestLinearizableRefusesWhenTheOldLeaderIsIsolated(t *testing.T) {
 		t.Fatalf("open the log on the member about to be cut: %v", err)
 	}
 	gen := func() uint32 { return 1 }
-	idx, err := statelog.NewReadIndex(probeDomain{}, log, probeEncode, gen, nil)
+	idx, err := statelog.NewReadIndex(probeDomain{}, log, testSigner(t, probeDomain{}), probeEncode, gen, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestLinearizableKeepsWorkingOnTheSurvivingMajority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	idx, err := statelog.NewReadIndex(probeDomain{}, log, probeEncode,
+	idx, err := statelog.NewReadIndex(probeDomain{}, log, testSigner(t, probeDomain{}), probeEncode,
 		func() uint32 { return 1 }, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)

@@ -424,6 +424,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	pub, err := statelog.NewPublisher(statelog.Deps{
 		Domain:        domain,
 		Log:           h.appends,
+		Signer:        testSigner(t, domain),
 		Rows:          h.rows,
 		Fence:         h.fence,
 		Gates:         h.gates,
@@ -460,4 +461,26 @@ func (h *harness) anchorAt(subj statelog.Subject, seq uint64) {
 	h.rows.stage(subj, statelog.Position{
 		Stream: probeStream, Generation: h.gen.Load(), Seq: seq,
 	})
+}
+
+// testRing is the keyring every case in this package signs and verifies
+// under. One key, because the rotation arms have their own cases.
+func testRing() statelog.Keyring { return statelog.OneKey("k1", "test-material") }
+
+func testSigner(t *testing.T, d statelog.Domain) *statelog.Signer {
+	t.Helper()
+	signer, err := statelog.NewSigner(d.Name(), testRing())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer
+}
+
+func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
+	t.Helper()
+	verifier, err := statelog.NewVerifier(d.Name(), testRing())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return verifier
 }

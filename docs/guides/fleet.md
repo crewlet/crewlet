@@ -323,6 +323,29 @@ Two consequences worth stating plainly:
 - **Rolling *back* across a protocol bump needs a full stop.** An older
   build has no protocol check at all, so it will happily take over a
   newer node's expired leases. Nothing in the table can stop it.
+
+**Adding a state-log domain is a coordinated upgrade**, and it sits beside the
+seat-protocol rule for the same reason: the fleet is briefly running two
+builds that disagree about what a node must hold.
+
+A snapshot artefact is adopted **wholesale**. Its manifest names a position per
+domain, and a joiner refuses one that names no position for a domain its own
+build registers — there is no partial adoption, because a checkpoint for a
+domain the file has no rows for is worse than no artefact at all. So on the day
+a domain is added, every artefact already on disk was taken by the build before
+it and is unadoptable by the new build.
+
+The engine handles that rather than waiting it out. A node whose newest
+artefact is short of a domain it runs takes a complete one immediately instead
+of resting on the interval (`statelog_snapshot_recent_but_short`), and until it
+has one it reports itself as holding **no** snapshot at all — not even for the
+domains the old artefact does cover — so the trim stops counting it as a donor
+and keeps the records a joiner would still need.
+
+What that means for an operator: **upgrade every node before letting any node
+fall below the trim floor.** In practice this is the ordinary rolling deploy
+plus one check — watch the fleet screen until every node reports a snapshot
+again before you start restoring, rebuilding or adding nodes.
 - **A stalled rollout stalls the fleet duties too, on upgrades that move
   them.** Upgrading from a build that kept the `worker:` leases beside the
   seat leases, newer nodes run no scheduler tick, retention sweep,

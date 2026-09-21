@@ -103,6 +103,28 @@ crewlet secrets get TOKEN -reveal                # break-glass; logged
 crewlet secrets rekey                            # after a keyring rotation
 ```
 
+### The keyring is not optional, and it does three jobs
+
+A deployment has one keyring, and everything that has to be authenticated
+across a fleet derives from it. It **seals** the company config and the secret
+store's rows. It **signs** the two per-run tokens a sandbox carries. And it
+**signs every record on every state log** — the tracker's, the knowledge
+base's, and any domain a later build registers.
+
+That third job is why a node with no keyring now refuses to start. The
+embedded broker has no auth of its own; on a fleet it clusters its members over
+a port, and a record on a domain's log is not a message but an *instruction* —
+the next node applies it and derives rows from it. Unsigned, such a record is
+whatever anyone who can reach that port writes. Each of the three derives a
+different key from the same material, each binding its own label in, so a
+record signature and a token signature over one key are never the same bytes.
+
+A record's frame **names the key that signed it**, and a verifier looks that id
+up. A key it does not hold means "not yet" — the record is retained and applied
+once the key arrives. A key it *does* hold whose signature fails means "not
+this fleet" — the applier stops, because continuing past it would be applying
+whatever it was written to precede.
+
 ### Rotating the keyring, with nothing in flight lost
 
 The keyring seals the company's secrets and also signs the two **per-run
@@ -126,8 +148,12 @@ That makes the rotation a runbook with no window in it:
    still on the ring.
 4. **Run `crewlet secrets rekey`** to re-seal the stored values under the new
    active key.
-5. **Drop** the old key once the longest token lifetime has passed. From that
-   moment a token signed under it is refused, which is the point.
+5. **Drop** the old key once the longest token lifetime has passed *and* every
+   state log has trimmed past the records signed under it. From that moment a
+   token or a record signed under it is refused, which is the point. Dropping
+   it while a log still holds such records leaves those records unappliable on
+   a node replaying from the floor, which reports itself as retained records
+   rather than as data loss — add the key back and they apply.
 
 Nodes may restart in any order at every step, because a key is either on a
 node's ring or it is not, and tokens name which one they need. There is no

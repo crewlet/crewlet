@@ -20,8 +20,23 @@ nodes lives in the KV instead. See [Running a Fleet](fleet.md) and
 
 ## The single host
 
+**A keyring is required, on one node and on every node.** Every record on every
+state log is signed under it, because the broker has no auth of its own and a
+record is an instruction the next node applies. `crewlet secrets keygen` mints
+one and prints the export line; a node without one refuses to start, naming the
+field. Every node of a fleet needs the **same** keyring — one keyed differently
+would refuse every peer's records. See
+[Secret store](../concepts/secret-store.md) for what else it does and for the
+zero-downtime rotation runbook.
+
 ```yaml
 # crewlet.yaml (Tier A)
+secrets:
+  active_key_id: "2026-01"
+  keys:
+    - id: "2026-01"
+      material: "${CREWLET_SECRET_KEY_2026_01}"
+
 stream:
   type: embedded              # a JetStream server inside this process
   store_dir: "/var/lib/crewlet/stream"   # empty = in-memory, nothing survives a restart
@@ -856,16 +871,35 @@ and does not reach the activity feed — so the exclusions below are
 deliberate and each one says why, and a *new* type that nobody placed fails a
 test rather than vanishing quietly.
 
-| Excluded type | Why |
-|---|---|
-| `agent_turn_progress` | Fires once per LLM round as a live-only signal; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
-| `agent_spawned` | Placement moves a seat between nodes on every rebalance, so a durable row per claim would fill the log with a fact about **scheduling** rather than about the company. It still drives the live projection, which is what asks "is this seat running, and where". |
-| `agent_terminated` | The counterpart, excluded for the same reason. It is what returns a released seat to `terminated` on a live screen rather than leaving it showing whatever it last did. |
-| `raw_webhook` | The delivery is **already** a row (the `webhook` category above). This event is the wake the receiver publishes onto a seat's inbox, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
-| `a2a_request` | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
-| `a2a_message` | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
-| `tool_skill_page_changed` | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
-| `budget_reported` | A **snapshot** of the shared token counter, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
+Each exclusion carries a **cause** as well as a reason. The reason is for you,
+when you come looking for a type and do not find it; the cause is the same
+decision as a value, so the rule below can be checked rather than remembered.
+
+| Excluded type | Cause | Why |
+|---|---|---|
+| `agent_turn_progress` | Intermediate state | Fires once per LLM round as a live-only signal; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
+| `agent_spawned` | Placement | Placement moves a seat between nodes on every rebalance, so a durable row per claim would fill the log with a fact about **scheduling** rather than about the company. It still drives the live projection, which is what asks "is this seat running, and where". |
+| `agent_terminated` | Placement | The counterpart, excluded for the same reason. It is what returns a released seat to `terminated` on a live screen rather than leaving it showing whatever it last did. |
+| `raw_webhook` | Already recorded | The delivery is **already** a row (the `webhook` category above). This event is the wake the receiver publishes onto a seat's inbox, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
+| `a2a_request` | Already recorded | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
+| `a2a_message` | Already recorded | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
+| `tool_skill_page_changed` | Already recorded | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
+| `budget_reported` | Periodic snapshot | A **snapshot** of the shared token counter, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
+
+**Nothing an anonymous caller can pace is written here.** Every categorised
+type also records who authors its rate — this company's own work (`engine`), an
+admitted caller such as an operator's token, a seat or a signed webhook
+delivery (`authenticated`), or anybody who can reach the listener with no
+credential at all (`anonymous`). Nothing is in that third group, and the rule
+is that nothing may be: this file is on a disk you sized, and every backup,
+every snapshot a lagging node installs and every integrity check taken before
+either counts is a copy of the whole of it. A failed login is the case to hold
+in mind — anyone who can reach the API can author millions a day for free — so
+the per-attempt fact belongs on a metrics counter, and what becomes a row is
+the coalesced event the engine publishes per source per minute, which the
+engine paces. A type kept out for this reason is excluded with the cause
+`anonymous_rate`. The rule is enforced by a test over the taxonomy, not by
+review.
 
 #### Querying events
 

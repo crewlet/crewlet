@@ -277,3 +277,43 @@ func registeredDomains() []statelog.Domain {
 	}
 	return domains
 }
+
+// signerFor and verifierFor are one domain's halves of the record signature.
+//
+// PER DOMAIN, because the derivation binds the domain's own name in: a record
+// replayed from one log onto another must not verify, and a signer that did
+// not know which log it was writing to could not promise that.
+func (s *stateLog) signerFor(domain statelog.Domain) (*statelog.Signer, error) {
+	return statelog.NewSigner(domain.Name(), s.ring)
+}
+
+func (s *stateLog) verifierFor(domain statelog.Domain) (*statelog.Verifier, error) {
+	return statelog.NewVerifier(domain.Name(), s.ring)
+}
+
+// recordKeyring is the Tier A keyring as the state log's signatures read it.
+//
+// THE SAME MATERIAL THE PER-RUN TOKENS DERIVE FROM, and deliberately: a
+// deployment has one keyring, and a second one for records would be a second
+// thing to rotate, a second thing to get wrong and a second thing an operator
+// has to know exists. The two derive different keys from it, each binding its
+// own label in, so a record MAC and a token MAC over one key are never the
+// same bytes.
+//
+// THE REFERENCES ARE NOT RESOLVED, for [config.Secrets.TokenMaterial]'s
+// reason: this is read before the secret store whose own key would resolve
+// them is open, and what matters is that two nodes agree rather than that the
+// material is plaintext.
+func recordKeyring(boot *config.Bootstrap) statelog.Keyring {
+	if boot == nil {
+		return statelog.Keyring{}
+	}
+	ring := statelog.Keyring{
+		ActiveID: boot.Secrets.ActiveKeyID,
+		Keys:     make([]statelog.Key, 0, len(boot.Secrets.Keys)),
+	}
+	for _, key := range boot.Secrets.Keys {
+		ring.Keys = append(ring.Keys, statelog.Key{ID: key.ID, Material: key.Material})
+	}
+	return ring
+}

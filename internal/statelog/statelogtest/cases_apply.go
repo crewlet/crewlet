@@ -220,7 +220,7 @@ func applyInto(t *testing.T, new Factory, records []suiteRecord) map[string]int 
 			t.Fatalf("apply %s/%s at %s: %v", r.kind, r.id, rec.Position, err)
 		}
 	}
-	return countRows(t, db, c.Domain.Tables())
+	return tableContents(t, db, c.Domain.Tables())
 }
 
 // applyOne runs the candidate's own gate and state machine, which is what the

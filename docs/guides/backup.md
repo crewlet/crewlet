@@ -70,6 +70,11 @@ Classify before you size the job:
 
 ## What `crewlet backup` produces
 
+A snapshot artefact is adopted **wholesale**, and so is a backup read back:
+the manifest names a position per domain, and a build that registers a domain
+the artefact never named refuses it rather than concluding it is caught up on
+that domain from a checkpoint the file has no rows for.
+
 One directory, and the **manifest is the claim**: a directory holding
 `manifest.json` is a complete backup, one without it is the debris of a run
 that did not finish. Nothing else in the directory says so, which is exactly

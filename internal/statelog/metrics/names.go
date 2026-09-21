@@ -49,6 +49,8 @@ const (
 	StatelogReadServed               = "crewlet.statelog.read.served"
 	StatelogReadWait                 = "crewlet.statelog.read.wait"
 	StatelogRecordsGated             = "crewlet.statelog.records_gated"
+	StatelogRecordsTampered          = "crewlet.statelog.records_tampered"
+	StatelogRecordsUnverifiable      = "crewlet.statelog.records_unverifiable"
 	StatelogTrimBlockedSeconds       = "crewlet.statelog.trim.blocked_seconds"
 	StatelogWaiters                  = "crewlet.statelog.waiters"
 	StatelogWriteSessionWait         = "crewlet.statelog.write.session_wait"

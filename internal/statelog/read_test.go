@@ -136,8 +136,7 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 			t.Parallel()
 			var appends atomic.Int64
 			h := newHarness(t)
-			index, err := statelog.NewReadIndex(probeDomain{},
-				&countingAppends{inner: h.log, n: &appends}, probeEncode, h.gen.Load, nil)
+			index, err := statelog.NewReadIndex(probeDomain{}, &countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), probeEncode, h.gen.Load, nil)
 			if err != nil {
 				t.Fatalf("NewReadIndex: %v", err)
 			}
@@ -194,7 +193,7 @@ func (c *countingAppends) LastSeq(ctx context.Context, subject string) (uint64, 
 func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, refusingAppender{}, probeEncode,
+	index, err := statelog.NewReadIndex(probeDomain{}, refusingAppender{}, testSigner(t, probeDomain{}), probeEncode,
 		h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -246,8 +245,7 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	var appends atomic.Int64
-	index, err := statelog.NewReadIndex(probeDomain{},
-		&countingAppends{inner: h.log, n: &appends}, probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, &countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -286,7 +284,7 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 func TestALinearizableReadWaitsForThePositionItsBarrierEstablished(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, h.log, probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, h.log, testSigner(t, probeDomain{}), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -400,8 +398,7 @@ func TestADeferredScopeRefusesAPointReadAndUncertifiesASetRead(t *testing.T) {
 	}
 	var appends atomic.Int64
 	broker := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{},
-		&countingAppends{inner: broker.log, n: &appends}, probeEncode, broker.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, &countingAppends{inner: broker.log, n: &appends}, testSigner(t, probeDomain{}), probeEncode, broker.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -615,8 +612,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	var appends atomic.Int64
-	index, err := statelog.NewReadIndex(probeDomain{},
-		&countingAppends{inner: h.log, n: &appends}, probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, &countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -685,7 +681,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, h.log, probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, h.log, testSigner(t, probeDomain{}), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}

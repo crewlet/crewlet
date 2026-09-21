@@ -394,3 +394,81 @@ func TestANodeHoldingNothingIsStillReported(t *testing.T) {
 			"donor is exactly what it is for", say)
 	}
 }
+
+// TestANodeHoldingAShortArtefactIsADonorForNothing.
+//
+// [statelog.Offer.Usable] refuses an artefact that names no position for a
+// domain the RECIPIENT registers, and it refuses it WHOLESALE — there is no
+// partial adoption. So a node whose newest artefact predates a domain can
+// donate it to nobody, for any domain, and stamping the domains it does cover
+// would have the trim count this node as holding a snapshot it can never hand
+// over. That is the arithmetic that lets a log trim past records no joiner
+// could then replay.
+func TestANodeHoldingAShortArtefactIsADonorForNothing(t *testing.T) {
+	t.Parallel()
+	row := coord.NodePositions{
+		NodeID: "node-a",
+		Domains: map[string]coord.DomainPosition{
+			"tracker": {Seq: 900, Generation: 2, AppliedThrough: 900},
+			"pages":   {Seq: 40, Generation: 2, AppliedThrough: 40},
+			"chart":   {Seq: 7, Generation: 2, AppliedThrough: 7},
+		},
+	}
+	stampSnapshot(&row, &snapshotHeld{
+		Have: true,
+		Manifest: statelog.Manifest{
+			TakenAt: time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC),
+			Bytes:   4 << 20,
+			// Taken by the build before `chart` was registered.
+			Domains: map[string]statelog.DomainPosition{
+				"tracker": {Seq: 850, Generation: 2},
+				"pages":   {Seq: 33, Generation: 2},
+			},
+		},
+	})
+
+	for name := range row.Domains {
+		if got := row.Domains[name]; !got.SnapshotAt.IsZero() || got.SnapshotSeq != 0 {
+			t.Errorf("%s was stamped seq %d at %s from an artefact no joiner can "+
+				"adopt — the trim would then count this node as holding a snapshot "+
+				"it can never hand over", name, got.SnapshotSeq, got.SnapshotAt)
+		}
+	}
+	if row.SnapshotBytes != 0 {
+		t.Errorf("snapshot_bytes = %d, want 0: the fleet screen would otherwise "+
+			"offer a transfer that cannot happen", row.SnapshotBytes)
+	}
+}
+
+// TestAnArtefactNamingADomainThisNodeDroppedStillStamps is the other side of
+// the same rule, and the reason it is a subset test rather than an equality
+// one: an artefact from an OLDER build names domains this one no longer
+// registers, and that is not a reason to refuse it. What matters is that it
+// covers everything this node runs.
+func TestAnArtefactNamingADomainThisNodeDroppedStillStamps(t *testing.T) {
+	t.Parallel()
+	taken := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	row := coord.NodePositions{
+		NodeID:  "node-a",
+		Domains: map[string]coord.DomainPosition{"tracker": {Seq: 900, Generation: 2}},
+	}
+	stampSnapshot(&row, &snapshotHeld{
+		Have: true,
+		Manifest: statelog.Manifest{
+			TakenAt: taken,
+			Bytes:   1 << 20,
+			Domains: map[string]statelog.DomainPosition{
+				"tracker": {Seq: 850, Generation: 2},
+				"retired": {Seq: 12, Generation: 1},
+			},
+		},
+	})
+	if got := row.Domains["tracker"]; got.SnapshotSeq != 850 || !got.SnapshotAt.Equal(taken) {
+		t.Errorf("tracker snapshot = seq %d at %s, want 850 at %s", got.SnapshotSeq,
+			got.SnapshotAt, taken)
+	}
+	if _, stamped := row.Domains["retired"]; stamped {
+		t.Error("a domain this node does not run was stamped onto the row, which the " +
+			"trim reads as a node holding that log back at zero")
+	}
+}

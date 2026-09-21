@@ -178,6 +178,12 @@ type stateLog struct {
 	// broker.
 	volume string
 
+	// ring is the Tier A keyring every record on every log is signed
+	// under and verified against. Read once at construction: only a
+	// restart changes it, which is the same restart that changes every
+	// other Tier A fact.
+	ring statelog.Keyring
+
 	// snapshot is what this node's snapshot loop last concluded, carried
 	// from that loop to the position heartbeat.
 	//
@@ -341,9 +347,18 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	if err != nil {
 		return nil, err
 	}
+	// THE KEYRING IS REQUIRED WHEREVER A DOMAIN RUNS, and it is checked
+	// here so that the refusal names the configuration rather than
+	// arriving later as one domain's constructor failing. Every record on
+	// every log is signed under it, because the broker has no auth of its
+	// own and a record is whatever the next node applies.
+	if _, err := statelog.NewSigner(registeredDomains()[0].Name(), recordKeyring(boot)); err != nil {
+		return nil, err
+	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &stateLog{
 		domains: map[string]*runningDomain{},
+		ring:    recordKeyring(boot),
 		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
 		metrics: e.metrics,
 		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
@@ -602,8 +617,12 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	if err != nil {
 		return nil, err
 	}
+	verifier, err := s.verifierFor(domain)
+	if err != nil {
+		return nil, err
+	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: domain, Applier: applier, Fetch: consumer,
+		Domain: domain, Applier: applier, Fetch: consumer, Verifier: verifier,
 		// THE REPLICATED HANDLE, not the node one. The applier PINS a
 		// connection for the life of its loop, and the pins live on the
 		// replicated estate's pool — that is where every applier writes,
@@ -661,8 +680,12 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.DomainLog,
 	runner *statelog.Runner) (*statelog.Publisher, func(context.Context) (bool, error), error) {
 
+	signer, err := s.signerFor(domain)
+	if err != nil {
+		return nil, nil, err
+	}
 	deps := statelog.Deps{
-		Domain: domain, Log: appendTo, Waiter: runner, NodeID: s.nodeID,
+		Domain: domain, Log: appendTo, Signer: signer, Waiter: runner, NodeID: s.nodeID,
 		// READ FRESH ON EVERY PUBLISH rather than captured: a reanchor
 		// moves the generation under a running process, and a publisher
 		// stamping the old one would write records every applier reads
@@ -751,7 +774,11 @@ func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainL
 		Metrics: s.metrics,
 	}
 	if encode != nil {
-		index, err := statelog.NewReadIndex(domain, appendTo, encode,
+		signer, err := s.signerFor(domain)
+		if err != nil {
+			return nil, err
+		}
+		index, err := statelog.NewReadIndex(domain, appendTo, signer, encode,
 			func() uint32 { return runner.Committed().Generation }, s.metrics)
 		if err != nil {
 			return nil, fmt.Errorf("engine: build %s's read index: %w", domain.Name(), err)
@@ -2006,6 +2033,20 @@ func stampSnapshot(row *coord.NodePositions, held *snapshotHeld) {
 	row.SnapshotSkip = string(held.Skip)
 	if !held.Have {
 		return
+	}
+	// A SHORT ARTEFACT IS A DONOR FOR NOTHING, so it stamps nothing at
+	// all. [statelog.Offer.Usable] refuses an artefact that names no
+	// position for a domain the RECIPIENT registers, and it refuses it
+	// WHOLESALE — there is no partial adoption. So a node whose newest
+	// artefact predates a domain cannot donate it to anybody, for any
+	// domain, and stamping the domains it does cover would have the trim
+	// count this node as holding a snapshot it can never hand over. That
+	// is the arithmetic that lets a log keep trimming past records no
+	// joiner could then replay.
+	for name := range row.Domains {
+		if _, covered := held.Manifest.Domains[name]; !covered {
+			return
+		}
 	}
 	row.SnapshotBytes = held.Manifest.Bytes
 	for name, at := range held.Manifest.Domains {

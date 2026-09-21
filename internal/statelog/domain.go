@@ -441,6 +441,14 @@ type Record struct {
 	// one reads for itself.
 	StoredAt time.Time
 
+	// verdict is what the framework's signature check concluded about
+	// this record, unexported for [Record.ack]'s reason: it is the
+	// framework's own fact and the apply loop is the only thing that may
+	// act on it. An applier that could read it might branch on it, and a
+	// state machine whose rows depend on which keys the node happened to
+	// hold is no longer a pure function of the record.
+	verdict Verdict
+
 	// ack acknowledges this record's delivery, and is unexported because
 	// exactly one caller may use it: the apply loop, after the transaction
 	// that consumed the record has committed. An applier that could reach

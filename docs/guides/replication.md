@@ -269,7 +269,12 @@ from the work tracker, are the first retired kind.
    held N times.
 5. **Applier occupancy** — the 16 seconds above.
 6. **The snapshot repository** — one artefact per node, sized in
-   [Retention](retention.md).
+   [Retention](retention.md). An artefact is adopted **wholesale**: its
+   manifest names a position per domain, and a joiner refuses one that names
+   no position for a domain its own build registers, because a checkpoint for
+   a domain the file has no rows for is worse than no artefact at all. That is
+   why adding a domain is a coordinated upgrade — see
+   [Running a fleet](fleet.md#draining-and-rolling-upgrades).
 
 ### How the byte ceilings are sized
 

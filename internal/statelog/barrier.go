@@ -93,10 +93,17 @@ type barrierRun struct {
 const DefaultBarrierBudget = 5 * time.Second
 
 // NewReadIndex builds a domain's read index.
-func NewReadIndex(d Domain, log Appender, encode func(Envelope) ([]byte, error),
+func NewReadIndex(d Domain, log Appender, signer *Signer, encode func(Envelope) ([]byte, error),
 	gen func() uint32, rec *metrics.Recorder) (*ReadIndex, error) {
 	spec := d.Stream()
 	if err := spec.Validate(); err != nil {
+		return nil, err
+	}
+	// A BARRIER IS A RECORD ON THE DOMAIN'S OWN LOG, so it is signed like
+	// any other: an unsigned one would let anyone who can reach the broker
+	// satisfy a linearizable read's proof of quorum.
+	signed, err := signing(log, signer, d.Name())
+	if err != nil {
 		return nil, err
 	}
 	if encode == nil {
@@ -110,7 +117,7 @@ func NewReadIndex(d Domain, log Appender, encode func(Envelope) ([]byte, error),
 			"barrier writes no rows at all", d.Name(), class)
 	}
 	return &ReadIndex{
-		log:     log,
+		log:     signed,
 		stream:  spec.Name,
 		subject: spec.SubjectPrefix + "." + BarrierKind,
 		domain:  d.Name(),

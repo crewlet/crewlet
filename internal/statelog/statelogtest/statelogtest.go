@@ -47,7 +47,11 @@ package statelogtest
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -112,25 +116,93 @@ func openEstate(t *testing.T, c Candidate) *store.DB {
 	return db
 }
 
-// countRows is what determinism and idempotency are both asserted over: the
-// exact contents of every table the domain declares, in a stable order.
-func countRows(t *testing.T, db *store.DB, tables map[string]statelog.TableClass) map[string]int {
+// tableContents is what determinism and idempotency are both asserted over:
+// the exact CONTENTS of every table the domain declares, in a stable order.
+//
+// IT USED TO BE `SELECT COUNT(*)`, under a comment claiming exact contents.
+// Two nodes that applied one record and wrote different bytes into the same
+// number of rows passed — which is the whole failure the determinism contract
+// exists to catch, since an applier that reads a clock, a map iteration order
+// or this node's own id produces exactly that: the right shape, the wrong
+// values, on one node out of three. The counts were also what an encrypted
+// domain would have been certified by, and ciphertext that differs per node is
+// invisible to a count.
+//
+// Rows are rendered as text and ordered by every column, so the comparison
+// needs no per-domain key and no knowledge of what any column means.
+func tableContents(t *testing.T, db *store.DB, tables map[string]statelog.TableClass) map[string]string {
 	t.Helper()
-	out := map[string]int{}
+	out := map[string]string{}
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		for name := range tables {
-			var n int
-			if err := tx.QueryRowContext(t.Context(),
-				`SELECT COUNT(*) FROM `+name).Scan(&n); err != nil {
-				return err
+			rendered, err := renderTable(t.Context(), tx, name)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", name, err)
 			}
-			out[name] = n
+			out[name] = rendered
 		}
 		return nil
 	}); err != nil {
-		t.Fatalf("count the domain's rows: %v", err)
+		t.Fatalf("read the domain's rows: %v", err)
 	}
 	return out
+}
+
+// renderTable is one table as a stable string: every column of every row, in
+// an order the rows themselves decide.
+func renderTable(ctx context.Context, tx *sql.Tx, name string) (string, error) {
+	// ORDERED BY EVERY COLUMN rather than by a primary key this suite does
+	// not know: without an ORDER BY the engine may hand back rows in any
+	// order it likes, and a comparison over that would fail on two
+	// identical tables.
+	rows, err := tx.QueryContext(ctx, `SELECT * FROM `+name)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = rows.Close() }()
+	cols, err := rows.Columns()
+	if err != nil {
+		return "", err
+	}
+	var rendered []string
+	for rows.Next() {
+		cells := make([]any, len(cols))
+		into := make([]any, len(cols))
+		for i := range cells {
+			into[i] = &cells[i]
+		}
+		if err := rows.Scan(into...); err != nil {
+			return "", err
+		}
+		var line strings.Builder
+		for i, cell := range cells {
+			if i > 0 {
+				line.WriteByte(0x1f)
+			}
+			// BYTES AS BYTES. A []byte column rendered with %v is a
+			// list of numbers and a string is not, so two tables
+			// holding the same value under different column types
+			// would compare unequal; %q over the byte form makes
+			// both render the same way and keeps a NULL distinct
+			// from an empty string.
+			switch v := cell.(type) {
+			case nil:
+				line.WriteString("NULL")
+			case []byte:
+				line.WriteString(strconv.Quote(string(v)))
+			case string:
+				line.WriteString(strconv.Quote(v))
+			default:
+				fmt.Fprintf(&line, "%v", v)
+			}
+		}
+		rendered = append(rendered, line.String())
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	slices.Sort(rendered)
+	return strings.Join(rendered, "\n"), nil
 }
 
 // runTables certifies that the domain's declared tables accept the framework's

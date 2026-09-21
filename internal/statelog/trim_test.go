@@ -451,3 +451,39 @@ func TestTrimRacesATransfer(t *testing.T) {
 		}
 	})
 }
+
+// TestANodeWhoseArtefactOmitsADomainIsNotCountedInThatDomainsFloor.
+//
+// THE REGRESSION THIS PATH NEVER HAD. The whole chain from an artefact on one
+// node's disk to a term in another node's trim runs through a live fleet, and
+// the one hop that can be exercised without one is this: a node that holds no
+// usable artefact must not count as a donor, because counting it licenses
+// removing records no adoptable artefact covers.
+//
+// The stamping half is the engine's, and its own case proves that a node
+// holding an artefact short of a domain stamps nothing at all — which is what
+// arrives here as HasSnapshot false.
+func TestANodeWhoseArtefactOmitsADomainIsNotCountedInThatDomainsFloor(t *testing.T) {
+	t.Parallel()
+	in := baseInputs()
+	// node-c's newest artefact predates a domain this build registers, so
+	// it stamped nothing and reaches the trim holding none.
+	in.Counted[2].HasSnapshot = false
+	in.Counted[2].SnapshotSeq = 0
+
+	d := statelog.Trim(in.Terms())
+	if d.Blocked() {
+		t.Fatalf("two donors out of three blocked the trim on %s: %s", d.BlockedBy, d.Detail)
+	}
+
+	// CONTROL: with one donor left, the floor must stop being known —
+	// losing any single donor still has to leave a usable artefact.
+	in.Counted[1].HasSnapshot = false
+	in.Counted[1].SnapshotSeq = 0
+	if d := statelog.Trim(in.Terms()); !d.Blocked() {
+		t.Errorf("one donor and two nodes holding nothing trimmed to %d — a node "+
+			"whose artefact no joiner can adopt must not count as a donor", d.To)
+	} else if d.BlockedBy != statelog.TermSnapshotFloor {
+		t.Errorf("blocked by %s, want %s", d.BlockedBy, statelog.TermSnapshotFloor)
+	}
+}

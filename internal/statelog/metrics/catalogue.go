@@ -275,6 +275,23 @@ func Catalogue() []Instrument {
 				"would see that it happened.",
 		},
 		{
+			Name: StatelogRecordsTampered, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain"},
+			Shows: "Records whose signature failed under a key this node " +
+				"holds, which means something that is not this fleet wrote " +
+				"to the broker. The applier stops on the first one, so this " +
+				"counts at most one per domain per stop, and any value above " +
+				"zero is an incident rather than a rate.",
+		},
+		{
+			Name: StatelogRecordsUnverifiable, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain"},
+			Shows: "Records signed under a key this node does not hold, " +
+				"retained until it does. Expected and transient during a " +
+				"keyring rotation; sustained, it means a key reached one " +
+				"node's secrets.keys and not this one's.",
+		},
+		{
 			Name: StatelogDrainRowsPerSecond, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "The applier's observed drain, which every retry hint " +

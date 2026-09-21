@@ -194,34 +194,39 @@ api:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
 
-# ── Secret encryption at rest (OPTIONAL) ──────────────────────────────
+# ── The keyring (REQUIRED) ────────────────────────────────────────────
 #
-# Uncomment to encrypt the ENTIRE Tier B company config at rest. With a
-# keyring configured, the whole company payload is stored as one opaque
-# AES-256-GCM blob (`{"__encrypted__": "enc:v1:…"}`) — org chart,
-# policies, model choices, and every secret are ciphertext in the store.
-# The keyring below is the sole root of trust: it lives here in Tier A /
-# the environment, never in the store.
+# The keyring is this deployment's root of trust, and it does two jobs.
 #
-# Without this block (the default), Tier B is stored verbatim — secrets
-# are `${VAR}` references resolved from the environment at construction
-# time.
+# It SIGNS every record on every state log. The broker has no auth of its
+# own, so a signature is the only thing that says a record came from this
+# fleet rather than from anything else that can reach the cluster port —
+# and a record is whatever the next node applies. A node with no keyring
+# refuses to start for that reason.
 #
-# Enable it:
+# It also ENCRYPTS the Tier B company config at rest, if you ask it to:
+# run `crewlet config seal` once and the whole company payload is stored
+# as one opaque AES-256-GCM blob (`{"__encrypted__": "enc:v1:…"}`) — org
+# chart, policies, model choices and every secret as ciphertext. Without
+# that step Tier B is stored verbatim, with secrets as `${VAR}`
+# references resolved at construction time.
+#
+# Set it up:
 #   1. Mint a key + snippet:   crewlet secrets keygen -key-id 2026-01
 #   2. Export the printed key:  export CREWLET_SECRET_KEY_2026_01=<base64>
-#   3. Uncomment the block, then encrypt the active revision once:
-#        crewlet config seal
-#   Afterwards only this key is needed to read the config.
+#   3. Optionally seal the config too:  crewlet config seal
+#
+# Every node in a fleet needs the SAME keyring: one keyed differently
+# would refuse every peer's records.
 #
 # Rotate the master key with `crewlet config rekey` (keep the old key in
 # `keys` until it succeeds). See docs/concepts/configuration.md#secrets.
 #
-# secrets:
-#   active_key_id: "2026-01"          # which key seals NEW writes
-#   keys:
-#     - id: "2026-01"                 # colon-free id; stamped into every envelope
-#       material: "${CREWLET_SECRET_KEY_2026_01}"   # base64(32 bytes)
+secrets:
+  active_key_id: "2026-01"          # which key seals NEW writes and signs every record
+  keys:
+    - id: "2026-01"                 # colon-free id; stamped into every envelope and record
+      material: "${CREWLET_SECRET_KEY_2026_01}"   # base64(32 bytes)
 #     # During a rotation, keep the previous key here so its ciphertext
 #     # still decrypts, then drop it once `crewlet config rekey` completes:
 #     # - id: "2025-07"

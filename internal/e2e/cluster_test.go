@@ -183,6 +183,11 @@ var errNotRetryable = errors.New("not fixable by another attempt")
 func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, n int) (*cluster, error) {
 	t.Helper()
 	c := &cluster{relays: relays, nodes: make([]*node, n)}
+	// ONE KEYRING FOR THE MESH, minted once and handed to every member.
+	// Every record on every state log is signed under it, so members that
+	// did not share one would refuse each other's records — which is a
+	// property these cases exist to exercise rather than to trip over.
+	ringID, ringMaterial := fleetKeyring(t)
 
 	// CONCURRENTLY, which is what a fleet actually does: n machines boot
 	// independently. Sequentially is not merely slower — it does not work.
@@ -202,7 +207,7 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 			// failure is carried back rather than raised here — a
 			// FailNow from another goroutine ends that goroutine and
 			// leaves the test running with a nil member.
-			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, relays, i, n)
+			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, relays, i, n, ringID, ringMaterial)
 		}()
 	}
 	wg.Wait()
@@ -284,7 +289,8 @@ const clusterHost = "127.0.0.1"
 
 // ctx is the ATTEMPT's, so the retry loop's wall-clock ceiling can interrupt a
 // bring-up rather than only refuse the next one — see [startMesh].
-func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, i, n int) (
+func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, i, n int,
+	ringID, ringMaterial string) (
 	*node, []func(), error) {
 
 	// THE TEARDOWN IS RETURNED, NOT REGISTERED WITH t.Cleanup, because an
@@ -336,6 +342,12 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	}
 	boot := config.DefaultBootstrap()
 	boot.Node.ID = fmt.Sprintf("node-%d", i)
+	// ONE RING FOR THE WHOLE MESH. A member keyed differently would
+	// refuse every peer's records, which is exactly what these cases
+	// exist to prove cannot happen by accident.
+	boot.Secrets.ActiveKeyID, boot.Secrets.Keys = ringID, []config.SecretKey{
+		{ID: ringID, Material: ringMaterial},
+	}
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	boot.Stream.Cluster.Name = jetstreamtest.RelayClusterName

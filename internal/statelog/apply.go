@@ -111,6 +111,11 @@ type RunnerDeps struct {
 	Applier Applier
 	Fetch   Fetcher
 
+	// Verifier authenticates every record before this domain decodes one.
+	// REQUIRED: a runner built without it would apply whatever reached the
+	// broker, and the broker has no auth of its own. See [signature.go].
+	Verifier *Verifier
+
 	// DB is the REPLICATED estate — the file this domain's rows, its
 	// operation ledger, its deferred records, its anchors and its
 	// checkpoint all live in, because contract 2 puts them in one
@@ -164,18 +169,19 @@ type RunnerDeps struct {
 // reads; the waiters at or below it; the domain's own non-row consequences;
 // and only then the acknowledgement, by IDENTITY over every record consumed.
 type Runner struct {
-	domain  Domain
-	applier Applier
-	fetch   Fetcher
-	db      Estate
-	tables  tables
-	spec    StreamSpec
-	metrics *metrics.Recorder
-	logger  *slog.Logger
-	now     func() time.Time
-	opts    ApplyOptions
-	created time.Time
-	gen     uint32
+	domain   Domain
+	applier  Applier
+	fetch    Fetcher
+	verifier *Verifier
+	db       Estate
+	tables   tables
+	spec     StreamSpec
+	metrics  *metrics.Recorder
+	logger   *slog.Logger
+	now      func() time.Time
+	opts     ApplyOptions
+	created  time.Time
+	gen      uint32
 
 	waiters waiters
 
@@ -245,6 +251,15 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		return nil, fmt.Errorf("statelog: applier has no fetcher")
 	case d.DB == nil:
 		return nil, fmt.Errorf("statelog: applier has no database")
+	case d.Verifier == nil:
+		// REFUSED RATHER THAN DEFAULTED TO ACCEPTING EVERYTHING. A
+		// runner with no verifier applies whatever reached the broker,
+		// and the broker has no auth of its own — so the absence of a
+		// keyring must be a boot failure naming what to configure,
+		// never a node that quietly authenticates nothing.
+		return nil, fmt.Errorf("%w: %s's applier has no verifier, so it would apply "+
+			"any record that reached the broker — Tier A secrets.keys is required "+
+			"wherever a state-log domain runs", ErrUnsigned, d.Domain.Name())
 	}
 	spec := d.Domain.Stream()
 	if err := spec.Validate(); err != nil {
@@ -263,17 +278,18 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		now = time.Now
 	}
 	return &Runner{
-		domain:  d.Domain,
-		applier: d.Applier,
-		fetch:   d.Fetch,
-		db:      d.DB,
-		tables:  t,
-		spec:    spec,
-		metrics: d.Metrics,
-		logger:  logger,
-		now:     now,
-		created: d.StreamCreatedAt,
-		gen:     d.Generation,
+		domain:   d.Domain,
+		applier:  d.Applier,
+		fetch:    d.Fetch,
+		verifier: d.Verifier,
+		db:       d.DB,
+		tables:   t,
+		spec:     spec,
+		metrics:  d.Metrics,
+		logger:   logger,
+		now:      now,
+		created:  d.StreamCreatedAt,
+		gen:      d.Generation,
 		opts: ApplyOptions{
 			ArbitratedKinds: spec.ArbitratedKinds,
 			Epoch:           d.Epoch,
@@ -745,7 +761,29 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 				kept++
 				continue
 			}
-			env, err := r.domain.Envelope(row.payload)
+			// RE-VERIFIED, NEVER TRUSTED BECAUSE IT WAS ONCE
+			// FILED. What the table holds is the bytes as
+			// published, so a record retained for an unheld key is
+			// re-opened here and stays retained until the key
+			// arrives — and one that verifies now is applied by a
+			// build that authenticated it, not by one that
+			// remembered an earlier build had looked at it.
+			body, verdict, err := r.verifier.Open(row.payload)
+			if err != nil {
+				return fmt.Errorf("statelog: verify %s's retained record at packed "+
+					"position %d: %w", r.domain.Name(), row.position, err)
+			}
+			switch verdict {
+			case KeyUnknown:
+				kept++
+				continue
+			case Tampered:
+				return fmt.Errorf("%w: %s's retained record at packed position %d is "+
+					"not signed by this fleet — it was filed under a key this node "+
+					"did not hold and now fails under one it does",
+					ErrStopped, r.domain.Name(), row.position)
+			}
+			env, err := r.domain.Envelope(body)
 			if err != nil {
 				return fmt.Errorf("statelog: %s could not read the envelope of a "+
 					"retained record at packed position %d, which every build must "+
@@ -931,7 +969,31 @@ func (r *Runner) budgetWouldBind(run []Record) bool {
 func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) {
 	out := make([]Record, 0, len(batch))
 	for _, m := range batch {
-		env, err := r.domain.Envelope(m.Payload)
+		// VERIFIED BEFORE THE DOMAIN SEES IT. The broker has no auth of
+		// its own, so a record's signature is the only thing that says
+		// it came from this fleet, and handing an unauthenticated
+		// payload to a domain's decoder is handing it to the one place
+		// that parses attacker-controlled bytes.
+		body, verdict, err := r.verifier.Open(m.Payload)
+		if err != nil {
+			return nil, fmt.Errorf("statelog: verify %s's record at sequence %d: %w",
+				r.domain.Name(), m.Seq, err)
+		}
+		if verdict == Tampered {
+			// PERMANENT, and it stops the loop. A record whose MAC
+			// fails under a key this fleet holds was written by
+			// something that is not this fleet; applying past it
+			// would be applying whatever it was written to precede.
+			r.countWith(metrics.StatelogRecordsTampered, metrics.Attrs{
+				"domain": r.domain.Name(),
+			})
+			return nil, r.stop(ctx, fmt.Errorf("%w: %s's record at sequence %d is not "+
+				"signed by this fleet — its frame fails under the keys this node "+
+				"holds (%v), so something that can reach the broker wrote it and "+
+				"this node will not apply it or anything after it",
+				ErrStopped, r.domain.Name(), m.Seq, r.verifier.KeyIDs()))
+		}
+		env, err := r.domain.Envelope(body)
 		if err != nil {
 			// AN UNREADABLE ENVELOPE IS A STOP, not a deferral and not
 			// a retry. The envelope is the half every build can read,
@@ -952,8 +1014,13 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 		out = append(out, Record{
 			Envelope: env,
 			Position: Position{Stream: r.spec.Name, Generation: r.gen, Seq: m.Seq},
+			// THE FRAMED BYTES, not the body: lossless means what was
+			// published, so a record retained here is re-verified by
+			// the build that can finally read it rather than trusted
+			// because an earlier build once looked at it.
 			Payload:  m.Payload,
 			StoredAt: m.StoredAt,
+			verdict:  verdict,
 			ack:      m.Ack,
 		})
 	}
@@ -1041,6 +1108,45 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 			}
 
 			switch {
+			case rec.verdict == KeyUnknown:
+				// THE SAME DISPOSITION AS A RECORD FROM A NEWER
+				// BUILD, and for the same reason: both mean
+				// "this build cannot read this yet", and both
+				// stop being true without the record changing —
+				// one when the build is upgraded, one when the
+				// operator adds the key. Retained under its own
+				// scope, so later records touching the same
+				// objects wait behind it rather than applying on
+				// rows it never wrote.
+				//
+				// A GATE IS STILL A STOP, for the reason the
+				// version arm gives: a deferred gate licenses
+				// every record above it, and an eviction the
+				// evicted node could not read leaves that node
+				// passing every fence it has.
+				if r.domain.InstallsGate(rec.Envelope) {
+					return fmt.Errorf("%w: %s at %s installs an apply gate and is "+
+						"signed under a key this node does not hold (it holds %v) "+
+						"— a gate this node cannot authenticate would license "+
+						"every record above it, so the applier halts and its "+
+						"seats move to a node that can",
+						ErrStopped, rec.Kind, rec.Position, r.verifier.KeyIDs())
+				}
+				if err := r.tables.retain(ctx, tx, rec, r.spec.Replay == ReplayCompacted, opts.MaxVariables); err != nil {
+					return err
+				}
+				hasDeferred = true
+				tally.retained++
+				r.countWith(metrics.StatelogRecordsUnverifiable, metrics.Attrs{
+					"domain": r.domain.Name(),
+				})
+				r.logger.WarnContext(ctx, "statelog_record_unverifiable",
+					"domain", r.domain.Name(), "position", rec.Position.String(),
+					"kind", rec.Kind, "node_holds", r.verifier.KeyIDs(),
+					"detail", "retained until this node's secrets.keys holds the key "+
+						"it was signed under; expected briefly during a keyring "+
+						"rotation and an operator error if it persists")
+
 			case rec.V > r.domain.RecordVersion():
 				if r.domain.InstallsGate(rec.Envelope) {
 					// A GATE IS A STOP, and it is the one
