@@ -174,9 +174,16 @@ func (e A2AChannelOpened) Summary() string {
 	return lead(e.Requester, "opened A2A channel with "+e.Target)
 }
 
-// A2AMessageSent marks a message put on an A2A channel. It is also a trigger
-// the learning subsystem normalizes into an inbound interaction, which is why
-// Sender and Content are the fields that matter downstream.
+// A2AMessageSent marks a message put on an A2A channel — the brief on the way
+// out, and the answer on the way back.
+//
+// AN AUDIT RECORD AND NOTHING ELSE, which this comment used to deny: it said
+// the learning subsystem normalizes it into an inbound interaction. Nothing
+// does. Interactions are built by Engine.interactionsOf out of
+// [ExternalNotification] alone, and internal/learning's own profiler states
+// the opposite in as many words — "an internal trigger (a schedule, a sandbox
+// completion, an A2A ask) carries no interactions". What a turn is woken by is
+// [A2AMessage]; this is the row an operator reads afterwards.
 type A2AMessageSent struct {
 	ChannelID  string `json:"channel_id"`
 	Sender     string `json:"sender"`

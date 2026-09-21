@@ -343,12 +343,17 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	//
 	// WHAT THIS CANNOT DO is give a turn id to an event that does not carry
 	// one. This reads the promoted TAG, which internal/store's own extractor
-	// pulls off the event's `turn_id` FIELD — so an A2A ask (this comment
-	// used to name it as an example, and it never qualified), the scheduler's
-	// cron fire and every other payload with no such field write an empty
-	// column and cannot be read back by turn at all. The Turn screen's bands
-	// are held against exactly that in
+	// pulls off the event's `turn_id` FIELD — so the scheduler's cron fire,
+	// a trigger the dispatcher declined to work, and every other payload
+	// with no such field write an empty column and cannot be read back by
+	// turn at all. The Turn screen's bands are held against exactly that in
 	// internal/events/types/turnbands_client_test.go.
+	//
+	// The A2A audit records used to be this comment's example and are no
+	// longer: internal/a2a stamps the publishing turn on all three, so an
+	// ask is now readable on the turn that made it. What replaced them as
+	// the example is the shape that cannot be repaired — an event published
+	// where no single turn is the right one to name.
 	if spend.TurnID == "" {
 		spend.TurnID = tags["turn_id"]
 	}

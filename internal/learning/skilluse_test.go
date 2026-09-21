@@ -23,12 +23,17 @@ func skillUse(t *testing.T, s *learning.Skills) *learning.SkillUse {
 }
 
 // useTurn is a turn that was offered the named skills.
+//
+// TWO IDENTITIES, NEVER ONE — the run and the unit of work behind it — because
+// both reach this worker's events and they answer different questions: the run
+// is what a Turn screen is keyed on, the work key is what groups a redelivered
+// trigger's several attempts. See ADR-0017.
 func useTurn(ids ...string) learning.Turn {
 	return learning.Turn{
 		Role: &org.Role{Name: "Dev"},
 		Event: types.TurnCompleted{
 			Agent: "agent-uuid", AgentHandle: "dev", RoleName: "Dev",
-			TurnID: "work-1", ToolSequence: []string{"reply"},
+			TurnID: "run-1", WorkKey: "wk-1", ToolSequence: []string{"reply"},
 			ReviewOutcome: "done", SkillsUsed: ids,
 		},
 	}
@@ -97,6 +102,13 @@ func TestReviningAStaleSkillIsAnnounced(t *testing.T) {
 	if ev.SkillID != sk.ID || ev.PriorState != types.SkillStateStale {
 		t.Errorf("event = %+v", ev)
 	}
+	// AND THE TURN THAT DROVE IT. Every other event this worker publishes
+	// has always carried the run id; these two did not, so the Turn screen
+	// — whose one query is `WHERE turn_id = ?` — could never draw them.
+	if ev.TurnID != "run-1" || ev.WorkKey != "wk-1" {
+		t.Errorf("the revival names turn %q / work %q, want this turn's",
+			ev.TurnID, ev.WorkKey)
+	}
 	if got := mustSkill(t, store, sk.ID); got.State != learning.SkillActive {
 		t.Errorf("state = %q, want the row back in the catalogue", got.State)
 	}
@@ -161,6 +173,13 @@ func TestAStampThatCannotBeWrittenIsAnnounced(t *testing.T) {
 	}
 	if ev.SkillID != "sk-that-was-deleted" || ev.Kind != "mark_used" {
 		t.Errorf("event = %+v", ev)
+	}
+	// AND THE TURN, for the reason the revival's does: an operator opens
+	// the turn that used the skill to find out why its stamp stopped
+	// refreshing, and until this was stamped that page could not show it.
+	if ev.TurnID != "run-1" || ev.WorkKey != "wk-1" {
+		t.Errorf("the failed write names turn %q / work %q, want this turn's",
+			ev.TurnID, ev.WorkKey)
 	}
 }
 

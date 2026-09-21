@@ -692,25 +692,6 @@ func resumeTask(in resumeInput) string {
 	return in.Run.TaskDescription
 }
 
-// resumeReply is the delivery obligation a parked run comes back with.
-//
-// OFF THE ROW, and it cannot come from anywhere else. The resumed turn never
-// sees the trigger that raised the obligation, and the event that carries the
-// completion here is the run FINISHING rather than the ask, so [ReplyFor] over
-// it would answer "nobody is waiting" for every turn somebody is waiting on.
-//
-// AN ABSENT VALUE IS [turn.NoReply], which is the reading [sandbox.PendingRun]
-// states for it: the column is `reply,omitempty`, nothing ever rewrites a
-// parked row, and a run launched before the field existed therefore carries
-// none. Read as [turn.ReplyUnset] instead, those rows were refused by
-// [Company.RunnerFor] and could never be resumed at all, so a box that had
-// already done the work was collected and its answer dropped.
-//
-// A value that is PRESENT and unrecognised is refused rather than defaulted: it
-// was written by a build that knows a kind this one does not, and guessing at
-// who is waiting is the half of the delivery question this engine exists to get
-// right. The refusal is a ROUTING failure, like a state this build cannot
-// decode, so the completion goes back for a peer that can read it.
 // resumeInputFor renders a parked run coming back as the loop's own
 // [turn.Input].
 //
@@ -734,6 +715,25 @@ func resumeInputFor(in resumeInput, reply turn.Reply) turn.Input {
 	}
 }
 
+// resumeReply is the delivery obligation a parked run comes back with.
+//
+// OFF THE ROW, and it cannot come from anywhere else. The resumed turn never
+// sees the trigger that raised the obligation, and the event that carries the
+// completion here is the run FINISHING rather than the ask, so [ReplyFor] over
+// it would answer "nobody is waiting" for every turn somebody is waiting on.
+//
+// AN ABSENT VALUE IS [turn.NoReply], which is the reading [sandbox.PendingRun]
+// states for it: the column is `reply,omitempty`, nothing ever rewrites a
+// parked row, and a run launched before the field existed therefore carries
+// none. Read as [turn.ReplyUnset] instead, those rows were refused by
+// [Company.RunnerFor] and could never be resumed at all, so a box that had
+// already done the work was collected and its answer dropped.
+//
+// A value that is PRESENT and unrecognised is refused rather than defaulted: it
+// was written by a build that knows a kind this one does not, and guessing at
+// who is waiting is the half of the delivery question this engine exists to get
+// right. The refusal is a ROUTING failure, like a state this build cannot
+// decode, so the completion goes back for a peer that can read it.
 func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 	if run.Reply == "" {
 		return turn.NoReply(), nil
