@@ -64,7 +64,18 @@ var githubAppPage = template.Must(template.New("github-app").Parse(`<!doctype ht
         font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
       }
       .wrap { width: 100%; max-width: 30rem; text-align: center; }
-      .mark { width: 56px; height: 56px; margin: 0 auto 1.25rem; display: block; }
+      /* ONE AXIS, AND THE FILE DECIDES THE OTHER. crewlet-icon.svg is
+         1467x978 and MEETS its box rather than filling it, so the 56px
+         square this used to be drew 56px of mark across 37px of art and
+         padded the rest: 9.5px of empty box above the figure and 9.5px
+         below. That padding is symmetric, so what it cost was not the
+         centring but the SPACING either side of it: the bottom margin is
+         measured from the box, so the gap to the heading was a declared
+         1.25rem and a drawn 1.84, and no edit to the margin could have
+         found the real number while the box was lying about its height.
+         The same square had the same effect in the dashboard's rail; see
+         .rail-brand img in frame.css. */
+      .mark { width: 56px; height: auto; margin: 0 auto 1.25rem; display: block; }
       h1 {
         margin: 0 0 1.5rem;
         font-size: 1.375rem;
