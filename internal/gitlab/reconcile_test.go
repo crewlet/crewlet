@@ -1250,7 +1250,8 @@ func reconcileWith(t *testing.T, f *adminInstance, sink provision.TokenSink,
 	plan := &provision.Plan{}
 	for handle, tokenVar := range seats {
 		plan.Add(provision.Seat{
-			Handle: handle, Role: strings.ToUpper(handle), TokenVar: tokenVar,
+			Handle: handle, Origin: provision.Origin(handle),
+			Role: strings.ToUpper(handle), TokenVar: tokenVar,
 		})
 	}
 	opts := gitlab.Options{
@@ -1544,7 +1545,7 @@ func TestWithoutAPublicURLNoHookIsGuessed(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 	plan := &provision.Plan{}
-	plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "T"})
+	plan.Add(provision.Seat{Handle: "swe", Origin: "swe", Role: "SWE", TokenVar: "T"})
 
 	res, err := gitlab.Reconcile(context.Background(), gitlab.Options{
 		Client: client, Config: enabledGitLab(), Plan: plan,
@@ -1628,7 +1629,7 @@ func TestACancelledRunStillRevokesWhatItMinted(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	plan := &provision.Plan{}
-	plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+	plan.Add(provision.Seat{Handle: "swe", Origin: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
 
 	// The sink cancels the run as it is asked to record — the shape of an
 	// interrupt arriving between minting and persisting.
@@ -3622,7 +3623,7 @@ func TestACancelledPassWithSeatsMakesNoRequest(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 	plan := &provision.Plan{}
-	plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+	plan.Add(provision.Seat{Handle: "swe", Origin: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -4435,7 +4436,7 @@ func TestABlockedAccountIsReportedRatherThanMintedInto(t *testing.T) {
 	if _, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
 		o.RemoveSeats = true
 		o.Plan = &provision.Plan{}
-		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+		o.Plan.Add(provision.Seat{Handle: "swe", Origin: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
 	}); err != nil {
 		t.Fatalf("disconnect: %v", err)
 	}

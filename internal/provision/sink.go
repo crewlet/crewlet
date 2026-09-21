@@ -294,14 +294,71 @@ const (
 	VerdictOther
 )
 
+// Origin is the handle a seat was CREATED under, and it is what every
+// third-party app account this engine makes is named after.
+//
+// # Why a third-party name may not be built from the live handle
+//
+// None of these apps stores a Crewlet seat id, and none of them lets this
+// engine attach a field of its own that survives: Atlassian accepts a
+// description, answers 200 and keeps nothing (see [atlassian.AccountName]).
+// So the account's OWN name is the only thing a later pass can match on, and
+// a derived name is what lets the pass that creates an account and the
+// teardown that disables it agree about which account is whose with no
+// mapping stored anywhere.
+//
+// That makes the derived name a DURABLE ADDRESS living in somebody else's
+// system — and a handle is not one. A handle is prose a founder retypes, and
+// [org.Role.Origin] exists because renaming a seat must not make it a
+// different seat (adr/0019). Built from the live handle, every rename did
+// three things at once, silently and in somebody's real workspace:
+//
+//   - the next pass looked up a name nothing holds, so it CREATED A SECOND
+//     ACCOUNT while the first stayed live, in the channels, holding a token
+//     this engine had already sealed and would never revoke;
+//   - `-decommission` read the first as a departed seat and disabled the
+//     account the agent was working as;
+//   - Datadog's orphan sweep reported it exactly right and could do nothing
+//     about it — "a renamed seat's identity, live, holding whatever it held,
+//     matching nothing any pass will ever ask for again"
+//     ([datadog.orphanedAccounts]).
+//
+// The origin is frozen by a seat's FIRST rename and never moves again, so a
+// name derived from it is stable for the life of the seat. For a seat that
+// was never renamed it is the handle, byte for byte, which is why this
+// changes nothing at any app that is already converged.
+//
+// # And why it is its own type
+//
+// Every derivation here takes one string and an accidental handle produces a
+// perfectly valid name for an account nobody holds — which is the bug above,
+// reintroduced silently, in a write to somebody else's Mattermost, GitLab
+// or Datadog. A distinct type makes that a compile error, and the conversions
+// left over mark the two places a string genuinely becomes an origin: a plan
+// built from the chart, and a decommission reading one back out of a managed
+// account's own name.
+type Origin string
+
 // Seat is one agent seat a provisioner has work to do for.
 //
 // The integration-specific scan produces these; everything below is shared.
 // Held as a struct rather than passed as four arguments because a report
 // groups by it and a rollback iterates it.
 type Seat struct {
-	// Handle is the seat, for the report.
+	// Handle is the seat AS IT IS ADDRESSED TODAY: what a report prints,
+	// what `-handles` filters on, and what an operator reading either one
+	// will look for in the org chart.
+	//
+	// NEVER what a third-party account is named after — see [Origin] for
+	// the three things that went wrong when it was.
 	Handle string
+
+	// Origin is the handle this seat was created under, which is what its
+	// account at every third-party app is named after.
+	//
+	// Equal to Handle for a seat that was never renamed, which is every
+	// seat in a company that has not used the gesture.
+	Origin Origin
 
 	// Role is the seat's role name, which is what a third-party app account is
 	// usually named after.
@@ -350,7 +407,23 @@ type Plan struct {
 // ORDERED, because the report is read side by side with a previous run's
 // and a plan whose order came from a map iteration cannot be compared with
 // anything.
+//
+// A SEAT WITH NO ORIGIN IS REFUSED rather than provisioned, and this is the
+// one place that can see it: every scan builds its own [Seat] and they all
+// come through here. It matters because an empty [Origin] is not a name that
+// fails — every derivation renders it as the bare prefix, so `crewlet-` is a
+// perfectly valid account name and TWO seats missing it resolve to ONE
+// account, holding one credential, acting as both agents. Skipping is
+// recoverable and says so in the report an operator reads; a shared identity
+// between two agents is neither, and nothing downstream could tell it from a
+// seat that legitimately shares.
 func (p *Plan) Add(s Seat) {
+	if strings.TrimSpace(string(s.Origin)) == "" {
+		p.Note("%s: this seat was scanned without the handle it was created "+
+			"under, so there is no stable name to hold its account at the "+
+			"third-party app and it was left alone", s.Handle)
+		return
+	}
 	p.Seats = append(p.Seats, s)
 	slices.SortFunc(p.Seats, func(a, b Seat) int { return cmp.Compare(a.Handle, b.Handle) })
 }

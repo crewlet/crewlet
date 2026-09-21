@@ -146,6 +146,31 @@ flowchart LR
 
 ---
 
+## Renaming a seat
+
+**An agent's account at a third-party app is named after the handle the seat was *created* under, not the one it answers to now.** Renaming a seat in the org chart moves its address and nothing else — its account at Mattermost, GitLab, Datadog and Atlassian stays exactly where it is, under exactly the name it already has, and the next pass recognises it.
+
+That is worth stating because the obvious alternative reads better and is wrong. None of these apps stores a Crewlet seat id, and none of them lets the engine attach a field of its own that survives — Atlassian accepts a description on the create call, answers `200`, and keeps nothing. So the account's **own name is the only thing a later pass can match on**, which makes that name a durable address living in somebody else's system. A handle is not one: it is prose a founder retypes.
+
+Built from the live handle, a single rename did three things at once, silently, in a real workspace:
+
+- the next pass looked up a name nothing holds and **created a second account**, while the first stayed live, in the channels, holding a token the engine had already sealed and would never revoke;
+- `-decommission` read the first as a **departed seat** — and disabled, or at GitLab *deleted*, the account the agent was actually working as;
+- Datadog's orphan sweep reported it exactly right and could do nothing about it, because Datadog will not change an account's address at all.
+
+Where each app's name comes from:
+
+| App | The account's name | What follows the chart instead |
+|---|---|---|
+| Mattermost | `{username_prefix}{origin handle}`, and the token description `crewlet-<origin handle>` | the bot's **display name**, patched to `{role name}{display_name_suffix}` on every pass |
+| GitLab | `{username_prefix}-{origin handle}`, and the token name `crewlet-<origin handle>` | — |
+| Datadog | the account address, `crewlet-<origin handle>@{email_domain}` | — |
+| Atlassian | the marker inside the display name, `{role} (crewlet:<origin handle>)` | the `{role}` label in front of the marker |
+
+A seat that has never been renamed has an origin handle equal to its handle, byte for byte, so none of this changes anything at a company that has not used the gesture.
+
+**What still follows the rename is every reference a person wrote.** A Datadog monitor tagged `crewlet:sre-lead`, a channel topic, a runbook line: those resolve through the seat's [alias list](organization-model.md), so an alert tagged with a retired handle still wakes the seat. The alias list is capped and the origin is not, which is the difference between the two — an alias keeps a reference working, and the origin *is* the identity. See [ADR-0019](https://github.com/crewlet/crewlet/blob/main/adr/0019-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md).
+
 ## What the loop does, and what it leaves alone
 
 **It does not tear anything down.** Removing an integration block from the company document says what the engine should stop talking to. It does not say that fifteen service accounts, and everything attributable to them, should be destroyed. A removed block makes the loop forget the surface's status and nothing else; decommissioning stays an explicit flag on the third-party app's own subcommand, where you type it and read what it is about to delete.

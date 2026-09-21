@@ -10,7 +10,7 @@ import (
 
 // AccountName is the display name one seat's account carries.
 //
-// IT CARRIES THE HANDLE, and that is what makes the pass idempotent.
+// IT CARRIES THE ORIGIN HANDLE, and that is what makes the pass idempotent.
 // Atlassian assigns the account id and derives the address from the name, so
 // there is nothing to store on the seat and no stable field of this engine's
 // own to match on — except this one.
@@ -21,29 +21,42 @@ import (
 // every pass failed to recognise the accounts the last one made and created
 // another. Four runs, four accounts for one agent, before a listing showed
 // it. The name is the field that survives.
-func AccountName(role, handle string) string {
+//
+// THE ORIGIN RATHER THAN THE LIVE HANDLE, because a marker built from an
+// address that moves fails in exactly the way the description did — one
+// rename and the next pass recognises none of this seat's accounts. It is the
+// one place here where the same string is both a LABEL and a KEY, so the two
+// halves are drawn from different facts on purpose: the label is the role as
+// the chart names it today, and the marker is the identity that cannot move.
+// See [provision.Origin].
+func AccountName(role string, origin provision.Origin) string {
 	label := strings.TrimSpace(role)
 	if label == "" {
-		label = handle
+		label = string(origin)
 	}
-	return fmt.Sprintf("%s (crewlet:%s)", label, handle)
+	return fmt.Sprintf("%s (crewlet:%s)", label, origin)
 }
 
-// HandleFrom reads the seat back out of an account's display name, or empty
-// for an account this engine did not create.
+// OriginFrom reads the seat's origin handle back out of an account's display
+// name, or empty for an account this engine did not create.
 //
 // It is what keeps a disconnect from deleting somebody else's service
 // account, so it matches the whole marker rather than a prefix.
-func HandleFrom(displayName string) string {
+//
+// AN ORIGIN, NOT A HANDLE, and the name says so because the difference is
+// invisible in the value: what comes back is whatever [AccountName] put in,
+// which is the handle this seat was created under and not necessarily the one
+// the chart calls it today. Read as a live handle it matches no seat at all.
+func OriginFrom(displayName string) provision.Origin {
 	_, rest, found := strings.Cut(strings.TrimSpace(displayName), "(crewlet:")
 	if !found {
 		return ""
 	}
-	handle, closed := strings.CutSuffix(rest, ")")
+	origin, closed := strings.CutSuffix(rest, ")")
 	if !closed {
 		return ""
 	}
-	return strings.TrimSpace(handle)
+	return provision.Origin(strings.TrimSpace(origin))
 }
 
 // PlanFor is the seats this company wants an Atlassian identity for.
@@ -79,7 +92,10 @@ func PlanFor(o *org.Organization) (*provision.Plan, error) {
 				"manage this seat's account by hand", handle, key)
 			continue
 		}
-		entry := provision.Seat{Handle: handle, Role: seat.Name, TokenVar: name}
+		entry := provision.Seat{
+			Handle: handle, Origin: provision.Origin(seat.Origin()),
+			Role: seat.Name, TokenVar: name,
+		}
 		// WHERE THE ADDRESS GOES. Atlassian names the account itself, and its
 		// product APIs take Basic base64(address:token), so a seat holding
 		// only the token authenticates as nobody. The address is not

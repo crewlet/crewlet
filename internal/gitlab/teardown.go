@@ -271,7 +271,7 @@ func removeAccounts(
 	// the same fact N times in a report an operator reads.
 	var stranded []string
 	for _, seat := range opts.Plan.Seats {
-		username := Username(opts.Config.Provisioning, seat.Handle)
+		username := Username(opts.Config.Provisioning, seat.Origin)
 		user, found, err := opts.Client.UserByUsername(ctx, username)
 		if err != nil {
 			failures = append(failures, fmt.Errorf(

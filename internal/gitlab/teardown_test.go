@@ -136,7 +136,7 @@ func TestAGroupThatDoesNotResolveDoesNotReportLiveAccountsAsRemoved(t *testing.T
 	removed, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
 		o.RemoveSeats = true
 		o.Plan = &provision.Plan{}
-		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+		o.Plan.Add(provision.Seat{Handle: "swe", Origin: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
 	})
 	if err == nil {
 		t.Fatal("a group that does not resolve, over an account that is still " +
@@ -163,7 +163,7 @@ func TestAGroupThatDoesNotResolveStillReportsAnAccountThatIsGone(t *testing.T) {
 	removed, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
 		o.RemoveSeats = true
 		o.Plan = &provision.Plan{}
-		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+		o.Plan.Add(provision.Seat{Handle: "swe", Origin: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
 	})
 	if err != nil {
 		t.Fatalf("Teardown: %v", err)
@@ -189,7 +189,7 @@ func TestAGroupOwnedAccountIsNotDeletedThroughAGroupThatIsNotThere(t *testing.T)
 	_, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
 		o.RemoveSeats = true
 		o.Plan = &provision.Plan{}
-		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+		o.Plan.Add(provision.Seat{Handle: "swe", Origin: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
 	})
 	if err == nil {
 		t.Fatal("the delete was reported as done")
@@ -220,7 +220,7 @@ func TestARemovedAccountKeepsNoWorkingToken(t *testing.T) {
 	removed, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
 		o.RemoveSeats = true
 		o.Plan = &provision.Plan{}
-		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+		o.Plan.Add(provision.Seat{Handle: "swe", Origin: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
 	})
 	if err != nil {
 		t.Fatalf("Teardown: %v", err)
@@ -253,7 +253,7 @@ func TestATokenThatCannotBeRevokedLeavesTheAccountIntact(t *testing.T) {
 	removed, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
 		o.RemoveSeats = true
 		o.Plan = &provision.Plan{}
-		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+		o.Plan.Add(provision.Seat{Handle: "swe", Origin: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
 	})
 	if err == nil {
 		t.Fatal("a teardown that could not revoke a live token reported success")

@@ -375,7 +375,7 @@ func provisionSeat(
 		return out
 	default:
 		created, err := opts.Client.CreateServiceAccount(
-			ctx, opts.Creds, seat.Email, AccountName(seat.Role, seat.Handle), roleID)
+			ctx, opts.Creds, seat.Email, AccountName(seat.Role, seat.Origin), roleID)
 		if err != nil {
 			out.Err = fmt.Errorf("create the account for %s: %w", seat.Handle,
 				integration.Reject(err, Status(err)))

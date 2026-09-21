@@ -86,11 +86,13 @@ func PlanFor(o *org.Organization, cfg *config.Datadog) (*provision.Plan, error) 
 				"variable, or manage this seat's key by hand", handle, key)
 			continue
 		}
+		origin := provision.Origin(seat.Origin())
 		plan.Add(provision.Seat{
 			Handle:   handle,
+			Origin:   origin,
 			Role:     seat.Name,
 			TokenVar: name,
-			Email:    AccountEmail(cfg.Provisioning, handle),
+			Email:    AccountEmail(cfg.Provisioning, origin),
 		})
 	}
 	return plan, nil
@@ -109,10 +111,14 @@ func firstCredential(block map[string]string) (string, string) {
 // AccountEmail is the address one seat's service account is created with.
 //
 // DERIVED, so the pass that creates an account and the teardown that disables
-// it agree about which account is whose without storing a mapping. The handle
-// is the only part that varies, which is what makes the address a stable name
-// for a seat rather than a value somebody has to look up.
-func AccountEmail(p *config.DatadogProvisioning, handle string) string {
+// it agree about which account is whose without storing a mapping.
+//
+// FROM THE ORIGIN HANDLE, which is what makes the address stable for the life
+// of the seat: Datadog will not change an account's address at all, so one
+// derived from a handle that moves is unreachable the moment somebody renames
+// the seat — and this package already says what that costs, at
+// [orphanedAccounts]. See [provision.Origin].
+func AccountEmail(p *config.DatadogProvisioning, origin provision.Origin) string {
 	domain := DefaultEmailDomain
 	if p != nil && strings.TrimSpace(p.EmailDomain) != "" {
 		domain = strings.TrimSpace(p.EmailDomain)
@@ -123,14 +129,18 @@ func AccountEmail(p *config.DatadogProvisioning, handle string) string {
 	// marker (topics.AgentGroupPrefix), and a literal of it here reads to
 	// the hand-built-subject guard exactly like somebody assembling a
 	// consumer group by hand.
-	return fmt.Sprintf("crewlet-%s@%s", handle, domain)
+	return fmt.Sprintf("crewlet-%s@%s", origin, domain)
 }
 
 // AccountName is the display name one seat's account carries, so a person
 // reading Datadog's user list can tell which agent it is.
-func AccountName(role, handle string) string {
+//
+// The origin is the FALLBACK LABEL only, for a seat whose role is unnamed —
+// the same string [AccountEmail] puts in the address, so the two columns of
+// Datadog's user list agree rather than naming a seat two ways.
+func AccountName(role string, origin provision.Origin) string {
 	if strings.TrimSpace(role) == "" {
-		return handle + " (Crewlet)"
+		return string(origin) + " (Crewlet)"
 	}
 	return role + " (Crewlet)"
 }

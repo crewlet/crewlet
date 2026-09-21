@@ -27,7 +27,7 @@ func TestATeardownReportsAnEndStateAndNamesBothSlots(t *testing.T) {
 	o := &stubOrg{empty: true}
 	plan := &provision.Plan{}
 	plan.Add(provision.Seat{
-		Handle: "sre-lead", Role: "SRE Lead",
+		Handle: "sre-lead", Origin: "sre-lead", Role: "SRE Lead",
 		TokenVar: "SRE_ATLASSIAN_TOKEN", EmailVar: "SRE_ATLASSIAN_EMAIL",
 	})
 

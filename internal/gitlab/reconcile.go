@@ -428,7 +428,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// gitlab.com for every seat. Zero on the instance path, where the
 		// credential is an admin token and no group owns the account.
 		token, err := opts.Client.CreateToken(ctx, mintGroup(opts, group.ID), user.ID,
-			TokenName(seat.Handle), tokenScopes(p), expiry(opts))
+			TokenName(seat.Origin), tokenScopes(p), expiry(opts))
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("gitlab: %s: mint token: %w", seat.Handle, err))
@@ -476,7 +476,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 					"gitlab: %s: this account cannot authenticate, and the "+
 						"token just minted for it could not be revoked — "+
 						"revoke tokens named %q on user %d at GitLab: %w",
-					seat.Handle, TokenName(seat.Handle), user.ID, rerr))
+					seat.Handle, TokenName(seat.Origin), user.ID, rerr))
 			}
 			res.Unusable = append(res.Unusable, seat.Handle)
 			res.Notes = append(res.Notes, fmt.Sprintf(
@@ -718,7 +718,10 @@ type mintedToken struct {
 // retire step key on it — so it is a named function rather than a format
 // string repeated at three call sites, where the three would eventually
 // differ and rotation would quietly stop retiring anything.
-func TokenName(handle string) string { return "crewlet-" + handle }
+// FROM THE ORIGIN, for the reason [Username] gives: the retire step matches
+// this name against what a previous pass minted, so a name that moved with a
+// rename would leave every earlier token live and unrecognised.
+func TokenName(origin provision.Origin) string { return "crewlet-" + string(origin) }
 
 // credentialFor decides whether this seat already has a working token.
 //
@@ -790,7 +793,7 @@ func retirePrevious(
 		// nothing and every rotation leaves another behind, so a run
 		// without this issues one more pointless request than the run
 		// before it, for ever.
-		if token.ID == keep || token.Revoked || token.Name != TokenName(seat.Handle) {
+		if token.ID == keep || token.Revoked || token.Name != TokenName(seat.Origin) {
 			continue
 		}
 		if err := opts.Client.RevokeToken(ctx, groupID, userID, token.ID); err != nil {
@@ -871,7 +874,7 @@ func ensureAccount(ctx context.Context, opts Options, groupID int,
 	seat provision.Seat,
 ) (User, bool, error) {
 	p := opts.Config.Provisioning
-	username := Username(p, seat.Handle)
+	username := Username(p, seat.Origin)
 	user, found, err := opts.Client.UserByUsername(ctx, username)
 	if err != nil {
 		return User{}, false, err
@@ -1019,7 +1022,7 @@ func decommission(ctx context.Context, opts Options, groupID int, members []Memb
 	prefix := strings.ToLower(Username(p, ""))
 	keep := make(map[string]bool, len(opts.Plan.Seats))
 	for _, seat := range opts.Plan.Seats {
-		keep[strings.ToLower(Username(p, seat.Handle))] = true
+		keep[strings.ToLower(Username(p, seat.Origin))] = true
 	}
 	var removed, notes []string
 	for _, member := range members {

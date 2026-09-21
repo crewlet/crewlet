@@ -199,7 +199,7 @@ func reconcile(
 	t.Helper()
 	plan := &provision.Plan{}
 	plan.Add(provision.Seat{
-		Handle: "sre-lead", Role: "SRE Lead",
+		Handle: "sre-lead", Origin: "sre-lead", Role: "SRE Lead",
 		TokenVar: "SEAT_TOKEN", EmailVar: "SEAT_EMAIL",
 	})
 	return atlassian.Reconcile(ctx, atlassian.Options{

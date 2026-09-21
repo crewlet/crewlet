@@ -244,15 +244,15 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// BY THE MARKER IN THE DISPLAY NAME, which is the only field of this
 	// engine's own that Atlassian keeps: it accepts a description, answers
 	// 200 and stores nothing. See [AccountName].
-	byHandle := map[string]ServiceAccount{}
+	byOrigin := map[provision.Origin]ServiceAccount{}
 	for _, account := range existing {
-		if handle := HandleFrom(account.DisplayName); handle != "" {
-			byHandle[handle] = account
+		if origin := OriginFrom(account.DisplayName); origin != "" {
+			byOrigin[origin] = account
 		}
 	}
 
 	for _, seat := range opts.Plan.Seats {
-		res.Seats = append(res.Seats, reconcileSeat(ctx, opts, seat, site.CloudID, byHandle))
+		res.Seats = append(res.Seats, reconcileSeat(ctx, opts, seat, site.CloudID, byOrigin))
 		// AND CANCELLED PART-WAY THROUGH IS THE SAME ANSWER, which the
 		// check at the top cannot give.
 		//
@@ -275,10 +275,10 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 // reconcileSeat brings one seat's identity into line.
 func reconcileSeat(
 	ctx context.Context, opts Options, seat provision.Seat, site string,
-	byHandle map[string]ServiceAccount,
+	byOrigin map[provision.Origin]ServiceAccount,
 ) SeatResult {
 	out := SeatResult{Handle: seat.Handle}
-	account, found := byHandle[seat.Handle]
+	account, found := byOrigin[seat.Origin]
 
 	// WHETHER THIS PASS MAY WRITE AT ALL, asked once and by
 	// [provision.CanMint] rather than by a nil check.
@@ -301,7 +301,7 @@ func reconcileSeat(
 		return out
 	default:
 		created, err := opts.Client.CreateServiceAccount(ctx, opts.Key, opts.OrgID,
-			AccountName(seat.Role, seat.Handle), "")
+			AccountName(seat.Role, seat.Origin), "")
 		if err != nil {
 			out.Err = fmt.Errorf("atlassian: create the account for %s: %w", seat.Handle, err)
 			return out

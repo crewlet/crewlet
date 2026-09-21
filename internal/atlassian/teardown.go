@@ -58,23 +58,27 @@ func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, err
 	if err != nil {
 		return removed, fmt.Errorf("atlassian: list service accounts: %w", err)
 	}
-	wanted := map[string]provision.Seat{}
+	wanted := map[provision.Origin]provision.Seat{}
 	if opts.Plan != nil {
 		for _, seat := range opts.Plan.Seats {
-			wanted[seat.Handle] = seat
+			wanted[seat.Origin] = seat
 		}
 	}
 	for _, account := range accounts {
-		handle := HandleFrom(account.DisplayName)
-		seat, planned := wanted[handle]
-		if handle == "" || !planned {
+		origin := OriginFrom(account.DisplayName)
+		seat, planned := wanted[origin]
+		if origin == "" || !planned {
 			continue
 		}
 		if err := opts.Client.DeleteServiceAccount(ctx, opts.Key, account.ID); err != nil {
-			return removed, fmt.Errorf("atlassian: delete the account for %s: %w", handle, err)
+			// NAMED BY THE SEAT, not by the marker: the origin is how this
+			// account was found and the handle is what an operator reading
+			// the failure will look for in the chart.
+			return removed, fmt.Errorf(
+				"atlassian: delete the account for %s: %w", seat.Handle, err)
 		}
 		removed.Add(removalFor(seat, account.Email))
-		delete(wanted, handle)
+		delete(wanted, origin)
 	}
 	// WHAT WAS ALREADY GONE. Everything still in `wanted` has no account in
 	// the organization, so its credentials are dead whoever removed it.

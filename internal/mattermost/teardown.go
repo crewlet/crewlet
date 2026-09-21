@@ -78,7 +78,7 @@ func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, err
 
 	var failures []error
 	for _, seat := range opts.Plan.Seats {
-		username := BotUsername(opts.Config.Provisioning, seat.Handle)
+		username := BotUsername(opts.Config.Provisioning, seat.Origin)
 		bot, found, err := opts.Client.BotByUsername(ctx, username)
 		if err != nil {
 			failures = append(failures, fmt.Errorf(
@@ -100,7 +100,7 @@ func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, err
 		// that works again the moment anybody re-enables the account.
 		// The first is the safer thing to be interrupted at.
 		if _, err := opts.Client.RevokeMinted(ctx, bot.ID,
-			TokenDescription(seat.Handle), ""); err != nil {
+			TokenDescription(seat.Origin), ""); err != nil {
 			failures = append(failures, fmt.Errorf(
 				"mattermost: revoke %s's tokens before disabling it: %w",
 				username, err))

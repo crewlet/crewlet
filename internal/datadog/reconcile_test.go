@@ -91,7 +91,7 @@ func planWith(handles ...string) *provision.Plan {
 	p := &provision.Plan{}
 	for _, h := range handles {
 		p.Add(provision.Seat{
-			Handle: h, Role: strings.ToUpper(h),
+			Handle: h, Origin: provision.Origin(h), Role: strings.ToUpper(h),
 			TokenVar: strings.ToUpper(h) + "_DD_KEY",
 			Email:    "crewlet-" + h + "@agents.test.invalid",
 		})

@@ -90,6 +90,7 @@ func PlanFor(o *org.Organization, cfg *config.GitLab) (*provision.Plan, error) {
 		// NO EMAIL, and that omission is the whole of the fix below.
 		plan.Add(provision.Seat{
 			Handle:   handle,
+			Origin:   provision.Origin(seat.Origin()),
 			Role:     seat.Name,
 			TokenVar: name,
 		})
@@ -146,10 +147,16 @@ func stripScheme(value string) string {
 // derived one was making and is one the instance can actually keep.
 
 // Username is the service-account name for a seat.
-func Username(p *config.GitLabProvisioning, handle string) string {
+//
+// FROM THE ORIGIN HANDLE, never the live one: GitLab keeps no field of this
+// engine's own, so this name is how the next pass recognises the account it
+// made. Derived from a handle that moves, a rename left the service account
+// running and unmatched, made a second beside it, and had `-decommission`
+// delete the first. See [provision.Origin].
+func Username(p *config.GitLabProvisioning, origin provision.Origin) string {
 	prefix := strings.TrimSpace(p.UsernamePrefix)
 	if prefix == "" {
 		prefix = "crewlet"
 	}
-	return prefix + "-" + handle
+	return prefix + "-" + string(origin)
 }

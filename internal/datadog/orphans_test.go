@@ -246,7 +246,7 @@ func TestARealDomainNeedsTheCrewletPrefix(t *testing.T) {
 	}}
 	plan := &provision.Plan{}
 	plan.Add(provision.Seat{
-		Handle: "sre", Role: "SRE", TokenVar: "SRE_DD_KEY",
+		Handle: "sre", Origin: "sre", Role: "SRE", TokenVar: "SRE_DD_KEY",
 		Email: "crewlet-sre@acme.example",
 	})
 

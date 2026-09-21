@@ -23,6 +23,18 @@ is a separate field with a separate job: an alias keeps a REFERENCE somebody
 wrote down working and is capped, while the origin is the seat's identity and
 can never be dropped.
 
+A second family of consumers keys on the ORIGIN HANDLE ITSELF rather than on
+the id derived from it, and the difference is forced rather than chosen: an
+agent's account at Mattermost, GitLab, Datadog and Atlassian is named after
+its origin, because none of those apps stores a Crewlet id, none of them keeps
+a field of this engine's own, and a uuid in a bot username is a name no person
+can read. What that buys is the same thing the id buys — a durable address
+that a rename does not move — and the failure it avoids is worse than an
+orphan, because the account is live in somebody else's system: a second bot
+created beside the first, the first still holding a sealed token, and
+`-decommission` deleting the one the agent is working as. `internal/provision`
+is the one place that can refuse a seat with no origin, and does.
+
 ## Why the obvious alternative is wrong
 
 ADR-0013's alternative was a minted uuid in a row, and it rejected it because

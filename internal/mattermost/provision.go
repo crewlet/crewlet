@@ -55,9 +55,10 @@ func PlanFor(o *org.Organization, cfg *config.Mattermost) (*provision.Plan, erro
 				handle, provision.Shape(seat.Mattermost.BotToken))
 			continue
 		}
+		origin := provision.Origin(seat.Origin())
 		plan.Add(provision.Seat{
-			Handle: handle, Role: seat.Name, TokenVar: name,
-			Email: BotEmail(cfg.Provisioning, handle),
+			Handle: handle, Origin: origin, Role: seat.Name, TokenVar: name,
+			Email: BotEmail(cfg.Provisioning, origin),
 		})
 	}
 	return plan, nil
@@ -65,20 +66,24 @@ func PlanFor(o *org.Organization, cfg *config.Mattermost) (*provision.Plan, erro
 
 // BotUsername is a seat's bot username.
 //
+// FROM THE ORIGIN HANDLE, never the live one: this is the name the next pass
+// looks the account up by, so a rename that moved it would leave the running
+// bot unmatched and make a second. See [provision.Origin].
+//
 // LOWERCASED, because Mattermost usernames are and a mixed-case handle would
 // be created as one thing and looked up as another on the next run — which
 // reads as "the bot is missing" and creates a second.
-func BotUsername(p *config.MattermostProvisioning, handle string) string {
+func BotUsername(p *config.MattermostProvisioning, origin provision.Origin) string {
 	prefix := ""
 	if p != nil {
 		prefix = strings.TrimSpace(p.UsernamePrefix)
 	}
-	return strings.ToLower(prefix + handle)
+	return strings.ToLower(prefix + string(origin))
 }
 
 // BotEmail is the address a bot account is created with.
-func BotEmail(p *config.MattermostProvisioning, handle string) string {
-	return BotUsername(p, handle) + "@noreply.crewlet.invalid"
+func BotEmail(p *config.MattermostProvisioning, origin provision.Origin) string {
+	return BotUsername(p, origin) + "@noreply.crewlet.invalid"
 }
 
 // BotDisplayName is what a person sees beside the bot's posts.
@@ -235,11 +240,11 @@ func (c *Client) RevokeTokens(ctx context.Context, userID string) error {
 // an administrator's own token or leave a live one behind, silently either
 // way.
 //
-// FOLDED, because the description is built from a seat handle a person wrote
-// (see [TokenDescription]) and a decommission recovers that handle from the
-// LOWERCASED username Mattermost stores. Comparing exactly there would leave
-// a mixed-case seat's credential live on an account this engine had just
-// disabled.
+// FOLDED, because the description is built from an origin handle a person
+// wrote (see [TokenDescription]) and a decommission recovers that origin from
+// the LOWERCASED username Mattermost stores. Comparing exactly there would
+// leave a mixed-case seat's credential live on an account this engine had
+// just disabled.
 func (c *Client) RevokeMinted(ctx context.Context, userID, description, keep string) (int, error) {
 	tokens, err := c.Tokens(ctx, userID)
 	if err != nil {

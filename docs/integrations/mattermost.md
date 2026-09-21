@@ -37,8 +37,8 @@ each seat's bot token and then disables its bot, in that order. The revoke is
 what makes the disable stand up: a disabled account keeps its username and its
 tokens, so a token left behind starts working again the moment anything
 re-enables the bot, this engine's own reconnect included. Only tokens this
-tool minted are taken (matched on the `crewlet-<handle>` description), so an
-administrator's own token on the same account is left alone. A token that
+tool minted are taken (matched on the `crewlet-<origin handle>` description),
+so an administrator's own token on the same account is left alone. A token that
 cannot be revoked fails the disconnect with the bot left **enabled**, rather
 than leaving a disabled account quietly holding a live credential; repeating
 the disconnect resumes there. The sealed `${VAR}` is left in the secret store
@@ -259,7 +259,7 @@ which is reported and left untouched.
 | `url` | Instance base URL. Required when enabled. |
 | `team` | Team slug agents belong to. Required — channels are team-scoped. |
 | `typing_status` | `always` (default) / `addressed`. See [Working status](#working-status). |
-| `provisioning.username_prefix` | Prepended to each handle to form the bot username. |
+| `provisioning.username_prefix` | Prepended to each seat's [origin handle](../concepts/integration-reconcile.md#renaming-a-seat) to form the bot username. |
 | `provisioning.channels` | Channels every agent bot is added to. |
 | `provisioning.display_name_suffix` | Appended to each bot's display name. |
 
@@ -298,7 +298,9 @@ crewlet mattermost provision company.yaml
 For every Mattermost-enabled agent seat the command:
 
 1. **finds or creates the bot account** at a deterministic username
-   (`{username_prefix}{handle}`, or an explicit `username`);
+   (`{username_prefix}{origin handle}`, or an explicit `username`) — see
+   [Renaming a seat](../concepts/integration-reconcile.md#renaming-a-seat)
+   for why it is the seat's *origin* handle;
 2. **re-enables it if this engine's own disconnect disabled it**, and only
    then — a disabled bot still owns its username, so creating over it fails
    with a conflict nothing else would explain. The test is the
@@ -458,7 +460,8 @@ a command whose whole promise is that it is safe to re-run.
 So a bot is left alone when **both** halves hold: the variable holding its
 token still has a value (answered by the sink the run is writing to, and an
 *unreadable* sink stops the run rather than being read as empty), and the
-account still has a token under this tool's description, `crewlet-<handle>`.
+account still has a token under this tool's description,
+`crewlet-<origin handle>`.
 Either alone is wrong — a recorded value whose token was revoked leaves a
 bot 401ing for ever, and a live token nobody wrote down cannot be deployed.
 

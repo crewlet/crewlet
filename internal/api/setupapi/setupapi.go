@@ -657,11 +657,11 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		summary = datadog.Summary()
 		reqs = datadog.Requirements(block, s.resolve)
 		at := mcpEnvAt([]string{datadog.SeatEnv}, datadog.CredentialKeys)
-		at.Identity = derivedIdentity(func(handle string) string {
+		at.Identity = derivedIdentity(func(origin provision.Origin) string {
 			if block == nil {
 				return ""
 			}
-			return datadog.AccountEmail(block.Provisioning, handle)
+			return datadog.AccountEmail(block.Provisioning, origin)
 		})
 		at.Configured = block != nil
 		seats = credentialSeats(roster, s.resolve, at, "Datadog",
@@ -730,11 +730,11 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		summary = gitlab.Summary()
 		reqs = gitlab.Requirements(block, s.resolve)
 		at := mcpEnvAt([]string{gitlab.SeatEnv}, gitlab.CredentialKeys)
-		at.Identity = derivedIdentity(func(handle string) string {
+		at.Identity = derivedIdentity(func(origin provision.Origin) string {
 			if block == nil {
 				return ""
 			}
-			return gitlab.Username(block.Provisioning, handle)
+			return gitlab.Username(block.Provisioning, origin)
 		})
 		at.Configured = block != nil
 		seats = credentialSeats(roster, s.resolve, at, "GitLab",
@@ -751,11 +751,11 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// card reported Connected over a company whose agents had no bots,
 		// which is the half an operator cannot act on.
 		at := mattermostAt
-		at.Identity = derivedIdentity(func(handle string) string {
+		at.Identity = derivedIdentity(func(origin provision.Origin) string {
 			if block == nil {
 				return ""
 			}
-			return "@" + mattermost.BotUsername(block.Provisioning, handle)
+			return "@" + mattermost.BotUsername(block.Provisioning, origin)
 		})
 		at.Configured = block != nil
 		seats = credentialSeats(roster, s.resolve, at, "Mattermost",
@@ -1391,9 +1391,16 @@ func atlassianIdentity(resolve func(string) (string, bool)) func(*org.Role) stri
 // answer: a second rule here would name the wrong account the day either
 // changed, and the failure is an operator hunting a user list for a name
 // nothing created.
-func derivedIdentity(name func(handle string) string) func(*org.Role) string {
+//
+// AND THE SAME ARGUMENT, which is what that promise was missing. Every one of
+// these names is derived from the handle a seat was CREATED under
+// ([provision.Origin]), so handing one the live handle is precisely the
+// second rule this warns about: on a renamed seat the screen named an account
+// no pass would ever create, next to a row reporting the real one as
+// connected.
+func derivedIdentity(name func(provision.Origin) string) func(*org.Role) string {
 	return func(role *org.Role) string {
-		return name(role.Handle())
+		return name(provision.Origin(role.Origin()))
 	}
 }
 

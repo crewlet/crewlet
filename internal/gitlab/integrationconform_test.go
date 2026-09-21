@@ -137,7 +137,8 @@ func newWorld(t *testing.T, tb integrationtest.TB, tune func(*adminInstance),
 		{"cto", "GITLAB_TOKEN_CTO"},
 	} {
 		plan.Add(provision.Seat{
-			Handle: seat.handle, Role: strings.ToUpper(seat.handle),
+			Handle: seat.handle, Origin: provision.Origin(seat.handle),
+			Role:     strings.ToUpper(seat.handle),
 			TokenVar: seat.tokenVar,
 			Email:    seat.handle + "@noreply.crewlet.invalid",
 		})

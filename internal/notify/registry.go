@@ -114,7 +114,15 @@ func NewRegistry(o *org.Organization) *Registry {
 		}
 		p := Party{Handle: handle, Name: role.Name, Human: role.IsHuman()}
 		if !p.Human {
-			if id, ok := org.DeriveAgentID(o.Name, handle); ok {
+			// THROUGH THE ORGANIZATION, never by hashing the handle in
+			// hand. The id is derived from the handle a seat was CREATED
+			// under (ADR-0019), which this loop cannot see and the free
+			// function cannot supply; built from the live handle, a
+			// renamed seat's party carried a uuid no mailbox, no lease
+			// and no ledger anywhere in the fleet is named after, so
+			// every notification the spine routed through it addressed a
+			// subject nothing consumes.
+			if id, ok := o.AgentIDFor(role); ok {
 				p.AgentID = id
 			}
 		}
@@ -132,6 +140,39 @@ func NewRegistry(o *org.Organization) *Registry {
 			if _, dup := r.byEmail[email]; !dup {
 				r.byEmail[email] = handle
 			}
+		}
+	}
+	// AND THE ADDRESSES THESE SEATS USED TO ANSWER TO, which is what the
+	// chart's alias list is for: a Datadog monitor tagged `crewlet:sre-lead`,
+	// a channel topic, a runbook line — every one of them is a REFERENCE
+	// somebody wrote down, and a rename that stopped resolving them would
+	// deliver those alerts to nobody while the seat sat there working.
+	// [org.Organization.Role] already resolves an alias, so a registry that
+	// did not was the same string answering on one path and not the other.
+	//
+	// IN A SECOND PASS, so a live handle always wins: one seat renamed AWAY
+	// from a name another seat now holds must never shadow the seat holding
+	// it, and a single pass in org order would decide that by position.
+	// The party is the CURRENT seat's, and nothing is appended to parties —
+	// an alias is another way to say one seat, not another seat.
+	//
+	// FIRST WINS between two seats' aliases, which is the rule the loop
+	// above already follows: two seats that both once answered to one name
+	// is a question this index cannot settle, and dropping both would
+	// silently retire a reference that does resolve.
+	for role := range o.AllRoles() {
+		p, known := r.byHandle[role.Handle()]
+		if !known {
+			continue
+		}
+		for _, former := range role.FormerHandles {
+			if former == "" {
+				continue
+			}
+			if _, taken := r.byHandle[former]; taken {
+				continue
+			}
+			r.byHandle[former] = p
 		}
 	}
 	return r
