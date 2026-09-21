@@ -136,7 +136,14 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		// another agent inherits its depth plus one.
 		DelegationDepth: turn.Depth,
 		DelegationChain: append(append([]string(nil), turn.Chain...), seat.Handle()),
-		ParentTurnID:    turn.RunID,
+		// THIS RUN, and the unit of work behind it. The run id is what the
+		// three audit records this ask publishes are read back by — the
+		// turn query is `WHERE turn_id = ?` — and what the target's wake
+		// points at as its parent. The work key rides along so the
+		// work-key filter answers with a run's whole record rather than
+		// only its phases. See ADR-0017.
+		TurnID:  turn.RunID,
+		WorkKey: turn.WorkKey,
 	})
 	if err != nil {
 		return failed(fmt.Sprintf("Could not reach %s: %v", resolved.Handle, err)), nil

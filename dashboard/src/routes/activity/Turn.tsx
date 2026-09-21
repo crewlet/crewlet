@@ -1244,7 +1244,16 @@ function Absorbed({ groups }: { groups: AbsorbedGroup[] }) {
              its loudest type. `.run-count` keeps its own colour, which is what
              leaves the ×N as the one bright mark in the row. */
           <div key={g.type} className="row gap-2 t-caption">
-            <span className="mono truncate">{g.type}</span>
+            {/* THE WIRE TYPE IS THE CHECKABLE HALF of this line, so a cut one
+                keeps its whole text in a `title` — the same rule the ledger
+                cells above take, and for the same reason. The destination
+                beside it is prose a reader can follow without it; the type is
+                what they match against a payload, a grep or the count they
+                came here to reconcile, and `agent_turn_completed` cut to
+                `agent_turn_comp…` is not a name anything answers to. */}
+            <span className="mono truncate" title={g.type}>
+              {g.type}
+            </span>
             {/* ABSENT AT ONE, for the reason [TurnEventRow]'s own count is:
                 "×1" on every line is a column that says nothing. */}
             {g.count > 1 && (
@@ -1549,14 +1558,18 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             <Card.Header
               icon={<BoltGlyph size="sm" />}
               count={story.did.length}
-              // NOT "colleagues" any more. The band listed the three A2A
-              // audit records and this line advertised them, and none of the
-              // three carries a `turn_id` — so the turn query, which is
-              // `WHERE turn_id = ?`, has never returned one and this heading
-              // has never once drawn an ask. A subtitle naming a row the wire
-              // cannot deliver fails EMPTY, which reads as "this turn talked
-              // to nobody" rather than as a broken panel. See ./lib/turnstory.
-              subtitle="work outside the tool loop: coding runs, delegations, skills"
+              // "COLLEAGUES" IS A PROMISE AGAIN, and only because the wire
+              // can keep it now. This line used to advertise the three A2A
+              // audit records while none of them carried a `turn_id` — so the
+              // turn query, which is `WHERE turn_id = ?`, never returned one
+              // and the heading had never once drawn an ask. A subtitle naming
+              // a row the wire cannot deliver fails EMPTY, which reads as
+              // "this turn talked to nobody" rather than as a broken panel.
+              // The engine stamps the publishing turn on all three now
+              // (internal/a2a/service.go), which is what earns the word back;
+              // the gate in internal/events/types/turnbands_client_test.go is
+              // what would take it away again. See ./lib/turnstory.
+              subtitle="work outside the tool loop: coding runs, delegations, colleagues, skills"
             >
               <Card.Title>What else it did</Card.Title>
             </Card.Header>

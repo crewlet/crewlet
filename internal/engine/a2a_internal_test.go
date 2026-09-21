@@ -162,6 +162,19 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 
+	// AND THE CLOSE RECORD, which is the audit row the Turn screen draws.
+	// Subscribed before the answer for the same reason the inbox is:
+	// interest retention drops a publish no consumer covers.
+	closes := make(chan *events.Event, 4)
+	if err := e.Backends().Queue.Subscribe(t.Context(),
+		topics.Event("a2a_channel_closed"), "close-probe",
+		func(_ context.Context, ev *events.Event) queue.Result {
+			closes <- ev
+			return queue.Ack()
+		}); err != nil {
+		t.Fatalf("subscribe to the close record: %v", err)
+	}
+
 	channelID, err := svc.Open(t.Context(), a2a.Ask{
 		Requester: "ceo", Target: "cto", Brief: "What broke last night?",
 		SenderRole: "CEO", DelegationDepth: 0,
@@ -172,7 +185,7 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 
 	// The answering seat's turn, finished.
 	e.answerColleague(t.Context(), company, Request{
-		Handle: "cto", WorkKey: "wk-answer", Depth: 1,
+		Handle: "cto", WorkKey: "wk-answer", RunID: "run-answer", Depth: 1,
 		Events: []*events.Event{askEvent(channelID, "What broke last night?")},
 	}, turn.Result{Decision: phase.Done, Artifact: "the deploy at 02:14 rolled back"})
 
@@ -217,6 +230,15 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 		t.Errorf("the reply charges depth %d, want the ask's 1", reply.DelegationDepth)
 	}
 
+	// THE ANSWERING RUN, not the unit of work: a trigger that fails without
+	// acting is redelivered, so one work key legitimately runs several
+	// times and a parent pointer naming it could not say which attempt
+	// answered. See ADR-0017.
+	if reply.ParentTurnID != "run-answer" {
+		t.Errorf("the reply points at %q, want the answering RUN",
+			reply.ParentTurnID)
+	}
+
 	// One ask, one answer, then CLOSED — rather than left to the idle
 	// sweep an hour later.
 	ch, err := a2a.NewCoordStore(e.Backends().Fleet).Get(t.Context(), channelID)
@@ -225,6 +247,31 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 	}
 	if ch.Open() {
 		t.Error("the channel was left open after its one answer")
+	}
+
+	// AND THE CLOSE SAYS WHO AND WHEN. ClosedBy went unwritten on every
+	// path, so every close this engine published read as "system" — the
+	// wording reserved for the sweep — and with no turn id the row could
+	// never appear on the answering turn's page.
+	var record *types.A2AChannelClosed
+	closeDeadline := time.After(10 * time.Second)
+	for record == nil {
+		select {
+		case ev := <-closes:
+			if payload, ok := events.DataAs[*types.A2AChannelClosed](ev); ok &&
+				payload.ChannelID == channelID {
+				record = payload
+			}
+		case <-closeDeadline:
+			t.Fatal("the close was never announced")
+		}
+	}
+	if record.ClosedBy != "cto" {
+		t.Errorf("closed_by = %q, want the answering seat", record.ClosedBy)
+	}
+	if record.TurnID != "run-answer" || record.WorkKey != "wk-answer" {
+		t.Errorf("the close names turn %q / work %q, want the answering turn",
+			record.TurnID, record.WorkKey)
 	}
 }
 

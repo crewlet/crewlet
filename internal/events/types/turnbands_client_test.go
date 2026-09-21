@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"testing"
 
@@ -37,6 +38,13 @@ import (
 // the same thing. Nothing failed, nothing logged, and a turn that asked three
 // colleagues rendered exactly like a turn that spoke to nobody.
 //
+// Four of the eight were repairs rather than facts, and all four have landed:
+// the three A2A records now carry the publishing turn (internal/a2a/service.go)
+// and skill_telemetry_write_failed carries the turn whose reflection tried the
+// write (internal/learning/skilluse.go). They are back in their bands, and the
+// stale check below is what made that a decision somebody took rather than one
+// nobody got to.
+//
 // This is the `internal/clientsource` idiom for the reason that package's own
 // doc gives: the dashboard is a separate build in a separate language that
 // cannot import a Go identifier, so where it must know a set this engine owns
@@ -46,10 +54,12 @@ import (
 // # Two-sided, like the roster it is built on
 //
 // One direction stops a band naming a type that can never fill. The other
-// stops the repair being forgotten: [keptOutOfTurnBands] records the eight
-// decisions with a reason each, and an entry whose type GAINS a `turn_id`
-// fails as stale — the fix landed, so the row can be banded, and somebody has
-// to decide that rather than default to it. A reason per entry rather than a
+// stops the repair being forgotten: [keptOutOfTurnBands] records each decision
+// with a reason, and an entry whose type GAINS a `turn_id` fails as stale — the
+// fix landed, so the row can be banded, and somebody has to decide that rather
+// than default to it. That half has already earned itself: it is what turned
+// four of the original eight from a note nobody re-read into a failing build
+// the day their payloads were repaired. A reason per entry rather than a
 // set for the reason `events.excluded` gives about its own map: an exclusion
 // and an oversight look identical from the outside, and writing the reason
 // down is what lets the next reader tell them apart.
@@ -63,27 +73,53 @@ import (
 // to match.
 var turnBands = []string{"WENT_WRONG", "GIVEN", "DID", "LEFT_BEHIND", "TURN_STOP"}
 
+// absorbedBand is the SIXTH classification, and it is a map rather than a set.
+//
+// A row in [ABSORBED] is not dropped — it is drawn somewhere better, and the
+// screen prints an inventory of them ("Already on this page") so a reader
+// checking a cut turn's event total can see where each kind went. That makes
+// it as much a promise against the query as the five bands are: a type here
+// with no `turn_id` never reaches the browser, and the inventory omits it
+// silently, which is the same EMPTY failure one band further along.
+//
+// Its own declaration, because its shape is its own: the bands are
+// `new Set([...])` and this is `Record<string, string>` keyed on the type with
+// the destination as the value, so one regex cannot read both. Keeping them
+// apart is also what lets the entry below be about the map rather than about
+// a band nobody would find it in.
+const absorbedBand = "ABSORBED"
+
+// notPersisted are absorbed types that never reach the event store at all, so
+// the `turn_id` question does not arise for them.
+//
+// A SEPARATE ROSTER FROM [keptOutOfTurnBands], because it answers a different
+// question and the two must not be confused: that roster is "this row could be
+// on the screen and is not, here is the repair owed", and this one is "this row
+// is not in the store to begin with". An entry here is permanent by
+// construction rather than by judgement — a stream-only event has no row for a
+// query to return however its payload is shaped.
+var notPersisted = map[string]string{
+	"agent_turn_progress": "stream-only — published to the live socket and " +
+		"never appended to crewlet_events, so it is in no turn's answer by " +
+		"construction. The Turn screen absorbs it into the live phase card, " +
+		"which is the only place it exists",
+}
+
 // keptOutOfTurnBands are the types a band named and had to give up, with the
 // reason each one cannot be there.
 //
 // Two shapes, and the difference is the whole value of writing them down. Some
 // of these will never carry a turn id, because no turn exists when they are
 // published or because they describe many turns at once — those entries are
-// permanent. The rest are events published INSIDE a turn by code that already
-// holds its id and simply does not stamp it; those are a defect in this
-// package, and the stale check below is what announces the day it is fixed.
+// permanent. The rest were events published INSIDE a turn by code that already
+// held its id and simply did not stamp it; those were a defect in this package,
+// and the stale check below is what announced the day each one was fixed.
+//
+// EVERY ENTRY LEFT IS OF THE FIRST KIND, which is a state worth naming rather
+// than a coincidence to notice later: the four repairs are done, so a NEW entry
+// here is either a genuinely turn-less event or a repair somebody has decided
+// to defer, and the two must not be added under the same silence.
 var keptOutOfTurnBands = map[string]string{
-	"a2a_channel_opened": "published by internal/a2a's service from inside the " +
-		"ASKING turn's tool loop, which holds turnctx.Turn.RunID and passes it " +
-		"to a2a.Ask.ParentTurnID already — the audit record just does not carry " +
-		"it. Add TurnID/WorkKey to the payload and thread them off the Ask, and " +
-		"this goes back in DID",
-	"a2a_message_sent": "the same publisher and the same omission; the brief's " +
-		"copy is published inside the asking turn and the reply's inside the " +
-		"answering turn (internal/engine/a2a.go, which holds req.RunID)",
-	"a2a_channel_closed": "the same, with one honest gap: the answering turn " +
-		"closes the channel and knows its id, but the maintenance sweep closing " +
-		"an idle channel belongs to no turn and would carry an empty one",
 	"task_assigned": "the SCHEDULER's cron fire (internal/schedule), published " +
 		"to wake a seat. It is the TRIGGER of a turn rather than work a turn " +
 		"did, so it precedes every turn id there could be — and the Turn screen " +
@@ -99,11 +135,6 @@ var keptOutOfTurnBands = map[string]string{
 		"no turn because there is no single right one to name — the same reason " +
 		"skill_synthesized carries an empty turn id on its clustered path. " +
 		"Permanent",
-	"skill_telemetry_write_failed": "published by the SkillUse reflection worker " +
-		"(internal/learning/skilluse.go), which holds t.Event.TurnID and stamps " +
-		"it onto its siblings — episode_written, skill_refined and the rest all " +
-		"carry it. This one does not. Add TurnID/WorkKey and it goes back in " +
-		"WENT_WRONG",
 }
 
 // TestTurnBandsNameOnlyTurnScopedEvents holds the Turn screen's four bands
@@ -148,6 +179,59 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 					"which reads as a quiet turn rather than as a broken panel. "+
 					"Give the payload a turn id or take it out of the band: %s",
 					band, name, reason)
+			}
+		}
+	}
+
+	// AND THE ABSORBED MAP, on the same terms. Read separately because its
+	// declaration has a different shape, checked identically because it makes
+	// the identical promise: the screen draws these rows, so a type here that
+	// the turn query cannot return is an inventory line that never appears.
+	absorbed, err := clientsource.Declaration("../"+clientsource.Tree,
+		fmt.Sprintf(`(?s)const %s: Record<string, string> = \{(.*?)\n\}`, absorbedBand))
+	if err != nil {
+		t.Errorf("%s: %v", absorbedBand, err)
+	} else {
+		// KEYS, NOT EVERY QUOTED STRING. The map's values are prose — "the
+		// phase card it opens" — so [clientsource.Strings] would read a
+		// destination as an event type and report the whole map as
+		// unregistered.
+		names := absorbedKeys(absorbed)
+		if len(names) == 0 {
+			t.Errorf("the Turn screen's %s map names no event type, so this "+
+				"gate certifies nothing for it", absorbedBand)
+		}
+		for _, name := range names {
+			switch {
+			case !known[name]:
+				t.Errorf("the Turn screen's %s map names %q, which this build "+
+					"registers no payload for. The catalogue is %v",
+					absorbedBand, name, sortedKeys(known))
+			case scoped[name]:
+				// Carries a turn id: it is in the answer, and the screen
+				// draws it wherever the map says. Nothing to check.
+			case notPersisted[name] != "":
+				// In no answer because it is in no table. Declared.
+			default:
+				t.Errorf("the Turn screen's %s map names %q, whose payload "+
+					"declares no `turn_id` key and which is not on the "+
+					"not-persisted roster in this file. The turn query is "+
+					"`WHERE turn_id = ?` (internal/store/eventlog.go), so the "+
+					"row can never be in the answer and the screen's "+
+					"\"Already on this page\" inventory omits it silently — "+
+					"the same EMPTY failure a band has, one classification "+
+					"further along. Give the payload a turn id, or add it to "+
+					"notPersisted with the reason it has no row",
+					absorbedBand, name)
+			}
+		}
+		// And the roster stops describing the build if an entry leaves the map.
+		for name, reason := range notPersisted {
+			if !slices.Contains(names, name) {
+				t.Errorf("the not-persisted roster names %q, which the %s map "+
+					"no longer carries — a stale entry is how a roster stops "+
+					"describing the build. It was listed because: %s",
+					name, absorbedBand, reason)
 			}
 		}
 	}
@@ -210,6 +294,20 @@ func turnScopedTypes(t *testing.T) (scoped, known map[string]bool) {
 	}
 	return scoped, known
 }
+
+// absorbedKeys reads the TYPE names out of an object-literal body — the token
+// before each `:` — and ignores the prose values.
+func absorbedKeys(body string) []string {
+	var out []string
+	for _, m := range absorbedKey.FindAllStringSubmatch(body, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// A key at the start of a line, which is what prettier guarantees for this
+// map and what keeps a colon inside a comment or a value from reading as one.
+var absorbedKey = regexp.MustCompile(`(?m)^\s*([a-z][a-z0-9_.]*):`)
 
 func sortedKeys(set map[string]bool) []string {
 	out := make([]string, 0, len(set))

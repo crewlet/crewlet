@@ -81,7 +81,21 @@ type Ask struct {
 
 	DelegationDepth int
 	DelegationChain []string
-	ParentTurnID    string
+
+	// TurnID and WorkKey identify the ASKING turn — the run whose tool loop
+	// called a2a_ask, and the unit of work it was dispatched for.
+	//
+	// ONE FIELD, TWO LANDINGS, and the coincidence is worth stating because
+	// the names differ at each end. TurnID is stamped on the audit records
+	// this call publishes, where it answers "what else happened on this
+	// turn" for the Turn screen; it is ALSO copied onto the wake's envelope
+	// as ParentTurnID, where it answers "what asked for this" for whoever
+	// is woken. The caller is both those things at once — the turn writing
+	// the record is the parent of the wake it triggers — so a second field
+	// here would be one value spelled twice, with nothing keeping the two
+	// equal.
+	TurnID  string
+	WorkKey string
 }
 
 // Open opens a channel and wakes the target, carrying the brief.
@@ -126,6 +140,7 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 	opened := events.New(types.A2AChannelOpened{
 		ChannelID: id, Requester: ask.Requester, Target: ask.Target,
 		Participants: ch.Participants(),
+		TurnID:       ask.TurnID, WorkKey: ask.WorkKey,
 	}, tracing.TraceOf(ctx))
 	opened.Source = ask.Requester
 	if err := s.queue.Publish(ctx, topics.Event(opened.Type), opened); err != nil {
@@ -136,7 +151,11 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 		if _, err := s.channels.CountMessage(ctx, id, now); err != nil {
 			return "", err
 		}
-		if err := s.publishSent(ctx, id, ask.Requester, ask.Target, ask.Brief, ask.SenderRole); err != nil {
+		if err := s.publishSent(ctx, types.A2AMessageSent{
+			ChannelID: id, Sender: ask.Requester, Recipient: ask.Target,
+			Content: ask.Brief, SenderRole: ask.SenderRole,
+			TurnID: ask.TurnID, WorkKey: ask.WorkKey,
+		}); err != nil {
 			return "", err
 		}
 	}
@@ -150,7 +169,7 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 	// The ASK is the delegation, so this is the leg that charges.
 	wake.DelegationDepth = ask.DelegationDepth + 1
 	wake.DelegationChain = appendChain(ask.DelegationChain, ask.Requester)
-	wake.ParentTurnID = ask.ParentTurnID
+	wake.ParentTurnID = ask.TurnID
 	if err := s.queue.Publish(ctx, topics.AgentInbox(ask.Target), wake); err != nil {
 		return "", fmt.Errorf("a2a: wake %s: %w", ask.Target, err)
 	}
@@ -183,7 +202,12 @@ type Answer struct {
 
 	DelegationDepth int
 	DelegationChain []string
-	ParentTurnID    string
+
+	// TurnID and WorkKey identify the ANSWERING turn — the run that
+	// produced this reply. See [Ask.TurnID] for why one field feeds both
+	// the audit record's turn id and the wake's parent pointer.
+	TurnID  string
+	WorkKey string
 }
 
 // Reply answers on a channel and wakes the other party.
@@ -215,7 +239,11 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 	if _, err := s.channels.CountMessage(ctx, ans.ChannelID, now); err != nil {
 		return err
 	}
-	if err := s.publishSent(ctx, ans.ChannelID, ans.Sender, recipient, ans.Content, ans.SenderRole); err != nil {
+	if err := s.publishSent(ctx, types.A2AMessageSent{
+		ChannelID: ans.ChannelID, Sender: ans.Sender, Recipient: recipient,
+		Content: ans.Content, SenderRole: ans.SenderRole,
+		TurnID: ans.TurnID, WorkKey: ans.WorkKey,
+	}); err != nil {
 		return err
 	}
 
@@ -227,7 +255,7 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 	wake.Source = ans.Sender
 	wake.DelegationDepth = ans.DelegationDepth
 	wake.DelegationChain = appendChain(ans.DelegationChain, ans.Sender)
-	wake.ParentTurnID = ans.ParentTurnID
+	wake.ParentTurnID = ans.TurnID
 	if ans.CausedBy != nil {
 		wake.TraceID = ans.CausedBy.TraceID
 		wake.SpanID = ans.CausedBy.SpanID
@@ -242,13 +270,38 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 	return nil
 }
 
+// Closure is one party closing a channel it is finished with.
+//
+// A STRUCT RATHER THAN FOUR STRINGS, matching [Ask] and [Answer], because the
+// arguments are four values of one type and a positional call site gives a
+// reader no way to catch a transposed pair. The alternative was to keep the
+// identity on the Service or on the [Channel] record, and both are wrong in a
+// way that is worth writing down: a Service is one long-lived struct shared by
+// every seat this node runs, so a turn's id parked on it is a data race that
+// attributes one seat's close to another seat's turn; and the Channel record
+// carries the OPENING turn, which is the asker's, on a record whose whole
+// subject is what the ANSWERING turn did with it.
+type Closure struct {
+	ChannelID string
+
+	// ClosedBy is the participant closing it. Empty for a caller that is
+	// not one — the maintenance sweep — which is what makes the "system"
+	// reading of [types.A2AChannelClosed] honest.
+	ClosedBy string
+
+	// TurnID and WorkKey identify the closing turn. See [Ask.TurnID]; the
+	// close publishes no wake, so this one lands in a single place.
+	TurnID  string
+	WorkKey string
+}
+
 // Close closes a channel and announces it.
 //
 // Closing an already-closed channel is not an error: both parties may close,
 // and the second one is not a fault. The announcement is skipped in that case
 // so a dashboard does not draw two closes for one channel.
-func (s *Service) Close(ctx context.Context, id string) error {
-	before, err := s.channels.Get(ctx, id)
+func (s *Service) Close(ctx context.Context, c Closure) error {
+	before, err := s.channels.Get(ctx, c.ChannelID)
 	if err != nil {
 		return err
 	}
@@ -256,29 +309,92 @@ func (s *Service) Close(ctx context.Context, id string) error {
 		return nil
 	}
 	now := s.now()
-	ch, err := s.channels.Close(ctx, id, now)
+	ch, err := s.channels.Close(ctx, c.ChannelID, now)
 	if err != nil {
 		return err
 	}
+	return s.announceClose(ctx, ch, c, now)
+}
+
+// SweepIdle closes every channel idle since before cutoff and announces each
+// one, reporting how many it closed.
+//
+// HERE RATHER THAN IN THE SWEEP JOB, because announcing is the reason
+// [Store.CloseIdle] returns the channels it closed rather than a count — and
+// the one caller discarded the list, so nothing was published at all. Three
+// separate places described a close event the sweep never emitted: that
+// method's own contract, the "system" fallback in
+// [types.A2AChannelClosed.Summary], and the event-system doc. What an operator
+// lost with it is the only signal that an ask went unanswered: the requester's
+// turn ended when it asked, so a channel reaching this sweep means some turn
+// never finished, and that is exactly the event worth seeing.
+//
+// The publisher lives in this package for the reason every other A2A publish
+// does: what a close means on the wire is this package's decision, and
+// internal/maintenance is a scheduler of jobs rather than a second author of
+// event payloads.
+//
+// A FAILED ANNOUNCEMENT DOES NOT UNDO THE CLOSE, and does not stop the rest:
+// the channel is already closed in the store, the sweep cannot roll that back,
+// and abandoning the remaining channels would leave a batch half-reported with
+// no record of where it stopped. The first error is returned once every
+// channel has been attempted.
+func (s *Service) SweepIdle(ctx context.Context, cutoff time.Time) (int, error) {
+	now := s.now()
+	closed, err := s.channels.CloseIdle(ctx, cutoff, now)
+	if err != nil {
+		return 0, err
+	}
+	var first error
+	for _, ch := range closed {
+		// No ClosedBy, no TurnID: a swept channel is one NO turn finished,
+		// and naming this node's sweep as the closer would read as a
+		// participant. See [Closure.ClosedBy].
+		if err := s.announceClose(ctx, ch, Closure{ChannelID: ch.ID}, now); err != nil && first == nil {
+			first = err
+		}
+	}
+	return len(closed), first
+}
+
+// Purge deletes channels closed before cutoff, returning the count.
+//
+// A passthrough, so the retention sweep drives ONE surface rather than holding
+// the store beside the service and choosing between them per job.
+func (s *Service) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
+	return s.channels.Purge(ctx, cutoff)
+}
+
+// announceClose publishes the close record for an already-closed channel.
+func (s *Service) announceClose(ctx context.Context, ch Channel, c Closure, now time.Time) error {
 	ev := events.New(types.A2AChannelClosed{
-		ChannelID: id, Participants: ch.Participants(),
+		ChannelID: ch.ID, ClosedBy: c.ClosedBy,
+		Participants: ch.Participants(),
 		MessageCount: ch.Messages,
-		DurationMS:   float64(ch.Duration(now).Milliseconds()),
+		// THE RECORD'S OWN TWO INSTANTS, never two machines' clocks: a
+		// channel is opened on one node and closed on another as a matter
+		// of course, so a duration taken across them would be skew.
+		DurationMS: float64(ch.Duration(now).Milliseconds()),
+		TurnID:     c.TurnID, WorkKey: c.WorkKey,
 	}, tracing.TraceOf(ctx))
+	ev.Source = c.ClosedBy
 	if err := s.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		return fmt.Errorf("a2a: announce close of %s: %w", id, err)
+		return fmt.Errorf("a2a: announce close of %s: %w", ch.ID, err)
 	}
 	return nil
 }
 
-func (s *Service) publishSent(ctx context.Context, channelID, sender, recipient, content, role string) error {
-	ev := events.New(types.A2AMessageSent{
-		ChannelID: channelID, Sender: sender, Recipient: recipient,
-		Content: content, SenderRole: role,
-	}, tracing.TraceOf(ctx))
-	ev.Source = sender
+// publishSent records one message on a channel.
+//
+// It takes the PAYLOAD rather than the six strings it used to, because that is
+// what the two call sites are assembling either way and six adjacent strings
+// in a positional call is a transposition nothing catches — the compiler least
+// of all.
+func (s *Service) publishSent(ctx context.Context, sent types.A2AMessageSent) error {
+	ev := events.New(sent, tracing.TraceOf(ctx))
+	ev.Source = sent.Sender
 	if err := s.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		return fmt.Errorf("a2a: record message on %s: %w", channelID, err)
+		return fmt.Errorf("a2a: record message on %s: %w", sent.ChannelID, err)
 	}
 	return nil
 }

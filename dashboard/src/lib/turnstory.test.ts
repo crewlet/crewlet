@@ -240,20 +240,36 @@ describe("a band entry is a query predicate", () => {
   // `turn_id` key at all, so they could never be in the answer and each band
   // failed EMPTY — the one way a panel cannot say it is broken.
   //
-  // These cases pin what the screen does with them NOW, and the wire half is
-  // held by `internal/events/types/turnbands_client_test.go`: this file cannot
-  // read a Go struct tag, so it asserts the banding and the engine asserts the
-  // key. Neither half is the whole claim on its own.
+  // FOUR OF THEM WERE REPAIRED IN THE ENGINE and are banded again; the four
+  // below describe no single turn and never will be. These cases pin what the
+  // screen does with each group NOW, and the wire half is held by
+  // `internal/events/types/turnbands_client_test.go`: this file cannot read a
+  // Go struct tag, so it asserts the banding and the engine asserts the key.
+  // Neither half is the whole claim on its own.
 
-  test("an A2A ask is not claimed by 'What else it did'", () => {
-    // The band advertised "colleagues" for these three and an ask has never
-    // been drawn under that heading on any turn this engine has run: none of
-    // the three carries a turn id, so the query never returns one. Banding
-    // them again is a promise the wire cannot keep — until the engine stamps
-    // the id, which the Go gate's roster is what announces.
+  test("an A2A ask is 'What else it did' again", () => {
+    // The band advertised "colleagues" for these three while none of them
+    // carried a turn id, so an ask was never once drawn under that heading.
+    // The engine stamps the publishing turn on all three now, which is what
+    // makes banding them a promise the wire can keep — and the Go gate's
+    // roster is what announced that the repair had landed.
     for (const type of ["a2a_channel_opened", "a2a_message_sent", "a2a_channel_closed"]) {
-      expect(bandOf(event(type)), type).toBe("rest");
+      expect(bandOf(event(type)), type).toBe("did");
     }
+  });
+
+  test("a skill the reflection could not stamp is what went wrong", () => {
+    // Published by the SkillUse worker, which holds the turn id and did not
+    // put it on this one payload — so the panel an operator opens after a
+    // failed counter write could not draw it however it was banded.
+    expect(bandOf(event("skill_telemetry_write_failed"))).toBe("went_wrong");
+  });
+
+  test("a skill this turn brought back is what it left behind", () => {
+    // The same worker's other event. Its second producer — the curator
+    // reviving a row an operator restored — carries no turn id and simply is
+    // not in any turn's answer, which is the correct half.
+    expect(bandOf(event("skill_revived"))).toBe("left_behind");
   });
 
   test("the scheduler's cron fire is the trigger, not work the turn did", () => {
@@ -281,7 +297,7 @@ describe("a band entry is a query predicate", () => {
     // Falling through to `rest` is about the BAND, never about the weight: the
     // failure taxonomy is the engine's and outranks every set in this file, so
     // a de-banded type that comes back failed is still what went wrong.
-    expect(bandOf(event("skill_telemetry_write_failed", { failed: true }))).toBe("went_wrong");
+    expect(bandOf(event("skill_promoted", { failed: true }))).toBe("went_wrong");
   });
 });
 

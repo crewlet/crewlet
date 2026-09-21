@@ -47,18 +47,25 @@
  *
  * Eight types were named here that way. The three A2A audit records were the
  * loudest, because the "What else it did" band advertised "colleagues" on
- * their behalf and an A2A ask has never once appeared under it. The rest
+ * their behalf and an A2A ask had never once appeared under it. The rest
  * carried the same defect quietly: `task_assigned` is the SCHEDULER's cron
  * fire, published before the turn it wakes exists; `turn_trigger_skipped` and
  * `notification_skipped` are both records that NO turn ran; `skill_promoted`
  * is the curator duty promoting a unit's skill across many turns; and
- * `skill_telemetry_write_failed` is a reflection worker that holds the turn id
- * and does not stamp it.
+ * `skill_telemetry_write_failed` was a reflection worker that held the turn id
+ * and did not stamp it.
+ *
+ * FOUR OF THE EIGHT WERE FIXED IN THE ENGINE rather than written off here, and
+ * they are back: `internal/a2a/service.go` now stamps the publishing turn on
+ * all three A2A records, and `internal/learning/skilluse.go` stamps the turn
+ * whose reflection attempted the counter write. The four still absent are the
+ * ones that describe no single turn, which no change to a payload can alter.
  *
  * `internal/events/types/turnbands_client_test.go` holds these sets against the
- * frozen wire contract now, in both directions — so a band entry that can
- * never fill fails the build, and so does a kept-out type that GAINS a
- * `turn_id` and is therefore ready to come back.
+ * frozen wire contract, in both directions — so a band entry that can never
+ * fill fails the build, and so does a kept-out type that GAINS a `turn_id` and
+ * is therefore ready to come back. The second direction is what made this
+ * repair land in one change instead of being noticed a release later.
  */
 
 import type { EventRecord } from "~/protocol/index.ts";
@@ -117,13 +124,16 @@ export function absorbedInto(event: EventRecord): string {
  *
  * These are the rows the old panel's subtitle promised ("fallbacks, guard
  * breaches") and — until the events behind them were given a producer and a
- * turn id — could never actually contain. Six of the nine that claim carried:
+ * turn id — could never actually contain. Seven of the nine that claim carry:
  * every one below publishes `turn_id`, which is what puts it in the answer
- * this file sorts. The three that did not are on the kept-out roster in
- * `internal/events/types/turnbands_client_test.go` — a skipped trigger and a
- * skipped notification are both records that NO turn ran, and the skill
- * telemetry failure is a reflection worker that holds the turn id without
- * stamping it.
+ * this file sorts. `skill_telemetry_write_failed` is the seventh and the most
+ * recent, and it is here rather than on the roster because the engine stopped
+ * dropping the id rather than because the panel lowered its bar — the counter
+ * write that failed happened inside a turn's reflection, so the turn that used
+ * the skill is exactly where an operator goes looking for it. The two still
+ * absent are on the kept-out roster in
+ * `internal/events/types/turnbands_client_test.go`: a skipped trigger and a
+ * skipped notification are both records that NO turn ran.
  */
 const WENT_WRONG = new Set([
   "turn.guard_breach",
@@ -132,6 +142,7 @@ const WENT_WRONG = new Set([
   "provider_fallback",
   "phase.tool_skill_blocked",
   "sandbox_run_failed",
+  "skill_telemetry_write_failed",
 ]);
 
 /**
@@ -159,6 +170,14 @@ const GIVEN = new Set(["prefetch_summary", "prompt.size"]);
  * off a cluster of many seats' turns, so it names no turn and there is no
  * single right one to name. That is the same reason `skill_synthesized`
  * carries an agent id and an empty turn id on its clustered path.
+ *
+ * `skill_revived` IS here, and it has the same two-producer shape as
+ * `skill_synthesized` rather than `skill_promoted`'s: the reflection worker
+ * revives a skill this turn was offered and stamps the turn, while the curator
+ * revives one an operator restored by hand and stamps nothing. Only the first
+ * can be in a turn's answer, which is the correct half — a skill coming back
+ * into use because this seat used it is something this turn changed about the
+ * company.
  */
 const LEFT_BEHIND = new Set([
   "episode_written",
@@ -167,19 +186,27 @@ const LEFT_BEHIND = new Set([
   "reflection_completed",
   "skill_synthesized",
   "skill_refined",
+  "skill_revived",
 ]);
 
 /**
- * Work the turn did that is not a phase: a coding run, a delegation, a tool.
+ * Work the turn did that is not a phase: a coding run, a delegation, a tool,
+ * and asking a colleague.
  *
- * NO COLLEAGUE ROWS, and the panel's subtitle no longer offers any. The three
- * A2A audit records were named here and the band advertised "colleagues" for
- * them, but `a2a_channel_opened`, `a2a_message_sent` and `a2a_channel_closed`
- * carry no `turn_id` on the wire, so an ask has never been drawn under this
- * heading on any turn this engine has ever run — see the note at the top of
- * this file, and the roster in
- * `internal/events/types/turnbands_client_test.go` for what has to change in
- * the engine before they can come back.
+ * THE COLLEAGUE ROWS ARE BACK, and what changed is the wire rather than this
+ * set. The three A2A audit records were named here for as long as this file
+ * has existed while carrying no `turn_id`, so an ask was never once drawn
+ * under this heading; they now carry the turn that published them
+ * (`internal/a2a/service.go`), which is what puts them in `EventLog.Turn`'s
+ * answer. One ask draws three rows — the channel, the brief, and the close —
+ * and that is the exchange rather than noise: the brief is the question this
+ * turn asked, and the close is the answer having arrived.
+ *
+ * A CLOSE WITH NO TURN BEHIND IT IS NOT ONE OF THESE. `a2a_channel_closed` has
+ * a second producer — the maintenance sweep reaping a channel nobody answered
+ * — which carries an empty turn id and therefore cannot be in any turn's
+ * answer. That is the band working rather than a hole in it: a swept close is
+ * precisely the statement that no turn finished.
  *
  * `task_assigned` was named here too and is a different mistake: it is the
  * SCHEDULER's cron fire — the wake that starts a turn — rather than work a
@@ -191,6 +218,9 @@ const DID = new Set([
   "sandbox_run_completed",
   "subagent_batched",
   "skill_used",
+  "a2a_channel_opened",
+  "a2a_message_sent",
+  "a2a_channel_closed",
 ]);
 
 /**
