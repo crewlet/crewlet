@@ -609,6 +609,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// exact reordering a deferral exists to prevent.
 		backlog := s.needBacklog(t)
 		q := s.start(ctx, t)
+		fill := holdForOneBatch(ctx, t, q, "topic.b", "grp")
 
 		seen := newJournal()
 		if err := q.SubscribeBatch(ctx, "topic.b", "grp",
@@ -623,28 +624,26 @@ func (s *suite) runBatch(t *testing.T) {
 		// partitions: delivered one at a time, the multi-partition loop
 		// this covers never runs.
 		//
-		// That one-batch outcome is an ASSUMPTION, not a guarantee the
-		// contract makes, and it is worth knowing which because this case
-		// has failed intermittently on JetStream and the cause is still
-		// unattributed. It was briefly written up as timing-independent
-		// "by construction" — that is wrong, and stating it here rather
-		// than leaving the correction in a commit message: the PUBLISH
-		// side is indeed race-free, since the hold means every event is
-		// in the mailbox before the attachment resumes, but the DRAIN
-		// side is not, and nothing obliges a backend to hand all three
-		// to one call.
+		// THE PUBLISH SIDE IS NOW RACE-FREE AND WAS NOT. This case failed
+		// intermittently on JetStream, and the cause was recorded here as
+		// unattributed alongside the claim that the hold put every event
+		// in the mailbox before the attachment could read one. That claim
+		// was false: the hold used to be taken AFTER the subscription, so
+		// an attachment already sitting in a long poll was served the
+		// first publish and handed it straight back — which on this
+		// backend returns it BEHIND the events published after it, so the
+		// partition this case expects first arrived second.
+		// holdForOneBatch takes the hold before the attachment exists and
+		// states the mechanism in full.
 		//
-		// What is actually known: 22 consecutive clean runs here (12
-		// isolated, 10 full-package, all under -race), and no
-		// reproduction. Forcing a split with a max batch of 2 did not
-		// reproduce it either, though with a zero linger that variant may
-		// not exercise a split at all — so that experiment rules nothing
-		// out. If it recurs, capture the BACKLOG ORDER from the final
-		// assertion before anything else: a deferral pushes its partition
-		// to the front, so the order distinguishes a split (which is
-		// timing) from partitions handled past a deferral (which is the
-		// ordering defect this case exists to catch).
-		fillOneBatch(ctx, t, q, "topic.b", "grp", "a", "b", "c")
+		// The DRAIN side is still an assumption: nothing obliges a backend
+		// to hand all three partitions to one handler call. If this case
+		// recurs, capture the BACKLOG ORDER from the final assertion
+		// before anything else — a deferral pushes its partition to the
+		// front, so the order distinguishes a split (which is timing) from
+		// partitions handled past a deferral (which is the ordering defect
+		// this case exists to catch).
+		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
 		seen.staysAt(t, 1, "the deferral did not stop the batch")
@@ -670,6 +669,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// have.
 		backlog := s.needBacklog(t)
 		q := s.start(ctx, t)
+		fill := holdForOneBatch(ctx, t, q, "topic.hold", "grp")
 
 		seen := newJournal()
 		if err := q.SubscribeBatch(ctx, "topic.hold", "grp",
@@ -685,7 +685,7 @@ func (s *suite) runBatch(t *testing.T) {
 			t.Fatalf("SubscribeBatch: %v", err)
 		}
 
-		fillOneBatch(ctx, t, q, "topic.hold", "grp", "a", "b", "c")
+		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
 		seen.staysAt(t, 1, "the hold did not stop the batch")
@@ -728,6 +728,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// loop STOPPING.
 		backlog := s.needBacklog(t)
 		q := s.start(ctx, t)
+		fill := holdForOneBatch(ctx, t, q, "topic.detach", "grp")
 
 		seen := newJournal()
 		if err := q.SubscribeBatch(ctx, "topic.detach", "grp",
@@ -747,7 +748,7 @@ func (s *suite) runBatch(t *testing.T) {
 			t.Fatalf("SubscribeBatch: %v", err)
 		}
 
-		fillOneBatch(ctx, t, q, "topic.detach", "grp", "a", "b", "c")
+		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
 		seen.staysAt(t, 1, "the detach did not stop the batch")
@@ -789,6 +790,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// different branch in both backends.
 		backlog := s.needBacklog(t)
 		q := s.start(ctx, t)
+		fill := holdForOneBatch(ctx, t, q, "topic.drain", "grp")
 
 		seen := newJournal()
 		if err := q.SubscribeBatch(ctx, "topic.drain", "grp",
@@ -806,7 +808,7 @@ func (s *suite) runBatch(t *testing.T) {
 			t.Fatalf("SubscribeBatch: %v", err)
 		}
 
-		fillOneBatch(ctx, t, q, "topic.drain", "grp", "a", "b", "c")
+		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
 		seen.staysAt(t, 1, "the drain pause did not stop the batch")
@@ -848,18 +850,34 @@ func (s *suite) runBatch(t *testing.T) {
 		// and un-quiescing it is a different verb testing a different
 		// thing.
 		//
-		// OBSERVED AS A COMPARISON rather than against a literal, for the
-		// reason the mixed-count case gives: the two readings are taken
-		// through the same accessor in the same run, so an extra
-		// redelivery on the way here cannot turn the rule into a timing
-		// test. What must hold is that the partition handed back
-		// undispatched comes back with LESS than a never-delivered one,
-		// which is false by exactly one if the hand-back was free.
+		// OBSERVED AGAINST BOTH LITERALS, and it used to be a bare
+		// comparison of the two readings — handed back must be LESS than
+		// never-delivered — on the stated ground that an extra redelivery
+		// on the way here could not then turn the rule into a timing test.
+		// That reasoning was inverted, and it cost a CI failure: a
+		// comparison of two DIFFERENT messages presumes they entered the
+		// drain at the same delivery count, and nothing here established
+		// that. An early delivery of the stopping partition and nothing
+		// else — which is exactly what holdForOneBatch now prevents, and
+		// what the hold used to allow — lowers the baseline by one and
+		// makes the two readings EQUAL while the hand-back was charged
+		// correctly. Reported, of course, as a hand-back that was free.
+		//
+		// So the precondition is asserted rather than presumed. The
+		// stopping partition must read a full budget less one, which says
+		// it was delivered exactly once and therefore that the fill held
+		// everything back; and the handed-back one must read exactly one
+		// less than that, which is the rule — ONE delivery, not two. Both
+		// numbers follow from queue.DeliveriesLeft's contract and from the
+		// attempts configured here, not from either backend's shape, and
+		// each failure names which half it is: a broken fill and a
+		// mischarged hand-back send a reader to opposite places.
 		newQueueWithAttempts := s.needAttempts(t)
 		const attempts = 5
 		q := startQueue(ctx, t, newQueueWithAttempts(t, attempts))
 
 		const topic, group = "topic.charged", "grp"
+		fill := holdForOneBatch(ctx, t, q, topic, group)
 		var (
 			mu     sync.Mutex
 			first  = map[string]int{}
@@ -892,7 +910,7 @@ func (s *suite) runBatch(t *testing.T) {
 				return queue.Ack()
 			}, queue.NewBatchOptions(lingerFor.Seconds(), 20))
 
-		fillOneBatch(ctx, t, q, topic, group, "a", "b")
+		fill("a", "b")
 		j.awaitLabels(t, "only the first partition to be handled", "a")
 		j.staysAt(t, 1, "the hold did not stop the batch")
 
@@ -910,14 +928,24 @@ func (s *suite) runBatch(t *testing.T) {
 				"a backend that states nothing cannot be asked what a hand-back "+
 				"cost", first)
 		}
-		if handed >= fresh {
+		if fresh != attempts-1 {
+			t.Fatalf("the partition that stopped the drain reported %d deliveries "+
+				"left of %d attempts, want %d: it is dispatched on its FIRST "+
+				"delivery, so anything lower means it had already been delivered "+
+				"and handed back before this batch — a fill that did not hold "+
+				"everything back, not a charge this case can read. See "+
+				"holdForOneBatch.", fresh, attempts, attempts-1)
+		}
+		if handed != fresh-1 {
 			t.Errorf("the partition handed back undispatched reported %d deliveries "+
-				"left and the never-delivered one %d: a drain the consumer stopped "+
-				"is handed back, and every hand-back spends a delivery — the "+
-				"partition that stopped it is charged, so the rest of it cannot be "+
-				"free. (If this backend split the fill into separate batches there "+
-				"was no undispatched remainder to charge and this case never ran "+
-				"the loop it is named for; see fillOneBatch.)", handed, fresh)
+				"left and the one that stopped the drain %d, want exactly one "+
+				"less: a drain the consumer stopped is handed back, and every "+
+				"hand-back spends one delivery — the partition that stopped it is "+
+				"charged, so the rest of it is neither free nor charged twice. (At "+
+				"%d it was free, which is also what a backend that split the fill "+
+				"into separate batches reports: there was then no undispatched "+
+				"remainder to charge and this case never ran the loop it is named "+
+				"for. See holdForOneBatch.)", handed, fresh, fresh)
 		}
 	})
 
@@ -932,6 +960,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// reordering the very partitions the guard protects.
 		backlog := s.needBacklog(t)
 		q := s.start(ctx, t)
+		fill := holdForOneBatch(ctx, t, q, "topic.c", "grp")
 
 		seen := newJournal()
 		var grown bool
@@ -956,7 +985,7 @@ func (s *suite) runBatch(t *testing.T) {
 			t.Fatalf("SubscribeBatch: %v", err)
 		}
 
-		fillOneBatch(ctx, t, q, "topic.c", "grp", "a", "b", "c")
+		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
 		awaitState(t, "the undispatched partitions to be spliced after the deferred one", func() bool {
@@ -966,33 +995,71 @@ func (s *suite) runBatch(t *testing.T) {
 	})
 }
 
-// fillOneBatch publishes one event per conversation while the subscription is
-// held, so they arrive as a single multi-partition batch when it is released.
+// holdForOneBatch holds a subscription's deliveries so several events can be
+// put in ONE batch, and returns the function that publishes them and releases
+// the hold.
 //
-// SCOPE, because this is an assumption and not a guarantee. Holding the
-// subscription makes the events available together, which is the most any
-// caller can arrange through the contract — but nothing obliges a backend to
-// hand them over as ONE batch. A backend that delivers them singly makes the
-// cases built on this pass without exercising the multi-partition loop they are
-// named for: the first single-partition batch defers, the attachment quiesces,
-// and there never was a "rest of the batch" to stop. That is a vacuous pass,
-// not a false one, and it is invisible from the assertions.
+// TWO CALLS RATHER THAN ONE, and their order is the whole of it: the hold has
+// to be in place BEFORE the caller attaches. So a case takes the hold, then
+// subscribes, then fills — and a single pause/publish/resume helper called
+// after SubscribeBatch, which is what this was, cannot give the guarantee
+// while reading exactly as though it does.
+//
+// A HOLD CANNOT RETRACT A FETCH THAT IS ALREADY IN FLIGHT. An idle attachment
+// on a pull backend sits in a long poll, and a hold is a flag on the client:
+// an event published a moment after the flag is set is served straight into
+// that outstanding request, delivered, and then handed back by the very guard
+// the hold exists for. It reaches the next drain having ALREADY SPENT a
+// delivery — and, on a backend where a redelivery returns behind
+// never-delivered mail (which is measured true of JetStream), behind the
+// events published after it.
+//
+// That is not hypothetical and it is not one case's problem. It was
+// reproduced by letting the attachment reach its first fetch before the hold
+// lands, and it accounts for two intermittent failures in this group, with
+// two different symptoms:
+// an_undispatched_partition_pays_for_its_hand_back read the STOPPING
+// partition's headroom one lower than the remainder's and so reported a
+// hand-back as free, and a_deferral_stops_the_rest_of_a_batch had its first
+// partition arrive other than first.
+//
+// Holding before the attachment exists removes it BY CONSTRUCTION rather than
+// by a wait: the attachment's own first look at the flag already sees the
+// hold, so nothing is ever outstanding while the fill publishes. A wait would
+// have had to outlast a poll window the suite cannot see — the backend's, not
+// the contract's — which is how a suite acquires a race it cannot measure.
+//
+// WHAT IT STILL DOES NOT PROMISE IS THE DRAIN SIDE, and that half is an
+// assumption rather than a guarantee. Holding the subscription makes the
+// events available together, which is the most any caller can arrange through
+// the contract — but nothing obliges a backend to hand them over as ONE batch.
+// A backend that delivers them singly makes the cases built on this pass
+// without exercising the multi-partition loop they are named for: the first
+// single-partition batch defers, the attachment quiesces, and there never was
+// a "rest of the batch" to stop. That is a vacuous pass, not a false one, and
+// it is invisible from most of the assertions —
+// an_undispatched_partition_pays_for_its_hand_back is the exception, because
+// it can tell a split from a hand-back that cost nothing and says which it
+// saw.
 //
 // The in-memory twin is where these genuinely exercise the loop, because it
 // drains everything available into one delivery. Treat a green result on an
 // asynchronous backend as "did not contradict" rather than "certified", and if
 // that distinction ever needs closing it needs an observable the contract does
 // not currently have — how many partitions a delivery was drawn from.
-func fillOneBatch(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string, convs ...string) {
+func holdForOneBatch(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string) func(convs ...string) {
 	t.Helper()
 	if err := q.PauseTopic(ctx, topic, group, "queuetest-fill"); err != nil {
 		t.Fatalf("PauseTopic: %v", err)
 	}
-	for _, conv := range convs {
-		publish(ctx, t, q, topic, newConvEvent(conv, conv))
-	}
-	if err := q.ResumeTopic(ctx, topic, group, "queuetest-fill"); err != nil {
-		t.Fatalf("ResumeTopic: %v", err)
+	return func(convs ...string) {
+		t.Helper()
+		for _, conv := range convs {
+			publish(ctx, t, q, topic, newConvEvent(conv, conv))
+		}
+		if err := q.ResumeTopic(ctx, topic, group, "queuetest-fill"); err != nil {
+			t.Fatalf("ResumeTopic: %v", err)
+		}
 	}
 }
 
