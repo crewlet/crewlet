@@ -98,6 +98,7 @@ func (s *suite) runAttachment(t *testing.T) {
 		// flag (twin) or blocked()'s detached term (JetStream) is
 		// removed.
 		q := s.start(ctx, t)
+		release := holdBeforeAttach(ctx, t, q, "topic.detach1", "grp")
 
 		seen := newJournal()
 		var detached bool
@@ -122,14 +123,15 @@ func (s *suite) runAttachment(t *testing.T) {
 		// one's handler gives the seat up. Publishing them without the
 		// hold would let the first be delivered and acked before the
 		// second was even accepted, and the case would assert nothing.
-		if err := q.PauseTopic(ctx, "topic.detach1", "grp", "queuetest-fill"); err != nil {
-			t.Fatalf("PauseTopic: %v", err)
-		}
+		//
+		// THE HOLD IS TAKEN ABOVE, before the attachment exists, and that
+		// is what makes the sentence above true rather than merely
+		// intended: a hold taken after Subscribe cannot retract a fetch
+		// already in flight, so e1 could be delivered DURING it — exactly
+		// what this comment claims is impossible. See holdBeforeAttach.
 		publish(ctx, t, q, "topic.detach1", newEvent("e1"))
 		publish(ctx, t, q, "topic.detach1", newEvent("e2"))
-		if err := q.ResumeTopic(ctx, "topic.detach1", "grp", "queuetest-fill"); err != nil {
-			t.Fatalf("ResumeTopic: %v", err)
-		}
+		release()
 
 		seen.awaitLabels(t, "only the first event to be handled", "e1")
 		seen.staysAt(t, 1, "the detach did not stop the next delivery")
