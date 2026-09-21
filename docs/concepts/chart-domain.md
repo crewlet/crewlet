@@ -177,6 +177,32 @@ node, and refusing a partly wired chart would make that sequence impossible.
 Dangling references are reported where the tree is read — see
 [Organization Model](organization-model.md).
 
+### Reading it back
+
+Every answer carries **the position it was true as of** — not a "hydrated"
+boolean. The question a caller has is not "are you caught up", which is a
+snapshot of a moving thing and false by the time it is read, but "what did you
+know when you answered this". A position answers that and it composes: write at
+P, then require your next read to include P.
+
+- **The whole chart is one read.** A company has hundreds of objects, not the
+  hundreds of thousands the tracker holds, and every derivation over a chart is
+  a walk — so the thing a walk is computed from has to be one answer.
+- **A retired key goes on resolving** until something else claims it, and then
+  the claimant wins. A key is pasted into chat and typed into `manages:`
+  entries, so one that stopped resolving would break every reference anybody
+  had already written; but a unit created under a retired name must not
+  silently resolve to the old object for ever.
+- **"Removed" is a different answer from "no such thing."** A tombstone reads
+  back with when, by whom and why, so a person asking where their team went is
+  told it was dissolved in March and merged into infrastructure, rather than
+  that it never existed.
+- **The import ledger answers which revision this structure is running**, and
+  where on the log it landed. It is what makes re-activating an unchanged
+  revision — the credential-rotation gesture, and therefore routine — a no-op
+  every node reaches the same way, from a row rather than from a comparison
+  each node makes for itself.
+
 ---
 
 ## What the chart is not

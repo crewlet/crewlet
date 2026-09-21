@@ -104,6 +104,35 @@ board from for a year.
 Every answer reports the level it was **actually** read at, so a caller that
 asked for one and got another can tell.
 
+### The org chart, and what its `linearizable` reads cost
+
+The chart is a state-log domain like the tracker and the knowledge base, so
+every level above means the same thing about it — but two of its reads are
+worth naming, because they are the only two the engine issues at
+`linearizable` on its own account:
+
+- **An import's read-back.** After a config revision's structure lands, the
+  import reads the chart to confirm what it actually holds. A weaker level
+  would let it confirm against a copy that does not include the write it just
+  made, and report a revision as applied when the node cannot see it.
+- **`GET /chart?level=linearizable`.** A person about to reorganise a company
+  is the one caller who genuinely needs to know that what they are looking at
+  includes every change committed anywhere in the fleet — because the batch
+  they are about to submit is refused *whole* against exactly that state.
+
+Both **append a barrier and wait through it**, and both count against
+`LinearizableReadsPerDay` like every other. Everything else that reads the
+chart — a turn's roster, an escalation walk, the organization screen — reads
+at the surface's own default, because a chart that is one record behind still
+answers "who leads this team" correctly in all but the seconds after a
+reorganisation.
+
+**A chart read carries its position, and refuses rather than degrading.** The
+whole structure comes back in one answer, because every derivation over a
+chart is a walk — lead inheritance, unit expansion, who manages whom — and a
+walk served by a query per ancestor is N round trips against a copy that may
+move between them.
+
 ## Bounding staleness
 
 `stale` on its own accepts an answer of any age. A caller that will not says so

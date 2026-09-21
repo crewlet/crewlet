@@ -601,3 +601,28 @@ func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
 	}
 	return verifier
 }
+
+// applyRekey publishes a key claim directly.
+//
+// NOT THROUGH A BATCH, because a key claim arbitrates on the KEY's own subject
+// — create-only at an expectation of zero — where a batch arbitrates on the
+// structure's. Two objects taking one address must contend, and two structural
+// batches never would.
+func (r *writeRig) applyRekey(opID, key, former string) (chart.WriteResult, error) {
+	r.t.Helper()
+	got, err := r.writer.WriteRekey(r.t.Context(), opID,
+		chart.ObjectRef{Kind: chart.KindUnit, ID: key}, former)
+	if err == nil {
+		r.drain()
+	}
+	return got, err
+}
+
+// mustImport publishes one config revision's structure and applies it.
+func (r *writeRig) mustImport(opID, revision string, edges ...chart.Edge) {
+	r.t.Helper()
+	if _, err := r.writer.WriteImport(r.t.Context(), opID, revision, edges); err != nil {
+		r.t.Fatalf("import %s: %v", revision, err)
+	}
+	r.drain()
+}

@@ -2,11 +2,13 @@ package engine
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"maps"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -216,3 +218,120 @@ func openCipher(boot *config.Bootstrap) (secrets.Cipher, error) {
 	}
 	return cipher, nil
 }
+
+// chartSealer is the chart's sealing seam over the company's secret store.
+//
+// # Why an adapter rather than the store itself
+//
+// [chart.Sealer] is two verbs — seal one value, read the blind-index key —
+// and the store's surface is eleven. A consumer-defined interface is what
+// keeps the chart from importing a rekey, a listing and a migration it has no
+// business with, and what lets a test satisfy it without a coordination
+// backend.
+//
+// NIL IS A REAL CONFIGURATION rather than a missing wire: a company with no
+// fleet backend or no keyring has no store, and the chart's own write path
+// then REFUSES a literal credential by name rather than putting one on a log
+// every node applies. What nil must never mean is "store it in the clear".
+func (e *Engine) chartSealer() chart.Sealer {
+	if e.backends == nil || e.backends.Fleet == nil || e.cipher == nil {
+		return nil
+	}
+	node := ""
+	if e.node != nil {
+		node = e.node.ID()
+	}
+	return &chartSealer{
+		store: fleetsecrets.New(e.backends.Fleet, e.cipher),
+		node:  node,
+		now:   time.Now,
+	}
+}
+
+// chartSealer adapts the company's secret store to [chart.Sealer].
+type chartSealer struct {
+	store *fleetsecrets.Store
+	node  string
+	now   func() time.Time
+}
+
+// Seal stores one value under the name the chart derived.
+func (c *chartSealer) Seal(ctx context.Context, name, value string) error {
+	// SOURCE "chart", which is what an operator listing their secrets reads
+	// to tell a credential a founder typed into a seat from one a
+	// provisioner minted. The two have different remedies when they stop
+	// working, and a listing that called both "api" would send somebody to
+	// the wrong place.
+	return c.store.Set(ctx, name, value, c.node, "chart", c.now())
+}
+
+// BlindKey is the material an email's blind index is computed under.
+//
+// # Why it is a stored secret rather than the keyring's own key
+//
+// The keyring seals values and ideally no node needs it to answer a question.
+// A blind index is the opposite: EVERY node computes and compares it on every
+// inbound vendor payload, so its key has to be readable by every node on the
+// ordinary read path. Making it a record in the company's own store is what
+// keeps those two key roles apart — a fleet can rotate one without making the
+// other's ciphertext unreadable.
+//
+// IT IS MINTED ON FIRST USE and never afterwards. Changing it would make every
+// stored index unmatchable at once, with no gesture that recomputes them, so a
+// rotation is a migration rather than a setting — which is why nothing here
+// takes one.
+func (c *chartSealer) BlindKey(ctx context.Context) ([]byte, error) {
+	value, err := c.store.Get(ctx, ChartBlindIndexKey)
+	switch {
+	case err == nil && value != "":
+		return decodeBlindKey(value)
+	case err != nil && !errors.Is(err, secrets.ErrNotFound):
+		return nil, fmt.Errorf("engine: read the chart's blind-index key: %w", err)
+	}
+	// MINTED ONCE, and a racing node's write wins harmlessly: both mint a
+	// key, one lands, and the read below takes whichever did. What must not
+	// happen is a node computing under a key it invented and did not store,
+	// which would index every address to a value no peer can match.
+	minted, err := secrets.GenerateKey()
+	if err != nil {
+		return nil, fmt.Errorf("engine: mint the chart's blind-index key: %w", err)
+	}
+	if err := c.store.Set(ctx, ChartBlindIndexKey, secrets.EncodeKey(minted),
+		c.node, "chart", c.now()); err != nil {
+		return nil, fmt.Errorf("engine: store the chart's blind-index key: %w", err)
+	}
+	stored, err := c.store.Get(ctx, ChartBlindIndexKey)
+	if err != nil {
+		return nil, fmt.Errorf("engine: read back the chart's blind-index "+
+			"key: %w", err)
+	}
+	return decodeBlindKey(stored)
+}
+
+// decodeBlindKey reads the stored key back out of the form it was written in.
+//
+// THE READ-BACK IS WHAT MAKES THE RACE HARMLESS: two nodes that both mint one
+// each store theirs, one lands, and both then read the same value. A node that
+// used the key it minted without reading back would index every address to a
+// value no peer can match — and nothing would report it, because the index is
+// opaque by construction.
+func decodeBlindKey(value string) ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("engine: the chart's blind-index key is not "+
+			"the form it is written in: %w", err)
+	}
+	if len(key) == 0 {
+		return nil, errors.New("engine: the chart's blind-index key is empty, " +
+			"so every address would index to one value")
+	}
+	return key, nil
+}
+
+// ChartBlindIndexKey is the secret name the chart's blind-index key lives
+// under.
+//
+// IN THE COMPANY'S OWN STORE, under the reference grammar every other secret
+// follows, so an operator listing their secrets sees it and a rekey moves it
+// with the rest.
+const ChartBlindIndexKey = "CREWLET_CHART_BLIND_INDEX_KEY"

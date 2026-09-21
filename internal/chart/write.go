@@ -405,3 +405,167 @@ func objectsOf(edges []Edge, removed []ObjectRef) []ObjectRef {
 func wire(s Subject) statelog.Subject {
 	return statelog.Subject{Kind: string(s.Kind), ID: s.ID}
 }
+
+// WriteRekey moves one key onto one object, keeping the old one resolving.
+//
+// ON THE KEY'S OWN SUBJECT, create-only at an expectation of zero, for the
+// reason a page's create arbitrates on its title: two objects taking one
+// address must CONTEND, and two objects' own subjects never would. A rekey
+// published on the object's subject would let two renames onto one address
+// both succeed, and the chart would then hold two objects answering to it.
+//
+// THE FORMER KEY IS STATED rather than read, because the apply RETIRES that
+// claim and a retirement the record did not state would be a row rewritten on
+// one node's authority rather than the log's.
+func (w *Writer) WriteRekey(ctx context.Context, opID string, object ObjectRef,
+	former string) (WriteResult, error) {
+
+	if opID == "" {
+		return WriteResult{}, fmt.Errorf("chart: a rekey needs an operation id")
+	}
+	key := NormalizeKey(object.ID)
+	was := NormalizeKey(former)
+	switch {
+	case key == "":
+		return WriteResult{}, fmt.Errorf("chart: a rekey names no new key")
+	case was == "":
+		return WriteResult{}, fmt.Errorf("chart: the rekey onto %q retires "+
+			"nothing — a claim that moves no reference leaves two addresses "+
+			"that both resolve: %w", key, ErrRefused)
+	case was == key:
+		return WriteResult{}, fmt.Errorf("chart: the rekey onto %q retires "+
+			"itself: %w", key, ErrRefused)
+	case object.Kind != KindUnit && object.Kind != KindSeat:
+		return WriteResult{}, fmt.Errorf("chart: only a unit and a seat hold "+
+			"a key, and this rekey names a %s: %w", object.Kind, ErrRefused)
+	}
+	subject := RekeySubject(key)
+	at := w.Now()
+	// THE SCOPE NAMES THE OBJECT, not the key: a claim's subject is an
+	// address and the apply writes the object's row, so a scope built from
+	// the subject would file the record's blast radius under something that
+	// has no row at all.
+	scope := BatchScope([]ScopeTerm{scopeTermFor(object, "")})
+
+	result, err := w.publish(ctx, statelog.Request{
+		Subject:  wire(subject),
+		Scope:    scope.Resolve(subject),
+		OpID:     opID,
+		MintedAt: at,
+		// FIRST-WRITER-WINS ON THE NEW ADDRESS, which is what makes two
+		// renames onto one key contend: the second sees the claim and is
+		// refused rather than overwriting it.
+		Pattern: statelog.PatternCreate,
+		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+			// THE OBJECT HAS TO BE THERE, read in this snapshot: a
+			// rekey of something that has already been removed would
+			// claim an address for an object the apply then cannot
+			// find, leaving the claim standing and nothing holding it.
+			present, err := objectPresent(ctx, tx, ObjectRef{
+				Kind: object.Kind, ID: was})
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			if !present {
+				return statelog.Decision{}, fmt.Errorf("chart: nothing in the "+
+					"chart answers to %q, so there is no object to move the "+
+					"key %q onto: %w", was, key, ErrRefused)
+			}
+			return w.record(subject, OpRekey, opID, at, scope, RekeyPayload{
+				V: DocumentVersion, Key: key, FormerKey: was,
+				Object: ObjectRef{Kind: object.Kind, ID: key},
+			})
+		},
+	})
+	return WriteResult{Result: result,
+		Objects: []ObjectRef{{Kind: object.Kind, ID: key}}}, err
+}
+
+// WriteImport publishes one config revision's whole authored structure.
+//
+// ITS OWN VERB rather than a large batch, because what an operator reads in
+// the log is the difference between "somebody moved a seat" and "a config
+// revision rewrote the chart" — and reconstructing that from the SIZE of a
+// payload is not reading, it is guessing. It is also what the import ledger is
+// keyed on, so re-activating an unchanged revision (the credential-rotation
+// gesture, and therefore routine) is a no-op every node reaches the same way.
+//
+// IT IS QUIET. A revision that touches forty seats would otherwise wake forty
+// seats to tell each of them their goal was reworded.
+func (w *Writer) WriteImport(ctx context.Context, opID, revision string,
+	edges []Edge) (WriteResult, error) {
+
+	if opID == "" {
+		return WriteResult{}, fmt.Errorf("chart: an import needs an operation id")
+	}
+	if revision == "" {
+		return WriteResult{}, fmt.Errorf("chart: an import names no revision, "+
+			"and the ledger that makes a re-import a no-op is keyed on one: %w",
+			ErrRefused)
+	}
+	subject := TreeSubject()
+	at := w.Now()
+	terms := make([]ScopeTerm, 0, len(edges))
+	objects := make([]ObjectRef, 0, len(edges))
+	for _, edge := range edges {
+		terms = append(terms, scopeTermFor(edge.Object, edge.Parent))
+		objects = append(objects, edge.Object)
+	}
+	scope := BatchScope(terms)
+
+	result, err := w.publish(ctx, statelog.Request{
+		Subject:  wire(subject),
+		Scope:    scope.Resolve(subject),
+		OpID:     opID,
+		MintedAt: at,
+		Pattern:  statelog.PatternArbitrated,
+		Decide: func(*sql.Tx) (statelog.Decision, error) {
+			// THE LEDGER IS CHECKED AT THE APPLY, not here, and that is
+			// deliberate: every node has to reach the same no-op, and a
+			// decision taken on this node's own rows would have a node
+			// that has not applied the previous import publish a second
+			// one. The apply is where every node sees the same ledger.
+			return w.record(subject, OpImport, opID, at, scope, ImportPayload{
+				V: DocumentVersion, Revision: revision, Edges: edges,
+			})
+		},
+	})
+	return WriteResult{Result: result, Objects: objects}, err
+}
+
+// scopeTermFor is one object's term in this domain's alphabet.
+//
+// ONE FUNCTION because four writers build them and a seat's term takes a unit
+// where a unit's does not — a rule written four times is a record filed under
+// a path no probe for it ever looks at.
+func scopeTermFor(object ObjectRef, parent string) ScopeTerm {
+	if object.Kind == KindSeat {
+		return ScopeTerm{Kind: TermSeat, Unit: NormalizeKey(parent),
+			ID: NormalizeKey(object.ID)}
+	}
+	return ScopeTerm{Kind: TermUnit, ID: NormalizeKey(object.ID)}
+}
+
+// objectPresent reports whether the chart holds this object, in this
+// transaction.
+func objectPresent(ctx context.Context, tx *sql.Tx, ref ObjectRef) (bool, error) {
+	var table, column string
+	switch ref.Kind {
+	case KindUnit:
+		table, column = "chart_units", "key"
+	case KindSeat:
+		table, column = "chart_seats", "handle"
+	default:
+		return false, nil
+	}
+	var one int
+	err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM `+table+` WHERE `+column+` = ?`, ref.ID).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("chart: read %s %s: %w", ref.Kind, ref.ID, err)
+	}
+	return true, nil
+}

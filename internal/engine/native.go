@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -90,6 +91,17 @@ type native struct {
 	// trackerReader and pageReader are the read paths.
 	trackerReader *tracker.Reader
 	pageReader    *pages.Reader
+
+	// chartWriter and chartReader are the org chart's two sides.
+	//
+	// THEY ARE BUILT UNCONDITIONALLY, unlike the tracker's and the wiki's:
+	// those two have a BACKEND setting and a company on Jira or Confluence
+	// runs neither, where every company has a chart and there is nowhere
+	// else to keep one. A node whose chart domain failed to come up is a
+	// node that cannot say who reports to whom, which is a boot failure
+	// rather than a nil to branch on.
+	chartWriter *chart.Writer
+	chartReader *chart.Reader
 
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
@@ -292,6 +304,13 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			return fmt.Errorf("engine: serve search slices: %w", err)
 		}
 		n.stopSlices = stop
+	}
+
+	// THE CHART, WHICH EVERY COMPANY HAS. There is no backend setting for
+	// it and no second place to keep one, so its absence is a boot failure
+	// naming the domain rather than a reader that answers nil.
+	if err := n.openChart(e, sl, nodeID); err != nil {
+		return err
 	}
 
 	if wiki {
@@ -555,6 +574,64 @@ func (e *Engine) Domains() []statelog.Domain {
 		return registeredDomains()
 	}
 	return e.native.log.part.Domains()
+}
+
+// openChart builds the org chart's two sides over its running domain.
+//
+// THE WRITER ACTS AS THE NODE ITSELF, and every surface derives its own from
+// it with [chart.Writer.As]: an operator's session acts as that credential, a
+// founder's as that person. What is left acting as the node is what the node
+// itself does — an import applying a config revision, a duty tidying a
+// tombstone — and attributing those to a person would make a machine's
+// housekeeping indistinguishable from somebody's decision.
+func (n *native) openChart(e *Engine, sl *stateLog, nodeID string) error {
+	running := sl.Domain(chart.Domain{}.Name())
+	if running == nil {
+		return fmt.Errorf("engine: this node runs no chart domain, so it " +
+			"cannot say who reports to whom — the domain is in the register " +
+			"and its stream failed to come up")
+	}
+	writer, err := chart.NewWriter(chart.WriterDeps{
+		Publisher: running.publisher, DB: e.backends.Store,
+		// THE COMPANY'S OWN SECRET STORE, so a literal credential
+		// written to a seat is sealed rather than put on a log every
+		// node applies. Nil is a real configuration — a company with no
+		// store — and a write that needs one is then refused by name.
+		Seal:      e.chartSealer(),
+		Actor:     nodeID,
+		ActorKind: chart.AuthorOperator,
+	})
+	if err != nil {
+		return fmt.Errorf("engine: chart writer: %w", err)
+	}
+	n.chartWriter = writer
+	// THROUGH THE DOMAIN'S OWN READ AUTHORITY, so a level asked for is a
+	// level served: the refusal ladder, the coverage probe and the barrier
+	// a linearizable read waits through.
+	if n.chartReader, err = chart.NewReader(chart.ReaderOptions{
+		DB: e.backends.Store, Log: running.reader,
+		Committed: running.runner.Committed,
+	}); err != nil {
+		return fmt.Errorf("engine: chart reader: %w", err)
+	}
+	return nil
+}
+
+// Chart is this node's org chart read side, or nil before the native runtime
+// exists.
+func (e *Engine) Chart() *chart.Reader {
+	if e.native == nil {
+		return nil
+	}
+	return e.native.chartReader
+}
+
+// ChartWriter is this node's org chart write side, or nil.
+func (e *Engine) ChartWriter() *chart.Writer {
+	if e.native == nil {
+		return nil
+	}
+	return e.native.chartWriter
 }
 
 // Tracker is this node's tracker read side, or nil.
