@@ -62,7 +62,7 @@ type View struct {
 
 	// At is the chart position these rows were read at, which every answer
 	// derived from this view is true as of.
-	At chartPosition
+	At ViewPosition
 
 	// Reparented names every unit this build had to move to the root to
 	// break a cycle, in the order it moved them.
@@ -75,13 +75,17 @@ type View struct {
 	Reparented []string
 }
 
-// chartPosition is the position a view was built from.
+// ViewPosition is the position a view was built from.
 //
 // ITS OWN NAME rather than [statelog.Position] directly, so this package does
 // not take a dependency on the framework for one struct: `org` is read by the
 // prompt builder, the API and the learning loop, and none of them should have
 // to know what a state log is to render a roster.
-type chartPosition struct {
+//
+// COMPARABLE, which is what makes a rebuild a no-op at an equal cursor: the
+// engine holds the position its published view carries and compares it against
+// the applier's before it derives anything.
+type ViewPosition struct {
 	Generation uint32
 	Seq        uint64
 }
@@ -108,7 +112,7 @@ func FromRows(rows chart.Chart, settings Settings) *View {
 			TokenBudget:    settings.TokenBudget,
 			KnowledgeScope: settings.KnowledgeScope,
 		},
-		At: chartPosition{
+		At: ViewPosition{
 			Generation: rows.Position.Generation,
 			Seq:        rows.Position.Seq,
 		},
@@ -269,34 +273,65 @@ func attachSeats(rows chart.Chart, units []*Unit) []*Role {
 // effective one is what the cascade computes, and a row carrying the computed
 // answer would be a derived value written down.
 func unitFrom(row chart.Unit) *Unit {
-	return &Unit{
-		Name:          row.Name,
-		ID:            row.Key,
-		Type:          UnitType(row.Type),
-		Purpose:       row.Purpose,
-		Goals:         row.Goals,
-		Lead:          row.Lead,
-		Channel:       row.Channel,
-		Project:       row.Project,
-		Space:         row.Space,
-		KnowledgeRefs: row.KnowledgeRefs,
-		parentKey:     row.ParentKey,
-	}
+	// THE RUNTIME DOCUMENT FIRST, then the row's own fields OVER it.
+	//
+	// The order is the rule: the row is what a write arbitrated on and the
+	// blob is only what one carried, so a document that somehow holds a
+	// name loses to the column. Written as an overlay rather than as a
+	// struct literal for the reason the partition gate exists — a literal
+	// listing the runtime fields would silently drop the next one somebody
+	// adds, which is the failure this whole split has to not have.
+	//
+	// A DOCUMENT THIS BUILD CANNOT DECODE leaves the unit with its rows and
+	// no runtime: a team that inherits no credentials, which is the honest
+	// answer rather than refusing to build the whole company over one blob.
+	unit := &Unit{}
+	//nolint:errcheck // the empty result IS the handling; see above.
+	_ = ApplyUnitRuntime(unit, row.Runtime)
+
+	unit.Name = row.Name
+	unit.ID = row.Key
+	unit.Type = UnitType(row.Type)
+	unit.Purpose = row.Purpose
+	unit.Goals = row.Goals
+	unit.Lead = row.Lead
+	unit.Channel = row.Channel
+	unit.Project = row.Project
+	unit.Space = row.Space
+	unit.KnowledgeRefs = row.KnowledgeRefs
+	unit.parentKey = row.ParentKey
+	// THE CASCADE'S OWN BOOKKEEPING IS RESET, whatever a blob held: these
+	// record what this unit DECLARED, and the row is the declaration.
+	unit.DeclaredLead, unit.DeclaredChannel, unit.declared = "", "", false
+	unit.Roles, unit.Children = nil, nil
+	return unit
 }
 
 // seatFrom is one row as the runtime model's seat.
 func seatFrom(row chart.Seat, manages []string) *Role {
-	return &Role{
-		Name:                 row.Name,
-		Kind:                 RoleKind(row.Kind),
-		DeclaredHandle:       row.Handle,
-		Email:                row.Email,
-		Backstory:            row.Backstory,
-		Goal:                 row.Goal,
-		Responsibilities:     row.Responsibilities,
-		BehavioralGuidelines: row.BehavioralGuidelines,
-		Manages:              slices.Clone(manages),
-		Project:              row.Project,
-		Space:                row.Space,
-	}
+	// THE RUNTIME DOCUMENT FIRST, then the row's own fields over it — see
+	// [unitFrom] for why the order and the overlay are both load-bearing.
+	seat := &Role{}
+	//nolint:errcheck // the empty result IS the handling; see [unitFrom].
+	_ = ApplySeatRuntime(seat, row.Runtime)
+
+	seat.Name = row.Name
+	seat.Kind = RoleKind(row.Kind)
+	seat.DeclaredHandle = row.Handle
+	seat.Email = row.Email
+	seat.Backstory = row.Backstory
+	seat.Goal = row.Goal
+	seat.Responsibilities = row.Responsibilities
+	seat.BehavioralGuidelines = row.BehavioralGuidelines
+	seat.Manages = slices.Clone(manages)
+	seat.Project = row.Project
+	seat.Space = row.Space
+	// DERIVED, so a blob that carried one is discarded: the view recomputes
+	// it from the lead cascade on every build.
+	seat.AutoManaged = nil
+	// STRUCTURE: the row's `unit_key` places this seat, and a `unit:`
+	// reference is what a ROOT seat writes to ask to be moved. A seat built
+	// from rows is already where it belongs.
+	seat.UnitRef = ""
+	return seat
 }

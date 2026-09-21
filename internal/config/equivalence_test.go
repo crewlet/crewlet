@@ -61,7 +61,7 @@ func TestTheRowDerivationEqualsTheDocumentDerivation(t *testing.T) {
 			fromDocument.Normalize()
 
 			// THE ROW SIDE: the same company, imported and derived.
-			view := org.FromRows(authoredFrom(company).Rows(), settingsOf(company))
+			view := org.FromRows(config.AuthoredChart(company).Rows(), config.OrgSettings(company))
 
 			want := shapeOf(t, fromDocument)
 			got := shapeOf(t, view.Org)
@@ -98,7 +98,7 @@ func TestTheEquivalenceGateCatchesAPerturbedDerivation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derive from the document: %v", err)
 	}
-	view := org.FromRows(authoredFrom(company).Rows(), settingsOf(company))
+	view := org.FromRows(config.AuthoredChart(company).Rows(), config.OrgSettings(company))
 
 	// THE PERTURBATION, applied to the built view rather than to the
 	// builder: what this case has to establish is that shapeOf SEES a
@@ -202,60 +202,6 @@ func loadCompany(t *testing.T, path string) *config.Company {
 }
 
 // settingsOf is the company values that are not the chart.
-func settingsOf(c *config.Company) org.Settings {
-	return org.Settings{
-		Name: c.Name, Mission: c.Mission, Vision: c.Vision,
-		Policies: slices.Clone(c.Policies), TokenBudget: c.TokenBudget,
-		KnowledgeScope: slices.Clone(c.Knowledge.KnowledgeScope),
-	}
-}
-
-// authoredFrom flattens a parsed company into the chart's authored shape.
-//
-// THIS IS WHAT AN IMPORT DOES, in test form: it walks the document's nesting
-// and states each object's parent, because rows are flat.
-func authoredFrom(c *config.Company) chart.Authored {
-	var out chart.Authored
-	for i := range c.Roles {
-		out.Seats = append(out.Seats, authoredSeat(&c.Roles[i], c.Roles[i].Unit))
-	}
-	var walk func(units []config.Unit, parent string)
-	walk = func(units []config.Unit, parent string) {
-		for i := range units {
-			unit := &units[i]
-			key := unit.IdentityKey()
-			out.Units = append(out.Units, chart.AuthoredUnit{
-				Key: key, Parent: parent,
-				Name: unit.Name, Type: string(unit.Type),
-				Purpose: unit.Purpose, Goals: slices.Clone(unit.Goals),
-				Lead: unit.Lead, Channel: unit.Channel,
-				Project: unit.Project, Space: unit.Space,
-				KnowledgeRefs: slices.Clone(unit.Knowledge),
-			})
-			for j := range unit.Roles {
-				out.Seats = append(out.Seats,
-					authoredSeat(&unit.Roles[j], key))
-			}
-			walk(unit.Children, key)
-		}
-	}
-	walk(c.Units, "")
-	return out
-}
-
-func authoredSeat(role *config.Role, unit string) chart.AuthoredSeat {
-	seat := role.Seat()
-	return chart.AuthoredSeat{
-		Handle: seat.Handle(), Unit: unit,
-		Kind: chart.SeatKind(seat.Kind), Name: role.Name,
-		Email: role.Email, Backstory: role.Backstory, Goal: role.Goal,
-		Responsibilities:     slices.Clone(role.Responsibilities),
-		BehavioralGuidelines: slices.Clone(role.BehavioralGuidelines),
-		Manages:              slices.Clone(role.Manages),
-		Project:              role.Project, Space: role.Space,
-	}
-}
-
 // shapeOf renders the derivations this gate compares, as one string.
 //
 // # Why a rendering rather than reflect.DeepEqual
@@ -269,6 +215,12 @@ func authoredSeat(role *config.Role, unit string) chart.AuthoredSeat {
 // effective lead and channel resolved to, and which handles each `manages`
 // list expanded to. A difference in any of those is a company that behaves
 // differently; a difference in anything else is not.
+//
+// THE KIND IS RENDERED EFFECTIVE for the same reason. A document leaves
+// `kind:` off an agent seat and a ROW may not — a stored kind is a column the
+// chart validates as a closed set, where "" would be a value nothing
+// recognises rather than a default nobody wrote. Both halves mean "agent",
+// and every consumer reads them through the same accessor.
 func shapeOf(t *testing.T, o *org.Organization) string {
 	t.Helper()
 	type seatShape struct {
@@ -296,7 +248,7 @@ func shapeOf(t *testing.T, o *org.Organization) string {
 			})
 			for _, r := range u.Roles {
 				seats = append(seats, seatShape{
-					Handle: r.Handle(), Kind: string(r.Kind),
+					Handle: r.Handle(), Kind: string(r.EffectiveKind()),
 					Unit: u.Key(), Manages: sortedCopy(r.Manages),
 				})
 			}
@@ -306,7 +258,7 @@ func shapeOf(t *testing.T, o *org.Organization) string {
 	walk(o.Units, "")
 	for _, r := range o.Roles {
 		seats = append(seats, seatShape{
-			Handle: r.Handle(), Kind: string(r.Kind),
+			Handle: r.Handle(), Kind: string(r.EffectiveKind()),
 			Manages: sortedCopy(r.Manages),
 		})
 	}

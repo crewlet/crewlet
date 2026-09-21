@@ -594,6 +594,26 @@ type Role struct {
 // IsHuman reports whether a human holds this seat.
 func (r *Role) IsHuman() bool { return r.Kind == KindHuman }
 
+// EffectiveKind is this seat's kind with the document's default resolved.
+//
+// AN EMPTY KIND IS AN AGENT SEAT, which is what makes `kind:` optional in a
+// file: a company writes `kind: human` for the people and nothing for the
+// agents. Every reader here already knows that — [Role.IsHuman] is the whole
+// of it — so the zero value never had to be resolved.
+//
+// A STORED ROW IS DIFFERENT, and that is what this is for. A seat's kind is a
+// column the chart validates as a closed set, so a row carrying "" would be a
+// value nothing recognises rather than a default nobody wrote: the difference
+// between "agent, unstated" and "unknown" is invisible in a file and load
+// bearing in a table. Whatever writes a row resolves it here rather than
+// deciding for itself.
+func (r *Role) EffectiveKind() RoleKind {
+	if r == nil || r.Kind == "" {
+		return KindAgent
+	}
+	return r.Kind
+}
+
 // IsAgent reports whether an AI agent holds this seat — the case an unset
 // kind means. Validate rejects any other kind, so these two are total.
 func (r *Role) IsAgent() bool { return !r.IsHuman() }

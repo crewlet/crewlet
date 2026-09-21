@@ -1,0 +1,253 @@
+package engine
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// THE BOOT SEED: a company FILE's org chart becoming rows.
+//
+// # Why a file still writes a chart at all
+//
+// The chart is a log, and an operator edits it with `crewlet chart` and the
+// per-entity routes. But a company has to START somewhere, and what an
+// operator has on the first run is a file — `crewlet run -company acme.yaml`,
+// or the seed a first `crewlet config import` writes. Without this a fresh
+// deployment boots with an empty chart, which is a company with no seats: no
+// mailbox is attached, no placement claims anything, and the dashboard renders
+// an organisation of nobody. The file would validate, the node would come up,
+// and nothing at all would say why.
+//
+// # ONLY WHEN THE CHART IS EMPTY
+//
+// This is a SEED and not an import. It answers "this company has never had a
+// chart, and a file describes one", and nothing else. The moment the chart
+// holds anything — a seat somebody hired through the API, a unit moved with
+// `crewlet chart`, a peer's import — the file stops being the authority and
+// this does nothing at all.
+//
+// The alternative was to seed on every boot and let the ledger make it a
+// no-op. That is wrong in one direction and it is the expensive one: an
+// operator who still passes `-company` on a node that restarts would re-place
+// every object the file names, so a seat moved to another unit last week
+// would silently move back on the next restart. A chart edited after the seed
+// belongs to whoever edited it.
+//
+// Changing the chart from a file afterwards is `crewlet config import`, which
+// diffs the file against the rows, says what it would remove, and asks.
+//
+// # It is an IMPORT RECORD, keyed on the file's own content
+//
+// [chart.Writer.WriteImport] is one record on the structure's subject carrying
+// the whole authored chart, and the apply is a no-op when its revision is
+// already in `chart_import_ledger`. That ledger is the FLEET's half of the
+// emptiness rule above: two nodes booting the same file at the same moment
+// both see an empty chart, both publish, and the second apply writes nothing.
+// The key is a hash of the AUTHORED CHART rather than of the file or of the
+// revision id, so the two publishes are one record:
+//
+//   - The FILE is the wrong key because two things change it that the chart
+//     does not care about — a reworded mission, a rotated `${VAR}` — and each
+//     would make the two nodes disagree about what they were seeding.
+//   - The REVISION ID is the wrong key for the same reason and one more: the
+//     rotation gesture is re-activating an UNCHANGED revision, and a new id
+//     over an identical chart is not a different structure.
+//   - The CHART's own content is right because the question the ledger
+//     answers is "has this structure already landed".
+
+// seedChart publishes the company file's authored chart, once.
+//
+// It runs at boot, after the state log is up and before the first epoch is
+// installed, so the view the first composition carries is already the file's.
+//
+// A NODE WITH NO CHART WRITER DOES NOTHING, which is the `crewlet validate`
+// shape and not a failure: that engine applies to nothing and opens no log.
+func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
+	writer := e.ChartWriter()
+	if writer == nil || cfg == nil {
+		return nil
+	}
+	// THE EMPTINESS CHECK FIRST, and at this node's own applied level: a
+	// linearizable read would put a broker round trip and a barrier append
+	// into every boot, to answer a question whose wrong answer the fleet's
+	// import ledger already absorbs.
+	held, err := e.Chart().Read(ctx, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		return fmt.Errorf("engine: read the chart before seeding it: %w", err)
+	}
+	if len(held.Units) > 0 || len(held.Seats) > 0 {
+		return nil
+	}
+
+	authored := config.AuthoredChart(cfg)
+	edges := authored.Edges()
+	if len(edges) == 0 {
+		// A COMPANY WITH NO UNITS AND NO SEATS is a real authoring
+		// state — an operator who has written their providers and not
+		// their people — and importing nothing would write a ledger row
+		// saying an empty structure had landed, which the next edited
+		// file would then have to be distinguished from.
+		return nil
+	}
+	revision := chartSeedKey(authored)
+
+	// THE OP ID IS THE REVISION, so a retry of a seed that published and
+	// then lost its answer is the same operation rather than a second one.
+	// The ledger makes the APPLY idempotent on every node; this makes the
+	// PUBLISH idempotent on this one.
+	result, err := writer.WriteImport(ctx, "seed:"+revision, revision, edges)
+	if err != nil {
+		return fmt.Errorf("engine: seed the org chart from the company file: %w", err)
+	}
+	switch result.Outcome {
+	case statelog.OutcomeApplied, statelog.OutcomePending:
+	default:
+		// UNKNOWN IS NOT A FAILURE HERE. The broker may have taken the
+		// record and not answered, and the ledger is what decides — so a
+		// boot that refused on this would refuse on a seed that landed.
+		log.WarnContext(ctx, "chart_seed_unknown", "revision", revision,
+			"detail", "the broker did not say whether the seed landed; the "+
+				"import ledger makes a re-publish a no-op, so the next boot "+
+				"settles it")
+	}
+
+	// AND THEN THE CONTENT, one record per object.
+	//
+	// THE IMPORT CARRIES STRUCTURE ONLY — where each object sits and who
+	// leads each unit — because that is the one thing that has to be
+	// arbitrated as a whole: it is one graph, and a cycle has to be
+	// impossible rather than merely detectable. Everything else about an
+	// object is its own, contends with nothing, and is a record on its own
+	// subject.
+	//
+	// So a seeded chart without this half is a company of empty seats:
+	// every handle in the right unit, with no model, no credentials and no
+	// name. The two halves are ONE gesture from an operator's point of
+	// view, which is why a failure in the second is reported with the same
+	// revision the first was keyed on.
+	if err := e.seedContent(ctx, writer, authored, revision); err != nil {
+		return err
+	}
+	log.InfoContext(ctx, "chart_seeded", "revision", revision,
+		"units", len(authored.Units), "seats", len(authored.Seats),
+		"detail", "the company file's units and seats were published to the "+
+			"chart log; the chart is no longer empty, so nothing seeds it again")
+	return nil
+}
+
+// seedContent publishes each object's own content after the structure.
+//
+// # Why every record is keyed on the seed's revision
+//
+// The op ids are `seed:<revision>:<kind>:<key>`, which makes each one
+// idempotent across a retry and across two nodes seeding at once: the
+// operation ledger collapses the second publish of an id it has already
+// applied. Without that, two nodes booting the same file at the same instant
+// would write every seat twice — harmless in the rows, because the second is
+// identical, and not harmless in the history, which would read as somebody
+// having edited every seat in the company.
+//
+// # A failure here stops rather than continuing
+//
+// A partial content seed is a company where some seats can think and others
+// cannot, which is worse than one where none can: the first looks like a
+// working company with a few broken people in it. The error names the object
+// it stopped on, and the next boot resumes — the ledger makes what landed a
+// no-op, so there is nothing to undo.
+func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
+	authored chart.Authored, revision string) error {
+
+	for _, unit := range authored.Units {
+		if _, err := writer.WriteUnit(ctx, seedOpID(revision, "u", unit.Key),
+			chart.UnitContent{
+				Key: unit.Key, Name: unit.Name, Type: unit.Type,
+				Purpose: unit.Purpose, Goals: unit.Goals,
+				Channel: unit.Channel, Project: unit.Project,
+				Space: unit.Space, KnowledgeRefs: unit.KnowledgeRefs,
+				Runtime: unit.Runtime,
+			}); err != nil {
+			return fmt.Errorf("engine: seed the content of unit %q: %w", unit.Key, err)
+		}
+	}
+	for _, seat := range authored.Seats {
+		if _, err := writer.WriteSeat(ctx, seedOpID(revision, "s", seat.Handle),
+			chart.SeatContent{
+				Handle: seat.Handle, Kind: seat.Kind, Unit: seat.Unit,
+				Name: seat.Name, Email: seat.Email,
+				Backstory: seat.Backstory, Goal: seat.Goal,
+				Responsibilities:     seat.Responsibilities,
+				BehavioralGuidelines: seat.BehavioralGuidelines,
+				Manages:              seat.Manages,
+				Project:              seat.Project, Space: seat.Space,
+				Runtime: seat.Runtime,
+			}); err != nil {
+			return fmt.Errorf("engine: seed the content of seat %q: %w", seat.Handle, err)
+		}
+	}
+	return nil
+}
+
+// seedOpID is one seeded object's operation id.
+func seedOpID(revision, kind, key string) string {
+	return "seed:" + revision + ":" + kind + ":" + chart.NormalizeKey(key)
+}
+
+// chartSeedKey is the import key for one authored chart: a hash of its own
+// content.
+//
+// STABLE ACROSS PROCESSES AND NODES, which is the whole requirement — two
+// nodes booting the same file must produce the same key or each would import
+// the same structure under a name the other's ledger does not hold. So it is a
+// hash of the canonical JSON of the authored value rather than anything
+// derived from this process: no time, no node id, no map iteration (the
+// converter builds slices in document order, and the edge list is parents
+// before children).
+func chartSeedKey(authored chart.Authored) string {
+	body, err := json.Marshal(authored)
+	if err != nil {
+		// UNREACHABLE: Authored is slices of strings and named string
+		// types. Falling back to a time-based key would be worse than
+		// the failure, because it would re-import on every boot.
+		return "file:unencodable"
+	}
+	return fmt.Sprintf("file:%x", sha256.Sum256(body))
+}
+
+// seedTimeout bounds the seed's publish.
+//
+// A BOOT-SHAPED BUDGET rather than the write path's own: this runs before the
+// node serves anything, and a broker that has taken the record and gone quiet
+// would otherwise hold the whole node up with no probe answering to say why.
+// Thirty seconds is the same figure [jsprovision] gives a clustered create,
+// which is the slowest thing that has already happened by the time this runs.
+const seedTimeout = 30 * time.Second
+
+// seedChartAtBoot is [Engine.seedChart] under its own deadline, and it never
+// fails the boot.
+//
+// # Why a failure is a warning rather than a refusal
+//
+// A node that cannot publish the seed still has to come up. Its peers may
+// already hold the chart — the ledger would make this a no-op anyway — and the
+// alternative is a fleet that cannot start because one node's broker was slow.
+// What it must NOT do is pass silently: a company whose chart never landed has
+// no seats, and this line is the only thing that says which of the two
+// happened.
+func (e *Engine) seedChartAtBoot(ctx context.Context, cfg *config.Company) {
+	seed, cancel := context.WithTimeout(ctx, seedTimeout)
+	defer cancel()
+	if err := e.seedChart(seed, cfg); err != nil {
+		log.WarnContext(ctx, "chart_seed_failed", "error", err,
+			"detail", "this node could not publish the company file's org "+
+				"chart. If no peer has published it either, the company has "+
+				"no seats: check the broker and re-run, or write the chart "+
+				"with `crewlet chart`")
+	}
+}

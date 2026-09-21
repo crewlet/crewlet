@@ -78,6 +78,8 @@ func (a *Applier) applyUnit(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	unit.Project = content.Project
 	unit.Space = content.Space
 	unit.KnowledgeRefs = content.KnowledgeRefs
+	// Whole, for [Applier.applySeat]'s reason.
+	unit.Runtime = content.Runtime
 	unit.UpdatedAt = at.brokerAt
 	unit.LastChange = a.change(at, ObjectRef{Kind: KindUnit, ID: key},
 		ChangeEdited)
@@ -130,6 +132,11 @@ func (a *Applier) applySeat(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	seat.BehavioralGuidelines = content.BehavioralGuidelines
 	seat.Project = content.Project
 	seat.Space = content.Space
+	// THE WHOLE RUNTIME DOCUMENT, replaced rather than merged: it is one
+	// value the writer holds whole, and a merge here would make a field
+	// somebody deleted survive on whichever node applied an older record
+	// last.
+	seat.Runtime = content.Runtime
 	seat.UpdatedAt = at.brokerAt
 	seat.LastChange = a.change(at, ObjectRef{Kind: KindSeat, ID: handle},
 		ChangeEdited)

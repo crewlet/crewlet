@@ -92,9 +92,12 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 	if row := p.fleetRow(t); row.Status != string(configplane.StatusOK) {
 		t.Errorf("fleet status = %q (%s), want ok", row.Status, row.Error)
 	}
-	seats := p.seats(t)
-	if !slices.Contains(seats, "platform-engineer") || !slices.Contains(seats, "product-engineer") {
-		t.Errorf("seats = %v, want both engineers running", seats)
+	// THE REVISION IS SERVED, which is the point: an admission violation is
+	// a warning on a stored revision, never a refusal. Asserted on the
+	// epoch this node published rather than on its seats — the chart is a
+	// log of its own now, and a config apply carries no chart to count.
+	if p.engine.Company() == nil {
+		t.Fatal("the apply reported success and published no epoch")
 	}
 
 	// SIX: the two duplicates, and one per unit with no id.

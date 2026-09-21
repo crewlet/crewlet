@@ -170,6 +170,10 @@ type UnitPayload struct {
 	// NOT scope what a seat may read — that is the org-wide knowledge
 	// scope, for the reason the organisation model gives.
 	KnowledgeRefs []string `json:"knowledge_refs,omitempty"`
+
+	// Runtime is the unit's engine-only content, opaque to this domain.
+	// See [Unit.Runtime].
+	Runtime json.RawMessage `json:"runtime,omitempty"`
 }
 
 // SeatPayload is a seat's own content, as FULL POST-STATE. Its subject is
@@ -217,6 +221,10 @@ type SeatPayload struct {
 	// identities. A seat inside a unit takes the unit's.
 	Project string `json:"project,omitempty"`
 	Space   string `json:"space,omitempty"`
+
+	// Runtime is the seat's engine-only content, opaque to this domain.
+	// See [Seat.Runtime].
+	Runtime json.RawMessage `json:"runtime,omitempty"`
 }
 
 // RekeyPayload moves one key onto one object. Its subject is the NEW key.
@@ -403,7 +411,7 @@ func (u UnitPayload) unit() Unit {
 		V: DocumentVersion, Key: NormalizeKey(u.Key), Name: u.Name,
 		Type: u.Type, Purpose: u.Purpose, Goals: u.Goals,
 		Channel: u.Channel, Project: u.Project, Space: u.Space,
-		KnowledgeRefs: u.KnowledgeRefs,
+		KnowledgeRefs: u.KnowledgeRefs, Runtime: u.Runtime,
 	}
 }
 
@@ -415,5 +423,6 @@ func (s SeatPayload) seat() Seat {
 		Responsibilities:     s.Responsibilities,
 		BehavioralGuidelines: s.BehavioralGuidelines,
 		Project:              s.Project, Space: s.Space,
+		Runtime: s.Runtime,
 	}
 }

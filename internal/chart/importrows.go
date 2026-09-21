@@ -1,5 +1,7 @@
 package chart
 
+import "encoding/json"
+
 // TURNING AN AUTHORED COMPANY INTO ROWS, which is what an import does and
 // what the equivalence between the two derivations is measured over.
 //
@@ -48,6 +50,10 @@ type AuthoredUnit struct {
 	Project       string
 	Space         string
 	KnowledgeRefs []string
+
+	// Runtime is the unit's engine-only content, opaque here. See
+	// [Unit.Runtime].
+	Runtime json.RawMessage
 }
 
 // AuthoredSeat is one seat as written.
@@ -64,6 +70,10 @@ type AuthoredSeat struct {
 
 	Responsibilities     []string
 	BehavioralGuidelines []string
+
+	// Runtime is the seat's engine-only content, opaque here. See
+	// [Seat.Runtime].
+	Runtime json.RawMessage
 
 	// Manages is the authored list, entries exactly as written — including
 	// ones that resolve to nothing. Expanding here would store a derived
@@ -103,6 +113,7 @@ func (a Authored) Rows() Chart {
 			KnowledgeRefs: unit.KnowledgeRefs,
 			ParentKey:     NormalizeKey(unit.Parent),
 			Lead:          NormalizeKey(unit.Lead),
+			Runtime:       unit.Runtime,
 		})
 		if lead := NormalizeKey(unit.Lead); lead != "" {
 			out.Leads[key] = lead
@@ -121,6 +132,7 @@ func (a Authored) Rows() Chart {
 			BehavioralGuidelines: seat.BehavioralGuidelines,
 			Project:              seat.Project, Space: seat.Space,
 			UnitKey: NormalizeKey(seat.Unit),
+			Runtime: seat.Runtime,
 		})
 		// THE EDGE SET IS FOLDED AND DE-DUPLICATED exactly as the applier
 		// folds it, because this is what the applier would have written:

@@ -3,6 +3,7 @@ package chart
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/redact"
@@ -55,6 +56,10 @@ type UnitContent struct {
 	Project       string
 	Space         string
 	KnowledgeRefs []string
+
+	// Runtime is the unit's engine-only content, opaque to this domain.
+	// See [Unit.Runtime].
+	Runtime json.RawMessage
 }
 
 // SeatContent is one seat's own content.
@@ -94,6 +99,10 @@ type SeatContent struct {
 	Manages              []string
 	Project              string
 	Space                string
+
+	// Runtime is the seat's engine-only content, opaque to this domain.
+	// See [Seat.Runtime].
+	Runtime json.RawMessage
 }
 
 // WriteUnit publishes one unit's content.
@@ -135,6 +144,7 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 				Goals: content.Goals, Channel: content.Channel,
 				Project: content.Project, Space: content.Space,
 				KnowledgeRefs: content.KnowledgeRefs,
+				Runtime:       content.Runtime,
 			}
 			// THE CAPS ARE CHECKED WHERE A RECORD IS WRITTEN and
 			// never where one is applied — the asymmetry every value
@@ -209,6 +219,7 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 				BehavioralGuidelines: content.BehavioralGuidelines,
 				Manages:              content.Manages,
 				Project:              content.Project, Space: content.Space,
+				Runtime: content.Runtime,
 			}
 			email, err := w.resolveMasked(ctx, object, "email",
 				content.Email, priorEmail(prior, found))

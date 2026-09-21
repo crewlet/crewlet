@@ -185,6 +185,22 @@ type stateLog struct {
 	skills      pages.SkillDetector
 	nudgeSkills func()
 
+	// nudgeChart is what the CHART APPLIER calls after a committed batch,
+	// threaded down for the same reason nudgeSkills is: the apply is the
+	// only thing that sees every change on EVERY node, and the company
+	// view is derived from those rows.
+	//
+	// The change feed is deliberately not what notices. It relays a record
+	// to ONE node, so every other node's view would go on serving a chart
+	// it had already applied and could not see it had.
+	//
+	// IT MUST NOT BLOCK. This runs on the apply loop's own goroutine with
+	// the next batch waiting behind it, and the derivation reads the
+	// estate — so what it does is signal, and the rebuild happens
+	// elsewhere. Nil answers "nobody is listening", which is a build with
+	// no engine behind the log.
+	nudgeChart func()
+
 	// ceilings is the byte ceiling each domain's stream is CREATED with,
 	// sized from Tier A inside the broker's budget ([ceilingsFor]). It is
 	// only ever applied at creation: a stream's configuration has one
@@ -400,7 +416,8 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
 		metrics: e.metrics,
 		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
-		ceilings: ceilings, volume: streamVolume(boot),
+		nudgeChart: e.nudgeChart,
+		ceilings:   ceilings, volume: streamVolume(boot),
 		run: runCtx, stop: cancel,
 	}
 	// PROVISION EVERY LOG FIRST, and only then decide whether this node
@@ -1341,6 +1358,25 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 					"the next fetch, so this costs redeliveries rather than "+
 					"correctness")
 		}
+	}
+	// THE CHART VIEW, AFTER THE CONSUMER RESET AND BEFORE THE APPLIERS
+	// RELAUNCH (the deferred launchAppliers above runs last).
+	//
+	// An adoption REPLACES the replicated file wholesale, so this node's
+	// chart rows are now a donor's and no apply calls happened to say so.
+	// A node that waited for the next committed record would serve a view
+	// over rows it abandoned — for however long nobody is hired, which may
+	// be days — while reporting itself caught up, because it IS caught up:
+	// its cursor moved without its view.
+	//
+	// The periodic trigger would find it within its interval; doing it
+	// here means the node rejoins with a correct view rather than with a
+	// wrong one for up to that long.
+	if _, err := e.refreshChart(ctx); err != nil {
+		log.WarnContext(ctx, "chart_view_unbuilt_after_rejoin",
+			"node", s.nodeID, "error", err.Error(),
+			"detail", "this node adopted a peer's rows and is still serving "+
+				"the view it built from its own; the periodic rebuild retries")
 	}
 	log.InfoContext(ctx, "statelog_rejoined", "node", s.nodeID)
 	return nil

@@ -70,6 +70,12 @@ type Unit struct {
 	// stale the moment an ancestor's lead moves.
 	Lead string `json:"lead,omitempty"`
 
+	// Runtime is everything about this unit that only the ENGINE reads:
+	// the credentials its direct members inherit, its token budget, its
+	// learning toggle, its scheduled work. Opaque here for the reason
+	// [Seat.Runtime] gives, and carrying no structure for the same one.
+	Runtime json.RawMessage `json:"runtime,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
@@ -116,6 +122,27 @@ type Seat struct {
 	// UnitKey is the unit this seat sits in, empty at the org root, and
 	// written only by a structural record.
 	UnitKey string `json:"unit_key,omitempty"`
+
+	// Runtime is everything about this seat that only the ENGINE reads:
+	// its model chain, its tool credentials, its sandbox cell, its worker
+	// grants, its schedules, its per-seat vendor identities.
+	//
+	// # Why it is opaque here
+	//
+	// This domain owns the chart — who exists, where they sit, who reports
+	// to whom — and it can say what every one of those means. It cannot say
+	// what an `mcp_env` key is for, and a chart that grew a field per
+	// runtime setting would be the company document again with a log under
+	// it. So the content travels as bytes the organisation model owns both
+	// ends of: [org.Role] carries the shape and the JSON tags, the writer
+	// marshals one and the view unmarshals it.
+	//
+	// IT IS NOT STRUCTURE. Nothing in here may name a unit, a parent or a
+	// `manages:` entry — those are the row's own columns and the edge
+	// tables, arbitrated on the tree's subject — and a content record
+	// carrying them would be a second writer of the shape of the company,
+	// contending with nobody.
+	Runtime json.RawMessage `json:"runtime,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -310,10 +337,10 @@ func checkList(field string, values []string) error {
 var (
 	unitFields = fieldSet(Unit{}, "former_keys", "name", "type", "purpose",
 		"goals", "channel", "project", "space", "knowledge_refs", "parent_key",
-		"lead", "last_change")
+		"lead", "runtime", "last_change")
 	seatFields = fieldSet(Seat{}, "former_handles", "name", "email", "backstory",
 		"goal", "responsibilities", "behavioral_guidelines", "project", "space",
-		"unit_key", "last_change")
+		"unit_key", "runtime", "last_change")
 	changeFields = fieldSet(Change{}, "actor", "actor_kind", "operator_id",
 		"revision", "fields", "summary", "turn_id", "quiet")
 )

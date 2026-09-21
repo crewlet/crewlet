@@ -246,7 +246,18 @@ func register() []registration {
 				// record to ONE node, and a derived view is held by
 				// every node — so the rest would go on serving a chart
 				// they had already applied and could not see they had.
-				return chart.NewApplier(s.nodeID, nil), nil
+				// THE VIEW'S TRIGGER. Every committed batch
+				// nudges the rebuild — on this node, which is
+				// the only node whose view these rows are.
+				// The object list is not read: a rebuild
+				// derives the whole tree, because lead
+				// inheritance and manages expansion make one
+				// seat's move a fact about its descendants.
+				return chart.NewApplier(s.nodeID, func([]chart.ObjectRef) {
+					if s.nudgeChart != nil {
+						s.nudgeChart()
+					}
+				}), nil
 			},
 			NewSeams: func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
 				rows, err := chart.NewRows(s.db)

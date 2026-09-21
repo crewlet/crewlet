@@ -26,11 +26,14 @@ import (
 // of the turn. A revision published mid-turn is simply not observed by that
 // turn — the guarantee, not a limitation. The next turn gets it.
 
-// epoch holds the current company.
+// epoch holds the current company: the two halves it is composed from, and
+// the composition readers load.
 //
-// An atomic pointer and nothing else: readers never block, and there is no
-// lock because there is only ever one writer — see [Engine.Apply].
+// THE COMPOSED POINTER IS AN ATOMIC AND NOTHING MORE, so readers never block.
+// The mutex covers the two INPUTS and the build between them — see view.go for
+// why the composition happens on the write side rather than per read.
 type epoch struct {
+	chartView
 	current atomic.Pointer[Company]
 }
 
@@ -98,7 +101,10 @@ func (e *Engine) installEpoch(c *Company) {
 	if c != nil && !e.indexes(c) {
 		e.refreshParties(c)
 	}
-	e.epoch.current.Store(c)
+	// COMPOSED rather than stored: the company a reader loads is this
+	// settings epoch and this node's chart view together, and whichever
+	// half moves republishes the pair. See view.go.
+	e.epoch.setSettings(c)
 	if c != nil && c.Models == nil {
 		// Said here, once per epoch, because it is the only line that
 		// reaches the operator of a company nobody has messaged yet: with

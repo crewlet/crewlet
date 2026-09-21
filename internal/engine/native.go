@@ -372,6 +372,26 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	}
 
 	e.native = n
+
+	// THE CHART VIEW'S TWO TRIGGERS, started AFTER e.native is published
+	// because both reach the chart reader through it — a goroutine that
+	// raced the assignment would read a nil runtime, and under the detector
+	// it would be a data race rather than a harmless one.
+	//
+	// NEITHER IS A DUTY. A node's view is a derivation of its OWN rows, so
+	// tying it to a fleet lease would mean a lease flap stopped a node
+	// tracking its own state — which is not a fleet decision and has no
+	// business depending on one. They also run on a MAINTENANCE node,
+	// which applies records and serves reads while publishing nothing.
+	n.done.Add(2)
+	go func() {
+		defer n.done.Done()
+		e.watchChartNudges(runCtx)
+	}()
+	go func() {
+		defer n.done.Done()
+		e.watchChart(runCtx)
+	}()
 	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
 	// down and [Engine.stopNative] — the same shutdown — is what ends it.
 	// Set before the two calls below because both reach through e.native:

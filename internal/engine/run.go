@@ -53,9 +53,14 @@ import (
 type Engine struct {
 	// epoch is the company this engine is running, replaced whole by an
 	// apply and never mutated. See epoch.go.
-	epoch    epoch
-	backends *Backends
-	node     *node.Node
+	epoch epoch
+
+	// chartNudge carries the chart applier's post-commit signal to the
+	// rebuild loop. ONE SLOT, which is the coalescing window — see
+	// [Engine.nudgeChart].
+	chartNudge chan struct{}
+	backends   *Backends
+	node       *node.Node
 
 	// configWriter is how a disconnect removes a block, installed by the
 	// wiring that builds the config surface. Atomic because the loop
@@ -601,6 +606,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// numbers into it, and before node.New, which hands the same
 		// value to every seat attachment.
 		batch: queue.DefaultBatchOptions(),
+		// BEFORE startNative, which threads the nudge into the chart's
+		// applier: a nil channel there would make every send block for
+		// ever on the apply loop's own goroutine.
+		chartNudge: make(chan struct{}, 1),
 	}
 	// ONE RUNNER PER ENGINE, because its in-process guard is half of what
 	// keeps two writers off one third-party app — see [setup.Runner.Hold].
@@ -743,6 +752,30 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := e.equip(ctx, company); err != nil {
 			return nil, err
+		}
+		// THE FILE'S OWN CHART, BEFORE THE FIRST EPOCH IS COMPOSED. A
+		// company has to start somewhere, and what an operator has on a
+		// first run is a file — without this a fresh deployment boots
+		// with an empty chart, which is a company with no seats and no
+		// line saying so. It is an import keyed on the chart's own
+		// content, so a second boot over the same structure publishes
+		// nothing and an edited file places what it names without
+		// touching whoever was hired through the API. See seed.go.
+		e.seedChartAtBoot(ctx, company.Config)
+		// AND THE VIEW THE SEED JUST WROTE. The composition prefers the
+		// view where there is one, so building it here is what makes the
+		// engine's first published company the one derived from rows
+		// rather than the document's own tree.
+		//
+		// A FAILURE IS NOT A REFUSAL, for the seed's own reason: the
+		// composition falls back to the document, the periodic trigger
+		// retries, and a node that refused to boot on a slow applier
+		// would be refusing over a state that clears itself.
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if _, err := e.refreshChart(ctx); err != nil {
+			log.WarnContext(ctx, "chart_view_unbuilt_at_boot", "error", err,
+				"detail", "this node serves the company file's own tree until "+
+					"its chart view builds; the periodic rebuild retries")
 		}
 	}
 	e.installEpoch(company)

@@ -138,6 +138,22 @@ Three of those four groups are **inventories, not pipelines**: no box inside
 `ingress`, `workers` or the always-on set hands work to another box in the same
 group. They are named here rather than drawn.
 
+**What a node holds before it serves anything.** The boot order is not a detail
+of the implementation; two of its steps exist because of what happens if they
+are the other way round.
+
+1. The **backends** — the stream, coordination and the store file — opened together (below).
+2. The **state log**, every registered domain's stream provisioned and its applier started. This is unconditional: a company that names a vendor for its tracker and its wiki still has an [org chart](chart-domain.md), which is a domain like any other.
+3. The **tool catalogue**, equipped onto the company before anything is published — a turn can start the instant the epoch is current, and one that found an empty registry would run a seat with no tools at all.
+4. The **chart seed**, if the chart is empty and a company file was given: the file's units and seats published to the log. See [Control Plane](control-plane.md#the-boot-seed).
+5. The **first chart read**, which is what the company view is derived from.
+6. The **epoch**, composed from the settings and that view and published. Every reader from here on is a single atomic load.
+7. The **node**, its seats, its duties and its inbound edge.
+
+Steps 4 and 5 are before 6 because a node that published an epoch first would
+serve a company with no seats for as long as the seed and the read take — and
+a turn that started in that window would be a turn for a company of nobody.
+
 **Two slots and a file.** The stream and coordination are the two *chosen*
 backends, validated together — a multi-node fleet cannot coordinate locally, and
 a two-member fleet has no quorum. The store is not a third choice: it is this

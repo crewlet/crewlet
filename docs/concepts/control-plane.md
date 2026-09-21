@@ -199,6 +199,40 @@ That is the whole of the comparison, and it is over resolved values rather than 
 
 ---
 
+## The company is two halves, composed into one value
+
+**A revision carries the SETTINGS and the org chart is a log of its own.** The two move on completely different rhythms, and that is the whole reason they are apart:
+
+| | The settings epoch | The chart |
+|---|---|---|
+| **What it is** | The providers, the integrations, the turn engine, the scheduling defaults — the eighteen fields a revision holds | The units and the seats: who exists, where they sit, who reports to whom |
+| **Where it lives** | One versioned document per revision, activated fleet-wide through the pointer below | The [chart domain](chart-domain.md) on the state log — one ordered stream, N identical SQL copies |
+| **How often it moves** | An operator activates one a few times a month | Whenever somebody is hired, moved or promoted |
+| **Who agrees on it** | Every node, identically, on the epoch the pointer names | Every node, eventually, at its own applied position — so two nodes legitimately differ while one is behind |
+
+Keeping them in one pointer would mean one of two wrong things: rebuilding every provider and every tool server because a seat's goal was reworded, or leaving the chart stale until the next config activation, which may be weeks.
+
+**A read still gets ONE value.** `Engine.Company()` is a single atomic load, exactly as it was — the composition happens on the WRITE side, so whichever half moves republishes the pair. Two pointers would have put the straddling hazard back one layer down, where a reader that loaded the settings and then the chart could catch either swap.
+
+**The view is DERIVED inside that composition, from the rows and the settings together.** A company view carries the name, the mission and the token budget, all of which are settings, and the units and seats, which are rows. Deriving it where the rows arrive would pair them with whichever settings epoch happened to be current then — and the first such pairing at boot has no settings epoch at all, which would derive every seat's agent id from an empty company name. So the derivation runs where both halves are in hand. It costs re-deriving the tree when the settings move (44 ms at twenty thousand seats, a few times a month) and nothing when the chart does, which is the cheaper side by a wide margin.
+
+**Four things rebuild it**, all through one function that is a no-op when the applier's cursor has not moved:
+
+1. **The chart applier's committed hook**, on every batch. Not the change feed: that relays a record to *one* node, so every other node's view would go on serving a chart it had already applied and could not see it had. The signal is one slot deep, which is the coalescing window — an import of a thousand records costs two derivations rather than a thousand.
+2. **Boot**, after the [seed](#the-boot-seed) and before the first epoch is installed.
+3. **A rejoin's adoption branch**, after the consumer reset and before the appliers relaunch. An adoption replaces the replicated file wholesale, so this node's rows are now a donor's with no apply call to say so.
+4. **A 30-second comparison** of the applier's cursor against the view's, as the net under all three.
+
+### The boot seed
+
+A company has to start somewhere, and what an operator has on a first run is a file. `crewlet run -company acme.yaml` publishes that file's units and seats to the chart log — **only when the chart is empty**, and never again.
+
+That gate is the whole of it. Seeding on every boot and letting the import ledger make it a no-op would be wrong in the expensive direction: an operator who still passes `-company` restarts a node, and every object the file names is re-placed, so a seat moved to another team last week silently moves back. A chart edited after the seed belongs to whoever edited it; changing it from a file afterwards is `crewlet config import`, which diffs and asks.
+
+The seed publishes both halves — one import record for the structure, because it is one graph and has to be arbitrated whole, then each object's own content on its own subject. A seeded chart without the second half is a company of empty seats: every handle in the right unit, with no model, no credentials and no name.
+
+---
+
 ## What a running turn sees
 
 **Nothing moves under a running turn, because nothing is mutated in place.** An epoch is published rather than edited, so the question is only ever *which* epoch a turn is reading — and a turn answers that once. `runTurn` pins the company in a local at the top and builds everything from that one value: the runner, the round caps, the prefetch, the telemetry. Two reads could straddle a publish, and a turn that built its runner from one revision and took its round caps from the next would be running a company that never existed. That is the failure publishing-instead-of-mutating exists to remove, and the pin is what collects the benefit.

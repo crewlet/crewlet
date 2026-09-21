@@ -133,6 +133,19 @@ chart is a walk — lead inheritance, unit expansion, who manages whom — and a
 walk served by a query per ancestor is N round trips against a copy that may
 move between them.
 
+**What a turn reads is the VIEW, which is one derivation behind the rows by
+design.** A turn does not query the chart; it reads a company the node derived
+from its own rows and published, and holds that one value for its whole
+length. So the freshness a turn sees is the view's position, which lags this
+node's applied position by however long the last derivation took — tens of
+milliseconds — and by nothing else. Four things move it: the chart applier's
+own committed hook, boot, a rejoin's adoption branch, and a 30-second
+comparison underneath all three. See [Control Plane](../concepts/control-plane.md#the-company-is-two-halves-composed-into-one-value).
+
+That lag is a property of this node and not of the fleet: a view that has not
+carried a write yet is a node that has not derived it yet, which is a
+strictly smaller window than the one its applier was already behind by.
+
 ## Bounding staleness
 
 `stale` on its own accepts an answer of any age. A caller that will not says so
