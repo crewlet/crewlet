@@ -484,8 +484,11 @@ func noParallel(t *testing.T) {
 // `go test ./...`". That measurement was taken when this package SHARED a
 // runner with every other one. It does not any more: `internal/solo` exists
 // precisely so this package has the machine to itself at `-p 1`, which is the
-// condition the starvation was measured against. Re-measured under
-// `make test-solo`, the whole suite is comfortably inside its budget.
+// condition the starvation was measured against. RE-MEASURED under
+// `make test-solo`: this package takes 448.6s at three members against 442.6s
+// at two — six seconds, not a starved suite — and the solo half as a whole is
+// 9m05s of its 30m budget. The cost of the third member was never the third
+// member; it was the other hundred and twenty packages running beside it.
 const fleetSize = 3
 
 // clusterSettle is how long a fleet assertion waits for a record one member
