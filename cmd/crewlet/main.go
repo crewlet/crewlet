@@ -2717,14 +2717,16 @@ func nativeWorkSearch(e *engine.Engine) queries.WorkSearcher {
 
 // validatedDomains is the state-log domain set this Tier A produces.
 //
-// A ROLE LIST THE VALIDATOR ALREADY REFUSED reaches here as an error, and the
-// summary says so rather than omitting the key: an absent field reads as a
-// build that does not report this, and the problem list beside it already
-// names the field to fix.
-func validatedDomains(boot *config.Bootstrap) any {
+// ALWAYS A LIST. A field whose TYPE depended on whether the document was
+// valid is the one shape a client decoding this summary cannot handle, and
+// the error arm cannot arrive anyway: a role name the parser refuses is a
+// problem [config.ParseBootstrap] raises, so such a document never reaches a
+// summary at all. The arm is here because the accessor returns an error, not
+// because there is a document that takes it.
+func validatedDomains(boot *config.Bootstrap) []string {
 	roles, err := boot.Node.RoleSet()
 	if err != nil {
-		return "unknown: " + err.Error()
+		return []string{}
 	}
 	return engine.DomainsForRoles(roles)
 }
