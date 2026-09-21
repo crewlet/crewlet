@@ -18,6 +18,12 @@ import (
 
 // heldSeat is a seat this node holds. Every field is guarded by Host.mu.
 type heldSeat struct {
+	// seat is what this node is holding: the id every durable name for it
+	// is built from, and the handle everything else calls it. CARRIED, so
+	// a release can name the lease and detach the mailbox on the paths
+	// where the company view is gone — see [placement.Seat.ID].
+	seat placement.Seat
+
 	lease coord.Lease
 
 	// renewedAt is the time of the last SUCCESSFUL renew.
@@ -496,6 +502,23 @@ func (h *Host) Held() []string {
 	return slices.Sorted(maps.Keys(h.held))
 }
 
+// HeldSeats is [Host.Held] as the seats themselves, in the same order.
+//
+// For a caller that has to NAME something durable about a held seat — its
+// mailbox, its lease — where the handle is only its label. It reads what the
+// host recorded at the claim rather than the company's current seat list, so
+// it still answers for a seat the running revision has since removed, which
+// is exactly the seat a drain has to quiesce.
+func (h *Host) HeldSeats() []placement.Seat {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]placement.Seat, 0, len(h.held))
+	for _, handle := range slices.Sorted(maps.Keys(h.held)) {
+		out = append(out, h.held[handle].seat)
+	}
+	return out
+}
+
 // CompanySeats is the seat set this host currently sees, sorted by handle.
 //
 // Distinct from [Host.Held], and the distinction is the first thing to
@@ -783,7 +806,7 @@ func (h *Host) releaseLocked(ctx context.Context, handle string, reason ReleaseR
 // never ran it, leased so no peer could, counted against this node's
 // capacity forever, and announced exactly once.
 func (h *Host) finishRelease(ctx context.Context, handle string, entry *heldSeat, reason ReleaseReason) bool {
-	if err := h.notifyRelease(ctx, handle, entry.lease, reason); err != nil {
+	if err := h.notifyRelease(ctx, entry.seat, entry.lease, reason); err != nil {
 		now := h.now()
 		h.mu.Lock()
 		h.undead[handle] = &undeadSeat{held: entry, reason: reason, since: now, attempts: 1, lastAlarm: now}
@@ -822,11 +845,12 @@ func (h *Host) retryUndeadTeardown(ctx context.Context, handle string) bool {
 		return false
 	}
 	entry.attempts++
-	lease, reason, attempts, since := entry.held.lease, entry.reason, entry.attempts, entry.since
+	seat, lease := entry.held.seat, entry.held.lease
+	reason, attempts, since := entry.reason, entry.attempts, entry.since
 	h.mu.Unlock()
 
 	now := h.now()
-	if err := h.notifyRelease(ctx, handle, lease, reason); err != nil {
+	if err := h.notifyRelease(ctx, seat, lease, reason); err != nil {
 		h.alarmUndead(handle, err, now)
 		return false
 	}
@@ -875,11 +899,11 @@ func (h *Host) alarmUndead(handle string, cause error, now time.Time) {
 
 // --- hook plumbing --------------------------------------------------------
 
-func (h *Host) notifyAcquire(ctx context.Context, handle string, lease coord.Lease) error {
+func (h *Host) notifyAcquire(ctx context.Context, seat placement.Seat, lease coord.Lease) error {
 	if h.hooks == nil {
 		return nil
 	}
-	return callHook("on_acquire", handle, func() error { return h.hooks.OnAcquire(ctx, handle, lease) })
+	return callHook("on_acquire", seat.Handle, func() error { return h.hooks.OnAcquire(ctx, seat, lease) })
 }
 
 // notifyRelease runs the teardown hook, letting the caller see what
@@ -889,11 +913,11 @@ func (h *Host) notifyAcquire(ctx context.Context, handle string, lease coord.Lea
 // consumer and MCP children alive in this process while the lease goes to a
 // peer — two live consumers on one inbox, the exact state ownership exists
 // to prevent.
-func (h *Host) notifyRelease(ctx context.Context, handle string, lease coord.Lease, reason ReleaseReason) error {
+func (h *Host) notifyRelease(ctx context.Context, seat placement.Seat, lease coord.Lease, reason ReleaseReason) error {
 	if h.hooks == nil {
 		return nil
 	}
-	return callHook("on_release", handle, func() error { return h.hooks.OnRelease(ctx, handle, lease, reason) })
+	return callHook("on_release", seat.Handle, func() error { return h.hooks.OnRelease(ctx, seat, lease, reason) })
 }
 
 // noteAdmission reports a change in whether this seat's ownership is
@@ -903,7 +927,8 @@ func (h *Host) notifyRelease(ctx context.Context, handle string, lease coord.Lea
 // not one per heartbeat, so the consumer is stopped once and resumed once. A
 // hook failure is logged and swallowed — it cannot be allowed to abort the
 // heartbeat, which is what keeps every OTHER seat on this node alive.
-func (h *Host) noteAdmission(ctx context.Context, handle string, admitted bool) {
+func (h *Host) noteAdmission(ctx context.Context, seat placement.Seat, admitted bool) {
+	handle := seat.Handle
 	h.mu.Lock()
 	_, wasUnproven := h.unprovenAdmission[handle]
 	switch {
@@ -921,7 +946,7 @@ func (h *Host) noteAdmission(ctx context.Context, handle string, admitted bool) 
 	if h.hooks == nil {
 		return
 	}
-	err := callHook("on_admission", handle, func() error { return h.hooks.OnAdmission(ctx, handle, admitted) })
+	err := callHook("on_admission", handle, func() error { return h.hooks.OnAdmission(ctx, seat, admitted) })
 	if err != nil {
 		log.ErrorContext(ctx, "seat_admission_hook_failed", "seat", handle, "admitted", admitted, "error", err)
 	}

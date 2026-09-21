@@ -1400,7 +1400,7 @@ func (c *Coordinator) announceFailure(ctx context.Context, run PendingRun, reaso
 		log.WarnContext(ctx, "sandbox_failure_publish_failed",
 			"turn_id", run.TurnID, "reason", reason, "error", err.Error())
 	}
-	if control := topics.AgentControl(run.AgentHandle); control != "" {
+	if control := controlSubject(run.AgentID); control != "" {
 		if err := c.queue.Publish(ctx, control, ev); err != nil {
 			log.WarnContext(ctx, "sandbox_failure_control_failed",
 				"turn_id", run.TurnID, "reason", reason, "error", err.Error())

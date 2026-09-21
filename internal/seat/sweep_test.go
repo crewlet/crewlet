@@ -249,7 +249,7 @@ func TestTheSweepReadsNoHintsWhenThereIsNothingToOrder(t *testing.T) {
 	h := f.newHost("node-a", Config{Backend: counting, Seats: seatsNamed("ceo", "eng")})
 
 	// Two candidates: an ordering exists, so the hints are worth reading.
-	if got := h.claimOrder(f.ctx, []string{"ceo", "eng"}); len(got) != 2 {
+	if got := h.claimOrder(f.ctx, seatIndex([]string{"ceo", "eng"}), []string{"ceo", "eng"}); len(got) != 2 {
 		t.Fatalf("claimOrder over two = %v", got)
 	}
 	if counting.reads != 1 {
@@ -257,10 +257,10 @@ func TestTheSweepReadsNoHintsWhenThereIsNothingToOrder(t *testing.T) {
 	}
 
 	// One, and none: each has exactly one ordering, so neither reads.
-	if got := h.claimOrder(f.ctx, []string{"ceo"}); len(got) != 1 {
+	if got := h.claimOrder(f.ctx, seatIndex([]string{"ceo"}), []string{"ceo"}); len(got) != 1 {
 		t.Fatalf("claimOrder over one = %v", got)
 	}
-	if got := h.claimOrder(f.ctx, nil); len(got) != 0 {
+	if got := h.claimOrder(f.ctx, seatIndex(nil), nil); len(got) != 0 {
 		t.Fatalf("claimOrder over none = %v", got)
 	}
 	if counting.reads != 1 {

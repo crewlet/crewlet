@@ -124,7 +124,7 @@ func (h *harness) settled(t *testing.T, topic string) []*events.Event {
 
 func (h *harness) inbox(t *testing.T, handle string) []*events.Event {
 	t.Helper()
-	return h.settled(t, topics.AgentInbox(handle))
+	return h.settled(t, inbox(handle))
 }
 
 // quiet asserts a topic stays empty, which needs a real wait: "nothing
@@ -172,7 +172,7 @@ func newService(t *testing.T, mutate func(*notify.Options, *harness)) *harness {
 		seen:   map[string][]*events.Event{},
 	}
 	for _, handle := range collected {
-		h.collect(t, topics.AgentInbox(handle))
+		h.collect(t, inbox(handle))
 	}
 	h.collect(t, skipTopic)
 
@@ -502,7 +502,7 @@ func TestTheServiceRefusesToWakeASeatForItsOwnAction(t *testing.T) {
 	h.parser.out = []notify.Routed{r}
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
-	h.quiet(t, topics.AgentInbox("engineering-lead"))
+	h.quiet(t, inbox("engineering-lead"))
 	skips := h.skips(t)
 	if len(skips) != 1 || !strings.Contains(skips[0].Reason, "self-action") {
 		t.Fatalf("skips = %+v", skips)
@@ -516,7 +516,7 @@ func TestAHumanRecipientIsNotWoken(t *testing.T) {
 	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "dana-founder"}, "for you")}
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
-	h.quiet(t, topics.AgentInbox("dana-founder"))
+	h.quiet(t, inbox("dana-founder"))
 	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "human") {
 		t.Fatalf("skips = %+v", skips)
 	}
@@ -548,7 +548,7 @@ func TestARateLimitedSeatIsNotWoken(t *testing.T) {
 	if h.valve.seen() != 1 {
 		t.Fatalf("the valve was consulted %d times", h.valve.seen())
 	}
-	h.quiet(t, topics.AgentInbox("engineering-lead"))
+	h.quiet(t, inbox("engineering-lead"))
 	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "rate limit") {
 		t.Fatalf("skips = %+v", skips)
 	}
@@ -591,7 +591,7 @@ func TestAsheddingNodeDefersRatherThanNaks(t *testing.T) {
 	if got.Reason == "" {
 		t.Fatal("the deferral carries no reason, which is its only record")
 	}
-	h.quiet(t, topics.AgentInbox("engineering-lead"))
+	h.quiet(t, inbox("engineering-lead"))
 }
 
 // A payload this node cannot read will not become readable on a redelivery,
@@ -632,7 +632,7 @@ func TestTheServiceResolvesAgainstTheLiveRegistry(t *testing.T) {
 	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "new-seat"}, "hi")}
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
-	h.quiet(t, topics.AgentInbox("new-seat"))
+	h.quiet(t, inbox("new-seat"))
 
 	// The apply lands: a new org, a new registry.
 	o := company()
@@ -679,7 +679,7 @@ func TestAFailedWakeIsRetried(t *testing.T) {
 	if !errors.Is(got.Err, boom) {
 		t.Fatalf("the NAK carries %v, want the publish failure", got.Err)
 	}
-	h.quiet(t, topics.AgentInbox("engineering-lead"))
+	h.quiet(t, inbox("engineering-lead"))
 }
 
 // One recipient failing must not silently swallow the others: the retry

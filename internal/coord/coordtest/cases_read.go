@@ -102,7 +102,7 @@ var readCases = []testCase{
 		for i, handle := range []string{
 			"alice.smith", "a/b", "a b", "ünïcødé", "a=b", "*", ">", "a:b", "A.B",
 		} {
-			name := coord.SeatResource(handle)
+			name := coord.ClassSeat.Resource(handle)
 			owner := fmt.Sprintf("owner-%02d:1", i)
 			lease, err := h.b.TryAcquire(h.ctx, name, coord.AcquireOptions{
 				Owner: owner, TTL: LongTTL,
@@ -149,7 +149,7 @@ var readCases = []testCase{
 	}},
 
 	{"list_live_answers_one_class", func(h *harness) {
-		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
+		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 		h.claim(coord.WorkerResource("scheduler"), coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 		h.claim(coord.NodeResource("node-a"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
@@ -165,7 +165,7 @@ var readCases = []testCase{
 	}},
 
 	{"a_class_that_cannot_address_a_key_is_refused", func(h *harness) {
-		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
+		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 
 		// REFUSED, NEVER ANSWERED EMPTY. A class is one segment of a
 		// resource name, so one that is empty or carries the separator
@@ -287,7 +287,7 @@ var readCases = []testCase{
 	}},
 
 	{"preferred_resources_are_scoped_to_the_prefix", func(h *harness) {
-		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{
+		h.claim("seat:ceo", coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Preferred: "node-a",
 		})
 		h.claim(coord.WorkerResource("scheduler"), coord.AcquireOptions{
@@ -400,13 +400,13 @@ var readCases = []testCase{
 		// lease. Callers read empty as "does everything, labelled with
 		// nothing" — the old behaviour, and the only safe reading of a
 		// peer that never told you.
-		lease := h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{
+		lease := h.claim("seat:ceo", coord.AcquireOptions{
 			Owner: "n1:a", TTL: LongTTL,
 		})
 		if len(lease.Meta) != 0 {
 			h.t.Fatalf("claim without meta returned %v", lease.Meta)
 		}
-		if read := h.mustHold(coord.SeatResource("ceo"), "n1:a"); len(read.Meta) != 0 {
+		if read := h.mustHold("seat:ceo", "n1:a"); len(read.Meta) != 0 {
 			h.t.Fatalf("Get of a lease without meta returned %v", read.Meta)
 		}
 	}},

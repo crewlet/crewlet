@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
@@ -38,11 +40,12 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 
 	held := map[string]int{}
 	seatRows := make([]map[string]any, 0, len(seats))
+	byID := s.seatHandles()
 	for _, lease := range seats {
 		node := nodeOf(lease.Owner)
 		held[node]++
 		seatRows = append(seatRows, map[string]any{
-			"handle":     nameIn(coord.ClassSeat, lease.Resource),
+			"handle":     seatHandleOf(byID, lease.Resource),
 			"node":       node,
 			"owner":      lease.Owner,
 			"epoch":      lease.Epoch,
@@ -214,6 +217,54 @@ func (s Sources) activation(ctx context.Context) activationTarget {
 		"at":          isoOrEmpty(target.At),
 		"summary":     target.Summary,
 	}}
+}
+
+// seatHandles is every seat the running company has, by the ID its lease is
+// named under.
+//
+// A SEAT LEASE CARRIES NO HANDLE. It is named by the seat's id (ADR-0019),
+// because a handle is an address a rename moves and a lease is what stops two
+// nodes running one seat. What a fleet view is FOR, though, is a person
+// reading it, so every row is resolved back through the company here rather
+// than showing a uuid — and this is the only place that resolution happens,
+// so the row an operator reads and the set `unplaceable` compares against can
+// never disagree about which seat a lease is.
+//
+// Empty for a node with no company, which is the same answer it gives for a
+// seat the company no longer has: see [seatHandleOf].
+func (s Sources) seatHandles() map[uuid.UUID]string {
+	if s.Company == nil {
+		return nil
+	}
+	_, roster := s.Company()
+	if roster == nil {
+		return nil
+	}
+	out := map[uuid.UUID]string{}
+	for role := range roster.AllRoles() {
+		if id, ok := roster.AgentIDFor(role); ok {
+			out[id] = role.Handle()
+		}
+	}
+	return out
+}
+
+// seatHandleOf names the seat a lease is for, falling back to the id.
+//
+// THE ID IS THE HONEST FALLBACK rather than an empty cell: a lease for a seat
+// the active revision no longer declares is exactly the row an operator is
+// looking for — a node still holding a seat that was removed — and a blank
+// would hide it. The same goes for a node with no company of its own, which
+// can still serve this view for a fleet that has one.
+func seatHandleOf(byID map[uuid.UUID]string, resource string) string {
+	id, ok := coord.SeatID(resource)
+	if !ok {
+		return nameIn(coord.ClassSeat, resource)
+	}
+	if handle, named := byID[id]; named {
+		return handle
+	}
+	return id.String()
 }
 
 // unplaceable are the seats the company declares that no live node may run.

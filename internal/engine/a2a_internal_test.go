@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // askEvent builds an ask THE WAY internal/a2a BUILDS IT: events.New over the
@@ -153,7 +152,7 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 	// agent stream uses interest retention, so a publish to a subject no
 	// durable consumer covers is dropped in silence.
 	woken := make(chan *events.Event, 4)
-	inbox, group := topics.AgentInbox("ceo"), topics.AgentInboxGroup("ceo")
+	inbox, group := seatInbox(e, "ceo"), seatInboxGroup(e, "ceo")
 	if err := e.Backends().Queue.Subscribe(t.Context(), inbox, group,
 		func(_ context.Context, ev *events.Event) queue.Result {
 			woken <- ev

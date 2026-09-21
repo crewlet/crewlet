@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -83,7 +85,10 @@ func TestAMajoritySurvivesAPartition(t *testing.T) {
 		awaitRoutes(t, c, i, 2)
 	}
 	q := c.Client(t, 0)
-	topic := topics.AgentInbox("alice")
+	// A SEAT'S INBOX is built from the seat's id rather than its handle; a
+	// fixed uuid is all this case needs, since what is under test is the
+	// cluster rather than the seat.
+	topic := topics.AgentInbox(uuid.MustParse("0f1d4c07-6d2a-4e2b-9a3c-5b8e17d04c21"))
 	if err := q.Publish(t.Context(), topic, events.New(probe{N: 1}, events.TraceContext{})); err != nil {
 		t.Fatalf("publish before the partition: %v", err)
 	}

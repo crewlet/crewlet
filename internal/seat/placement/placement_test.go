@@ -15,6 +15,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
@@ -435,7 +437,8 @@ func TestFromLease(t *testing.T) {
 
 	// A caller sweeping the wrong prefix must not read a seat as a peer:
 	// a phantom node in the denominator shrinks everyone's share.
-	if _, ok := FromLease(coord.Lease{Resource: coord.SeatResource("alice")}); ok {
+	if _, ok := FromLease(coord.Lease{Resource: coord.SeatResource(
+		uuid.MustParse("0f1d4c07-6d2a-4e2b-9a3c-5b8e17d04c21"))}); ok {
 		t.Fatal("a seat lease must not read as a node profile")
 	}
 }

@@ -35,7 +35,7 @@ func TestInjectedClockDecidesExpiry(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	b := &memory.Backend{Clock: func() time.Time { return now }}
 
-	lease, err := b.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	lease, err := b.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "node-a:1", TTL: 30 * time.Second,
 	})
 	if err != nil || lease == nil {
@@ -47,13 +47,13 @@ func TestInjectedClockDecidesExpiry(t *testing.T) {
 
 	// Time does not pass on its own here — the store's clock is the only
 	// clock, so the lease is still held however long the test takes.
-	held, err := b.Get(ctx, coord.SeatResource("ceo"))
+	held, err := b.Get(ctx, "seat:ceo")
 	if err != nil || held == nil {
 		t.Fatalf("Get = (%v, %v), want the lease still held", held, err)
 	}
 
 	now = now.Add(31 * time.Second)
-	if unheld, err := b.Get(ctx, coord.SeatResource("ceo")); err != nil || unheld != nil {
+	if unheld, err := b.Get(ctx, "seat:ceo"); err != nil || unheld != nil {
 		t.Fatalf("Get = (%v, %v) past the deadline, want (nil, nil)", unheld, err)
 	}
 }
@@ -82,7 +82,7 @@ func TestDeadContextIsUnknownNotRefusal(t *testing.T) {
 		call func() error
 	}{
 		{"TryAcquire", func() error {
-			lease, err := b.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+			lease, err := b.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 				Owner: "node-a:1", TTL: time.Minute,
 			})
 			if lease != nil {
@@ -91,20 +91,20 @@ func TestDeadContextIsUnknownNotRefusal(t *testing.T) {
 			return err
 		}},
 		{"Renew", func() error {
-			ok, err := b.Renew(ctx, coord.SeatResource("ceo"), "node-a:1", 1, time.Minute)
+			ok, err := b.Renew(ctx, "seat:ceo", "node-a:1", 1, time.Minute)
 			if ok {
 				t.Error("Renew reported success on a cancelled context")
 			}
 			return err
 		}},
 		{"Release", func() error {
-			ok, err := b.Release(ctx, coord.SeatResource("ceo"), "node-a:1", 1)
+			ok, err := b.Release(ctx, "seat:ceo", "node-a:1", 1)
 			if ok {
 				t.Error("Release reported success on a cancelled context")
 			}
 			return err
 		}},
-		{"Get", func() error { _, err := b.Get(ctx, coord.SeatResource("ceo")); return err }},
+		{"Get", func() error { _, err := b.Get(ctx, "seat:ceo"); return err }},
 		{"ListOwned", func() error { _, err := b.ListOwned(ctx, "node-a:1"); return err }},
 		{"ListLive", func() error { _, err := b.ListLive(ctx, coord.ClassNode); return err }},
 		{"PreferredResources", func() error {

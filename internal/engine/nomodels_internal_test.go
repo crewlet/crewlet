@@ -10,11 +10,20 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// noModelHolds reports which of the handles hold the no-model pause on q.
-func noModelHolds(q queue.EventQueue, handles ...string) []string {
+// noModelHolds reports which of the seats hold the no-model pause on q.
+//
+// THROUGH THE ENGINE'S OWN COMPANY, because a seat's inbox is named by its id
+// and the pause is taken on that subject: a topic a case built from the handle
+// would be one nothing ever paused, and every assertion over it would pass by
+// finding no holds.
+func noModelHolds(e *Engine, q queue.EventQueue, handles ...string) []string {
 	var out []string
 	for _, h := range handles {
-		holds := q.(*memory.Queue).PauseHolds(topics.AgentInbox(h), topics.AgentInboxGroup(h))
+		id, err := e.seatID(h)
+		if err != nil {
+			continue
+		}
+		holds := q.(*memory.Queue).PauseHolds(topics.AgentInbox(id), topics.AgentInboxGroup(id))
 		if slices.Contains(holds, pauseReasonNoTurnEngine) {
 			out = append(out, h)
 		}
@@ -22,13 +31,14 @@ func noModelHolds(q queue.EventQueue, handles ...string) []string {
 	return out
 }
 
-// recorded is the record of paused seats, read under its own lock.
+// recorded is the record of paused seats, read under its own lock, by the
+// HANDLE each entry carries as its label.
 func recorded(e *Engine) []string {
 	e.modelHolds.mu.Lock()
 	defer e.modelHolds.mu.Unlock()
 	var out []string
-	for h := range e.modelHolds.seats {
-		out = append(out, h)
+	for _, handle := range e.modelHolds.seats {
+		out = append(out, handle)
 	}
 	slices.Sort(out)
 	return out
@@ -45,12 +55,12 @@ func TestTheReleaseLiftsEveryNoModelHold(t *testing.T) {
 			t.Fatalf("pause %s: %v", h, err)
 		}
 	}
-	if got := noModelHolds(q, "ceo", "cto"); !slices.Equal(got, []string{"ceo", "cto"}) {
+	if got := noModelHolds(e, q, "ceo", "cto"); !slices.Equal(got, []string{"ceo", "cto"}) {
 		t.Fatalf("holds on %v, want both paused seats", got)
 	}
 
 	e.releaseModelHolds(t.Context())
-	if got := noModelHolds(q, "ceo", "cto"); len(got) != 0 {
+	if got := noModelHolds(e, q, "ceo", "cto"); len(got) != 0 {
 		t.Errorf("the release left %v paused", got)
 	}
 	if got := recorded(e); len(got) != 0 {
@@ -81,7 +91,7 @@ roles:
 	if err := e.pause(t.Context(), "ceo", "no turn engine"); err != nil {
 		t.Fatalf("pause: %v", err)
 	}
-	if got := noModelHolds(q, "ceo"); len(got) != 0 {
+	if got := noModelHolds(e, q, "ceo"); len(got) != 0 {
 		t.Error("a seat paused after its company gained a model stays paused " +
 			"with no release left to lift it")
 	}

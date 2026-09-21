@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
@@ -53,7 +55,24 @@ func (r *recorder) onlyTo(topic string) []*events.Event {
 
 type dir map[string]bool
 
-func (d dir) IsAgentSeat(handle string) bool { return d[handle] }
+// SeatInbox answers the id a wake is published to, which for a case here is a
+// stable derivation from the handle: what the service needs is a value it can
+// build a subject from and that a test can build the same subject from.
+func (d dir) SeatInbox(handle string) (uuid.UUID, bool) {
+	if !d[handle] {
+		return uuid.Nil, false
+	}
+	return seatID(handle), true
+}
+
+// seatID is the id of the seat a case calls handle.
+func seatID(handle string) uuid.UUID {
+	return uuid.NewSHA1(uuid.MustParse("6f1c2a4e-9d3b-4a71-8f5e-2b0c7d81a940"),
+		[]byte(handle))
+}
+
+// inbox is that seat's mailbox subject.
+func inbox(handle string) string { return topics.AgentInbox(seatID(handle)) }
 
 var clock = time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 
@@ -62,16 +81,8 @@ func service(t *testing.T, seats dir) (*a2a.Service, a2a.Store, *recorder) {
 	st := a2a.NewCoordStore(memory.NewFleet())
 	rec := &recorder{}
 	n := 0
-	// A nil map must reach New as a NIL INTERFACE, not as an interface
-	// holding a nil map — those are different values in Go and the second
-	// refuses every ask. Assigning through the concrete type and then
-	// zeroing the interface is what keeps "no directory" meaning it.
-	var directory a2a.Directory
-	if seats != nil {
-		directory = seats
-	}
 	svc, err := a2a.New(st, rec, a2a.Options{
-		Directory: directory,
+		Directory: seats,
 		Now:       func() time.Time { return clock },
 		NewID:     func() string { n++; return "a2a-fixed" },
 	})
@@ -99,7 +110,7 @@ func TestAnAskOpensAChannelAndWakesTheTarget(t *testing.T) {
 		t.Errorf("messages = %d, want the brief counted", ch.Messages)
 	}
 
-	wakes := rec.onlyTo(topics.AgentInbox("bob"))
+	wakes := rec.onlyTo(inbox("bob"))
 	if len(wakes) != 1 {
 		t.Fatalf("wakes to bob = %d, want 1 (topics: %v)", len(wakes), rec.topics())
 	}
@@ -139,7 +150,7 @@ func TestTheChannelIsAnnouncedBeforeTheWake(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	got := rec.topics()
-	wake := topics.AgentInbox("bob")
+	wake := inbox("bob")
 	opened := topics.Event("a2a_channel_opened")
 	iOpened, iWake := indexOf(got, opened), indexOf(got, wake)
 	if iOpened < 0 || iWake < 0 {
@@ -200,14 +211,34 @@ func TestACrossNodeColleagueIsAValidTarget(t *testing.T) {
 	// The question is "does this seat exist and can it be woken", NOT "is
 	// it running here". Asking a local pool made every cross-node ask fail
 	// as a typo, so the more nodes a company ran, the fewer colleagues each
-	// agent appeared to have.
-	//
-	// With no directory wired at all, nothing is refused: the guard is a
-	// directory question, and a service without one must not invent
-	// answers.
-	svc, _, _ := service(t, nil)
+	// agent appeared to have. The directory answers for a seat no node in
+	// this test runs, and the wake lands on that seat's own mailbox.
+	svc, _, rec := service(t, dir{"remote-bob": true})
 	if _, err := svc.Open(context.Background(), a2a.Ask{Requester: "alice", Target: "remote-bob"}); err != nil {
-		t.Errorf("a target on another node was refused: %v", err)
+		t.Fatalf("a target on another node was refused: %v", err)
+	}
+	if got := rec.onlyTo(inbox("remote-bob")); len(got) == 0 {
+		t.Errorf("no wake reached the colleague's mailbox; published to %v", rec.topics())
+	}
+}
+
+// AND A SERVICE WITH NO DIRECTORY IS REFUSED AT CONSTRUCTION.
+//
+// It used to be optional, and a nil one meant "refuse nothing" — which
+// answered the guard and left the caller to build the wake's subject itself,
+// so "is this seat addressable" and "what address is it" were two derivations
+// that could disagree. There is only one now, and a service that cannot make
+// it can open channels and wake nobody: every ask succeeding and every answer
+// never arriving, which reads as a slow colleague rather than as a wiring
+// mistake.
+func TestAServiceWithNoDirectoryIsRefused(t *testing.T) {
+	t.Parallel()
+	_, err := a2a.New(a2a.NewCoordStore(memory.NewFleet()), &recorder{}, a2a.Options{})
+	if err == nil {
+		t.Fatal("a service with no directory was built; it can address no ask at all")
+	}
+	if !strings.Contains(err.Error(), "directory") {
+		t.Errorf("the refusal does not name what is missing: %v", err)
 	}
 }
 
@@ -226,7 +257,7 @@ func TestTheAskChargesDepthAndTheAnswerDoesNot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	ask := rec.onlyTo(topics.AgentInbox("bob"))[0]
+	ask := rec.onlyTo(inbox("bob"))[0]
 	if ask.DelegationDepth != 2 {
 		t.Errorf("the ask carries depth %d, want the caller's 1 plus one", ask.DelegationDepth)
 	}
@@ -237,7 +268,7 @@ func TestTheAskChargesDepthAndTheAnswerDoesNot(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Reply: %v", err)
 	}
-	reply := rec.onlyTo(topics.AgentInbox("alice"))[0]
+	reply := rec.onlyTo(inbox("alice"))[0]
 	if reply.DelegationDepth != 2 {
 		t.Errorf("the reply carries depth %d, want the ask's %d unchanged",
 			reply.DelegationDepth, ask.DelegationDepth)
@@ -250,7 +281,7 @@ func TestTheChainGrowsOnEveryHopBecauseItIsProvenance(t *testing.T) {
 	// gate, so a repeat visit is history rather than a cycle to suppress.
 	svc, _, rec := service(t, dir{"bob": true, "alice": true})
 	id, _ := svc.Open(context.Background(), a2a.Ask{Requester: "alice", Target: "bob", Brief: "?"})
-	ask := rec.onlyTo(topics.AgentInbox("bob"))[0]
+	ask := rec.onlyTo(inbox("bob"))[0]
 	if len(ask.DelegationChain) != 1 || ask.DelegationChain[0] != "alice" {
 		t.Fatalf("ask chain = %v, want [alice]", ask.DelegationChain)
 	}
@@ -261,7 +292,7 @@ func TestTheChainGrowsOnEveryHopBecauseItIsProvenance(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Reply: %v", err)
 	}
-	reply := rec.onlyTo(topics.AgentInbox("alice"))[0]
+	reply := rec.onlyTo(inbox("alice"))[0]
 	if len(reply.DelegationChain) != 2 || reply.DelegationChain[1] != "bob" {
 		t.Errorf("reply chain = %v, want [alice bob]", reply.DelegationChain)
 	}
@@ -290,7 +321,7 @@ func TestAppendingToTheChainDoesNotRewriteTheCallersRecord(t *testing.T) {
 	if got := chain[:cap(chain)][1]; got != "" {
 		t.Errorf("the reply wrote %q into the caller's backing array", got)
 	}
-	reply := rec.onlyTo(topics.AgentInbox("alice"))[0]
+	reply := rec.onlyTo(inbox("alice"))[0]
 	if len(reply.DelegationChain) != 2 || reply.DelegationChain[1] != "bob" {
 		t.Errorf("reply chain = %v, want [alice bob]", reply.DelegationChain)
 	}
@@ -309,7 +340,7 @@ func TestAReplyEchoesTheQuestionBack(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Reply: %v", err)
 	}
-	reply := rec.onlyTo(topics.AgentInbox("alice"))[0]
+	reply := rec.onlyTo(inbox("alice"))[0]
 	answer, ok := events.DataAs[*types.A2AMessage](reply)
 	if !ok {
 		t.Fatalf("the reply does not carry a typed A2AMessage payload")
@@ -336,7 +367,7 @@ func TestAReplyInheritsTheAsksTrace(t *testing.T) {
 	// and a dashboard's trace link points nowhere.
 	svc, _, rec := service(t, dir{"bob": true, "alice": true})
 	id, _ := svc.Open(context.Background(), a2a.Ask{Requester: "alice", Target: "bob", Brief: "?"})
-	ask := rec.onlyTo(topics.AgentInbox("bob"))[0]
+	ask := rec.onlyTo(inbox("bob"))[0]
 	ask.TraceID = "0af7651916cd43dd8448eb211c80319c"
 	ask.SpanID = "b7ad6b7169203331"
 
@@ -346,7 +377,7 @@ func TestAReplyInheritsTheAsksTrace(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Reply: %v", err)
 	}
-	reply := rec.onlyTo(topics.AgentInbox("alice"))[0]
+	reply := rec.onlyTo(inbox("alice"))[0]
 	if reply.TraceID != ask.TraceID || reply.SpanID != ask.SpanID {
 		t.Errorf("reply trace = %s/%s, want the ask's %s/%s",
 			reply.TraceID, reply.SpanID, ask.TraceID, ask.SpanID)
@@ -452,7 +483,7 @@ func TestAnAskOpenedOnOneNodeIsAnsweredFromAnother(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if len(askRec.onlyTo(topics.AgentInbox("bob"))) != 1 {
+	if len(askRec.onlyTo(inbox("bob"))) != 1 {
 		t.Fatalf("the ask did not wake bob (topics: %v)", askRec.topics())
 	}
 
@@ -463,7 +494,7 @@ func TestAnAskOpenedOnOneNodeIsAnsweredFromAnother(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("a reply from the node that did not open the channel: %v", err)
 	}
-	replies := answerRec.onlyTo(topics.AgentInbox("alice"))
+	replies := answerRec.onlyTo(inbox("alice"))
 	if len(replies) != 1 {
 		t.Fatalf("replies to alice = %d, want 1 (topics: %v)", len(replies), answerRec.topics())
 	}

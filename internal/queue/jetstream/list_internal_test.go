@@ -38,8 +38,8 @@ func TestAConsumerFromBeforeTheMetadataIsListedByItsName(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	q := openForTest(t, Config{})
-	inbox := queue.Subscription{Topic: topics.AgentInbox("gone-seat"), Group: topics.AgentInboxGroup("gone-seat")}
-	control := queue.Subscription{Topic: topics.AgentControl("gone-seat"), Group: topics.AgentControlGroup("gone-seat")}
+	inbox := queue.Subscription{Topic: seatInbox("gone-seat"), Group: seatGroup("gone-seat")}
+	control := queue.Subscription{Topic: topics.AgentControl(seatID("gone-seat")), Group: topics.AgentControlGroup(seatID("gone-seat"))}
 	legacyConsumer(ctx, t, q, inbox.Topic, inbox.Group)
 	legacyConsumer(ctx, t, q, control.Topic, control.Group)
 
@@ -122,7 +122,7 @@ func TestPairOfListsOnlyAPairThatAddressesTheConsumer(t *testing.T) {
 		}}
 	}
 	ephemeral := &jetstream.ConsumerInfo{Config: jetstream.ConsumerConfig{
-		Name: "Xy12ab", FilterSubject: topics.AgentInbox("alice"),
+		Name: "Xy12ab", FilterSubject: seatInbox("alice"),
 	}}
 	for _, tc := range []struct {
 		name    string
@@ -192,7 +192,7 @@ func TestPairFromConsumerNameAcceptsOnlyWhatItCanProve(t *testing.T) {
 		name, nameTopic, group, topic string
 		want                          bool
 	}{
-		{"a seat inbox", topics.AgentInbox("alice"), topics.AgentInboxGroup("alice"), topics.AgentInbox("alice"), true},
+		{"a seat inbox", seatInbox("alice"), seatGroup("alice"), seatInbox("alice"), true},
 		{"an underscore in the group", "t.x", "a_b", "t.x", true},
 		{"a lossy group", "t.x", "a.b", "t.x", false},
 		{"a truncated name", "t.x", long, "t.x", false},

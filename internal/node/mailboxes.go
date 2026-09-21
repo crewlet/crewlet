@@ -6,10 +6,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // mailboxes is what this node believes about the company's mailboxes.
@@ -42,12 +45,13 @@ type mailboxes struct {
 	mu sync.Mutex
 
 	// ensured is the seats the broker has said it holds a mailbox for,
-	// plus the ones this pass has just made. Pruned to the company's
-	// current seats on every pass: a handle that leaves the company and
-	// comes back is a handle whose mailbox the retirement sweep may have
-	// deleted in between (see [MailboxRegistry]), so remembering it
-	// across its absence is how a returning seat gets no mailbox.
-	ensured map[string]struct{}
+	// plus the ones this pass has just made. KEYED ON THE SEAT'S ID, which
+	// is what its mailbox is named by. Pruned to the company's current
+	// seats on every pass: a seat that leaves the company and comes back is
+	// one whose mailbox the retirement sweep may have deleted in between
+	// (see [MailboxRegistry]), so remembering it across its absence is how
+	// a returning seat gets no mailbox.
+	ensured map[uuid.UUID]struct{}
 
 	// seededAt is when ensured was last taken from the broker's own
 	// listing. Zero means never, which is a node that has not converged
@@ -57,15 +61,15 @@ type mailboxes struct {
 	// missingSince is when this node first failed to make a seat's
 	// mailbox, and alarmedAt when it last said so out loud. Both are
 	// cleared the moment the mailbox exists.
-	missingSince map[string]time.Time
-	alarmedAt    map[string]time.Time
+	missingSince map[uuid.UUID]time.Time
+	alarmedAt    map[uuid.UUID]time.Time
 }
 
 func newMailboxes() *mailboxes {
 	return &mailboxes{
-		ensured:      map[string]struct{}{},
-		missingSince: map[string]time.Time{},
-		alarmedAt:    map[string]time.Time{},
+		ensured:      map[uuid.UUID]struct{}{},
+		missingSince: map[uuid.UUID]time.Time{},
+		alarmedAt:    map[uuid.UUID]time.Time{},
 	}
 }
 
@@ -154,14 +158,14 @@ func (n *Node) EnsureMailboxes(ctx context.Context) {
 	// ONE READ of the seat list for the walk and the line that reports it.
 	// Two reads straddled an apply that changed the seats, and the log then
 	// claimed a count the walk never covered.
-	handles := n.addressableSeats()
+	seats := n.addressableSeats()
 
-	missing, stale := n.mail.diff(handles, n.host.TTL(), time.Now())
+	missing, stale := n.mail.diff(seats, n.host.TTL(), time.Now())
 	if len(missing) == 0 && !stale {
 		// THE STEADY STATE, and it is silent: every seat in the company
 		// has a mailbox and the set saying so is younger than a lease.
 		// No listing, no create, nothing sent to the broker at all.
-		n.log.Debug("seat_mailboxes_converged", "seats", len(handles))
+		n.log.Debug("seat_mailboxes_converged", "seats", len(seats))
 		return
 	}
 
@@ -172,7 +176,7 @@ func (n *Node) EnsureMailboxes(ctx context.Context) {
 		// returns the consumer that is already there; a consumer that is
 		// GONE and remembered as present costs a seat its mail for the
 		// life of the process.
-		missing = n.mail.adopt(handles, listed, time.Now())
+		missing = n.mail.adopt(seats, listed, time.Now())
 	} else if len(missing) == 0 {
 		// The listing is the only thing that could have told this pass
 		// anything, and it did not. Nothing is known to be missing, so
@@ -181,10 +185,11 @@ func (n *Node) EnsureMailboxes(ctx context.Context) {
 	}
 
 	created := 0
-	for _, handle := range missing {
-		inbox, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
+	for _, s := range missing {
+		handle := s.Handle
+		inbox, group := topics.AgentInbox(s.ID), topics.AgentInboxGroup(s.ID)
 		if n.cfg.Mailboxes != nil {
-			if err := n.cfg.Mailboxes.Register(ctx, handle); err != nil {
+			if err := n.cfg.Mailboxes.Register(ctx, s); err != nil {
 				if ctx.Err() != nil {
 					n.reportInterrupted(ctx)
 					return
@@ -216,10 +221,10 @@ func (n *Node) EnsureMailboxes(ctx context.Context) {
 				n.reportInterrupted(ctx)
 				return
 			}
-			n.alarmMissingMailbox(handle, err)
+			n.alarmMissingMailbox(s, err)
 			continue
 		}
-		n.mail.ensuredNow(handle)
+		n.mail.ensuredNow(s.ID)
 		if made {
 			created++
 		}
@@ -238,23 +243,23 @@ func (n *Node) EnsureMailboxes(ctx context.Context) {
 	// which was once per boot and once per apply; it now runs on the seat
 	// sweep's cadence, where a pass that changed nothing is the normal
 	// case and an unconditional INFO would be the loudest thing in the log.
-	n.log.Info("seat_mailboxes_ready", "seats", len(handles), "provisioned", created)
+	n.log.Info("seat_mailboxes_ready", "seats", len(seats), "provisioned", created)
 }
 
 // addressableSeats is the company's seats that can hold a mailbox at all, in
 // the order the org lists them.
 //
-// A handle that derives no inbox subject is skipped rather than refused: the
+// A seat that derives no inbox subject is skipped rather than refused: the
 // seat list is whatever the current revision says, and a pass that failed on
 // one unroutable entry would deny every seat after it a mailbox.
-func (n *Node) addressableSeats() []string {
+func (n *Node) addressableSeats() []placement.Seat {
 	seats := n.cfg.Seats()
-	out := make([]string, 0, len(seats))
+	out := make([]placement.Seat, 0, len(seats))
 	for _, s := range seats {
-		if topics.AgentInbox(s.Handle) == "" || topics.AgentInboxGroup(s.Handle) == "" {
+		if topics.AgentInbox(s.ID) == "" || topics.AgentInboxGroup(s.ID) == "" {
 			continue
 		}
-		out = append(out, s.Handle)
+		out = append(out, s)
 	}
 	return out
 }
@@ -264,12 +269,12 @@ func (n *Node) addressableSeats() []string {
 //
 // THE PAIR IS WHAT IDENTIFIES ONE, never the subject: a consumer on a seat's
 // inbox subject under some other group belongs to somebody else, and counting
-// it as the seat's mailbox would leave that seat with none. [topics.MailboxHandle]
+// it as the seat's mailbox would leave that seat with none. [topics.MailboxSeat]
 // is the inverse of the grammar that built the name, and the control
 // subscription it also recognises is deliberately not counted here — this pass
 // creates inboxes, and a seat whose control subscription exists is not a seat
 // whose inbox does.
-func (n *Node) listMailboxes(ctx context.Context) (map[string]struct{}, bool) {
+func (n *Node) listMailboxes(ctx context.Context) (map[uuid.UUID]struct{}, bool) {
 	subs, err := n.cfg.Queue.ListSubscriptions(ctx, topics.AgentInboxPrefix+">")
 	if err != nil {
 		if !errors.Is(err, queue.ErrNotLive) && ctx.Err() == nil {
@@ -281,13 +286,13 @@ func (n *Node) listMailboxes(ctx context.Context) (map[string]struct{}, bool) {
 		}
 		return nil, false
 	}
-	out := make(map[string]struct{}, len(subs))
+	out := make(map[uuid.UUID]struct{}, len(subs))
 	for _, sub := range subs {
-		handle, ok := topics.MailboxHandle(sub.Topic, sub.Group)
-		if !ok || sub.Group != topics.AgentInboxGroup(handle) {
+		id, ok := topics.MailboxSeat(sub.Topic, sub.Group)
+		if !ok || sub.Group != topics.AgentInboxGroup(id) {
 			continue
 		}
-		out[handle] = struct{}{}
+		out[id] = struct{}{}
 	}
 	return out, true
 }
@@ -328,10 +333,11 @@ func (n *Node) reportInterrupted(ctx context.Context) {
 // [seat.UndeadAlarmInterval] gives about the other seat-level alarm: the
 // failure itself is not news, *still failing* is, and one stuck seat must not
 // be able to fill a log with its own retries.
-func (n *Node) alarmMissingMailbox(handle string, cause error) {
+func (n *Node) alarmMissingMailbox(seat placement.Seat, cause error) {
+	handle := seat.Handle
 	now := time.Now()
 	ttl := n.host.TTL()
-	outstanding, alarm := n.mail.missing(handle, ttl, now)
+	outstanding, alarm := n.mail.missing(seat.ID, ttl, now)
 	if !alarm {
 		// Logged all the same, because a cause that never reaches the log
 		// is a cause nobody has when the alarm does fire.
@@ -354,13 +360,15 @@ func (n *Node) alarmMissingMailbox(handle string, cause error) {
 // It PRUNES to the company's current seats as it goes, which is both why the
 // maps stay bounded in a process that reconfigures often and why a seat that
 // left and came back is ensured again rather than assumed.
-func (m *mailboxes) diff(handles []string, ttl time.Duration, now time.Time) (missing []string, stale bool) {
+func (m *mailboxes) diff(seats []placement.Seat, ttl time.Duration, now time.Time) (
+	missing []placement.Seat, stale bool) {
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.pruneLocked(handles)
-	for _, handle := range handles {
-		if _, ok := m.ensured[handle]; !ok {
-			missing = append(missing, handle)
+	m.pruneLocked(seats)
+	for _, s := range seats {
+		if _, ok := m.ensured[s.ID]; !ok {
+			missing = append(missing, s)
 		}
 	}
 	return missing, now.Sub(m.seededAt) > ttl
@@ -368,68 +376,70 @@ func (m *mailboxes) diff(handles []string, ttl time.Duration, now time.Time) (mi
 
 // adopt replaces the set with what the broker answered, and reports what the
 // company's seats are still missing.
-func (m *mailboxes) adopt(handles []string, listed map[string]struct{}, now time.Time) []string {
+func (m *mailboxes) adopt(seats []placement.Seat, listed map[uuid.UUID]struct{},
+	now time.Time) []placement.Seat {
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ensured = map[string]struct{}{}
-	var missing []string
-	for _, handle := range handles {
-		if _, ok := listed[handle]; ok {
-			m.ensured[handle] = struct{}{}
-			delete(m.missingSince, handle)
-			delete(m.alarmedAt, handle)
+	m.ensured = map[uuid.UUID]struct{}{}
+	var missing []placement.Seat
+	for _, s := range seats {
+		if _, ok := listed[s.ID]; ok {
+			m.ensured[s.ID] = struct{}{}
+			delete(m.missingSince, s.ID)
+			delete(m.alarmedAt, s.ID)
 			continue
 		}
-		missing = append(missing, handle)
+		missing = append(missing, s)
 	}
 	m.seededAt = now
 	return missing
 }
 
 // ensuredNow records a mailbox this node has just been told exists.
-func (m *mailboxes) ensuredNow(handle string) {
+func (m *mailboxes) ensuredNow(id uuid.UUID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ensured[handle] = struct{}{}
-	delete(m.missingSince, handle)
-	delete(m.alarmedAt, handle)
+	m.ensured[id] = struct{}{}
+	delete(m.missingSince, id)
+	delete(m.alarmedAt, id)
 }
 
 // missing records a failed ensure and reports how long this seat has been
 // without a mailbox, and whether that is now worth saying out loud.
-func (m *mailboxes) missing(handle string, ttl time.Duration, now time.Time) (time.Duration, bool) {
+func (m *mailboxes) missing(id uuid.UUID, ttl time.Duration, now time.Time) (time.Duration, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	since, known := m.missingSince[handle]
+	since, known := m.missingSince[id]
 	if !known {
 		since = now
-		m.missingSince[handle] = since
+		m.missingSince[id] = since
 	}
 	outstanding := now.Sub(since)
 	if outstanding <= ttl {
 		return outstanding, false
 	}
-	if last, alarmed := m.alarmedAt[handle]; alarmed && now.Sub(last) < ttl {
+	if last, alarmed := m.alarmedAt[id]; alarmed && now.Sub(last) < ttl {
 		return outstanding, false
 	}
-	m.alarmedAt[handle] = now
+	m.alarmedAt[id] = now
 	return outstanding, true
 }
 
-func (m *mailboxes) pruneLocked(handles []string) {
-	keep := make(map[string]struct{}, len(handles))
-	for _, handle := range handles {
-		keep[handle] = struct{}{}
+func (m *mailboxes) pruneLocked(seats []placement.Seat) {
+	keep := make(map[uuid.UUID]struct{}, len(seats))
+	for _, s := range seats {
+		keep[s.ID] = struct{}{}
 	}
-	for handle := range m.ensured {
-		if _, ok := keep[handle]; !ok {
-			delete(m.ensured, handle)
+	for id := range m.ensured {
+		if _, ok := keep[id]; !ok {
+			delete(m.ensured, id)
 		}
 	}
-	for handle := range m.missingSince {
-		if _, ok := keep[handle]; !ok {
-			delete(m.missingSince, handle)
-			delete(m.alarmedAt, handle)
+	for id := range m.missingSince {
+		if _, ok := keep[id]; !ok {
+			delete(m.missingSince, id)
+			delete(m.alarmedAt, id)
 		}
 	}
 }

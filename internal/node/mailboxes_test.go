@@ -48,8 +48,8 @@ type recordingRegistry struct {
 	fail error
 }
 
-func (r *recordingRegistry) Register(_ context.Context, handle string) error {
-	r.log.add("register " + handle)
+func (r *recordingRegistry) Register(_ context.Context, s placement.Seat) error {
+	r.log.add("register " + s.Handle)
 	return r.fail
 }
 
@@ -74,7 +74,7 @@ func mailboxNode(t *testing.T, registry node.MailboxRegistry, log *callLog) (*no
 		Queue: q, Coord: &coordmem.Backend{}, Mailboxes: registry,
 		NodeID: "node-a", Owner: "node-a-1",
 		Seats: func() []placement.Seat {
-			return []placement.Seat{{Handle: "ceo"}, {Handle: "swe"}}
+			return seats("ceo", "swe")
 		},
 		Turn: func(context.Context, string, []*events.Event) queue.Result { return queue.Ack() },
 	})
@@ -95,8 +95,8 @@ func TestEveryMailboxIsRegisteredBeforeItIsCreated(t *testing.T) {
 	n.EnsureMailboxes(t.Context())
 
 	want := []string{
-		"register ceo", "ensure " + topics.AgentInbox("ceo"),
-		"register swe", "ensure " + topics.AgentInbox("swe"),
+		"register ceo", "ensure " + inbox("ceo"),
+		"register swe", "ensure " + inbox("swe"),
 	}
 	if got := log.snapshot(); !slices.Equal(got, want) {
 		t.Fatalf("walk made\n  %v\nwant\n  %v", got, want)
@@ -113,7 +113,7 @@ func TestAFailedRegistrationStillCreatesTheMailbox(t *testing.T) {
 	n.EnsureMailboxes(t.Context())
 
 	for _, handle := range []string{"ceo", "swe"} {
-		made, err := q.Queue.EnsureSubscription(t.Context(), topics.AgentInbox(handle), topics.AgentInboxGroup(handle))
+		made, err := q.Queue.EnsureSubscription(t.Context(), inbox(handle), inboxGroup(handle))
 		if err != nil {
 			t.Fatalf("probe %s: %v", handle, err)
 		}
@@ -131,7 +131,7 @@ func TestANodeWithoutARegistryStillCreatesEveryMailbox(t *testing.T) {
 
 	n.EnsureMailboxes(t.Context())
 
-	want := []string{"ensure " + topics.AgentInbox("ceo"), "ensure " + topics.AgentInbox("swe")}
+	want := []string{"ensure " + inbox("ceo"), "ensure " + inbox("swe")}
 	if got := log.snapshot(); !slices.Equal(got, want) {
 		t.Fatalf("walk made %v, want %v", got, want)
 	}
@@ -144,7 +144,7 @@ func seatsOf(handles ...string) func() []placement.Seat {
 	return func() []placement.Seat {
 		out := make([]placement.Seat, 0, len(handles))
 		for _, h := range handles {
-			out = append(out, placement.Seat{Handle: h})
+			out = append(out, seat(h))
 		}
 		return out
 	}
@@ -207,14 +207,14 @@ func TestTheEnsuredSetIsSeededFromTheBroker(t *testing.T) {
 	// A peer got to this one first. Made through the embedded queue so the
 	// call log records only what the NODE asked for.
 	if _, err := q.Queue.EnsureSubscription(t.Context(),
-		topics.AgentInbox("ceo"), topics.AgentInboxGroup("ceo")); err != nil {
+		inbox("ceo"), inboxGroup("ceo")); err != nil {
 		t.Fatalf("the peer's EnsureSubscription: %v", err)
 	}
 
 	n := convergingNode(t, q, "node-a", ttl, seatsOf("ceo", "swe"))
 	n.EnsureMailboxes(t.Context())
 
-	if got, want := ensured(log), []string{topics.AgentInbox("swe")}; !slices.Equal(got, want) {
+	if got, want := ensured(log), []string{inbox("swe")}; !slices.Equal(got, want) {
 		t.Fatalf("the first pass ensured %v, want %v: the seat a peer had already given a "+
 			"mailbox was proposed again, which is one replicated write per seat per apply "+
 			"for a company whose mailboxes all exist", got, want)
@@ -224,7 +224,7 @@ func TestTheEnsuredSetIsSeededFromTheBroker(t *testing.T) {
 	// simply not there any more.
 	for _, handle := range []string{"ceo", "swe"} {
 		if _, err := q.Queue.DeleteSubscription(t.Context(),
-			topics.AgentInbox(handle), topics.AgentInboxGroup(handle)); err != nil {
+			inbox(handle), inboxGroup(handle)); err != nil {
 			t.Fatalf("recreate the stream (delete %s): %v", handle, err)
 		}
 	}
@@ -242,7 +242,7 @@ func TestTheEnsuredSetIsSeededFromTheBroker(t *testing.T) {
 	time.Sleep(5 * ttl)
 	log.reset()
 	n.EnsureMailboxes(t.Context())
-	want := []string{topics.AgentInbox("ceo"), topics.AgentInbox("swe")}
+	want := []string{inbox("ceo"), inbox("swe")}
 	if got := ensured(log); !slices.Equal(got, want) {
 		t.Fatalf("after the stream was recreated the node ensured %v, want %v: it trusted "+
 			"its own memory, so every seat in the company is silently dropping its mail", got, want)
@@ -259,7 +259,7 @@ func TestAFailedEnsureIsRetriedOnTheNextTick(t *testing.T) {
 	log := &callLog{}
 	q := &failingQueue{
 		recordingQueue: &recordingQueue{Queue: qmem.New(), log: log},
-		refuse:         map[string]int{topics.AgentInbox("swe"): 1},
+		refuse:         map[string]int{inbox("swe"): 1},
 	}
 	if err := q.Start(t.Context()); err != nil {
 		t.Fatalf("queue.Start: %v", err)
@@ -269,7 +269,7 @@ func TestAFailedEnsureIsRetriedOnTheNextTick(t *testing.T) {
 	n := convergingNode(t, q, "node-a", time.Minute, seatsOf("ceo", "swe"))
 
 	n.EnsureMailboxes(t.Context())
-	want := []string{topics.AgentInbox("ceo"), topics.AgentInbox("swe")}
+	want := []string{inbox("ceo"), inbox("swe")}
 	if got := ensured(log); !slices.Equal(got, want) {
 		t.Fatalf("the first pass ensured %v, want %v", got, want)
 	}
@@ -278,7 +278,7 @@ func TestAFailedEnsureIsRetriedOnTheNextTick(t *testing.T) {
 	// re-proposing it is the cost this whole change removes.
 	log.reset()
 	n.EnsureMailboxes(t.Context())
-	if got, want := ensured(log), []string{topics.AgentInbox("swe")}; !slices.Equal(got, want) {
+	if got, want := ensured(log), []string{inbox("swe")}; !slices.Equal(got, want) {
 		t.Fatalf("the retry pass ensured %v, want %v: a seat whose mailbox could not be "+
 			"made is the one thing a later tick has to come back to", got, want)
 	}
@@ -303,9 +303,12 @@ func TestAPeerEnsuresEverySeatAndProposesNothingForTheOnesThatExist(t *testing.T
 	broker := qmem.NewBroker()
 	company := func() []placement.Seat {
 		return []placement.Seat{
-			{Handle: "ceo", Placement: placement.SeatPlacement{Node: "node-a"}},
-			{Handle: "swe", Placement: placement.SeatPlacement{Node: "node-a"}},
-			{Handle: "pm", Placement: placement.SeatPlacement{Node: "node-b"}},
+			{ID: seatID("ceo"), Handle: "ceo",
+				Placement: placement.SeatPlacement{Node: "node-a"}},
+			{ID: seatID("swe"), Handle: "swe",
+				Placement: placement.SeatPlacement{Node: "node-a"}},
+			{ID: seatID("pm"), Handle: "pm",
+				Placement: placement.SeatPlacement{Node: "node-b"}},
 		}
 	}
 
@@ -338,15 +341,17 @@ func TestAPeerEnsuresEverySeatAndProposesNothingForTheOnesThatExist(t *testing.T
 	if err != nil {
 		t.Fatalf("ListSubscriptions: %v", err)
 	}
-	var handles []string
+	var held []string
 	for _, sub := range subs {
-		if handle, ok := topics.MailboxHandle(sub.Topic, sub.Group); ok {
-			handles = append(handles, handle)
+		if id, ok := topics.MailboxSeat(sub.Topic, sub.Group); ok {
+			held = append(held, id.String())
 		}
 	}
-	slices.Sort(handles)
-	if want := []string{"ceo", "pm", "swe"}; !slices.Equal(handles, want) {
-		t.Fatalf("the broker holds mailboxes for %v, want %v", handles, want)
+	slices.Sort(held)
+	want := []string{seatID("ceo").String(), seatID("pm").String(), seatID("swe").String()}
+	slices.Sort(want)
+	if !slices.Equal(held, want) {
+		t.Fatalf("the broker holds mailboxes for %v, want %v", held, want)
 	}
 }
 

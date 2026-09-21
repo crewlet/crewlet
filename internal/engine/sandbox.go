@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -1400,7 +1401,8 @@ func waiterDutyTTL(interval time.Duration) time.Duration {
 
 // prepareSeat is the node's SeatReady hook: recover this seat's in-flight runs
 // and start listening for their completions, BEFORE its mailbox opens.
-func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, owner string) error {
+func (e *Engine) prepareSeat(ctx context.Context, seat placement.Seat, epoch int64, owner string) error {
+	handle := seat.Handle
 	// THE SEAT'S OWN TOOLS FIRST, because OnAcquire's whole contract is
 	// that everything the first turn needs is ready before the mailbox
 	// opens. A seat that started consuming before its per-role children
@@ -1430,7 +1432,7 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 	if e.sandboxCoordinator == nil {
 		return nil
 	}
-	control, group := topics.AgentControl(handle), topics.AgentControlGroup(handle)
+	control, group := topics.AgentControl(seat.ID), topics.AgentControlGroup(seat.ID)
 	if control == "" {
 		return nil
 	}
@@ -1510,7 +1512,8 @@ func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 // The control subscription is DETACHED, never deleted: a completion published
 // while the seat is between owners must be held for its successor, and the box
 // it refers to is still real.
-func (e *Engine) releaseSeat(ctx context.Context, handle string) {
+func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
+	handle := seat.Handle
 	// FIRST, while the queue is still reachable and before anything this
 	// release tears down: a seat that went away with no event left its
 	// last state standing on every dashboard — stuck "working" in a phase
@@ -1570,7 +1573,7 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 		return
 	}
 	e.sandboxCoordinator.ReleaseSeat(handle)
-	control, group := topics.AgentControl(handle), topics.AgentControlGroup(handle)
+	control, group := topics.AgentControl(seat.ID), topics.AgentControlGroup(seat.ID)
 	if control == "" {
 		return
 	}

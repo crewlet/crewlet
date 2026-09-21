@@ -171,7 +171,16 @@ func (c *Company) Seats() []placement.Seat {
 		// yields no handle ("the name yields no handle, so set one
 		// explicitly"), and NewCompany validates. Probed, not assumed —
 		// "!!!", "---" and "日本" are all refused at parse.
-		out = append(out, placement.Seat{Handle: role.Handle(), Placement: role.Placement})
+		//
+		// THE ID IS CARRIED WITH THE SEAT, because every durable name the
+		// host and the mailbox sweep build is made from it and neither can
+		// resolve one on the paths where the company view is gone. A seat
+		// with no derivable id is still listed: the host refuses to claim
+		// it, loudly, where dropping it here would make it vanish from the
+		// placement arithmetic with nothing to say so.
+		id, _ := c.Org.AgentIDFor(role)
+		out = append(out, placement.Seat{
+			ID: id, Handle: role.Handle(), Placement: role.Placement})
 	}
 	// Sorted, because this feeds the placement math and the sweep compares
 	// its own answer across ticks. An org walk's order is stable today but

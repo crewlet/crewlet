@@ -21,7 +21,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -287,7 +286,7 @@ func (n *node) publishWakeKeyed(t *testing.T, handle, text, partition, conversat
 	// that fallback is the only thing holding it up.
 	notify.Stamp(ev, partition, conversation)
 	if err := n.engine.Backends().Queue.Publish(t.Context(),
-		topics.AgentInbox(handle), ev); err != nil {
+		seatInbox(t, n, handle), ev); err != nil {
 		t.Fatalf("wake %s: %v", handle, err)
 	}
 }

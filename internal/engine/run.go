@@ -867,8 +867,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// Before the mailbox opens and after it closes — see node.Config.
 		// A seat mid-detached-run must have its runs recovered and its mail
 		// parked before anything can deliver to it.
-		SeatReady: func(ctx context.Context, handle string, lease coord.Lease) error {
-			return e.prepareSeat(ctx, handle, lease.Epoch, lease.Owner)
+		SeatReady: func(ctx context.Context, s placement.Seat, lease coord.Lease) error {
+			return e.prepareSeat(ctx, s, lease.Epoch, lease.Owner)
 		},
 		SeatDone: e.releaseSeat,
 		LeaseTTL: e.leaseTTL,
@@ -1481,13 +1481,19 @@ func (e *Engine) seatFence(handle string) func() error {
 // half that landed are collapsed by the dedupe at the top of the next
 // screening, which is why that stage runs before any parking branch.
 func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) error {
-	subject := topics.AgentInbox(handle)
-	if subject == "" {
-		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	id, err := e.seatID(handle)
+	if err != nil {
+		return err
 	}
+	subject := topics.AgentInbox(id)
 	for _, ev := range evs {
 		if err := e.backends.Queue.Publish(ctx, subject, ev); err != nil {
-			return fmt.Errorf("engine: requeue %s onto %s: %w", ev.Type, subject, err)
+			// THE SEAT BY NAME, not only the subject it is addressed by.
+			// A mailbox is named by the seat's id, so a failure reported
+			// as the subject alone hands whoever reads it a uuid and no
+			// way to tell which colleague lost their mail.
+			return fmt.Errorf("engine: requeue %s onto seat %q (%s): %w",
+				ev.Type, handle, subject, err)
 		}
 	}
 	return nil

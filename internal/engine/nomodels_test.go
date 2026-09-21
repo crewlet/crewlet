@@ -12,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // noModelsDoc is an org chart written before its credentials exist: valid,
@@ -133,11 +132,11 @@ func TestACompanyWithNoModelsHoldsItsWorkUntilAProviderArrives(t *testing.T) {
 	}
 	paused := func() bool {
 		return slices.Contains(holds.PauseHolds(
-			topics.AgentInbox("ceo"), topics.AgentInboxGroup("ceo")), "no_turn_engine")
+			seatInbox(e, "ceo"), seatInboxGroup(e, "ceo")), "no_turn_engine")
 	}
 
 	held := ev("external_notification")
-	if err := e.Backends().Queue.Publish(t.Context(), topics.AgentInbox("ceo"), held); err != nil {
+	if err := e.Backends().Queue.Publish(t.Context(), seatInbox(e, "ceo"), held); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	waitFor(t, "the seat's inbox to be paused", paused)

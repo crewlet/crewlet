@@ -17,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // newEngine stands up a real engine on an embedded stream in a temp directory.
@@ -443,7 +442,7 @@ func TestStopLetsAnInFlightTurnFinish(t *testing.T) {
 		return slices.Contains(e.Node().Host().Held(), "ceo")
 	})
 
-	if err := e.Backends().Queue.Publish(t.Context(), topics.AgentInbox("ceo"),
+	if err := e.Backends().Queue.Publish(t.Context(), seatInbox(e, "ceo"),
 		ev("external_notification")); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -511,7 +510,7 @@ func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(e.Node().Host().Held(), "ceo")
 	})
-	if err := e.Backends().Queue.Publish(t.Context(), topics.AgentInbox("ceo"),
+	if err := e.Backends().Queue.Publish(t.Context(), seatInbox(e, "ceo"),
 		ev("external_notification")); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}

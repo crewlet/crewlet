@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // --- the loops ------------------------------------------------------------
@@ -115,6 +116,7 @@ func (h *Host) beatInterval() time.Duration {
 // heartbeatTarget is one seat to renew, snapshotted so the store call never
 // runs while holding a lock.
 type heartbeatTarget struct {
+	seat      placement.Seat
 	handle    string
 	entry     *heldSeat
 	lease     coord.Lease
@@ -160,7 +162,7 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 				log.WarnContext(ctx, "seat_heartbeat_unavailable", "seat", t.handle,
 					"seconds_since_renew", elapsed.Seconds(), "ttl_seconds", h.ttl.Seconds(),
 					"error", err)
-				h.noteAdmission(ctx, t.handle, false)
+				h.noteAdmission(ctx, t.seat, false)
 				continue
 			}
 			log.ErrorContext(ctx, "seat_dropped_unrenewable", "seat", t.handle,
@@ -181,7 +183,7 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 				h.retryUndeadTeardown(ctx, t.handle)
 				continue
 			}
-			h.noteAdmission(ctx, t.handle, true)
+			h.noteAdmission(ctx, t.seat, true)
 			continue
 		}
 
@@ -233,11 +235,11 @@ func (h *Host) heartbeatTargets() []heartbeatTarget {
 	out := make([]heartbeatTarget, 0, len(h.held)+len(h.undead))
 	for _, handle := range slices.Sorted(maps.Keys(h.held)) {
 		e := h.held[handle]
-		out = append(out, heartbeatTarget{handle: handle, entry: e, lease: e.lease, renewedAt: e.renewedAt})
+		out = append(out, heartbeatTarget{seat: e.seat, handle: handle, entry: e, lease: e.lease, renewedAt: e.renewedAt})
 	}
 	for _, handle := range slices.Sorted(maps.Keys(h.undead)) {
 		e := h.undead[handle].held
-		out = append(out, heartbeatTarget{handle: handle, entry: e, lease: e.lease, renewedAt: e.renewedAt, undead: true})
+		out = append(out, heartbeatTarget{seat: e.seat, handle: handle, entry: e, lease: e.lease, renewedAt: e.renewedAt, undead: true})
 	}
 	return out
 }
@@ -307,7 +309,7 @@ func (h *Host) dropLostSeat(ctx context.Context, t heartbeatTarget) bool {
 	// abandoned rather than finished. There is nothing to fail closed ON —
 	// the lease is already gone — so an unproven teardown is logged, not
 	// retained.
-	if err := h.notifyRelease(ctx, t.handle, t.lease, ReasonLeaseLost); err != nil {
+	if err := h.notifyRelease(ctx, t.seat, t.lease, ReasonLeaseLost); err != nil {
 		log.ErrorContext(ctx, "seat_lost_release_unproven", "seat", t.handle, "epoch", t.lease.Epoch, "error", err,
 			"hint", "the lease is already gone, so there is nothing to keep; this process may "+
 				"still be consuming a seat a peer now owns")

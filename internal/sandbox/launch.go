@@ -8,11 +8,30 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
+
+// controlSubject is a seat's sandbox-control subject from the id a run's row
+// carries, or empty when the row names no routable seat.
+//
+// ONE PARSE, in one place. The id rides these rows as TEXT — the record is a
+// JSON blob on the node estate and the framework that carries it never
+// decodes it — so the three publishers that need this subject would otherwise
+// each have their own idea of what an unparseable value means. Here it means
+// exactly what a nil id means: not routable, say so, and do not publish to a
+// subject named after nothing.
+func controlSubject(agentID string) string {
+	id, err := uuid.Parse(agentID)
+	if err != nil {
+		return ""
+	}
+	return topics.AgentControl(id)
+}
 
 // TurnRef identifies the turn a detached run belongs to.
 //
@@ -232,7 +251,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		log.WarnContext(ctx, "sandbox_started_publish_failed",
 			"turn_id", req.Turn.TurnID, "error", err.Error())
 	}
-	if control := topics.AgentControl(req.Turn.AgentHandle); control != "" {
+	if control := controlSubject(req.Turn.AgentID); control != "" {
 		if err := q.Publish(ctx, control, ev); err != nil {
 			log.WarnContext(ctx, "sandbox_started_control_failed",
 				"turn_id", req.Turn.TurnID, "error", err.Error())

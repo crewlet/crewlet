@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -119,10 +121,10 @@ func (f *fleet) present(node string, ttl time.Duration, profile placement.NodePr
 // false rather than an error.
 func (f *fleet) peerTakes(handle, owner string, epochHeldBy string, epoch int64) {
 	f.t.Helper()
-	if _, err := f.store.Release(f.ctx, coord.SeatResource(handle), epochHeldBy, epoch); err != nil {
+	if _, err := f.store.Release(f.ctx, seatResource(handle), epochHeldBy, epoch); err != nil {
 		f.t.Fatalf("peerTakes release: %v", err)
 	}
-	lease, err := f.store.TryAcquire(f.ctx, coord.SeatResource(handle), coord.AcquireOptions{
+	lease, err := f.store.TryAcquire(f.ctx, seatResource(handle), coord.AcquireOptions{
 		Owner: owner, TTL: time.Minute, Protocol: coord.ProtocolVersion,
 	})
 	if err != nil || lease == nil {
@@ -145,7 +147,7 @@ func seatsNamed(handles ...string) func() []placement.Seat {
 	return func() []placement.Seat {
 		out := make([]placement.Seat, 0, len(handles))
 		for _, h := range handles {
-			out = append(out, placement.Seat{Handle: h})
+			out = append(out, testSeat(h))
 		}
 		return out
 	}
@@ -164,7 +166,7 @@ func numberedSeats(n int) func() []placement.Seat {
 // — so this is how a test stages "these seats were last served here".
 func (f *fleet) seedHint(handle, node string) {
 	f.t.Helper()
-	lease, err := f.store.TryAcquire(f.ctx, coord.SeatResource(handle), coord.AcquireOptions{
+	lease, err := f.store.TryAcquire(f.ctx, seatResource(handle), coord.AcquireOptions{
 		Owner: node + ":previous", TTL: time.Millisecond, Preferred: node,
 		Protocol: coord.ProtocolVersion,
 	})
@@ -193,7 +195,8 @@ type hookLog struct {
 	block func(handle string)
 }
 
-func (l *hookLog) OnAcquire(_ context.Context, handle string, _ coord.Lease) error {
+func (l *hookLog) OnAcquire(_ context.Context, s placement.Seat, _ coord.Lease) error {
+	handle := s.Handle
 	l.mu.Lock()
 	l.acquires = append(l.acquires, handle)
 	n := len(l.acquires)
@@ -209,7 +212,8 @@ func (l *hookLog) OnAcquire(_ context.Context, handle string, _ coord.Lease) err
 	return nil
 }
 
-func (l *hookLog) OnRelease(_ context.Context, handle string, _ coord.Lease, reason ReleaseReason) error {
+func (l *hookLog) OnRelease(_ context.Context, s placement.Seat, _ coord.Lease, reason ReleaseReason) error {
+	handle := s.Handle
 	l.mu.Lock()
 	l.releases = append(l.releases, handle+":"+reason.String())
 	n := len(l.releases)
@@ -221,7 +225,8 @@ func (l *hookLog) OnRelease(_ context.Context, handle string, _ coord.Lease, rea
 	return nil
 }
 
-func (l *hookLog) OnAdmission(_ context.Context, handle string, admitted bool) error {
+func (l *hookLog) OnAdmission(_ context.Context, s placement.Seat, admitted bool) error {
+	handle := s.Handle
 	l.mu.Lock()
 	state := "false"
 	if admitted {
@@ -272,4 +277,31 @@ func wantAdmits(t *testing.T, h *Host, handle string, want bool) {
 	if _, ok := h.MayStart(handle); ok != want {
 		t.Errorf("MayStart(%q) = %v, want %v", handle, ok, want)
 	}
+}
+
+// testSeat is the seat a case calls handle: the id its lease and its mailbox
+// are named by, and the handle every hook and every log line reads.
+//
+// DERIVED rather than random, so a case can name the same seat twice — claim
+// it, lose it, reclaim it — and reach the same lease.
+func testSeat(handle string) placement.Seat {
+	return placement.Seat{ID: testSeatID(handle), Handle: handle}
+}
+
+func testSeatID(handle string) uuid.UUID {
+	return uuid.NewSHA1(uuid.MustParse("6f1c2a4e-9d3b-4a71-8f5e-2b0c7d81a940"),
+		[]byte(handle))
+}
+
+// seatResource is that seat's lease name.
+func seatResource(handle string) string { return coord.SeatResource(testSeatID(handle)) }
+
+// seatIndex is what a sweep hands the claim path: the company's seats by
+// handle, so the claim can name each one's lease.
+func seatIndex(handles []string) map[string]placement.Seat {
+	out := make(map[string]placement.Seat, len(handles))
+	for _, handle := range handles {
+		out[handle] = testSeat(handle)
+	}
+	return out
 }

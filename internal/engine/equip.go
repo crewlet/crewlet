@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"github.com/google/uuid"
+
 	"context"
 	"fmt"
 
@@ -187,11 +189,17 @@ func (e *Engine) a2aService(c *Company) *a2a.Service {
 //
 // AGENT seats only, which is the whole question it exists to answer: a human
 // seat is addressable and never spawned, so a channel opened to one is a
-// channel no turn will ever answer.
+// channel no turn will ever answer. The id it returns is the seat's durable
+// one, so a colleague who has been renamed is still reached — and the
+// resolution goes through the org's own lookup, which answers a retired
+// handle too, because a model asks for the colleague it remembers.
 type agentSeats struct{ org *org.Organization }
 
-func (d agentSeats) IsAgentSeat(handle string) bool {
-	return d.org != nil && d.org.AgentSeatByHandle(handle) != nil
+func (d agentSeats) SeatInbox(handle string) (uuid.UUID, bool) {
+	if d.org == nil {
+		return uuid.Nil, false
+	}
+	return d.org.AgentIDFor(d.org.AgentSeatByHandle(handle))
 }
 
 // markers is the onboarding marker store, or nil on a node with none.

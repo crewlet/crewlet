@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // --- the tri-state ---------------------------------------------------------
@@ -334,7 +335,7 @@ func TestAnAdmissionHookFailureDoesNotAbortTheHeartbeat(t *testing.T) {
 	faulty := coordtest.NewFaulty(f.store)
 	h := f.newHost("node-a", Config{
 		Backend: faulty, Seats: seatsNamed("ceo", "eng"),
-		Hooks: HookFuncs{Admission: func(context.Context, string, bool) error {
+		Hooks: HookFuncs{Admission: func(context.Context, placement.Seat, bool) error {
 			panic("the broker will not answer")
 		}},
 	})

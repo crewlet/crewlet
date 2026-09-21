@@ -18,15 +18,29 @@ import (
 
 var log = logging.Get("a2a")
 
-// Directory answers whether a handle is an agent seat with an inbox.
+// Directory answers where a handle's wake goes, and reports false when
+// nowhere.
 //
 // The question is "does this seat exist and can it be woken", NOT "is it
 // running in this process". A colleague owned by another node is a perfectly
 // good target — the wake lands on its inbox and that node consumes it. Asking
 // a local pool instead made every cross-node ask fail as a typo, so the more
 // nodes a company ran, the fewer colleagues each agent appeared to have.
+//
+// ONE CALL ANSWERS BOTH HALVES, deliberately. This used to be IsAgentSeat,
+// and the caller then built the wake's subject itself from the handle — so
+// "is this seat addressable" and "what address is it" were two derivations
+// that could disagree, which is exactly what they did the moment a seat's
+// durable address stopped being its handle. A human seat, an unknown handle
+// and a seat with no derivable id are one answer here, because a caller does
+// the same thing with all three.
 type Directory interface {
-	IsAgentSeat(handle string) bool
+	SeatInbox(handle string) (uuid.UUID, bool)
+}
+
+// inbox is where a handle's wake goes, reporting false when nowhere.
+func (s *Service) inbox(handle string) (uuid.UUID, bool) {
+	return s.dir.SeatInbox(handle)
 }
 
 // Service opens channels and carries asks and answers over the durable queue.
@@ -57,6 +71,14 @@ func New(channels Store, pub queue.Publisher, opts Options) (*Service, error) {
 	}
 	if pub == nil {
 		return nil, fmt.Errorf("a2a: no publisher")
+	}
+	// REFUSED BY NAME rather than tolerated. The directory is what says
+	// where a wake goes, so a service without one can open channels and
+	// wake nobody — every ask succeeding and every answer never arriving,
+	// which reads as a slow colleague rather than as a wiring mistake.
+	if opts.Directory == nil {
+		return nil, fmt.Errorf("a2a: no directory, so no ask could be " +
+			"addressed — wire the running company's org")
 	}
 	s := &Service{channels: channels, queue: pub, dir: opts.Directory,
 		now: opts.Now, newID: opts.NewID}
@@ -115,7 +137,8 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 		return "", fmt.Errorf("%w: %q is you — reason it through in this turn "+
 			"instead of asking yourself", ErrSelfChannel, ask.Target)
 	}
-	if s.dir != nil && !s.dir.IsAgentSeat(ask.Target) {
+	target, addressable := s.inbox(ask.Target)
+	if !addressable {
 		// The chokepoint that creates the inbox wake. Without the guard a
 		// human seat or a typo'd handle produces a channel whose wake
 		// lands on a subscriber-less topic: the requester reports success
@@ -170,7 +193,7 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 	wake.DelegationDepth = ask.DelegationDepth + 1
 	wake.DelegationChain = appendChain(ask.DelegationChain, ask.Requester)
 	wake.ParentTurnID = ask.TurnID
-	if err := s.queue.Publish(ctx, topics.AgentInbox(ask.Target), wake); err != nil {
+	if err := s.queue.Publish(ctx, topics.AgentInbox(target), wake); err != nil {
 		return "", fmt.Errorf("a2a: wake %s: %w", ask.Target, err)
 	}
 
@@ -261,7 +284,15 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 		wake.SpanID = ans.CausedBy.SpanID
 		wake.ParentSpanID = ans.CausedBy.ParentSpanID
 	}
-	if err := s.queue.Publish(ctx, topics.AgentInbox(recipient), wake); err != nil {
+	seat, addressable := s.inbox(recipient)
+	if !addressable {
+		// A counterparty who has been removed or turned into a human seat
+		// since the channel opened. The message is already recorded and
+		// announced; what cannot happen is the wake.
+		return fmt.Errorf("a2a: wake %s: %w (the counterparty has no inbox)",
+			recipient, ErrNotAnAgent)
+	}
+	if err := s.queue.Publish(ctx, topics.AgentInbox(seat), wake); err != nil {
 		return fmt.Errorf("a2a: wake %s: %w", recipient, err)
 	}
 

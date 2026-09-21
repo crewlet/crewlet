@@ -506,11 +506,12 @@ func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
 	if err := w.queue.Publish(ctx, topics.Event(completion.EventType()), announcement); err != nil {
 		return err
 	}
-	control := topics.AgentControl(run.AgentHandle)
+	control := controlSubject(run.AgentID)
 	if control == "" {
-		// No handle means no routable seat. The announcement still went out,
-		// so the failure is visible rather than silent.
-		log.WarnContext(ctx, "sandbox_completion_unroutable", "turn_id", run.TurnID)
+		// No seat id means no routable seat. The announcement still went
+		// out, so the failure is visible rather than silent.
+		log.WarnContext(ctx, "sandbox_completion_unroutable", "turn_id", run.TurnID,
+			"agent", run.AgentHandle)
 		return nil
 	}
 	return w.queue.Publish(ctx, control, announcement)

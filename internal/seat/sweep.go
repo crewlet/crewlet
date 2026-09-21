@@ -7,6 +7,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
@@ -151,7 +153,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 			room = h.claimLimit
 		}
 		if room > 0 {
-			claimed, blocked = h.claimUpTo(ctx, plan.Eligible, room)
+			claimed, blocked = h.claimUpTo(ctx, byHandle, plan.Eligible, room)
 		}
 	}
 
@@ -309,13 +311,15 @@ func (h *Host) shedToCapacity(ctx context.Context, capacity int) []string {
 
 // claimUpTo takes at most room seats, and reports the fleet's protocol floor
 // when it took none because an older-protocol peer is live.
-func (h *Host) claimUpTo(ctx context.Context, eligible []string, room int) ([]string, int) {
+func (h *Host) claimUpTo(ctx context.Context, byHandle map[string]placement.Seat,
+	eligible []string, room int) ([]string, int) {
+
 	var claimed []string
-	for _, handle := range h.claimOrder(ctx, eligible) {
+	for _, handle := range h.claimOrder(ctx, byHandle, eligible) {
 		if len(claimed) >= room {
 			break
 		}
-		took, stop := h.tryClaim(ctx, handle)
+		took, stop := h.tryClaim(ctx, byHandle[handle])
 		if took {
 			claimed = append(claimed, handle)
 		}
@@ -334,7 +338,20 @@ func (h *Host) claimUpTo(ctx context.Context, eligible []string, room int) ([]st
 
 // tryClaim takes one seat, reporting whether it was established and whether
 // the pass must stop claiming altogether.
-func (h *Host) tryClaim(ctx context.Context, handle string) (took, stop bool) {
+func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took, stop bool) {
+	handle := seat.Handle
+	// A SEAT WITH NO ID CANNOT BE CLAIMED, and refusing here is what keeps
+	// that loud: its lease resource, its mailbox subject and its consumer
+	// group are all built from the id, so claiming it would take a lease
+	// nothing can name and attach a consumer to a subject nothing publishes
+	// to — a seat that reads as served and receives nothing.
+	if handle == "" || seat.ID == uuid.Nil {
+		log.WarnContext(ctx, "seat_claim_unidentified", "seat", handle,
+			"hint", "this seat has no derivable id, so it has no lease and no "+
+				"mailbox; a human seat is never claimed, and an agent seat "+
+				"without one is a company whose name or handle derives nothing")
+		return false, false
+	}
 	unlock := h.lockSeat(handle)
 	defer unlock()
 
@@ -346,7 +363,7 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took, stop bool) {
 		return false, false // re-claimed under us while we waited
 	}
 
-	lease, err := h.backend.TryAcquire(ctx, coord.SeatResource(handle), coord.AcquireOptions{
+	lease, err := h.backend.TryAcquire(ctx, coord.SeatResource(seat.ID), coord.AcquireOptions{
 		Owner: h.owner,
 		TTL:   h.ttl,
 		// The STABLE node id, not the incarnation: the hint has to survive
@@ -373,10 +390,10 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took, stop bool) {
 	// Held from here so the heartbeat renews it while the hook runs, but
 	// ESTABLISHING so nothing may start a turn on it yet. See heldSeat.
 	h.mu.Lock()
-	h.held[handle] = &heldSeat{lease: *lease, renewedAt: h.now(), establishing: true}
+	h.held[handle] = &heldSeat{seat: seat, lease: *lease, renewedAt: h.now(), establishing: true}
 	h.mu.Unlock()
 
-	if err := h.notifyAcquire(ctx, handle, *lease); err != nil {
+	if err := h.notifyAcquire(ctx, seat, *lease); err != nil {
 		// A seat whose takeover pipeline failed must not stay claimed: it
 		// would look owned to the fleet while nothing runs it. Give it
 		// straight back so a peer can try — and back off here, because
@@ -430,7 +447,9 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took, stop bool) {
 // Seats this node recently failed to acquire are skipped until their backoff
 // expires — negative stickiness, the mirror of the positive kind. Peers are
 // unaffected.
-func (h *Host) claimOrder(ctx context.Context, seats []string) []string {
+func (h *Host) claimOrder(ctx context.Context, byHandle map[string]placement.Seat,
+	seats []string) []string {
+
 	now := h.now()
 	h.mu.Lock()
 	for handle, until := range h.acquireBackoffs {
@@ -474,7 +493,7 @@ func (h *Host) claimOrder(ctx context.Context, seats []string) []string {
 	mine := make([]string, 0, len(candidates))
 	rest := make([]string, 0, len(candidates))
 	for _, handle := range candidates {
-		if _, ok := hinted[coord.SeatResource(handle)]; ok {
+		if _, ok := hinted[coord.SeatResource(byHandle[handle].ID)]; ok {
 			mine = append(mine, handle)
 			continue
 		}

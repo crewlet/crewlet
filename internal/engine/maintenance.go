@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -237,7 +238,7 @@ func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailbo
 		Records: b.Fleet, Queue: b.Queue, Leases: b.Coord,
 		Owner:    config.NewIncarnation(nodeID),
 		LeaseTTL: e.leaseTTL,
-		Roster:   e.activeSeatHandles,
+		Roster:   e.activeSeats,
 		Runs:     e.retireSeatRuns,
 	})
 }
@@ -285,8 +286,8 @@ func (e *Engine) mailboxRegistry() node.MailboxRegistry {
 	return e.mailboxes
 }
 
-// activeSeatHandles is the mailbox sweep's roster: the agent seats of the
-// revision the fleet is pointed at, or an error saying why that is unknown.
+// activeSeats is the mailbox sweep's roster: the agent seats of the revision
+// the fleet is pointed at, or an error saying why that is unknown.
 //
 // # Only when this node serves that revision
 //
@@ -302,7 +303,7 @@ func (e *Engine) mailboxRegistry() node.MailboxRegistry {
 // next; the company last. An apply installs its company before the reconciler
 // records its epoch, so a company read after a matching epoch is that
 // revision's or a later one, and a later revision is only ever a truer roster.
-func (e *Engine) activeSeatHandles(ctx context.Context) ([]string, error) {
+func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
 	}
@@ -324,12 +325,7 @@ func (e *Engine) activeSeatHandles(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("engine: this node serves activation epoch %d and the fleet is on %d; "+
 			"seats are judged once this node has applied it", applied, target.Epoch)
 	}
-	seats := company.Seats()
-	handles := make([]string, 0, len(seats))
-	for _, seat := range seats {
-		handles = append(handles, seat.Handle)
-	}
-	return handles, nil
+	return company.Seats(), nil
 }
 
 // Maintenance exposes the retention sweep.

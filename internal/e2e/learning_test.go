@@ -41,7 +41,7 @@ func wakeWithMessage(t *testing.T, n *node, handle string) {
 		},
 	}, events.TraceContext{})
 	if err := n.engine.Backends().Queue.Publish(t.Context(),
-		topics.AgentInbox(handle), ev); err != nil {
+		seatInbox(t, n, handle), ev); err != nil {
 		t.Fatalf("wake %s: %v", handle, err)
 	}
 }

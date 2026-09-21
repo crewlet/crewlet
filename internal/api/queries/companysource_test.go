@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -53,4 +54,24 @@ func eachAuthoredSeat(c *config.Company, visit func(*config.Role)) {
 		}
 	}
 	walk(c.Units)
+}
+
+// seatLease is the resource name of a seat's lease in this company.
+//
+// A SEAT LEASE IS NAMED BY THE SEAT'S ID, which a fixture cannot write out:
+// the derivation takes the company's own name and the seat's origin handle,
+// so a case seeding a held seat has to ask the company rather than invent one.
+// A lease under an invented id is a lease for nobody, and the row it produces
+// reads exactly like a real one.
+func seatLease(t *testing.T, c *config.Company, handle string) string {
+	t.Helper()
+	o, err := c.Organization()
+	if err != nil {
+		t.Fatalf("this fixture's company does not build an org: %v", err)
+	}
+	id, ok := o.AgentIDFor(o.AgentSeatByHandle(handle))
+	if !ok {
+		t.Fatalf("seat %q is no agent seat in this fixture, so it holds no lease", handle)
+	}
+	return coord.SeatResource(id)
 }

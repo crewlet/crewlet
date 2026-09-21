@@ -138,7 +138,7 @@ var protocolCases = []testCase{
 		h.claim(coord.NodeResource("old"), coord.AcquireOptions{
 			Owner: "old:1", TTL: LongTTL, Protocol: 1, Ungated: true,
 		})
-		h.refused(coord.SeatResource("ceo"), coord.AcquireOptions{
+		h.refused("seat:ceo", coord.AcquireOptions{
 			Owner: "new:1", TTL: LongTTL, Protocol: 2,
 		})
 	}},
@@ -171,7 +171,7 @@ var protocolCases = []testCase{
 		if duty.Protocol != 3 {
 			h.t.Fatalf("ungated claim recorded protocol %d, want 3", duty.Protocol)
 		}
-		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{
+		h.claim("seat:ceo", coord.AcquireOptions{
 			Owner: "node-b:1", TTL: LongTTL, Protocol: 3,
 		})
 	}},

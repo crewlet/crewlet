@@ -81,7 +81,7 @@ func watchInbox(t *testing.T, n *node, handle string) *inbox {
 	t.Helper()
 	box := &inbox{}
 	err := n.engine.Backends().Queue.Subscribe(t.Context(),
-		topics.AgentInbox(handle), "e2e-inbox-"+handle,
+		seatInbox(t, n, handle), "e2e-inbox-"+handle,
 		func(_ context.Context, ev *events.Event) queue.Result {
 			if got, ok := events.DataAs[*types.ExternalNotification](ev); ok {
 				box.mu.Lock()

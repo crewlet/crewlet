@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/maintenance"
@@ -72,7 +74,7 @@ roles:
 	e.epoch.current.Store(company)
 
 	// Nothing activated: not a fault, and not a roster of nobody either.
-	if _, err := e.activeSeatHandles(t.Context()); !errors.Is(err, maintenance.ErrNoActiveRevision) {
+	if _, err := e.activeSeats(t.Context()); !errors.Is(err, maintenance.ErrNoActiveRevision) {
 		t.Fatalf("roster with no activation = %v, want ErrNoActiveRevision", err)
 	}
 
@@ -82,7 +84,7 @@ roles:
 	}
 
 	// A node with no reconciler cannot say which activation it serves.
-	if handles, err := e.activeSeatHandles(t.Context()); err == nil {
+	if handles, err := e.activeSeats(t.Context()); err == nil {
 		t.Fatalf("a node with no reconciler produced a roster %v", handles)
 	}
 
@@ -95,23 +97,34 @@ roles:
 		t.Fatalf("NewReconciler: %v", err)
 	}
 	r.publish(applyProgress{applied: activation.Epoch - 1, target: activation.Epoch})
-	if handles, err := e.activeSeatHandles(t.Context()); err == nil {
+	if handles, err := e.activeSeats(t.Context()); err == nil {
 		t.Fatalf("a node behind the fleet's epoch produced a roster %v; its seats may be stale", handles)
 	}
 
 	r.publish(applyProgress{applied: activation.Epoch, target: activation.Epoch})
-	handles, err := e.activeSeatHandles(t.Context())
+	handles, err := e.activeSeats(t.Context())
 	if err != nil {
 		t.Fatalf("a node serving the fleet's epoch: %v", err)
 	}
-	// Agent seats only: a human seat has no mailbox to retire or keep.
-	if !slices.Equal(handles, []string{"ceo", "swe"}) {
-		t.Fatalf("roster = %v, want the agent seats", handles)
+	// Agent seats only: a human seat has no mailbox to retire or keep. And
+	// each carries the ID its mailbox is named by, because the sweep builds
+	// every one of those names from it.
+	var named []string
+	for _, s := range handles {
+		if s.ID == uuid.Nil {
+			t.Errorf("roster entry %q carries no seat id, so the sweep can name "+
+				"neither its mailbox nor the lease that excludes a node running it",
+				s.Handle)
+		}
+		named = append(named, s.Handle)
+	}
+	if !slices.Equal(named, []string{"ceo", "swe"}) {
+		t.Fatalf("roster = %v, want the agent seats", named)
 	}
 
 	// An unreadable pointer is unknown, never the last roster it produced.
 	fleet.down = true
-	if handles, err := e.activeSeatHandles(t.Context()); !errors.Is(err, coord.ErrUnavailable) {
+	if handles, err := e.activeSeats(t.Context()); !errors.Is(err, coord.ErrUnavailable) {
 		t.Fatalf("roster with an unreadable pointer = (%v, %v), want the store's error", handles, err)
 	}
 }

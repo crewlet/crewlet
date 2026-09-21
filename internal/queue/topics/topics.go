@@ -1,6 +1,6 @@
 // Package topics is the one place a Crewlet subject string is built.
 //
-// An agent's inbox subject (crewlet.agent.{handle}.inbox) is the engine's
+// An agent's inbox subject (crewlet.agent.{seat-id}.inbox) is the engine's
 // routing primitive: the notification service publishes to it, the scheduler
 // fires into it, an A2A ask wakes a colleague through it, the sandbox
 // coordinator resumes a suspended turn on it, and the engine subscribes one
@@ -9,17 +9,33 @@
 // has to match exactly. A mismatch is not an
 // error anywhere: it is a message published to a topic nobody reads.
 //
+// # THE TOKEN IS THE SEAT'S ID, NEVER ITS HANDLE
+//
+// The handle used to be the routing key, and a handle is an ADDRESS somebody
+// types: renaming a seat published its mail to a subject no consumer was
+// attached to and left the old mailbox holding whatever had arrived before
+// the edit. The id is [org.Organization.AgentIDFor]'s, derived from the
+// handle the seat was CREATED under — see ADR-0019 — so it is the one name
+// for a seat that a rename cannot move.
+//
+// The parameter is a [uuid.UUID] rather than a string on purpose. Every one
+// of these names is a wire name that has to match exactly, and the failure
+// when it does not is silence rather than an error — so passing a handle
+// where an id belongs is a mistake that must not be expressible. It is a
+// compile error instead.
+//
 // The grammar lives here so there is exactly one definition, and here rather
-// than beside the parties because it is a QUEUE fact — the handle is the
-// routing key, not the identity. This package imports nothing else from the
-// engine so any layer may use it. A test greps the tree and fails the build
-// on a hand-built subject outside this package.
+// than beside the parties because it is a QUEUE fact. This package imports
+// nothing else from the engine so any layer may use it. A test greps the tree
+// and fails the build on a hand-built subject outside this package.
 package topics
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -42,10 +58,11 @@ const (
 	// consumer group from the inbox group of that same seat.
 	//
 	// It and AgentGroupPrefix do NOT make a group name unique on their
-	// own — a seat handled `a-control` mints the same group as seat `a`'s
-	// control group, because a hyphen is legal inside a handle. That is
-	// safe only because a subscription is keyed on the (topic, group)
-	// PAIR by every backend, and the two pairs differ in their topic. See
+	// own, as a matter of the grammar rather than of what a seat id
+	// happens to look like: `agent-` + X + `-control` and `agent-` + Y
+	// coincide whenever Y is X + "-control". That is safe only because a
+	// subscription is keyed on the (topic, group) PAIR by every backend,
+	// and the two pairs differ in their topic. See
 	// TestGroupNamesAreNotUniqueOnTheirOwn.
 	AgentControlGroupSuffix = "-control"
 
@@ -53,7 +70,7 @@ const (
 	EventsPrefix = "crewlet.events."
 
 	// MemoryPrefix carries a seat's memory rows, one subject per row:
-	// crewlet.memory.<handle>.<table>.<key-digest>.
+	// crewlet.memory.<seat-id>.<table>.<key-digest>.
 	//
 	// A SUBJECT PER ROW is the whole design. The stream retains one message
 	// per subject, so it holds the current value of every row rather than a
@@ -114,30 +131,31 @@ const (
 	SearchSlice = SearchPrefix + "slice"
 )
 
-// AgentInbox returns the inbox subject for the seat with this handle.
+// AgentInbox returns the inbox subject for the seat with this id.
 //
-// The handle is the SEAT's handle, which every process derives from the org
-// — never a process-local instance id. An empty handle returns an empty
-// subject rather than a topic named after nothing: callers must treat that
-// as "not routable" instead of publishing to crewlet.agent..inbox, a real
-// topic that no consumer subscribes to and that would swallow the event.
-func AgentInbox(handle string) string {
-	if handle == "" {
+// The id is the SEAT's, which every process derives from the org — never a
+// process-local instance id, and never the handle, which a rename moves. A
+// nil id returns an empty subject rather than a topic named after nothing:
+// callers must treat that as "not routable" instead of publishing to
+// crewlet.agent..inbox, a real topic that no consumer subscribes to and that
+// would swallow the event.
+func AgentInbox(seat uuid.UUID) string {
+	if seat == uuid.Nil {
 		return ""
 	}
-	return AgentInboxPrefix + handle + AgentInboxSuffix
+	return AgentInboxPrefix + seat.String() + AgentInboxSuffix
 }
 
 // AgentInboxGroup returns the durable consumer group for a seat's inbox.
 //
 // One group per seat, so membership IS ownership: the node that attaches a
-// consumer to agent-{handle} is the node that receives that seat's work.
+// consumer to agent-{seat-id} is the node that receives that seat's work.
 // Nothing computes "which node" — routing falls out of who subscribed.
-func AgentInboxGroup(handle string) string {
-	if handle == "" {
+func AgentInboxGroup(seat uuid.UUID) string {
+	if seat == uuid.Nil {
 		return ""
 	}
-	return AgentGroupPrefix + handle
+	return AgentGroupPrefix + seat.String()
 }
 
 // AgentControl returns the seat's sandbox-control subject.
@@ -147,46 +165,66 @@ func AgentInboxGroup(handle string) string {
 // requeued behind the very wait it exists to end. Attached and detached
 // alongside the inbox, so a completion reaches the seat's owner and only its
 // owner.
-func AgentControl(handle string) string {
-	if handle == "" {
+func AgentControl(seat uuid.UUID) string {
+	if seat == uuid.Nil {
 		return ""
 	}
-	return AgentInboxPrefix + handle + AgentControlSuffix
+	return AgentInboxPrefix + seat.String() + AgentControlSuffix
 }
 
 // AgentControlGroup returns the durable consumer group for a seat's control
 // subject.
-func AgentControlGroup(handle string) string {
-	if handle == "" {
+func AgentControlGroup(seat uuid.UUID) string {
+	if seat == uuid.Nil {
 		return ""
 	}
-	return AgentGroupPrefix + handle + AgentControlGroupSuffix
+	return AgentGroupPrefix + seat.String() + AgentControlGroupSuffix
 }
 
-// HandleFromInbox recovers the seat handle from an inbox subject, reporting
+// SeatFromInbox recovers the seat id from an inbox subject, reporting
 // whether the subject was one. Used by diagnostics and by backends that log
-// per-seat activity without threading the handle through.
+// per-seat activity without threading the id through.
 //
 // It is the exact inverse of [AgentInbox]: it reports true only for a
 // subject AgentInbox could have produced. The suffix is matched against what
 // is LEFT after the prefix, not against the whole subject, because the two
 // overlap on one dot — "crewlet.agent.inbox" carries both, and matching them
-// independently recovered a handle of "inbox" from a subject that is nobody's
-// inbox. A false identification is worse than none here: the caller is a log
-// line or a diagnostic that would then name a seat which is not involved.
-func HandleFromInbox(subject string) (string, bool) {
+// independently recovered a seat token of "inbox" from a subject that is
+// nobody's inbox. A false identification is worse than none here: the caller
+// is a log line, a diagnostic or a sweep that would then name a seat which is
+// not involved.
+//
+// THE TOKEN IS PARSED, not merely extracted, which is what the id buys over
+// the handle this used to recover: a subject whose middle token is not a
+// uuid was not minted here, so a consumer somebody attached by hand under
+// this prefix is reported as not-a-mailbox rather than as a seat with an
+// unreadable name.
+func SeatFromInbox(subject string) (uuid.UUID, bool) {
 	rest, ok := strings.CutPrefix(subject, AgentInboxPrefix)
 	if !ok {
-		return "", false
+		return uuid.Nil, false
 	}
-	h, ok := strings.CutSuffix(rest, AgentInboxSuffix)
-	if !ok || h == "" || strings.Contains(h, ".") {
-		return "", false
+	token, ok := strings.CutSuffix(rest, AgentInboxSuffix)
+	if !ok {
+		return uuid.Nil, false
 	}
-	return h, true
+	return parseSeat(token)
 }
 
-// MailboxHandle reports the seat whose mailbox a durable subscription is, for
+// parseSeat reads one seat token, refusing anything [AgentInbox] would not
+// have written. [uuid.Parse] accepts several spellings a canonical String()
+// never produces — braced, urn-prefixed, unhyphenated — and each of them is
+// a DIFFERENT subject naming one seat, so accepting them here would make the
+// inverse many-to-one and a sweep would see two mailboxes for one seat.
+func parseSeat(token string) (uuid.UUID, bool) {
+	id, err := uuid.Parse(token)
+	if err != nil || id == uuid.Nil || id.String() != token {
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// MailboxSeat reports the seat whose mailbox a durable subscription is, for
 // the two subscriptions a seat's mailbox comprises: its inbox and its
 // sandbox-control subscription.
 //
@@ -196,19 +234,23 @@ func HandleFromInbox(subject string) (string, bool) {
 // [AgentInbox] with [AgentInboxGroup] and of [AgentControl] with
 // [AgentControlGroup], so it reports true only for a pair those could have
 // produced.
-func MailboxHandle(topic, group string) (string, bool) {
-	if h, ok := HandleFromInbox(topic); ok {
-		return h, group == AgentInboxGroup(h)
+func MailboxSeat(topic, group string) (uuid.UUID, bool) {
+	if id, ok := SeatFromInbox(topic); ok {
+		return id, group == AgentInboxGroup(id)
 	}
 	rest, ok := strings.CutPrefix(topic, AgentInboxPrefix)
 	if !ok {
-		return "", false
+		return uuid.Nil, false
 	}
-	h, ok := strings.CutSuffix(rest, AgentControlSuffix)
-	if !ok || h == "" || strings.Contains(h, ".") || group != AgentControlGroup(h) {
-		return "", false
+	token, ok := strings.CutSuffix(rest, AgentControlSuffix)
+	if !ok {
+		return uuid.Nil, false
 	}
-	return h, true
+	id, ok := parseSeat(token)
+	if !ok || group != AgentControlGroup(id) {
+		return uuid.Nil, false
+	}
+	return id, true
 }
 
 // Event returns the fleet-wide routing subject for an event type. Each of

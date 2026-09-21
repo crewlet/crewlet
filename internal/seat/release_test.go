@@ -79,7 +79,7 @@ func TestTheAcquireHookIsGivenTheFencingToken(t *testing.T) {
 	var seen coord.Lease
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo"),
-		Hooks: HookFuncs{Acquire: func(_ context.Context, _ string, lease coord.Lease) error {
+		Hooks: HookFuncs{Acquire: func(_ context.Context, _ placement.Seat, lease coord.Lease) error {
 			seen = lease
 			return nil
 		}},
@@ -88,7 +88,7 @@ func TestTheAcquireHookIsGivenTheFencingToken(t *testing.T) {
 	h.Sweep(f.ctx)
 
 	epoch, ok := h.EpochFor("ceo")
-	if !ok || seen.Epoch != epoch || seen.Resource != coord.SeatResource("ceo") {
+	if !ok || seen.Epoch != epoch || seen.Resource != seatResource("ceo") {
 		t.Fatalf("hook saw %+v, want the live lease at epoch %d", seen, epoch)
 	}
 	if _, ok := h.EpochFor("nobody"); ok {
@@ -123,12 +123,12 @@ func TestAnUnprovenTeardownKeepsTheLease(t *testing.T) {
 	wantAdmits(t, h, "ceo", false)
 	// ...but still leased, and still ours.
 	wantStrings(t, h.Unproven(), []string{"ceo"}, "unproven")
-	lease := f.leaseOf(coord.SeatResource("ceo"))
+	lease := f.leaseOf(seatResource("ceo"))
 	if lease == nil || lease.Owner != h.Owner() || lease.Epoch != epoch {
 		t.Fatalf("seat lease = %+v, want ours at epoch %d", lease, epoch)
 	}
 	// And a peer cannot take it.
-	taken, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	taken, err := f.store.TryAcquire(f.ctx, seatResource("ceo"), coord.AcquireOptions{
 		Owner: "peer:1", TTL: time.Minute, Protocol: coord.ProtocolVersion,
 	})
 	if err != nil || taken != nil {
@@ -147,10 +147,10 @@ func TestAnUnprovenSeatKeepsBeingRenewed(t *testing.T) {
 	h.Sweep(f.ctx)
 	h.Release(f.ctx, "ceo", ReasonDrain)
 
-	before := f.leaseOf(coord.SeatResource("ceo")).ExpiresAt
+	before := f.leaseOf(seatResource("ceo")).ExpiresAt
 	f.clock.Advance(10 * time.Second)
 	h.Heartbeat(f.ctx)
-	after := f.leaseOf(coord.SeatResource("ceo")).ExpiresAt
+	after := f.leaseOf(seatResource("ceo")).ExpiresAt
 	if !after.After(before) {
 		t.Fatal("an unproven seat stopped being renewed, so a peer will take a seat this " +
 			"process may still be consuming")
@@ -202,7 +202,7 @@ func TestAnUnprovenTeardownIsRetriedAndRecovers(t *testing.T) {
 	wantStrings(t, hooks.released(), []string{"ceo:placement", "ceo:placement"},
 		"the retry must continue the SAME release, or the hook tears the seat down differently")
 	// And the lease is gone, so the fleet can run the seat again.
-	if lease := f.leaseOf(coord.SeatResource("ceo")); lease != nil {
+	if lease := f.leaseOf(seatResource("ceo")); lease != nil {
 		t.Fatalf("the recovered seat is still leased: %+v", lease)
 	}
 }
@@ -231,7 +231,7 @@ func TestARetryThatKeepsFailingKeepsTheSeatAndAges(t *testing.T) {
 	if age := h.UnprovenAges()["ceo"]; age != 10*time.Second {
 		t.Fatalf("stranded age = %s, want 10s", age)
 	}
-	if lease := f.leaseOf(coord.SeatResource("ceo")); lease == nil || lease.Owner != h.Owner() {
+	if lease := f.leaseOf(seatResource("ceo")); lease == nil || lease.Owner != h.Owner() {
 		t.Fatalf("seat lease = %+v, want still ours", lease)
 	}
 }
@@ -322,7 +322,7 @@ func TestAPanickingReleaseHookAlsoFailsClosed(t *testing.T) {
 	f := newFleet(t)
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo"),
-		Hooks: HookFuncs{Release: func(context.Context, string, coord.Lease, ReleaseReason) error {
+		Hooks: HookFuncs{Release: func(context.Context, placement.Seat, coord.Lease, ReleaseReason) error {
 			panic("something else entirely")
 		}},
 	})
@@ -349,7 +349,8 @@ func TestSeatsAreReleasedTogetherNotInAQueue(t *testing.T) {
 	all := make(chan struct{})
 	release := make(chan struct{})
 	h := f.newHost("node-a", Config{
-		Hooks: HookFuncs{Release: func(_ context.Context, handle string, _ coord.Lease, _ ReleaseReason) error {
+		Hooks: HookFuncs{Release: func(_ context.Context, s placement.Seat, _ coord.Lease, _ ReleaseReason) error {
+			handle := s.Handle
 			mu.Lock()
 			entered[handle] = true
 			if len(entered) == 3 {
@@ -386,7 +387,8 @@ func TestOneStuckSeatDoesNotStrandTheOthers(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	h := f.newHost("node-a", Config{
-		Hooks: HookFuncs{Release: func(_ context.Context, handle string, _ coord.Lease, _ ReleaseReason) error {
+		Hooks: HookFuncs{Release: func(_ context.Context, s placement.Seat, _ coord.Lease, _ ReleaseReason) error {
+			handle := s.Handle
 			if handle == "eng" {
 				return errors.New("consumer will not close")
 			}
@@ -441,14 +443,14 @@ func TestAReleaseWaitsForAConcurrentAcquireOnTheSameSeat(t *testing.T) {
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo"),
 		Hooks: HookFuncs{
-			Acquire: func(context.Context, string, coord.Lease) error {
+			Acquire: func(context.Context, placement.Seat, coord.Lease) error {
 				note("acquire:start")
 				close(inAcquire)
 				<-finish
 				note("acquire:end")
 				return nil
 			},
-			Release: func(context.Context, string, coord.Lease, ReleaseReason) error {
+			Release: func(context.Context, placement.Seat, coord.Lease, ReleaseReason) error {
 				note("release")
 				return nil
 			},
@@ -490,7 +492,7 @@ func TestNoWorkIsAdmittedUntilTheAcquireHookReturns(t *testing.T) {
 	finish := make(chan struct{})
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo"),
-		Hooks: HookFuncs{Acquire: func(context.Context, string, coord.Lease) error {
+		Hooks: HookFuncs{Acquire: func(context.Context, placement.Seat, coord.Lease) error {
 			close(inAcquire)
 			<-finish
 			return nil

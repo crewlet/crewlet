@@ -56,7 +56,7 @@ func TestEveryEngineDutyIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 
 	// The seat lease bucket keeps its own ceiling: moving duties out of it
 	// widened nothing for seats.
-	_, err := s.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	_, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "node-a:1", TTL: productionSeatTTL + time.Second,
 	})
 	if !errors.Is(err, errTTLTooLong) {
@@ -217,7 +217,7 @@ func TestADutyWaitsWhileANodeOfAnOlderBuildIsLive(t *testing.T) {
 	if !s.dutiesWaiting.Load() {
 		t.Fatal("the store refused duties for an older build and did not report that it is waiting")
 	}
-	if seat, err := s.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	if seat, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "new:1", TTL: time.Minute,
 	}); err != nil || seat == nil {
 		t.Fatalf("a seat claim beside a live older build = (%v, %v); the layout gates duties only",
@@ -381,7 +381,7 @@ func TestEveryWriteStampsTheLayout(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, embeddedNATS(t), time.Minute)
-	seat := coord.SeatResource("ceo")
+	seat := "seat:ceo"
 
 	lease, err := s.TryAcquire(ctx, seat, coord.AcquireOptions{Owner: "new:1", TTL: time.Minute})
 	if err != nil || lease == nil {

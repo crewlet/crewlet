@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/slack"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -1256,7 +1257,7 @@ func TestReleasingASeatTakesItsIndicatorDown(t *testing.T) {
 		t.Fatal("the suspended turn's indicator is not live")
 	}
 
-	e.releaseSeat(t.Context(), "swe")
+	e.releaseSeat(t.Context(), placement.Seat{Handle: "swe"})
 
 	if shown := ws.shown(); shown[len(shown)-1] != "" {
 		t.Errorf("the released seat's indicator was not cleared: %v", shown)

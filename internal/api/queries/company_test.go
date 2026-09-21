@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -341,10 +342,10 @@ func TestFleetReadsTheLeaseTable(t *testing.T) {
 	claim(coord.NodeResource("node-a"), "node-a:1", map[string]any{
 		"roles": []any{"seats", "workers"}, "labels": map[string]any{"zone": "eu"},
 	})
-	claim(coord.SeatResource("ceo"), "node-a:1", nil)
+	cfg := company(t)
+	claim(seatLease(t, cfg, "ceo"), "node-a:1", nil)
 	claim(coord.WorkerResource("scheduler"), "node-a:1", nil)
 
-	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Coord: backend, NodeID: "node-a",
 		Company: companySource(t, cfg),
@@ -750,11 +751,11 @@ func TestASeatThatIsHeldIsNotReportedUnplaceable(t *testing.T) {
 		}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := backend.TryAcquire(t.Context(), coord.SeatResource("cto"),
+	cfg := company(t)
+	if _, err := backend.TryAcquire(t.Context(), seatLease(t, cfg, "cto"),
 		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := company(t)
 	cfg.Roles[1].Placement = &config.RolePlacement{Labels: map[string]string{"zone": "us"}}
 
 	body := asMap(t, answer(t, queries.Sources{

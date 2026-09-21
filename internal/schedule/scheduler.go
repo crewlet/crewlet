@@ -544,7 +544,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	}, trace)
 	task.Source = "scheduler"
 
-	if err := s.pub.Publish(ctx, topics.AgentInbox(handle), task); err != nil {
+	if err := s.pub.Publish(ctx, topics.AgentInbox(agentID), task); err != nil {
 		// The claim is already spent, and that is the at-most-once side of
 		// the trade rather than an oversight: a publish failure is
 		// AMBIGUOUS — the broker may have persisted the event and lost the

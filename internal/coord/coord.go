@@ -137,6 +137,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ProtocolVersion is the seat-host protocol this build speaks.
@@ -163,9 +165,11 @@ import (
 // Bump this when the MEANING of holding a lease changes, never when
 // something merely gains a field. The history: v2 = holding a seat means
 // consulting the completion ledger; v3 = claiming
-// a seat means this node satisfies the role's placement. Both were silent
-// corruption in a mixed fleet, which is the bar.
-const ProtocolVersion = 3
+// a seat means this node satisfies the role's placement; v4 = a seat lease
+// and a seat mailbox are named by the seat's ID rather than its handle, so a
+// v3 and a v4 node claim DIFFERENT resources for one seat and would each run
+// it. Every one was silent corruption in a mixed fleet, which is the bar.
+const ProtocolVersion = 4
 
 // ErrUnavailable is the canonical "store could not answer" error. Backends
 // wrap their transport failures in it. Callers should not switch on it —
@@ -568,7 +572,13 @@ func ResourceSegments(resource string) []string {
 }
 
 // SeatResource names the lease for an agent seat.
-func SeatResource(handle string) string { return ClassSeat.Resource(handle) }
+//
+// BY THE SEAT'S ID, never its handle. A lease is what stops two nodes running
+// one seat, and a handle is an ADDRESS a founder edits: mid-rename one node
+// would hold `seat:sarah-chen` while another claimed `seat:sarah-okonkwo`,
+// each correctly, and the seat would be running twice. The id is the one name
+// for a seat a rename cannot move — see ADR-0019.
+func SeatResource(seat uuid.UUID) string { return ClassSeat.Resource(seat.String()) }
 
 // WorkerResource names the lease for a per-company singleton duty.
 func WorkerResource(duty string) string { return ClassWorker.Resource(duty) }
@@ -592,8 +602,23 @@ func IsWorkerResource(resource string) bool { return ClassWorker.Holds(resource)
 // IsNodeResource reports whether a resource names a node's presence.
 func IsNodeResource(resource string) bool { return ClassNode.Holds(resource) }
 
-// SeatHandle recovers the handle from a seat resource name.
-func SeatHandle(resource string) (string, bool) { return ClassSeat.Name(resource) }
+// SeatID recovers the seat id from a seat resource name.
+//
+// It reports false for a resource of another class AND for one whose name is
+// not a canonical uuid, so a key written by hand or by a build that predates
+// the id is answered as "not a seat lease" rather than as a seat with an
+// unreadable name.
+func SeatID(resource string) (uuid.UUID, bool) {
+	name, ok := ClassSeat.Name(resource)
+	if !ok {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(name)
+	if err != nil || id == uuid.Nil || id.String() != name {
+		return uuid.Nil, false
+	}
+	return id, true
+}
 
 // NodeID recovers the node id from a presence resource name.
 func NodeID(resource string) (string, bool) { return ClassNode.Name(resource) }

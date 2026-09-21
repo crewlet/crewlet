@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -142,7 +144,8 @@ func TestTheDutyClaimIsUngated(t *testing.T) {
 
 	// A peer holding an unrelated resource at protocol 1 — the situation the
 	// gate exists for.
-	if _, err := backend.TryAcquire(ctx, coord.SeatResource("legacy"), coord.AcquireOptions{
+	legacy := coord.SeatResource(uuid.MustParse("0f1d4c07-6d2a-4e2b-9a3c-5b8e17d04c21"))
+	if _, err := backend.TryAcquire(ctx, legacy, coord.AcquireOptions{
 		Owner: "old-node#1", TTL: time.Minute, Protocol: 1,
 	}); err != nil {
 		t.Fatalf("seed the old lease: %v", err)

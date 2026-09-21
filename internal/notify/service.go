@@ -470,6 +470,19 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		s.skip(ctx, r.Source, party.Handle, why)
 		return nil
 	}
+	// AND CAN IT BE ADDRESSED. A seat's mailbox is named by its agent id,
+	// so a party with none has no subject to publish to. Separate from
+	// [Deliverable] beside it, which answers whether this SHOULD be
+	// delivered: that is a policy question about the event and this is a
+	// routing fact about the recipient. Skipped rather than raised, because
+	// the answer is PERMANENT and a nak would retry it for ever.
+	if party.AgentID == uuid.Nil {
+		const why = "the seat has no agent id, so it has no mailbox"
+		log.WarnContext(ctx, "notification_unaddressable", "source", r.Source,
+			"handle", party.Handle, "reason", why)
+		s.skip(ctx, r.Source, party.Handle, why)
+		return nil
+	}
 	// THREE ANSWERS, NOT TWO. "Under the cap", "over the cap" and "the
 	// valve could not say" are three different facts, and the error is
 	// what tells the last two apart.
@@ -576,7 +589,10 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	// metadata one is what a prompt renders from, this one is what the broker
 	// groups on and what the ledger keys off.
 	Stamp(wake, partition, conversation)
-	if err := s.queue.Publish(ctx, topics.AgentInbox(party.Handle), wake); err != nil {
+	// THE PARTY'S ID, never its handle: a seat's mailbox is keyed on the
+	// one name a rename cannot move. A party with no id never reaches here
+	// — the addressability guard above has already skipped it.
+	if err := s.queue.Publish(ctx, topics.AgentInbox(party.AgentID), wake); err != nil {
 		return fmt.Errorf("notify: wake %s: %w", party.Handle, err)
 	}
 	log.InfoContext(ctx, "notification_routed", "source", r.Source, "handle", party.Handle,

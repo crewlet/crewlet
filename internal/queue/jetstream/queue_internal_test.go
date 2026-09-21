@@ -8,7 +8,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // A FAILING MESSAGE BACKS OFF, and the budget outlives the outage.
@@ -151,7 +150,7 @@ func TestABatchThatAcksAfterFailingIsForgotten(t *testing.T) {
 	t.Parallel()
 	q := openForTest(t, Config{})
 	ctx := t.Context()
-	topic, group := topics.AgentInbox("erin"), topics.AgentInboxGroup("erin")
+	topic, group := seatInbox("erin"), seatGroup("erin")
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 		t.Fatalf("EnsureSubscription: %v", err)
 	}

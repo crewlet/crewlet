@@ -175,9 +175,16 @@ func TestAwkwardResourceNamesSurviveTheStore(t *testing.T) {
 	s := openStore(t, nc, time.Minute)
 
 	// A dot is a SUBJECT SEPARATOR in a NATS key, so an unescaped one would
-	// split the key into two tokens; a handle really can contain one.
-	dotted := coord.SeatResource("alice.smith")
-	plain := coord.SeatResource("alice")
+	// split the key into two tokens.
+	//
+	// BUILT FROM THE CLASS DIRECTLY rather than through coord.SeatResource,
+	// which takes a uuid and can no longer produce a dotted name. What is
+	// under test is the STORE's key encoding over an arbitrary resource
+	// name, and there is nothing in the contract that says a class's names
+	// are uuid-shaped — a company name, a duty and a stream all reach these
+	// buckets, and each can carry a dot.
+	dotted := coord.ClassSeat.Resource("alice.smith")
+	plain := coord.ClassSeat.Resource("alice")
 	for _, r := range []string{dotted, plain} {
 		if _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
 			Owner: "node-a:1", TTL: time.Minute, Preferred: "node-a",

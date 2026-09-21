@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // --- fakes ----------------------------------------------------------------
@@ -295,7 +296,7 @@ func TestARoleScheduleFiresToItsOwnInbox(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("inbox tasks = %d, want 1", len(tasks))
 	}
-	if tasks[0].topic != "crewlet.agent.qa.inbox" {
+	if tasks[0].topic != seatInbox("qa") {
 		t.Fatalf("topic = %q, want the seat's inbox", tasks[0].topic)
 	}
 	// THE TYPED PAYLOAD, not the envelope's free-form bag. The fire's task
@@ -414,7 +415,7 @@ func TestUnitEachFansOutToEveryDirectMember(t *testing.T) {
 	if got := h.tick(tickAt(9, 0, 30)); got != 2 {
 		t.Fatalf("Tick = %d fires, want 2", got)
 	}
-	requireTopics(t, h.q.inboxTopics(), "crewlet.agent.qa-lead.inbox", "crewlet.agent.qa-dev.inbox")
+	requireTopics(t, h.q.inboxTopics(), seatInbox("qa-lead"), seatInbox("qa-dev"))
 }
 
 func TestUnitTargetLeadFiresOnlyToTheLead(t *testing.T) {
@@ -424,7 +425,7 @@ func TestUnitTargetLeadFiresOnlyToTheLead(t *testing.T) {
 	if got := h.tick(tickAt(9, 0, 30)); got != 1 {
 		t.Fatalf("Tick = %d fires, want 1", got)
 	}
-	requireTopics(t, h.q.inboxTopics(), "crewlet.agent.qa-lead.inbox")
+	requireTopics(t, h.q.inboxTopics(), seatInbox("qa-lead"))
 }
 
 func TestAnEmptyTargetMeansEach(t *testing.T) {
@@ -442,12 +443,12 @@ func TestAnEmptyTargetMeansEach(t *testing.T) {
 func TestOneMembersPublishFailureDoesNotBlockItsSiblings(t *testing.T) {
 	t.Parallel()
 	h := build(t, unitOrg(org.TargetEach))
-	h.q.refuse["crewlet.agent.qa-dev.inbox"] = errors.New("broker refused the publish")
+	h.q.refuse[seatInbox("qa-dev")] = errors.New("broker refused the publish")
 	h.seed(tickAt(8, 59, 30))
 	if got := h.tick(tickAt(9, 0, 30)); got != 1 {
 		t.Fatalf("Tick = %d fires, want 1 — the healthy member still runs", got)
 	}
-	requireTopics(t, h.q.inboxTopics(), "crewlet.agent.qa-lead.inbox")
+	requireTopics(t, h.q.inboxTopics(), seatInbox("qa-lead"))
 }
 
 func TestAFailedPublishKeepsItsClaim(t *testing.T) {
@@ -457,7 +458,7 @@ func TestAFailedPublishKeepsItsClaim(t *testing.T) {
 	// and lost the acknowledgement — so releasing the claim to retry would
 	// risk waking the seat twice. The fire is dropped and the row stands.
 	h := build(t, roleOrg())
-	h.q.refuse["crewlet.agent.qa.inbox"] = errors.New("broker refused the publish")
+	h.q.refuse[seatInbox("qa")] = errors.New("broker refused the publish")
 	h.seed(tickAt(8, 59, 30))
 	if got := h.tick(tickAt(9, 0, 30)); got != 0 {
 		t.Fatalf("Tick = %d, want 0", got)
@@ -515,7 +516,7 @@ func TestAHumanSeatIsNeverARunner(t *testing.T) {
 	if got := h.tick(tickAt(9, 0, 30)); got != 1 {
 		t.Fatalf("Tick = %d fires, want 1 (the agent only)", got)
 	}
-	requireTopics(t, h.q.inboxTopics(), "crewlet.agent.qa-lead.inbox")
+	requireTopics(t, h.q.inboxTopics(), seatInbox("qa-lead"))
 
 	lead := &org.Organization{Name: "Acme", Units: []*org.Unit{{
 		Name: "Quality", Type: org.UnitTypeTeam, Lead: "sarah-chen",
@@ -625,7 +626,7 @@ func TestCatchupFiresARecentlyMissedTick(t *testing.T) {
 	if got := h.tick(tickAt(9, 2, 0)); got != 1 {
 		t.Fatalf("Tick = %d, want 1", got)
 	}
-	requireTopics(t, h.q.inboxTopics(), "crewlet.agent.qa.inbox")
+	requireTopics(t, h.q.inboxTopics(), seatInbox("qa"))
 }
 
 func TestCatchupRecordsASkipOutsideTheWindow(t *testing.T) {
@@ -1120,4 +1121,15 @@ func requireTopics(t *testing.T, got []string, want ...string) {
 		}
 		seen[w]--
 	}
+}
+
+// seatInbox is a fixture seat's mailbox subject.
+//
+// THROUGH THE ORG, because the scheduler publishes to the subject a seat's ID
+// names rather than to one built from its handle. Every fixture here runs in
+// the company "Acme" and none of its seats has been renamed, so the id is the
+// one that company derives for that handle.
+func seatInbox(handle string) string {
+	id, _ := org.DeriveAgentID("Acme", handle)
+	return topics.AgentInbox(id)
 }

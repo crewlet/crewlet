@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
 	qmem "github.com/crewlet/crewlet/internal/queue/memory"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -54,7 +53,7 @@ func gatedFleet(t *testing.T, ceiling int, turn node.TurnFunc, seats ...string) 
 	nodeQueue, publisher := client(), client()
 	for _, h := range seats {
 		if _, err := publisher.EnsureSubscription(t.Context(),
-			topics.AgentInbox(h), topics.AgentInboxGroup(h)); err != nil {
+			inbox(h), inboxGroup(h)); err != nil {
 			t.Fatalf("EnsureSubscription(%s): %v", h, err)
 		}
 	}
@@ -65,7 +64,7 @@ func gatedFleet(t *testing.T, ceiling int, turn node.TurnFunc, seats ...string) 
 		Seats: func() []placement.Seat {
 			out := make([]placement.Seat, len(seats))
 			for i, h := range seats {
-				out[i] = placement.Seat{Handle: h}
+				out[i] = seat(h)
 			}
 			return out
 		},
@@ -119,7 +118,7 @@ func (g *gatedNode) send(handle, work string) {
 	ev.Payload = map[string]any{notify.PartitionField: "c/" + handle}
 	ctx := context.WithoutCancel(g.t.Context())
 	go func() {
-		if err := g.q.Publish(ctx, topics.AgentInbox(handle), ev); err != nil {
+		if err := g.q.Publish(ctx, inbox(handle), ev); err != nil {
 			g.t.Errorf("Publish(%s): %v", handle, err)
 		}
 	}()
@@ -305,7 +304,7 @@ func (g *gatedNode) sendTo(handle, partition, work string) *events.Event {
 	}
 	ctx := context.WithoutCancel(g.t.Context())
 	go func() {
-		if err := g.q.Publish(ctx, topics.AgentInbox(handle), ev); err != nil {
+		if err := g.q.Publish(ctx, inbox(handle), ev); err != nil {
 			g.t.Errorf("Publish(%s): %v", handle, err)
 		}
 	}()

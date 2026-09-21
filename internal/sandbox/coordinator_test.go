@@ -1001,7 +1001,7 @@ func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
 			topicsSeen := rig.queue.topics()
 			for _, want := range []string{
 				topics.Event(types.SandboxRunFailed{}.EventType()),
-				topics.AgentControl("swe"),
+				sweControl(),
 			} {
 				if !slices.Contains(topicsSeen, want) {
 					t.Fatalf("the failure did not reach %q; published to %v", want, topicsSeen)
@@ -1571,7 +1571,7 @@ func TestTheWaitersCompletionIsClaimed(t *testing.T) {
 	rig.queue.mu.Lock()
 	var control *events.Event
 	for _, p := range rig.queue.published {
-		if p.topic == topics.AgentControl("swe") {
+		if p.topic == sweControl() {
 			control = p.event
 		}
 	}
@@ -2003,7 +2003,7 @@ func (r *coordRig) deliverControl(t *testing.T) {
 	r.queue.mu.Lock()
 	var completions []*events.Event
 	for _, p := range r.queue.published {
-		if _, ok := p.event.Data.(*types.SandboxRunCompleted); ok && p.topic == topics.AgentControl("swe") {
+		if _, ok := p.event.Data.(*types.SandboxRunCompleted); ok && p.topic == sweControl() {
 			completions = append(completions, p.event)
 		}
 	}
@@ -2952,7 +2952,7 @@ func TestAHeldSeatsParkSpendsNoAnswerBudget(t *testing.T) {
 	// person: the one shape where both counts are non-zero at once.
 	rig.launch("t2")
 	if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
-		Agent: "a-1", AgentHandle: "swe", TurnID: "t2",
+		Agent: sweID, AgentHandle: "swe", TurnID: "t2",
 	}); err != nil {
 		t.Fatalf("OnStarted: %v", err)
 	}

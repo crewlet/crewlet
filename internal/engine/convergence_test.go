@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/org"
@@ -178,12 +180,18 @@ func TestARotatedSeatCredentialReachesItsOwnChildren(t *testing.T) {
 	}
 }
 
-// mailboxHandles is every seat the broker holds an INBOX mailbox for.
+// mailboxHandles is every seat the broker holds an INBOX mailbox for, named
+// by the handle the running company gives it.
 //
 // THE PAIR IDENTIFIES ONE, never the subject alone: a consumer on a seat's
 // inbox subject under some other group belongs to somebody else. The control
 // subscription is deliberately not counted — a seat whose control
 // subscription exists is not a seat whose inbox does.
+//
+// The subject carries the seat's ID, so this resolves each one back through
+// the company. A mailbox whose seat the company no longer has is reported by
+// its id: that is genuinely all this node can say about it, and dropping it
+// would make a leaked mailbox invisible to the one assertion that looks.
 func mailboxHandles(t *testing.T, e *engine.Engine) []string {
 	t.Helper()
 	subs, err := e.Backends().Queue.ListSubscriptions(t.Context(),
@@ -191,12 +199,23 @@ func mailboxHandles(t *testing.T, e *engine.Engine) []string {
 	if err != nil {
 		t.Fatalf("ListSubscriptions: %v", err)
 	}
+	byID := map[uuid.UUID]string{}
+	if c := e.Company(); c != nil && c.Org != nil {
+		for _, s := range c.Seats() {
+			byID[s.ID] = s.Handle
+		}
+	}
 	var out []string
 	for _, sub := range subs {
-		h, ok := topics.HandleFromInbox(sub.Topic)
-		if ok && sub.Group == topics.AgentInboxGroup(h) {
-			out = append(out, h)
+		id, ok := topics.SeatFromInbox(sub.Topic)
+		if !ok || sub.Group != topics.AgentInboxGroup(id) {
+			continue
 		}
+		if handle, named := byID[id]; named {
+			out = append(out, handle)
+			continue
+		}
+		out = append(out, id.String())
 	}
 	return out
 }

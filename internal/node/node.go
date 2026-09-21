@@ -91,7 +91,7 @@ type Config struct {
 	// its runs have to be recovered and its mail parked before anything
 	// can deliver, or the first message starts a second turn beside a
 	// coding job that is still going.
-	SeatReady func(ctx context.Context, handle string, lease coord.Lease) error
+	SeatReady func(ctx context.Context, seat placement.Seat, lease coord.Lease) error
 
 	// SeatsAdmitted reports whether this node may take on NEW seats right
 	// now. Nil always admits. It gates the CLAIM only — see
@@ -108,7 +108,7 @@ type Config struct {
 	// SeatDone runs after the mailbox is detached. It never fails a
 	// release: the seat is already gone from this node, and its durable
 	// state belongs to the store rather than to this process.
-	SeatDone func(ctx context.Context, handle string)
+	SeatDone func(ctx context.Context, seat placement.Seat)
 
 	// BatchOptions tunes inbox coalescing. Nil uses the defaults.
 	BatchOptions *queue.BatchOptions
@@ -140,7 +140,10 @@ type MailboxRegistry interface {
 	// returns once the node may create it. It may wait: a retirement of the
 	// seat's previous mailbox that is still deleting it has to finish first,
 	// or the subscription this node creates is deleted under it.
-	Register(ctx context.Context, handle string) error
+	//
+	// THE WHOLE SEAT, because the record is filed under the id its mailbox
+	// is named by and carries the handle as the label a person reads.
+	Register(ctx context.Context, seat placement.Seat) error
 }
 
 // Node is one process's participation in a company.
@@ -376,9 +379,9 @@ func (n *Node) Drain(ctx context.Context) {
 	// keep publishing, and "wait until nothing is running" never comes
 	// true. It is also the reversible verb — a drain that turns out to be
 	// a shed can be undone, which PauseDelivery could not offer.
-	for _, handle := range n.host.Held() {
-		if err := n.OnAdmission(ctx, handle, false); err != nil {
-			n.log.Warn("drain_quiesce_failed", "handle", handle, "error", err)
+	for _, s := range n.host.HeldSeats() {
+		if err := n.OnAdmission(ctx, s, false); err != nil {
+			n.log.Warn("drain_quiesce_failed", "handle", s.Handle, "error", err)
 		}
 	}
 
@@ -414,16 +417,19 @@ func (n *Node) Drain(ctx context.Context) {
 // receives work before its runtime is up runs its first turn against a
 // half-built engine. Attaching last means the mailbox is the final thing to
 // open, so the first event to arrive meets a seat that can serve it.
-func (n *Node) OnAcquire(ctx context.Context, handle string, lease coord.Lease) error {
-	inbox, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
+func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Lease) error {
+	handle := s.Handle
+	inbox, group := topics.AgentInbox(s.ID), topics.AgentInboxGroup(s.ID)
 	if inbox == "" {
-		// An unroutable handle. Refusing here rather than attaching to a
-		// subject nobody publishes to is what keeps the failure loud.
-		return fmt.Errorf("node: seat %q has no inbox subject", handle)
+		// A seat with no id has no mailbox. Refusing here rather than
+		// attaching to a subject nobody publishes to is what keeps the
+		// failure loud.
+		return fmt.Errorf("node: seat %q has no inbox subject: it derives no "+
+			"seat id, and a mailbox is named by the id", handle)
 	}
 
 	if n.cfg.SeatReady != nil {
-		if err := n.cfg.SeatReady(ctx, handle, lease); err != nil {
+		if err := n.cfg.SeatReady(ctx, s, lease); err != nil {
 			// The seat is REFUSED rather than attached anyway: a seat
 			// whose in-flight runs could not be recovered would take new
 			// work beside a coding job nothing is tracking.
@@ -491,8 +497,9 @@ func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) 
 // Reporting an error means the teardown could NOT be proven, and the seat
 // host keeps the lease in response: a seat this process may still be
 // consuming must not be handed to a peer.
-func (n *Node) OnRelease(ctx context.Context, handle string, _ coord.Lease, reason seat.ReleaseReason) error {
-	inbox, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
+func (n *Node) OnRelease(ctx context.Context, s placement.Seat, _ coord.Lease, reason seat.ReleaseReason) error {
+	handle := s.Handle
+	inbox, group := topics.AgentInbox(s.ID), topics.AgentInboxGroup(s.ID)
 	if inbox == "" {
 		return nil
 	}
@@ -510,7 +517,7 @@ func (n *Node) OnRelease(ctx context.Context, handle string, _ coord.Lease, reas
 	delete(n.attached, handle)
 	n.mu.Unlock()
 	if n.cfg.SeatDone != nil {
-		n.cfg.SeatDone(ctx, handle)
+		n.cfg.SeatDone(ctx, s)
 	}
 	n.log.Info("seat_detached", "handle", handle, "reason", reason.String())
 	return nil
@@ -523,8 +530,9 @@ func (n *Node) OnRelease(ctx context.Context, handle string, _ coord.Lease, reas
 // prove ownership stops taking NEW work but keeps the seat; when a renew
 // succeeds again the consumer must be told to resume, or the seat stays
 // owned, attached, and permanently deaf.
-func (n *Node) OnAdmission(ctx context.Context, handle string, admitted bool) error {
-	inbox, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
+func (n *Node) OnAdmission(ctx context.Context, s placement.Seat, admitted bool) error {
+	handle := s.Handle
+	inbox, group := topics.AgentInbox(s.ID), topics.AgentInboxGroup(s.ID)
 	if inbox == "" {
 		return nil
 	}
@@ -563,9 +571,9 @@ func (n *Node) OnAdmission(ctx context.Context, handle string, admitted bool) er
 // a node that still holds them.
 func (n *Node) ResumeClaiming(ctx context.Context) {
 	n.turns.open()
-	for _, handle := range n.host.Held() {
-		if err := n.OnAdmission(ctx, handle, true); err != nil {
-			n.log.Warn("resume_admit_failed", "handle", handle, "error", err)
+	for _, s := range n.host.HeldSeats() {
+		if err := n.OnAdmission(ctx, s, true); err != nil {
+			n.log.Warn("resume_admit_failed", "handle", s.Handle, "error", err)
 		}
 	}
 	n.host.ResumeClaiming(ctx)

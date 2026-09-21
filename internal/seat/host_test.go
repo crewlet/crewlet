@@ -209,7 +209,7 @@ func TestASeatClaimDoesNotBlankThePresenceProfile(t *testing.T) {
 	}
 	// And the seat row says nothing about what this node IS: a second,
 	// staler answer to the question presence already answers.
-	seat := f.leaseOf(coord.SeatResource("ceo"))
+	seat := f.leaseOf(seatResource("ceo"))
 	if seat == nil || len(seat.Meta) != 0 {
 		t.Fatalf("seat lease meta = %v, want none", seat.Meta)
 	}
@@ -541,7 +541,7 @@ func TestTheShedOrderIsPlainSorted(t *testing.T) {
 	a.Sweep(f.ctx)
 	wantHeld(t, a, "ceo", "eng", "ops")
 	for _, handle := range a.Held() {
-		if hint := f.leaseOf(coord.SeatResource(handle)).Preferred; hint != "node-a" {
+		if hint := f.leaseOf(seatResource(handle)).Preferred; hint != "node-a" {
 			t.Fatalf("hint for %q is %q; the hint names the last claimer, so it cannot rank "+
 				"a node's own seats", handle, hint)
 		}
@@ -622,7 +622,7 @@ func placed(pinned map[string]placement.SeatPlacement, handles ...string) func()
 	return func() []placement.Seat {
 		out := make([]placement.Seat, 0, len(handles))
 		for _, h := range handles {
-			out = append(out, placement.Seat{Handle: h, Placement: pinned[h]})
+			out = append(out, placement.Seat{ID: testSeatID(h), Handle: h, Placement: pinned[h]})
 		}
 		return out
 	}
@@ -699,7 +699,8 @@ func TestASeatThatStopsMatchingIsHandedBack(t *testing.T) {
 	h := f.newHost("node-a", Config{
 		Hooks: hooks,
 		Seats: func() []placement.Seat {
-			return []placement.Seat{{Handle: "ceo", Placement: pin.Load().(placement.SeatPlacement)}}
+			return []placement.Seat{{ID: testSeatID("ceo"), Handle: "ceo",
+				Placement: pin.Load().(placement.SeatPlacement)}}
 		},
 	})
 	h.renewNodePresence(f.ctx)
@@ -783,7 +784,7 @@ func TestPresenceSurvivesAnOlderProtocolPeer(t *testing.T) {
 	// seats by a count that excludes it and each take a larger share — and
 	// its own capacity excludes it too.
 	f := newFleet(t)
-	if _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	if _, err := f.store.TryAcquire(f.ctx, seatResource("ceo"), coord.AcquireOptions{
 		Owner: "old-node:1", TTL: time.Minute, Protocol: 1,
 	}); err != nil {
 		t.Fatalf("stage an old peer: %v", err)

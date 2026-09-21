@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
@@ -54,7 +56,7 @@ type Fleet struct {
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
-	mailboxes    map[string]coord.MailboxRecord
+	mailboxes    map[uuid.UUID]coord.MailboxRecord
 	positions    map[string]coord.NodePositions
 	holds        map[string]coord.TrimHold
 	floors       map[string]coord.TrimFloor
@@ -148,7 +150,7 @@ func NewFleetWithAges(ages FleetAges) *Fleet {
 		runs:         map[string]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
-		mailboxes:    map[string]coord.MailboxRecord{},
+		mailboxes:    map[uuid.UUID]coord.MailboxRecord{},
 	}
 }
 

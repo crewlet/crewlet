@@ -133,7 +133,7 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 		r.t.Fatalf("Create: %v", err)
 	}
 	run := PendingRun{
-		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
+		TurnID: turnID, AgentHandle: "swe", AgentID: sweID, Role: "SWE",
 		// A DIRECT MESSAGE'S TWO VALUES: the conversation an answer is
 		// matched on and the resume reports back to, and the partition
 		// the kick-off arrived in. Different here on purpose — equal ones
@@ -232,7 +232,7 @@ func TestACompletionIsAnnouncedAndRoutedToTheSeatsOwner(t *testing.T) {
 	got := rig.queue.topics()
 	want := []string{
 		topics.Event(types.SandboxRunCompleted{}.EventType()),
-		topics.AgentControl("swe"),
+		sweControl(),
 	}
 	if len(got) != len(want) {
 		t.Fatalf("published to %v, want %v", got, want)

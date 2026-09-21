@@ -1,11 +1,45 @@
 package coordtest
 
 import (
+	"cmp"
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 )
+
+// seatID is the id of the seat a case calls name.
+//
+// The registry keys on a seat's ID rather than its handle, so a case that
+// wants "the swe's mailbox" needs a uuid it can write twice and read back the
+// same. The engine's own derivation is not reachable from here, and a suite
+// that imported the org model to build a coordination key would be certifying
+// the org model — so this mints its own stable v5: what a case needs is a
+// value that is a uuid and is the same on every run.
+func seatID(name string) uuid.UUID {
+	return uuid.NewSHA1(uuid.MustParse("6f1c2a4e-9d3b-4a71-8f5e-2b0c7d81a940"),
+		[]byte(name))
+}
+
+// seat is one seat's record as a case names it: the id it is filed under and
+// the handle a person reads.
+func seat(handle string) coord.MailboxRecord {
+	return coord.MailboxRecord{Seat: seatID(handle), Handle: handle}
+}
+
+// withVersion and withAbsent set one field on a record a case built with
+// [seat], so the id and the handle stay paired in one place.
+func withVersion(rec coord.MailboxRecord, version uint64) coord.MailboxRecord {
+	rec.Version = version
+	return rec
+}
+
+func withAbsent(rec coord.MailboxRecord, at time.Time) coord.MailboxRecord {
+	rec.AbsentSince = at
+	return rec
+}
 
 // ---- the seat mailbox registry ----------------------------------------- //
 
@@ -20,7 +54,7 @@ func (h *fleetHarness) createMailbox(rec coord.MailboxRecord) (coord.MailboxReco
 
 func (h *fleetHarness) mailbox(handle string) (coord.MailboxRecord, bool) {
 	h.t.Helper()
-	rec, found, err := h.f.Mailbox(h.ctx, handle)
+	rec, found, err := h.f.Mailbox(h.ctx, seatID(handle))
 	if err != nil {
 		h.t.Fatalf("Mailbox(%s): %v", handle, err)
 	}
@@ -38,7 +72,7 @@ func (h *fleetHarness) updateMailbox(rec coord.MailboxRecord) (coord.MailboxReco
 
 func (h *fleetHarness) deleteMailbox(handle string, version uint64) bool {
 	h.t.Helper()
-	gone, err := h.f.DeleteMailbox(h.ctx, handle, version)
+	gone, err := h.f.DeleteMailbox(h.ctx, seatID(handle), version)
 	if err != nil {
 		h.t.Fatalf("DeleteMailbox(%s): %v", handle, err)
 	}
@@ -52,7 +86,7 @@ var mailboxCases = []fleetCase{{
 	// created it.
 	name: "a mailbox one node registered is readable by every node",
 	fn: func(h *fleetHarness) {
-		stored, created := h.createMailbox(coord.MailboxRecord{Handle: "swe"})
+		stored, created := h.createMailbox(seat("swe"))
 		if !created {
 			h.t.Fatal("the first registration lost")
 		}
@@ -76,13 +110,13 @@ var mailboxCases = []fleetCase{{
 	// registration must not reset it. Only a conditional update may.
 	name: "a second registration does not overwrite a record",
 	fn: func(h *fleetHarness) {
-		stored, _ := h.createMailbox(coord.MailboxRecord{Handle: "swe"})
+		stored, _ := h.createMailbox(seat("swe"))
 		stored.AbsentSince = h.now()
 		stored.RetiringSince = h.now().Add(time.Minute)
 		if _, ok := h.updateMailbox(stored); !ok {
 			h.t.Fatal("an update at the version the create returned was refused")
 		}
-		if _, created := h.createMailbox(coord.MailboxRecord{Handle: "swe"}); created {
+		if _, created := h.createMailbox(seat("swe")); created {
 			h.t.Error("a second create reported itself as new")
 		}
 		read, _ := h.mailbox("swe")
@@ -96,7 +130,7 @@ var mailboxCases = []fleetCase{{
 	// loser must be told rather than allowed to overwrite.
 	name: "a stale version loses, and the version a write returns wins",
 	fn: func(h *fleetHarness) {
-		first, _ := h.createMailbox(coord.MailboxRecord{Handle: "swe"})
+		first, _ := h.createMailbox(seat("swe"))
 
 		marked := first
 		marked.AbsentSince = h.now()
@@ -126,7 +160,7 @@ var mailboxCases = []fleetCase{{
 }, {
 	name: "an update to a record that is gone is a lost race, not an error",
 	fn: func(h *fleetHarness) {
-		if _, ok := h.updateMailbox(coord.MailboxRecord{Handle: "missing", Version: 1}); ok {
+		if _, ok := h.updateMailbox(withVersion(seat("missing"), 1)); ok {
 			h.t.Error("an update invented a record")
 		}
 		if _, found := h.mailbox("missing"); found {
@@ -139,13 +173,13 @@ var mailboxCases = []fleetCase{{
 	// delete one mid-retirement, where it must lose.
 	name: "a write carrying no version is a lost race",
 	fn: func(h *fleetHarness) {
-		if _, ok := h.updateMailbox(coord.MailboxRecord{Handle: "swe"}); ok {
+		if _, ok := h.updateMailbox(seat("swe")); ok {
 			h.t.Error("an update with no version created a record")
 		}
 		if _, found := h.mailbox("swe"); found {
 			h.t.Error("an update with no version left a record behind")
 		}
-		h.createMailbox(coord.MailboxRecord{Handle: "swe"})
+		h.createMailbox(seat("swe"))
 		if h.deleteMailbox("swe", 0) {
 			h.t.Error("a delete with no version removed a record")
 		}
@@ -158,7 +192,7 @@ var mailboxCases = []fleetCase{{
 	// seat just rewrote with it.
 	name: "a delete is conditional, and a deleted handle can be registered again",
 	fn: func(h *fleetHarness) {
-		stored, _ := h.createMailbox(coord.MailboxRecord{Handle: "swe"})
+		stored, _ := h.createMailbox(seat("swe"))
 		if h.deleteMailbox("swe", stored.Version+1) {
 			h.t.Error("a delete at a version that never existed reported success")
 		}
@@ -172,7 +206,7 @@ var mailboxCases = []fleetCase{{
 			h.t.Error("a second delete of one version reported success")
 		}
 		// A seat added again under the handle of a retired one.
-		again, created := h.createMailbox(coord.MailboxRecord{Handle: "swe"})
+		again, created := h.createMailbox(seat("swe"))
 		if !created {
 			h.t.Fatal("a handle whose record was deleted cannot be registered again")
 		}
@@ -190,24 +224,38 @@ var mailboxCases = []fleetCase{{
 		}
 	},
 }, {
-	name: "every record is listed, by handle",
+	// ORDERED BY THE KEY, which is the seat's id: what a sweep needs is that
+	// two backends hand it the same list in the same order, and the id is
+	// the only thing on the record that both of them file it under. Ordering
+	// by the HANDLE would be ordering by a label that is allowed to be
+	// stale, so two nodes could disagree about it for one record.
+	name: "every record is listed, in one order both backends agree on",
 	fn: func(h *fleetHarness) {
-		for _, handle := range []string{"swe", "ceo", "pm"} {
-			h.createMailbox(coord.MailboxRecord{Handle: handle})
+		handles := []string{"swe", "ceo", "pm"}
+		for _, handle := range handles {
+			h.createMailbox(seat(handle))
 		}
 		records, err := h.f.Mailboxes(h.ctx)
 		if err != nil {
 			h.t.Fatalf("Mailboxes: %v", err)
 		}
-		var handles []string
+		var got []string
 		for _, rec := range records {
-			handles = append(handles, rec.Handle)
+			got = append(got, rec.Handle)
 			if rec.Version == 0 {
 				h.t.Errorf("listed record %s carries no version", rec.Handle)
 			}
+			if rec.Seat != seatID(rec.Handle) {
+				h.t.Errorf("record %s is filed under %s, want the seat's own id",
+					rec.Handle, rec.Seat)
+			}
 		}
-		if !slices.Equal(handles, []string{"ceo", "pm", "swe"}) {
-			h.t.Errorf("records = %v, want every one in handle order", handles)
+		want := slices.Clone(handles)
+		slices.SortFunc(want, func(a, b string) int {
+			return cmp.Compare(seatID(a).String(), seatID(b).String())
+		})
+		if !slices.Equal(got, want) {
+			h.t.Errorf("records = %v, want %v — every one, in seat-id order", got, want)
 		}
 	},
 }, {
@@ -218,7 +266,7 @@ var mailboxCases = []fleetCase{{
 	fn: func(h *fleetHarness) {
 		zone := time.FixedZone("UTC+5", 5*60*60)
 		absent := h.now().Add(123456789 * time.Nanosecond).In(zone)
-		stored, _ := h.createMailbox(coord.MailboxRecord{Handle: "swe", AbsentSince: absent})
+		stored, _ := h.createMailbox(withAbsent(seat("swe"), absent))
 		read, _ := h.mailbox("swe")
 		for name, rec := range map[string]coord.MailboxRecord{"create": stored, "read": read} {
 			if !rec.AbsentSince.Equal(absent) {
@@ -233,19 +281,28 @@ var mailboxCases = []fleetCase{{
 		}
 	},
 }, {
-	name: "an unnamed record is an error, not a lost race",
+	name: "an unidentified record is an error, not a lost race",
 	fn: func(h *fleetHarness) {
 		if _, created, err := h.f.CreateMailbox(h.ctx, coord.MailboxRecord{}); err == nil || created {
-			h.t.Errorf("CreateMailbox with no handle = (%v, %v), want an error", created, err)
+			h.t.Errorf("CreateMailbox with no seat id = (%v, %v), want an error", created, err)
 		}
 		if _, ok, err := h.f.UpdateMailbox(h.ctx, coord.MailboxRecord{Version: 1}); err == nil || ok {
-			h.t.Errorf("UpdateMailbox with no handle = (%v, %v), want an error", ok, err)
+			h.t.Errorf("UpdateMailbox with no seat id = (%v, %v), want an error", ok, err)
 		}
-		if gone, err := h.f.DeleteMailbox(h.ctx, "", 1); err == nil || gone {
-			h.t.Errorf("DeleteMailbox with no handle = (%v, %v), want an error", gone, err)
+		if gone, err := h.f.DeleteMailbox(h.ctx, uuid.Nil, 1); err == nil || gone {
+			h.t.Errorf("DeleteMailbox with no seat id = (%v, %v), want an error", gone, err)
 		}
-		if _, found, err := h.f.Mailbox(h.ctx, ""); err == nil || found {
-			h.t.Errorf("Mailbox with no handle = (%v, %v), want an error", found, err)
+		if _, found, err := h.f.Mailbox(h.ctx, uuid.Nil); err == nil || found {
+			h.t.Errorf("Mailbox with no seat id = (%v, %v), want an error", found, err)
+		}
+		// A HANDLE IS NOT AN IDENTITY HERE: a record naming one and no
+		// seat is refused, because the key is what the mailbox subject is
+		// built from and a handle cannot build one.
+		if _, created, err := h.f.CreateMailbox(h.ctx,
+			coord.MailboxRecord{Handle: "swe"}); err == nil || created {
+
+			h.t.Errorf("CreateMailbox with a handle and no seat id = (%v, %v), "+
+				"want an error", created, err)
 		}
 	},
 }}

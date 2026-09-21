@@ -7,23 +7,25 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // ---- the seat mailbox registry ----------------------------------------- //
 
 // Mailbox reads one record.
-func (f *Fleet) Mailbox(_ context.Context, handle string) (coord.MailboxRecord, bool, error) {
-	if handle == "" {
-		return coord.MailboxRecord{}, false, errors.New("coord/memory: a mailbox record needs a handle")
+func (f *Fleet) Mailbox(_ context.Context, seat uuid.UUID) (coord.MailboxRecord, bool, error) {
+	if seat == uuid.Nil {
+		return coord.MailboxRecord{}, false, errors.New("coord/memory: a mailbox record needs a seat id")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	rec, ok := f.mailboxes[handle]
+	rec, ok := f.mailboxes[seat]
 	return rec, ok, nil
 }
 
-// Mailboxes returns every record, ordered by handle.
+// Mailboxes returns every record, ordered by seat id.
 func (f *Fleet) Mailboxes(context.Context) ([]coord.MailboxRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -31,18 +33,20 @@ func (f *Fleet) Mailboxes(context.Context) ([]coord.MailboxRecord, error) {
 	for _, rec := range f.mailboxes {
 		out = append(out, rec)
 	}
-	slices.SortFunc(out, func(a, b coord.MailboxRecord) int { return cmp.Compare(a.Handle, b.Handle) })
+	slices.SortFunc(out, func(a, b coord.MailboxRecord) int {
+		return cmp.Compare(a.Seat.String(), b.Seat.String())
+	})
 	return out, nil
 }
 
 // CreateMailbox writes a new record, leaving an existing one alone.
 func (f *Fleet) CreateMailbox(_ context.Context, rec coord.MailboxRecord) (coord.MailboxRecord, bool, error) {
-	if rec.Handle == "" {
-		return coord.MailboxRecord{}, false, errors.New("coord/memory: a mailbox record needs a handle")
+	if rec.Seat == uuid.Nil {
+		return coord.MailboxRecord{}, false, errors.New("coord/memory: a mailbox record needs a seat id")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, exists := f.mailboxes[rec.Handle]; exists {
+	if _, exists := f.mailboxes[rec.Seat]; exists {
 		return coord.MailboxRecord{}, false, nil
 	}
 	stored := f.storeMailboxLocked(rec)
@@ -51,12 +55,12 @@ func (f *Fleet) CreateMailbox(_ context.Context, rec coord.MailboxRecord) (coord
 
 // UpdateMailbox writes a record at the version it was read at.
 func (f *Fleet) UpdateMailbox(_ context.Context, rec coord.MailboxRecord) (coord.MailboxRecord, bool, error) {
-	if rec.Handle == "" {
-		return coord.MailboxRecord{}, false, errors.New("coord/memory: a mailbox record needs a handle")
+	if rec.Seat == uuid.Nil {
+		return coord.MailboxRecord{}, false, errors.New("coord/memory: a mailbox record needs a seat id")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	current, ok := f.mailboxes[rec.Handle]
+	current, ok := f.mailboxes[rec.Seat]
 	if !ok || current.Version != rec.Version {
 		return coord.MailboxRecord{}, false, nil
 	}
@@ -64,17 +68,17 @@ func (f *Fleet) UpdateMailbox(_ context.Context, rec coord.MailboxRecord) (coord
 }
 
 // DeleteMailbox removes a record at a version.
-func (f *Fleet) DeleteMailbox(_ context.Context, handle string, version uint64) (bool, error) {
-	if handle == "" {
-		return false, errors.New("coord/memory: a mailbox record needs a handle")
+func (f *Fleet) DeleteMailbox(_ context.Context, seat uuid.UUID, version uint64) (bool, error) {
+	if seat == uuid.Nil {
+		return false, errors.New("coord/memory: a mailbox record needs a seat id")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	current, ok := f.mailboxes[handle]
+	current, ok := f.mailboxes[seat]
 	if !ok || current.Version != version {
 		return false, nil
 	}
-	delete(f.mailboxes, handle)
+	delete(f.mailboxes, seat)
 	return true, nil
 }
 
@@ -90,7 +94,7 @@ func (f *Fleet) storeMailboxLocked(rec coord.MailboxRecord) coord.MailboxRecord 
 	rec.Version = f.version
 	rec.AbsentSince = utcUnlessZero(rec.AbsentSince)
 	rec.RetiringSince = utcUnlessZero(rec.RetiringSince)
-	f.mailboxes[rec.Handle] = rec
+	f.mailboxes[rec.Seat] = rec
 	return rec
 }
 

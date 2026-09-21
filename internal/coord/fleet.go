@@ -7,6 +7,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -1120,7 +1122,20 @@ type Integrations interface {
 // constants. This package keeps two instants and a version, and certifies only
 // that they round-trip and that every write is conditional.
 type MailboxRecord struct {
-	// Handle is the seat's handle, and the record's key.
+	// Seat is the seat's durable id, and the record's KEY.
+	//
+	// THE ID RATHER THAN THE HANDLE, because the mailbox this record is
+	// about is named by the id: a registry keyed on a handle could not
+	// build the subject it is registering, and a rename would leave one
+	// record for a mailbox that is still live and another for a seat that
+	// already has one.
+	Seat uuid.UUID
+
+	// Handle is what the seat answered to when this record was last
+	// written, and it is a LABEL rather than an identity: it is what a
+	// person reading the registry, or a retirement log line, needs in
+	// order to know whose mailbox is being retired. Nothing resolves by
+	// it, and a rename leaves it stale until the next registration.
 	Handle string
 
 	// AbsentSince is when a sweep first found the handle missing from the
@@ -1171,17 +1186,17 @@ func (r MailboxRecord) Retiring() bool { return !r.RetiringSince.IsZero() }
 // The bucket has no age, for the channel bucket's reason: a record's age cannot
 // tell a seat that is present from one that left, so removing a record is the
 // sweep's decision rather than a broker's clock. The set is bounded by the
-// handles a company has ever used rather than by anything that grows per event.
+// seats a company has ever had rather than by anything that grows per event.
 type Mailboxes interface {
-	// Mailbox reads one record.
-	Mailbox(ctx context.Context, handle string) (MailboxRecord, bool, error)
+	// Mailbox reads one record, by the seat's id.
+	Mailbox(ctx context.Context, seat uuid.UUID) (MailboxRecord, bool, error)
 
-	// Mailboxes returns every record, ordered by handle, so two backends
+	// Mailboxes returns every record, ordered by seat id, so two backends
 	// answer a sweep in the same order.
 	Mailboxes(ctx context.Context) ([]MailboxRecord, error)
 
 	// CreateMailbox writes a new record and returns it as stored, with the
-	// version its next write must carry. A handle that already has a record
+	// version its next write must carry. A seat that already has a record
 	// is left alone and reports false: the existing record may be mid-way
 	// through a retirement, and only a conditional update may change it.
 	CreateMailbox(ctx context.Context, rec MailboxRecord) (MailboxRecord, bool, error)
@@ -1193,7 +1208,7 @@ type Mailboxes interface {
 
 	// DeleteMailbox removes a record at a version, reporting whether that
 	// version still held. A record deleted this way can be created again.
-	DeleteMailbox(ctx context.Context, handle string, version uint64) (bool, error)
+	DeleteMailbox(ctx context.Context, seat uuid.UUID, version uint64) (bool, error)
 }
 
 // Fleet is a backend that serves all of the shared state, which is what the

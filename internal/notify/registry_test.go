@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // company is the fixture every registry test resolves against: two agent
@@ -32,6 +33,20 @@ func registry(t *testing.T) *notify.Registry {
 	o := company()
 	o.Normalize()
 	return notify.NewRegistry(o)
+}
+
+// inbox is a seat's mailbox subject in the fixture company.
+//
+// THROUGH THE ID, because that is what the service publishes to: a subject a
+// case built from the handle would be one nothing writes to, and every
+// assertion over it would pass by being empty.
+//
+// Derived rather than read off an org, so it answers for a seat a case adds
+// mid-test as well. That is the same value the org would give — a seat nobody
+// has renamed has its own handle as its origin.
+func inbox(handle string) string {
+	id, _ := org.DeriveAgentID(company().Name, handle)
+	return topics.AgentInbox(id)
 }
 
 func TestASeatResolvesByEveryAddressItHas(t *testing.T) {
