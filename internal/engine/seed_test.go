@@ -2,8 +2,10 @@ package engine_test
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +93,56 @@ func TestABootSeedTurnsAFileIntoChartRows(t *testing.T) {
 	if unit.Channel != "c-eng" {
 		t.Errorf("channel = %q, want the file's", unit.Channel)
 	}
+}
+
+// A COMPANY OF SIXTY SEATS BOOTS WITH SIXTY SEATS.
+//
+// # What a fixture this size catches that a two-seat one cannot
+//
+// A seed's records carry a SCOPE, one root per object, and the deferral probe
+// that runs inside the decide states every root. Written as a chained `OR`
+// that expression's depth grew with the roster, and Turso refuses one past a
+// hundred — so a file of about fifty seats failed its own seed outright, the
+// whole chart lost, and the node served a company of nobody. Every fixture
+// small enough to write by hand passed. See
+// [TestAScopeWithHundredsOfRootsIsProbedRatherThanRefused], which holds the
+// rule where it lives.
+//
+// # And it is read with no wait of its own
+//
+// Every other case here calls readChart, which polls until the rows arrive.
+// This one reads the published company the instant the constructor returns,
+// because a node's FIRST epoch is what wires its integrations: one published
+// before the seed applied wires them against a roster of nobody and converges
+// only when the periodic rebuild fires, which is what the floor read at the
+// end of [Engine.seedChart] removes. That race is normally won either way on
+// an idle machine, so what this pins is the size; the floor is what keeps it
+// from turning into a flake on a loaded one.
+func TestTheFirstPublishedCompanyCarriesTheSeed(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, wideSeedDoc(60))})
+
+	company := e.Company()
+	if company == nil {
+		t.Fatal("the engine published no company at boot")
+	}
+	if got := len(company.Seats()); got != 60 {
+		t.Errorf("the first published company has %d seats, want the file's "+
+			"60 — a node that boots short wires every integration against a "+
+			"roster it does not have until the periodic rebuild fires", got)
+	}
+}
+
+// wideSeedDoc is a company of n agent seats, each with its own content record.
+func wideSeedDoc(n int) string {
+	var doc strings.Builder
+	doc.WriteString("name: Acme\nproviders:\n  llm:\n    zulu:\n" +
+		"      type: anthropic\n      model: claude-sonnet-5\n" +
+		"      api_keys: [\"${K}\"]\nroles:\n")
+	for i := range n {
+		fmt.Fprintf(&doc, "  - {name: Seat %04d, handle: s%04d, llm: zulu}\n", i, i)
+	}
+	return doc.String()
 }
 
 // AND A CHART THAT IS NOT EMPTY IS NEVER SEEDED OVER.

@@ -16,10 +16,10 @@ import (
 //
 // # Why a file still writes a chart at all
 //
-// The chart is a log, and an operator edits it with `crewlet chart` and the
-// per-entity routes. But a company has to START somewhere, and what an
-// operator has on the first run is a file — `crewlet run -company acme.yaml`,
-// or the seed a first `crewlet config import` writes. Without this a fresh
+// The chart is a log: every later change to it is a record with its own
+// history and its own author, and a stored config revision cannot carry one at
+// all. But a company has to START somewhere, and what an operator has on the
+// first run is a file — `crewlet run -company acme.yaml`. Without this a fresh
 // deployment boots with an empty chart, which is a company with no seats: no
 // mailbox is attached, no placement claims anything, and the dashboard renders
 // an organisation of nobody. The file would validate, the node would come up,
@@ -30,7 +30,7 @@ import (
 // This is a SEED and not an import. It answers "this company has never had a
 // chart, and a file describes one", and nothing else. The moment the chart
 // holds anything — a seat somebody hired through the API, a unit moved with
-// `crewlet chart`, a peer's import — the file stops being the authority and
+// a chart write, a peer's import — the file stops being the authority and
 // this does nothing at all.
 //
 // The alternative was to seed on every boot and let the ledger make it a
@@ -132,8 +132,48 @@ func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
 	// name. The two halves are ONE gesture from an operator's point of
 	// view, which is why a failure in the second is reported with the same
 	// revision the first was keyed on.
-	if err := e.seedContent(ctx, writer, authored, revision); err != nil {
+	last, err := e.seedContent(ctx, writer, authored, revision)
+	if err != nil {
 		return err
+	}
+
+	// AND THEN WAIT FOR THIS NODE TO APPLY ITS OWN SEED, by reading at a
+	// FLOOR: the position the last record landed at.
+	//
+	// # Why the seed is the one read here that names a position
+	//
+	// Publishing is not applying. Every record above is on the log and the
+	// applier reaches it a moment later, on its own goroutine — so the view
+	// rebuild that runs next reads at the applier's cursor and finds an
+	// EMPTY chart. The node then boots a company with no seats: it installs
+	// its first epoch from that empty view, wires every integration against
+	// a roster of nobody, and converges only when the periodic rebuild
+	// fires. Measured, that was a node reporting `config_applied seats=0`
+	// and `gitlab_wired seat_identities=0` on a company whose file has a
+	// seat in it, and then serving that for up to half a minute.
+	//
+	// Everything else reads stale with no floor, for the reason
+	// [Engine.rebuildChart] gives: what is being derived IS this node's
+	// view, and asking the fleet whether it is caught up would put a round
+	// trip on every committed record. This is not that question — the floor
+	// is a position this node's own writes returned, so the wait is for its
+	// own applier and for nothing else.
+	//
+	// A ZERO FLOOR WAITS FOR NOTHING, which is the honest answer when every
+	// write came back `unknown`: there is no position to wait for, and the
+	// import ledger settles it on the next boot.
+	//
+	// A FAILURE HERE IS NOT A FAILED SEED. The records are published and
+	// the applier will reach them; what is lost is the boot's head start,
+	// so it is reported and the boot continues.
+	if _, err := e.Chart().Read(ctx, statelog.Freshness{
+		Level: statelog.ReadStale, MinPosition: last,
+	}); err != nil {
+		log.WarnContext(ctx, "chart_seed_not_applied_yet", "revision", revision,
+			"error", err,
+			"detail", "the seed is published and this node has not applied it "+
+				"yet, so its first epoch may carry no seats; the periodic "+
+				"rebuild converges within 30s")
 	}
 	log.InfoContext(ctx, "chart_seeded", "revision", revision,
 		"units", len(authored.Units), "seats", len(authored.Seats),
@@ -162,22 +202,36 @@ func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
 // it stopped on, and the next boot resumes — the ledger makes what landed a
 // no-op, so there is nothing to undo.
 func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
-	authored chart.Authored, revision string) error {
+	authored chart.Authored, revision string) (statelog.Position, error) {
+
+	// THE FURTHEST POSITION ANY OF THESE REACHED, which is what the caller
+	// waits on. The LAST one is not necessarily it — a write that came back
+	// `unknown` carries a zero position — so the maximum is the only floor
+	// that is true of every record this seed placed.
+	var last statelog.Position
+	reached := func(at statelog.Position) {
+		if at.Packed() > last.Packed() {
+			last = at
+		}
+	}
 
 	for _, unit := range authored.Units {
-		if _, err := writer.WriteUnit(ctx, seedOpID(revision, "u", unit.Key),
+		result, err := writer.WriteUnit(ctx, seedOpID(revision, "u", unit.Key),
 			chart.UnitContent{
 				Key: unit.Key, Name: unit.Name, Type: unit.Type,
 				Purpose: unit.Purpose, Goals: unit.Goals,
 				Channel: unit.Channel, Project: unit.Project,
 				Space: unit.Space, KnowledgeRefs: unit.KnowledgeRefs,
 				Runtime: unit.Runtime,
-			}); err != nil {
-			return fmt.Errorf("engine: seed the content of unit %q: %w", unit.Key, err)
+			})
+		if err != nil {
+			return last, fmt.Errorf("engine: seed the content of unit %q: %w",
+				unit.Key, err)
 		}
+		reached(result.Position)
 	}
 	for _, seat := range authored.Seats {
-		if _, err := writer.WriteSeat(ctx, seedOpID(revision, "s", seat.Handle),
+		result, err := writer.WriteSeat(ctx, seedOpID(revision, "s", seat.Handle),
 			chart.SeatContent{
 				Handle: seat.Handle, Kind: seat.Kind, Unit: seat.Unit,
 				Name: seat.Name, Email: seat.Email,
@@ -187,11 +241,14 @@ func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
 				Manages:              seat.Manages,
 				Project:              seat.Project, Space: seat.Space,
 				Runtime: seat.Runtime,
-			}); err != nil {
-			return fmt.Errorf("engine: seed the content of seat %q: %w", seat.Handle, err)
+			})
+		if err != nil {
+			return last, fmt.Errorf("engine: seed the content of seat %q: %w",
+				seat.Handle, err)
 		}
+		reached(result.Position)
 	}
-	return nil
+	return last, nil
 }
 
 // seedOpID is one seeded object's operation id.
@@ -247,7 +304,7 @@ func (e *Engine) seedChartAtBoot(ctx context.Context, cfg *config.Company) {
 		log.WarnContext(ctx, "chart_seed_failed", "error", err,
 			"detail", "this node could not publish the company file's org "+
 				"chart. If no peer has published it either, the company has "+
-				"no seats: check the broker and re-run, or write the chart "+
-				"with `crewlet chart`")
+				"no seats: check the broker and re-run, or publish the chart "+
+				"from a node that can reach it")
 	}
 }
