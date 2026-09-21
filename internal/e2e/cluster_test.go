@@ -17,6 +17,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -393,7 +395,21 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 			"engine refuses: %w", errNotRetryable, i, err))
 	}
 
-	e, err := engine.New(ctx, engine.Options{Bootstrap: &boot, Company: cfg})
+	// THE HUB AHEAD OF THE ENGINE, as every other node builder here does:
+	// the chat applier takes its observer inside engine.New. A member whose
+	// applier announced to nothing would apply every record and push none,
+	// which on a fleet is the one failure mode a single node cannot show.
+	var e *engine.Engine
+	chatLive := api.NewChatLive(api.ChatLiveOptions{
+		Company: func() *config.Company { return cfg },
+		Rooms:   func() stream.ChatRooms { return chatRooms(e) },
+		Peers:   func() stream.ChatPeers { return chatPeers(e) },
+		NodeID:  boot.Node.ID,
+	})
+
+	e, err = engine.New(ctx, engine.Options{
+		Bootstrap: &boot, Company: cfg, ChatLive: chatLive,
+	})
 	if err != nil {
 		return fail(fmt.Errorf("engine.New: %w", err))
 	}
@@ -418,7 +434,7 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// projector — serves for the whole case. The test's own context is
 	// that lifetime exactly: longer than the attempt, and still ended when
 	// the case is over, which [context.WithoutCancel] would not be.
-	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot, nil) //nolint:contextcheck // see above
+	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot, chatLive, nil) //nolint:contextcheck // see above
 	stops = append(stops, apiStops...)
 	if err != nil {
 		return fail(fmt.Errorf("api: %w", err))

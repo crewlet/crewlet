@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -404,18 +405,19 @@ func ask(t *testing.T, conn *websocket.Conn, id int64, what, token string,
 //
 // # And why it is the socket's QUERY channel rather than its push
 //
-// Because the push does not reach a socket at all on a running node, and an
-// absence assertion over a path nothing feeds is the worst shape a test can
-// take: it passes identically when the filter works and when the frames were
-// never going to arrive. [stream.ChatHub] is the applier's [chat.Observer] and
-// [api.App.ChatLive] exposes it "for the engine" — but `applierFor` in
-// internal/engine builds `chat.NewApplier(nodeID, nil)`, [engine.Options] has
-// no field that could carry a hub, and nothing in cmd/crewlet builds one. So
-// no committed chat record becomes a frame anywhere, and the live channel this
-// asserts against is the one every chat read already travels: the query
-// channel, which is a thin adapter over the same function each REST route
-// calls. When the observer is wired, the push filter gets its own case here
-// and this one keeps its own subject.
+// Because they are different filters and each deserves its own subject. This
+// one is the READ path: a question asked with a credential, answered or
+// refused. The push path — a committed record becoming a frame — is
+// [TestACommittedMessageReachesAWatchingSocket] below.
+//
+// That case did not exist for a while, and the reason is worth keeping: the
+// push reached no socket at all on a running node. `applierFor` built
+// `chat.NewApplier(nodeID, nil)`, [engine.Options] had no field that could
+// carry a hub, and nothing in cmd/crewlet built one — so no committed chat
+// record became a frame anywhere. Asserting the push filter then would have
+// been an absence assertion over a path nothing feeds, which passes
+// identically when the filter works and when the frames were never going to
+// arrive. The wiring exists now, so the case does.
 func TestAPrivateRoomIsNotServedToANonMemberOverTheSocket(t *testing.T) {
 	t.Parallel()
 	n := startWith(t, peopleDoc, peopleTokens)
@@ -818,5 +820,108 @@ func TestANodeThatWasNotRunningCatchesUpOnTheRoom(t *testing.T) {
 	if gotRows := digestTable(t, joined, "chat_messages"); gotRows != wantRows {
 		t.Errorf("chat_messages digests %s on the arriving node and %s on the "+
 			"one that wrote it", gotRows, wantRows)
+	}
+}
+
+// dialAs opens a socket carrying a credential, so the server resolves it to a
+// seat at ACCEPT time.
+//
+// The ordinary [node.dial] is anonymous, which is the dashboard's own posture
+// and is right for the query channel: a browser cannot set a header on a
+// WebSocket constructor, so a token rides each question instead. The PUSH
+// stream cannot work that way. A frame is decided per recipient before it is
+// sent, so the socket's identity has to be settled once, when it is accepted —
+// see [stream.ChatHub.join], and the rule it states: "a frame-carried token
+// may upgrade one query and may never move a push stream's identity".
+func dialAs(t *testing.T, n *node, token string) *websocket.Conn {
+	t.Helper()
+	target := "ws" + strings.TrimPrefix(n.server.URL, "http") + "/ws/stream"
+	conn, _, err := websocket.Dial(t.Context(), target, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": []string{"Bearer " + token}},
+	})
+	if err != nil {
+		t.Fatalf("dial %s as the holder of %s: %v", target, token, err)
+	}
+	conn.SetReadLimit(8 << 20)
+	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
+	return conn
+}
+
+// A COMMITTED MESSAGE REACHES A SOCKET WATCHING THE ROOM.
+//
+// # What this is actually asserting
+//
+// The whole push path, which is four hand-offs and no fewer: the applier
+// commits a batch, announces it to its [chat.Observer], the hub decides per
+// watcher whether that viewer may see the room, and the frame reaches the wire.
+// Every one of them is a place the frame can be lost, and the first was lost
+// for the entire life of this feature — the engine built its applier with a
+// nil observer and no process ever supplied one, so nothing committed here
+// became a frame anywhere.
+//
+// That is why this is an e2e case rather than a unit test of the hub. The hub's
+// own suite already proves it fans out what it is given; what nobody could
+// prove without a running node is that anything ever gives it anything.
+//
+// # Why the socket carries its credential on the HANDSHAKE
+//
+// See [dialAs]. A push is decided per recipient, so the identity has to exist
+// before the frame does.
+func TestACommittedMessageReachesAWatchingSocket(t *testing.T) {
+	t.Parallel()
+	n := startWith(t, peopleDoc, peopleTokens)
+	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
+
+	made := room(t, n, person("alice"), chat.NewChannel{
+		Name: "shipping", Kind: chat.KindPublic, Topic: "what is going out",
+	}).Channel
+
+	// WATCHING BEFORE THE MESSAGE EXISTS. A push is live, not replayed:
+	// the hub serves what is committed while a socket is attached and
+	// nothing else, so a socket that arrived afterwards would be asserting
+	// against a frame that was correctly never sent to it.
+	conn := dialAs(t, n, "alice-token")
+	focus, err := json.Marshal(map[string]any{
+		"kind": stream.ChatFocusKind, "channel_id": made.ID, "typing": false,
+	})
+	if err != nil {
+		t.Fatalf("encode the focus frame: %v", err)
+	}
+	if err := conn.Write(t.Context(), websocket.MessageText, focus); err != nil {
+		t.Fatalf("send the focus frame: %v", err)
+	}
+
+	said := say(t, n, person("alice"), made.ID, "push-chat-1",
+		"the build is green")
+	if err := n.engine.WaitCommitted(t.Context(), said.Outcome.Position); err != nil {
+		t.Fatalf("wait for the message to be applied: %v", err)
+	}
+
+	// READ PAST EVERY OTHER FRAME, for [ask]'s reason: a health tick, a
+	// roster and a presence frame all arrive unasked. The one this case is
+	// about is the posted frame naming this room.
+	deadline, cancel := context.WithTimeout(t.Context(), waitBudget)
+	defer cancel()
+	for {
+		_, raw, err := conn.Read(deadline)
+		if err != nil {
+			t.Fatalf("no chat_posted frame reached a socket watching #%s: %v — "+
+				"the applier's observer is not reaching the hub", made.Name, err)
+		}
+		var env struct {
+			Kind string `json:"kind"`
+			Data struct {
+				ChannelID string `json:"channel_id"`
+				MessageID string `json:"message_id"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(raw, &env) != nil || env.Kind != stream.KindChatPosted {
+			continue
+		}
+		if env.Data.ChannelID != made.ID {
+			t.Fatalf("a posted frame named room %q, not #%s",
+				env.Data.ChannelID, made.Name)
+		}
+		return
 	}
 }

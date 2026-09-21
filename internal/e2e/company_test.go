@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 )
@@ -136,7 +137,21 @@ func startWith(t *testing.T, amend func(doc string) string,
 		amendBoot(&boot)
 	}
 
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: &boot, Company: cfg})
+	// THE CHAT HUB BEFORE THE ENGINE, as runEngine builds it: the applier
+	// takes its observer inside engine.New, so a hub built after this line
+	// could never be the thing it announces to. `e` is captured by
+	// reference and is set before any frame is served.
+	var e *engine.Engine
+	chatLive := api.NewChatLive(api.ChatLiveOptions{
+		Company: func() *config.Company { return cfg },
+		Rooms:   func() stream.ChatRooms { return chatRooms(e) },
+		Peers:   func() stream.ChatPeers { return chatPeers(e) },
+		NodeID:  boot.Node.ID,
+	})
+
+	e, err = engine.New(t.Context(), engine.Options{
+		Bootstrap: &boot, Company: cfg, ChatLive: chatLive,
+	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
@@ -145,7 +160,7 @@ func startWith(t *testing.T, amend func(doc string) string,
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app, srv := serveAPI(t, e, &boot, nil)
+	app, srv := serveAPI(t, e, &boot, chatLive, nil)
 
 	return &node{engine: e, app: app, server: srv, model: model, id: boot.Node.ID}
 }
