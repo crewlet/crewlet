@@ -275,7 +275,7 @@ summary, and the two-file `crewlet validate -config … -company …` a
 pipeline runs:
 
 ```
-crewlet.yaml: stream "nats", coordination "embedded-kv", store "…", roles [seats], domains [tracker vectors pages]
+crewlet.yaml: stream "nats", coordination "embedded-kv", store "…", roles [seats], domains [tracker vectors pages chart]
 ```
 
 ### Reading it off a running node
@@ -285,7 +285,7 @@ which on a `roles: [seats]` satellite is the one place to look, because
 such a node [binds no listener](#1-give-the-satellite-a-tier-a-config):
 
 ```
-statelog_started  node=sat-eu-1 domains="[tracker vectors pages]"
+statelog_started  node=sat-eu-1 domains="[tracker vectors pages chart]"
 ```
 
 On a node that **does** run `ingress`, `GET /health` carries the same
