@@ -9,8 +9,8 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { MAX_EVENTS, MAX_PHASES, Store } from "./store.ts";
-import type { EventEnvelope, FeedRow } from "./types.ts";
+import { MAX_CHAT_LIVE, MAX_CHAT_ROOMS, MAX_EVENTS, MAX_PHASES, Store } from "./store.ts";
+import type { ChatChange, EventEnvelope, FeedRow } from "./types.ts";
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
   return {
@@ -288,5 +288,139 @@ describe("seat lookup", () => {
       expect(store.agentByKey(key)?.handle, key).toBe("pm");
     }
     expect(store.agentByKey("nobody")).toBeNull();
+  });
+});
+
+describe("chat", () => {
+  function change(over: Partial<ChatChange> = {}): ChatChange {
+    return {
+      channel_id: "room-1",
+      op: "post",
+      op_id: "op-1",
+      message_id: "m-1",
+      channel_seq: 1,
+      author: "ada",
+      author_kind: "human",
+      at: "2026-01-01T00:00:00Z",
+      position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
+      ...over,
+    };
+  }
+
+  test("the first frame for a room sets the live mark without claiming the tab is behind", () => {
+    // A tab that has just connected is not behind on a room it has never
+    // seen. Measured against zero instead, every room would open with a
+    // phantom hole and a refetch nobody needed.
+    const store = new Store();
+    store.applyChatChange(change({ channel_seq: 4_211 }));
+    expect(store.state.chat.rooms["room-1"]?.seq).toBe(4_211);
+    expect(store.state.chat.rooms["room-1"]?.changes).toHaveLength(1);
+  });
+
+  test("a redelivered frame is the same record, not a second message", () => {
+    // The op id is the record's own idempotency key. A reconnect that
+    // overlaps, or a hub that re-sent, hands the same frame twice — and
+    // counting it twice is a message rendered twice everywhere a screen
+    // counts these.
+    const store = new Store();
+    store.applyChatChange(change());
+    const version = store.version("chat");
+    store.applyChatChange(change());
+    expect(store.state.chat.rooms["room-1"]?.changes).toHaveLength(1);
+    // And it does not even wake a listener: nothing about the room moved.
+    expect(store.version("chat")).toBe(version);
+  });
+
+  test("a late frame never moves the live mark backwards", () => {
+    // Out of order is LATE, not new. A mark that went down would leave a
+    // screen re-reading a room it is already ahead of for ever.
+    const store = new Store();
+    store.applyChatChange(change({ op_id: "op-9", channel_seq: 9 }));
+    store.applyChatChange(change({ op_id: "op-7", channel_seq: 7 }));
+    expect(store.state.chat.rooms["room-1"]?.seq).toBe(9);
+    expect(store.state.chat.rooms["room-1"]?.changes).toHaveLength(2);
+  });
+
+  test("the live tail is bounded per room, and so is the number of rooms", () => {
+    // A tab left open on a busy company holds a bounded amount of chat, the
+    // way MAX_EVENTS and MAX_PHASES already bound their slices. Frames arrive
+    // for every room the viewer may READ, which is wider than their rail, so
+    // the room bound is a real ceiling rather than a restatement of one.
+    const store = new Store();
+    for (let i = 0; i < MAX_CHAT_LIVE + 40; i++) {
+      store.applyChatChange(change({ op_id: `op-${i}`, channel_seq: i + 1 }));
+    }
+    expect(store.state.chat.rooms["room-1"]?.changes).toHaveLength(MAX_CHAT_LIVE);
+    // Newest first, so the bound drops the OLDEST frame.
+    expect(store.state.chat.rooms["room-1"]?.changes[0]?.op_id).toBe(`op-${MAX_CHAT_LIVE + 39}`);
+
+    for (let i = 0; i < MAX_CHAT_ROOMS + 10; i++) {
+      store.applyChatChange(
+        change({
+          channel_id: `other-${i}`,
+          op_id: `other-op-${i}`,
+          // The instant is what orders the eviction, so it has to move.
+          at: `2026-01-02T00:${String(i % 60).padStart(2, "0")}:00Z`,
+        }),
+      );
+    }
+    expect(Object.keys(store.state.chat.rooms).length).toBeLessThanOrEqual(MAX_CHAT_ROOMS);
+  });
+
+  test("a frame with no room or no op id is dropped rather than filed under nothing", () => {
+    const store = new Store();
+    store.applyChatChange(change({ channel_id: "" }));
+    store.applyChatChange(change({ op_id: "" }));
+    expect(Object.keys(store.state.chat.rooms)).toHaveLength(0);
+  });
+
+  test("a degraded snapshot does not blank the open conversation", () => {
+    // The 5 s REST snapshot carries no chat at all. Applying one has to leave
+    // the transcript, the presence and the read state exactly where they
+    // were, or an engine that is merely unreachable empties the screen every
+    // five seconds.
+    const store = new Store();
+    store.applyChatChange(change());
+    store.applyChatPresence({ rooms: { "room-1": { viewing: ["ada"] } } });
+    store.applyChatRead({ cursors: { "room-1": 42 } });
+    store.applySnapshot({ agents: [] });
+    expect(store.state.chat.rooms["room-1"]?.changes).toHaveLength(1);
+    expect(store.state.chatPresence.rooms["room-1"]?.viewing).toEqual(["ada"]);
+    expect(store.state.chatRead?.cursors?.["room-1"]).toBe(42);
+  });
+
+  test("presence is replaced whole, because a room that went quiet says so by being absent", () => {
+    // Merged instead, the last person seen typing in a room would be left
+    // there for the life of the tab.
+    const store = new Store();
+    store.applyChatPresence({ rooms: { "room-1": { viewing: ["ada"], typing: ["ada"] } } });
+    store.applyChatPresence({ rooms: { "room-2": { viewing: ["bo"] } } });
+    expect(store.state.chatPresence.rooms["room-1"]).toBeUndefined();
+    expect(store.state.chatPresence.rooms["room-2"]?.viewing).toEqual(["bo"]);
+  });
+
+  test("an unread read state is null rather than an empty cursor set", () => {
+    // Null is "nobody could look"; an empty cursor map is "you have read
+    // nothing anywhere". A screen badging a whole company unread because a
+    // coordination read failed is what keeping them apart prevents.
+    const store = new Store();
+    expect(store.state.chatRead).toBeNull();
+    store.applyChatRead(null);
+    expect(store.state.chatRead).toBeNull();
+    store.applyChatRead({ cursors: {} });
+    expect(store.state.chatRead?.cursors).toEqual({});
+  });
+
+  test("each chat slice wakes only its own listeners", () => {
+    // Presence is re-probed every few seconds whatever the conversation does,
+    // so a rail that woke on it would re-render the channel list on a tick.
+    const store = new Store();
+    const fn = vi.fn();
+    store.subscribe(["chat"], fn);
+    store.applyChatPresence({ rooms: {} });
+    store.applyChatRead({ cursors: {} });
+    expect(fn).not.toHaveBeenCalled();
+    store.applyChatChange(change());
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });

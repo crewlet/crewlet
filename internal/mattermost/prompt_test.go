@@ -94,16 +94,19 @@ func TestAPartialIdentityStillReads(t *testing.T) {
 // would mark arbitrary public channels as direct messages and raise
 // indicators for traffic nobody addressed to this agent.
 func TestThisBackendUsesNoChannelIDPrefix(t *testing.T) {
-	p := mattermost.Prompt()
-	if p.DMPrefix != "" {
-		t.Fatalf("a channel-id prefix is configured: %q", p.DMPrefix)
+	rule := mattermost.Prompt().Address
+	if rule.DMPrefix != "" {
+		t.Fatalf("a channel-id prefix is configured: %q", rule.DMPrefix)
 	}
 	// A public channel whose id happens to start with D is still public.
-	if p.IsDirect(map[string]string{"channel": "dxxxxxxxxxxxxxxxxxxxxxxxxx", "channel_type": "O"}) {
+	if rule.IsDirect(map[string]string{
+		notify.ChannelField:     "dxxxxxxxxxxxxxxxxxxxxxxxxx",
+		notify.ChannelTypeField: "O",
+	}) {
 		t.Fatal("a public channel was read as a direct message")
 	}
 	for _, kind := range mattermost.DirectKinds {
-		if !p.IsDirect(map[string]string{"channel_type": kind}) {
+		if !rule.IsDirect(map[string]string{notify.ChannelTypeField: kind}) {
 			t.Errorf("%q is not read as direct", kind)
 		}
 	}

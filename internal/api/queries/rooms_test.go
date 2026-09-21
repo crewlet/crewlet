@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -14,12 +15,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -177,7 +180,59 @@ func everySeam(t *testing.T) queries.Sources {
 		// a function rather than a reader — and this sweep is about which
 		// names exist, so what it answers is nothing.
 		Retention: func(context.Context) any { return nil },
+		// THE COMPANY'S OWN CONVERSATION. Three seams rather than one,
+		// on WorkSearch's precedent and for the same reason: the index
+		// is this node's own and the badges are coordination's, so a
+		// node with the rooms and neither of the others is a real shape
+		// — and `chat_search` is gated on the index separately.
+		Chat:       emptyChat{},
+		ChatSearch: emptyChat{},
+		ChatReads:  coordmemory.NewFleet(),
 	}
+}
+
+// emptyChat is the chat reader and its keyword index with nothing in them, on
+// emptyWork's terms: this sweep is about which NAMES exist.
+type emptyChat struct{}
+
+func (emptyChat) Channels(context.Context, string, chat.ChannelsQuery,
+	statelog.Freshness) (chat.ChannelListing, error) {
+
+	return chat.ChannelListing{}, nil
+}
+
+func (emptyChat) Channel(context.Context, string, string,
+	statelog.Freshness) (chat.ChannelDetail, error) {
+
+	return chat.ChannelDetail{}, nil
+}
+
+func (emptyChat) Messages(context.Context, string, chat.TranscriptQuery,
+	statelog.Freshness) (chat.Transcript, error) {
+
+	return chat.Transcript{}, nil
+}
+
+func (emptyChat) Thread(context.Context, string, chat.ThreadQuery,
+	statelog.Freshness) (chat.Thread, error) {
+
+	return chat.Thread{}, nil
+}
+
+func (emptyChat) Mentions(context.Context, string, chat.MentionQuery,
+	statelog.Freshness) (chat.MentionFeed, error) {
+
+	return chat.MentionFeed{}, nil
+}
+
+func (emptyChat) Readable(context.Context, string, statelog.Freshness) ([]string, error) {
+	return nil, nil
+}
+
+func (emptyChat) At() statelog.Position { return statelog.Position{} }
+
+func (emptyChat) SearchMessages(context.Context, search.ChatQuery) ([]search.ChatHit, error) {
+	return nil, nil
 }
 
 // emptyWork and emptyPages are the native readers with nothing in them, on
@@ -383,6 +438,77 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 			"reader was lost, or the answer should go with whatever used to "+
 			"call it", kind)
 	}
+}
+
+// AND THE SWEEP ITSELF CANNOT GO QUIET.
+//
+// Both gates above are only as wide as [everySeam]: Register tests each seam
+// for nil, so a seam the helper does not set registers nothing, and every name
+// behind it disappears from `registeredKinds` without either direction saying
+// a word. That is not hypothetical — it is how the chat family arrived, gated
+// on three seams this helper did not set, and it was caught only because six
+// rooms happened to ask for those names. An operator-only family, or one read
+// over REST from the docs, would have gone in silently and this sweep would
+// have reported a pass over a surface it could not see.
+//
+// So the gating conditions are READ FROM Register ITSELF rather than restated
+// here, on [declaration]'s reasoning: a list of seams kept by hand beside the
+// one that matters is the second copy that drifts.
+func TestEverySeamThatGatesAQuestionIsInTheSweep(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile("answers.go")
+	if err != nil {
+		t.Fatalf("Register's own source could not be read, so this gate "+
+			"certifies nothing: %v", err)
+	}
+	gates := regexp.MustCompile(`s\.([A-Z][A-Za-z0-9]*) != nil`).
+		FindAllStringSubmatch(registerBody(t, string(source)), -1)
+	if len(gates) == 0 {
+		t.Fatal("Register gates nothing on a seam at all, which it has always " +
+			"done — so this gate certifies nothing")
+	}
+	sweep := reflect.ValueOf(everySeam(t))
+	seen := map[string]bool{}
+	for _, gate := range gates {
+		name := gate[1]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		field := sweep.FieldByName(name)
+		if !field.IsValid() {
+			t.Errorf("Register gates on Sources.%s and no such field exists — "+
+				"this gate is reading a Register it does not understand", name)
+			continue
+		}
+		if field.IsNil() {
+			t.Errorf("Register gates every name behind Sources.%s on it being "+
+				"non-nil and everySeam leaves it nil, so those names are absent "+
+				"from this sweep and BOTH directions of it go quiet about them",
+				name)
+		}
+	}
+}
+
+// registerBody is Register's own body, which is where a gate on a seam lives.
+//
+// BOUNDED AT THE NEXT TOP-LEVEL DECLARATION rather than read to the end of the
+// file, because the answers below it test their seams for a different reason:
+// a nil `Counterparties` is an empty list rather than an absent question, and
+// reading those as gates would demand seams this sweep has no use for.
+func registerBody(t *testing.T, source string) string {
+	t.Helper()
+	const decl = "\nfunc Register(r *Registry, s Sources) {"
+	from := strings.Index(source, decl)
+	if from < 0 {
+		t.Fatal("Register's declaration was not found, so this gate certifies " +
+			"nothing — it has been renamed or resharped")
+	}
+	body := source[from+len(decl):]
+	if end := strings.Index(body, "\nfunc "); end >= 0 {
+		return body[:end]
+	}
+	return body
 }
 
 // AND EVERY WAKE REASON HAS ENGLISH ON THE OTHER SIDE.

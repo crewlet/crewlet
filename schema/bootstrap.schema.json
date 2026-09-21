@@ -282,6 +282,12 @@
     "Stream": {
       "additionalProperties": false,
       "properties": {
+        "chat_log_max_bytes": {
+          "description": "Byte ceiling on the chat log; unset asks for 8 GiB, capped by the same quarter of the stream volume's free space the mutation log derives from.",
+          "maximum": 274877906944,
+          "minimum": 1073741824,
+          "type": "integer"
+        },
         "cluster": {
           "$ref": "#/$defs/StreamCluster"
         },

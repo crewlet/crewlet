@@ -21,7 +21,11 @@ Organization
     ├── Name string; Type UnitType; Purpose, Lead string; Goals []string
     ├── KnowledgeRefs []string
     ├── Channel string                     (team channel on the company's chat
-    │                                       surface, inherited by children)
+    │                                       surface, inherited by children. An
+    │                                       ADDRESS: lowercase letters, digits and
+    │                                       `-`, up to 64 — `backend`, never
+    │                                       `#backend` or `C_BACKEND`. On native
+    │                                       chat the engine opens this room)
     ├── Project string                     (tracker identity: lead-fallback routing
     │                                       and the project the team files under.
     │                                       VENDOR-NEUTRAL: it names a native project

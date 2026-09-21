@@ -109,6 +109,16 @@ export class LiveSocket {
   private token = "";
   /** Whether the shell has already been asked to collect a token. */
   private askedForToken = false;
+  /**
+   * Which room a tab has open, and whether somebody is typing in it.
+   *
+   * HELD RATHER THAN SENT AND FORGOTTEN, because it is state the SERVER keeps
+   * per socket: a reconnect gets a new socket that knows nothing, and a
+   * reader sitting in a room through a thirty-second backoff would come back
+   * invisible to everybody else in it and see nobody.
+   */
+  private focused = "";
+  private typing = false;
   private authRejectedHandler: (() => void) | null = null;
 
   constructor(store: Store) {
@@ -185,6 +195,36 @@ export class LiveSocket {
     });
   }
 
+  /**
+   * Say which room this tab is looking at, and whether it is being typed in.
+   *
+   * THE ONE CLIENT-TO-SERVER FRAME THAT IS NOT A QUERY: it asks nothing and
+   * is answered by nothing. What it buys is that the fleet-wide presence
+   * probe is bounded to the rooms somebody actually has open — without it a
+   * node would have to ask its peers about every room in the company on every
+   * tick.
+   *
+   * It is not delivered while the socket is down and is not queued: presence
+   * is about now, and a probe from ten seconds ago is worse than none. The
+   * reconnect re-sends what this tab is looking at, which is the state above.
+   */
+  focus(channelID: string, typing: boolean): void {
+    this.focused = channelID;
+    this.typing = typing;
+    this.sendFocus();
+  }
+
+  private sendFocus(): void {
+    if (!this.connected || !this.sock) return;
+    try {
+      this.sock.send(
+        JSON.stringify({ kind: "chat_focus", channel_id: this.focused, typing: this.typing }),
+      );
+    } catch {
+      // The close handler owns recovery, and `onopen` re-sends this.
+    }
+  }
+
   private sendQuery(entry: Inflight): void {
     if (!this.connected || !this.sock) return; // `onopen` flushes it
     const frame: Record<string, unknown> = {
@@ -253,6 +293,11 @@ export class LiveSocket {
       // catch-up fetch of its own — but any query that was waiting for this
       // socket, or lost with the last one, does need sending now.
       this.flushQueries();
+      // AND WHERE THIS TAB IS LOOKING, which the new socket does not know: the
+      // server keeps that per connection, so a reader who sat in a room
+      // through a reconnect would otherwise be invisible to everybody else in
+      // it until they clicked something.
+      if (this.focused) this.sendFocus();
     };
     sock.onmessage = (e: MessageEvent) => this.onMessage(String(e.data));
     sock.onclose = (e: CloseEvent) => {
@@ -402,6 +447,32 @@ export class LiveSocket {
         break;
       case "health":
         this.store.applyHealth(msg.data as never);
+        break;
+      // THE CHAT ARM. Six kinds, ONE store method: the frame carries the
+      // record's own `op` (`post`, `edit`, `react`, …) and the kind is a
+      // routing label the server derived from it, so passing the kind as well
+      // would be a second vocabulary for one fact — and the two would
+      // disagree on exactly the op somebody adds next.
+      //
+      // Every one of these was already filtered by the engine against whether
+      // this viewer may read the room, failing closed, so nothing below this
+      // line decides who may see what.
+      case "chat_posted":
+      case "chat_edited":
+      case "chat_deleted":
+      case "chat_reacted":
+      case "chat_room_changed":
+      case "chat_membership_changed":
+        this.store.applyChatChange(msg.data as never);
+        break;
+      case "chat_presence":
+        this.store.applyChatPresence(msg.data as never);
+        break;
+      // NOT ABOUT A ROOM AT ALL: where one person has read to, sent to that
+      // person's own sockets and nobody else's, so a badge cleared in one
+      // window clears in the other.
+      case "chat_cursor_moved":
+        this.store.applyChatRead(msg.data as never);
         break;
       case "result":
         this.settle(msg.id, null, msg.data);

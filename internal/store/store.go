@@ -129,20 +129,41 @@ const driverName = "turso"
 
 // Defaults for Options. Both are anchored to the dashboard, which is the only
 // component that reads this store concurrently with the engine writing it.
+//
+// The read pool is EXPORTED because the anchor runs both ways and nothing
+// else can check it: the socket's own suite asserts this equals
+// [stream.MaxInFlightQueries], which is the only thing standing between the
+// two numbers and a silent drift into `pool_starved` on every first paint.
 const (
-	// The dashboard's query channel admits 4 concurrent queries, so 4
-	// connections is what keeps a read burst off
-	// the write path. More would not help: under WAL, readers never block
-	// the writer, but writers serialise on the file lock regardless, so
-	// connections past the read concurrency only deepen a queue.
+	// The dashboard's query channel admits 8 concurrent queries
+	// ([stream.MaxInFlightQueries], sized to the chat screen's opening
+	// burst), so 8 connections is what keeps a read burst off the write
+	// path. More would not help: under WAL, readers never block the
+	// writer, but writers serialise on the file lock regardless, so
+	// connections past the read concurrency only deepen a queue. Fewer is
+	// worse than it looks: a query that queues for a connection has not
+	// started, which is what `pool_starved` names and what a person waiting
+	// on a first paint sees. THE TWO NUMBERS MOVE TOGETHER — they cannot be
+	// one constant, because this package is a leaf and importing the socket
+	// would be a cycle.
 	//
 	// READERS ONLY. Every pinned writer ([DB.Writer]) holds a connection of
 	// its own for its lifetime and counts against the same bound, so the
 	// pool is this plus [Options.PinnedWriters] rather than a constant —
 	// see maxOpenConns. A constant here was outgrown the moment a second
-	// long-lived writer existed: its pin came out of the readers' four and
+	// long-lived writer existed: its pin came out of the readers' eight and
 	// nothing said so.
-	defaultReaderConns = 4
+	//
+	// WHAT IT COSTS IN MEMORY, because raising it is not free: each
+	// connection carries its own 32 MiB page cache (the session list
+	// below), so the CEILING across both estates is this number times
+	// 32 MiB times two. It is a ceiling rather than an allocation, and a
+	// loose one: that cache is sized for B-TREE INTERIOR PAGES, which every
+	// connection reading the same table caches the same copies of, so eight
+	// readers hold nowhere near twice what four held. An operator who needs
+	// the bound somewhere else sets `store.max_open_conns`, which wins
+	// outright.
+	DefaultReaderConns = 8
 
 	// Half the dashboard's 10 s query timeout. A busy wait longer than the
 	// timeout above it turns lock contention into a request that fails with
@@ -169,7 +190,7 @@ type Options struct {
 	WrapDriver func(driver.Driver) driver.Driver
 
 	// MaxOpenConns bounds the connection pool; 0 means the derived bound —
-	// defaultReaderConns plus PinnedWriters. Setting it wins outright, and
+	// DefaultReaderConns plus PinnedWriters. Setting it wins outright, and
 	// a caller that sets it owns the arithmetic PinnedWriters does for
 	// everybody else.
 	MaxOpenConns int
@@ -179,7 +200,7 @@ type Options struct {
 	// knows the number rather than fixed here.
 	//
 	// A pinned connection counts against MaxOpenConns like any other, so a
-	// handle with N pins and a fixed pool of four leaves 4−N for every
+	// handle with N pins and a fixed pool of eight leaves 8−N for every
 	// reader — the dashboard, the probes, the coverage checks — with
 	// nothing naming the loss. The engine registers the writers, so the
 	// engine passes the count; the store owns the arithmetic because the
@@ -225,7 +246,7 @@ type Options struct {
 // would leave a writer silently holding a reader's connection.
 func (o Options) forEstate(estate Estate) Options {
 	if o.MaxOpenConns <= 0 {
-		o.MaxOpenConns = defaultReaderConns
+		o.MaxOpenConns = DefaultReaderConns
 		if estate == EstateReplicated {
 			o.MaxOpenConns += o.PinnedWriters
 		}
@@ -239,7 +260,7 @@ func (o Options) forEstate(estate Estate) Options {
 // made Pending a different database connection from the engine's.
 func (o Options) poolSize() int {
 	if o.MaxOpenConns <= 0 {
-		return defaultReaderConns
+		return DefaultReaderConns
 	}
 	return o.MaxOpenConns
 }

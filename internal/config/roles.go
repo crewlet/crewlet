@@ -654,7 +654,13 @@ type Unit struct {
 	// app this build refuses, and put "Team Slack channel" into the prompt
 	// of every agent in a company that talks on Mattermost. A unit's
 	// channel is a fact about the unit, not about who hosts it.
-	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Unit channel on the company's chat surface; inherited by child units."`
+	//
+	// IT IS AN ADDRESS, which is what the grammar is for — see
+	// [unitChannel]. THE PATTERN IS ON THE FIELD as well as in the
+	// validator, for the reason [Unit.ID] gives: the generator emits it
+	// into the published schema, and a schema accepting channels the engine
+	// refuses is exactly the drift the schema-diff test cannot see.
+	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]{0,63}$" desc:"Unit channel on the company's chat surface, e.g. engineering; inherited by child units. Lowercase letters, digits and -."`
 
 	// Knowledge is free-text knowledge references for this unit. NOT a
 	// read scope — org-wide read scope is the knowledge block.
@@ -712,6 +718,22 @@ func (u *Unit) validate(path Path) error {
 				"starting with a letter, up to 64 characters. It is chosen once "+
 				"and read by nobody, so it can be short and dull", id)
 	}
+	// THE RAW VALUE, deliberately unlike the id above: that one is trimmed
+	// here and trimmed again by [Unit.Unit], so a padded id normalises
+	// end to end, while a channel is copied VERBATIM into the organization
+	// and from there into a prompt and a room name. Trimming it here would
+	// accept `" ops"` and leave a room named with a leading space — and it
+	// would also make the published schema, which carries this same pattern
+	// and cannot trim anything, stricter than the engine. That is the one
+	// direction the schema must never take.
+	if u.Channel != "" && !unitChannel.MatchString(u.Channel) {
+		p.add(at(path, "channel"), ErrShape,
+			"%q is not a channel name: lowercase letters, digits and `-`, "+
+				"starting with a letter or a digit, up to 64 characters, and no "+
+				"surrounding whitespace. Write the name rather than an id or a "+
+				"rendering of one — `engineering`, not `#engineering` and not "+
+				"`C_ENG`", u.Channel)
+	}
 	for i := range u.Roles {
 		p.wrap(u.Roles[i].validate(idx(at(path, "roles"), i)))
 	}
@@ -728,6 +750,34 @@ func (u *Unit) validate(path Path) error {
 // is the intersection of what every one of those carries safely rather than
 // what a name may contain.
 var unitID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+
+// unitChannel is what a unit's channel may look like.
+//
+// # A channel is an ADDRESS now, and it had no rule at all
+//
+// The field shipped with no validation of any kind and exactly one consumer —
+// a line in the prompt — so anything an author typed was passed through to a
+// model as prose: `#eng`, `C_BACKEND`, `Engineering (private)`. With
+// `chat.backend: native` the engine MINTS the room this names, routes a
+// unit's wakes to it, and hands the name to a model as something to type back
+// into a tool call, which makes every one of those three a different failure:
+// a name nobody can address, a rendering of an id the native backend has no
+// concept of, and a name no vendor would accept either.
+//
+// The set is the INTERSECTION of the three surfaces rather than the native
+// one's own: Mattermost's channel URL names are lowercase alphanumerics with
+// `-` and `_` up to 64 characters, Slack's are lowercase, hyphenated and up to
+// 80, and the engine's own address is a subject token, which may carry
+// neither a space nor a `.` nor a `*`. So one grammar serves all three, a
+// company can switch backends without rewriting its org chart, and the
+// character an author is most likely to add — the `#` that is a rendering
+// rather than a name — is refused where it is written rather than printed
+// into a prompt.
+//
+// 64 characters because that is the shortest of the three limits, and the one
+// that truncates rather than refusing is the one that would give two units the
+// same room.
+var unitChannel = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
 // Unit transforms the authored unit into the runtime one, recursively.
 //

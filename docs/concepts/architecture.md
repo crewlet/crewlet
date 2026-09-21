@@ -501,7 +501,7 @@ flowchart LR
     Q{"Who has to agree<br/>on this fact?"}
     LOCAL["<b>This node alone</b> — the node store<br/><i>one file, one process, exclusively owned</i>"]
     DERIVED["<b>Every node, identically</b> — the replicated store<br/><i>a second file, written by a state log's applier</i>"]
-    FLEET["<b>The whole company</b> — coordination KV<br/><i>eighteen buckets on the stream's own connection</i>"]
+    FLEET["<b>The whole company</b> — coordination KV<br/><i>nineteen buckets on the stream's own connection</i>"]
     STREAM["<b>In flight, or keyed</b> — the streams<br/><i>6 message streams + one ordered log per domain</i>"]
 
     Q -->|"nobody — it is this node's<br/>own record of what it did"| LOCAL
@@ -531,6 +531,7 @@ What each of the four holds, in full:
 | **`conversation_sessions`** | What this seat already said in that thread |
 | `company_config` · `scheduled_runs` · `secret_values` | Revisions, cron bookkeeping, and the secret store's bootstrap half |
 | `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
+| `chat_docs` · `chat_postings` · `chat_index_state` · `chat_index_pruned` | The **keyword** index over the company's own chat, its durable watermark and its corpus statistics. Its own index rather than a corner of `kb_docs`, because a message is a remark about work rather than a statement of it — the same argument that keeps a work item's comment thread out of the knowledge index — and because chat has no semantic half at all: a year of it needs several times the whole supported vector corpus |
 | `statelog_adoption` | This node's own record of any peer snapshot it has adopted, which is what tells an operation minted before the join from one this node's ledger can answer for |
 | `chat_thread_follows` | EMPTY, and kept for one reason: rows written before the follows moved to coordination are carried onto the fleet at the next start, and a migration cannot do that — a `.sql` file has no KV client, and it runs before any Go code on every boot. Nothing reads or writes it at runtime. See node migration 0028 |
 | `stream_identity` | What this node last saw of each stream's identity, which is how it notices one that was recreated underneath it. A per-node **observation** rather than shared state: two nodes can legitimately have seen different generations, so one agreed value would destroy the comparison it exists to make |
@@ -555,6 +556,7 @@ exceptions are `adr/0002`, held by
 |---|---|
 | **`tracker_tasks`** · `tracker_comments` · `tracker_history` · … | The company's work — the tracker's whole state, derived from `CREWLET_TRACKER_LOG` |
 | **`pages_heads`** · `pages_revisions` · `pages_titles` · … | The company's knowledge base, derived from `CREWLET_PAGES_LOG`: a page's current body, the immutable revisions behind it, and the title claim that is what makes a name an address |
+| **`chat_channels`** · `chat_messages` · `chat_members` · `chat_channel_names` · … | The company's own chat, derived from `CREWLET_CHAT_LOG`: the rooms, the transcript, who is in each room, and the name claim that makes a channel name an address. `chat_messages` is the largest table this engine writes, which is why it is the first with a content horizon — `chat.native.message_retention_days`, swept by a **record** carrying a cutoff instant rather than by each node reading its own clock |
 | **`kb_vectors`** · `kb_vectors_bin` | Page and task embeddings and their 1-bit codes, derived from `CREWLET_TRACKER_VECTORS`. The fleet pays the provider bill **once** and every node holds the answer, which is precisely why these are not in the node's own file |
 | `statelog_cursor` · each domain's operation ledger and deferred records | Where this node is on each log, which operations it has already applied, and any record a newer build wrote that this one cannot decode |
 
@@ -570,6 +572,7 @@ exceptions are `adr/0002`, held by
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
 | **`crewlet_budgets`** · `crewlet_rate` · `crewlet_cooldowns` | The token counter, the notification valve, benched credentials |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
+| `crewlet_follows` · `crewlet_chat_reads` | Who follows which vendor chat thread, and — per person, per company — how far they have read in each room, what they have muted and whether they are in do-not-disturb. **Not on the chat log**, deliberately: a cursor is a fact about one reader's attention that nobody replays and every node would otherwise apply, and at a realistic flush rate it is the highest-volume thing the company writes |
 | `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |
 | `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each owner's newest backup covers, which is the only input the backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
 
@@ -585,6 +588,8 @@ exceptions are `adr/0002`, held by
 | **`CREWLET_DLQ`** | `dlq.>` — *deliberately outside* `crewlet.*` |
 | **`CREWLET_TRACKER_LOG`** | `crewlet.tracker.log.>` — **the write-ahead log the replicated estate's tracker tables are derived from.** One subject per object, which is what makes the subject the unit two writers contend on; retention is bounded by durability rather than by age. Two of its subjects carry no object at all: **`…log.barrier`**, which every `linearizable` read appends one record to and then waits for — the acknowledgement is what proves a quorum agrees on a position, where a field read can be served by an isolated former leader; and **`…log.rankorder.<PROJECT>`**, which is where a board drag is arbitrated, so two people reordering one project's board contend and two reordering different ones never do |
 | **`CREWLET_TRACKER_VECTORS`** | `crewlet.tracker.vectors.>` — the same shape for embeddings, **compacted**: one message retained per subject, because the current embedding of a source is the only one anybody wants and a history of superseded vectors is a bill nobody asked for |
+| **`CREWLET_CHAT_LOG`** | `crewlet.chat.log.>`, **the ordered log the replicated estate's chat is derived from**, and the state log's fourth domain. TWO DISCIPLINES ON ONE STREAM, which is what makes it unlike the other three: channel state (topic, purpose, membership, archive, retention) arbitrates on the room's own subject, while a MESSAGE is **additive** on that same subject — two people talking in one room are not racing for anything, and an expectation there would serialise the busiest subject in the company behind itself and refuse a message somebody typed. See `adr/0018`. Its retention is bounded by what every node has applied, like the other logs; what bounds the TRANSCRIPT is the content horizon on the rows |
+| **`crewlet.chat.presence`** | One fleet-wide subject, deliberately **outside** the chat log's wildcard: who is looking at which room right now is in-flight state with no durable record and no applier, so putting it inside the log's space would make every keystroke of it a record every node applies for ever |
 | **`CREWLET_PAGES_LOG`** | `crewlet.pages.log.>`, **the ordered log the replicated estate's knowledge base is derived from**, and the state log's third domain. The same shape as the tracker's: one subject per object, so two writers saving one page contend at the broker and two saving different pages never do. Retention is bounded by what every node has already applied rather than by age, because a page is a fact for the life of the deployment and removing one is a decision somebody takes rather than a horizon that reaps it while a person is still reading it |
 
 **Mailboxes and event history are different kinds of stream.** The two
@@ -615,8 +620,8 @@ They were moved, and the rule is now the one above. See
 **Retention here is a bucket's age, never a per-write TTL.** On the embedded
 broker a per-key TTL is create-only — an update clears it, leaving the key
 immortal — so a horizon has to be fixed when its bucket is created, and that is
-why there are eighteen of them rather than one with prefixes: three in the lease
-store, fifteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
+why there are nineteen of them rather than one with prefixes: three in the lease
+store, sixteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
 lease TTL* — a renew rewrites the key and restarts the clock, so a node that
 stops renewing stops holding and nothing has to notice it died. `crewlet_epochs`
 sits beside it with no age at all, because a fence that restarts is not a fence.

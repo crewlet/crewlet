@@ -114,7 +114,7 @@ func (x *Indexer) Search(ctx context.Context, q LexicalQuery) ([]LexicalHit, err
 		}
 		idf := textindex.IDF(corpus.Docs, docs)
 		for _, p := range postings {
-			scores[p.DocID] += textindex.Score(idf, p, corpus)
+			scores[p.DocID] += textindex.ProseProfile.Score(idf, p, corpus)
 		}
 	}
 	if len(scores) == 0 {

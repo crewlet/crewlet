@@ -37,6 +37,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
@@ -181,6 +182,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runRetention(rest, stdout, stderr)
 	case "work":
 		return runWork(rest, stdout, stderr)
+	case "chat":
+		return runChat(rest, stdout, stderr)
 	case "llm":
 		return runLLM(rest, stdout, stderr)
 	case "search":
@@ -210,6 +213,9 @@ Usage:
   crewlet work <cmd>          The gestures on work items that belong to a person:
                               purge, which destroys a task and every row it
                               produced and which nothing undoes
+  crewlet chat <cmd>          The company's own chat, as an operator: list and
+                              read rooms, say something, search, prune a room
+                              now, and import a Slack or Mattermost export
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
@@ -1090,8 +1096,37 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
 		"company", companyName(company))
-	e, err := engine.New(ctx, engine.Options{
+
+	// THE CHAT HUB IS BUILT BEFORE THE ENGINE, and it is the one seam in
+	// this function that has to be.
+	//
+	// It is a single object with two consumers that come up at different
+	// times: the chat applier announces every committed record to it, and
+	// the API serves those announcements onto open sockets. The applier is
+	// constructed inside engine.New, so a hub built after the engine could
+	// never be the thing the applier tells — which is why
+	// [api.NewChatLive] takes every seam as a FUNCTION. None of them has
+	// to exist yet; `e` below is captured by reference and is set before
+	// any frame is served, because frames are served from the hub's own
+	// loop and that loop starts with the API.
+	//
+	// ONE HUB, not one per consumer. Two would mean the applier announces
+	// to an object no socket is attached to, which is indistinguishable
+	// from a company where nobody is talking.
+	var e *engine.Engine
+	chatLive := api.NewChatLive(api.ChatLiveOptions{
+		Company: func() *config.Company { return companyConfig(e) },
+		Rooms:   func() stream.ChatRooms { return nativeChatRooms(e) },
+		Peers:   func() stream.ChatPeers { return nativeChatPeers(e) },
+		NodeID:  boot.Node.ID,
+	})
+
+	e, err = engine.New(ctx, engine.Options{
 		Bootstrap: boot, Company: company, Metrics: recorder, Mode: nodeMode,
+		// The applier's observer. Nil here is what a company off native
+		// chat gets; the hub itself is harmless on such a node, since
+		// nothing is ever announced to it.
+		ChatLive: chatLive,
 	})
 	if err != nil {
 		return err
@@ -1196,7 +1231,8 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// /ready report honestly that it holds no seats yet, and a webhook that
 	// arrives in the window is retained rather than dropped because the
 	// mailboxes are created before any claiming (see Node.Start).
-	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, log)
+	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface,
+		chatLive, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
@@ -1373,9 +1409,14 @@ func companyConfig(e *engine.Engine) *config.Company {
 func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets() }
 
 // serveAPI binds the HTTP surface, or reports that this node serves none.
+// chatLive is the hub runEngine built BEFORE the engine, passed down rather
+// than made here: the same object is already the chat applier's observer, and
+// a second one built at this point would be a hub the applier never tells.
+// See [api.NewChatLive].
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
-	configSurface *configapi.Service, log *slog.Logger,
+	configSurface *configapi.Service, chatLive *stream.ChatHub,
+	log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
 		// A real posture: a worker-only node runs no dashboard, no REST
@@ -1649,6 +1690,18 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// backend.
 			Work:  nativeWork(e),
 			Pages: nativePages(e),
+			// The native chat read surface: the transcript, the rail,
+			// the thread, the mention feed and the ranking over them,
+			// plus a person's own read cursors. Nil on a company that
+			// runs no native chat, which leaves the six chat queries
+			// unregistered rather than answering an empty room as
+			// though it had been read.
+			Chat:       nativeChatReader(e),
+			ChatSearch: nativeChatSearch(e),
+			// THE FLEET'S, not this node's. A cursor is one person's
+			// attention and it follows them across nodes, so a per-node
+			// answer would reset their unread counts on every failover.
+			ChatReads: e.Backends().Fleet,
 			// RANKED SEARCH, gated on its own index rather than on
 			// the tracker: the rows are the fleet's and the lexical
 			// index is this node's own, so a node still building one
@@ -1700,10 +1753,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
-		Backup:  backups,
-		Config:  configSurface,
-		Secrets: secretSurface,
-		Setup:   setupSurface,
+		// THE CHAT WRITE SIDE AND ITS LIVE ARM. The hub is the same
+		// object the engine above announces to — built once, before the
+		// engine, so that the applier and the socket are two ends of one
+		// thing rather than two hubs that never meet.
+		Chat:     nativeChatWriter(e),
+		Cursors:  e.Backends().Fleet,
+		ChatLive: chatLive,
+		Backup:   backups,
+		Config:   configSurface,
+		Secrets:  secretSurface,
+		Setup:    setupSurface,
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through the FLEET'S coordination store, which is what
 		// makes a delivery that lands on any node wake the seat's owner
@@ -2582,21 +2642,53 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			Await:    e.WaitCommitted,
 		}
 	}
+	// THE CHART, RESOLVED PER CALL. An operator has no turn, so every
+	// seam on this surface that needs the org reads it from here — and a
+	// config apply replaces the epoch, so a captured chart would scope a
+	// search, and resolve a chat token's seat, against a company that has
+	// moved. ONE closure rather than one per consumer: two would be two
+	// answers to which chart is current.
+	chart := func() *org.Organization {
+		c := e.Company()
+		if c == nil {
+			return nil
+		}
+		return c.Org
+	}
+	// THE COMPANY'S OWN ROOMS. Offered on the same terms as the wiki
+	// above — both halves present or nothing — and without it the six
+	// operator chat tools were built and catalogued against a zero
+	// [builtin.ChatDeps], which gates every one of them off.
+	if reader, writer := e.Chat(), e.ChatStore(); reader != nil && writer != nil {
+		opts.Chat = builtin.ChatDeps{
+			Reader: reader, Writer: writer,
+			// THE TOKEN'S OWN SEAT, never the token's name: a room
+			// where a credential can appear as a speaker is one
+			// where "who said this" has two vocabularies. See
+			// [opsmcp.ChatActor], which also refuses an unbound
+			// token its READS, because a caller the engine cannot
+			// resolve to a seat has no membership to serve.
+			Actor:    opsmcp.ChatActor(chart),
+			Mentions: engine.LiveMentions(e),
+			// THE SEAT SURFACE'S OWN SEARCHER. It resolves the
+			// visible rooms from the viewer it is handed, so the
+			// operator's bound seat is scoped exactly as that
+			// person's own seat is.
+			Search: engine.LiveChatSearch(e),
+			Await:  e.WaitCommitted,
+			// NO ReadState, deliberately: a read cursor is written
+			// when somebody OPENS a room, and an assistant calling
+			// a tool is not that. Nil means the listing carries no
+			// unread counts at all, which is the honest answer —
+			// see [builtin.ChatDeps.ReadState].
+		}
+	}
 	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
 	// unlike the ten write tools, ranked search over the company's own
 	// wiki is exactly as useful to an operator's assistant on Confluence.
 	if e.Knowledge() != nil {
 		opts.Knowledge = operatorKnowledge{engine: e}
-		// AND THE CHART BESIDE IT. An operator has no turn, so the org
-		// the search is scoped against comes from here; resolved per
-		// call, because a config apply replaces it.
-		opts.Org = func() *org.Organization {
-			c := e.Company()
-			if c == nil {
-				return nil
-			}
-			return c.Org
-		}
+		opts.Org = chart
 	}
 	// THE LEAD RELATION, which the tracker deliberately does not derive:
 	// it holds no org chart, and one it derived would be a second opinion
@@ -2705,6 +2797,64 @@ func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context
 func nativeWorkSearch(e *engine.Engine) queries.WorkSearcher {
 	if s := e.WorkSearch(); s != nil {
 		return s
+	}
+	return nil
+}
+
+// The native chat seams, each nil on a company that runs no native chat.
+//
+// SIX ACCESSORS FOR ONE FEATURE, and they are separate because they are
+// separate authorities: the store writes, the reader reads, the index ranks
+// and the fleet holds a person's own cursors. Handing the API one object that
+// did all four would be inventing a facade nothing else in this process has.
+//
+// EVERY ONE OF THEM RETURNS TYPED NIL DELIBERATELY. A nil chat seam is not a
+// wiring mistake here, unlike [api.Options]'s required set: a company on
+// `chat.backend: vendor` or `none` genuinely has none, and the API leaves the
+// routes and queries unregistered rather than serving a surface with nothing
+// behind it. What makes that honest rather than silent is that all six move
+// TOGETHER — they are filled from one engine, so a native-chat company gets
+// every one and a vendor company gets none, and there is no arrangement where
+// the screen loads and the writes 404.
+//
+// The `if x != nil` dance is not ceremony: these return concrete pointer
+// types, and assigning a nil *chat.Store straight into an interface field
+// yields a NON-nil interface holding a nil pointer, which every `== nil` gate
+// downstream reads as present and then calls through.
+func nativeChatRooms(e *engine.Engine) stream.ChatRooms {
+	if e == nil {
+		return nil
+	}
+	if r := e.Chat(); r != nil {
+		return r
+	}
+	return nil
+}
+
+func nativeChatPeers(e *engine.Engine) stream.ChatPeers {
+	if e == nil || e.Backends() == nil || e.Backends().Queue == nil {
+		return nil
+	}
+	return e.Backends().Queue
+}
+
+func nativeChatReader(e *engine.Engine) queries.ChatReader {
+	if r := e.Chat(); r != nil {
+		return r
+	}
+	return nil
+}
+
+func nativeChatWriter(e *engine.Engine) api.ChatWriter {
+	if w := e.ChatStore(); w != nil {
+		return w
+	}
+	return nil
+}
+
+func nativeChatSearch(e *engine.Engine) queries.ChatSearcher {
+	if x := e.ChatIndex(); x != nil {
+		return x
 	}
 	return nil
 }

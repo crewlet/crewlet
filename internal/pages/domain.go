@@ -160,6 +160,14 @@ func (Domain) ScopeIndex() string { return "pages_log_deferred_scope" }
 // OpsTable is contract 3's first layer: what this node has already applied.
 func (Domain) OpsTable() string { return "pages_ops" }
 
+// OpsRetention is how long a row in `pages_ops` is kept.
+//
+// THE FRAMEWORK'S DEFAULT. A wiki commits when somebody writes a page, which
+// is well under the census rate the default is sized for — so this horizon is
+// bounded by the client that retries rather than by the table it costs, and
+// that is exactly the argument [statelog.OpsRetention] makes.
+func (Domain) OpsRetention() time.Duration { return statelog.OpsRetention }
+
 // ReadinessInput reports that this domain's health gates seat admission.
 //
 // TRUE, for the tracker's reason: a strict replay's stall is a FAULT rather

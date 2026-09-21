@@ -396,8 +396,13 @@ func (r *Runner) Anchor(ctx context.Context, subject string) (Position, error) {
 	return p, err
 }
 
-// OpsRetention is how long a node keeps its record of which operations it
-// applied.
+// OpsRetention is the DEFAULT horizon a domain's operation ledger is kept
+// over, and every domain in this build answers with it.
+//
+// It is a default rather than the rule because the table's size is a function
+// of the domain's own commit rate: see [Domain.OpsRetention], which is what a
+// domain committing an order of magnitude more than the census rate lowers.
+// The argument below is the SIZING argument, and it is about the census.
 //
 // THIRTY DAYS, and it is derived from the client that actually retries rather
 // than from the machine one. The longest MACHINE retry is sixteen rounds
@@ -413,6 +418,14 @@ func (r *Runner) Anchor(ctx context.Context, subject string) (Position, error) {
 // this table had before the sweep existed, on a schema whose own migration
 // says it is swept and ships the index for it.
 const OpsRetention = 30 * 24 * time.Hour
+
+// OpsRetention is this runner's domain's own horizon, which is what the
+// maintenance sweep builds its job's cutoff from.
+//
+// READ OFF THE DOMAIN rather than handed to the sweep as one number, because
+// one number is what made every domain's ledger the same size regardless of
+// how fast it commits.
+func (r *Runner) OpsRetention() time.Duration { return r.domain.OpsRetention() }
 
 // PurgeOps deletes this node's operation rows applied before cutoff.
 //

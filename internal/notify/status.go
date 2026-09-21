@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 )
@@ -64,13 +63,15 @@ const (
 	StatusOff StatusMode = "off"
 
 	// StatusAddressed is the default: exactly the cases where a person is
-	// plausibly waiting on THIS agent — a direct message, a personal
-	// mention, or a thread it already follows.
+	// plausibly waiting on THIS agent — whatever the backend's own
+	// [AddressRule] says, which is a direct message, a personal mention,
+	// or a thread the seat is in for one of those reasons.
 	//
-	// A broadcast and a passive top-level channel message are excluded
-	// deliberately. Every bot in the channel wakes on those and the triage
-	// prompt tells most of them to stay silent, so lighting up N
-	// indicators is noise rather than signal.
+	// A broadcast, a passive top-level channel message and a thread the
+	// seat merely spoke in are excluded deliberately. Every bot in the
+	// channel wakes on those and the triage prompt tells most of them to
+	// stay silent, so lighting up N indicators is noise rather than
+	// signal.
 	StatusAddressed StatusMode = "addressed"
 
 	// StatusAlways shows it on every chat-triggered turn, which is what a
@@ -86,13 +87,6 @@ func (m StatusMode) Valid() bool {
 	}
 	return false
 }
-
-// DirectChannelTypes are every chat backend's spelling of "this is a private
-// conversation, not a room".
-//
-// A normalised vocabulary each transport maps its own onto, so the decision
-// below never has to know a backend's id conventions.
-var DirectChannelTypes = []string{"im", "mpim", "D", "G"}
 
 // Conversation is the thread a status belongs to.
 type Conversation struct {
@@ -110,46 +104,19 @@ type Conversation struct {
 // the indicator the person is watching stays the one that clears.
 //
 // Raising a status needs a THREAD ANCHOR, and a top-level message has no
-// thread yet — so its own id is the anchor. That is the same value the chat
-// prompt tells the agent to reply under, which is what makes the indicator
-// appear where the reply will land rather than somewhere else in the channel.
+// thread yet — so its own id is the anchor. Through [Anchor], which is the
+// same value the chat prompt tells the agent to reply under: that is what
+// makes the indicator appear where the reply will land rather than somewhere
+// else in the channel.
 func ConversationOf(metadata map[string]string, backend string) (Conversation, bool) {
 	if len(metadata) == 0 || backend == "" || metadata[TransportField] != backend {
 		return Conversation{}, false
 	}
-	channel := metadata["channel"]
-	anchor := metadata["thread_ts"]
-	if anchor == "" {
-		anchor = metadata["ts"]
-	}
+	channel, anchor := metadata[ChannelField], Anchor(metadata)
 	if channel == "" || anchor == "" {
 		return Conversation{}, false
 	}
 	return Conversation{Channel: channel, Thread: anchor}, true
-}
-
-// Addressed reports whether a person is plausibly waiting on THIS agent.
-//
-// dmPrefix is the belt-and-braces fallback for the one backend with a
-// meaningful one, where a channel id beginning with a known letter is always
-// a direct message — so the answer stays right even if metadata arrives
-// without a channel type at all.
-//
-// It is OPT-IN PER BACKEND and must stay empty where channel ids are opaque.
-// A backend whose ids are arbitrary alphanumerics would mark random public
-// channels as direct messages, and raise an indicator on every seat for
-// traffic nobody addressed to any of them.
-func Addressed(metadata map[string]string, dmPrefix string) bool {
-	if slices.Contains(DirectChannelTypes, metadata["channel_type"]) {
-		return true
-	}
-	if dmPrefix != "" && strings.HasPrefix(metadata["channel"], dmPrefix) {
-		return true
-	}
-	if metadata["thread_follow_reason"] == string(FollowMention) {
-		return true
-	}
-	return metadata["thread_following"] != ""
 }
 
 // StatusPoster is the backend call this driver drives, plus what it can
@@ -168,9 +135,15 @@ type StatusPoster interface {
 	// own expiry.
 	StatusRefresh() time.Duration
 
-	// DMChannelPrefix marks a direct message unambiguously on this
-	// backend, or is empty where its ids are opaque. See [Addressed].
-	DMChannelPrefix() string
+	// AddressRule is this backend's answer to "was this message addressed
+	// to this seat?", and it is the SAME VALUE its chat prompt carries —
+	// declared once per backend and read here.
+	//
+	// The indicator says "this agent is working on your message" and the
+	// delivery check says "this agent owes your message an answer". Two
+	// rules would let one of them be right, so there is one; see
+	// [AddressRule].
+	AddressRule() AddressRule
 
 	// SetStatus raises or updates the indicator. It never returns an
 	// error: a failed call reports false and the status expires on the
@@ -315,7 +288,7 @@ func (d *StatusDriver) Shows(metadata map[string]string) bool {
 	case StatusAlways:
 		return true
 	default:
-		return Addressed(metadata, d.poster.DMChannelPrefix())
+		return d.poster.AddressRule().Addressed(metadata)
 	}
 }
 

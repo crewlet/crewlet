@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -292,8 +293,14 @@ func TestTheTypingCadenceComesFromTheServer(t *testing.T) {
 	if tr.SupportsStatusText() {
 		t.Fatal("the transport claims it can render status text")
 	}
-	if tr.DMChannelPrefix() != "" {
-		t.Fatalf("a channel-id prefix is declared: %q", tr.DMChannelPrefix())
+	if got := tr.AddressRule().DMPrefix; got != "" {
+		t.Fatalf("a channel-id prefix is declared: %q", got)
+	}
+	// AND IT IS THE PROMPT'S OWN RULE. Two declarations would raise a
+	// spinner on messages the prompt tells the agent it may ignore.
+	if got := tr.AddressRule(); !reflect.DeepEqual(got, mattermost.Prompt().Address) {
+		t.Fatalf("the transport addresses by %+v, the prompt by %+v",
+			got, mattermost.Prompt().Address)
 	}
 	if tr.StatusBackend() != mattermost.Backend {
 		t.Fatalf("StatusBackend = %q", tr.StatusBackend())

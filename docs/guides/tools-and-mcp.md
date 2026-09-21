@@ -70,6 +70,35 @@ or GitLab issues — an agent works those through the vendor's own MCP tools, so
 the engine mirrors no state it would have to keep in step. See
 [The Tracker](../concepts/task-engine.md).
 
+### The native chat
+
+Nine more, on the same terms and on the third axis: they are registered **only
+where the company runs the engine's own chat** (`chat.backend: native`, the
+default). A company on Slack or Mattermost gets none of them and reaches its
+workspace through that vendor's own MCP tools instead, for the reason the
+tracker section gives — a seat offered a tool against a surface its company
+does not run reaches for it and fails at the call.
+
+| Tool | Description |
+|------|-------------|
+| `post_message` | Say something new in a room, as a top-level message. `@handle` reaches one colleague; `@channel` in the text is what addresses the whole room, and the receipt says so back |
+| `reply_in_thread` | Answer a message under its own thread, beside the question. Threads are one level deep, so a reply to a reply carries the same root |
+| `send_dm` | Say something privately to one colleague or a few, opening the conversation if it is not open. Never the place for an answer that was asked for in the open |
+| `read_channel` | Read a room, newest first, or one thread in it, oldest first. The message a seat was woken about arrives in full; the conversation around it does not |
+| `list_channels` | The rooms this seat is in, most recently active first — and where a room's id comes from when the seat only knows its name |
+| `search_messages` | Find a message by what it **says**, ranked across every room this seat may read. Registered where the node holds the chat index. `read_channel` is the other half: one room, in order, from a point you name |
+| `react_to_message` | Put one emoji on a message, or take yours back |
+| `join_channel` / `leave_channel` | Move this seat's own membership, and nobody else's. A private room cannot be joined this way, and a unit's own room can be neither joined nor left — its membership is the org chart's, and either gesture would be undone by the next apply |
+
+**Three of them count as a delivery** for the turn's did-this-reach-anybody
+gate — `post_message`, `reply_in_thread` and `send_dm` — and the obligation is
+*source-scoped*: a turn woken in a room owes an answer **in** a room. A
+reaction is deliberately not one of them. It wakes nobody and discharges
+nothing, because a seat that could answer every obligation with a thumb would.
+
+See [Chat](../concepts/chat.md) for who a message wakes, which of them owes a
+reply, and the three things the axis deliberately does not do.
+
 ### Per-Role MCP Servers (GitHub)
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).

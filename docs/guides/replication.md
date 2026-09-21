@@ -275,14 +275,14 @@ from the work tracker, are the first retired kind.
 
 A byte ceiling is a **reservation**. The broker grants it in full when it
 creates the stream, before a single record is written, and refuses to create a
-stream whose ceiling it could not honour. So the three logs compete for one
+stream whose ceiling it could not honour. So the four logs compete for one
 number, and a node sizes them together, once, when it creates their streams:
 
 | Step | What happens |
 |---|---|
 | **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
 | **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
-| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), and the vector changelog for 16 GiB capped by the same quarter. |
+| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), the vector changelog for 16 GiB capped by the same quarter, and the chat log for 8 GiB capped by the same quarter. |
 | **The fit** | A ceiling you set is never scaled. The unset ones share what is left of the logs' half in proportion to what each asked for, and none goes below 1 GiB. |
 
 **A stream that already exists keeps its ceiling.** Sizing decides what a
@@ -315,9 +315,9 @@ keep the ceilings they were created with, and no Tier A setting changes them: â€
 
 The remedies are the ones it lists. Give the broker more room: raise
 `stream.store_max_bytes` where you set one, or, where you did not, free space
-on that volume (a first boot needs at least 4 GiB free there, three quarters
-of which is the three 1 GiB floors), which the broker measures again when the
-node next starts. Or, when the refused log's ceiling is
+on that volume (a first boot needs about 5.4 GiB free there, three quarters of
+which is the four 1 GiB floors), which the broker measures again when the node
+next starts. Or, when the refused log's ceiling is
 above the 1 GiB floor, set its field to a smaller ceiling, and the refusal says
 so when that applies.
 

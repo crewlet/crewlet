@@ -86,6 +86,31 @@ type Domain interface {
 	// landed.
 	OpsTable() string
 
+	// OpsRetention is how long this domain's applier keeps a row in that
+	// ledger.
+	//
+	// PER DOMAIN, because the ledger's SIZE is a function of the domain's
+	// own commit rate and of nothing else: one row per applied record, on
+	// every node, for as long as this says. [OpsRetention] is sized for the
+	// tracker's census — a few thousand commits a day — and a domain
+	// committing an order of magnitude more (a chat log's traffic is
+	// messages rather than work items) inherits an order of magnitude more
+	// table for the same thirty days. The horizon is the only knob that
+	// bounds it, so the domain that knows its own rate is what states it.
+	//
+	// THE FLOOR IS THE SWEEP'S OWN TICK — `maintenance.Interval`, fifteen
+	// minutes — and it must EXCEED it rather than merely reach it. The
+	// sweep raises a shorter horizon to the tick and says so only in a log
+	// line, so a domain declaring one would keep rows its own declaration
+	// says are gone: the number stops describing the table and the next
+	// reader sizes the disk from a value nothing honours.
+	//
+	// EMPTY OPS TABLE, REAL ANSWER. A domain with no ledger still states a
+	// horizon rather than zero, because zero is the sweep's "this job
+	// carries its own retention" — the shape the event log has — and a
+	// ledger that later appears must not inherit it.
+	OpsRetention() time.Duration
+
 	// ReadinessInput reports whether this domain's health gates seat
 	// admission. A strictly ordered domain's stall is a fault; a
 	// compacted domain's gap is a coverage number, and shedding a

@@ -517,12 +517,15 @@ func (t *Transport) StatusRefresh() time.Duration {
 	return t.throttle
 }
 
-// DMChannelPrefix implements [notify.StatusPoster]: NONE.
+// AddressRule implements [notify.StatusPoster].
 //
-// Mattermost ids are opaque 26-character alphanumerics, so a prefix test
-// would mark arbitrary public channels as direct messages and raise
-// indicators for traffic nobody addressed to this agent.
-func (t *Transport) DMChannelPrefix() string { return "" }
+// THE PROMPT'S OWN RULE, not a second one: the indicator raises on exactly
+// the messages the prompt tells the agent it owes an answer to. It carries
+// no channel-id prefix, because Mattermost ids are opaque 26-character
+// alphanumerics and a prefix test would mark arbitrary public channels as
+// direct messages — raising an indicator, and demanding a reply, for traffic
+// nobody addressed to this agent.
+func (t *Transport) AddressRule() notify.AddressRule { return AddressRule() }
 
 // SetStatus implements [notify.StatusPoster] by raising the typing indicator.
 //

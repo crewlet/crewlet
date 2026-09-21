@@ -137,8 +137,14 @@ func (controlDomain) Tables() map[string]statelog.TableClass {
 func (controlDomain) DeferredTable() string { return "control_log_deferred" }
 func (controlDomain) ScopeIndex() string    { return "control_deferred_scope" }
 func (controlDomain) OpsTable() string      { return "control_ops" }
-func (controlDomain) ReadinessInput() bool  { return true }
-func (controlDomain) ClaimsIdentity() bool  { return true }
+
+// OpsRetention is the framework's default, which is what a CONTROL must
+// answer: the suite's own case refuses a horizon at or below the sweep's tick,
+// and a control expected to come back clean has to clear it.
+func (controlDomain) OpsRetention() time.Duration { return statelog.OpsRetention }
+
+func (controlDomain) ReadinessInput() bool { return true }
+func (controlDomain) ClaimsIdentity() bool { return true }
 
 // compactedControl is the same domain under the other replay protocol: no
 // arbitration, no operation ledger, and a gap that is a coverage number rather
@@ -213,6 +219,9 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		},
 		"an identity claim over no replicated table": {
 			domain: nothingReplicated{controlDomain{}}, names: "empty set",
+		},
+		"an operation ledger swept before its own horizon": {
+			domain: shallowOps{controlDomain{}}, names: "maintenance tick",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -292,6 +301,13 @@ func (b brokenStream) Stream() statelog.StreamSpec {
 type ledgerless struct{ controlDomain }
 
 func (ledgerless) OpsTable() string { return "" }
+
+// shallowOps keeps its ledger for less than the sweep's own tick, so the
+// sweep silently raises the horizon and the declaration stops describing the
+// table it is about.
+type shallowOps struct{ controlDomain }
+
+func (shallowOps) OpsRetention() time.Duration { return time.Minute }
 
 type nothingReplicated struct{ controlDomain }
 

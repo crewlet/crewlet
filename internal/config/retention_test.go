@@ -201,9 +201,9 @@ func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 		}
 		// NEVER BELOW WHAT TIER A WOULD ACCEPT AS A VALUE, or a node
 		// could derive a ceiling its own validation refuses to be told.
-		if got < config.PagesLogMaxBytesFloor {
+		if got < config.LogMaxBytesFloor {
 			t.Errorf("unset on %d free derives %d, under the floor %d",
-				free, got, config.PagesLogMaxBytesFloor)
+				free, got, config.LogMaxBytesFloor)
 		}
 	}
 	s := config.Stream{PagesLogMaxBytes: 3 * gib}
@@ -247,10 +247,10 @@ func TestTheVectorCeilingIsSizedForAModelChange(t *testing.T) {
 		t.Errorf("the capped ceiling is %d, which is not below the default %d",
 			small, config.DefaultTrackerVectorsMaxBytes)
 	}
-	if small < config.TrackerVectorsMaxBytesFloor {
+	if small < config.LogMaxBytesFloor {
 		t.Errorf("the capped ceiling is %d, under the floor %d — below it a log "+
 			"is a window that refuses appends within a week",
-			small, config.TrackerVectorsMaxBytesFloor)
+			small, config.LogMaxBytesFloor)
 	}
 
 	// AN OPERATOR'S OWN NUMBER IS NOT CAPPED. They named a limit for a
@@ -283,6 +283,10 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"pages at a gibibyte":      {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib }, true, ""},
 		"pages at 256 GiB":         {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256 * gib }, true, ""},
 		"pages past 256 GiB":       {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256*gib + 1 }, false, "pages_log_max_bytes"},
+		"chat below a gibibyte":    {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = gib - 1 }, false, "chat_log_max_bytes"},
+		"chat at a gibibyte":       {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = gib }, true, ""},
+		"chat at 256 GiB":          {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = 256 * gib }, true, ""},
+		"chat past 256 GiB":        {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = 256*gib + 1 }, false, "chat_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()

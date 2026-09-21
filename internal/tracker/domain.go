@@ -139,6 +139,15 @@ func (Domain) ScopeIndex() string { return "tracker_log_deferred_scope" }
 // OpsTable is contract 3's first layer: what this node has already applied.
 func (Domain) OpsTable() string { return "tracker_ops" }
 
+// OpsRetention is how long a row in `tracker_ops` is kept.
+//
+// THE FRAMEWORK'S DEFAULT, and this is the domain the default was SIZED for:
+// [statelog.OpsRetention]'s 29 MB steady figure is the census rate's ~6 500
+// commits a day at this domain's row width. A work item's commits are a
+// person's and an agent's decisions about work, so the rate is bounded by how
+// much work a company does rather than by how much it talks.
+func (Domain) OpsRetention() time.Duration { return statelog.OpsRetention }
+
 // ReadinessInput reports that this domain's health gates seat admission.
 //
 // TRUE, because a strict replay's stall is a FAULT rather than a coverage

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -99,6 +100,27 @@ func Declaration(c Candidate) []error {
 				"ledger is the only thing that can answer for one",
 				name, spec.ArbitratedKinds)
 		}
+	}
+
+	// THE OPERATION LEDGER'S HORIZON MUST OUTLAST THE SWEEP'S OWN TICK,
+	// and strictly. The sweep RAISES a shorter horizon to the tick and
+	// says so in a single log line, so a domain that declares one keeps
+	// rows its own declaration says are already gone — and that number is
+	// the only thing anybody sizes the table from. A horizon sitting
+	// exactly ON the tick is the same failure at its boundary: the sweep
+	// treats it as the floor, and a value at the floor describes what the
+	// sweep will do rather than what the domain asked for.
+	//
+	// CHECKED AGAINST [maintenance.Interval] rather than a copy of it
+	// here, because there is one sweep: a second spelling of its cadence
+	// is a second thing to keep in step, and this case's whole subject is
+	// two numbers drifting apart.
+	if horizon := c.Domain.OpsRetention(); horizon <= maintenance.Interval {
+		add("%s keeps its operation ledger for %v, which the %v maintenance "+
+			"tick does not fit inside — raise Domain.OpsRetention above the "+
+			"sweep's own interval, or the sweep raises it for you and the "+
+			"declared retention stops describing the table",
+			name, horizon, maintenance.Interval)
 	}
 
 	// THE TABLE NAMES THE FRAMEWORK INTERPOLATES ARE PLAIN IDENTIFIERS. A

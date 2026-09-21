@@ -30,7 +30,7 @@ func TestEveryPageReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := pages.NewReader(pages.ReaderOptions{DB: r.db, Log: behind})
+	reader, err := pages.NewReader(pages.ReaderOptions{Log: behind})
 	if err != nil {
 		t.Fatalf("pages reader: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestAPageReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 		t.Fatalf("waiting read authority: %v", err)
 	}
 	reader, err := pages.NewReader(pages.ReaderOptions{
-		DB: r.db, Log: waiting, Committed: r.waiter.Committed,
+		Log: waiting, Committed: r.waiter.Committed,
 	})
 	if err != nil {
 		t.Fatalf("pages reader: %v", err)

@@ -110,7 +110,7 @@ func newRoundTrip(t *testing.T) *roundTrip {
 		t.Fatalf("build the read authority: %v", err)
 	}
 	reader, err := pages.NewReader(pages.ReaderOptions{
-		DB: db, Log: authority, Committed: waiter.Committed,
+		Log: authority, Committed: waiter.Committed,
 	})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)

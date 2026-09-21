@@ -98,7 +98,7 @@
       "type": "division",
       "lead": "vp-engineering",
       "lead_inherited": false,
-      "channel": "#engineering",
+      "channel": "engineering",
       "channel_inherited": false,
       "seats": [
         "vp-engineering"
@@ -110,7 +110,7 @@
       "type": "team",
       "lead": "vp-engineering",
       "lead_inherited": true,
-      "channel": "#engineering",
+      "channel": "engineering",
       "channel_inherited": true,
       "seats": [
         "backend-developer"
@@ -122,7 +122,7 @@
       "type": "team",
       "lead": "vp-engineering",
       "lead_inherited": true,
-      "channel": "#engineering",
+      "channel": "engineering",
       "channel_inherited": true,
       "seats": [
         "storage-developer"
@@ -134,7 +134,7 @@
       "type": "team",
       "lead": "sre",
       "lead_inherited": false,
-      "channel": "#infra",
+      "channel": "infra",
       "channel_inherited": false,
       "seats": [
         "sre"
@@ -146,7 +146,7 @@
       "type": "team",
       "lead": "",
       "lead_inherited": false,
-      "channel": "#engineering",
+      "channel": "engineering",
       "channel_inherited": true,
       "seats": [
         "security-analyst"

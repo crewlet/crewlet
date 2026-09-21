@@ -42,30 +42,32 @@ webhooks and the dashboard, and there is nothing else to operate.
 
 ### The room the stream's volume needs
 
-The engine's own tracker, knowledge base and vector index each keep an ordered
-log on the stream, and each log's byte ceiling is **reserved** on the volume
-holding `stream.store_dir` when its stream is created: the embedded broker
-grants a ceiling in full, up front, or refuses to create the stream at all.
-Its limit is three quarters of that volume's free space.
+The engine's own tracker, knowledge base, vector index and chat each keep an
+ordered log on the stream, and each log's byte ceiling is **reserved** on the
+volume holding `stream.store_dir` when its stream is created: the embedded
+broker grants a ceiling in full, up front, or refuses to create the stream at
+all. Its limit is three quarters of that volume's free space.
 
-The node sizes the three ceilings together to fit half of that limit, and
+The node sizes the four ceilings together to fit half of that limit, and
 never below 1 GiB each, so:
 
-- **A first boot needs at least 4 GiB free on that volume.** Three quarters of
-  4 GiB is the three 1 GiB floors. Below it the node refuses to boot with an
+- **A first boot needs about 5.4 GiB free on that volume.** Three quarters of
+  it is the four 1 GiB floors. Below that the node refuses to boot with an
   error naming the log it could not reserve, the bytes it needed, the bytes
   the broker had left, and the Tier A field that sets the ceiling.
 - **More room buys longer logs, up to a point.** Unset, the mutation log asks
   for a quarter of the free space (4..64 GiB), the knowledge base's log for a
-  quarter of that, and the vector changelog for 16 GiB capped by the same
-  quarter. They are scaled down together whenever they ask for more than that
-  half, which on a first boot is every volume with less than 256 GiB free;
-  from there up each log gets what it asked for.
+  quarter of that, the vector changelog for 16 GiB capped by the same quarter,
+  and the chat log for 8 GiB capped by the same quarter. They are scaled down
+  together whenever they ask for more than that half, which on a first boot is
+  every volume with less than about 278 GiB free; from there up each log gets
+  what it asked for.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
-  `stream.tracker_vectors_max_bytes` or `stream.pages_log_max_bytes` later,
-  changes nothing about streams that already exist; `crewlet retention
-  set-capacity` is what changes a running log's ceiling.
+  `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes` or
+  `stream.chat_log_max_bytes` later, changes nothing about streams that
+  already exist; `crewlet retention set-capacity` is what changes a running
+  log's ceiling.
 
 [Replication](replication.md#how-the-byte-ceilings-are-sized) has the whole
 arithmetic and the refusal's text.
@@ -225,8 +227,9 @@ reasons:
 Then placement retries for as long as the cluster answers "no suitable
 peers", inside the per-create provisioning budget — **30 seconds** on a solo
 node and **2 minutes** on a member with peers, because the two creates are not
-the same call underneath. See *A clustered node is given longer to create
-them* below.
+the same call underneath. See
+[A clustered node is given longer to create them](#a-clustered-node-is-given-longer-to-create-them)
+below.
 
 The clustered accept budget is four times the solo one because a member
 starting alongside its peers is competing with them for the same disk and the
@@ -381,13 +384,13 @@ than something a reconnect policy should paper over.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the six engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the three state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the four state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
-`CREWLET_PAGES_LOG`), a stream per extra subject namespace a company
+`CREWLET_PAGES_LOG`, `CREWLET_CHAT_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
-call, measured at 1.7 ms), and the eighteen `crewlet_*` KV buckets:
+call, measured at 1.7 ms), and the nineteen `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
-leases and the fencing epochs, and fifteen in the fleet store holding the
+leases and the fencing epochs, and sixteen in the fleet store holding the
 shared records. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
@@ -406,7 +409,9 @@ consumer churn is what produces a steady stream of `JetStream connection
 closed: Client Closed` lines — see `stream.debug`, which is off by default for
 exactly this reason.
 
-**A clustered node is given longer to create them than a solo one.** Every
+#### A clustered node is given longer to create them
+
+Every
 one of those creates is a local file-store setup on a solo node and a raft
 round trip on a member of a cluster, against a metadata group whose peers are
 themselves still booting — so the budget branches: **30 seconds** per create
@@ -438,7 +443,7 @@ comes back as a peer having won the race. A node no longer fails to start
 because it could not hear.
 
 **A create that is taking a while says so while it is happening.** Provisioning
-was otherwise silent — a node opens eighteen buckets and several streams in a
+was otherwise silent — a node opens nineteen buckets and several streams in a
 row and logged nothing between them, so one that hung emitted nothing at all
 until its budget expired and the log could not say which object it was on. Any
 create still running after 10 seconds now writes one `WARN` naming it
@@ -460,7 +465,7 @@ indistinguishable, which is the one question a reader has about a fleet that
 did not form. Lines carry `server=` from `stream.cluster.name`'s member
 identity; a solo broker has no name to carry and the attribute is empty.
 
-**And it needs room for the state logs.** The three logs reserve their byte
+**And it needs room for the state logs.** The four logs reserve their byte
 ceilings against the account's JetStream storage limit when their streams are
 created, and the node sizes them to half of what that limit has left. An
 untiered limit counts every replica, so a `replicas: 3` fleet needs three

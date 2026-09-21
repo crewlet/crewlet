@@ -59,8 +59,22 @@ var DirectKinds = []string{"im", "mpim"}
 // Slack's ids carry their kind in the first letter — C for a channel, G for
 // a private one, D for a DM — which is what makes this safe here and unsafe
 // on a backend whose ids are opaque. It is the fallback for the one event
-// that omits `channel_type`: an app_mention. See [notify.Addressed].
+// that omits `channel_type`: an app_mention. See [notify.AddressRule].
 const DMPrefix = "D"
+
+// AddressRule is how this backend decides a message was addressed to a seat.
+//
+// ONE DECLARATION, read by both doors: the prompt that tells an agent it was
+// asked, and the working indicator that tells a person the agent is working.
+// The two answering differently raises a spinner over a turn that may end in
+// silence, or ends one in silence after raising a spinner.
+func AddressRule() notify.AddressRule {
+	return notify.AddressRule{
+		DirectKinds: DirectKinds,
+		DMPrefix:    DMPrefix,
+		Follows:     notify.AddressingFollows(),
+	}
+}
 
 // contentSubtypes are the `message` subtypes that carry NEW user-visible
 // content and may wake an agent.
@@ -420,32 +434,38 @@ func metadata(body, event map[string]any, seat Seat, msg notify.ChatMessage,
 	kind, ts, thread string, reach notify.Delivery,
 ) map[string]string {
 	m := map[string]string{
-		notify.TransportField: Backend,
-		"channel":             msg.Channel,
-		"channel_type":        kind,
+		notify.TransportField:   Backend,
+		notify.ChannelField:     msg.Channel,
+		notify.ChannelTypeField: kind,
 		// The canonical shape beside the third-party app's own word. Both,
 		// because the raw one is what a prompt and an operator
 		// recognise and the canonical one is what the learning workers
 		// read — and the mapping belongs here, in the only code that
 		// knows what "mpim" means.
 		notify.ChannelKindField: string(canonicalKind(kind)),
-		"ts":                    ts,
-		"thread_ts":             thread,
+		notify.MessageIDField:   ts,
+		notify.ThreadField:      thread,
 		"team":                  str(body, "team_id"),
 		// The RAW user id, never a display name: the learning subsystem
 		// resolves counterparty identity from this key.
-		"user":                 str(event, "user"),
-		"bot_user_id":          firstOf(botUserID(body), seat.BotUserID),
-		"app_id":               firstOf(str(body, "api_app_id"), seat.AppID),
-		notify.ActorField:      str(event, "user"),
-		"thread_follow_reason": string(reach.Reason),
+		notify.UserField:  str(event, "user"),
+		"bot_user_id":     firstOf(botUserID(body), seat.BotUserID),
+		"app_id":          firstOf(str(body, "api_app_id"), seat.AppID),
+		notify.ActorField: str(event, "user"),
+		// WHY THIS MESSAGE reached the seat, which for a top-level
+		// mention is the only answer there is: it rode no follow.
+		notify.FollowReasonField: string(reach.Reason),
 	}
-	// thread_anchor is where a reply goes: the thread if there is one,
-	// otherwise this message, which becomes the thread the moment anybody
-	// answers under it.
-	m["thread_anchor"] = firstOf(thread, ts)
-	if thread != "" && reach.Deliver {
-		m["thread_following"] = "true"
+	// Where a reply GOES, which is a different question — [notify.Anchor]
+	// is the one derivation, and it reads the two keys above.
+	m[notify.ThreadAnchorField] = notify.Anchor(m)
+	if thread != "" && reach.Deliver && reach.Reason != "" {
+		// WHY THE SEAT IS IN THIS THREAD, which is the only answer a
+		// later reply has once the message that named it has scrolled
+		// away. The REASON, never a bare "true": a follow is not an
+		// ask, and which follow decides whether this reply obliges an
+		// answer — see [notify.FollowReason.Addresses].
+		m[notify.FollowingField] = string(reach.Reason)
 	}
 	return m
 }

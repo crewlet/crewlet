@@ -14,7 +14,7 @@ One interface serves all inter-component communication:
 
 | Where the broker runs | What that is |
 |---|---|
-| **In this process** — `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving; left empty they live in memory, which a company whose tracker and knowledge base are both a vendor's may use — on any node, whatever its `node.roles`, since every node runs the engine. On either native backend — the default pairing — the engine **refuses** an in-memory stream, because the company's own tracker and knowledge base keep their logs there and a restart would recreate them empty (see [Configuration](../getting-started/configuration.md#stream)). |
+| **In this process** — `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving; left empty they live in memory, which a company whose tracker and knowledge base are both a vendor's may use — on any node, whatever its `node.roles`, since every node runs the engine. On either native backend — the default pairing — the engine **refuses** an in-memory stream, because the company's own tracker and knowledge base keep their logs there and a restart would recreate them empty (see [Configuration](../getting-started/configuration.md#stream-store-and-coordination-tier-a)). |
 | **Somewhere else** — `stream.type: nats` | The same client code against a NATS server or cluster somebody else runs, dialled through `stream.url`. That sameness is what lets a laptop run the whole company with no services and a fleet run the same binary against a cluster. |
 | **Nowhere — the in-memory twin** (`internal/queue/memory`) | The test twin: a real broker object plus N clients rather than one fused thing, so a test can stop a node and still inspect what its subscription retained. |
 
@@ -56,6 +56,13 @@ crewlet.events.{type}                # What the engine records about itself:
 # revision, because the authoritative path polls the activation pointer
 crewlet.config.revision_activated
 crewlet.config.revision_applied
+
+# Who is looking at which chat room, and who is typing. ONE FLEET-WIDE SUBJECT,
+# and deliberately outside the chat log's own `crewlet.chat.log.>` space: this
+# is in-flight state with no durable record and no applier, so a subject inside
+# the log's wildcard would make every keystroke a record every node applies for
+# ever
+crewlet.chat.presence
 
 # A seat's memory, ONE SUBJECT PER ROW, on a stream that retains one message
 # per subject — so it holds the current value of every row rather than a log of
@@ -431,15 +438,29 @@ The pattern accepts subject wildcards: `*` matches one segment, `>` matches one-
 
 ## Communication
 
-Two communication systems:
+Two communication systems, and the first of them has two implementations.
 
-### External Channels (Slack, Mattermost)
+### Channels (the engine's own, or Slack / Mattermost)
 
-Org-wide announcements, department coordination, and team discussions happen in the company's own chat (Slack or Mattermost channels). Agents post with their own MCP tools, and the **notification service** routes what arrives, a Slack webhook or a Mattermost socket event, to agent inboxes.
+Org-wide announcements, department coordination and team discussions happen in
+channels: one room per unit, plus whatever the company opens. Which product
+holds them is [`chat.backend`](chat.md), and it is exclusive — one live chat
+home, or a person replies in the place the agents are not reading.
 
-- **Org-wide** — announcements (via Slack `#announcements` channel)
-- **Department** — leads-only coordination (via Slack department channel)
-- **Team** — team coordination, DACI decisions (via Slack team channel)
+- **Org-wide** — announcements
+- **Department** — leads-only coordination
+- **Team** — team coordination, DACI decisions
+
+On a **vendor** backend the rooms are Slack or Mattermost channels: agents post
+with their own MCP tools, and the notification service routes what arrives — a
+Slack webhook, a Mattermost socket event — to agent inboxes.
+
+On the **native** backend the rooms are the engine's own, and the path is
+shorter in one specific way rather than different in kind: a message is a
+record on `CREWLET_CHAT_LOG`, and the wake is derived from that committed
+record by a durable consumer rather than from an inbound webhook. Everything
+after that — the routing, the inbox, the coalescing, the turn — is the same
+machinery, which is the point. A unit's `channel` is what opens its room.
 
 ### Ephemeral A2A channels (`internal/a2a`)
 

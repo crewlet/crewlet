@@ -101,6 +101,24 @@ type Turn struct {
 	Depth int
 	Chain []string
 
+	// Calls is what this turn has ALREADY invoked, oldest first, as the
+	// tool loop recorded it. Empty on the turn the engine starts with; the
+	// frame that runs one tool derives the turn that call sees — see
+	// [Turn.WithCalls] — so what a tool is handed is the record as of its
+	// own invocation.
+	//
+	// A VALUE, and that is the whole design. The alternative — a closure
+	// on the Turn that asks the live surface how many calls it has run —
+	// reads correctly in the frame that built it and keeps answering
+	// afterwards: a Turn is documented immutable precisely so a goroutine
+	// that captured one cannot observe a turn moving underneath it, and a
+	// function field would smuggle exactly that back in. A slice copied
+	// per call cannot change after the call is over.
+	//
+	// It exists for [Turn.CallOrdinal] and for nothing else yet. See
+	// there for what a wrong answer costs.
+	Calls []Call
+
 	// ConversationKey is the conversation this turn is serving — the Slack
 	// thread, the issue, the page — or empty for a trigger that has none.
 	//
@@ -142,6 +160,104 @@ type Turn struct {
 	// request somebody is still waiting for.
 	Task  string
 	Reply string
+}
+
+// Call is one tool invocation a turn has already made.
+//
+// THE TWO FIELDS AN ORDINAL IS DERIVED FROM, and no more. The loop's own
+// record (`tools.Call`, `ledger.Call`) also carries the arguments and the
+// output, and copying those per call would put a turn's whole transcript on
+// every Turn every tool is handed — a cost that grows with the round count on
+// a value whose only question is "how many of these have run".
+type Call struct {
+	Name string
+
+	// Failed marks a call the tool reported failure for. Recorded rather
+	// than inferred, exactly as the loop records it: see
+	// [Turn.CallOrdinal] for why a failed call must not advance a
+	// counter.
+	Failed bool
+}
+
+// WithCalls derives the turn ONE call runs under: this turn, with the record
+// of what ran before it.
+//
+// DERIVED RATHER THAN MUTATED, on this type's own rule — a Turn is immutable
+// after construction, so the frame that invokes a tool builds the turn that
+// call sees instead of rewriting the one it holds. The copy is shallow and
+// deliberately so: every other field is either a scalar or a slice nothing
+// appends to in place.
+//
+// # Who calls this, and what happens if nobody does
+//
+// The frame that runs a tool on behalf of a turn — `tools.Surface.invoke`,
+// which already holds both the turn and the loop's record. A resumed phase
+// has a SECOND source: the calls a suspended run made before it parked live
+// on its `execstate` row rather than in this process's surface (see
+// `runner.resumedCalls`), so a resume composes the parked record with the
+// live one, oldest first.
+//
+// With nobody calling it every turn reports an ordinal of 0 for every call,
+// which is SILENT: a seat that posts twice in one turn derives one message id
+// twice, the applier's insert declines the second, and the turn believes it
+// said two things. That is the failure [Turn.CallOrdinal] exists to prevent,
+// so a build wiring a tool whose id is derived from the ordinal must wire
+// this too.
+func (t *Turn) WithCalls(calls []Call) *Turn {
+	if t == nil {
+		return nil
+	}
+	out := *t
+	// CLONED, because the caller's slice is the loop's own live record and
+	// it appends to it after this call returns. Sharing the backing array
+	// would let a turn already in flight observe calls made after it.
+	out.Calls = append([]Call(nil), calls...)
+	return &out
+}
+
+// CallOrdinal is how many of the named tools this turn has already run
+// successfully — the number the NEXT such call takes.
+//
+// # What it is for
+//
+// A turn may legitimately do the same thing twice: a seat that answers a
+// question and then reports what it did has said two things, and both are
+// real. Native chat derives a message's id from (turn, channel, ordinal)
+// precisely so that the second remark is a second message while a RE-RUN of
+// the whole turn — which redelivery makes ordinary — derives the same ids and
+// writes each message once. Without the ordinal a turn's second post
+// overwrites its first on every node, silently.
+//
+// # Why several names, and why success only
+//
+// SEVERAL NAMES, because the ordinal numbers the GESTURE rather than the
+// tool: chat's three posting tools all derive ids in one space, so a room
+// post and a thread reply in one turn must not both be call number zero.
+// A caller passes the set that shares an id space — `chat.WriteTools` — and
+// never a single name.
+//
+// SUCCESS ONLY, because a failed call wrote nothing. A model whose post was
+// refused for a body over the cap retries it, and that retry is still the
+// turn's FIRST message; counting the refusal would leave a hole in the
+// numbering and — worse — make the ids depend on how many times the model
+// got it wrong, which a re-run reproduces only by failing identically.
+func (t *Turn) CallOrdinal(names ...string) int {
+	if t == nil || len(names) == 0 {
+		return 0
+	}
+	n := 0
+	for _, call := range t.Calls {
+		if call.Failed {
+			continue
+		}
+		for _, name := range names {
+			if call.Name == name {
+				n++
+				break
+			}
+		}
+	}
+	return n
 }
 
 // Handle is the acting seat's handle, or "" when there is no seat.
@@ -207,6 +323,15 @@ func (t *Turn) RequireSeat() (*org.Role, error) {
 // EXTENDS the delegation chain, refusing past the cap. The seat becomes the
 // child's own: a sub-agent acting as its parent would make the delegation cap
 // unenforceable, because nothing downstream could tell the two apart.
+//
+// THE CALL RECORD DOES NOT TRAVEL. A child runs its own loop and records its
+// own calls, so carrying the parent's would number the child's first call
+// after work it did not do. What makes that safe rather than merely tidy is
+// that parent and child SHARE a RunID: two loops numbering from separate
+// records would collide on any id derived from (run, ordinal), and the only
+// reason they cannot is that every tool whose id is so derived writes to a
+// shared surface, which the sub-agent guard denies a worker outright. A tool
+// that changes is a tool that needs a seed of its own here.
 func (t *Turn) ForSubagent(seat *org.Role, limit int) (*Turn, error) {
 	if t == nil {
 		return nil, ErrNoSeat

@@ -69,22 +69,37 @@ const (
 	// every source at once.
 	DefaultTrackerVectorsMaxBytes int64 = 16 << 30
 
-	// TrackerLogMaxBytesFloor and TrackerLogMaxBytesCeiling bound the
-	// mutation log's ceiling.
-	TrackerLogMaxBytesFloor   int64 = 1 << 30
+	// LogMaxBytesFloor is the floor EVERY state log's byte ceiling shares,
+	// and it is ONE constant because there is no honest reason for the
+	// four to differ: below a gibibyte a log is not a log, it is a window
+	// that refuses appends within a week of a company starting work, and
+	// that sentence is about the mechanism rather than about any one
+	// domain's corpus. It was four constants of the same value — each
+	// doc comment asserting it matched the others, with nothing enforcing
+	// it — which is the shape internal/textcut and internal/whsec each
+	// exist to record.
+	//
+	// The engine scales a DERIVED ceiling down to this same number and no
+	// lower (`engine.MinDomainCeiling`), so an operator who sets a value
+	// and an operator who sets none reach the same floor.
+	LogMaxBytesFloor int64 = 1 << 30
+
+	// TrackerLogMaxBytesCeiling bounds the mutation log's ceiling from
+	// above. A tebibyte: the only one of the four that is not the
+	// broker-reservation bound below, because the mutation log is the one
+	// an operator genuinely sizes into a storage array.
 	TrackerLogMaxBytesCeiling int64 = 1 << 40
 
-	// TrackerVectorsMaxBytesFloor and TrackerVectorsMaxBytesCeiling bound
-	// the vector changelog's.
-	TrackerVectorsMaxBytesFloor   int64 = 1 << 30
+	// TrackerVectorsMaxBytesCeiling, PagesLogMaxBytesCeiling and
+	// ChatLogMaxBytesCeiling bound the other three from above, at the same
+	// number for the same reason: what bounds a ceiling there is the
+	// reservation a broker can plausibly grant, rather than anything about
+	// vectors, pages or messages. They are written separately because each
+	// field's refusal names its own bound, and a shared name would put one
+	// domain's constant in another's error.
 	TrackerVectorsMaxBytesCeiling int64 = 256 << 30
-
-	// PagesLogMaxBytesFloor and PagesLogMaxBytesCeiling bound the
-	// knowledge base's log. The floor is every log's, and the ceiling is a
-	// quarter of the mutation log's for the corpus ratio
-	// DerivedPagesLogDivisor states.
-	PagesLogMaxBytesFloor   int64 = 1 << 30
-	PagesLogMaxBytesCeiling int64 = 256 << 30
+	PagesLogMaxBytesCeiling       int64 = 256 << 30
+	ChatLogMaxBytesCeiling        int64 = 256 << 30
 
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
 	// is than the mutation log's derived ceiling.
@@ -247,6 +262,13 @@ func containsFloor(f BackupFloor) bool {
 }
 
 // bytesInRange refuses a byte ceiling outside its bounds, naming both.
+//
+// BOTH BOUNDS ARE PARAMETERS, and the floor was briefly not: every state log
+// shares [LogMaxBytesFloor], so while the logs were the only callers it was a
+// knob nobody turned. `store_max_bytes` is the caller that made it one again
+// — it bounds the WHOLE embedded broker rather than one log, so its floor is
+// four gibibytes against a log's one, and hard-coding the log's would have
+// admitted a broker limit smaller than a single log's own floor.
 func bytesInRange(p *problems, path Path, name string, v, lo, hi int64) {
 	if v == 0 {
 		return
@@ -315,7 +337,7 @@ func (s Stream) VectorsMaxBytes(free int64) (int64, bool) {
 		return s.TrackerVectorsMaxBytes, false
 	}
 	capped := min(DefaultTrackerVectorsMaxBytes, DerivedLogMaxBytes(free))
-	return max(capped, TrackerVectorsMaxBytesFloor), capped != DefaultTrackerVectorsMaxBytes
+	return max(capped, LogMaxBytesFloor), capped != DefaultTrackerVectorsMaxBytes
 }
 
 // SnapshotDirFor is where a node keeps its snapshots, with the default

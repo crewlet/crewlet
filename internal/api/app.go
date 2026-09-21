@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -82,6 +83,25 @@ type App struct {
 	// the route being absent, because "you are in the wrong mode" is the
 	// answer an operator needs.
 	capacity capacityRunner
+
+	// chat is the company's own conversation as a WRITE authority, and
+	// chatCursors is the read state beside it. Both nil on a company that
+	// runs no native chat, which leaves their routes unmounted — an
+	// endpoint that exists and refuses everything reads as broken, while
+	// one that is not there matches what `chat.backend` says. Every read
+	// is a registered question instead; see chat.go.
+	chat        ChatWriter
+	chatCursors ChatCursors
+
+	// chatActor resolves a request's credential to the seat it writes as.
+	// THE SERVER'S ANSWER, on every call: a caller may never name a seat.
+	chatActor func(ctx context.Context) (chat.Actor, error)
+
+	// chatLive is the chat arm of the socket: the applier's observer, the
+	// per-recipient visibility filter and the presence scatter. Built
+	// outside this package, because the applier takes its observer before
+	// an API exists — see [stream.ChatHubOptions].
+	chatLive *stream.ChatHub
 
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
@@ -222,6 +242,29 @@ type Options struct {
 	// Capacity drives a stream's byte ceiling.
 	Capacity capacityRunner
 
+	// Chat is the company's own chat as a write authority, and Cursors is
+	// the per-person read state. Nil leaves their routes UNMOUNTED, which
+	// is the honest shape for a company on Slack or Mattermost: there is
+	// no native conversation here to write to.
+	//
+	// The READ half is not here. Every chat read is a registered question
+	// in [queries.Sources], reached by a named route exactly as the
+	// board's and the wiki's are, because the socket's query channel is a
+	// thin adapter over the same function each REST route calls.
+	Chat    ChatWriter
+	Cursors ChatCursors
+
+	// ChatLive is the chat arm of the live socket. Built by the caller
+	// rather than here, and that is an ORDERING fact: the chat applier
+	// takes its observer when the state log comes up, which is before
+	// this App exists, so a hub built here could never be the observer.
+	// See [stream.ChatHubOptions], whose seams are all functions for the
+	// same reason.
+	//
+	// Nil serves no chat frames and no presence. Every method on a nil hub
+	// is a no-op, so nothing downstream needs a branch.
+	ChatLive *stream.ChatHub
+
 	// Backup copies this node's durable state to a path an operator
 	// names.
 	Backup backupTaker
@@ -322,6 +365,12 @@ func New(opts Options) (*App, error) {
 	a.backup = opts.Backup
 	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
 	a.capacity = opts.Capacity
+	a.chat, a.chatCursors, a.chatLive = opts.Chat, opts.Cursors, opts.ChatLive
+	// ONE RESOLUTION OF WHO THE CALLER IS, built here and read by both
+	// halves: the write routes attribute with it, and the live channel
+	// identifies a socket with it. Two would let a person write in a room
+	// their own socket is not shown.
+	a.chatActor = chatActorFor(opts.Sources.Company)
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
@@ -348,7 +397,10 @@ func New(opts Options) (*App, error) {
 	// and it is why the verb can run at all on a topology whose broker
 	// binds no socket. See retention.go.
 	a.mountCapacity(mux)
-	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
+	// The company's own chat, WRITES ONLY. Every read is a registered
+	// question reached by a named route; see chat.go.
+	a.mountChat(mux)
+	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer, a.chatLive))
 	// The OPERATOR MCP surface: the same tracker and knowledge tools a
 	// seat holds, offered to a person's own assistant. Under its own
 	// always-guarded prefix rather than under /mcp/, which is exempt
@@ -535,10 +587,19 @@ func (a *App) Configured() bool { return a.company() != nil }
 // the caller's (see observe.Seed, wired in cmd/crewlet).
 func (a *App) Start(ctx context.Context) {
 	a.stream.StartHealthTicks(ctx)
+	// The chat arm's own two loops: the fan-out that turns a committed
+	// record into a frame, and the presence scatter. Started here rather
+	// than at construction because both are goroutines, and a goroutine's
+	// lifetime belongs to whoever started it — this is the call that has
+	// the context they die with.
+	a.chatLive.Start(ctx)
 }
 
 // Stop ends the tick and disconnects every client.
-func (a *App) Stop() { a.stream.Stop() }
+func (a *App) Stop() {
+	a.chatLive.Stop()
+	a.stream.Stop()
+}
 
 func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	// ALWAYS 200 while the process is alive, INCLUDING through a drain: an

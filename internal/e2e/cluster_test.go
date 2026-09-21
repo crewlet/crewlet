@@ -56,12 +56,12 @@ type cluster struct {
 
 // startCluster stands up n nodes, each an engine and its API, on one clustered
 // broker.
-func startCluster(t *testing.T, n int) *cluster {
+func startCluster(t *testing.T, n int, tune ...func(*config.Bootstrap)) *cluster {
 	t.Helper()
 	if n < 2 {
 		t.Fatalf("startCluster(%d): use start(t) for one node", n)
 	}
-	return startMesh(t, jetstreamtest.StartDirectMesh, n)
+	return startMesh(t, jetstreamtest.StartDirectMesh, n, tune...)
 }
 
 // startPartitionableCluster is [startCluster] on a mesh whose every route runs
@@ -85,7 +85,9 @@ func startPartitionableCluster(t *testing.T, n int) *cluster {
 // DIFFERENT NUMBERS." Retrying with the same numbers is retrying the question
 // somebody else already answered, so a genuinely lost port failed all three
 // attempts identically and with nothing to say which of the two causes it was.
-func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstreamtest.Relays, n int) *cluster {
+func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstreamtest.Relays,
+	n int, tune ...func(*config.Bootstrap)) *cluster {
+
 	t.Helper()
 	// BOUNDED IN WALL CLOCK AS WELL AS IN TRIES — see
 	// [jetstreamtest.ClusterStartBudget]. Three attempts at an unbounded
@@ -118,7 +120,7 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 		attemptCtx, cancelAttempt := context.WithDeadline(t.Context(),
 			jetstreamtest.StartAttemptEnd(time.Now(), deadline))
 		relays := mesh(attemptCtx, t, n)
-		c, err := startMeshOnce(attemptCtx, t, relays, n)
+		c, err := startMeshOnce(attemptCtx, t, relays, n, tune...)
 		cancelAttempt()
 		if err == nil {
 			return c
@@ -180,7 +182,9 @@ var errNotRetryable = errors.New("not fixable by another attempt")
 
 // ctx BOUNDS THIS ATTEMPT, and is not the test's own: see [startMesh] for why
 // a ceiling the member starts cannot observe bounds nothing.
-func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, n int) (*cluster, error) {
+func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, n int,
+	tune ...func(*config.Bootstrap)) (*cluster, error) {
+
 	t.Helper()
 	c := &cluster{relays: relays, nodes: make([]*node, n)}
 
@@ -202,7 +206,7 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 			// failure is carried back rather than raised here — a
 			// FailNow from another goroutine ends that goroutine and
 			// leaves the test running with a nil member.
-			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, relays, i, n)
+			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, relays, i, n, tune...)
 		}()
 	}
 	wg.Wait()
@@ -284,8 +288,8 @@ const clusterHost = "127.0.0.1"
 
 // ctx is the ATTEMPT's, so the retry loop's wall-clock ceiling can interrupt a
 // bring-up rather than only refuse the next one — see [startMesh].
-func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, i, n int) (
-	*node, []func(), error) {
+func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, i, n int,
+	tune ...func(*config.Bootstrap)) (*node, []func(), error) {
 
 	// THE TEARDOWN IS RETURNED, NOT REGISTERED WITH t.Cleanup, because an
 	// attempt that fails has to stop what it started BEFORE the next one
@@ -353,7 +357,67 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// one replica a publish is durable on the member that took it, and a
 	// case asserting a peer sees it would be asserting timing.
 	boot.Stream.Replicas = n
+	// A FLEET COORDINATES THROUGH THE REPLICATED KV, and this harness took
+	// the single-node default for as long as it existed.
+	//
+	// `coordination.type: local` means leases kept in this process, so on a
+	// cluster every member holds every lease and runs every seat — two
+	// nodes owning `ceo`, two consumers on one mailbox. It is a pairing
+	// `crewlet validate` refuses BY NAME, and the harness never validated,
+	// so it stood up the refused shape and measured it: both members
+	// reporting `Held() == [ceo]`.
+	//
+	// The cases that noticed were the ones about WHICH node a wake reaches;
+	// every other cluster case's subject is the state log, which is shared
+	// either way, which is why this survived. It is the harness's default
+	// now rather than one case's amendment, and [fleetSize] is three
+	// because that is what the config layer requires of it.
+	boot.Coordination.Type = config.CoordinationEmbeddedKV
+	// LAST, so a case can amend anything above it — and before the engine,
+	// which is the only moment Tier A is read at all.
+	for _, amend := range tune {
+		amend(&boot)
+	}
+	// THE HARNESS MAY NOT RUN A SHAPE THE ENGINE REFUSES, which is what let
+	// the coordination defect above live: `engine.New` does not validate
+	// Tier A — `crewlet run` does, before it ever gets here — so every
+	// refusal the config layer writes was invisible to this suite. A case
+	// that amends its way into an invalid fleet now fails saying so,
+	// instead of passing against a deployment nobody could run.
+	//
+	// NOT RETRYABLE: a config this file composed is wrong the same way on
+	// every attempt, and retrying it spends the whole budget on one
+	// mistake.
+	if err := boot.Validate(); err != nil {
+		return fail(fmt.Errorf("%w: member %d's bootstrap is a shape the "+
+			"engine refuses: %w", errNotRetryable, i, err))
+	}
 
+	// NO LIVE HUB ON A CLUSTER MEMBER, deliberately, and this is the one
+	// place in this package that differs from how `crewlet run` wires a
+	// node.
+	//
+	// It had one briefly, on the reasoning that a member whose applier
+	// announced to nothing is a failure a single node cannot show. That
+	// reasoning does not survive contact with the suite: NO CLUSTER CASE
+	// ASSERTS A PUSH. The only one that does is
+	// [TestACommittedMessageReachesAWatchingSocket], which runs on the
+	// single-node harness, where the hub IS attached. So a hub here bought
+	// no coverage at all.
+	//
+	// What it cost is measurable. Each hub serves a presence subject and
+	// scatters to its peers every api/stream.ChatPresenceInterval — three
+	// extra responders and a periodic fan-out per member, arriving while
+	// the embedded brokers are still establishing routes. On a machine with
+	// room that is free; on a constrained runner it is not, and CI's
+	// `end-to-end gates` went from green to failing on cluster FORMATION
+	// the commit it was added: "connect: connection refused" on twenty
+	// route attempts and NO QUORUM on every stream, with this package
+	// taking 823s against the 448.6s measured at three members below.
+	//
+	// The applier applies every record with a nil observer — its
+	// documented no-op — so these cases assert exactly what they did
+	// before.
 	e, err := engine.New(ctx, engine.Options{Bootstrap: &boot, Company: cfg})
 	if err != nil {
 		return fail(fmt.Errorf("engine.New: %w", err))
@@ -379,7 +443,7 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// projector — serves for the whole case. The test's own context is
 	// that lifetime exactly: longer than the attempt, and still ended when
 	// the case is over, which [context.WithoutCancel] would not be.
-	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot, nil) //nolint:contextcheck // see above
+	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot, nil, nil) //nolint:contextcheck // see above
 	stops = append(stops, apiStops...)
 	if err != nil {
 		return fail(fmt.Errorf("api: %w", err))
@@ -425,20 +489,32 @@ func noParallel(t *testing.T) {
 
 // fleetSize is how many members a cluster case stands up.
 //
-// TWO, and the number is a cost decision rather than a coverage one. What a
-// case here needs is a FLEET — two processes, two stores, two brokers, and
-// agreement that has to cross between them — and two members gives all of it:
-// a write one node makes reaches the other's rows through the log, and two
-// nodes minting from one counter contend at the broker exactly as three would.
+// THREE, and it is the coordination layer that decides it rather than
+// coverage or taste. A fleet coordinates through the replicated KV, and the
+// config layer permits that at ONE node or at THREE and refuses TWO by name:
+// two members have no coordination quorum, so the fleet stops serving the
+// moment either restarts. Two was the number while this harness ran on
+// `coordination.type: local`, which is the single-node default and a shape
+// `crewlet validate` refuses on a cluster — see [buildMember], which now
+// validates.
 //
-// What three would add is a MAJORITY, which is the only thing that makes
-// "survive losing one" meaningful — and that is [jetstreamtest]'s own suite's
-// subject, on bare brokers, where it costs three servers and not three
-// engines. Here three members is three embedded brokers with better than
-// twenty raft groups each, plus three pairs of SQLite databases, and measured
-// on this repository's own CI shape they starve each other: each case passes
-// alone and all of them time out under `go test ./...`.
-const fleetSize = 2
+// WHAT THREE ALSO BUYS is a MAJORITY, which is the only thing that makes
+// "survive losing one" mean anything, and it is why the partition cases can
+// assert about a member coming back rather than about timing.
+//
+// IT WAS TWO FOR A MEASURED REASON THAT NO LONGER HOLDS. Three members is
+// three embedded brokers with better than twenty raft groups each plus three
+// pairs of SQLite databases, and measured on this repository's CI shape they
+// starved each other — "each case passes alone and all of them time out under
+// `go test ./...`". That measurement was taken when this package SHARED a
+// runner with every other one. It does not any more: `internal/solo` exists
+// precisely so this package has the machine to itself at `-p 1`, which is the
+// condition the starvation was measured against. RE-MEASURED under
+// `make test-solo`: this package takes 448.6s at three members against 442.6s
+// at two — six seconds, not a starved suite — and the solo half as a whole is
+// 9m05s of its 30m budget. The cost of the third member was never the third
+// member; it was the other hundred and twenty packages running beside it.
+const fleetSize = 3
 
 // clusterSettle is how long a fleet assertion waits for a record one member
 // published to reach another's rows.
@@ -621,7 +697,14 @@ func TestAFleetTakesAndOffersSnapshots(t *testing.T) {
 	// that does not name one of its own domains, so a snapshot missing a
 	// domain is one nobody can adopt — and it is indistinguishable from a
 	// healthy one until somebody needs it.
-	for _, want := range []string{"tracker", "vectors", "pages"} {
+	//
+	// OVER THE ENGINE'S OWN REGISTER, never over a list written here. It
+	// WAS a list here — "tracker", "vectors", "pages" — and a fourth domain
+	// added to the register would have left this case asserting three of
+	// four while reporting a pass, which is the exact shape of the failure
+	// it exists to catch.
+	for _, domain := range c.nodes[0].engine.Domains() {
+		want := domain.Name()
 		if _, named := manifest.Domains[want]; !named {
 			t.Errorf("the snapshot names %v and not %q — a recipient refuses "+
 				"an artefact that does not name every domain it registers",
@@ -1163,8 +1246,10 @@ func digestRows(rendered []string) string {
 //
 // The scatter rides core NATS request/reply — no stream, no consumer, no ack,
 // per [queue]'s `Ask`/`Serve` — so cutting a member's routes is exactly what
-// makes it unreachable, and quorum, which a two-member cluster loses here, is
-// not what this measures.
+// makes it unreachable, and quorum is not what this measures. At [fleetSize]
+// the surviving pair KEEPS quorum, which is what lets the two be told apart:
+// the cut member is unreachable while the cluster is otherwise healthy, so a
+// missing slice can only be the partition.
 func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 	noParallel(t)
 	c := startPartitionableCluster(t, fleetSize)
@@ -1213,9 +1298,31 @@ func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 	// search open for far longer than its caller allowed.
 	const cut = 2 * time.Second
 	got, took := scatter(cut)
-	if len(got) != 0 {
-		t.Errorf("a partitioned member answered %d slices — the cut route did "+
-			"not stop the request, so this case measures nothing", len(got))
+	// THE CUT MEMBER IS ABSENT AND EVERY OTHER PEER IS PRESENT, which is
+	// the assertion a fleet of any size can carry. It read "nobody
+	// answered", which is the same sentence only at TWO members — the one
+	// peer being the only peer. At three it failed, correctly: the
+	// unpartitioned peer answered, as it must.
+	//
+	// The stronger shape is also the more honest one. An empty answer
+	// cannot tell a member silenced by the cut from a scatter that reached
+	// nobody at all, and this case exists to measure the first.
+	cutNode := c.nodes[1].id
+	answered := make(map[string]bool, len(got))
+	for _, slice := range got {
+		answered[slice.Node] = true
+	}
+	if answered[cutNode] {
+		t.Errorf("the partitioned member %s answered — the cut route did not "+
+			"stop the request, so this case measures nothing", cutNode)
+	}
+	for _, peer := range peers {
+		if peer.Node != cutNode && !answered[peer.Node] {
+			t.Errorf("peer %s did not answer, and it was never cut — one lost "+
+				"member is silencing the rest, which is the failure this case "+
+				"exists to tell apart from a member that is merely absent",
+				peer.Node)
+		}
 	}
 	if took > cut+cut/2 {
 		t.Errorf("the scatter took %s against a %s budget — a coordinator that "+

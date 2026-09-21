@@ -67,6 +67,8 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       ];
     case "company":
       return [root, ...companyCrumbs(rest, labels)];
+    case "chat":
+      return [root, ...chatCrumbs(rest, labels)];
     case "knowledge":
       return [root, ...knowledgeCrumbs(rest, labels)];
     case "activity":
@@ -153,6 +155,26 @@ function companyCrumbs(rest: string[], labels: Labels): Crumb[] {
     return second ? [{ label: "Units" }, { label: named(labels, second) }] : [{ label: "Units" }];
   }
   return [{ label: named(labels, first) }];
+}
+
+/**
+ * Chat: two fixed lists, and otherwise a room.
+ *
+ * A ROOM IS A UUID, so the fallback is `mono` — the crumb is an address until
+ * the screen publishes the room's name, and drawn in the proportional face an
+ * unresolved id reads as something somebody called a channel. The fixed pair
+ * come from the one destinations table for the reason `workCrumbs` gives: a
+ * hand-written list here is what leaves a new list out on the day it is added.
+ *
+ * THE THREAD IS NOT A SEGMENT and so is not a crumb: it is `?thread=` on the
+ * room, which the trail deliberately ignores the way it ignores every other
+ * query — a pane open beside a room is not a place the reader has gone.
+ */
+function chatCrumbs(rest: string[], labels: Labels): Crumb[] {
+  const [first = ""] = rest;
+  const fixed = destinationLabel("chat", first);
+  if (fixed) return [{ label: fixed }];
+  return [{ label: named(labels, first), mono: !labels[first] }];
 }
 
 function knowledgeCrumbs(rest: string[], labels: Labels): Crumb[] {

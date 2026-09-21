@@ -1037,7 +1037,14 @@ type deadlinePoster struct {
 func (*deadlinePoster) StatusBackend() string        { return "chat" }
 func (*deadlinePoster) SupportsStatusText() bool     { return true }
 func (*deadlinePoster) StatusRefresh() time.Duration { return time.Hour }
-func (*deadlinePoster) DMChannelPrefix() string      { return "D" }
+
+// AddressRule is where a DM prefix lives now. The poster used to answer one
+// directly, and it is a backend's own rule rather than the indicator's — the
+// same value the delivery obligation and the prompt read, so a fake that
+// declared a different one here would be testing a backend no company runs.
+func (*deadlinePoster) AddressRule() notify.AddressRule {
+	return notify.AddressRule{DMPrefix: "D", Follows: notify.AddressingFollows()}
+}
 
 func (*deadlinePoster) SetStatus(context.Context, string, string, string, string) bool {
 	return true

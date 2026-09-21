@@ -30,6 +30,21 @@
 // exact ranking at sufficient depth — and never recall on a particular
 // company's documents. `crewlet search eval` is what answers that, against
 // that company's own vectors.
+//
+// # Which corpora are in the semantic half at all
+//
+// [Sources] is the whole of it: the knowledge base's pages and the native
+// tracker's work items. It is a BUDGET rather than a list of what would be
+// useful — every member is a vector per document in the replicated estate,
+// a record per document on the log, and a share of an embedding duty that
+// runs about a thousand sources a minute for every corpus a company has.
+//
+// The company's CHAT is deliberately outside it, with a lexical index of its
+// own in this package ([ChatIndexer]) and no semantic half at all: a year at
+// the declared census is several times the entire supported vector corpus,
+// and the knowledge base's own embeddings are what would pay for it. ADR-0019
+// is the record of that decision and of what admitting chat to one half and
+// not the other cost the last time it happened.
 package search
 
 import "math/bits"

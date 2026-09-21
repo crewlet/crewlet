@@ -15,11 +15,11 @@ import (
 // spirit — one that renders text and one that cannot — and the difference is
 // the only thing this module models per backend, so it is a field.
 type poster struct {
-	backend  string
-	text     bool
-	refresh  time.Duration
-	dmPrefix string
-	fail     bool
+	backend string
+	text    bool
+	refresh time.Duration
+	rule    notify.AddressRule
+	fail    bool
 
 	mu      sync.Mutex
 	set     []string
@@ -27,13 +27,21 @@ type poster struct {
 }
 
 func newPoster() *poster {
-	return &poster{backend: "chat", text: true, refresh: 20 * time.Millisecond}
+	return &poster{
+		backend: "chat", text: true, refresh: 20 * time.Millisecond,
+		// A backend's OWN vocabulary, which is the whole point of the
+		// rule being a value: "im" means nothing to any other backend.
+		rule: notify.AddressRule{
+			DirectKinds: []string{"im", "mpim"},
+			Follows:     notify.AddressingFollows(),
+		},
+	}
 }
 
-func (p *poster) StatusBackend() string        { return p.backend }
-func (p *poster) SupportsStatusText() bool     { return p.text }
-func (p *poster) StatusRefresh() time.Duration { return p.refresh }
-func (p *poster) DMChannelPrefix() string      { return p.dmPrefix }
+func (p *poster) StatusBackend() string           { return p.backend }
+func (p *poster) SupportsStatusText() bool        { return p.text }
+func (p *poster) StatusRefresh() time.Duration    { return p.refresh }
+func (p *poster) AddressRule() notify.AddressRule { return p.rule }
 
 func (p *poster) SetStatus(_ context.Context, _, _, _, status string) bool {
 	p.mu.Lock()
@@ -195,19 +203,34 @@ func TestAddressedShowsOnlyWhereSomebodyIsWaiting(t *testing.T) {
 			m["channel_type"] = "mpim"
 		}), true},
 		{"personal mention", chatMeta(func(m map[string]string) {
-			m["channel_type"] = "channel"
-			m["thread_follow_reason"] = string(notify.FollowMention)
+			m[notify.ChannelTypeField] = "channel"
+			m[notify.FollowReasonField] = string(notify.FollowMention)
 		}), true},
-		{"a thread it already follows", chatMeta(func(m map[string]string) {
-			m["channel_type"] = "channel"
-			m["thread_following"] = "yes"
+		{"a thread it is in because it was named", chatMeta(func(m map[string]string) {
+			m[notify.ChannelTypeField] = "channel"
+			m[notify.FollowingField] = string(notify.FollowMention)
+		}), true},
+		{"a thread somebody subscribed it to", chatMeta(func(m map[string]string) {
+			m[notify.ChannelTypeField] = "channel"
+			m[notify.FollowingField] = string(notify.FollowExplicit)
 		}), true},
 		{"a broadcast", chatMeta(func(m map[string]string) {
-			m["channel_type"] = "channel"
-			m["thread_follow_reason"] = string(notify.FollowCollective)
+			m[notify.ChannelTypeField] = "channel"
+			m[notify.FollowReasonField] = string(notify.FollowCollective)
+		}), false},
+		// A TRIGGER IS NOT A STANDING FOLLOW. Having spoken in a thread
+		// once puts the seat in the room; it does not make it the
+		// addressee of everything said there afterwards, and reading it
+		// as one raised an indicator on every later reply in every
+		// thread the seat had ever posted in.
+		{"a reply in a thread it merely spoke in", chatMeta(func(m map[string]string) {
+			m[notify.ChannelTypeField] = "channel"
+			m[notify.ThreadField] = "1718.001"
+			m[notify.FollowingField] = string(notify.FollowParticipated)
+			m[notify.FollowReasonField] = string(notify.FollowParticipated)
 		}), false},
 		{"a passive channel message", chatMeta(func(m map[string]string) {
-			m["channel_type"] = "channel"
+			m[notify.ChannelTypeField] = "channel"
 		}), false},
 	}
 	for _, c := range cases {

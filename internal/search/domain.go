@@ -161,6 +161,16 @@ func (Domain) ScopeIndex() string { return "vectors_log_deferred_scope" }
 // monotone version guard, so a redelivery writes the same rows or none.
 func (Domain) OpsTable() string { return "" }
 
+// OpsRetention is the framework's default, stated although this domain keeps
+// no ledger for it to govern.
+//
+// A REAL HORIZON RATHER THAN ZERO, because zero is the sweep's "this job
+// carries its own retention" — the shape the event log has — and a domain that
+// later grows a ledger must not inherit that by omission. Nothing reads it
+// today: the maintenance sweep builds one job per LEDGER, and this domain
+// hands it none.
+func (Domain) OpsRetention() time.Duration { return statelog.OpsRetention }
+
 // ReadinessInput reports that this domain's health does NOT gate seat
 // admission.
 //

@@ -12,7 +12,7 @@ import (
 //
 // # Why a pin at all
 //
-// The pool is small on purpose (see defaultReaderConns), and every reader on
+// The pool is small on purpose (see DefaultReaderConns), and every reader on
 // this node draws from it: the dashboard's queries, the coverage probes, a
 // seat's tool reads. A writer that takes a pooled connection per transaction
 // competes with them for one — and the competition has a direction that makes

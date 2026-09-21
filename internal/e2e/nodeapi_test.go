@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
@@ -27,10 +28,11 @@ import (
 // goroutine. A fleet member is built on a goroutine of its own and may have to
 // be torn down before the test ends, so it calls [wireAPI] directly.
 func serveAPI(
-	t *testing.T, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
+	t *testing.T, e *engine.Engine, boot *config.Bootstrap, chatLive *stream.ChatHub,
+	amend func(*api.Options),
 ) (*api.App, *httptest.Server) {
 	t.Helper()
-	app, srv, stops, err := wireAPI(t.Context(), e, boot, amend)
+	app, srv, stops, err := wireAPI(t.Context(), e, boot, chatLive, amend)
 	// REGISTERED BEFORE THE ERROR IS RAISED, so a wiring that failed halfway
 	// still stops the half that came up.
 	t.Cleanup(func() { stopInReverse(stops) })
@@ -61,8 +63,12 @@ func serveAPI(
 // What it leaves out is what a case here never reaches: the operator MCP
 // surface and the native tracker and knowledge readers, each of which has its
 // own suite.
+// chatLive is the hub the CALLER built before engine.New, because the chat
+// applier takes its observer when the state log comes up and that is inside
+// New. Passing nil here is what a company off native chat gets.
 func wireAPI(
-	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
+	ctx context.Context, e *engine.Engine, boot *config.Bootstrap,
+	chatLive *stream.ChatHub, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
 	var stops []func()
 	fail := func(what string, err error) (*api.App, *httptest.Server, []func(), error) {
@@ -137,7 +143,23 @@ func wireAPI(
 			Events:  backends.Store.Events(),
 			Company: company,
 			NodeID:  nodeID,
+			// THE COMPANY'S OWN ROOMS. Every chat read is a registered
+			// question, so this is what mounts them on the socket and on
+			// the REST routes alike — and without it the whole surface is
+			// simply unregistered, which answers `unknown_query` and looks
+			// from a test exactly like a company with nothing to say.
+			Chat: chatReader(e),
+			// AND THE REST OF THE READ HALF, so this harness serves
+			// what `crewlet run` serves rather than a subset of it.
+			ChatSearch: chatSearcher(e),
+			ChatReads:  backends.Fleet,
 		},
+		// THE WRITE HALF AND THE LIVE ARM. Without these the routes
+		// `crewlet chat` and the dashboard's composer use are not
+		// mounted at all, and no committed record becomes a frame.
+		Chat:      chatWriter(e),
+		Cursors:   backends.Fleet,
+		ChatLive:  chatLive,
 		Config:    configSurface,
 		Secrets:   secretSurface,
 		Setup:     setupSurface,
@@ -186,6 +208,71 @@ func wireAPI(
 	srv := httptest.NewServer(app)
 	stops = append(stops, srv.Close)
 	return app, srv, stops, nil
+}
+
+// chatReader is this node's chat read side as the query registry takes it, or
+// a NIL INTERFACE for a company running no native chat.
+//
+// The nil is the whole reason this is a function. [queries.Sources] registers
+// the chat questions on `s.Chat != nil`, and a typed nil pointer assigned into
+// an interface is not nil — so handing over [engine.Engine.Chat] directly
+// would register every chat question on a node that has no reader and answer
+// each of them with a panic.
+//
+// IT AGREES WITH cmd/crewlet, and for a while it did not: that process built
+// its [api.Options] with no Chat reader, no ChatWriter and no ChatLive hub, so
+// a running node mounted none of the chat surface — including the `/chat/...`
+// routes `crewlet chat` talks to — while this harness served the reads and
+// every test here passed. A harness AHEAD of the process it stands in for is
+// the worst place for this seam to be: it proves the layer works and says
+// nothing about whether anything reaches it.
+//
+// `cmd/crewlet`'s own gate is TestANativeChatCompanyServesItsChatSurface, which
+// asserts a served surface rather than a compiled one, because nil is a legal
+// value for all of these.
+func chatReader(e *engine.Engine) queries.ChatReader {
+	if reader := e.Chat(); reader != nil {
+		return reader
+	}
+	return nil
+}
+
+// chatWriter and chatSearcher are the same typed-nil dance for the same
+// reason: a nil *chat.Store in an interface field is not a nil interface, and
+// every gate downstream reads it as present and then calls through.
+func chatWriter(e *engine.Engine) api.ChatWriter {
+	if w := e.ChatStore(); w != nil {
+		return w
+	}
+	return nil
+}
+
+func chatSearcher(e *engine.Engine) queries.ChatSearcher {
+	if x := e.ChatIndex(); x != nil {
+		return x
+	}
+	return nil
+}
+
+// chatRooms and chatPeers are what the live hub reads through, and they take
+// the engine by POINTER-TO-VARIABLE at the call site rather than by value:
+// the hub is built before engine.New, so `e` is still nil when these closures
+// are made and set long before either is called.
+func chatRooms(e *engine.Engine) stream.ChatRooms {
+	if e == nil {
+		return nil
+	}
+	if r := e.Chat(); r != nil {
+		return r
+	}
+	return nil
+}
+
+func chatPeers(e *engine.Engine) stream.ChatPeers {
+	if e == nil || e.Backends() == nil || e.Backends().Queue == nil {
+		return nil
+	}
+	return e.Backends().Queue
 }
 
 // stopInReverse runs a teardown in the reverse of the order it was built.

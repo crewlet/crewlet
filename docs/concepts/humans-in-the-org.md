@@ -54,7 +54,7 @@ units:
 | `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
 | `contact.github_login` | one identity | GitHub username: review requests, sender attribution. Lowercased |
 | `contact.gitlab_username` | one identity | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
-| `contact.crewlet_operator_id` | one identity | One of Tier A's `api.auth.tokens[].id`. Binds that credential to this seat, so a person writing through the dashboard, the REST API or the operator tool server acts as **themselves** — the item they file carries their name and wakes their colleagues. An **attribution, never an address**: the engine never sends as itself, so this id is left out of rosters and `lookup_colleague`, and a seat carrying only this one is reached through their dashboard queue rather than by an @-mention. Leaving a token unbound is ordinary — an operator outside the org chart, a pipeline — and it acts as `operator:<id>` under its own label rather than being refused |
+| `contact.crewlet_operator_id` | one identity | One of Tier A's `api.auth.tokens[].id`. Binds that credential to this seat, so a person writing through the dashboard, the REST API or the operator tool server acts as **themselves** — the item they file carries their name and wakes their colleagues. An attribution on every **vendor** surface, because the engine never sends as itself there: on Slack, Mattermost, Jira and the rest this id is left out of rosters and `lookup_colleague`, and a seat carrying only this one is reached through their dashboard queue rather than by an @-mention. On the engine's **own chat** (`chat.backend: native`) the same id is also an ADDRESS — the person is mentionable by handle and can be sent a direct message, because the delivery is a row in this engine's own store rather than a message it would have to send somewhere. They are still never *woken*: a human seat runs no turn, so what a mention produces is an unread count and an entry in their mention feed. See [Chat § People](chat.md#people). Leaving a token unbound is ordinary — an operator outside the org chart, a pipeline — and it acts as `operator:<id>` under its own label rather than being refused. On native chat an unbound token is the one place that is not merely unaddressable but **refused outright, reads included**: a transcript is the most sensitive thing a deployment holds, and a pipeline's credential is not a person |
 | `email` | no | Indexed so a notification addressed to the address resolves to the seat. **Not** a delivery channel: no agent has an email tool by default |
 | `availability` | no | Free text rendered into a lead's roster (timezone, hours, response expectations) |
 
@@ -218,6 +218,18 @@ Two consequences:
 2. **Agents must never wait.** The turn model is already asynchronous:
    the prompts and tool errors steer the LLM to leave state on the
    surface and end the turn.
+
+**On native chat the first consequence holds and its REASON does not, which is
+worth knowing before you choose that backend.** A seat still has no turn to
+wake, so nothing changes about delivery. But the sentence above — "the person
+is already notified natively by the tool where the work lives" — is true
+because Jira emails its assignee and Slack pings its mentions, and with
+`chat.backend: native` there is no such tool: the engine is where the work
+lives, and the engine has never sent anything as itself. So a person mentioned
+in native chat learns about it when they next open the dashboard, and not
+before. What they get there is an unread count and a mention feed. See
+[Chat § What is not here](chat.md#what-is-not-here); an agent that genuinely
+needs a person *now* escalates through a surface that does push.
 
 ---
 

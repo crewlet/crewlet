@@ -21,8 +21,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
@@ -271,7 +273,8 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil, log)
+	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil,
+		nil, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -298,7 +301,7 @@ func TestANodeWithoutTheIngressRoleBindsNoListener(t *testing.T) {
 	boot.API.Port = freePort(t)
 	boot.Node.Roles = []string{"seats", "workers"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -335,7 +338,7 @@ func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
 	boot := bootstrapFor(t, port)
 	boot.Node.Roles = []string{"seats"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -406,7 +409,7 @@ func TestANodeRunningNoSeatsBindsNoBridgeListener(t *testing.T) {
 	boot := bootstrapFor(t, port)
 	boot.Node.Roles = []string{"workers"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -619,8 +622,19 @@ func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSur
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
 	}
+	// THE SAME HUB runEngine BUILDS, so a surface served here is the one
+	// production serves. Passing nil would leave every chat route and
+	// query unregistered in every test that goes through this helper —
+	// which is precisely the shape the production wiring was in, and
+	// precisely why nothing caught it.
+	chatLive := api.NewChatLive(api.ChatLiveOptions{
+		Company: func() *config.Company { return companyConfig(e) },
+		Rooms:   func() stream.ChatRooms { return nativeChatRooms(e) },
+		Peers:   func() stream.ChatPeers { return nativeChatPeers(e) },
+		NodeID:  nodeID,
+	})
 	return serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
-		logging.Get("test"))
+		chatLive, logging.Get("test"))
 }
 
 // testEngine builds a real engine on an embedded stream in a temp directory.
@@ -1108,7 +1122,7 @@ func TestTheJSONOutputLocatesAnOrgRuleAtEachSeat(t *testing.T) {
 func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 	t.Parallel()
 	doc := strings.Replace(companyYAML, "  - name: CTO\n", "  - name: CEO\n", 1) +
-		"units:\n  - name: Platform\n    lead: Ghost\n"
+		"units:\n  - name: Platform\n    channel: platform\n    lead: Ghost\n"
 	path := writeYAML(t, "company.yaml", doc)
 	var out, errOut bytes.Buffer
 	err := run([]string{"validate", path}, &out, &errOut)
@@ -1138,7 +1152,11 @@ func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 // could be better after it.
 func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	// THE CHANNEL KEEPS THIS CASE ABOUT THE TWO KINDS. A native-chat
+	// company whose units declare none raises a third advisory of its own,
+	// and a fixture collecting it would assert a warning set rather than
+	// the pair this case names.
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: Ghost\n"
 	got, raw, _ := validateJSON(t, doc)
 	if !got.Valid {
 		t.Fatalf("a dangling lead failed validation: %s", raw)
@@ -1183,7 +1201,7 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 // edit.
 func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: Ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate", "-json"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {
@@ -1227,7 +1245,7 @@ func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 // by a CI step.
 func TestTheProseOutputNamesEachWarningsKind(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: Ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {

@@ -75,7 +75,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 
 	// A BREADCRUMB, because without one this is the silent step. A boot
-	// opens eighteen of these in a row and logs nothing between them, so a
+	// opens nineteen of these in a row and logs nothing between them, so a
 	// node that hung here emitted nothing at all until its budget expired —
 	// and the log could not say which bucket it was on.
 	//
@@ -358,7 +358,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why FIFTEEN buckets and not one
+// # Why SIXTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -388,6 +388,13 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           stamp — and a follow that expired while the thread was still
 //	           live costs at most one missed non-mention reply, which the
 //	           next mention re-establishes through the ordinary path
+//	chatReads  none at all, and it is the clearest case in the table: a read
+//	           cursor has no expiry that means anything. Somebody who has
+//	           not opened a room in four months has still read it up to
+//	           where they read it, and an aged-out cursor would silently
+//	           mark the whole channel unread — the exact opposite of the
+//	           fact it stores. Removal is a decision, taken by the
+//	           membership reconcile when a handle leaves the org chart
 //	fires      the scheduler's catchup ceiling, days: a claim that expired
 //	           inside the window a tick can still evaluate lets that fire
 //	           run a second time
@@ -438,6 +445,7 @@ const (
 	budgetSuffix       = "_budgets"
 	channelSuffix      = "_channels"
 	followsSuffix      = "_follows"
+	chatReadsSuffix    = "_chat_reads"
 	firesSuffix        = "_fires"
 	runsSuffix         = "_sandbox_runs"
 	secretsSuffix      = "_secrets"
@@ -556,6 +564,7 @@ type FleetStore struct {
 	budgets      jetstream.KeyValue
 	channels     jetstream.KeyValue
 	follows      jetstream.KeyValue
+	chatReads    jetstream.KeyValue
 	secrets      jetstream.KeyValue
 	fires        jetstream.KeyValue
 	runs         jetstream.KeyValue
@@ -602,7 +611,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, fifteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, sixteen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -672,6 +681,9 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		{&store.follows, followsSuffix,
 			"Crewlet chat thread-follows; the bucket TTL is the last-activity horizon",
 			cfg.FollowRetention},
+		{&store.chatReads, chatReadsSuffix,
+			"Crewlet per-person chat read state; NO TTL — an expired cursor marks a room unread",
+			0},
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
 			cfg.FireRetention},

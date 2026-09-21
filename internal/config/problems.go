@@ -546,7 +546,108 @@ func (c *Company) AdvisoryWarnings() []Warning {
 		w.Unit = u.Name
 		out = append(out, w)
 	}
+	return append(out, c.channelAdvisories(o, x)...)
+}
+
+// channelAdvisories is what this company's unit channels say about each
+// other: a room two units both claim, and a native-chat company that has
+// asked for no rooms at all.
+//
+// Read from DECLARED channels rather than effective ones, because a child
+// unit inheriting its parent's channel is the feature rather than a
+// collision: [org.Organization.Normalize] cascades one down a whole branch,
+// so reading the effective value would warn about every team in a division
+// that named a channel once.
+func (c *Company) channelAdvisories(o *org.Organization, x *identityIndex) []Warning {
+	var declared []*org.Unit
+	holders := map[string][]*org.Unit{}
+	var first *org.Unit
+	for u := range o.AllUnits() {
+		if first == nil {
+			first = u
+		}
+		if u.DeclaredChannel == "" {
+			continue
+		}
+		declared = append(declared, u)
+		holders[u.DeclaredChannel] = append(holders[u.DeclaredChannel], u)
+	}
+
+	var out []Warning
+
+	// TWO UNITS IN ONE ROOM, warned about BESIDE EACH OF THEM, the same
+	// placement a duplicated name gets: fixing it means renaming one of the
+	// two, and an author who sees the warning on only one of them cannot
+	// tell which.
+	//
+	// Not a refusal, because it is a shape a real company writes on
+	// purpose: two teams that genuinely stand up together, or a unit split
+	// in the chart before the room it will move to exists. What it costs is
+	// worth saying once — every unit-scoped wake reaches both teams, and
+	// each team's prompt tells it that room is its own.
+	for _, u := range declared {
+		// KEYED ON THE UNIT rather than on its name, because two units
+		// sharing a name is itself a legal document to warn about (the
+		// admission rule that refuses one is not run here), and comparing
+		// names would have each of that pair hide the other.
+		others := make([]string, 0, len(holders[u.DeclaredChannel])-1)
+		for _, other := range holders[u.DeclaredChannel] {
+			if other != u {
+				others = append(others, other.Name)
+			}
+		}
+		if len(others) == 0 {
+			continue
+		}
+		w := advisory(at(x.units[u], "channel"), fmt.Sprintf(
+			"unit %q shares its channel %q with %s. Everything scoped to one "+
+				"of them lands in the other's room, and every seat in both is "+
+				"told that channel is its team's own. Give one of them a "+
+				"channel of its own, or leave the child's empty and let it "+
+				"inherit", u.Name, u.DeclaredChannel, quotedList(others)))
+		w.Unit = u.Name
+		out = append(out, w)
+	}
+
+	// A NATIVE-CHAT COMPANY WITH NO ROOMS AT ALL. The engine opens a channel
+	// for each one a unit declares, and on the native backend that is the
+	// only thing that opens one: with none declared the company's seats can
+	// be reached in a DM and in a thread somebody else started, and there is
+	// nowhere for a team to say anything to itself.
+	//
+	// Only where there is a unit to write it on — a company with no units is
+	// a flat one whose seats have no teams to give rooms to, and a warning
+	// pointing at no line in the document is one nobody can act on. Located
+	// at the FIRST unit's `channel`, which is the line an author adds it to;
+	// the sentence says it is about all of them, because the path cannot.
+	if c.ChatBackendFor() == ChatNative && first != nil && len(declared) == 0 {
+		w := advisory(at(x.units[first], "channel"), fmt.Sprintf(
+			"no unit in this company declares a `channel`, and its chat is "+
+				"native — the engine opens a room for each channel a unit names "+
+				"and nothing else opens one, so no team here has anywhere to "+
+				"talk to itself. Give the units that work in the open a channel, "+
+				"starting with %q", first.Name))
+		w.Unit = first.Name
+		out = append(out, w)
+	}
 	return out
+}
+
+// quotedList renders names for a warning's prose: "A" and "B", or "A", "B"
+// and "C". A list a person reads, rather than a Go slice printed with %v.
+func quotedList(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = strconv.Quote(name)
+	}
+	switch len(quoted) {
+	case 0:
+		return ""
+	case 1:
+		return quoted[0]
+	default:
+		return strings.Join(quoted[:len(quoted)-1], ", ") + " and " + quoted[len(quoted)-1]
+	}
 }
 
 // Warnings is everything valid about this bootstrap that its author should

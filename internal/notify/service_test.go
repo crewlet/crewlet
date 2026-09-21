@@ -310,7 +310,15 @@ func TestTheWakeEnvelopeCarriesBothKeys(t *testing.T) {
 func TestADirectMessageThreadReplyRejoinsItsConversation(t *testing.T) {
 	h := newService(t, func(o *notify.Options, _ *harness) {
 		o.Prompts = o.Prompts.With(notify.ChatPrompt{
-			Backend: "chat", Label: "Chat", DirectKinds: []string{"D"},
+			Backend: "chat", Label: "Chat",
+			// THROUGH THE RULE, which is where a backend's answer to
+			// "was this direct" lives now: one value the prompt, the
+			// delivery obligation and the working indicator all read,
+			// so they cannot hold three opinions about one message.
+			Address: notify.AddressRule{
+				DirectKinds: []string{"D"},
+				Follows:     notify.AddressingFollows(),
+			},
 		})
 	})
 

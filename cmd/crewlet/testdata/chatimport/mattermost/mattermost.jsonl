@@ -1,0 +1,5 @@
+{"type":"version","version":1}
+{"type":"team","team":{"name":"nimbus","display_name":"Nimbus"}}
+{"type":"channel","channel":{"team":"nimbus","name":"engineering","display_name":"Engineering","type":"O"}}
+{"type":"post","post":{"team":"nimbus","channel":"engineering","user":"founder","message":"Morning @engineer — the plan is at https://example.com/plan","create_at":1932093300000,"replies":[{"user":"engineer","message":"On it. Ship & measure.","create_at":1932093360000}]}}
+{"type":"direct_channel","direct_channel":{"members":["founder","engineer"]}}

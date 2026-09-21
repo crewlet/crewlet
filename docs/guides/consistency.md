@@ -69,7 +69,7 @@ happened to omit the key. There are four:
 | Surface | Default | May the caller choose? |
 |---|---|---|
 | A seat's own tools, inside a turn | `linearizable` | No |
-| The operator MCP, about tracker content | `linearizable` | No |
+| The operator MCP, about the company's own content — the tracker, the knowledge base and chat | `linearizable` | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
 | Any answer **about replication** — the retention report, the Fleet screen's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
 

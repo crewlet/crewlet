@@ -35,7 +35,11 @@ func newSocket(t *testing.T, authOpts func(*config.APIAuth), query stream.Query)
 	guard := auth.New(&b)
 	svc := buildService(t, stream.Options{})
 
-	srv := httptest.NewServer(stream.Handler(guard, svc, query))
+	// No chat arm: these cases are about the query channel and the
+	// credential, and a nil hub is a node that serves no native chat —
+	// every method on one is a no-op, which is what lets the socket carry
+	// no branch for it.
+	srv := httptest.NewServer(stream.Handler(guard, svc, query, nil))
 	t.Cleanup(srv.Close)
 	return &socketFixture{
 		server: srv, svc: svc,

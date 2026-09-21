@@ -448,12 +448,14 @@ func (t *Transport) SupportsStatusText() bool { return true }
 // roughly one request a minute per live turn.
 func (t *Transport) StatusRefresh() time.Duration { return 45 * time.Second }
 
-// DMChannelPrefix implements [notify.StatusPoster].
+// AddressRule implements [notify.StatusPoster].
 //
-// Slack's channel ids carry their kind in the first letter, so this is exact
-// rather than a heuristic — and it is what answers for an app_mention, whose
-// payload omits `channel_type` entirely.
-func (t *Transport) DMChannelPrefix() string { return DMPrefix }
+// THE PROMPT'S OWN RULE, not a second one: the indicator raises on exactly
+// the messages the prompt tells the agent it owes an answer to. Slack's
+// channel ids carry their kind in the first letter, so the prefix half of it
+// is exact rather than a heuristic — and it is what answers for an
+// app_mention, whose payload omits `channel_type` entirely.
+func (t *Transport) AddressRule() notify.AddressRule { return AddressRule() }
 
 // SetStatus implements [notify.StatusPoster].
 func (t *Transport) SetStatus(ctx context.Context, handle, channel, thread, status string) bool {

@@ -216,6 +216,9 @@ export default defineConfig({
       // The state log's retention document and its two operator gates, which
       // the Fleet screen's replication panels read and write.
       "/work": { target: "http://localhost:8000" },
+      // Every chat write, and the read-cursor flush. The reads are questions
+      // on the socket above; these are the requests that are not questions.
+      "/chat": { target: "http://localhost:8000" },
     },
   },
 });

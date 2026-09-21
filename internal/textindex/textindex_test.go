@@ -155,8 +155,8 @@ func TestAShortDocumentBeatsALongOneAtEqualFrequency(t *testing.T) {
 	t.Parallel()
 	c := textindex.Corpus{Docs: 100, AvgLength: 400}
 	idf := textindex.IDF(100, 10)
-	short := textindex.Score(idf, textindex.Posting{DocID: "s", Freq: 3, Length: 60}, c)
-	long := textindex.Score(idf, textindex.Posting{DocID: "l", Freq: 3, Length: 4000}, c)
+	short := textindex.ProseProfile.Score(idf, textindex.Posting{DocID: "s", Freq: 3, Length: 60}, c)
+	long := textindex.ProseProfile.Score(idf, textindex.Posting{DocID: "l", Freq: 3, Length: 4000}, c)
 	if short <= long {
 		t.Errorf("short %v did not beat long %v at the same frequency", short, long)
 	}
@@ -169,7 +169,7 @@ func TestFrequencySaturates(t *testing.T) {
 	c := textindex.Corpus{Docs: 100, AvgLength: 400}
 	idf := textindex.IDF(100, 10)
 	at := func(freq int) float64 {
-		return textindex.Score(idf, textindex.Posting{DocID: "d", Freq: freq, Length: 400}, c)
+		return textindex.ProseProfile.Score(idf, textindex.Posting{DocID: "d", Freq: freq, Length: 400}, c)
 	}
 	first, second, tenth := at(1), at(2), at(10)
 	if !(second > first && tenth > second) {
@@ -184,7 +184,7 @@ func TestFrequencySaturates(t *testing.T) {
 			"one word", late, early)
 	}
 	// Bounded above by idf*(K1+1), which is what saturation MEANS.
-	if ceiling := idf * (textindex.K1 + 1); at(1_000_000) > ceiling {
+	if ceiling := idf * (textindex.ProseProfile.K1() + 1); at(1_000_000) > ceiling {
 		t.Errorf("score exceeded its ceiling %v", ceiling)
 	}
 }
@@ -204,14 +204,14 @@ func TestCoveringMoreOfTheQueryWins(t *testing.T) {
 	c := textindex.Corpus{Docs: 100, AvgLength: 200}
 	rare, common := textindex.IDF(100, 5), textindex.IDF(100, 40)
 	both := textindex.Posting{DocID: "a", Freq: 2, Length: 200}
-	covers := textindex.Score(rare, both, c) + textindex.Score(common, both, c)
-	one := textindex.Score(rare, textindex.Posting{DocID: "b", Freq: 2, Length: 200}, c)
+	covers := textindex.ProseProfile.Score(rare, both, c) + textindex.ProseProfile.Score(common, both, c)
+	one := textindex.ProseProfile.Score(rare, textindex.Posting{DocID: "b", Freq: 2, Length: 200}, c)
 	if covers <= one {
 		t.Errorf("covering both terms (%v) lost to matching one (%v)", covers, one)
 	}
 	// And the common term is worth LESS than the rare one it is added to,
 	// or the weighting is not doing its job.
-	if textindex.Score(common, both, c) >= textindex.Score(rare, both, c) {
+	if textindex.ProseProfile.Score(common, both, c) >= textindex.ProseProfile.Score(rare, both, c) {
 		t.Error("a term 40% of the corpus holds weighs as much as one 5% holds")
 	}
 
@@ -222,11 +222,11 @@ func TestCoveringMoreOfTheQueryWins(t *testing.T) {
 	// top of the usual range ranks by verbosity instead of by coverage.
 	// (Measured: the two are equal at about six occurrences with K1=1.2,
 	// and coverage already loses at three with K1=2.0.)
-	verbose := textindex.Score(rare, textindex.Posting{DocID: "c", Freq: 5, Length: 200}, c)
+	verbose := textindex.ProseProfile.Score(rare, textindex.Posting{DocID: "c", Freq: 5, Length: 200}, c)
 	if covers <= verbose {
 		t.Errorf("covering both terms (%v) lost to five occurrences of the rarer "+
 			"one (%v) — K1=%v saturates too slowly for a corpus that repeats "+
-			"its subject", covers, verbose, textindex.K1)
+			"its subject", covers, verbose, textindex.ProseProfile.K1())
 	}
 }
 
@@ -244,13 +244,13 @@ func TestScoringSurvivesAMissingCorpus(t *testing.T) {
 		{"no document length", textindex.Posting{DocID: "d", Freq: 2}, textindex.Corpus{Docs: 10, AvgLength: 200}},
 		{"neither", textindex.Posting{DocID: "d", Freq: 2}, textindex.Corpus{}},
 	} {
-		got := textindex.Score(idf, tc.p, tc.c)
+		got := textindex.ProseProfile.Score(idf, tc.p, tc.c)
 		if math.IsNaN(got) || math.IsInf(got, 0) || got < 0 {
 			t.Errorf("%s scored %v", tc.name, got)
 		}
 	}
 	// No occurrences is no contribution, never a phantom hit.
-	if got := textindex.Score(idf, textindex.Posting{DocID: "d", Length: 10},
+	if got := textindex.ProseProfile.Score(idf, textindex.Posting{DocID: "d", Length: 10},
 		textindex.Corpus{Docs: 10, AvgLength: 10}); got != 0 {
 		t.Errorf("a zero-frequency posting scored %v", got)
 	}
@@ -306,5 +306,84 @@ func TestASnippetCentresOnTheMatch(t *testing.T) {
 	}
 	if got := textindex.Snippet("", []string{"x"}, 100); got != "" {
 		t.Errorf("an empty body produced %q", got)
+	}
+}
+
+// WHAT THE CHAT PROFILE BUYS, stated as the behaviour it exists for.
+//
+// The corpus is bimodal: a two-token acknowledgement beside a paragraph that
+// actually answers the question. Under the prose tuning the acknowledgement
+// WINS — its length normalisation is built for a corpus where a three-line
+// page mentioning a term is usually about that term, and on chat that
+// assumption inverts. Under the chat tuning the paragraph wins.
+//
+// Measured at these values: prose scores the acknowledgement 1.68 and the
+// paragraph 1.29; chat scores them 1.19 and 1.45. That reversal is the whole
+// of the change, and it is why neither value may be tidied toward the other.
+func TestTheChatProfileRanksTheAnswerAboveTheAcknowledgement(t *testing.T) {
+	t.Parallel()
+	c := textindex.Corpus{Docs: 1000, AvgLength: 200}
+	idf := textindex.IDF(1000, 50)
+	// "ok" — the query's word is the whole message.
+	ack := textindex.Posting{DocID: "ack", Freq: 1, Length: 2}
+	// A considered reply that uses the word three times in four hundred.
+	answer := textindex.Posting{DocID: "answer", Freq: 3, Length: 400}
+
+	if p := textindex.ProseProfile; p.Score(idf, ack, c) <= p.Score(idf, answer, c) {
+		t.Fatalf("the prose profile already prefers the substantive message "+
+			"(%v vs %v) — then the chat profile buys nothing and one tuning "+
+			"would do", p.Score(idf, ack, c), p.Score(idf, answer, c))
+	}
+	p := textindex.ChatProfile
+	if got, want := p.Score(idf, ack, c), p.Score(idf, answer, c); got >= want {
+		t.Fatalf("the chat profile scores the acknowledgement %v and the "+
+			"answer %v: on a corpus of one-liners and pasted blocks that hands "+
+			"every query to whoever typed the shortest reply", got, want)
+	}
+}
+
+// THE TWO PROFILES DIFFER IN EXACTLY ONE PARAMETER.
+//
+// One arithmetic, two tunings. A second saturation value would be a second
+// ranking to re-measure for a difference nobody has evidence for: a person who
+// says a word twice in a message means it as much as a page that says it
+// twice.
+func TestTheProfilesDifferOnlyInLengthNormalisation(t *testing.T) {
+	t.Parallel()
+	prose, chat := textindex.ProseProfile, textindex.ChatProfile
+	if prose.K1() != chat.K1() {
+		t.Errorf("the profiles saturate term frequency differently (%v and %v) "+
+			"— say why at the tuning or make them one value",
+			prose.K1(), chat.K1())
+	}
+	if !(chat.B() < prose.B()) {
+		t.Errorf("chat normalises length by %v and prose by %v: the weaker "+
+			"penalty belongs to the bimodal corpus", chat.B(), prose.B())
+	}
+}
+
+// AN UNTUNED PROFILE RANKS NOTHING, rather than silently ranking by a default.
+//
+// The zero value of a Profile is a caller that never chose a tuning. Scoring
+// it with prose's numbers would produce a result list indistinguishable from a
+// tuned one, and the corpus whose tuning was forgotten would simply be ranked
+// wrong for ever.
+func TestAnUntunedProfileRanksNothing(t *testing.T) {
+	t.Parallel()
+	var unset textindex.Profile
+	if unset.Valid() {
+		t.Fatalf("the zero profile %q reports itself tuned", unset)
+	}
+	c := textindex.Corpus{Docs: 1000, AvgLength: 200}
+	got := unset.Score(textindex.IDF(1000, 50),
+		textindex.Posting{DocID: "d", Freq: 5, Length: 100}, c)
+	if got != 0 {
+		t.Fatalf("the zero profile scored %v, so a corpus whose tuning was "+
+			"forgotten would rank plausibly and wrongly", got)
+	}
+	for _, p := range textindex.Profiles() {
+		if !p.Valid() {
+			t.Errorf("shipped profile %q has no tuning", p)
+		}
 	}
 }

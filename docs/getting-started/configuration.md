@@ -381,6 +381,8 @@ somebody is waiting on.
 Tier A (`crewlet.yaml`, restart-only) says where this node's stream, store and
 API are.  Example:
 
+## Stream, store and coordination (Tier A)
+
 ```yaml
 # crewlet.yaml — Tier A bootstrap
 stream:
@@ -528,17 +530,17 @@ stream:
                                     #   stream, so a full log drops no history —
                                     #   the append is refused, loudly, naming
                                     #   whatever is blocking the trim. ONE
-                                    #   BUDGET FOR ALL THREE LOGS: the broker
+                                    #   BUDGET FOR ALL FOUR LOGS: the broker
                                     #   reserves each ceiling in full when it
                                     #   creates the stream, so the derived
-                                    #   ceilings of this field and the two below
-                                    #   are scaled down together to fit half of
-                                    #   what the broker can grant them (never
-                                    #   below 1 GiB each). A value you set is
-                                    #   never scaled, and a boot that cannot
+                                    #   ceilings of this field and the three
+                                    #   below are scaled down together to fit
+                                    #   half of what the broker can grant them
+                                    #   (never below 1 GiB each). A value you set
+                                    #   is never scaled, and a boot that cannot
                                     #   reserve it fails naming the field, the
                                     #   bytes it needed and the bytes the broker
-                                    #   had. Every one of the three is the value
+                                    #   had. Every one of the four is the value
                                     #   a stream is CREATED with: editing it
                                     #   later changes nothing until
                                     #   `crewlet retention set-capacity` does.
@@ -568,6 +570,28 @@ stream:
                                     #   and a blocked trim fills either one in
                                     #   the same time. Crossing it refuses the
                                     #   append, like the mutation log's
+  # chat_log_max_bytes: 8589934592  #   the chat log, the ordered stream every
+                                    #   native message, reaction and membership
+                                    #   change goes through (1..256 GiB). UNSET
+                                    #   ASKS FOR 8 GiB, capped by the same
+                                    #   quarter of free space the mutation log
+                                    #   derives from — the vector changelog's
+                                    #   shape, not the knowledge base's, because
+                                    #   the number is chosen for an EXCURSION
+                                    #   rather than scaled off a disk. WHY 8 GiB:
+                                    #   at the declared census of 20 000 messages
+                                    #   a day and a mean record near 1.5 KiB the
+                                    #   log grows ~30 MB a day, so a healthy
+                                    #   fleet holds ~210 MB — one min_age window,
+                                    #   not a year. This ceiling is what a
+                                    #   COMPLETELY BLOCKED trim may spend first:
+                                    #   ~9 months at that census, ~4 at the
+                                    #   supported 50 000/day. Crossing it refuses
+                                    #   the append, which for a transcript is the
+                                    #   only acceptable direction — old messages
+                                    #   go by a prune RECORD every node applies
+                                    #   (chat.native.message_retention_days),
+                                    #   never by a stream bound
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
@@ -651,13 +675,21 @@ store:
                                     #   a copy of this one alone; separate it
                                     #   only to put it on a different disk, and
                                     #   never onto the same file as `path`
-  # max_open_conns: 0               #   connection-pool bound; 0 takes the
-                                    #   store's own default, which is four
-                                    #   readers plus one pinned connection per
-                                    #   state-log domain. Raise it if the
-                                    #   `pool_starved` alarm fires — see
-                                    #   reference/alarms.md — which means reads
-                                    #   are queuing before they start
+  # max_open_conns: 0               # the connection pool bound; 0 takes the
+                                    #   store's own default of 8 readers, plus
+                                    #   one more on the replicated estate for
+                                    #   each applier that holds a pinned writer.
+                                    #   EIGHT because that is what the dashboard
+                                    #   socket admits at once, which is the chat
+                                    #   screen's opening burst: below it a query
+                                    #   queues for a connection before it starts
+                                    #   — the `pool_starved` alarm, see
+                                    #   reference/alarms.md — and above it the
+                                    #   spare connections only deepen a queue,
+                                    #   since writers serialise on the file lock
+                                    #   however many readers there are. Raise it
+                                    #   only for a node serving more dashboards
+                                    #   than one
   # busy_timeout_seconds: 0         #   how long a WRITE waits for the
                                     #   database's write lock before giving up
                                     #   and retrying once; 0 takes the store's
@@ -830,6 +862,16 @@ units:
         goals:                          # optional
           - "Ship features on 2-week cadence"
         channel: backend                # optional — the team's chat channel, inherited
+                                        #   by children that name none. It is an
+                                        #   ADDRESS: lowercase letters, digits and
+                                        #   `-`, up to 64 characters, and a name
+                                        #   rather than a rendering or an id —
+                                        #   `backend`, not `#backend` and not
+                                        #   `C_BACKEND`. On native chat the engine
+                                        #   opens this room and hands the name to
+                                        #   agents to type into their own tools; on
+                                        #   Slack and Mattermost the same grammar is
+                                        #   what both accept as a channel name
         project: "BACK"                 # optional — the unit's tracker "home": routing +
         space: "BACK"                   #   write target. NOT read scope, NOT a credential,
                                         #   and NOT vendor-specific — the same keys name a
@@ -1098,9 +1140,63 @@ tracker:
                                          #   answered by the history either way
 ```
 
-Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#stream), or a decision the engine makes once for everybody.
+Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#stream-store-and-coordination-tier-a), or a decision the engine makes once for everybody.
 
 **A native tracker or knowledge base needs a stream that survives a restart.** Their write-ahead logs live on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. Either backend starts the log: a company on Jira whose knowledge base is the engine's own, the default without Confluence, is refused the same way. Only a company whose tracker and knowledge base are both a vendor's (or `none`) starts no log at all and is unaffected, which is why the rule needs both files to see.
+
+---
+
+## Chat
+
+```yaml
+chat:
+  backend: native                        # native (default) | vendor | none
+```
+
+Which **chat surface** this company talks on, the third axis and the same shape as the two above. Unset derives `vendor` when the company declares a vendor chat surface and `native` otherwise — and for chat "declares" means `integrations.mattermost`, `integrations.slack`, **or any seat's own `integrations.slack` app**, because Slack's credentials are per seat and a company with seven working Slack apps may never have written the org-level block at all. Naming `native` beside any of them is refused: conversations would live in two places, a person would reply in one of them, and nothing anywhere could say which thread was the real one. `none` is a company whose seats are woken by the tracker, the code host and schedules only.
+
+The value is `vendor` rather than a product name — the other two axes name theirs — because a company legitimately runs **both** Mattermost and Slack: they are different workspaces with different people in them, and an org migrating between them runs the pair for months.
+
+See [Chat](../concepts/chat.md) for what the native surface is, who a message wakes, and what it deliberately does not do.
+
+### The native chat's own policy
+
+```yaml
+chat:
+  backend: native
+  native:                                # ONLY on a native company — a retention
+                                         #   horizon on a company whose messages
+                                         #   live in Slack describes nothing, and
+                                         #   is refused
+    message_retention_days: 365          # how long a message lives (default 365,
+                                         #   30..3650). 0 KEEPS MESSAGES FOR EVER,
+                                         #   which is a different setting from
+                                         #   leaving the field out — chat is the
+                                         #   highest-volume thing the engine
+                                         #   stores, and every message sits in
+                                         #   every snapshot and every node join
+    default_channel_private: false       # create a channel private when the caller
+                                         #   names no visibility. Default false:
+                                         #   a company's rooms are readable by its
+                                         #   own seats
+    typing_status: always                # always (default) | addressed — the same
+                                         #   closed set, and the same meaning, as
+                                         #   integrations.slack.typing_status
+    thread_context_messages: 10          # earlier thread messages carried into the
+                                         #   woken seat's prompt (default 10, up to
+                                         #   50). 0 takes the default: a seat handed
+                                         #   a reply with none of its thread cannot
+                                         #   answer it. The block is re-sent on every
+                                         #   round of the tool loop, so this number
+                                         #   multiplies a whole turn's repeated
+                                         #   content
+```
+
+`message_retention_days` is **three-valued**, and the difference matters: leaving it out takes a year, `0` keeps messages for ever, and a number between 30 and 3650 is that horizon. Note that `tracker.native.inbox_retention_days` reads `0` the other way — as "take the default" — because an inbox row is derived from history that answers for ever, while a message is the only copy of what somebody said.
+
+Everything else native chat could be told is either the operator's (how big the log may grow, how long its replay window is kept — Tier A, under `stream.`) or a decision the engine makes once for everybody.
+
+**Two things `crewlet validate` will say about your rooms**, as warnings rather than refusals, because both are shapes a real company writes on purpose. A **channel two units both declare** is reported beside each of them: everything scoped to one lands in the other's room, and every seat in both is told that channel is its team's own. And a **native-chat company where no unit declares a `channel` at all** is reported at the first unit: the engine opens a room for each channel a unit names and nothing else opens one, so no team has anywhere to talk to itself. A child unit that names none and inherits its parent's is neither — that is the field working as intended.
 
 ---
 

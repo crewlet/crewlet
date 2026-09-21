@@ -547,20 +547,51 @@ which looks exactly like a sweep that works to whoever checks the node it ran
 on.
 
 Each domain's **operation ledger** — the table that answers "did the operation
-I published land here?" — is swept at **30 days**. The horizon comes from the
+I published land here?" — is swept at a horizon **the domain itself declares**,
+and every domain in this build declares **30 days**. The horizon comes from the
 client that actually re-asks: a machine retry lives inside a five-second wait,
 but a seat carries an operation id forward and re-asks on its next wake, hours
 or a weekend later. An operation id older than that resolves `unknown` rather
 than `applied`, which is the honest answer once the row is gone.
 
+It is per domain rather than one number for the fleet because the table takes
+one row per applied record: its size is that domain's own commit rate times
+this horizon, so a domain committing an order of magnitude more than the work
+tracker would keep an order of magnitude more table over the same thirty days.
+The floor is the sweep's own fifteen-minute tick — a horizon at or below it is
+raised to the tick and a `maintenance_horizon_raised_to_the_tick` warning names
+the job, because under the tick the declared number stops describing the table.
+
 A person's **inbox** — one row per routed change per recipient — is swept at
 `tracker.native.inbox_retention_days`, **365 days** by default and settable
-between 30 and 3650. It is the one horizon here that deletes something a person
-reads, and it deletes a *pointer* rather than the thing pointed at: the history
-row behind every notice is never swept, so "what was I told about in 2024" is
+between 30 and 3650. It deletes something a person reads, and it deletes a
+*pointer* rather than the thing pointed at: the history row behind every
+notice is never swept, so "what was I told about in 2024" is
 still a `work_activity` question at any age. A month is the floor because below
 it an inbox stops being one — somebody away for four weeks would come back to
 nothing.
+
+**Chat is a third exception, and a different kind of one.** The two above are
+swept per node, by each node's own maintenance worker, over tables that are
+this node's bookkeeping. The chat transcript is not bookkeeping and is not
+this node's: it is replicated content, so it is not swept at all — it is
+PRUNED BY A RECORD, one more change on the chat log that every node applies
+like any other. A message is also the only copy of what somebody said, so
+`chat.native.message_retention_days` — **365 days** by default, settable
+between 30 and 3650, and **`0` to keep everything for ever** — is a policy
+decision rather than a bookkeeping one. Note that `0` reads the opposite way
+here from `tracker.native.inbox_retention_days`, where it means "take the
+default": an inbox row is derived from history that answers for ever, and a
+message is not derived from anything.
+
+The sweep is a **record on the chat log**, not a local delete, and that is
+forced rather than stylistic. A message's instant is the BROKER's, stamped
+when the record was stored, so a fleet-singleton duty publishing one cutoff is
+what makes every node delete exactly the same rows; nodes each reading their
+own clock would diverge by whatever their clocks disagree by, permanently,
+with no read that repairs it. A channel may carry a horizon of its own, which
+beats the company's. Each node's chat keyword index follows the same range
+afterwards, because a forward-only walk cannot see a row that vanished.
 
 ## The storage forecast
 
@@ -571,6 +602,17 @@ a day, 3 000 turns a day, 50 projects):
 |---|---|---|---|
 | replicated store, per node | 9.7 GB | 26.6 GB | 43.8 GB |
 | snapshot volume at ×4.2 | 40.8 GB | 111.8 GB | 183.9 GB |
+
+**Chat is forecast separately, and it is the reason the horizon exists.** At
+the declared census of 20 000 messages a day, a year is 7.3 M message rows;
+at the row-and-index width this schema carries that is roughly **7 GB per
+node, per year** — comparable to everything else the reference company writes
+in its first year put together. Under the default 365-day horizon that figure
+is a STEADY STATE rather than a slope: the prune removes about as much as the
+company writes, on every node, in every snapshot and in every join transfer.
+With `message_retention_days: 0` it is a slope, and a company choosing that
+should size the snapshot volume for it. This is a DERIVED number over a
+declared census — change the census and it changes proportionally.
 
 The log itself, on a healthily-trimming fleet, holds **about 156 MB** — the
 `min_age` window's worth of records, not a year's. `blocked_by` is the field
@@ -617,8 +659,10 @@ which:
   deliverable time, the quantisation recall, the fsync rates. These came off a
   benchmark.
 - **DERIVED** — the join projections, the storage forecast, the barrier's
-  annual bytes. These are arithmetic over measured inputs and a stated corpus.
-  Change the corpus and they change.
+  annual bytes, and the chat transcript's 7 GB a node a year. These are
+  arithmetic over measured inputs and a stated corpus. Change the corpus and
+  they change — the chat figure in particular is linear in the declared
+  census, and a company that talks twice as much pays twice as much for it.
 - **PROJECTED** — the supported search corpus at your concurrency, and the
   under-load search capacity. These need a benchmark on your hardware, and
   until it runs they are estimates with a stated basis rather than facts.

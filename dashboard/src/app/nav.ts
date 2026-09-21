@@ -42,7 +42,7 @@ import type { MarkName } from "~/ui/glyph.tsx";
 
 /** The workspaces, which are the rail's rows. */
 export type Workspace =
-  "inbox" | "me" | "work" | "company" | "knowledge" | "activity" | "cost" | "admin";
+  "inbox" | "me" | "work" | "company" | "chat" | "knowledge" | "activity" | "cost" | "admin";
 
 export interface RailRow {
   key: Workspace;
@@ -105,6 +105,17 @@ export const RAIL: RailRow[] = [
     owns: ["company"],
     hint: "The charter, the people and the units",
     chord: "c",
+  },
+  {
+    // AFTER THE PEOPLE AND BEFORE WHAT THEY KNOW, which is the order the rail
+    // argues: the company, then the talking, then what the talking produced.
+    key: "chat",
+    label: "Chat",
+    icon: "chat",
+    path: ["chat"],
+    owns: ["chat"],
+    hint: "The company's own rooms, threads and direct messages",
+    chord: "h",
   },
   {
     key: "knowledge",
@@ -179,6 +190,7 @@ export function railRow(key: Workspace | ""): RailRow | undefined {
 export const RESERVED_SEGMENTS: string[] = [
   "views",
   "search",
+  "mentions",
   "people",
   "units",
   "turns",
@@ -285,6 +297,30 @@ export const DESTINATIONS: Destination[] = [
     icon: "group",
     path: ["company", "people"],
     hint: "Every seat, what it is doing, and why it stopped",
+  },
+  {
+    key: "chat",
+    workspace: "chat",
+    label: "Chat",
+    icon: "chat",
+    path: ["chat"],
+    hint: "Your rooms, newest activity first",
+  },
+  {
+    key: "chat-mentions",
+    workspace: "chat",
+    label: "Mentions",
+    icon: "notifications",
+    path: ["chat", "mentions"],
+    hint: "Every message that named you — the whole away story, because nothing is sent to you",
+  },
+  {
+    key: "chat-search",
+    workspace: "chat",
+    label: "Search chat",
+    icon: "search",
+    path: ["chat", "search"],
+    hint: "Rank what has been said in every room you can read",
   },
   {
     key: "knowledge",

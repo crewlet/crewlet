@@ -83,8 +83,16 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"RoleSandbox", "run_in", strs(Placements)},
 		{"LocalSandbox", "runtime", strs(ContainerRuntimes)},
 		{"MCPServer", "transport", strs(MCPTransports)},
+		{"Chat", "backend", strs(ChatBackends)},
+		// THE SAME CLOSED SET ON ALL THREE CHAT SURFACES, which is why it
+		// is one type — and why all three rows are here: "is somebody
+		// waiting on this seat" is a property of the message rather than of
+		// the product carrying it, and a rename that updated two of these
+		// tags and not the third would leave enums that agree today and
+		// drift on the next value.
 		{"Slack", "typing_status", strs(WorkingStatuses)},
 		{"Mattermost", "typing_status", strs(WorkingStatuses)},
+		{"ChatNativeConfig", "typing_status", strs(WorkingStatuses)},
 		{"GitLabProvisioning", "access_level", strs(GitLabAccessLevels)},
 		{"GitLabProvisioning", "group_webhook", strs(ContainerWebhookModes)},
 		// The same closed set on both code hosts, which is why it is one
@@ -494,6 +502,54 @@ units:
 			name: "a read scope for a knowledge base that is switched off",
 			tier: TierCompany, validatorOnly: true,
 			yaml: "name: Acme\nknowledge:\n  backend: none\n  scope: [HANDBOOK]\n",
+		},
+		// The native chat policy, every knob written — including
+		// `message_retention_days: 0`, which is the setting that is its own
+		// type's zero value ("keep messages for ever") and must survive
+		// BOTH layers: a schema or a validator reading it as "unset" would
+		// delete a company's history a year after somebody asked for it to
+		// be kept.
+		{
+			name: "a native chat policy", tier: TierCompany,
+			yaml: "name: Acme\nchat:\n  native:\n    message_retention_days: 0\n" +
+				"    default_channel_private: true\n    typing_status: addressed\n" +
+				"    thread_context_messages: 25\n",
+		},
+		{
+			name: "a chat backend that is a product name", tier: TierCompany,
+			editorCatches: true,
+			yaml:          "name: Acme\nchat: {backend: mattermost}\n",
+		},
+		{
+			name: "a thread window past the cap", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nchat:\n  native: {thread_context_messages: 99}\n",
+		},
+		// A UNIT CHANNEL IS AN ADDRESS, and the pattern is on the field, so
+		// an editor catches the `#` an author renders it with before the
+		// engine does.
+		{
+			name: "a unit channel written as a mention", tier: TierCompany,
+			editorCatches: true,
+			yaml:          "name: Acme\nunits:\n  - {name: Core, channel: \"#core\"}\n",
+		},
+		// A HORIZON BELOW THE FLOOR: the field's real set is "0, or
+		// 30..3650", which a minimum/maximum pair cannot state — the schema
+		// would have to carve a hole out of its own range. So it carries
+		// the outer bounds, lets 14 through, and the validator is the only
+		// layer that refuses it.
+		{
+			name: "a message horizon below the floor", tier: TierCompany,
+			validatorOnly: true,
+			yaml:          "name: Acme\nchat:\n  native: {message_retention_days: 14}\n",
+		},
+		// NATIVE CHAT BESIDE THE VENDOR IT WOULD DUPLICATE, which turns on
+		// a block's mere presence — the same shape of rule the knowledge
+		// and tracker axes leave to the validator alone.
+		{
+			name: "native chat beside a mattermost workspace", tier: TierCompany,
+			validatorOnly: true,
+			yaml: "name: Acme\nchat: {backend: native}\nintegrations:\n" +
+				"  mattermost: {enabled: true, url: \"https://chat.example.com\", team: acme}\n",
 		},
 		{
 			name: "unknown bootstrap key", tier: TierBootstrap, editorCatches: true,

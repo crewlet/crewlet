@@ -1,0 +1,18 @@
+[
+  {
+    "id": "U0FOUNDER",
+    "name": "founder",
+    "profile": {"display_name": "founder", "real_name": "The Founder"}
+  },
+  {
+    "id": "U0ENGINEER",
+    "name": "engineer",
+    "profile": {"display_name": "engineer", "real_name": "An Engineer"}
+  },
+  {
+    "id": "U0STRANGER",
+    "name": "stranger",
+    "deleted": true,
+    "profile": {"display_name": "stranger", "real_name": "Somebody Who Left"}
+  }
+]

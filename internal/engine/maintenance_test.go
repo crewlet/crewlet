@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE assertion whose absence was the bug. Every one of these tables ships a
@@ -53,6 +52,15 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// every recall scanned, forever.
 		"agent_diary",
 		"agent_diary_long",
+		// THE FOURTH DOMAIN'S LEDGER, and it is the first one on this
+		// list whose horizon is not the framework's thirty days: chat
+		// declares seven, because the table takes one row per applied
+		// record and its size is that domain's commit rate times the
+		// horizon — a log carrying conversation commits an order of
+		// magnitude more often than a work tracker does. See
+		// [chat.ChatOpsRetention]. It is a PER-NODE job for the same
+		// reason every other `<domain>_ops` entry is.
+		"chat_ops",
 		"conversation_sessions",
 		// Added the same way the diary was: the table shipped with a
 		// memsync entry that republishes every row to every peer on
@@ -286,11 +294,14 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		// a delete on one node's own authority is what the identity
 		// claim forbids.
 		//
-		// Their OPERATION LEDGERS are the exception, and they are here
-		// under one entry because every domain takes the same horizon:
-		// the ledger is framework bookkeeping about what THIS applier
-		// wrote, not a durable row any peer reads.
-		"<domain>_ops": statelog.OpsRetention,
+		// NOR THEIR OPERATION LEDGERS, which were one entry here while
+		// every domain took one constant. The horizon is per domain
+		// now — a ledger's size is that domain's own commit rate times
+		// its retention — and the rule is certified against EVERY
+		// registered domain by statelogtest's declaration case, which
+		// a fourth domain inherits without being added anywhere. A row
+		// per domain here would be a second list, and the list a new
+		// domain is not added to is the list that stops covering it.
 	} {
 		if horizon <= maintenance.Interval {
 			t.Errorf("%s retention (%v) is not longer than the %v tick",

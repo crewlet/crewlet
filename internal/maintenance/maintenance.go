@@ -281,7 +281,15 @@ func New(opts Options) (*Worker, error) {
 				"and grows for ever on every peer", j.Name, string(j.Scope)))
 			continue
 		}
-		if j.Horizon > 0 && j.Horizon < w.interval {
+		// AT OR BELOW, which is what the doc above promises and what the
+		// state-log suite refuses a domain for. A horizon exactly ON the
+		// tick does not move when it is raised — the value is already
+		// the floor — so the WARNING is the whole of it, and that is the
+		// point: a retention sitting on the sweep's own cadence is one
+		// the sweep decides rather than the caller, and the caller is
+		// the only one who will size a disk from it. Strictly below was
+		// the condition, which let the boundary case pass in silence.
+		if j.Horizon > 0 && j.Horizon <= w.interval {
 			log.Warn("maintenance_horizon_raised_to_the_tick",
 				"job", j.Name, "asked", j.Horizon.String(), "using", w.interval.String())
 			j.Horizon = w.interval
