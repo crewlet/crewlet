@@ -214,27 +214,27 @@ func ParseOtelHeaders(raw string) map[string]string {
 	return out
 }
 
-// OtelSigningKey derives the token key every process must share.
+// OtelSigningMaterial is the keyring every process must share, and the warning
+// for a deployment that has none.
 //
 // FROM THE KEYRING, which is the one secret every Crewlet process already
 // loads — and never from the database, which a token check must not depend
 // on: the check runs on the request path of an endpoint that is deliberately
 // reachable without other credentials.
 //
-// With no keyring the key is RANDOM PER PROCESS. A single node is unaffected,
-// because the node that mints also verifies. A fleet gets a loud warning
-// rather than a deterministic key invented from non-secret material, which
-// would let anyone who can reach the endpoint forge one.
-func OtelSigningKey(material []string) []byte {
-	if len(material) == 0 {
+// With no usable keyring the key is RANDOM PER PROCESS. A single node is
+// unaffected, because the node that mints also verifies. A fleet gets a loud
+// warning rather than a deterministic key invented from non-secret material,
+// which would let anyone who can reach the endpoint forge one.
+func OtelSigningMaterial(material runtoken.Material) runtoken.Material {
+	if !material.Usable() {
 		log.Warn("sandbox_otel_signing_key_ephemeral",
-			"detail", "no Tier A secrets.keys, so OTLP tokens are signed with "+
-				"a per-process key: on a fleet, a box that exports to any node "+
-				"but the one that minted its token is refused. `crewlet secrets "+
-				"keygen` fixes it")
-		return nil
+			"detail", "no usable Tier A secrets.keys, so OTLP tokens are signed "+
+				"with a per-process key: on a fleet, a box that exports to any "+
+				"node but the one that minted its token is refused. `crewlet "+
+				"secrets keygen` fixes it")
 	}
-	return runtoken.KeyFrom(OtelKeyDomain, material)
+	return material
 }
 
 // OtelKeyDomain separates this endpoint's tokens from the tool bridge's.
@@ -312,10 +312,10 @@ const (
 // the failure the signed, stateless token exists to prevent. A node with the
 // variable unset builds none, and its route is absent rather than refusing.
 //
-// keyMaterial is the Tier A keyring, which every process already loads. Nil
-// or empty takes a per-process key: correct for a single process, and warned
-// about because it cannot work across two.
-func BuildOtelReceiver(env func(string) string, keyMaterial []string) (*OtelReceiver, error) {
+// material is the Tier A keyring, which every process already loads. One that
+// names no active key takes a per-process key: correct for a single process,
+// and warned about because it cannot work across two.
+func BuildOtelReceiver(env func(string) string, material runtoken.Material) (*OtelReceiver, error) {
 	if env == nil {
 		return nil, nil
 	}
@@ -324,8 +324,11 @@ func BuildOtelReceiver(env func(string) string, keyMaterial []string) (*OtelRece
 		return nil, nil
 	}
 	return NewOtelReceiver(OtelReceiverOptions{
-		BaseURL:          base,
-		Tokens:           NewOtelTokens(OtelTokenOptions{Key: OtelSigningKey(keyMaterial)}),
+		BaseURL: base,
+		Tokens: NewOtelTokens(OtelTokenOptions{
+			Domain:   OtelKeyDomain,
+			Material: OtelSigningMaterial(material),
+		}),
 		UpstreamEndpoint: strings.TrimSpace(env(OtelUpstreamEndpointVar)),
 		UpstreamHeaders:  ParseOtelHeaders(env(OtelUpstreamHeadersVar)),
 	})

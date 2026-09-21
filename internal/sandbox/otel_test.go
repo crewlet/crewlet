@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -29,10 +30,19 @@ import (
 // visible only as exporter retry noise inside a sandbox nobody watches.
 func TestAnOtelTokenVerifiesInAnotherProcess(t *testing.T) {
 	t.Parallel()
-	key := sandbox.OtelSigningKey([]string{"k1:material-one", "k2:material-two"})
+	material := sandbox.OtelSigningMaterial(runtoken.Material{
+		ActiveID: "k2",
+		Keys: []runtoken.KeyMaterial{
+			{ID: "k1", Material: "material-one"},
+			{ID: "k2", Material: "material-two"},
+		},
+	})
+	opts := func(m runtoken.Material) sandbox.OtelTokenOptions {
+		return sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: m}
+	}
 
-	minter := sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: key})
-	verifier := sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: key})
+	minter := sandbox.NewOtelTokens(opts(material))
+	verifier := sandbox.NewOtelTokens(opts(material))
 
 	token := minter.Mint("trace-abc", time.Hour)
 	if got := verifier.Validate(token); got != "trace-abc" {
@@ -42,16 +52,40 @@ func TestAnOtelTokenVerifiesInAnotherProcess(t *testing.T) {
 	// THE KEY IS ORDER-INDEPENDENT, because two processes read the same
 	// keyring and nothing promises the same order — a map iteration or a
 	// re-ordered document would otherwise split a fleet in two.
-	reordered := sandbox.OtelSigningKey([]string{"k2:material-two", "k1:material-one"})
-	if sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: reordered}).
-		Validate(token) != "trace-abc" {
+	reordered := runtoken.Material{ActiveID: "k2", Keys: []runtoken.KeyMaterial{
+		{ID: "k2", Material: "material-two"}, {ID: "k1", Material: "material-one"},
+	}}
+	if sandbox.NewOtelTokens(opts(reordered)).Validate(token) != "trace-abc" {
 		t.Error("the signing key depends on the keyring's order")
+	}
+
+	// A ROTATION DOES NOT INVALIDATE A LIVE RUN'S TOKEN. The operator adds
+	// k3 and flips the active key to it; k2 is still on the ring, and the
+	// token names the key that signed it, so the box exporting right now
+	// keeps working. This is the whole reason the tag exists: derived from
+	// the whole keyring, every one of these three rings produced a
+	// DIFFERENT key and this token died the moment k3 was added.
+	rotated := runtoken.Material{ActiveID: "k3", Keys: []runtoken.KeyMaterial{
+		{ID: "k1", Material: "material-one"},
+		{ID: "k2", Material: "material-two"},
+		{ID: "k3", Material: "material-three"},
+	}}
+	if got := sandbox.NewOtelTokens(opts(rotated)).Validate(token); got != "trace-abc" {
+		t.Errorf("a rotation invalidated a token minted under a key still on the ring: %q", got)
+	}
+
+	// AND DROPPING THE KEY THAT SIGNED IT DOES invalidate it, or the drop
+	// would do nothing: an unknown tag is refused, never retried against
+	// whichever key happens to be active.
+	dropped := runtoken.OneKey("k3", "material-three")
+	if sandbox.NewOtelTokens(opts(dropped)).Validate(token) != "" {
+		t.Error("a token verified after the key that signed it left the ring")
 	}
 
 	// AND A DIFFERENT KEYRING DOES NOT VERIFY, or the derivation would be
 	// decoration.
-	other := sandbox.OtelSigningKey([]string{"k1:someone-elses"})
-	if sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: other}).Validate(token) != "" {
+	other := runtoken.OneKey("k2", "someone-elses")
+	if sandbox.NewOtelTokens(opts(other)).Validate(token) != "" {
 		t.Error("a token verified under an unrelated keyring")
 	}
 }
@@ -63,8 +97,8 @@ func TestOtelTokensAreRefusedEveryWayTheyCanBeWrong(t *testing.T) {
 	at := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	clock := at
 	tokens := sandbox.NewOtelTokens(sandbox.OtelTokenOptions{
-		Key: []byte("a-shared-signing-key"),
-		Now: func() time.Time { return clock },
+		Material: runtoken.OneKey("k", "a-shared-signing-key"),
+		Now:      func() time.Time { return clock },
 	})
 	good := tokens.Mint("trace-abc", 10*time.Minute)
 	if tokens.Validate(good) != "trace-abc" {
@@ -75,7 +109,7 @@ func TestOtelTokensAreRefusedEveryWayTheyCanBeWrong(t *testing.T) {
 		{"empty", ""},
 		{"not a token at all", "hello"},
 		{"too few parts", "v1.trace-abc.999"},
-		{"an unknown version", "v2" + good[2:]},
+		{"an unknown version", "v9" + good[2:]},
 		{"a tampered trace", strings.Replace(good, "trace-abc", "trace-xyz", 1)},
 		{"a tampered expiry", strings.Replace(good, ".", ".9", 1)},
 		{"a truncated signature", good[:len(good)-4]},
@@ -96,7 +130,7 @@ func TestOtelTokensAreRefusedEveryWayTheyCanBeWrong(t *testing.T) {
 // A TOKEN IS SCOPED TO ONE TRACE, so one run's endpoint is not another's.
 func TestOtelTokensAreScopedToTheirRun(t *testing.T) {
 	t.Parallel()
-	tokens := sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")})
+	tokens := sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")})
 	first := tokens.Mint("trace-one", time.Hour)
 	second := tokens.Mint("trace-two", time.Hour)
 	if first == second {
@@ -157,7 +191,7 @@ func TestTheUpstreamCredentialIsAddedOutsideTheSandbox(t *testing.T) {
 
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL:          "https://engine.internal",
-		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
 		UpstreamEndpoint: server.URL,
 		UpstreamHeaders:  map[string]string{"Authorization": "Bearer ingest-secret"},
 	})
@@ -192,7 +226,7 @@ func TestAReceiverWithNoUpstreamAcceptsAndDrops(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL: "https://engine.internal",
-		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +251,7 @@ func TestAFailingUpstreamNeverRaises(t *testing.T) {
 
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL:          "https://engine.internal",
-		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
 		UpstreamEndpoint: server.URL,
 	})
 	if err != nil {
@@ -238,7 +272,7 @@ func TestTheRunEnvironmentCarriesNoCredential(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL: "https://engine.internal/",
-		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
 		// A real upstream, whose credential must NOT appear below.
 		UpstreamEndpoint: "https://collector.example",
 		UpstreamHeaders:  map[string]string{"Authorization": "Bearer ingest-secret"},
@@ -290,7 +324,7 @@ func TestARunWithNoTraceGetsNoEndpoint(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL: "https://engine.internal",
-		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -306,7 +340,7 @@ func TestARunWithNoTraceGetsNoEndpoint(t *testing.T) {
 func TestAReceiverNeedsAnAddressTheBoxCanReach(t *testing.T) {
 	t.Parallel()
 	if _, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
-		Tokens: sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens: sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
 	}); err == nil {
 		t.Fatal("a receiver with no base URL was built")
 	}
@@ -361,7 +395,7 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	env := map[string]string{}
 	lookup := func(name string) string { return env[name] }
 
-	got, err := sandbox.BuildOtelReceiver(lookup, nil)
+	got, err := sandbox.BuildOtelReceiver(lookup, runtoken.Material{})
 	if err != nil || got != nil {
 		t.Fatalf("an unset receiver URL built %v (%v)", got, err)
 	}
@@ -369,7 +403,7 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	env[sandbox.OtelReceiverURLVar] = "https://engine.internal"
 	env[sandbox.OtelUpstreamEndpointVar] = "https://collector.example"
 	env[sandbox.OtelUpstreamHeadersVar] = "api-key=abc"
-	got, err = sandbox.BuildOtelReceiver(lookup, []string{"k1:material"})
+	got, err = sandbox.BuildOtelReceiver(lookup, runtoken.OneKey("k1", "material"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +426,7 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL: "https://engine.internal",
-		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("k")}),
+		Tokens:  sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
 	})
 	if err != nil {
 		t.Fatal(err)

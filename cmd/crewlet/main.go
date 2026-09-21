@@ -48,6 +48,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -1483,7 +1484,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
-	if len(appStateKeyMaterial(boot)) == 0 {
+	if !appStateKeyMaterial(boot).Usable() {
 		log.Warn("github_app_state_key_is_per_process",
 			"detail", "no secrets.keys are configured, so a GitHub App creation "+
 				"begun on one node cannot be finished on another")
@@ -2376,15 +2377,11 @@ func (w engineConfigWriter) SetSeat(
 // A deployment with no keys gets a per-process random key, which is correct
 // for one node and unusable across two — the warning this function's caller
 // logs.
-func appStateKeyMaterial(boot *config.Bootstrap) []string {
+func appStateKeyMaterial(boot *config.Bootstrap) runtoken.Material {
 	if boot == nil {
-		return nil
+		return runtoken.Material{}
 	}
-	out := make([]string, 0, len(boot.Secrets.Keys))
-	for _, key := range boot.Secrets.Keys {
-		out = append(out, key.ID+":"+key.Material)
-	}
-	return out
+	return boot.Secrets.TokenMaterial()
 }
 
 // nativeWork and nativePages are this node's projections, as the read surface

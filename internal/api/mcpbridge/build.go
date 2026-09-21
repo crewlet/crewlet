@@ -32,13 +32,13 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 // verification: a peer that a misrouted call reaches (a load balancer in front
 // of several nodes) can then tell a token the fleet signed from a forged one,
 // and log that the bridge URL addresses the wrong node rather than that the
-// route is under attack. See [runtoken.KeyFrom] and [Bridge.resolve].
+// route is under attack. See [runtoken.Material] and [Bridge.resolve].
 //
 // An unset base URL builds NOTHING, and that is a real configuration rather
 // than an error: most deployments run no agent mode. The route is then absent,
 // and a seat that asks for agent mode is refused with the variable named —
 // which is a better failure than a run that starts and cannot call a tool.
-func Build(env func(string) string, keyMaterial []string) *Bridge {
+func Build(env func(string) string, material runtoken.Material) *Bridge {
 	if env == nil {
 		return nil
 	}
@@ -46,8 +46,7 @@ func Build(env func(string) string, keyMaterial []string) *Bridge {
 	if base == "" {
 		return nil
 	}
-	key := runtoken.KeyFrom(KeyDomain, keyMaterial)
-	if len(key) == 0 {
+	if !material.Usable() {
 		// INFO, NOT A WARNING: a per-process key serves every session this
 		// node opens, on one node or a fleet, because only the opening node
 		// ever verifies a token. What it loses is the peer's diagnosis
@@ -59,5 +58,5 @@ func Build(env func(string) string, keyMaterial []string) *Bridge {
 				"cannot tell it from a forged token. `crewlet secrets keygen` "+
 				"gives every node the same key")
 	}
-	return New(Options{Key: key, BaseURL: base})
+	return New(Options{Material: material, BaseURL: base})
 }

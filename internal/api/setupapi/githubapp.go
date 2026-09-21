@@ -101,13 +101,14 @@ type StateClaims interface {
 // newAppFlow builds the completer the webhook mux serves. See
 // [Options.StateKeys] and [Options.StateClaims] for why both have to be the
 // fleet's rather than this process's.
-func newAppFlow(s *Service, material []string, spent StateClaims) *AppFlow {
+func newAppFlow(s *Service, material runtoken.Material, spent StateClaims) *AppFlow {
 	return &AppFlow{
 		service: s,
 		spent:   spent,
 		signer: runtoken.New(runtoken.Options{
-			Key: runtoken.KeyFrom(tokenDomain, material),
-			Now: s.clock,
+			Domain:   tokenDomain,
+			Material: material,
+			Now:      s.clock,
 		}),
 	}
 }

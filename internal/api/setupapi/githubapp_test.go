@@ -23,8 +23,9 @@ import (
 // none of these because it only ever prints a code.
 func TestTheAppCallbackStateIsSignedScopedAndExpiring(t *testing.T) {
 	t.Parallel()
-	key := runtoken.KeyFrom("github-app-manifest", []string{"k1:material"})
-	signer := runtoken.New(runtoken.Options{Key: key})
+	signer := runtoken.New(runtoken.Options{
+		Domain: "github-app-manifest", Material: runtoken.OneKey("k1", "material"),
+	})
 
 	token := signer.Mint("sre-lead", 15*60*1000000000)
 	if got := signer.Validate(token); got != "sre-lead" {
@@ -40,7 +41,7 @@ func TestTheAppCallbackStateIsSignedScopedAndExpiring(t *testing.T) {
 	// FROM ANOTHER ENDPOINT: the domain separates these keys, so a token
 	// minted for the telemetry receiver cannot be replayed here.
 	other := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("otel-run", []string{"k1:material"}),
+		Domain: "otel-run", Material: runtoken.OneKey("k1", "material"),
 	})
 	if got := signer.Validate(other.Mint("sre-lead", 15*60*1000000000)); got != "" {
 		t.Errorf("a token from another endpoint validated as %q", got)
@@ -61,13 +62,18 @@ func TestTheAppCallbackStateIsSignedScopedAndExpiring(t *testing.T) {
 // rather than about the deployment.
 func TestTwoNodesWithTheSameKeyringAgreeOnAState(t *testing.T) {
 	t.Parallel()
-	material := []string{"k2:second", "k1:first"}
-	one := runtoken.New(runtoken.Options{Key: runtoken.KeyFrom("github-app-manifest", material)})
+	ring := func(keys ...runtoken.KeyMaterial) runtoken.Options {
+		return runtoken.Options{
+			Domain:   "github-app-manifest",
+			Material: runtoken.Material{ActiveID: "k1", Keys: keys},
+		}
+	}
+	first := runtoken.KeyMaterial{ID: "k1", Material: "first"}
+	second := runtoken.KeyMaterial{ID: "k2", Material: "second"}
+	one := runtoken.New(ring(second, first))
 	// The SAME material in a different order, which is what a re-ordered
 	// document or a map iteration produces.
-	two := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:first", "k2:second"}),
-	})
+	two := runtoken.New(ring(first, second))
 	if got := two.Validate(one.Mint("sre-lead", 15*60*1000000000)); got != "sre-lead" {
 		t.Errorf("a second node validated the first's state as %q", got)
 	}
@@ -88,7 +94,7 @@ func TestTheServiceAlwaysHasAClock(t *testing.T) {
 	t.Parallel()
 	s := newService(t, setupapi.Options{
 		Company:   func() *config.Company { return &config.Company{} },
-		StateKeys: []string{"k1:material"},
+		StateKeys: runtoken.OneKey("k1", "material"),
 	})
 	// The flow mints a state, which reads the clock. A nil one panics
 	// here rather than in a request nobody can retry.
@@ -115,9 +121,9 @@ func TestTheServiceAlwaysHasAClock(t *testing.T) {
 // first call gets past the spend, the second does not.
 func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 	t.Parallel()
-	flow := newService(t, setupapi.Options{StateKeys: []string{"k1:material"}}).AppFlow()
+	flow := newService(t, setupapi.Options{StateKeys: runtoken.OneKey("k1", "material")}).AppFlow()
 	state := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:material"}),
+		Domain: "github-app-manifest", Material: runtoken.OneKey("k1", "material"),
 	}).Mint("sre-lead", 15*time.Minute)
 
 	if _, err := flow.Complete(t.Context(), "code-1", state); errors.Is(err, setupapi.ErrStateRefused) {
@@ -140,10 +146,10 @@ func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 func TestAnUnreadableClaimRegistryRefusesTheCallback(t *testing.T) {
 	t.Parallel()
 	flow := newService(t, setupapi.Options{
-		StateKeys: []string{"k1:material"}, StateClaims: blindClaims{},
+		StateKeys: runtoken.OneKey("k1", "material"), StateClaims: blindClaims{},
 	}).AppFlow()
 	state := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:material"}),
+		Domain: "github-app-manifest", Material: runtoken.OneKey("k1", "material"),
 	}).Mint("sre-lead", 15*time.Minute)
 
 	_, err := flow.Complete(t.Context(), "code-1", state)

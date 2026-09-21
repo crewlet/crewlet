@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -329,7 +330,7 @@ func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
 
 	port := freePort(t)
 	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
 	})
 	e := testEngineWithBridge(t, bridge)
 	boot := bootstrapFor(t, port)
@@ -401,7 +402,7 @@ func TestANodeRunningNoSeatsBindsNoBridgeListener(t *testing.T) {
 
 	port := freePort(t)
 	e := testEngineWithBridge(t, mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
 	}))
 	boot := bootstrapFor(t, port)
 	boot.Node.Roles = []string{"workers"}

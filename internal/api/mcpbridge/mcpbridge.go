@@ -158,9 +158,10 @@ type Bridge struct {
 
 // Options configure [New].
 type Options struct {
-	// Key signs the per-run tokens and must be the same in every process
-	// that mints or verifies one. See [runtoken.Options].
-	Key []byte
+	// Material is the fleet's keyring. The per-run tokens are signed under
+	// its active key and name it, so a rotation leaves a live run's token
+	// valid. See [runtoken.Options].
+	Material runtoken.Material
 
 	// Now is the clock, for the token expiry. Nil takes wall-clock time.
 	Now func() time.Time
@@ -194,7 +195,9 @@ func New(opts Options) *Bridge {
 		ttl = DefaultTTL
 	}
 	return &Bridge{
-		signer:   runtoken.New(runtoken.Options{Key: opts.Key, Now: opts.Now}),
+		signer: runtoken.New(runtoken.Options{
+			Domain: KeyDomain, Material: opts.Material, Now: opts.Now,
+		}),
 		base:     strings.TrimSuffix(opts.BaseURL, "/"),
 		ttl:      ttl,
 		sessions: map[string]*Session{},

@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
@@ -233,7 +234,7 @@ func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
 		Status:    s.status,
 		SlackApps: func() map[string]string { return apps },
 		// The keyring a GitHub App state is signed from.
-		StateKeys: []string{"test-material"},
+		StateKeys: runtoken.OneKey("k1", "test-material"),
 		Now:       func() time.Time { return pinned },
 	})
 	s.setup.Routes(s.mux)
@@ -909,7 +910,7 @@ func (s *surface) withPass(
 			return provision.NewSecretStoreSink(sinkStore{s.vault}, operator), nil
 		},
 		Status:    status,
-		StateKeys: []string{"test-material"},
+		StateKeys: runtoken.OneKey("k1", "test-material"),
 		Now:       func() time.Time { return pinned },
 	})
 	s.setup.Routes(s.mux)

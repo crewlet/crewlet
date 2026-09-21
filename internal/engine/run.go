@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -524,7 +525,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	otel := opts.OtelReceiver
 	if otel == nil {
 		built, err := sandbox.BuildOtelReceiver(os.Getenv,
-			keyMaterial(opts.Bootstrap))
+			tokenMaterial(opts.Bootstrap))
 		if err != nil {
 			// A receiver URL that is set and unusable is a deployment
 			// that asked for in-box telemetry and would get none, so it
@@ -540,7 +541,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// keyring rather than from a per-process random.
 	bridge := opts.Bridge
 	if bridge == nil {
-		bridge = mcpbridge.Build(os.Getenv, keyMaterial(opts.Bootstrap))
+		bridge = mcpbridge.Build(os.Getenv, tokenMaterial(opts.Bootstrap))
 	}
 
 	// THE MODE AND THE INCARNATION, resolved once. An unset mode is
@@ -1741,21 +1742,13 @@ func (e *Engine) OtelReceiver() *sandbox.OtelReceiver { return e.sandboxOtel }
 // session opened by a run is the session the route resolves.
 func (e *Engine) Bridge() *mcpbridge.Bridge { return e.bridge }
 
-// keyMaterial is the Tier A keyring, as the OTLP token key is derived from.
-//
-// THE REFERENCES ARE NOT RESOLVED HERE, and must not be: this runs before the
-// secret store is open, and the store's own key is what would resolve them.
-// Two nodes reading the same document derive the same key either way: what
-// matters is that they agree, not that the material is the plaintext.
-func keyMaterial(boot *config.Bootstrap) []string {
+// tokenMaterial is the Tier A keyring the per-run token issuers derive from,
+// nil-safe for an engine built without one.
+func tokenMaterial(boot *config.Bootstrap) runtoken.Material {
 	if boot == nil {
-		return nil
+		return runtoken.Material{}
 	}
-	out := make([]string, 0, len(boot.Secrets.Keys))
-	for _, key := range boot.Secrets.Keys {
-		out = append(out, key.ID+":"+key.Material)
-	}
-	return out
+	return boot.Secrets.TokenMaterial()
 }
 
 // observe publishes an engine-side observability event.

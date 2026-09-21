@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -26,7 +27,7 @@ func otlpReceiver(t *testing.T, upstream string) *sandbox.OtelReceiver {
 	t.Helper()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL:          "https://engine.internal",
-		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("test-key")}),
+		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "test-key")}),
 		UpstreamEndpoint: upstream,
 	})
 	if err != nil {
@@ -101,7 +102,7 @@ func TestAnExportWithoutAValidTokenIsRefused(t *testing.T) {
 		// matters most: anyone who can reach the endpoint can mint one of
 		// their own, and only the signature stops it counting.
 		{"another key's token", sandbox.NewOtelTokens(sandbox.OtelTokenOptions{
-			Key: []byte("attacker-key")}).Mint("trace-abc", time.Hour)},
+			Material: runtoken.OneKey("k", "attacker-key")}).Mint("trace-abc", time.Hour)},
 	} {
 		res := postOTLP(a, "/otlp/"+tc.token+"/v1/traces", "spans")
 		if res.StatusCode != http.StatusUnauthorized {

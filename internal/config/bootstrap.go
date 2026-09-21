@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -1698,6 +1699,32 @@ func (s *Secrets) validate(path Path) error {
 
 // Enabled reports whether secret encryption is configured at all.
 func (s *Secrets) Enabled() bool { return len(s.Keys) > 0 }
+
+// TokenMaterial is this keyring as a per-run token issuer reads it.
+//
+// ONE BUILDER FOR EVERY ISSUER, because it was three: the engine built this
+// list for the OTLP receiver, the engine built it again for the MCP bridge,
+// and the CLI built it a third time for the GitHub App state signer. Three
+// copies of one rule about which keys a fleet agrees on, in three files that
+// nothing compares.
+//
+// THE REFERENCES ARE NOT RESOLVED, and must not be: this is read before the
+// secret store whose own key would resolve them is open. Two nodes reading the
+// same document derive the same key either way — what matters is that they
+// agree, not that the material is the plaintext.
+func (s *Secrets) TokenMaterial() runtoken.Material {
+	if s == nil {
+		return runtoken.Material{}
+	}
+	out := runtoken.Material{
+		ActiveID: s.ActiveKeyID,
+		Keys:     make([]runtoken.KeyMaterial, 0, len(s.Keys)),
+	}
+	for _, key := range s.Keys {
+		out.Keys = append(out.Keys, runtoken.KeyMaterial{ID: key.ID, Material: key.Material})
+	}
+	return out
+}
 
 // Cipher builds the sealing cipher this Tier A configures, or nil when secret
 // encryption is disabled.

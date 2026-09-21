@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -35,7 +36,7 @@ func TestTheBridgeRouteIsAbsentWithoutABridge(t *testing.T) {
 func TestTheBridgeRouteIsReachableWithoutABearerToken(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
-		Bridge: mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"}),
+		Bridge: mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"}),
 	})
 	res := probe(a, http.MethodPost, mcpbridge.PathPrefix+"not-a-token")
 	if res.StatusCode != http.StatusUnauthorized {
@@ -50,7 +51,7 @@ func TestTheBridgeRouteIsReachableWithoutABearerToken(t *testing.T) {
 // route.
 func TestTheBridgeRouteAnswersEveryTransportVerb(t *testing.T) {
 	t.Parallel()
-	bridge := mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"})
+	bridge := mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
 	// The app first: mounting the route is what lets the bridge open a
 	// session at all.
 	a := newApp(t, api.Options{Bridge: bridge})

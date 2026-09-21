@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -363,7 +364,7 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	q := memory.New()
 	pending := sandbox.NewCoordStore(coordmemory.NewFleet())
 	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	})
 	// Mounted, as serveAPI mounts it on a node with a listener: a bridge no
 	// listener took opens no session.
@@ -398,7 +399,7 @@ func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	c, seat := splitLoginCompany(t, "api", "codex")
 	e := launchReadyEngine(t, c)
 	e.bridge = mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	})
 	launcher := &agentLauncher{
 		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,

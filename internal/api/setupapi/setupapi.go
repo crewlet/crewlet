@@ -47,6 +47,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
@@ -140,15 +141,16 @@ type Options struct {
 	// says where the seat's credential lives, which is what it can prove.
 	SlackApps func() map[string]string
 
-	// StateKeys is the Tier A keyring material the GitHub App state signer
-	// is keyed from, and it MUST be the same on every node that mints or
-	// validates a state: a fleet where the begin and the callback land on
-	// different nodes would otherwise refuse every completion.
+	// StateKeys is the Tier A keyring the GitHub App state signer is keyed
+	// from, and it MUST be the same on every node that mints or validates
+	// a state: a fleet where the begin and the callback land on different
+	// nodes would otherwise refuse every completion.
 	//
-	// Empty takes a per-process key, which is correct for one node and
-	// cannot work across two. That is a real deployment (a node with no
-	// secrets.keys), so it is not refused; the caller logs what it costs.
-	StateKeys []string
+	// One that names no active key takes a per-process key, which is
+	// correct for one node and cannot work across two. That is a real
+	// deployment (a node with no secrets.keys), so it is not refused; the
+	// caller logs what it costs.
+	StateKeys runtoken.Material
 
 	// StateClaims is where a spent callback state is recorded, so no state
 	// is accepted twice. It has the same fleet requirement as StateKeys for

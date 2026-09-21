@@ -103,6 +103,36 @@ crewlet secrets get TOKEN -reveal                # break-glass; logged
 crewlet secrets rekey                            # after a keyring rotation
 ```
 
+### Rotating the keyring, with nothing in flight lost
+
+The keyring seals the company's secrets and also signs the two **per-run
+tokens** a sandbox carries: the OTLP receiver's and the MCP bridge's. Those
+travel in a URL path, are minted on the node that starts a run and verified on
+whichever node the box can reach, and a detached coding run holds one for as
+long as the run lasts, which outlives a rollout.
+
+So a token **names the key that signed it**, the same way a sealed value's
+envelope carries the id of the key that sealed it, and a verifier looks that id
+up. A key it does not hold is refused rather than retried against the active
+key, which is what makes dropping a key mean something.
+
+That makes the rotation a runbook with no window in it:
+
+1. **Add** the new key to `secrets.keys`, leaving `active_key_id` where it is.
+2. **Restart** every node. Nothing has changed about what is minted; every node
+   now holds both keys.
+3. **Flip** `active_key_id` to the new key and restart every node again. New
+   tokens name the new key; outstanding ones still name the old one, which is
+   still on the ring.
+4. **Run `crewlet secrets rekey`** to re-seal the stored values under the new
+   active key.
+5. **Drop** the old key once the longest token lifetime has passed. From that
+   moment a token signed under it is refused, which is the point.
+
+Nodes may restart in any order at every step, because a key is either on a
+node's ring or it is not, and tokens name which one they need. There is no
+state in which two nodes disagree about a token they both hold the key for.
+
 The value is read from **stdin** by default rather than from `-value`, because an argv value is visible in `ps` output and lands in shell history. Exactly one trailing newline is stripped, so `echo "$TOKEN" | ...` does the right thing — and no more than one, because a secret may legitimately end in whitespace and altering it silently is a failure nobody can see.
 
 Reading a value back is **break-glass on both sides**. `crewlet secrets get` refuses without `-reveal`, and the route behind it (`GET /secrets/{name}`) serves only metadata unless the request carries an explicit `?reveal=true` — a spelling a crawl or a link cannot reach by accident. Both log the access by name, against the operator the API guard authenticated; the answer is marked `Cache-Control: no-store` so it cannot sit in a shared proxy. The refusal points at `list`, because the common need is "is X set and when did it last change" — which the listing answers without putting a credential into a terminal, a scrollback buffer and a screen-share.

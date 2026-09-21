@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -164,7 +165,7 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 		offer = []string{"read_page", "post_message"}
 	}
 	f.surface = tools.NewSurface("execute", reg.Snapshot(), offer)
-	f.bridge = mcpbridge.New(mcpbridge.Options{Key: []byte("test-key")})
+	f.bridge = mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "test-key")})
 	f.session = &mcpbridge.Session{
 		RunID: "run-1", Handle: "dev", Role: "Engineer",
 		Surface: f.surface, Ledger: f.ledger,
@@ -181,7 +182,7 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 func (f *fixture) open(t *testing.T) string {
 	t.Helper()
 	f.bridge = mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: f.server.URL,
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL,
 	})
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
@@ -329,7 +330,7 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 // launches the run whose end would have closed it.
 func TestNoBaseURLMintsNoEndpointAndHoldsNoSession(t *testing.T) {
 	t.Parallel()
-	b := mcpbridge.New(mcpbridge.Options{Key: []byte("k")})
+	b := mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "k")})
 	// Mounted, so the missing base URL is the only reason to refuse.
 	_ = b.Handler()
 	if url := b.Open(&mcpbridge.Session{
@@ -347,7 +348,7 @@ func TestAnExpiredTokenIsRefused(t *testing.T) {
 	f := newFixture(t)
 	clock := time.Now()
 	f.bridge = mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: f.server.URL, TTL: time.Minute,
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL, TTL: time.Minute,
 		Now: func() time.Time { return clock },
 	})
 	mux := http.NewServeMux()
@@ -757,7 +758,7 @@ func literal(v any) string {
 // tools/list — one seat's wiring mistake becoming a fleet node's crash.
 func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 	t.Parallel()
-	b := mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"})
+	b := mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
 	// Mounted, so the incomplete session is the only reason to refuse.
 	_ = b.Handler()
 	for _, tc := range []struct {
@@ -786,7 +787,7 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 // or a bridge that always refused would pass.
 func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
 	t.Parallel()
-	b := mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"})
+	b := mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
 	session := &mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface()}
 	if b.Mounted() {
 		t.Fatal("a bridge nothing mounted reports itself mounted")
@@ -831,7 +832,7 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 	token := endpoint[strings.LastIndex(endpoint, "/")+1:]
 
 	peer := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	})
 	runID, reason := peer.Miss(token)
 	if runID != "run-1" {
