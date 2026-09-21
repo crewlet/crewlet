@@ -19,10 +19,24 @@ type Entry struct {
 	// Scope is whether a role or a unit declares this schedule.
 	Scope types.ScheduleScope
 
-	// ScopeID is the declaring role's HANDLE or the declaring unit's NAME.
-	// Two different namespaces, deliberately: a handle is what addresses a
-	// seat, and a unit has no handle at all.
+	// ScopeID is the declaring scope's IDENTITY: the seat's agent id for a
+	// role, the unit's origin key for a unit. Two different shapes,
+	// deliberately — a unit has no derived uuid and needs none.
+	//
+	// AN IDENTITY AND NOT AN ADDRESS, because this is what the at-most-once
+	// ledger keys a fire on. It was the role's handle and the unit's NAME,
+	// and both were wrong in the same way: a rename split a schedule's
+	// history in two and reset its dedupe, and two units of one name shared
+	// a fire key outright — one team's standup suppressing the other's,
+	// which a stored revision can still reach because duplicate unit names
+	// are an admission rule rather than a runnable one. See ADR-0019.
 	ScopeID string
+
+	// ScopeName is the same scope as a person reads it: the seat's handle
+	// or the unit's key. Display only — nothing is filed under it — and it
+	// is what a log line, an event payload and a dashboard row carry
+	// beside the id.
+	ScopeName string
 
 	// Unit is the declaring unit, and nil for a role schedule. Runner
 	// resolution needs the unit itself — its direct members, its lead — and
@@ -46,13 +60,26 @@ func Entries(o *org.Organization) []Entry {
 	}
 	var out []Entry
 	for r := range o.AllRoles() {
+		if len(r.Schedules) == 0 {
+			continue
+		}
+		// A SEAT WITH NO AGENT ID DECLARES NOTHING THAT CAN FIRE. A human
+		// seat has none and runs no turns, so a schedule on one could
+		// never dispatch; dropping it here is what keeps the ledger from
+		// carrying a scope nothing can key on.
+		id, ok := o.AgentIDFor(r)
+		if !ok {
+			continue
+		}
 		for _, s := range r.Schedules {
-			out = append(out, Entry{Scope: types.ScheduleScopeRole, ScopeID: r.Handle(), Schedule: s})
+			out = append(out, Entry{Scope: types.ScheduleScopeRole,
+				ScopeID: id.String(), ScopeName: r.Handle(), Schedule: s})
 		}
 	}
 	for u := range o.AllUnits() {
 		for _, s := range u.Schedules {
-			out = append(out, Entry{Scope: types.ScheduleScopeUnit, ScopeID: u.Name, Unit: u, Schedule: s})
+			out = append(out, Entry{Scope: types.ScheduleScopeUnit,
+				ScopeID: u.Origin(), ScopeName: u.Key(), Unit: u, Schedule: s})
 		}
 	}
 	return out
@@ -91,9 +118,11 @@ func (e Entry) Runners(o *org.Organization) []string {
 		return nil
 	}
 	if e.Scope == types.ScheduleScopeRole {
-		// ScopeID is the seat's own handle, and a human seat cannot declare
-		// a role schedule (the org model forbids it), so this is an agent.
-		return []string{e.ScopeID}
+		// ScopeName is the seat's own handle, and a human seat cannot
+		// declare a role schedule (the org model forbids it), so this is
+		// an agent. The HANDLE and not the id, because a runner is
+		// resolved from the org by handle everywhere else.
+		return []string{e.ScopeName}
 	}
 	if e.Unit == nil {
 		return nil
@@ -121,11 +150,19 @@ func (e Entry) Runners(o *org.Organization) []string {
 // when it next fires — and none of those is a field anyone wrote down.
 type Row struct {
 	ScopeType types.ScheduleScope `json:"scope_type"`
-	ScopeID   string              `json:"scope_id"`
-	Name      string              `json:"name"`
-	Cron      string              `json:"cron"`
-	Timezone  string              `json:"timezone"`
-	Task      string              `json:"task"`
+
+	// ScopeID is the identity the ledger keys a fire on, and ScopeName the
+	// same scope as a person reads it. See [Entry.ScopeID]: a screen that
+	// rendered the id would show a uuid where a colleague's handle belongs,
+	// and one that keyed on the name would ask the ledger about a schedule
+	// it does not have.
+	ScopeID   string `json:"scope_id"`
+	ScopeName string `json:"scope_name"`
+
+	Name     string `json:"name"`
+	Cron     string `json:"cron"`
+	Timezone string `json:"timezone"`
+	Task     string `json:"task"`
 
 	// Target is empty for a role schedule. A role schedule's target is not
 	// "each" — it is meaningless, and reporting a default would invite a
@@ -190,6 +227,7 @@ func Describe(o *org.Organization, opts DescribeOptions) []Row {
 		row := Row{
 			ScopeType:      e.Scope,
 			ScopeID:        e.ScopeID,
+			ScopeName:      e.ScopeName,
 			Name:           s.Name,
 			Cron:           s.Cron,
 			Timezone:       zone,
@@ -234,8 +272,8 @@ func nextRun(expr, zone string, ref time.Time) (time.Time, string) {
 	return fire, ""
 }
 
-// SortRows orders a projection for display: by scope, then by scope id, then
-// by name.
+// SortRows orders a projection for display: by scope, then by the scope's
+// NAME, then by the schedule's.
 //
 // Stable and total, so two dashboard reads of one company draw the same list.
 // Entries come out of the org in tree order, which is meaningful to nobody
@@ -244,6 +282,10 @@ func SortRows(rows []Row) {
 	slices.SortStableFunc(rows, func(a, b Row) int {
 		return cmp.Or(
 			cmp.Compare(a.ScopeType, b.ScopeType),
+			// BY THE NAME, because this orders a table somebody reads and
+			// the id is a uuid for every role row — an ordering nobody can
+			// follow. The id breaks the tie, so the order is still total.
+			cmp.Compare(a.ScopeName, b.ScopeName),
 			cmp.Compare(a.ScopeID, b.ScopeID),
 			cmp.Compare(a.Name, b.Name),
 		)

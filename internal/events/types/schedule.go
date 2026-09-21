@@ -40,10 +40,21 @@ func (s ScheduleScope) Valid() bool {
 // the runner's inbox. This event is what the dashboard and the event store see,
 // so a tick that fired is visible even when the work it caused is not.
 type ScheduledTaskFired struct {
-	ScopeType    ScheduleScope `json:"scope_type"`
-	ScopeID      string        `json:"scope_id"`
-	ScheduleName string        `json:"schedule_name"`
-	TargetHandle string        `json:"target_handle"`
+	ScopeType ScheduleScope `json:"scope_type"`
+
+	// ScopeID is the identity the at-most-once ledger keys this fire on —
+	// a seat's agent id, or a unit's origin key. ScopeName is the same
+	// scope as a person reads it: the seat's handle, or the unit's key.
+	//
+	// BOTH, because they answer different questions. A reader following
+	// this event back to the schedule's own history needs the id, and a
+	// reader of the summary below needs a name — and a renamed seat's id
+	// is the one that still reaches its history.
+	ScopeID   string `json:"scope_id"`
+	ScopeName string `json:"scope_name,omitempty"`
+
+	ScheduleName string `json:"schedule_name"`
+	TargetHandle string `json:"target_handle"`
 	// ScheduledAt is the tick's own time as an ISO 8601 string, not the
 	// dispatch time the envelope stamps: a catchup run for a missed tick
 	// reports the tick it is making up, which is the whole point of naming it.
@@ -53,11 +64,19 @@ type ScheduledTaskFired struct {
 // EventType is the "scheduled_task_fired" wire type.
 func (ScheduledTaskFired) EventType() string { return "scheduled_task_fired" }
 
-// Summary names the seat the run was dispatched to, falling back to the scope
-// id: a unit schedule fires once per runner, so the handle is what tells two
-// dispatches of the same tick apart.
+// Summary names the seat the run was dispatched to, falling back to the
+// scope's NAME and then to its id: a unit schedule fires once per runner, so
+// the handle is what tells two dispatches of the same tick apart.
+//
+// THE NAME BEFORE THE ID, because this line is read by a person and a role
+// scope's id is a uuid. The id is the last resort rather than the first for
+// the same reason it is still there at all: an event written by a build that
+// carried no name must still say which schedule fired.
 func (e ScheduledTaskFired) Summary() string {
 	who := e.TargetHandle
+	if who == "" {
+		who = e.ScopeName
+	}
 	if who == "" {
 		who = e.ScopeID
 	}

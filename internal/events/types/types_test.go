@@ -275,7 +275,7 @@ var wireTags = map[string][]string{
 	"config_revision_applied":         {"applied_subsystems", "error", "revision_id", "status"},
 	"config_revision_scrubbed":        {"fields", "revision_id", "scrubbed_by"},
 	"task_assigned":                   {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
-	"scheduled_task_fired":            {"schedule_name", "scheduled_at", "scope_id", "scope_type", "target_handle"},
+	"scheduled_task_fired":            {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
 	"external_notification":           {"addressed", "agent_id", "body", "context_requires_recon", "messages", "metadata", "notification_source", "recipient_email", "salient_body", "sender", "source_event_type", "subject"},
 	"turn_trigger_skipped":            {"agent_handle", "agent_id", "reason", "trigger_id", "trigger_type"},
 	"notifications_coalesced":         {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},

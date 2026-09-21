@@ -55,8 +55,17 @@ func TestDescribeShapeAndDefaults(t *testing.T) {
 	byName := rowsByName(t, rows)
 
 	nightly := byName["nightly"]
-	if nightly.ScopeType != types.ScheduleScopeRole || nightly.ScopeID != "ops" {
-		t.Errorf("nightly scope = %s/%s, want role/ops", nightly.ScopeType, nightly.ScopeID)
+	// THE NAME IS WHAT A SCREEN READS; the id is the identity the fire
+	// ledger keys on, and for a role scope it is the seat's agent id rather
+	// than its handle — which is what keeps a renamed seat's history and
+	// its dedupe in one place.
+	if nightly.ScopeType != types.ScheduleScopeRole || nightly.ScopeName != "ops" {
+		t.Errorf("nightly scope = %s/%s, want role/ops", nightly.ScopeType, nightly.ScopeName)
+	}
+	if want, _ := describeOrg().AgentIDFor(describeOrg().AgentSeatByHandle("ops")); nightly.ScopeID != want.String() {
+		t.Errorf("nightly scope id = %q, want the seat's own id %s — a row keyed on "+
+			"anything a rename moves splits that schedule's history in two",
+			nightly.ScopeID, want)
 	}
 	// A role schedule's target is not "each" — it is meaningless, and
 	// reporting a default would invite a reader to change it and expect
@@ -340,10 +349,97 @@ func TestSortRowsIsTotalAndStable(t *testing.T) {
 	schedule.SortRows(rows)
 	var got []string
 	for _, r := range rows {
-		got = append(got, string(r.ScopeType)+"/"+r.ScopeID+"/"+r.Name)
+		got = append(got, string(r.ScopeType)+"/"+r.ScopeName+"/"+r.Name)
 	}
+	// BY THE NAME, because the order is one a person reads: sorting by the
+	// id would put role rows in uuid order, which follows nothing.
 	want := []string{"role/ops/nightly", "unit/Quality/report", "unit/Quality/standup"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("sorted rows = %v, want %v", got, want)
 	}
+}
+
+// A RENAME KEEPS A SCHEDULE'S IDENTITY, so its at-most-once history and its
+// dedupe stay in one place.
+//
+// The scope used to be the role's handle and the unit's display NAME, and
+// both moved the moment somebody retyped one: the ledger's key changed, so
+// the schedule's history split in two and the minute it was renamed in could
+// fire twice.
+func TestARenamedScopeKeepsTheIdentityItsFiresAreKeyedOn(t *testing.T) {
+	t.Parallel()
+	before := &org.Organization{Name: "Acme",
+		Roles: []*org.Role{{Name: "Ops", DeclaredHandle: "ops",
+			Schedules: []org.Schedule{{Name: "nightly", Cron: "0 2 * * *"}}}},
+		Units: []*org.Unit{{Name: "Quality", ID: "quality",
+			Schedules: []org.Schedule{{Name: "standup", Cron: "0 9 * * *"}}}},
+	}
+	after := &org.Organization{Name: "Acme",
+		Roles: []*org.Role{{Name: "Operations", DeclaredHandle: "operations",
+			OriginHandle: "ops", FormerHandles: []string{"ops"},
+			Schedules: []org.Schedule{{Name: "nightly", Cron: "0 2 * * *"}}}},
+		Units: []*org.Unit{{Name: "Reliability", ID: "reliability",
+			OriginKey: "quality", FormerKeys: []string{"quality"},
+			Schedules: []org.Schedule{{Name: "standup", Cron: "0 9 * * *"}}}},
+	}
+
+	was, is := scopeIDs(t, before), scopeIDs(t, after)
+	for _, name := range []string{"nightly", "standup"} {
+		if was[name] != is[name] {
+			t.Errorf("%s moved from scope %q to %q over a rename: its history "+
+				"splits in two and its at-most-once dedupe resets",
+				name, was[name], is[name])
+		}
+	}
+
+	// AND THE NAME FOLLOWS THE RENAME, which is the other half: an
+	// identity nothing moves is only useful beside a label that does.
+	names := scopeNames(t, after)
+	if names["nightly"] != "operations" || names["standup"] != "reliability" {
+		t.Errorf("after the rename the scopes read as %v, want the addresses "+
+			"they answer to now", names)
+	}
+}
+
+// TWO UNITS OF ONE NAME ARE TWO SCOPES.
+//
+// A unit's display name is unique only by an ADMISSION rule, so a stored
+// revision carrying two "Platform" teams is applied with a warning and runs —
+// and while the fire key was that name, one team's standup claimed the
+// other's minute and the other never fired at all.
+func TestTwoUnitsOfOneNameDoNotShareAFireKey(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Acme", Units: []*org.Unit{
+		{Name: "Platform", ID: "platform-eu",
+			Schedules: []org.Schedule{{Name: "standup", Cron: "0 9 * * *"}}},
+		{Name: "Platform", ID: "platform-us",
+			Schedules: []org.Schedule{{Name: "standup", Cron: "0 9 * * *"}}},
+	}}
+	entries := schedule.Entries(o)
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want one per unit", len(entries))
+	}
+	if entries[0].ScopeID == entries[1].ScopeID {
+		t.Errorf("both teams' standups are keyed on %q, so one of them claims "+
+			"the other's minute and the other never fires", entries[0].ScopeID)
+	}
+}
+
+// scopeIDs and scopeNames index one org's schedules by name.
+func scopeIDs(t *testing.T, o *org.Organization) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, e := range schedule.Entries(o) {
+		out[e.Schedule.Name] = e.ScopeID
+	}
+	return out
+}
+
+func scopeNames(t *testing.T, o *org.Organization) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, e := range schedule.Entries(o) {
+		out[e.Schedule.Name] = e.ScopeName
+	}
+	return out
 }

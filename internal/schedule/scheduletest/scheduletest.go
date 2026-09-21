@@ -175,15 +175,25 @@ func newHarness(t *testing.T, newLedger func(t *testing.T) schedule.Ledger) *har
 // aKey is the identity every case starts from. A role-scoped smoke test at
 // 09:00 on a fixed Monday, shared by every backend so a reader comparing two
 // backends is comparing behaviour and not fixtures.
+//
+// THE SCOPE ID IS A SEAT'S AGENT ID and the target handle is a handle: that
+// is the shape the scheduler writes, and the two are deliberately different
+// strings here so a backend that stored one under the other's column would
+// fail rather than round-trip a fixture where they happen to be equal.
 func aKey() schedule.FireKey {
 	return schedule.FireKey{
 		Scope:        types.ScheduleScopeRole,
-		ScopeID:      "qa",
+		ScopeID:      qaSeatID,
 		ScheduleName: "smoke",
 		FireLabel:    "20260608T0900",
 		TargetHandle: "qa",
 	}
 }
+
+// qaSeatID is the fixture seat's identity, written out rather than derived:
+// what these cases need is a value of the right SHAPE that is the same on
+// every run, and deriving it would make the suite depend on the org model.
+const qaSeatID = "49417a36-5606-59ed-a710-09b0b4212233"
 
 var scheduledAt = time.Date(2026, time.June, 8, 9, 0, 0, 0, time.UTC)
 
@@ -317,7 +327,11 @@ var claimCases = []testCase{
 			key   schedule.FireKey
 		}{
 			{"scope", func() schedule.FireKey { k := base; k.Scope = types.ScheduleScopeUnit; return k }()},
-			{"scope id", func() schedule.FireKey { k := base; k.ScopeID = "other"; return k }()},
+			{"scope id", func() schedule.FireKey {
+				k := base
+				k.ScopeID = "6d6f2d51-4c3d-5a2a-9d01-2f0e7ab1c934"
+				return k
+			}()},
 			{"schedule name", func() schedule.FireKey { k := base; k.ScheduleName = "other"; return k }()},
 			{"fire label", func() schedule.FireKey { k := base; k.FireLabel = "20260608T1000"; return k }()},
 			{"target handle", func() schedule.FireKey { k := base; k.TargetHandle = "other"; return k }()},

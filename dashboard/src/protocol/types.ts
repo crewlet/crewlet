@@ -987,8 +987,15 @@ export interface ToolRow {
 export interface ScheduleRow {
   /** `role` or `unit`. */
   scope_type: string;
-  /** The seat handle or the unit name this schedule is scoped to. */
+  /** The scope's IDENTITY, which is what the at-most-once ledger keys a fire
+   *  on: a seat's agent id, or a unit's origin key. Opaque — it survives a
+   *  rename, which is the whole reason it is not the handle. */
   scope_id: string;
+  /** The same scope as a person reads it: the seat's handle, or the unit's
+   *  key. Display and links only; nothing is filed under it. Absent from a
+   *  build that predates the split, which is why every reader falls back to
+   *  `scope_id`. */
+  scope_name?: string;
   name: string;
   cron: string;
   timezone: string;
@@ -1017,7 +1024,12 @@ export interface ScheduleRow {
  *  a turn failed; the turn says that. */
 export interface ScheduleRunRow {
   scope_type: string;
+  /** See `ScheduleRow.scope_id`: the identity this fire is keyed on. */
   scope_id: string;
+  /** See `ScheduleRow.scope_name`. Resolved at read time from the company the
+   *  node is running, so a renamed scope reads under its CURRENT name on
+   *  every row of its history rather than under the one it fired as. */
+  scope_name?: string;
   schedule_name: string;
   /** The tick this fire stands for, as the ledger's own at-most-once key. */
   fire_label: string;
@@ -1040,6 +1052,7 @@ export interface SchedulesAnswer {
 export interface ScheduleRunsAnswer {
   scope_type: string;
   scope_id: string;
+  scope_name?: string;
   schedule_name: string;
   runs: ScheduleRunRow[];
   /** The page filled, so older fires are past it. */

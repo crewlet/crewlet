@@ -34,7 +34,12 @@ const NOW = Date.parse("2026-06-15T00:30:00Z");
 function row(over: Partial<ScheduleRow> = {}): ScheduleRow {
   return {
     scope_type: "role",
-    scope_id: "ceo",
+    // THE ID IS NOT THE HANDLE — a role scope is keyed on the seat's agent
+    // id, and the handle rides beside it as `scope_name`. A fixture where
+    // the two are equal could not tell a screen reading the id from one
+    // reading the name.
+    scope_id: "b9f8fba1-4fe4-522f-8349-9f28db43654f",
+    scope_name: "ceo",
     name: "standup",
     cron: "0 9 * * *",
     timezone: "Asia/Tokyo",

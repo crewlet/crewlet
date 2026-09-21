@@ -365,13 +365,13 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, e E
 	loc, err := time.LoadLocation(zone)
 	if err != nil {
 		log.ErrorContext(ctx, "schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
-			"scope_id", e.ScopeID, "timezone", zone, "error", err)
+			"scope", e.ScopeName, "scope_id", e.ScopeID, "timezone", zone, "error", err)
 		return 0
 	}
 	cron, err := Parse(sch.Cron)
 	if err != nil {
 		log.ErrorContext(ctx, "schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
-			"scope_id", e.ScopeID, "cron", sch.Cron, "error", err)
+			"scope", e.ScopeName, "scope_id", e.ScopeID, "cron", sch.Cron, "error", err)
 		return 0
 	}
 
@@ -386,7 +386,7 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, e E
 	runners := e.Runners(company)
 	if len(runners) == 0 {
 		log.WarnContext(ctx, "schedule_no_runners", "schedule", sch.Name, "scope_type", e.Scope,
-			"scope_id", e.ScopeID, "target", sch.Target)
+			"scope", e.ScopeName, "scope_id", e.ScopeID, "target", sch.Target)
 		return 0
 	}
 
@@ -412,6 +412,9 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, e E
 // canonical, unshifted fire time is what forms the identity, so dedupe is
 // unaffected and two nodes with the same config compute the same offset.
 func (s *Scheduler) due(cron Expr, loc *time.Location, e Entry, at, windowStart time.Time, first bool) (toFire, toSkip []time.Time) {
+	// ON THE IDENTITY, so a seat's jitter does not move when it is renamed:
+	// the whole point of spreading fires deterministically is that one
+	// schedule lands at the same offset on every node and every tick.
 	jitter := s.jitterFor(e.ScopeID, e.Schedule.Name)
 	effNow := at.Add(-jitter)
 
@@ -487,13 +490,13 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		// this call. Do NOT claim — a later tick against a corrected org
 		// should still be able to fire.
 		log.WarnContext(ctx, "schedule_runner_not_found", "handle", handle,
-			"schedule", e.Schedule.Name, "scope_id", e.ScopeID)
+			"schedule", e.Schedule.Name, "scope", e.ScopeName, "scope_id", e.ScopeID)
 		return false
 	}
 	agentID, ok := company.AgentIDFor(seat)
 	if !ok {
 		log.WarnContext(ctx, "schedule_runner_not_found", "handle", handle,
-			"schedule", e.Schedule.Name, "scope_id", e.ScopeID,
+			"schedule", e.Schedule.Name, "scope", e.ScopeName, "scope_id", e.ScopeID,
 			"reason", "the seat has no derivable agent id")
 		return false
 	}
@@ -558,7 +561,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	}
 
 	log.InfoContext(ctx, "schedule_fired", "schedule", e.Schedule.Name, "scope_type", e.Scope,
-		"scope_id", e.ScopeID, "handle", handle,
+		"scope", e.ScopeName, "scope_id", e.ScopeID, "handle", handle,
 		"scheduled_at", fireUTC.Format(time.RFC3339), "trace_id", trace.TraceID)
 
 	// Observability only, and best-effort: the seat has already been woken,
@@ -566,6 +569,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	fired := events.New(types.ScheduledTaskFired{
 		ScopeType:    e.Scope,
 		ScopeID:      e.ScopeID,
+		ScopeName:    e.ScopeName,
 		ScheduleName: e.Schedule.Name,
 		TargetHandle: handle,
 		ScheduledAt:  fireUTC.Format(time.RFC3339),
@@ -597,7 +601,7 @@ func (s *Scheduler) recordSkip(ctx context.Context, e Entry, fireUTC time.Time, 
 		log.ErrorContext(ctx, "schedule_skip_record_failed", "schedule", e.Schedule.Name, "error", err)
 	}
 	log.InfoContext(ctx, "schedule_catchup_skipped", "schedule", e.Schedule.Name, "scope_type", e.Scope,
-		"scope_id", e.ScopeID, "scheduled_at", fireUTC.Format(time.RFC3339))
+		"scope", e.ScopeName, "scope_id", e.ScopeID, "scheduled_at", fireUTC.Format(time.RFC3339))
 }
 
 // holdsDuty asks whether this node runs the tick, failing closed on unknown.
@@ -620,7 +624,10 @@ func (s *Scheduler) holdsDuty(ctx context.Context) bool {
 // never gates a dispatch. That is exactly why the ledger does NOT key on a
 // string like this one.
 func runID(e Entry, label, runner string) string {
-	return fmt.Sprintf("%s:%s:%s:%s:%s", e.Scope, e.ScopeID, e.Schedule.Name, label, runner)
+	// THE READABLE NAME, because this is what a person reads off a task
+	// card. The ledger's own identity is the struct, and the id is beside
+	// it in every log line this run writes.
+	return fmt.Sprintf("%s:%s:%s:%s:%s", e.Scope, e.ScopeName, e.Schedule.Name, label, runner)
 }
 
 // newTrace opens the span one fire belongs to and returns its ids.

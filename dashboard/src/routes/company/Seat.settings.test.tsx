@@ -174,7 +174,12 @@ function mount(hash: string, answer: (what: string) => Promise<unknown>) {
     schedules: [
       {
         scope_type: "role",
-        scope_id: "ceo",
+        // THE ID IS NOT THE HANDLE. A role scope is keyed on the seat's
+        // agent id so a rename keeps the schedule's history, and the handle
+        // travels beside it as `scope_name` — so a screen that filtered or
+        // rendered by the id would show this seat none of its own schedules.
+        scope_id: "b9f8fba1-4fe4-522f-8349-9f28db43654f",
+        scope_name: "ceo",
         name: "weekly-review",
         cron: "0 9 * * 1",
         timezone: "UTC",
@@ -191,7 +196,10 @@ function mount(hash: string, answer: (what: string) => Promise<unknown>) {
       // lands in this seat's day.
       {
         scope_type: "unit",
-        scope_id: "Engineering",
+        // A RENAMED UNIT: the fire ledger keys on the key it was created
+        // under, and the screen reads the one it answers to now.
+        scope_id: "eng",
+        scope_name: "Engineering",
         name: "standup",
         cron: "0 9 * * 1-5",
         timezone: "UTC",
@@ -325,7 +333,8 @@ test("a schedule the engine cannot fire is marked, not left blank", async () => 
       schedules: [
         {
           scope_type: "role",
-          scope_id: "ceo",
+          scope_id: "b9f8fba1-4fe4-522f-8349-9f28db43654f",
+          scope_name: "ceo",
           name: "weekly-review",
           cron: "0 9 * * 1",
           timezone: "Mars/Olympus",

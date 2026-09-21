@@ -95,11 +95,13 @@ func (s Sources) recentRuns(ctx context.Context) []map[string]any {
 		log.WarnContext(ctx, "schedule_history_unreadable", "error", err)
 		return []map[string]any{}
 	}
+	names := s.scopeNames()
 	out := make([]map[string]any, 0, len(runs))
 	for _, run := range runs {
 		out = append(out, map[string]any{
 			"scope_type":    string(run.Scope),
 			"scope_id":      run.ScopeID,
+			"scope_name":    names.of(run.Scope, run.ScopeID),
 			"schedule_name": run.ScheduleName,
 			"fire_label":    run.FireLabel,
 			"target_handle": run.TargetHandle,

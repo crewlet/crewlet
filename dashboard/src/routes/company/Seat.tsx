@@ -705,7 +705,13 @@ export function SeatScreen({ handle }: { handle: string }) {
     () =>
       pushed.filter(
         (row) =>
-          (row.scope_type === "role" && row.scope_id === handle) || row.runners.includes(handle),
+          // BY THE SCOPE'S NAME. `scope_id` is the identity the fire ledger
+          // keys on — a seat's agent id — so comparing a handle to it
+          // matched nothing and this seat's own schedules vanished from its
+          // page. The fallback is the id, which is never a handle, so a
+          // build that sends no name simply matches on `runners` alone.
+          (row.scope_type === "role" && (row.scope_name ?? row.scope_id) === handle) ||
+          row.runners.includes(handle),
       ),
     [pushed, handle],
   );
@@ -1348,9 +1354,9 @@ export function SeatScreen({ handle }: { handle: string }) {
                         row.scope_type === "role" ? (
                           <span className="muted">theirs</span>
                         ) : (
-                          <TextCell icon="apartment">{row.scope_id}</TextCell>
+                          <TextCell icon="apartment">{row.scope_name ?? row.scope_id}</TextCell>
                         ),
-                      sortValue: (row) => `${row.scope_type}/${row.scope_id}`,
+                      sortValue: (row) => `${row.scope_type}/${row.scope_name ?? row.scope_id}`,
                     },
                     {
                       // THE ENGINE'S OWN ANSWER, and the REASON where it has

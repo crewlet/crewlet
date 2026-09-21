@@ -47,11 +47,13 @@ func (s Sources) scheduleRuns(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	names := s.scopeNames()
 	out := make([]map[string]any, 0, len(runs))
 	for _, run := range runs {
 		out = append(out, map[string]any{
 			"scope_type":    string(run.Scope),
 			"scope_id":      run.ScopeID,
+			"scope_name":    names.of(run.Scope, run.ScopeID),
 			"schedule_name": run.ScheduleName,
 			// THE FIRE LABEL IS THE IDENTITY of one fire — the minute it
 			// was scheduled for — which is what tells a catchup fire from
@@ -67,6 +69,7 @@ func (s Sources) scheduleRuns(ctx context.Context, p Params) (any, error) {
 	return map[string]any{
 		"scope_type":    string(scope),
 		"scope_id":      scopeID,
+		"scope_name":    names.of(scope, scopeID),
 		"schedule_name": name,
 		"runs":          out,
 		// SAYS WHEN IT CUT, like every other page in this tree: a page

@@ -76,8 +76,23 @@ function scheduleRef(scopeType: string, scopeId: string, name: string): ObjectRe
 }
 
 /** Where a scope points: a seat for a role schedule, a unit for a unit one. */
-function scopePath(scopeType: string, scopeId: string): string[] {
-  return scopeType === "role" ? ["company", "people", scopeId] : ["company", "units", scopeId];
+/**
+ * Where a scope's own page lives.
+ *
+ * FROM THE NAME AND NOT THE ID. A schedule's `scope_id` is the IDENTITY the
+ * at-most-once ledger keys a fire on — a seat's agent id, a unit's origin key
+ * — so that a rename keeps the schedule's history and its dedupe. The pages
+ * under `company/` are addressed by what a person types instead, which is
+ * `scope_name`: a link built from the id would reach a uuid nobody has a page
+ * for.
+ */
+function scopePath(scopeType: string, scopeName: string): string[] {
+  return scopeType === "role" ? ["company", "people", scopeName] : ["company", "units", scopeName];
+}
+
+/** What a person calls a scope, falling back to the id a build sent none for. */
+function scopeLabel(row: { scope_name?: string; scope_id: string }): string {
+  return row.scope_name || row.scope_id;
 }
 
 /**
@@ -196,8 +211,8 @@ function ScheduleDefinition({ row }: { row: ScheduleRow }) {
               },
               {
                 label: "Scope",
-                value: `${row.scope_type} · ${row.scope_id}`,
-                path: scopePath(row.scope_type, row.scope_id),
+                value: `${row.scope_type} · ${scopeLabel(row)}`,
+                path: scopePath(row.scope_type, scopeLabel(row)),
               },
               {
                 label: "Target",
@@ -523,16 +538,16 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 key: "scope",
                 header: "Scope",
                 shrink: true,
-                sortValue: (s) => `${s.scope_type}:${s.scope_id}`,
+                sortValue: (s) => `${s.scope_type}:${scopeLabel(s)}`,
                 // A ROLE SCOPE IS A SEAT and a unit scope is not, which is
                 // why only half of this column is a cell: `SeatCell` is the
                 // one rendering of a person in a grid, and a unit is a name
                 // with no avatar, no state and no page of people behind it.
                 cell: (s) =>
                   s.scope_type === "role" ? (
-                    <SeatCell handle={s.scope_id} />
+                    <SeatCell handle={scopeLabel(s)} />
                   ) : (
-                    <Tag appearance="outline">{s.scope_id}</Tag>
+                    <Tag appearance="outline">{scopeLabel(s)}</Tag>
                   ),
               },
               {

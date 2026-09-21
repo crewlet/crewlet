@@ -825,7 +825,10 @@ func TestATickAgainstNoCompanyFiresNothing(t *testing.T) {
 func TestJitterDelaysFiringDeterministically(t *testing.T) {
 	t.Parallel()
 	h := build(t, roleOrg(), func(o *Options) { o.Jitter = 45 * time.Second })
-	offset := h.s.jitterFor("qa", "smoke")
+	// ON THE SCOPE'S IDENTITY, which for a role is the seat's agent id: the
+	// offset has to be the same on every node and every tick, so it may not
+	// be derived from anything a rename moves.
+	offset := h.s.jitterFor(seatScopeID("qa"), "smoke")
 	if offset <= 0 || offset > 45*time.Second {
 		t.Fatalf("jitter offset = %v, want it inside (0, 45s] for this fixture", offset)
 	}
@@ -1121,6 +1124,12 @@ func requireTopics(t *testing.T, got []string, want ...string) {
 		}
 		seen[w]--
 	}
+}
+
+// seatScopeID is the identity a fixture seat's schedules are keyed under.
+func seatScopeID(handle string) string {
+	id, _ := org.DeriveAgentID("Acme", handle)
+	return id.String()
 }
 
 // seatInbox is a fixture seat's mailbox subject.
