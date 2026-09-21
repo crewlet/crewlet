@@ -606,3 +606,72 @@ func mustJSON(v any) []byte {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// ONE SPELLING OF "NOTHING MOVED" IN THE FIELDS COLUMN.
+//
+// # What this protects
+//
+// `fields_json` is written from one of two places — the applier's own deltas
+// where it compared two documents, and the RECORD's notification where it did
+// not. Both are [TaskDeltas], and [TaskDeltas] returns a NIL map when nothing
+// moved. `jsonOf` is `json.Marshal`, and a nil map marshals to the literal
+// `null`.
+//
+// So on `notify != nil` alone, every loud commit that moved no field stored
+// `null` in a column whose every other row stores `{}`. Nothing broke:
+// `json_extract` answers NULL against either and the dashboard coalesces. That
+// is exactly why it survived, and exactly what makes it worth a test — two
+// spellings of one fact in one column are indistinguishable until the first
+// query compares them, and then they disagree silently.
+//
+// A PRIORITIES WRITE IS THE CASE TO ASSERT ON, and the choice is load-bearing:
+// it is a DOCUMENT apply, so it passes no deltas at all, and its notification
+// is built unconditionally once the top task is on this node. A purge looks
+// like the obvious case and is not — `Gates.purgeNotify` returns nil unless
+// the project has a lead, so on a harness without one the row takes neither
+// branch and the assertion passes for the wrong reason.
+func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	// A LEAD WRITING SOMEBODY ELSE'S LIST, because that is what carries a
+	// notification: a person reordering their OWN queue announces nothing,
+	// so a self-write leaves `notified = 0` and never reaches the branch
+	// this case is about.
+	lead := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
+	if _, err := lead.WritePriorities(t.Context(), "op-prio", "ana",
+		[]string{"t-1"}, tracker.PersonAuthority{Lead: true}); err != nil {
+		t.Fatalf("WritePriorities: %v", err)
+	}
+	r.drain()
+
+	got := r.strings(`SELECT fields_json FROM tracker_history
+		WHERE subject_kind = ? AND kind = ?`,
+		string(tracker.KindPerson), string(tracker.ChangePrioritised))
+	if len(got) == 0 {
+		t.Fatal("the priorities write left no history row, so this case " +
+			"asserts nothing about the column it is here for")
+	}
+	// AND THE ROW CARRIED A NOTIFICATION, or the branch under test was
+	// never taken and `{}` below is the untouched initial value rather
+	// than an answer. This is the assertion the first draft of this case
+	// was missing, and it passed either way without it.
+	if notified := r.strings(`SELECT notified FROM tracker_history
+		WHERE subject_kind = ? AND kind = ?`,
+		string(tracker.KindPerson), string(tracker.ChangePrioritised)); len(notified) == 0 ||
+		notified[0] != "1" {
+
+		t.Fatalf("the priorities row carries notified = %v, so the write "+
+			"announced nothing and this case never reaches the branch it "+
+			"exists for", notified)
+	}
+	if got[0] != "{}" {
+		t.Errorf("a commit that moved no field stored fields_json = %q, want "+
+			"`{}` — every other row in this column spells an empty delta set "+
+			"that way, and a second spelling is one a reader comparing them "+
+			"cannot tell from a real difference", got[0])
+	}
+}
