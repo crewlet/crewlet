@@ -1269,19 +1269,27 @@ func cleanStrings(in []string) []string {
 
 // ---- the model-backed summarizer ------------------------------------- //
 
-// CompleteFunc is one call to a model on one seat's behalf: the ROLE whose
-// chain answers, a system prompt, a user prompt, and the text that came back.
+// CompleteFunc is one call to a model on one seat's behalf: the HANDLE of the
+// seat whose chain answers, a system prompt, a user prompt, and the text that
+// came back.
 //
 // The narrowest thing that can stand for "an LLM" — no provider, no message
 // types, no telemetry. Everything the engine wraps around a model call (the
-// role's auxiliary provider chain, the token budget, the usage event) lives on
+// seat's auxiliary provider chain, the token budget, the usage event) lives on
 // the engine's side of this function, which is why this package still imports
 // nothing but the store.
 //
-// The role is a NAME rather than a resolved provider for the same reason:
+// THE HANDLE RATHER THAN THE DISPLAY NAME, because the handle is what
+// addresses a seat: it names the inbox, derives the agent id, and is what the
+// org chart resolves. It was the name, and every compaction on a company whose
+// seats declare handles failed with "this revision has no such role" — the
+// memory stayed uncompacted and the failure was logged on a path whose whole
+// contract is best effort.
+//
+// It is an identifier rather than a resolved provider for the reason above:
 // resolving it is the engine's job, and a resolved chain here would put the
 // provider types back in this package's imports.
-type CompleteFunc func(ctx context.Context, role, system, user string) (string, error)
+type CompleteFunc func(ctx context.Context, handle, system, user string) (string, error)
 
 // NewSummarizer builds the model-backed [Summarizer]: it renders the cluster,
 // makes one call, and parses what comes back.
@@ -1305,7 +1313,11 @@ func (m modelSummarizer) Summarize(ctx context.Context, c Cluster) (Summary, err
 	// chain and attributes the token spend. Dropping it here would compact
 	// every seat's memory on whichever single model the wiring happened to
 	// close over, in a company whose whole point is that seats differ.
-	raw, err := m.complete(ctx, c.Role, CompactorSystemPrompt, RenderCluster(c))
+	// THE CLUSTER'S HANDLE, not its role: [Cluster] carries both because
+	// they answer different questions, and this one is "which seat's
+	// chain". The role is prose, and it reaches the model inside the
+	// rendered cluster where prose belongs.
+	raw, err := m.complete(ctx, c.Handle, CompactorSystemPrompt, RenderCluster(c))
 	if err != nil {
 		return Summary{}, err
 	}

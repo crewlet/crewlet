@@ -468,7 +468,10 @@ func (e SkillRefined) SummaryFor(actor string) string {
 // review what the agents worked out for themselves.
 type SkillPromoted struct {
 	// Role is a representative role for the unit rather than one author.
-	RoleName  string `json:"role"`
+	RoleName string `json:"role"`
+	// UnitID is the unit's KEY — what a `manages:` entry and a seat's
+	// `unit:` resolve — rather than its display name, so a reader can
+	// filter and join on it and a rename does not orphan the history.
 	UnitID    string `json:"unit_id"`
 	SkillName string `json:"skill_name"`
 	PageID    string `json:"page_id"`

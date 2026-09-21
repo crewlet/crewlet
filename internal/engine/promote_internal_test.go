@@ -50,7 +50,7 @@ func TestPromotionUnitsCarryTheirSeatsAndContainer(t *testing.T) {
 	if len(units) != 1 {
 		t.Fatalf("units = %d, want 1", len(units))
 	}
-	if units[0].ID != "Platform" || units[0].Container != "ENG" {
+	if units[0].ID != "platform" || units[0].Container != "ENG" {
 		t.Fatalf("unit = %+v", units[0])
 	}
 	if len(units[0].Handles) != 2 {
@@ -317,3 +317,35 @@ func setEpoch(e *Engine, c *Company) { e.epoch.current.Store(c) }
 
 // Compile-time proof the pass's seam is what the engine hands it.
 var _ = func() learning.PromotionUnit { return learning.PromotionUnit{} }
+
+// A PROMOTION NAMES ITS UNIT BY KEY, NOT BY DISPLAY NAME.
+//
+// The key is the unit's stable identity — what a `manages:` entry and a seat's
+// `unit:` resolve, and what every stored row naming a unit holds — and it
+// lands on the `unit_id` of every skill_promoted event. Written as the display
+// name it was a different value the moment a unit declared an id, so the
+// events named something nothing could be filtered or joined on, and a rename
+// orphaned every promotion that came before it.
+func TestAPromotionNamesItsUnitByKey(t *testing.T) {
+	t.Parallel()
+	e := engineOver(t)
+	setEpoch(e, promotionCompany(t, `units:
+  - name: Platform Engineering
+    id: plat
+    space: ENG
+    roles:
+      - name: Engineer
+        handle: eng
+        llm: gateway
+`))
+	wireConfluence(e)
+	units := e.promotionUnits()
+	if len(units) != 1 {
+		t.Fatalf("units = %d, want 1", len(units))
+	}
+	if units[0].ID != "plat" {
+		t.Errorf("the promotion names unit %q, want its key %q — the display name "+
+			"is %q, and an event carrying that can be neither filtered nor joined on",
+			units[0].ID, "plat", "Platform Engineering")
+	}
+}

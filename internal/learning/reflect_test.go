@@ -387,7 +387,7 @@ func TestASeatWhoseRoleIsGoneIsSkipped(t *testing.T) {
 	w := &stubWorker{name: "w"}
 	pub := &recordingPub{}
 	turn := settledTurn()
-	turn.RoleName = "Removed"
+	turn.AgentHandle = "removed"
 	out := reflectOnce(reflector(t, devOrg(), pub, w), turn)
 	if out.Skip != learning.SkipNoRole || w.ran() != 0 {
 		t.Errorf("pass = %+v, worker ran %d times", out, w.ran())
@@ -795,7 +795,7 @@ func TestReconfigureSwapsTheOrgTheSeatIsResolvedAgainst(t *testing.T) {
 	}
 
 	moved := settledTurn()
-	moved.RoleName, moved.TurnID = "Engineer", "t2"
+	moved.AgentHandle, moved.RoleName, moved.TurnID = "engineer", "Engineer", "t2"
 	if res := reflectOnce(r, moved); res.Skip != "" {
 		t.Fatalf("skip = %q, want the new epoch's role to be reflected on",
 			res.Skip)
@@ -1000,5 +1000,47 @@ func TestAParkedTurnLeavesTheMarkForItsResumedHalf(t *testing.T) {
 	// refused, which is what the mark did.
 	if w.ran() != 2 {
 		t.Errorf("the worker ran %d times, want the park and then the resume", w.ran())
+	}
+}
+
+// A TURN IS MATCHED TO ITS SEAT BY HANDLE, NOT BY DISPLAY NAME.
+//
+// The handle is what addresses a seat — it names the inbox, derives the agent
+// id, and is what the org chart resolves — and the turn carries both. Looking
+// the seat up by its display name found nobody on any company whose seats
+// declare a handle: every completed turn was skipped as SkipNoRole, and the
+// company silently stopped learning. No episode, no diary row, no counterparty
+// profile, on a path whose every failure is best effort and therefore says
+// nothing above debug.
+func TestAReflectionResolvesItsSeatByHandle(t *testing.T) {
+	t.Parallel()
+
+	// A SEAT WHOSE HANDLE AND NAME DIFFER, which is the ordinary shape:
+	// an operator writes a readable name and a short handle. With both
+	// the same, a lookup by either works and the case proves nothing.
+	seat := &org.Role{Name: "Senior Developer", DeclaredHandle: "dev"}
+	company := &org.Organization{Name: "Acme", Roles: []*org.Role{seat}}
+	if company.Role(seat.Name) != nil {
+		t.Fatalf("the fixture's display name %q resolves a seat, so this case "+
+			"cannot tell the two lookups apart", seat.Name)
+	}
+
+	w := &stubWorker{name: "w"}
+	turn := settledTurn()
+	turn.AgentHandle, turn.RoleName = "dev", "Senior Developer"
+	if out := reflectOnce(reflector(t, company, &recordingPub{}, w), turn); out.Skip != "" {
+		t.Errorf("a turn from a live seat was skipped as %q — the company learns "+
+			"nothing from any turn, and the only trace is a debug line", out.Skip)
+	}
+	if w.ran() != 1 {
+		t.Errorf("the worker ran %d times, want once", w.ran())
+	}
+
+	// AND THE DISPLAY NAME IS NOT AN ADDRESS: a turn carrying a handle
+	// this company does not have is skipped, whatever its role says.
+	gone := settledTurn()
+	gone.AgentHandle, gone.RoleName = "not-a-handle", "Senior Developer"
+	if out := reflectOnce(reflector(t, company, &recordingPub{}, w), gone); out.Skip != learning.SkipNoRole {
+		t.Errorf("a turn naming no seat was not skipped: %q", out.Skip)
 	}
 }

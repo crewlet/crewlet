@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -60,5 +61,60 @@ roles:
 `)
 	if got := e.learningPasses(t.Context(), off); got.Skills != nil || got.Cluster != nil {
 		t.Errorf("a company that turned learning off was handed passes: %+v", got)
+	}
+}
+
+// COMPACTION RESOLVES ITS SEAT BY HANDLE, NOT BY DISPLAY NAME.
+//
+// The handle is what the org chart resolves and what [learning.CompleteFunc]
+// passes. It was the display name, and on any company whose seats declare a
+// handle it resolved nobody: every compaction failed, the memory it was meant
+// to fold stayed whole, and the failure was logged on a path whose whole
+// contract is best effort.
+//
+// The lookup is what this pins, so the case ends at the seat rather than at a
+// model: a resolved seat with no auxiliary chain gets a DIFFERENT refusal, and
+// telling those two apart is the whole assertion.
+func TestCompactionResolvesItsSeatByHandle(t *testing.T) {
+	t.Parallel()
+	e := engineOver(t)
+	c := companyFor(t, `
+name: Acme
+providers:
+  llm:
+    gateway:
+      type: anthropic
+      model: m
+      api_keys: ["${K}"]
+roles:
+  - name: Senior Developer
+    handle: dev
+    llm: gateway
+    llm_auxiliary: gateway
+`)
+	// THE FIXTURE MUST BE ABLE TO TELL THE TWO APART. With the handle and
+	// the display name the same, a lookup by either works.
+	if c.Org.Role("Senior Developer") != nil {
+		t.Fatal("the fixture's display name resolves a seat, so this case cannot " +
+			"tell a lookup by handle from one by name")
+	}
+
+	complete := e.auxSummarizer(c)
+	if complete == nil {
+		t.Fatal("no summarizer on a company whose seat has an auxiliary model")
+	}
+	if _, err := complete(t.Context(), "dev", "system", "user"); err != nil &&
+		strings.Contains(err.Error(), "no seat with that handle") {
+
+		t.Errorf("the seat's own handle resolved nobody: %v — every compaction on "+
+			"this company fails and its memory is never folded", err)
+	}
+
+	// AND THE DISPLAY NAME IS NOT AN ADDRESS, which is what says the
+	// assertion above is the handle working rather than any string
+	// resolving.
+	_, err := complete(t.Context(), "Senior Developer", "system", "user")
+	if err == nil || !strings.Contains(err.Error(), "no seat with that handle") {
+		t.Errorf("a display name resolved a seat: %v", err)
 	}
 }

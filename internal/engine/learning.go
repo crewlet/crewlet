@@ -609,14 +609,20 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 	if !anySeatHasAuxiliary(c) {
 		return nil
 	}
-	return func(ctx context.Context, role, system, user string) (string, error) {
-		seat := c.Org.Role(role)
+	return func(ctx context.Context, handle, system, user string) (string, error) {
+		// BY HANDLE, which is what [org.Organization.Role] resolves and
+		// what [learning.CompleteFunc] passes. It was the display name,
+		// and on any company whose seats declare a handle it resolved
+		// nobody: every compaction failed with the refusal below, and
+		// the memory it was meant to fold stayed whole.
+		seat := c.Org.Role(handle)
 		if seat == nil {
-			return "", fmt.Errorf("engine: compaction for %q: this revision has no such role", role)
+			return "", fmt.Errorf("engine: compaction for %q: this revision has "+
+				"no seat with that handle", handle)
 		}
 		member, err := e.meteredModelsFor(c).Head(seat, phase.Auxiliary)
 		if err != nil {
-			return "", fmt.Errorf("engine: compaction for %q: %w", role, err)
+			return "", fmt.Errorf("engine: compaction for %q: %w", handle, err)
 		}
 		call, cancel := context.WithTimeout(ctx, learning.DefaultAuxTimeout)
 		defer cancel()
