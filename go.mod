@@ -8,9 +8,9 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/nats-io/nats-server/v2 v2.14.6
-	github.com/nats-io/nats.go v1.53.1
-	github.com/openai/openai-go/v3 v3.61.0
+	github.com/nats-io/nats-server/v2 v2.15.0
+	github.com/nats-io/nats.go v1.54.0
+	github.com/openai/openai-go/v3 v3.63.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/tursodatabase/turso-go-platform-libs v0.8.0-pre.11
 	github.com/yuin/goldmark v1.8.6
@@ -31,7 +31,7 @@ require (
 )
 
 require (
-	github.com/antithesishq/antithesis-sdk-go v0.7.2-default-no-op // indirect
+	github.com/antithesishq/antithesis-sdk-go v0.8.0-default-no-op // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
@@ -43,7 +43,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
-	github.com/klauspost/compress v1.19.2 // indirect
+	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/nats-io/jwt/v2 v2.8.2 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
@@ -61,11 +61,11 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.46.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
+	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
 	google.golang.org/grpc v1.83.1 // indirect
