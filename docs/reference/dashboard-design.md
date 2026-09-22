@@ -2229,6 +2229,17 @@ is one of the rules on this page applied to a tracker.
   a value it does not have: an undated, unassigned, unestimated task lines
   its status up with the task above it rather than pulling every later
   column one place left.
+- **And a row's own inset comes out of the tracks at its ends.** A subgrid
+  item's padding is SUBTRACTED from the first and last track it spans, and the
+  row pads itself so a hover tints it edge to edge rather than as a box
+  floating inside the panel. A browser hands that back where the track is
+  sized from content and cannot where it is fixed — so a fixed opening track
+  the same width as the inset resolves to nothing at all. Both of the list's
+  breakpoints had one: on the desktop list the priority mark overflowed a
+  zero-wide cell and came to rest on the key, so `↑LEAD-3` read as one
+  identifier with a stray character on the front; on the phone list, where the
+  mark is not drawn and the key is the first item, the key painted over the
+  status pill beside it. An end track states the inset as well as the column.
 - **A card is not a row, so it holds nothing open.** The dashed "nobody"
   square exists to keep a row's assignee COLUMN from collapsing; a card is
   inline flow and has no column to keep. So a card draws its foot only when
