@@ -64,3 +64,57 @@ func TestAnInheritedLeadKeepsItsOwnHandleToo(t *testing.T) {
 			"Platform", lead, found)
 	}
 }
+
+// THE UNIT-LEAD FALLBACK RESOLVES ON A COMPANY THAT GAVE ITS UNITS NO IDS,
+// which is every company that did not opt into them — the shipped example
+// included.
+//
+// `id` is optional and [org.Unit.Key] falls back to the name, so the string a
+// task's routing unit holds is the NAME on such a company. Matching the id
+// alone compared it against "" and found nothing: the fallback that reaches a
+// unit's lead when a change named nobody else reached NOBODY, and a wake that
+// went to no one is indistinguishable from a unit whose lead is unset.
+func TestAUnitsLeadResolvesByItsNameWhenItHasNoID(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
+		Name: "Platform", Lead: "Ada Okonkwo",
+		Roles: []*org.Role{
+			{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman},
+		},
+	}}}
+	o.Normalize()
+
+	if got := UnitLeadOf(o, "Platform"); got != "ada" {
+		t.Errorf("the lead of Platform is %q, want ada — a unit with no id is "+
+			"keyed by its name, and matching the id alone compares every "+
+			"routing unit against the empty string", got)
+	}
+	if got := UnitLeadOf(o, "Navigation"); got != "" {
+		t.Errorf("a unit nothing names resolved to %q", got)
+	}
+}
+
+// AND BY EITHER SPELLING ONCE IT HAS ONE. The id is what a row holds from the
+// moment a founder adds it; the name is what every row written before that
+// keeps, because a task's filed unit is a record of what was true and nothing
+// rewrites it. Both have to reach the lead, or adding an id silences the
+// fallback for every task already filed.
+func TestAUnitsLeadResolvesByItsIDAndByItsName(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
+		ID: "plat", Name: "Platform", Lead: "Ada Okonkwo",
+		Roles: []*org.Role{
+			{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman},
+		},
+		// AN INHERITING CHILD, so the effective lead is exercised on the
+		// same walk rather than only the declared one.
+		Children: []*org.Unit{{ID: "nav", Name: "Navigation"}},
+	}}}
+	o.Normalize()
+
+	for _, unit := range []string{"plat", "Platform", "PLAT", "nav", "Navigation"} {
+		if got := UnitLeadOf(o, unit); got != "ada" {
+			t.Errorf("the lead of %q is %q, want ada", unit, got)
+		}
+	}
+}

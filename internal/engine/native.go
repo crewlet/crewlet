@@ -1044,31 +1044,6 @@ func ProjectOfSeat(o *org.Organization, handle string) string {
 		func(r *org.Role) string { return r.Project })
 }
 
-// UnitOfSeat is the team a seat belongs to, as a task's unit fields hold it.
-//
-// THE UNIT'S KEY rather than its name, because a unit is renamed for the
-// reasons prose is renamed and every task filed under it would otherwise stop
-// resolving — [org.Unit.Key] is the stable identity, falling back to the name
-// for a unit that has not been given one.
-//
-// THE SAME UPWARD WALK as the project, so a seat in a team nested under a
-// department is filed under its OWN team rather than the department's: the
-// first unit that holds the role is the answer, which is what a person means
-// by "my team".
-func UnitOfSeat(o *org.Organization, handle string) string {
-	if o == nil || handle == "" {
-		return ""
-	}
-	for unit := range o.AllUnits() {
-		for _, role := range unit.Roles {
-			if role.Handle() == handle {
-				return unit.Key()
-			}
-		}
-	}
-	return ""
-}
-
 // scopeOfSeat is the project or container a seat files into: its own, else
 // its unit's, else its nearest ancestor's.
 //
@@ -1214,11 +1189,6 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		DefaultProject: func(handle string) string {
 			return ProjectOfSeat(e.Company().Org, handle)
 		},
-		// AND THE SEAT'S OWN TEAM, which a create stamps on both unit
-		// fields. Per call for the reason the default project is.
-		UnitOfSeat: func(handle string) string {
-			return UnitOfSeat(e.Company().Org, handle)
-		},
 		// THE LEAD MAP IS READ PER CALL against the epoch current when the
 		// tool runs, for the reason the default project is: a seat's
 		// tools are cloned into its lease, an apply does not rebuild the
@@ -1312,20 +1282,39 @@ func (l liveLeads) ProjectLead(project string) string {
 
 // UnitLead is who hears about work routed to a unit.
 func (l liveLeads) UnitLead(unit string) string {
-	if unit == "" {
+	return UnitLeadOf(l.engine.Company().Org, unit)
+}
+
+// UnitLeadOf is who hears about work routed to a unit, named by the unit's ID
+// or by its NAME.
+//
+// BOTH SPELLINGS, which is the set [org.Unit.ID]'s own doc promises a unit is
+// matched by. Matching the id ALONE — which this did — resolved a lead on no
+// company that had not given its units ids: `id` is optional, the shipped
+// example sets none, and `u.ID` is then the empty string, which equals no
+// routing unit any writer has ever stored. So the fallback that reaches a
+// unit's lead when a change named nobody else reached nobody, on every
+// default company, and looked exactly like a unit whose lead is unset.
+//
+// The name is what a row holds today and the id is what it holds the moment a
+// founder adds one; a task filed before that keeps the name, which is what
+// [tracker.Task.FiledUnit] being a record of what was true means. Neither
+// spelling may lose the lead, so both are matched, and case-insensitively for
+// the reason every other scope comparison here is.
+func UnitLeadOf(o *org.Organization, unit string) string {
+	if o == nil || unit == "" {
 		return ""
 	}
-	chart := l.engine.Company().Org
-	if chart == nil {
-		return ""
-	}
-	for u := range chart.AllUnits() {
-		if !strings.EqualFold(u.ID, unit) {
+	for u := range o.AllUnits() {
+		if !strings.EqualFold(u.Key(), unit) && !strings.EqualFold(u.Name, unit) {
 			continue
 		}
-		if lead := chart.EffectiveLead(u); lead != nil {
+		if lead := o.EffectiveLead(u); lead != nil {
 			return lead.Handle()
 		}
+		// THE UNIT EXISTS AND LEADS NOBODY, which is not the same as a
+		// unit nothing names: the walk stops rather than going on to
+		// find a same-named one, because there is not one.
 		return ""
 	}
 	return ""

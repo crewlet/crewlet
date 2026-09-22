@@ -202,16 +202,6 @@ type WorkDeps struct {
 	// colleague who joined this morning and admitting one who left.
 	Seats func() []colleague.Seat
 
-	// UnitOfSeat is the team a seat belongs to, read PER CALL against the
-	// epoch current when the tool runs — for the reason the default
-	// project is: a seat's tools are cloned into its lease, an apply does
-	// not rebuild the clone, and a captured unit would file today's work
-	// under the team somebody left last week.
-	//
-	// Nil stamps no unit, which is what a build with no chart has: the
-	// task is filed unrouted and its project lead is the only fallback.
-	UnitOfSeat func(handle string) string
-
 	// Units resolves a project's chart-owned unit at READ time — the
 	// tracker holds no org, because the applier may not read one. Nil
 	// renders every unit unresolved, which is honest rather than empty.
@@ -588,8 +578,9 @@ func (t *listWorkItems) Parameters() map[string]any {
 			},
 			"unit": map[string]any{
 				"type": "string",
-				"description": "A team's key: the work routed to that team, " +
-					"whoever holds it.",
+				"description": "A team's key: the work FILED into that team, " +
+					"whoever holds it. Where it routes NOW is `routing_unit`, " +
+					"which a re-route moves and this does not.",
 			},
 			"field_filters": map[string]any{
 				"type": "object",
@@ -1111,8 +1102,9 @@ func (t *createWorkItem) Parameters() map[string]any {
 			"unit": map[string]any{
 				"type": "string",
 				"description": "The team this work belongs to. Defaults to " +
-					"YOUR team, which is almost always right — name another " +
-					"only when you are filing on their behalf.",
+					"the team that owns `project`, which is almost always " +
+					"right — name another only when the work belongs to a " +
+					"different team than the project it sits in.",
 			},
 			"waiting_on": map[string]any{
 				"type": "array",
@@ -1234,11 +1226,19 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				"in rather than guessing."), nil
 		}
 	}
-	// THE FILING SEAT'S OWN TEAM, on both unit fields, and open to every
+	// A UNIT THE CALLER NAMED, checked against the chart and open to every
 	// seat — deliberately unlike the re-route above. `FiledUnit` is the
-	// immutable record of where this came from; `RoutingUnit` is the
-	// mutable half, and a create that stamped neither left a task whose
-	// unit lead could never be a fallback for it.
+	// immutable record of which team the work belongs to; `RoutingUnit`
+	// is the mutable half, whose lead hears about it now.
+	//
+	// NAMING NONE IS THE ORDINARY CASE, and the tracker fills both from
+	// the project's own chart-owned unit at the write — one derivation,
+	// inside the create's own snapshot, so every writer gets the same
+	// answer. This stamped the FILING SEAT'S team instead,
+	// which was right only for a seat filing into its own team's project:
+	// an operator holds no seat and a root-level seat holds no unit, so
+	// both filed work into no unit at all, whatever the project said the
+	// work belonged to.
 	if unit := strings.TrimSpace(argString(args, "unit")); unit != "" {
 		if t.deps.Units != nil {
 			if _, _, found := t.deps.Units.ResolveUnit(unit); !found {
@@ -1247,9 +1247,6 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			}
 		}
 		task.FiledUnit, task.RoutingUnit = unit, unit
-	} else if t.deps.UnitOfSeat != nil {
-		task.FiledUnit = t.deps.UnitOfSeat(actor.Handle)
-		task.RoutingUnit = task.FiledUnit
 	}
 
 	// THE ASSIGNEE IS RESOLVED BEFORE THE WATCHERS, so the canonical
