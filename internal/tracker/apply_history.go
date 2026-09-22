@@ -20,6 +20,22 @@ import (
 // feed is therefore a complete account of what happened rather than an account
 // of what was announced, and `notified` is how a reader tells "nothing was
 // announced" from "nothing happened".
+//
+// # AND EVERY HISTORY ROW SAYS WHAT MOVED
+//
+// One rule, for every kind [ObjectKind.RecordsHistory] names: the deltas in
+// `fields_json` are the APPLIER's, computed from the two states this frame
+// holds — the object as this node stored it and the object the record says it
+// should be. A task's comparison is [TaskDeltas]; every whole-document
+// object's is `deltas.go`, which states the bounds, the text forms and why a
+// value is never a rendering.
+//
+// The rule used to hold for a task alone, and the gap was the same one the
+// applier's own deltas were introduced to close, one layer out: a project, a
+// view, a tag set, a catalogue and a person record each passed a literal nil
+// here, so every one of those rows stored `{}` and no screen could say what
+// had changed. Both halves of the fix are the same sentence — what moved is a
+// property of the two documents, never of whether anybody was told.
 
 // writeHistory writes the record's history row and everything that hangs off
 // it.
