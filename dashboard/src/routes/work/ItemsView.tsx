@@ -97,6 +97,7 @@ import {
   shapeOf,
   shownRows,
   totalHint,
+  URL_HOMES,
   viewParams,
   type Scope,
   type Shape,
@@ -449,23 +450,29 @@ export function ItemsView({ project = "", host }: { project?: string; host?: Ite
   };
 
   const clearFilters = () => {
-    const patch: Record<string, string | null> = {
-      q: null,
-      status: null,
-      type: null,
-      priority: null,
-      tag: null,
-      assignee: null,
-      due: null,
-      blocked: null,
-      group: null,
-      removed: null,
-      // TO THE VIEW'S, not to "open": clearing a narrowing returns the screen
-      // to what the view asked for, and writing the fallback drops the key so
-      // the view keeps supplying it.
-      scope: null,
-    };
+    // EVERY KEY THE GRAMMAR CALLS A CHIP, from [URL_HOMES] rather than from a
+    // list written out here. Written out, this one was missing `unit` — a key
+    // no control on this screen writes, which is exactly why nobody noticed —
+    // so a list reached from an item's own "Filed into" line could not be
+    // widened again by the control that offers to do it, and the chip it left
+    // standing was the only trace of a narrowing Clear had just claimed to
+    // remove.
+    const patch: Record<string, string | null> = {};
+    for (const [key, home] of Object.entries(URL_HOMES)) {
+      // A FAMILY IS NOT A KEY: the company's own fields are one key per
+      // declared field, and the set is the company's — so what is cleared is
+      // whichever of them the address actually holds, below.
+      if (home === "chip" && !key.endsWith(".")) patch[key] = null;
+    }
     for (const key of Object.keys(fields)) patch[key] = null;
+    // AND THE SEGMENT, which is the one key Clear touches that is not a chip.
+    // It is not a narrowing somebody added, but it decides which half of the
+    // company is on screen, so a "nothing matched" that could not widen it
+    // would be offering to undo less than it says. TO THE VIEW'S, not to
+    // "open": clearing a narrowing returns the screen to what the view asked
+    // for, and writing the fallback drops the key so the view keeps supplying
+    // it.
+    patch.scope = null;
     setFilters(patch);
   };
 
