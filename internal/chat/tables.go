@@ -11,7 +11,7 @@ import "github.com/crewlet/crewlet/internal/statelog"
 // the only writer of any of them.
 //
 // THE NAMES ARE THE MIGRATION'S, EXACTLY. Nothing in Go connects a string here
-// to `internal/store/schema/replicated/0015_the_chat_domain_lands.sql`, and a
+// to `internal/store/schema/replicated/0016_the_chat_domain_lands.sql`, and a
 // misspelling is silent in the direction that matters: a table left out of the
 // map is scrubbed from no snapshot, compared by no claim and swept by nobody,
 // which looks exactly like a table that behaves. What catches it is the
