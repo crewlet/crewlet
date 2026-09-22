@@ -164,6 +164,43 @@ type Request struct {
 	// record to publish. It may run more than once — each round takes a
 	// fresh snapshot — and must decide only from rows it reads there.
 	Decide func(*sql.Tx) (Decision, error)
+
+	// NoWait asks for the answer the broker's acknowledgement already
+	// establishes — durable at a position — rather than waiting for this
+	// node's own applier to reach it.
+	//
+	// # What it is for, and why it is not an optimisation
+	//
+	// One caller has no use for the wait: a write whose RESULT the caller
+	// already holds independently of the rows. A sign-in is the case it
+	// exists for. The session-start record is durable the moment the
+	// broker acknowledges it, the cookie minted from it carries that
+	// position, and every node validates the bearer against its own
+	// applier — so the row this node is waiting for is a row nothing in
+	// the answer reads. What the wait costs there is 250-500 ms of parked
+	// browser fetch against a 50 ms credential verify, on the one request
+	// a person judges the whole product by.
+	//
+	// # What it does NOT skip
+	//
+	// [Request.Session] — the caller's own high-water mark, waited for
+	// BEFORE any snapshot opens. That wait is what makes a decision read
+	// the caller's own previous write, so skipping it would make a
+	// two-step gesture decide from a state below itself. The two waits
+	// are at opposite ends of one write and answer opposite questions:
+	// one is "may I decide yet", the other is "may I report what my
+	// decision produced". A flag that collapsed them would trade a
+	// correctness property for a latency one.
+	//
+	// # What the caller owes
+	//
+	// A position, carried to whoever reads next. [Result.Waited] says
+	// which kind of pending came back, and a caller that sets this and
+	// then reports the outcome as a transient failure has made a
+	// deliberate skip look like a node that is behind. Nothing in this
+	// framework can enforce that pairing — this comment is where it
+	// exists.
+	NoWait bool
 }
 
 // ErrExists reports a first-writer-wins create for an object that is already
@@ -747,6 +784,15 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 // absent ledger row means "somebody else won" only when the record might have
 // been somebody else's.
 func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine bool) (Result, error) {
+	if req.NoWait {
+		// THE ANSWER THE ACKNOWLEDGEMENT ALREADY ESTABLISHES. Durable at
+		// `at`, unresolved here because nothing asked — which is the
+		// same OUTCOME a wait that timed out produces and a different
+		// FACT, carried by [Result.Waited]. See [Request.NoWait].
+		return Result{
+			Outcome: OutcomePending, Position: at, OpID: req.OpID,
+		}, nil
+	}
 	waitCtx, cancel := context.WithTimeout(ctx, p.resolveBudget)
 	defer cancel()
 
@@ -757,7 +803,13 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 		// DURABLE AT p, UNRESOLVED HERE. Never "applied", and never a
 		// failure: every other node will apply it, and the caller has a
 		// position to resolve with rather than a retry to make.
-		return Result{Outcome: OutcomePending, Position: at, OpID: req.OpID}, nil
+		//
+		// WAITED, unlike the [Request.NoWait] arm above, and this is the
+		// pending that says something about the NODE: it was asked and
+		// did not arrive inside the budget.
+		return Result{
+			Outcome: OutcomePending, Position: at, OpID: req.OpID, Waited: true,
+		}, nil
 	}
 
 	// THE LEDGER IS ONLY ASKED WHERE THERE IS ONE. A ledgerless domain's
@@ -774,6 +826,7 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 				Position: where,
 				OpID:     req.OpID,
 				Version:  where.Packed(),
+				Waited:   true,
 			}, nil
 		}
 	}
@@ -813,6 +866,7 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 			Position: at,
 			OpID:     req.OpID,
 			Version:  at.Packed(),
+			Waited:   true,
 		}, nil
 	}
 
@@ -838,7 +892,9 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 		// adopted one arrives with an empty table — and reading that
 		// absence as "somebody else won" would re-decide against a row
 		// that moved because of this very write.
-		return Result{Outcome: OutcomeUnknown, Position: at, OpID: req.OpID}, nil
+		return Result{
+			Outcome: OutcomeUnknown, Position: at, OpID: req.OpID, Waited: true,
+		}, nil
 	}
 
 	// Somebody else won. Re-decide.

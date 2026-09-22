@@ -255,6 +255,22 @@ type Options struct {
 	// and half into the company document.
 	Setup routeMounter
 
+	// Auth serves /auth, normally an authapi.Service: how a person
+	// BECOMES a principal. It is the one surface here whose routes are
+	// not all guarded — five of them are how somebody obtains a
+	// credential, so requiring one would be a deployment nobody can
+	// enter — and which of the twelve is which is named in
+	// internal/api/auth's exemption list, held against the registration
+	// by a gate in authapi.
+	//
+	// OPTIONAL, unlike the four above, and its absence is a real posture
+	// rather than a wiring mistake: a deployment whose keyring cannot
+	// sign for the fleet has no way to mint a session, and the honest
+	// shape is a sign-in surface that is ABSENT rather than one that
+	// answers 503 to every attempt. `crewlet validate` refuses that
+	// keyring by name, so an operator learns it on a laptop.
+	Auth routeMounter
+
 	// Chart serves /chart and /company/export, normally a
 	// chartapi.Service: the company's org chart, which is a state-log
 	// domain of its own rather than part of the stored revision /config
@@ -507,6 +523,13 @@ func New(opts Options) (*App, error) {
 	// reads included — the list of which credentials a company has NOT
 	// configured is worth as much to an attacker as the ones it has.
 	opts.Setup.Routes(mux)
+	// AND THE WAY IN. Mounted after the guarded surfaces and before the
+	// chart's, which is a matter of reading order rather than routing:
+	// Go's mux prefers the more specific pattern whichever way round they
+	// are declared.
+	if opts.Auth != nil {
+		opts.Auth.Routes(mux)
+	}
 	// THE ORG CHART, and the only mount here that can fail: its routes
 	// carry their authority with their registration, so a policy that is
 	// missing or names a verb the table has no rule for is refused now

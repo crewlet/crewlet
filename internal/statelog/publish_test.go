@@ -580,3 +580,122 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 			"stays behind", waited, 250*time.Millisecond)
 	}
 }
+
+// A NO-WAIT WRITE ANSWERS PENDING WITHOUT ENTERING THE WAIT AT ALL.
+//
+// The difference from the ordinary pending above is not the outcome — both are
+// durable at a position and unresolved here — it is that this one never asked.
+// A sign-in is what it exists for: the cookie minted from the record carries
+// its position, every node validates the bearer against its own applier, and
+// the row this node would be waiting for is a row nothing in the answer reads.
+func TestAFlaggedWriteAnswersPendingWithoutWaiting(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	// THE APPLIER IS LEFT RUNNING, deliberately. Stopping it would make
+	// this pass for the ordinary reason — a wait that timed out — and the
+	// claim is that no wait happened, which is only visible while a wait
+	// WOULD have succeeded.
+	res, err := h.writeNoWait(probeSubject("a"), "op-1", "hello")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if res.Outcome != statelog.OutcomePending {
+		t.Fatalf("outcome = %q, want pending", res.Outcome)
+	}
+	if res.Position.Seq == 0 {
+		t.Error("a no-wait write has no position, so its caller has nothing " +
+			"to carry to whoever reads next")
+	}
+	if res.Waited {
+		t.Error("the write reports that it waited; a caller reading this as " +
+			"a node falling behind would go and investigate a skip somebody " +
+			"asked for")
+	}
+
+	// THE CONTROL, and it is the whole case: the same write without the
+	// flag resolves as applied, against the same running applier. Without
+	// it the assertions above would pass on a harness whose applier was
+	// simply never going to arrive.
+	ordinary, err := h.write(probeSubject("b"), "op-2", "hello")
+	if err != nil {
+		t.Fatalf("the ordinary write: %v", err)
+	}
+	if ordinary.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the unflagged write resolved %q, want applied: this node's "+
+			"applier is not arriving, so the case above proves nothing",
+			ordinary.Outcome)
+	}
+	if !ordinary.Waited {
+		t.Error("an ordinary write reports that it did not wait")
+	}
+}
+
+// AND THE PENDING THAT DID WAIT SAYS SO, which is the other half: the two are
+// one outcome and opposite facts about this node, and reported as one a
+// deliberate skip reads to an operator as a node falling behind under load.
+func TestThePendingThatWaitedIsDistinguishable(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.applier.mu.Lock()
+	h.applier.auto = false
+	h.applier.mu.Unlock()
+
+	res, err := h.write(probeSubject("a"), "op-1", "hello")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if res.Outcome != statelog.OutcomePending {
+		t.Fatalf("outcome = %q, want pending", res.Outcome)
+	}
+	if !res.Waited {
+		t.Error("a write whose apply wait timed out reports that it did not " +
+			"wait, so a node that is genuinely behind is indistinguishable " +
+			"from a caller that declined to find out")
+	}
+}
+
+// THE FLAG DOES NOT REACH THE SESSION WAIT, which is the one it must never
+// skip.
+//
+// The two waits sit at opposite ends of one write and answer opposite
+// questions: the session wait is "may I decide yet" and the apply wait is "may
+// I report what my decision produced". Skipping the first makes a two-step
+// gesture decide from a state below its own previous write — which is a
+// correctness property, not a latency one, and collapsing them would trade the
+// first away for the second.
+func TestTheSessionWaitIsNeverSkipped(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	// STALLED rather than merely not auto-applying, because the session
+	// wait is what `stalled` stops: a node that has stopped catching up,
+	// which is the state the wait exists to refuse a decision in.
+	h.applier.mu.Lock()
+	h.applier.stalled = true
+	h.applier.mu.Unlock()
+
+	// A session mark this node's applier will never reach. The write must
+	// refuse rather than decide from a state below it — flag or no flag.
+	ahead := statelog.Position{
+		Stream: probeStream, Generation: h.gen.Load(), Seq: 9999,
+	}
+	_, err := h.pub.Publish(context.Background(), statelog.Request{
+		Subject:  probeSubject("a"),
+		Scope:    statelog.ScopeSet{Paths: []string{probeSubject("a").String()}},
+		OpID:     "op-1",
+		MintedAt: time.Now(),
+		Pattern:  statelog.PatternArbitrated,
+		Session:  ahead,
+		NoWait:   true,
+		Decide: func(*sql.Tx) (statelog.Decision, error) {
+			return statelog.Decision{Payload: []byte("hello"), Version: 1}, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("a no-wait write decided from a state below its caller's own " +
+			"previous write")
+	}
+	var unavailable *statelog.Unavailable
+	if !errors.As(err, &unavailable) || unavailable.Reason != statelog.ReasonBehind {
+		t.Errorf("the refusal is not the session wait's: %v", err)
+	}
+}

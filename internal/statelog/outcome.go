@@ -17,9 +17,15 @@ import (
 // wrong-last-sequence refusal, and no answer at all.
 //
 // The boolean that used to sit beside this — saying whether the apply wait
-// succeeded — is deliberately absent. Durability is carried by the position
-// being set and the wait is carried by the enum itself, so a third field could
-// only ever disagree with one of them.
+// SUCCEEDED — is deliberately absent, and stays absent. Durability is carried
+// by the position being set and success by the enum itself, so that field
+// could only ever disagree with one of them.
+//
+// [Result.Waited] is not it, and the distinction is exactly the one that makes
+// the removed field redundant and this one not. "The wait succeeded" is
+// derivable — it is `applied`. "A wait was attempted at all" is not, once
+// [Request.NoWait] exists: the two pendings it produces carry the same
+// outcome and mean opposite things about this node.
 type Outcome string
 
 const (
@@ -71,6 +77,22 @@ type Result struct {
 	// OpID is the operation this write belongs to, and what a caller
 	// retries under.
 	OpID string
+
+	// Waited says an apply wait was ATTEMPTED, which is what tells the
+	// two pendings apart.
+	//
+	// NOT "the wait succeeded" — that is derivable and is `applied`. This
+	// says whether anybody asked, and it exists because [Request.NoWait]
+	// made the question askable: a pending that was waited for says this
+	// NODE is behind, and a pending that was not says the caller declined
+	// to find out. Reported as one, a deliberate skip reads to an
+	// operator as a node falling behind under load, which is a health
+	// signal they will go and act on.
+	//
+	// FALSE ON EVERY OUTCOME THAT DID NOT REACH THE WAIT — a refusal, a
+	// round that lost its race — which is honest rather than absent
+	// information: no wait happened there either.
+	Waited bool
 
 	// Version is the object's new version on an applied write: the
 	// position packed, which is the same number the row carries.

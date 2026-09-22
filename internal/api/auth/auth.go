@@ -78,6 +78,18 @@ var log = logging.Get("api.auth")
 //   - the dashboard shell and its assets: the page that prompts for the token
 //     cannot itself require one. It ships no data — every byte it renders comes
 //     from an authenticated fetch.
+//   - FIVE ROUTES UNDER /auth/, and only five: a login cannot require a login.
+//     The posture read, the sign-in, the first-operator bootstrap and the two
+//     OIDC legs are how somebody OBTAINS a credential, so requiring one is a
+//     deployment nobody can enter. What stands in for the guard on each is the
+//     per-source throttle and the origin check, which they are NOT exempt
+//     from. Plus /auth/invite/, whose own id is the credential.
+//
+// NOT A /auth/ PREFIX, and that is the whole care in this entry. The same
+// surface serves the logout routes, the second-factor enrolment and the
+// session read, and a prefix would exempt every one of them — a credential
+// surface behind no credential, which is the exact shape /operator/ was
+// deliberately kept out of /mcp/ to avoid.
 //
 // The split is deliberate. A PREFIX exempts everything beneath it, so only the
 // ones that genuinely have sub-paths get one, and each ends in a slash, which
@@ -87,9 +99,46 @@ var log = logging.Get("api.auth")
 // /readyz-reset — on the day it was added.
 var unguardedExact = map[string]struct{}{
 	"/": {}, "/dashboard": {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
+	PathAuthConfig: {}, PathAuthLogin: {}, PathAuthBootstrap: {},
+	PathAuthOIDCStart: {}, PathAuthOIDCCallback: {},
 }
 
-var unguardedPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, "/static/"}
+var unguardedPrefixes = []string{
+	WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, "/static/", AuthInvitePrefix,
+}
+
+// The sign-in routes served without a credential, named HERE rather than in
+// the surface that serves them.
+//
+// THE EXEMPTION AND THE REGISTRATION MUST BE ONE SPELLING, and this is the
+// package that owns the exemption — internal/api/authapi registers on these
+// constants, so a route it moved without moving the exemption would not
+// compile rather than quietly landing behind a credential nobody can obtain.
+// The dependency runs that way round because authapi already imports this
+// package for the guard, and the reverse would be a cycle.
+const (
+	// PathAuthConfig is the posture read: which backend, whether the
+	// first-operator route is still open, the password floor. No user
+	// list and no count of people — see authapi.
+	PathAuthConfig = "/auth/config"
+
+	// PathAuthLogin is the sign-in itself.
+	PathAuthLogin = "/auth/login"
+
+	// PathAuthBootstrap creates the first person from a one-time code
+	// written to a file on the host.
+	PathAuthBootstrap = "/auth/bootstrap"
+
+	// PathAuthOIDCStart and PathAuthOIDCCallback are the provider round
+	// trip. Both are reached by a BROWSER following a redirect, which
+	// carries nothing this engine issued.
+	PathAuthOIDCStart    = "/auth/oidc/start"
+	PathAuthOIDCCallback = "/auth/oidc/callback"
+
+	// AuthInvitePrefix is the invitation pair, and a PREFIX because the
+	// id is a path segment. Holding the link is the credential.
+	AuthInvitePrefix = "/auth/invite/"
+)
 
 // WebhookPrefix and OTLPPrefix are the two exempt edges a second rule also
 // reads. Named here, beside the exemption, for the reason [SocketPath] is: the

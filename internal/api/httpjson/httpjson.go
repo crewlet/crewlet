@@ -216,6 +216,70 @@ const (
 	CodeVendorRefused Code = "vendor_refused"
 )
 
+// THE IDENTITY CODES, and why there are so few of them.
+//
+// A sign-in surface's refusals are the one place in this vocabulary where
+// SAYING LESS IS THE FEATURE. Every arm of a failed sign-in — no such login,
+// wrong password, wrong second factor, a person suspended, a person removed —
+// is one code, because a caller that could tell them apart has a roster and a
+// way to test it. The specific ones below are the arms where being specific
+// discloses nothing a stranger did not already know, or where a person is
+// stuck without the detail.
+const (
+	// CodeSignInRefused is EVERY failed sign-in, whatever went wrong.
+	//
+	// ONE CODE FOR ALL OF THEM, deliberately. It is paired with the
+	// timing defence in internal/iam/credential — both arms padded to one
+	// wall-clock deadline measured from arrival — because a code that
+	// distinguished them would make the pad pointless, and a pad with a
+	// distinguishing code would make the code pointless. Neither half
+	// works alone.
+	CodeSignInRefused Code = "sign_in_refused"
+
+	// CodeThrottled is too many failed attempts from one source.
+	//
+	// THE ONE SPECIFIC REFUSAL ON THIS SURFACE, and it is safe precisely
+	// because it is keyed on the SOURCE rather than on the subject: a
+	// stranger learns they have been rate-limited, which they already
+	// knew. Keyed on a login it would be an oracle — "this account
+	// exists and I can lock it".
+	CodeThrottled Code = "throttled"
+
+	// CodeSecondFactorRequired is a first factor that checked out where a
+	// second is still needed.
+	//
+	// SPECIFIC BECAUSE THE PERSON IS ALREADY AUTHENTICATED by the first
+	// factor, so it discloses nothing to a stranger — and because without
+	// it a client cannot tell "your password is wrong" from "now type
+	// your code", which are different screens.
+	CodeSecondFactorRequired Code = "second_factor_required"
+
+	// CodeStepUpRequired is a session that is valid and has not proved
+	// identity recently enough for what it just asked to do.
+	CodeStepUpRequired Code = "step_up_required"
+
+	// CodeSessionRevoked is a bearer this node KNOWS is over: signed out,
+	// revoked, expired, or ended by reuse detection.
+	//
+	// DISTINCT FROM [CodeInvalidToken], because a client acts on them
+	// differently: this one means discard the cookie and sign in again,
+	// and that one means the credential presented was never valid here.
+	// Folded together a browser would discard a cookie on every malformed
+	// Authorization header it sent.
+	CodeSessionRevoked Code = "session_revoked"
+
+	// CodeBootstrapClosed is the one-time founder route asked for on a
+	// deployment where it may not run: somebody is already enrolled, or
+	// `api.auth.bootstrap` is closed.
+	CodeBootstrapClosed Code = "bootstrap_closed"
+
+	// CodeInviteSpent is an invitation that is redeemed, withdrawn or
+	// expired. SPECIFIC because the holder of the link needs to know to
+	// ask for another one, and because holding the link is already
+	// evidence it was issued to them.
+	CodeInviteSpent Code = "invite_spent"
+)
+
 // codes is THE TABLE: every code this engine answers with, each with the one
 // sentence a person is shown for it.
 //
@@ -270,6 +334,23 @@ var codes = map[Code]string{
 		"the node that executed it, and only for the last few passes.",
 	CodeVendorRefused: "The third-party app refused this pass. Nothing it had " +
 		"already done is undone, so running it again is safe.",
+
+	// THE COPY IS AS UNIFORM AS THE CODE. A message that said "no such
+	// user" for one arm and "wrong password" for another would be the
+	// oracle the single code exists to close, written out in the body.
+	CodeSignInRefused: "Those sign-in details were not accepted. Check them " +
+		"and try again.",
+	CodeThrottled: "There have been too many failed sign-in attempts from " +
+		"here. Wait a little and try again.",
+	CodeSecondFactorRequired: "Enter the code from your authenticator app, or " +
+		"one of your recovery codes.",
+	CodeStepUpRequired: "This action needs you to confirm who you are. Sign " +
+		"in again to continue.",
+	CodeSessionRevoked: "This session has ended. Sign in again.",
+	CodeBootstrapClosed: "The first-operator setup is not available on this " +
+		"deployment. Ask somebody who already has an account to invite you.",
+	CodeInviteSpent: "This invitation is no longer valid. Ask whoever sent it " +
+		"for a new one.",
 }
 
 // Valid reports whether c is in the vocabulary — which is to say, whether the

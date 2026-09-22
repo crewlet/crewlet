@@ -97,6 +97,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 		V: DocumentVersion, Kind: in.Kind, Stage: in.Stage,
 		NameSealed: sealedName, EmailSealed: sealedEmail,
 		Credentials: in.Credentials, Grants: in.Grants,
+		Colleague: in.Colleague,
 	}
 	mutation, err := EncodePerson(person)
 	if err != nil {
@@ -143,6 +144,11 @@ type Enrolment struct {
 
 	Credentials []Credential
 	Grants      []iam.Grant
+
+	// Colleague is how far into the company's own work this person
+	// reaches. Its zero is the CLOSED end and a real setting — see
+	// [Person.Colleague].
+	Colleague iam.Colleague
 
 	// OpID is the operation id for the whole gesture. Each append derives
 	// its own from it with a suffix, so a retry of the sequence dedupes
@@ -563,7 +569,12 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	result, err := w.publish(ctx, w.request(&rec, in.OpID, statelog.PatternCreate, nil))
+	req := w.request(&rec, in.OpID, statelog.PatternCreate, nil)
+	// THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT FOR ITS OWN ROW, and
+	// only because nothing in the answer reads it. See
+	// [SessionStart.NoWait].
+	req.NoWait = in.NoWait
+	result, err := w.publish(ctx, req)
 	return result.Position, err
 }
 
@@ -574,6 +585,23 @@ type SessionStart struct {
 	Epoch             uint64
 	AbsoluteExpiresAt time.Time
 	OpID              string
+
+	// NoWait asks for the answer the broker's acknowledgement already
+	// establishes, rather than waiting for this node's applier.
+	//
+	// THE ONE PLACE IN THIS ESTATE IT IS CORRECT, and the reason is that
+	// the bearer minted from this record carries its POSITION: every node
+	// validates against its own applier, and a node below that position
+	// serves reads on the signature and the epoch alone
+	// ([session.RowBehind]). So the row this node would wait for is a row
+	// nothing in the answer reads, and what the wait costs is 250-500 ms
+	// of parked browser fetch against a 50 ms credential verify — on the
+	// one request a person judges the whole product by.
+	//
+	// IT CANNOT BE SET ANYWHERE ELSE HERE. A directory write answers 200
+	// only once this node's rows carry it, because the caller's next read
+	// goes to this node and would not see what it just wrote.
+	NoWait bool
 }
 
 // CloseSession ends one session, keeping its row until the sweep collects it.
@@ -684,4 +712,245 @@ func seatExists(ctx context.Context, tx *sql.Tx, seatID string) error {
 			"created moments ago, retry", seatID)
 	}
 	return nil
+}
+
+// MintBootstrap issues the company's one way in before it has anybody.
+//
+// # Why it arbitrates on one subject for the whole domain
+//
+// Two live bootstrap codes is two ways into an engine that has no other way
+// in, so the mint contends at the broker on [BootstrapSubject] — one object
+// for the company — and exactly one of two nodes minting at once wins.
+//
+// # No grant, and what stands in for one
+//
+// Nobody holds a credential yet, so a capability check here would be asking
+// somebody to prove authority the code exists to confer. What bounds it is
+// the estate: [Enrolment] of the first person spends the code, and a mint
+// against a company that already has people is refused by the CALLER, which
+// is the only place the question can be asked honestly — this decide runs
+// inside a snapshot that would have to scan a table it has no reason to.
+func (w *Writer) MintBootstrap(ctx context.Context, in BootstrapMint) (
+	statelog.Position, error) {
+
+	if in.ID == "" || in.Verifier == "" || in.OpID == "" {
+		return statelog.Position{}, errors.New("iamdomain: minting a bootstrap " +
+			"needs an id, a verifier and an operation id")
+	}
+	mutation, err := EncodeBootstrapDoc(Bootstrap{
+		V: DocumentVersion, ID: in.ID, Verifier: in.Verifier,
+		MintedBy: in.MintedBy, ExpiresAt: in.ExpiresAt,
+	})
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	rec, err := w.record(BootstrapSubject(), OpBootstrap, "",
+		RootScope(), mutation, in.Reason)
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	// THE ROOT SCOPE, because a bootstrap is about the company rather than
+	// about a person: there is no bucket to name, and the one thing every
+	// node must not do is decide it has seen the whole estate while a
+	// mint it could not decode sits below.
+	result, err := w.publish(ctx,
+		w.request(&rec, in.OpID, statelog.PatternArbitrated, nil))
+	return result.Position, err
+}
+
+// BootstrapMint is what issuing the one-time code needs.
+type BootstrapMint struct {
+	// ID is the code's own id, minted by the caller.
+	ID string
+
+	// Verifier is what a presented code is checked against, NEVER the
+	// code: one readable out of a replicated database by anyone who can
+	// read a replicated database is not a credential.
+	Verifier string
+
+	// MintedBy is the node that issued it, which is what an operator
+	// reading a code they did not expect needs first.
+	MintedBy string
+
+	ExpiresAt time.Time
+	OpID      string
+	Reason    string
+}
+
+// SpendBootstrap records the one-time code being used, naming the person it
+// created.
+//
+// # It is a SECOND record on the same subject, not a field of the enrolment
+//
+// The enrolment arbitrates on the person and this arbitrates on the bootstrap,
+// which is what makes two nodes redeeming one code contend: the enrolment's
+// own subject is a fresh uuid nobody else would name, so two of them would
+// both succeed and the company would have two founders. The sequence is the
+// tracker dependency's — one record has one subject — and its residue is a
+// spent code with no person, which a mint against a company holding people
+// refuses anyway.
+func (w *Writer) SpendBootstrap(ctx context.Context, in BootstrapSpend) (
+	statelog.Position, error) {
+
+	if in.ID == "" || in.Person == "" || in.OpID == "" {
+		return statelog.Position{}, errors.New("iamdomain: spending a bootstrap " +
+			"needs its id, the person it created and an operation id")
+	}
+	mutation, err := EncodeBootstrapDoc(Bootstrap{
+		V: DocumentVersion, ID: in.ID, Person: in.Person,
+	})
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	rec, err := w.record(BootstrapSubject(), OpBootstrap, in.Person,
+		RootScope(), mutation, in.Reason)
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	result, err := w.publish(ctx,
+		w.request(&rec, in.OpID, statelog.PatternArbitrated, nil))
+	return result.Position, err
+}
+
+// BootstrapSpend is what redeeming the one-time code needs.
+type BootstrapSpend struct {
+	ID     string
+	Person string
+	OpID   string
+	Reason string
+}
+
+// SetCredentials replaces a person's credential set, reading their own row
+// inside the snapshot to form the new whole.
+//
+// # FULL POST-STATE, read inside the decide
+//
+// A person's document is authored whole, so a caller adding a second factor
+// cannot form the new value without the current one — and it must not read it
+// in another transaction. The write authority's own sentence is the reason:
+// take ONE snapshot, decide and form the expectation inside it, never guess.
+// A set assembled from a read taken earlier pairs an old decision with a new
+// expectation, and the broker accepts it.
+//
+// # No grant, and the caller's own rule instead
+//
+// Changing your own second factor is something a person does for themselves,
+// so a capability check here would refuse the ordinary case. What bounds it is
+// the SURFACE: the route is guarded, step-up applies, and the person id comes
+// off the resolved principal rather than out of a body.
+func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
+	statelog.Position, error) {
+
+	if in.PersonID == "" || in.OpID == "" {
+		return statelog.Position{}, errors.New("iamdomain: setting credentials " +
+			"needs a person and an operation id")
+	}
+	var mutation []byte
+	decide := func(tx *sql.Tx) error {
+		var document []byte
+		err := tx.QueryRowContext(ctx,
+			`SELECT document FROM iam_people WHERE id = ?`, in.PersonID).
+			Scan(&document)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("iamdomain: person %q is not held on this node, "+
+				"so their credential set cannot be formed here", in.PersonID)
+		} else if err != nil {
+			return fmt.Errorf("iamdomain: read person %q: %w", in.PersonID, err)
+		}
+		person, err := DecodePerson(document)
+		if err != nil {
+			return fmt.Errorf("iamdomain: open person %q: %w", in.PersonID, err)
+		}
+		person.Credentials = in.Apply(person.Credentials)
+		mutation, err = EncodePerson(person)
+		return err
+	}
+	rec, err := w.record(PersonSubject(in.PersonID), OpUpdate, in.PersonID,
+		PeopleScope(in.PersonID), nil, in.Reason)
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	req := w.request(&rec, in.OpID, statelog.PatternArbitrated, func(tx *sql.Tx) error {
+		if err := decide(tx); err != nil {
+			return err
+		}
+		rec.Mutation = mutation
+		return nil
+	})
+	result, err := w.publish(ctx, req)
+	return result.Position, err
+}
+
+// CredentialSet is what changing somebody's credentials needs.
+type CredentialSet struct {
+	PersonID string
+
+	// Apply forms the new set from the current one, INSIDE the snapshot.
+	//
+	// A FUNCTION RATHER THAN A LIST, because the caller does not hold the
+	// current set and must not read it separately: it is handed what the
+	// decide read and returns what should replace it, which is the only
+	// shape in which the expectation and the decision come from one
+	// snapshot.
+	Apply func([]Credential) []Credential
+
+	OpID   string
+	Reason string
+}
+
+// SpendInvitation records an invitation being used, naming the person it
+// created.
+//
+// A SECOND RECORD ON THE INVITATION'S OWN SUBJECT, for [SpendBootstrap]'s
+// reason: the enrolment beside it arbitrates on a fresh person id nobody else
+// would name, so two nodes redeeming one link would both succeed and the
+// company would have two people where somebody invited one. Contending here is
+// what makes exactly one win.
+//
+// NO GRANT. The invitation IS the authority — what redeeming it confers was
+// decided by whoever issued it, once, rather than again by whoever happens to
+// process the redemption.
+func (w *Writer) SpendInvitation(ctx context.Context, in InvitationSpend) (
+	statelog.Position, error) {
+
+	if in.ID == "" || in.Blind == "" || in.Person == "" || in.OpID == "" {
+		return statelog.Position{}, errors.New("iamdomain: spending an " +
+			"invitation needs its id, the address blind it arbitrates on, " +
+			"the person it created and an operation id")
+	}
+	mutation, err := EncodeInvitation(Invitation{
+		V: DocumentVersion, ID: in.ID, Person: in.Person,
+	})
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	// THE ADDRESS BLIND IS THE SUBJECT, not the invitation's own id, and
+	// the reason is what an invitation IS: a claim on an address by
+	// somebody who has no person yet. It arbitrates where the address
+	// does, which is what makes an invite and an enrolment for one
+	// address contend — and what makes two nodes redeeming one link
+	// contend with each other.
+	rec, err := w.record(EmailSubject(in.Blind), OpRedeem, in.Person,
+		PeopleScope(in.Person), mutation, in.Reason)
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	result, err := w.publish(ctx,
+		w.request(&rec, in.OpID, statelog.PatternArbitrated, nil))
+	return result.Position, err
+}
+
+// InvitationSpend is what redeeming an invitation needs.
+type InvitationSpend struct {
+	// ID is the invitation's own id, which the record's payload carries
+	// so the applier knows which row it is filling in.
+	ID string
+
+	// Blind is the keyed address blind this record ARBITRATES on. See
+	// [Writer.SpendInvitation] for why the two are different values.
+	Blind string
+
+	Person string
+	OpID   string
+	Reason string
 }

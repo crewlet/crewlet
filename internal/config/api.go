@@ -835,6 +835,34 @@ type APIOIDC struct {
 	GroupGrants map[string][]iam.Grant `yaml:"group_grants,omitempty" json:"group_grants,omitempty" desc:"Grants conferred by membership of a directory group."`
 }
 
+// GrantsFor is what membership of these groups confers, as one set.
+//
+// A UNION OVER THE GROUPS somebody is in, because a person is in several and
+// the alternative — first match wins — would make what they carry depend on
+// the order a provider happened to list them in.
+//
+// A GROUP THIS MAP DOES NOT NAME CONFERS NOTHING, which is the fail-closed
+// direction and the only sane one: a directory holds every group in the
+// organisation and this map holds the ones an operator decided about.
+//
+// It is NOT the ceiling. Everything here is still intersected with
+// [APIAuth.MaxGrants] per node per request, so a mapping an operator widens at
+// the provider cannot exceed what this deployment allows.
+func (o APIOIDC) GrantsFor(groups []string) []iam.Grant {
+	if len(o.GroupGrants) == 0 || len(groups) == 0 {
+		return nil
+	}
+	var out []iam.Grant
+	for _, group := range groups {
+		for _, grant := range o.GroupGrants[group] {
+			if !slices.Contains(out, grant) {
+				out = append(out, grant)
+			}
+		}
+	}
+	return out
+}
+
 // OIDC defaults and bounds.
 const (
 	DefaultDeactivationProbe = time.Hour

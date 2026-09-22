@@ -1,0 +1,571 @@
+package iamdomain
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// THE READ SIDE OF THE IDENTITY ESTATE, and what is particular about it.
+//
+// # Every answer is three-valued, and the third value is the point
+//
+// A read here decides whether somebody may act. Its three answers are the
+// engine's own three: this person is X, this person is definitively not X, and
+// this node could not tell — and the third is not a failure to be logged and
+// folded into the second. Folded, every credential in the company reads as
+// invalid for the length of an outage, which is how a company gets taught to
+// reset working passwords during one.
+//
+// So nothing here returns `(value, bool)`. An error is the unknown arm,
+// always, and a caller that cannot distinguish it has already lost the
+// distinction.
+//
+// # The session read is ONE read, deliberately
+//
+// [Directory.Resolve] answers six facts in one snapshot, because a revocation
+// landing between a session read and a person read produces a verdict that
+// never existed at any instant. That is not a performance argument; it is the
+// only shape in which "the replicated estate is not open" is one answer rather
+// than three.
+//
+// # Nothing here decrypts
+//
+// A person's name and address are SEALED under their own key, and opening one
+// means a fleet-secret read. Every read below returns the sealed bytes and
+// leaves opening them to a surface that has a reason to — which is also what
+// keeps an identity read a keyed lookup rather than a round trip, and why
+// internal/store's reserved connection is enough for it.
+
+// Reader answers questions about this node's copy of the identity estate.
+type Reader struct {
+	db  *store.DB
+	log *statelog.Reader
+
+	committed  func() statelog.Position
+	lag        func() time.Duration
+	deferred   func() (statelog.Deferral, bool)
+	generation func() uint64
+}
+
+// ReaderOptions is what a reader is built from.
+type ReaderOptions struct {
+	// DB is the replicated estate. REQUIRED.
+	DB *store.DB
+
+	// Log is this domain's read authority. REQUIRED, for the reason
+	// internal/chart's reader states: without it every read level is a
+	// label rather than a guarantee, and a degradation invisible in the
+	// answer is worse than a refusal.
+	Log *statelog.Reader
+
+	// Committed is this node's applied position, Lag how far behind the
+	// log it is, and Deferred whether it holds a record it could not
+	// decode. Each is nil-safe and answers the zero value, which is what a
+	// reader with no runner behind it honestly has.
+	Committed func() statelog.Position
+	Lag       func() time.Duration
+	Deferred  func() (statelog.Deferral, bool)
+}
+
+// NewReader builds the identity estate's read side.
+func NewReader(opts ReaderOptions) (*Reader, error) {
+	if opts.DB == nil {
+		return nil, errors.New("iamdomain: a reader needs the replicated estate")
+	}
+	if opts.Log == nil {
+		return nil, errors.New("iamdomain: a reader needs its domain's read " +
+			"authority — without it every read level is a label rather than a " +
+			"guarantee, and an identity answer that silently degraded is one " +
+			"nobody can tell from a correct refusal")
+	}
+	r := &Reader{db: opts.DB, log: opts.Log,
+		committed: opts.Committed, lag: opts.Lag, deferred: opts.Deferred}
+	if r.committed == nil {
+		r.committed = func() statelog.Position { return statelog.Position{} }
+	}
+	if r.lag == nil {
+		r.lag = func() time.Duration { return 0 }
+	}
+	if r.deferred == nil {
+		r.deferred = func() (statelog.Deferral, bool) { return statelog.Deferral{}, false }
+	}
+	return r, nil
+}
+
+// At is the position this node's rows were derived through.
+func (r *Reader) At() statelog.Position { return r.committed() }
+
+// ErrNotFound is a lookup this node could answer and that names nobody.
+//
+// A SENTINEL AND NOT A BOOL, because the caller's third answer is an error and
+// a bool beside one is two ways to say the same thing that eventually
+// disagree. What it deliberately is NOT is what a sign-in reports: see
+// [Reader.PersonByLogin].
+var ErrNotFound = errors.New("iamdomain: no such person")
+
+// Resolve answers everything one bearer is checked against, in ONE snapshot.
+//
+// It satisfies [session.Directory], which is consumer-defined there and kept
+// to what validation needs. The six facts travel together because reading them
+// separately produces a verdict that never existed at any instant.
+//
+// AN ERROR IS ALWAYS THE UNKNOWN ARM. A replicated estate that is not open, a
+// store that cannot be read, a row that will not decode — every one is 503,
+// and none of them may be reported as "this session does not exist".
+func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
+	session.Identity, error) {
+
+	out := session.Identity{
+		Applied: uint64(r.committed().Packed()),
+		Lag:     r.lag(),
+	}
+	// THE DEFERRAL IS READ FIRST and from the RUNNER rather than from a
+	// row, because it is the framework's own coverage answer: this node
+	// holds a record it could not decode whose scope covers this person's
+	// bucket. The read that follows SUCCEEDS and its rows are simply not
+	// known to be complete, which is why this is a field rather than an
+	// error.
+	if deferral, held := r.deferred(); held {
+		out.Deferred = coversPerson(deferral, person)
+	}
+
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		if err := readSessionRow(ctx, tx, lineage, &out.Session); err != nil {
+			return err
+		}
+		if err := readPersonRow(ctx, tx, person, &out.Person); err != nil {
+			return err
+		}
+		return readGeneration(ctx, tx, &out.Generation)
+	})
+	if err != nil {
+		return session.Identity{}, err
+	}
+	return out, nil
+}
+
+// coversPerson reports whether a deferred record's scope covers this person's
+// bucket.
+//
+// THE BUCKET AND NOT THE PERSON, because that is all a deferral can say: its
+// scope is a bucket path, and the person a record is about is inside a payload
+// the deferring node could not decode. See scope.go for why the scope is flat
+// and bucketed rather than per person.
+func coversPerson(d statelog.Deferral, person string) bool {
+	if person == "" {
+		return true
+	}
+	want := BucketOf(person).Path()
+	for _, path := range d.Scope.Paths {
+		if path == want || path == RootPath() {
+			return true
+		}
+	}
+	return false
+}
+
+// readSessionRow fills one session's facts.
+func readSessionRow(ctx context.Context, tx *sql.Tx, lineage string,
+	out *session.SessionRow) error {
+
+	if lineage == "" {
+		return nil
+	}
+	var endedAt, epoch int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT epoch, ended_at FROM iam_sessions WHERE lineage = ?`,
+		lineage).Scan(&epoch, &endedAt)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// ABSENT IS A FINDING, not a failure: it is what the bearer's own
+		// start position turns into the two answers it actually is — a
+		// session that ended and was swept, or one this node has not
+		// applied yet. session.Row is where that is decided.
+		return nil
+	case err != nil:
+		return fmt.Errorf("iamdomain: read the session row: %w", err)
+	}
+	out.Found = true
+	out.Ended = endedAt != 0
+	out.Epoch = uint64(epoch)
+	return nil
+}
+
+// readPersonRow fills one person's facts, opening the document for the two
+// that live in it.
+func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
+	out *session.PersonRow) error {
+
+	if person == "" {
+		return nil
+	}
+	var (
+		stage, login, seat string
+		chartPosition      int64
+		document           []byte
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT stage, login, seat_id, chart_position, document
+		  FROM iam_people WHERE id = ?`, person).
+		Scan(&stage, &login, &seat, &chartPosition, &document)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("iamdomain: read the person row: %w", err)
+	}
+	doc, err := DecodePerson(document)
+	if err != nil {
+		// THE UNKNOWN ARM, and deliberately not "no such person". A row
+		// written by a newer peer that this build cannot open is a
+		// person who exists and whose facts this node cannot state —
+		// answering 401 to them would sign out everybody enrolled since
+		// the upgrade started.
+		return fmt.Errorf("iamdomain: open person %q: %w", person, err)
+	}
+	out.Found = true
+	out.Stage = doc.Stage
+	if out.Stage == "" {
+		out.Stage = iam.Stage(stage)
+	}
+	out.Login = login
+	out.Colleague = doc.Colleague
+	out.Grants = doc.Grants
+	out.Seat = seat
+	out.SeatAt = uint64(chartPosition)
+
+	// THE REVOCATION EPOCH IS ITS OWN ROW, and it is read in this same
+	// transaction for the reason the whole method exists: a revocation
+	// landing between the person read and the epoch read produces a
+	// verdict that never existed.
+	var epoch int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT epoch FROM iam_revocation_epochs WHERE person_id = ?`,
+		person).Scan(&epoch)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// NO ROW IS EPOCH ZERO, which is a real value rather than a
+		// missing one: nobody has revoked anything for this person, and
+		// every bearer they hold carries zero too.
+	case err != nil:
+		return fmt.Errorf("iamdomain: read the revocation epoch: %w", err)
+	default:
+		out.Epoch = uint64(epoch)
+	}
+	return nil
+}
+
+// readGeneration fills the fleet-wide session generation.
+func readGeneration(ctx context.Context, tx *sql.Tx, out *uint64) error {
+	var generation int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT generation FROM iam_session_generation WHERE singleton = 0`).
+		Scan(&generation)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// A FLEET THAT HAS NEVER INVALIDATED is generation zero, and
+		// every bearer carries zero, so this is the ordinary state of a
+		// company rather than a missing row.
+		return nil
+	case err != nil:
+		return fmt.Errorf("iamdomain: read the session generation: %w", err)
+	}
+	*out = uint64(generation)
+	return nil
+}
+
+// Sighting is one person as a sign-in resolves them: enough to verify a
+// credential against and nothing more.
+//
+// DELIBERATELY NOT A PERSON DOCUMENT. A sign-in runs before anybody is
+// authenticated, so what it may read is bounded by what a refusal is allowed
+// to disclose — which is nothing. What is here is what the verify step needs.
+type Sighting struct {
+	ID          string
+	Kind        iam.Kind
+	Stage       iam.Stage
+	Login       string
+	Credentials []Credential
+	Grants      []iam.Grant
+	Colleague   iam.Colleague
+	Seat        string
+	SeatAt      uint64
+}
+
+// PersonByLogin resolves a login to the person who holds it.
+//
+// # Three answers, and the middle one is not an error
+//
+// A login nobody holds answers the zero [Sighting] and a nil error, NOT
+// [ErrNotFound]. That is the one place in this file the sentinel is
+// deliberately withheld, and it is the enumeration rule: a caller that could
+// tell "no such login" from "wrong password" has a roster, and the two arms
+// have to be indistinguishable in what they return, how long they take and
+// what they log. internal/iam/credential is where the timing half lives; this
+// is the shape half, and the caller runs a fixed-cost decoy against the zero
+// value rather than branching on it.
+//
+// An error is still the unknown arm, as everywhere here.
+func (r *Reader) PersonByLogin(ctx context.Context, login string) (Sighting, error) {
+	return r.sighting(ctx, "login", login)
+}
+
+// PersonByEmailBlind resolves a keyed address blind to its holder, on the same
+// three answers and for the same reason.
+//
+// THE BLIND AND NOT THE ADDRESS, because this read runs before anybody is
+// authenticated and an address is personal data. iam.NormalizeEmail and this
+// domain's blind are what a surface computes it with — and they must agree
+// with the chart's own derivation or one address would reach a seat and a
+// different person.
+func (r *Reader) PersonByEmailBlind(ctx context.Context, blind string) (Sighting, error) {
+	return r.sighting(ctx, "email_blind", blind)
+}
+
+// sighting is the one lookup both spellings share.
+//
+// THE COLUMN IS A LITERAL chosen by this package, never a caller's string:
+// both call sites pass a constant, and the alternative is a surface one
+// parameter away from selecting on something a request named.
+func (r *Reader) sighting(ctx context.Context, column, token string) (Sighting, error) {
+	if token == "" {
+		return Sighting{}, nil
+	}
+	var out Sighting
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		var (
+			stage, login, seat string
+			chartPosition      int64
+			document           []byte
+		)
+		err := tx.QueryRowContext(ctx, `
+			SELECT id, stage, login, seat_id, chart_position, document
+			  FROM iam_people WHERE `+column+` = ? AND shredded = 0`, token).
+			Scan(&out.ID, &stage, &login, &seat, &chartPosition, &document)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// NOBODY, and the zero value is the answer. See the doc
+			// on [Reader.PersonByLogin] for why this is not a
+			// sentinel.
+			out = Sighting{}
+			return nil
+		case err != nil:
+			return fmt.Errorf("iamdomain: resolve a person: %w", err)
+		}
+		doc, err := DecodePerson(document)
+		if err != nil {
+			return fmt.Errorf("iamdomain: open person %q: %w", out.ID, err)
+		}
+		out.Kind = doc.Kind
+		out.Stage = doc.Stage
+		if out.Stage == "" {
+			out.Stage = iam.Stage(stage)
+		}
+		out.Login = login
+		out.Credentials = doc.Credentials
+		out.Grants = doc.Grants
+		out.Colleague = doc.Colleague
+		out.Seat = seat
+		out.SeatAt = uint64(chartPosition)
+		return nil
+	})
+	if err != nil {
+		return Sighting{}, err
+	}
+	return out, nil
+}
+
+// AnyPerson reports whether this estate holds anybody at all.
+//
+// WHAT IT IS FOR is the bootstrap decision: a fresh deployment's identity
+// estate is empty, and the one-time code that creates the first person must
+// stop working the moment it is not. It is a COUNT rather than a listing
+// precisely because it is asked by an unauthenticated route — the answer is
+// one bit, and a roster is what it must never become.
+func (r *Reader) AnyPerson(ctx context.Context) (bool, error) {
+	var held bool
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		var count int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM iam_people WHERE shredded = 0)`).
+			Scan(&count); err != nil {
+			return fmt.Errorf("iamdomain: count people: %w", err)
+		}
+		held = count != 0
+		return nil
+	})
+	return held, err
+}
+
+// withTx runs one read in one transaction, which is what makes a multi-row
+// answer a snapshot rather than a sequence.
+//
+// [store.DB.Read] AND NEVER [store.DB.Tx], and the difference is two things at
+// once. Tx takes the WRITE lock at BEGIN, so a reader using it would queue
+// behind every applier commit and hold the lock against them while it read —
+// and the replicated estate is derived state that ONLY its applier writes, so
+// a read path holding a write transaction over it is the shape a local write
+// eventually grows out of. internal/engine's applier-exclusivity walk fails
+// the build on it, which is how this line got written correctly.
+//
+// MARKED AS IDENTITY WORK, which is what spends the connection
+// [store.DB.reserve] holds back. Without the mark these reads draw from the
+// ordinary pool, where a socket storm takes every connection and the identity
+// lookup that would let those very requests be DECIDED queues behind all of
+// them — a queue that feeds itself, since the reads that are waiting are the
+// ones identity has to clear. It is the one kind of read in this tree that
+// belongs there: a keyed lookup, never a scan, and it is only ever asked
+// before a request can decide anything.
+func (r *Reader) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	// CHAINED AND NEVER BOUND TO A VARIABLE. internal/store's
+	// applier-exclusivity walk cannot follow a handle once it is assigned
+	// out, so it reports one — correctly, because the difference between a
+	// reader and a writer holding it is exactly what it cannot see. The
+	// chain keeps the claim checkable, and it costs nothing: a nil handle
+	// answers [store.ErrNoEstate] from inside Read, which is the same
+	// three-valued answer a guard here would have produced.
+	if err := r.db.Replicated().Read(store.Identity(ctx), fn); err != nil {
+		if errors.Is(err, store.ErrNoEstate) {
+			return fmt.Errorf("%w: the replicated estate is not open on this "+
+				"node, so nothing can be established about any identity here",
+				err)
+		}
+		return err
+	}
+	return nil
+}
+
+// InvitationRow is one invitation as a redemption resolves it.
+//
+// ITS OWN TYPE beside the [Invitation] document, and not the document itself,
+// because the two carry different things: the document is what a WRITER
+// states and this is what a READER establishes, with the applier's own
+// columns — the blind it was filed under and whether it has been spent —
+// which no payload carries.
+//
+// NO ADDRESS IN THE CLEAR. What comes back is the SEALED bytes and the blind,
+// because this read runs for an unauthenticated caller holding a link — and
+// what they present is the link, not a claim about whose address it is.
+type InvitationRow struct {
+	ID         string
+	Blind      string
+	Sealed     string
+	InvitedBy  string
+	Grants     []iam.Grant
+	Colleague  iam.Colleague
+	ExpiresAt  time.Time
+	RedeemedAt time.Time
+	Person     string
+}
+
+// Spent reports whether this invitation can still be redeemed, at now.
+//
+// ONE PREDICATE rather than two fields a caller compares, because the two ways
+// an invitation stops working — redeemed, expired — have the same remedy and
+// must have the same answer: a surface that told them apart would say "this
+// was already used" to somebody whose link merely aged out, and send them
+// looking for whoever used it.
+func (i InvitationRow) Spent(now time.Time) bool {
+	if !i.RedeemedAt.IsZero() {
+		return true
+	}
+	return !i.ExpiresAt.IsZero() && !now.Before(i.ExpiresAt)
+}
+
+// InvitationByID resolves one invitation, on this file's three answers: the
+// zero value for one nobody issued, and an error for a node that could not
+// tell.
+func (r *Reader) InvitationByID(ctx context.Context, id string) (InvitationRow, error) {
+	if id == "" {
+		return InvitationRow{}, nil
+	}
+	var out InvitationRow
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		var document []byte
+		var expires, redeemed int64
+		err := tx.QueryRowContext(ctx, `
+			SELECT id, email_blind, expires_at, redeemed_at, person_id, document
+			  FROM iam_invites WHERE id = ?`, id).
+			Scan(&out.ID, &out.Blind, &expires, &redeemed, &out.Person, &document)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			out = InvitationRow{}
+			return nil
+		case err != nil:
+			return fmt.Errorf("iamdomain: read an invitation: %w", err)
+		}
+		doc, err := DecodeInvitation(document)
+		if err != nil {
+			return fmt.Errorf("iamdomain: open invitation %q: %w", id, err)
+		}
+		out.Sealed = doc.Sealed
+		out.InvitedBy = doc.InvitedBy
+		out.Grants = doc.Grants
+		out.Colleague = doc.Colleague
+		out.ExpiresAt = fromMillis(expires)
+		out.RedeemedAt = fromMillis(redeemed)
+		return nil
+	})
+	if err != nil {
+		return InvitationRow{}, err
+	}
+	return out, nil
+}
+
+// fromMillis reads a stored instant, answering the zero time for an unset
+// column rather than the epoch — which would render as 1970 on every screen
+// that shows a deadline nobody set.
+func fromMillis(ms int64) time.Time {
+	if ms == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms).UTC()
+}
+
+// SessionOwner is who holds one session, or empty for a lineage this node does
+// not hold.
+//
+// # Why it is separate from [Reader.Resolve]
+//
+// Resolve answers what a BEARER is checked against: it takes the person the
+// bearer names and reads both rows in one snapshot, so a caller already
+// holding a cookie never has to ask whose session it is. This answers the
+// opposite question — whose IS this — and it is asked by a surface acting on a
+// lineage somebody TYPED.
+//
+// THAT DISTINCTION IS THE SECURITY PROPERTY. A lineage is not a secret: it
+// rides in a cookie, a proxy log, a screenshot. A surface that ended whatever
+// lineage it was handed would let anybody end anybody's session, and the only
+// thing that stops it is comparing the owner this node holds against the
+// caller this node resolved — neither of which the caller supplies.
+func (r *Reader) SessionOwner(ctx context.Context, lineage string) (string, error) {
+	if lineage == "" {
+		return "", nil
+	}
+	var owner string
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx,
+			`SELECT person_id FROM iam_sessions WHERE lineage = ?`, lineage).
+			Scan(&owner)
+		if errors.Is(err, sql.ErrNoRows) {
+			owner = ""
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("iamdomain: read a session's owner: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return owner, nil
+}

@@ -91,6 +91,23 @@ type Person struct {
 	// than dropped — see [iam.Principal.UnknownGrants].
 	Grants []iam.Grant `json:"grants,omitempty"`
 
+	// Colleague is how far into the company's own WORK this person
+	// reaches: nothing, reading, or writing.
+	//
+	// THE SECOND HAT, and it is not a rung on the grant ladder. A grant is
+	// authority over the DEPLOYMENT and this is reach into the company,
+	// and folding them names the same counterexample pair every time — an
+	// auditor holding two grants who must not be assignable, and an SRE
+	// who files bugs and changes nothing about the deployment. See
+	// [iam.Colleague].
+	//
+	// ITS ZERO IS THE CLOSED END and is a real setting, which is the one
+	// place a zero value in this estate is meaningful rather than refused:
+	// a person enrolled with nothing said about their reach into the work
+	// reaches none of it, which is the answer that is safe to be wrong
+	// about.
+	Colleague iam.Colleague `json:"colleague,omitempty"`
+
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
@@ -161,6 +178,10 @@ type Invitation struct {
 	// again by whoever happens to process the redemption.
 	InvitedBy string      `json:"invited_by,omitempty"`
 	Grants    []iam.Grant `json:"grants,omitempty"`
+
+	// Colleague is the reach redeeming this confers, on the same
+	// two-hats split the person's own carries. See [Person.Colleague].
+	Colleague iam.Colleague `json:"colleague,omitempty"`
 
 	// ExpiresAt is when it stops being redeemable. THE WRITER'S CLOCK is
 	// not what enforces it: the applier stores the instant and the
@@ -249,11 +270,62 @@ const (
 
 	// MethodToken is a machine's bearer token, held as a hash.
 	MethodToken CredentialMethod = "token"
+
+	// MethodTOTP is a time-based code from an authenticator app, and it
+	// is the one method whose stored value is the SECRET rather than a
+	// verifier — because TOTP is symmetric and there is no other shape
+	// for it. Both ends derive the same code from the same seed, so an
+	// engine that held only a digest could verify nothing.
+	//
+	// WHAT THAT COSTS IS STATED RATHER THAN GLOSSED: a leaked estate
+	// yields second factors, where it yields nothing usable for a
+	// password. What bounds it is the same thing that bounds every other
+	// secret this company holds — the seed is SEALED under the person's
+	// own key before it reaches a payload, exactly as their name and
+	// address are, so a row is not a secret and the applier that writes
+	// it cannot read it.
+	//
+	// THE LAST ACCEPTED STEP rides in [Credential.Extra] rather than in a
+	// column of its own, because it is the one field a NEWER build might
+	// need beside it and a column added later never runs (schema_migrations
+	// keys on the filename). It is what makes a code single-use: a replay
+	// inside the same 30-second window is refused by comparing against it.
+	MethodTOTP CredentialMethod = "totp"
+
+	// MethodRecovery is the set of ten single-use codes issued beside a
+	// second factor, each held as a SHA-256 hash — a verifier, unlike the
+	// seed above, because a recovery code is presented rather than
+	// derived.
+	//
+	// ITS OWN METHOD RATHER THAN A FIELD ON THE TOTP ONE, because
+	// spending a code is a write to the person's record and the two are
+	// rotated independently: somebody re-enrols an authenticator without
+	// invalidating the codes they printed, and regenerates the codes
+	// without re-enrolling the app.
+	MethodRecovery CredentialMethod = "recovery"
 )
 
-// CredentialMethods are the three.
+// CredentialMethods are the five.
 var CredentialMethods = []CredentialMethod{
-	MethodPassword, MethodOIDC, MethodToken,
+	MethodPassword, MethodOIDC, MethodToken, MethodTOTP, MethodRecovery,
+}
+
+// SecondFactorMethods are the methods that satisfy a second factor rather
+// than a first.
+//
+// A SET RATHER THAN A PREDICATE ON THE VALUE, because the question "does this
+// person hold a second factor" is asked of a LIST of credentials and answering
+// it per method is what keeps the caller from spelling the same two names.
+var SecondFactorMethods = []CredentialMethod{MethodTOTP, MethodRecovery}
+
+// SecondFactor reports whether a method satisfies a second factor.
+func (m CredentialMethod) SecondFactor() bool {
+	for _, known := range SecondFactorMethods {
+		if m == known {
+			return true
+		}
+	}
+	return false
 }
 
 // Valid reports whether a method off the wire is one this build knows.

@@ -15,6 +15,7 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -260,6 +261,32 @@ func (r *writeRig) enrol(in iamdomain.Enrolment) error {
 	close(stop)
 	<-done
 	return err
+}
+
+// reader builds this rig's read side over the same estate its writer writes.
+//
+// THE RIG'S OWN WAITER is the committed position, so a read's level means what
+// it says: the reader and the publisher agree about how far this node has got,
+// which is the property a reader built over a separate notion of position
+// silently would not have.
+func (r *writeRig) reader(t *testing.T) *iamdomain.Reader {
+	t.Helper()
+	// THROUGH THE FRAMEWORK'S OWN TEST CONSTRUCTOR, over a waiter whose
+	// position MOVES as the rig drains — which is what makes a read that
+	// has to wait actually wait, rather than being served the rows from
+	// before the position it was handed.
+	log, err := statelogtest.LocalReaderOver(
+		iamdomain.Domain{}, r.db.Replicated(), r.waiter)
+	if err != nil {
+		t.Fatalf("build the read authority: %v", err)
+	}
+	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
+		DB: r.db, Log: log, Committed: r.waiter.Committed,
+	})
+	if err != nil {
+		t.Fatalf("build the reader: %v", err)
+	}
+	return reader
 }
 
 // column reads one column out of the estate.

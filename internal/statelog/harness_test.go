@@ -455,6 +455,23 @@ func (h *harness) write(subject statelog.Subject, opID string, body string) (sta
 	})
 }
 
+// writeNoWait is [harness.write] with [statelog.Request.NoWait] set, so the
+// two differ in exactly the field a case is about.
+func (h *harness) writeNoWait(subject statelog.Subject, opID string, body string) (statelog.Result, error) {
+	h.t.Helper()
+	return h.pub.Publish(h.t.Context(), statelog.Request{
+		Subject:  subject,
+		Scope:    statelog.ScopeSet{Paths: []string{subject.String()}},
+		OpID:     opID,
+		MintedAt: time.Now(),
+		Pattern:  statelog.PatternArbitrated,
+		NoWait:   true,
+		Decide: func(*sql.Tx) (statelog.Decision, error) {
+			return statelog.Decision{Payload: []byte(body), Version: 1}, nil
+		},
+	})
+}
+
 // anchorAt stages a durable row whose anchor is seq in the current
 // generation — a row the applier wrote and the world has since moved past.
 func (h *harness) anchorAt(subj statelog.Subject, seq uint64) {
