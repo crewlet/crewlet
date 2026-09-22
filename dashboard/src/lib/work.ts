@@ -1006,6 +1006,89 @@ export function anyFilter(f: TrackerFilters): boolean {
 }
 
 /**
+ * WHICH CONTROL OWNS A KEY. A filter is a chip; an arrangement is a menu.
+ *
+ * The rule is the design's, stated once in
+ * `docs/reference/dashboard-design.md`, and it is the boundary these screens
+ * lost first: a bar of eleven controls, five of them pickers drawn whether or
+ * not they were set, so the two that were narrowing looked exactly like the
+ * nine that were not. What a key IS decides where it is set and where it is
+ * taken off — a narrowing is added from the **Filter** menu and removed from
+ * its own chip, and a drawing is chosen in the **Display** menu, whose button
+ * says what is on.
+ *
+ * A key that is BOTH is two controls for one fact, and they disagree the
+ * first time either writes; a key that is NEITHER is a state a reader can
+ * reach only by editing the address, with nothing on screen to say it is on.
+ * Three keys are deliberately neither, and each carries the reason below.
+ */
+export type ControlHome = "chip" | "menu" | "bar" | "strip" | "shape";
+
+/**
+ * Every key the work list carries on the address, and what draws it.
+ *
+ * KEYED BY THE URL SPELLING rather than by the [TrackerFilters] field that
+ * holds it, because the address is what this states: `groupBy` is `group_by`
+ * there, and a custom field is not one key at all. The two FAMILIES end in a
+ * dot and stand for every key beneath them — the company's own fields, whose
+ * set is the company's, and the per-shape column arrangements, whose set is
+ * the grid shapes'.
+ *
+ * `routes/work/toolbar/grammar.test.tsx` READS THIS and holds it in both
+ * directions: every key the screen puts on the address has a home here, and
+ * every home here is a key the screen actually writes — so a key added later
+ * with nowhere to live fails rather than shipping invisible.
+ */
+export const URL_HOMES: Record<string, ControlHome> = {
+  // THE NARROWINGS. Each is a chip under the bar, and taking the chip off
+  // clears exactly this key. Most are offered by the Filter menu; `q` is the
+  // substring mark beside it and `unit` arrives from an item's own "Filed
+  // into" line, which changes where a filter is SET and not what it is.
+  q: "chip",
+  status: "chip",
+  type: "chip",
+  priority: "chip",
+  assignee: "chip",
+  tag: "chip",
+  unit: "chip",
+  due: "chip",
+  blocked: "chip",
+  removed: "chip",
+  // NARROWING A BOARD TO ONE COLUMN NARROWS THE WHOLE QUERY, totals included
+  // — see [TrackerFilters.group], which is also why its chip is drawn on the
+  // key's PRESENCE rather than on its value.
+  group: "chip",
+  /** The company's own fields: one key per declared field, `f.<slug>`. */
+  "f.": "chip",
+
+  // THE ARRANGEMENT. None of these narrows anything, which is exactly why
+  // they are one menu rather than chips: they decide how the same answer is
+  // DRAWN.
+  shape: "menu",
+  group_by: "menu",
+  group_by2: "menu",
+  sort: "menu",
+  /** The chosen columns, per grid shape: `cols.<shape>` — see `shapes/Grid.tsx`. */
+  "cols.": "menu",
+
+  // AND THE THREE THAT ARE NEITHER, each for a reason the design states.
+  //
+  // THE SCOPE is always set to something: as a chip it would either be
+  // permanently present, which is not a chip, or absent on its default, which
+  // hides the one segment deciding whether finished work is on screen at all.
+  // So it stays in the bar as a switch.
+  scope: "bar",
+  // A SAVED VIEW is a query somebody arranged and put somewhere, so it is a
+  // tab in the strip — and a key of its own beside `shape=` precisely so that
+  // redrawing a saved board does not throw the saved filters away.
+  view: "strip",
+  // AND THE CALENDAR'S WINDOW is that shape's own axis, stepped in its own
+  // header: a month is not a narrowing somebody added and not another drawing
+  // of one answer, it is WHICH answer that shape asks for.
+  month: "shape",
+};
+
+/**
  * The `work_items` parameters one screen state asks for.
  *
  * # A view is a set of DEFAULTS and every explicit key overrides it
