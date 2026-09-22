@@ -1,25 +1,27 @@
 /**
- * What changed, as a card beside the work — and what was purged, which has no
- * rows at all.
+ * What was purged, and how much of the log each activity read asks for.
  *
- * TWO READERS SHARE THESE. A project's History lens and the workspace-wide
- * `#/work/history` screen ask `work_activity` with different scopes and draw
- * the same rows, and the trash's purge band is the same records filtered
- * differently. Written once, so a change to how a delta reads reaches every
- * surface that reads one.
+ * THE FEED ITSELF IS GONE FROM HERE. This file opened by saying two readers
+ * shared its rows — a project's History lens and the workspace-wide
+ * `#/work/history` screen — and both of those render `HistoryView`
+ * (`routes/work/History.tsx`) now, which is the sharing that sentence asked
+ * for. What was left behind was an `ActivityFeed` with no caller at all, kept
+ * alive by one test: a component whose only reader is its own test is
+ * indistinguishable to the next person from one whose caller nobody found. The
+ * invariant that test protected — that an excerpt is drawn as the prose its
+ * markdown renders to — belongs to `describeChange`, and is asserted over the
+ * function itself in `lib/work.test.ts`.
  *
- * A DIFFERENT QUESTION FROM WHAT IS ON THE BOARD: the feed is ordered by the
- * LOG rather than by anything the rows sort on, so a change that moved nothing
- * on screen is still visible.
+ * WHAT IS GENUINELY THIS FILE'S is the purge band, which is not a feed: it
+ * draws activity records on a screen that has no log, because a purge is the
+ * one change whose subject does not survive it.
  */
 
 import { Card, EmptyValue, Tag } from "@crewlethq/ui";
-import { DeleteGlyph, TimelineGlyph } from "@crewlethq/icons/glyphs";
-import { href } from "~/app/router.tsx";
-import type { RowChrome } from "~/components/work.tsx";
+import { DeleteGlyph } from "@crewlethq/icons/glyphs";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdown.ts";
-import { describeChange, pageCount, pageNote } from "~/lib/work.ts";
+import { pageCount } from "~/lib/work.ts";
 import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts";
 
 /**
@@ -82,12 +84,12 @@ export function PurgeBand({
                 because there is no task row left to resolve one from. */}
             {record.subject_key || <EmptyValue label="No key recorded" />}
           </span>
-          {/* FLATTENED LIKE THE FEED'S. The same record reaches both this band
-              and the activity feed below it, and an excerpt rendered two ways on
-              one screen is the drift a shared helper exists to stop. The
-              operator's own reason is free text, so it can carry markdown too;
-              one that is only a rule or whitespace flattens to "" and falls
-              through to the word rather than drawing an empty cell. */}
+          {/* FLATTENED LIKE EVERY OTHER EXCERPT IN THE PRODUCT. The operator's
+              own reason is free text, so it can carry markdown; one that is
+              only a rule or whitespace flattens to "" and falls through to the
+              word rather than drawing an empty cell. `plainText` rather than
+              `describeChange` because a purge has no delta to prefer over it:
+              the reason IS the row. */}
           <span className="work-feed-what truncate">
             {plainText(record.excerpt ?? "") || "purged"}
           </span>
@@ -101,10 +103,13 @@ export function PurgeBand({
 /**
  * How much of the log each activity read on this screen asks for.
  *
- * NAMED, WITH REASONS, because a page size is what a count MEANS here: these
- * cards draw `records.length`, so on any company busier than these numbers the
- * figure a reader sees is this constant. That is honest only because the count
- * now says `+` when the page was capped — see [pageCount].
+ * NAMED, WITH REASONS, because a page size is what a count MEANS here: a card
+ * that draws `records.length` and cannot page reports this constant on any
+ * company busier than it, which is honest only because such a count says `+`
+ * when the page was capped — see [pageCount]. The two log surfaces are no
+ * longer in that position: `HistoryView` pages, so its number is how much has
+ * been LOADED and its size is how much arrives per press rather than a ceiling
+ * on what a reader can see.
  *
  * The engine's own maximum for one page is 200 (`tracker.MaxActivityRows`) and
  * the audit screen takes all of it, because that screen IS the record. Two of
@@ -118,6 +123,10 @@ export function PurgeBand({
  *    on every poll.
  *  - `board` — a project's History lens, which sits under a header and beside
  *    two other lenses: a screenful of one-line rows, re-read once a minute.
+ *    `HistoryView` takes it from its own `embedded` flag, which is the same
+ *    fact that decides who publishes the frame's coverage — and until it did,
+ *    this entry was a documented size with no caller while the lens asked for
+ *    the page screen's hundred.
  *  - `rail` — above the fold in a project's rail, beside a census and three
  *    other cards: a glance, not a page.
  *  - `trash` — THE ENGINE'S MAXIMUM, and load-bearing. The trash grid asks for
@@ -130,92 +139,3 @@ export function PurgeBand({
  *    dash stays, and why the band's count carries the `+`.
  */
 export const FEED_PAGE = { page: 100, board: 20, rail: 8, trash: 200 } as const;
-
-/**
- * What happened in this container lately.
- *
- * A DIFFERENT QUESTION from what is on the board: the feed is ordered by the
- * log rather than by anything the rows sort on, so a change that moved nothing
- * on screen — a comment, a watcher, a quiet re-type — is still visible. It
- * renders the AUTHORED instant, which is what the writer's clock said and what
- * "yesterday" has to keep meaning.
- */
-/**
- * THE WHOLE ANSWER, not its rows. The count, the note and the coverage line are
- * three readings of one read, and a component handed only `records` can state
- * none of them — which is how this card came to draw its own page size as though
- * it were the company's history.
- */
-export function ActivityFeed({
-  records,
-  answer,
-  now,
-  chrome = {},
-}: {
-  records: WorkActivityRecord[];
-  /** The answer those rows came out of, where the caller holds one. */
-  answer?: WorkActivityAnswer;
-  now: number;
-  /** The company's own words for a status, a type, a tag and a handle. A feed
-   *  row's delta is stored as the LOG's text — `in_review`, a bare handle, a
-   *  whole RFC3339 instant — and this is what turns it into what the rest of the
-   *  product says. */
-  chrome?: RowChrome;
-}) {
-  if (records.length === 0) return null;
-  return (
-    <Card padding="none">
-      <Card.Header
-        icon={<TimelineGlyph size="sm" />}
-        // A NON-EMPTY CURSOR IS THE ENGINE'S OWN "there is at least one more":
-        // `readActivity` asks for limit+1 rows and mints a cursor only when the
-        // extra one came back. Never derived from `records.length === limit`,
-        // which is wrong on the boundary in both directions.
-        count={pageCount(records.length, !!answer?.next_cursor)}
-        // TWO DIFFERENT FACTS, and never one figure. `next_cursor` is a page
-        // boundary, which a reader resolves by looking further back. `complete`
-        // is the state-log read's COVERAGE verdict — this node holds records it
-        // cannot DECODE covering this feed — which a reader resolves with a build
-        // that can read them. Folded into the count, a decode gap would be
-        // reported as "there are more rows" and send somebody scrolling for
-        // commits that are not missing.
-        //
-        // `|| undefined`, never `""`: an empty subtitle still renders its own
-        // element.
-        subtitle={
-          [
-            pageNote(records.length, !!answer?.next_cursor, "change"),
-            answer?.complete === false
-              ? "This node holds records it cannot read, so changes may be missing from this list."
-              : "",
-          ]
-            .filter(Boolean)
-            .join(" ") || undefined
-        }
-      >
-        <Card.Title>Recent activity</Card.Title>
-      </Card.Header>
-      {records.map((record) => (
-        <div key={record.id} className="work-feed-row">
-          <span className="work-feed-when" title={fmtDateTime(record.at)}>
-            {relTime(record.at, now)}
-          </span>
-          <span className="work-feed-kind">
-            <Tag appearance="outline">{record.kind.replaceAll("_", " ")}</Tag>
-          </span>
-          <span>
-            {record.subject_key ? (
-              <a className="mono t-link" href={href(["work", record.subject_key])}>
-                {record.subject_key}
-              </a>
-            ) : (
-              <EmptyValue label="No work item" />
-            )}
-          </span>
-          <span className="work-feed-what truncate">{describeChange(record, chrome)}</span>
-          <span className="work-feed-who">{record.actor || "the engine"}</span>
-        </div>
-      ))}
-    </Card>
-  );
-}

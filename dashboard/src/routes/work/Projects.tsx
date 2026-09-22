@@ -41,7 +41,6 @@ import { DateCell, NumberCell, SeatCell } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Coverage } from "~/components/work.tsx";
 import { EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
 import { DashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -280,7 +279,6 @@ export function Projects() {
           </span>
         )}
         <span className="spacer" />
-        <Coverage answer={state.data} />
         <Segmented
           value={shown}
           onChange={(value) => setShown(value)}

@@ -343,6 +343,17 @@ export function Activity() {
               bars={series.data.bars}
               bucket={series.data.bucket}
               total={series.data.total}
+              noun="event"
+              // THE ENGINE COUNTED THESE, over the whole window and through the
+              // same predicate the listing filters with — which is the claim
+              // the tracker's own log cannot make about its bars, and the
+              // reason the scope is a prop rather than an assumption.
+              over="window"
+              // THE SAME FRAME AS THE TRACKER'S LOG, dates included: a reader
+              // who has learnt one log in this product has learnt the other,
+              // and an axis on one of them only is two frames again.
+              axis
+              now={now}
               onPick={range.set}
             />
           )}

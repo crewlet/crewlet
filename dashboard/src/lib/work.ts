@@ -137,9 +137,9 @@ export function typeName(slug: string | undefined, types?: WorkTypeDef[]): strin
  *
  * AND A PHRASE, because `kind.replaceAll("_", " ")` after an actor's name reads
  * "ada watchers". Only the kinds an apply can compare two documents for produce
- * deltas — `tracker.TaskDeltas` covers eleven task fields and nothing else — so
- * `watchers`, `relations`, `checklist`, `archived`, `reparented` and the whole
- * comment family reach the reader through this column alone.
+ * deltas — `tracker.TaskDeltas` covers sixteen task fields and nothing else —
+ * so `watchers`, `checklist`, `archived`, `reparented` and the whole comment
+ * family reach the reader through this column alone.
  *
  * ONE DECLARATION, held against `tracker.ChangeKinds` by
  * `internal/tracker/client_gate_test.go`: this is a closed set the engine owns
@@ -223,6 +223,30 @@ export interface LabelContext {
   seatName?: (handle: string) => string;
   /** The company's own fields, so a chip over one can say what it is called. */
   fields?: WorkFieldDef[];
+  /**
+   * WHO IS READING, as the seat handle a wake would have been delivered to.
+   *
+   * A change record is written ONCE and read by everybody, so a sentence the
+   * engine addressed to the seat it woke — "…of your priorities" — is second
+   * person to whoever happens to open the log. Only a surface knows who that
+   * is, which is the same division `deltaValue` states for the reader's zone:
+   * the state log's N nodes write one identical row, and anything that depends
+   * on who is looking at it belongs here. Empty is the honest default and means
+   * "nobody in particular", which renders the owner's name rather than "you".
+   */
+  viewer?: string;
+  /**
+   * What a task id is CALLED, for the fields whose value is another task.
+   *
+   * A relation delta carries the other task's id rather than its key, and for
+   * the same reason `deltaValue` renders an instant rather than a day: the
+   * record is the state log's, written identically by N nodes, and a key
+   * belongs to the other task's own row — so a node that had not applied that
+   * task would store a different string, for ever, in a table nothing repairs.
+   * The answer resolves what it can (`WorkActivityAnswer.keys`) and this is how
+   * it reaches the sentence.
+   */
+  taskKey?: (id: string) => string;
 }
 
 /**
@@ -430,16 +454,57 @@ export const SORTS: { value: string; label: string }[] = [
  * like a rendering bug.
  */
 export function describeChange(record: WorkActivityRecord, ctx: LabelContext): string {
-  const moved = Object.entries(record.fields ?? {});
-  if (moved.length > 0) {
-    return moved.map(([field, d]) => deltaClause(field, d.from, d.to, ctx)).join(", ");
-  }
+  const moved = deltaSentence(record.fields, ctx);
+  if (moved) return moved;
   // THE PROSE THE BODY RENDERS TO, not its source. The excerpt is a cut of a
-  // comment or a description, both markdown by contract, and this string is
-  // drawn in a one-line cell — so an unflattened one printed `## Understanding
-  // the work` with the hashes in it.
-  if (record.excerpt) return plainText(record.excerpt);
+  // comment or a description, both markdown by contract, so an unflattened one
+  // printed `## Understanding the work` with the hashes in it.
+  //
+  // RE-ADDRESSED, because a cross-item log is read by everybody and an excerpt
+  // was written for one recipient. See [readdress].
+  if (record.excerpt) return readdress(plainText(record.excerpt), record, ctx);
   return record.kind.replaceAll("_", " ");
+}
+
+/**
+ * A sentence the engine addressed to ONE seat, re-addressed to whoever is
+ * reading it.
+ *
+ * `tracker.Writer.prioritisedWake` writes "<actor> put ENG-1 at position 1 of
+ * your priorities" — a notification CARD's text, correct for the seat the wake
+ * was delivered to and second person to everybody else. The company-wide log
+ * draws the same record for a founder, a lead and every other agent, so there
+ * it says "your" to a reader whose queue it is not.
+ *
+ * ONLY A SURFACE CAN FIX THIS, which is the division `deltaValue` states for
+ * the reader's zone one function below: the record is the state log's, written
+ * identically by N nodes, so it cannot carry a rendering that depends on who
+ * opens it. What the record DOES carry is whose record it is — a person
+ * subject's id is the handle itself (`tracker.PersonSubject`) — so the owner is
+ * always nameable, and second person survives exactly when the reader is that
+ * owner.
+ *
+ * SCOPED TO A PERSON SUBJECT, because that is the only kind whose records are
+ * addressed to somebody: a task's excerpt is a comment body or a description
+ * and its "you" belongs to whoever wrote it.
+ */
+function readdress(text: string, record: WorkActivityRecord, ctx: LabelContext): string {
+  if (record.subject_kind !== "person" || !text) return text;
+  const owner = record.subject_id;
+  // THE HANDLE IS THE ONLY IDENTITY THAT CAN MATCH HERE, and the other one is
+  // named rather than compared. A viewer has two — `/viewer` returns the
+  // operator id a token maps to AND the seat handle bound to it
+  // (`lib/viewer.ts`) — but a person subject's id is the SEAT HANDLE
+  // (`tracker.PersonSubject`), so a comparison against the operator id could
+  // never be true and would be a branch with no reachable case. An operator
+  // with no seat bound to them owns no queue for this to be about.
+  if (!owner || owner === ctx.viewer) return text;
+  const name = ctx.seatName?.(owner) ?? owner;
+  // THE POSSESSIVE FIRST, so "your priorities" does not become "<name> s
+  // priorities" by way of the bare pronoun. Case-insensitive because the
+  // engine's sentences are prose and a rule that only matched one casing would
+  // be one that silently stopped matching.
+  return text.replace(/\byour\b/gi, `${name}'s`).replace(/\byou\b/gi, name);
 }
 
 /**
@@ -476,9 +541,39 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
  * glance rather than only on a careful read.
  */
 export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
-  const moved = Object.entries(entry.fields ?? {});
+  return deltaSentence(entry.fields, ctx) || changePhrase(entry.kind);
+}
+
+/**
+ * EVERY FIELD A RECORD SAYS IT MOVED, as one sentence — and "" where it moved
+ * none.
+ *
+ * ONE FUNCTION FOR BOTH SURFACES, because the feed and an item's own history
+ * are the same claim about the same column: a delta worded two ways on two
+ * screens is the drift this module exists to end, and it had already started —
+ * the feed read `fields` as a from/to map and the history read it as either
+ * shape, so the two disagreed about what a comment's `mentions` said. They
+ * differ on ONE rung and only one, the excerpt, which each states for itself.
+ *
+ * GENERIC OVER THE KIND, deliberately, and there is no per-kind sentence
+ * anywhere below. `fields_json` is written by two producers — the applier's own
+ * document comparison, and the notification's fields where no comparison was
+ * possible — and neither tags its entries with what they are about, so a
+ * renderer that switched on the kind would be guessing at the shape rather than
+ * reading it. Which kinds carry fields at all is the ENGINE's answer and it
+ * grows: a `relations`, `project_updated`, `view_saved` or `person_updated`
+ * record that starts carrying deltas is rendered by this function on the day it
+ * does, with nothing here to change.
+ *
+ * TWO SHAPES, because a history entry's `fields` is sometimes a from/to pair
+ * and sometimes the state the change produced — the applier writes the deltas
+ * where it can compare two documents and the notification's own fields where it
+ * cannot (a comment, a mention, an ask). A renderer that assumed one printed
+ * `[object Object]` on the other.
+ */
+function deltaSentence(fields: Record<string, unknown> | undefined, ctx: LabelContext): string {
   const said: string[] = [];
-  for (const [field, raw] of moved) {
+  for (const [field, raw] of Object.entries(fields ?? {})) {
     const delta = raw as { from?: unknown; to?: unknown } | null;
     if (delta && typeof delta === "object" && ("from" in delta || "to" in delta)) {
       said.push(deltaClause(field, scalar(delta.from), scalar(delta.to), ctx));
@@ -487,8 +582,7 @@ export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
     const value = deltaValue(field, scalar(raw), ctx);
     said.push(value ? `${humanize(field)}: ${value}` : humanize(field));
   }
-  if (said.length > 0) return said.join(", ");
-  return changePhrase(entry.kind);
+  return said.join(", ");
 }
 
 /**
@@ -543,6 +637,26 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
     // this build does not recognise passes through rather than being guessed at.
     case "estimate":
       return /^\d+m$/.test(value) ? fmtMinutes(Number(value.slice(0, -1))) : value;
+    // A FIELD WHOSE VALUE IS OTHER TASKS, which travels as their IDS: three of
+    // `tracker.RelationKinds`, the `blocking` mirror, and the ordered queue a
+    // person record carries. NOT `page`, which is the fourth relation kind and
+    // names a wiki page — resolving it here would be claiming a page is a task,
+    // and the answer deliberately leaves those ids out of its map.
+    //
+    // AN ID THE ANSWER DID NOT RESOLVE RENDERS AS THE ID. The map omits what
+    // the answering node holds no row for — a record naming a counterparty it
+    // has not applied, or anything past the answer's own cap — and a value
+    // nobody can explain is still a value somebody set, where a blank reads as
+    // a task with no name.
+    case "waiting_on":
+    case "linked":
+    case "duplicates":
+    case "blocking":
+    case "priorities":
+      return value
+        .split(", ")
+        .map((id) => ctx.taskKey?.(id) || id)
+        .join(", ");
     default:
       return value;
   }

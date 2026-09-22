@@ -763,7 +763,14 @@ screens rather than one:
   answered fewer projects than the company has it says so rather than quoting
   the page as the company.
 - **History** (`#/work/history`) is the change log over a window you choose,
-  with the kinds and the authors on this page as facets.
+  with the kinds, the authors and the projects on the pages loaded as facets.
+  The window bounds what the engine is asked for and a page bounds what one ask
+  answers, so the two are different limits: **Load older changes** fetches the
+  next page back rather than asking you to move the window, and the pages you
+  have loaded are held still while you page through them — change the window or
+  a facet to pick up what has landed since. A project facet narrows to one
+  project's changes, which is the same narrowing a project's own History lens
+  is.
 - **A project** (`#/work/{KEY}`) opens on its work — the **Items** lens, which
   says how many are open — with an **Overview** lens for what the container
   itself declares (its statuses, its types, its labels and its fields) and a

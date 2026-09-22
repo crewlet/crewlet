@@ -17,7 +17,6 @@ import { afterEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import { Work } from "./Work.tsx";
 import { patchedHref } from "./ItemsView.tsx";
-import { ActivityFeed } from "./feed.tsx";
 import { Board } from "./shapes/Board.tsx";
 import { CalendarView } from "./shapes/Calendar.tsx";
 import { BoardCard, WorkRow } from "~/components/work.tsx";
@@ -950,44 +949,6 @@ test("a purged task appears in its own band, marked irreversible", async () => {
   // AND AN EMPTY TRASH IS NOT "NOTHING MATCHES": the band above IS the answer
   // on a company whose removals have all been purged.
   expect(screen.queryByText("Nothing matches")).toBeNull();
-});
-
-// MARKDOWN IS THE CONTRACT, so an excerpt is a markdown fragment. The feed cell
-// is ONE LINE — `.truncate` is `white-space: nowrap` — so the row drew "##
-// Understanding the work This task is to interview…" with the hashes in it,
-// which reads as a bug in the engine rather than as a heading.
-test("the activity feed draws a markdown excerpt as prose, not as its source", () => {
-  const { container } = render(
-    <ActivityFeed
-      records={[
-        {
-          id: "h-9",
-          log_seq: 12,
-          log_stream: "CREWLET_WORK_LOG",
-          log_generation: 1,
-          at: "2031-04-15T00:00:00Z",
-          effective_at: "2031-04-15T00:00:00Z",
-          kind: "created",
-          subject_kind: "task",
-          subject_id: "t-9",
-          subject_key: "ENG-12",
-          excerpt:
-            "## Understanding the work\n\nInterview three desks about **settlement**, then read [the guide](https://docs.crewlet.ai/x).",
-          notified: true,
-        },
-      ]}
-      now={NOW}
-    />,
-  );
-  const cell = container.querySelector(".work-feed-what") as HTMLElement;
-  // BOTH HALVES. The negative alone passes on a cell that renders nothing at
-  // all, which is the shape of an assertion that cannot fail.
-  expect(cell.textContent).toBe(
-    "Understanding the work Interview three desks about settlement, then read the guide.",
-  );
-  expect(cell.textContent).not.toContain("#");
-  expect(cell.textContent).not.toContain("**");
-  expect(cell.textContent).not.toContain("https://");
 });
 
 // ---------------------------------------------------------------------------
