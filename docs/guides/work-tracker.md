@@ -247,23 +247,27 @@ catalogue tools take them:
 | `precision` | integer, 0–6 | `number`, `progress`, `rollup` | How many decimal places a value may carry. Default **0**, whole numbers only. A value carrying more is refused naming the rule, never rounded |
 | `min` / `max` | number | `number`, `progress`, `rollup` | The range a value must fall in. Each is optional on its own, and `min: 0` is a floor — leaving it out is what means "no floor". A minimum above its maximum is refused |
 | `time` | boolean | `date` | True holds a time of day as well as a day, and then a bare date is refused rather than given an invented midnight. False truncates a timestamp to its date and says so |
-| `progress` | `manual` | `progress` | How the bar is filled. `auto` is refused — see below |
+| `progress` | `manual` | `progress` | How the bar is filled. `auto`, and the `tracking` list it would count, are refused — see below |
 | `multi` | boolean | `dropdown` | Lets one task carry more than one value, each its own filterable row. `labels`, `people` and `relationship` already hold several, so they need no flag |
 
 Beside them on the declaration itself, `applies_to` names the **type slugs**
 that carry the field; empty means every type. A task of a type a field does not
 apply to cannot hold a value for it, and cannot be required to.
 
-**Two settings are refused because nothing fills them.** A `rollup:` block and
-`progress: auto` both say a value keeps itself up to date, and this build
-computes neither — a rollup is a correlated aggregate over a relation and
-automatic progress is a per-task count of subtasks, checklist items or asked
-comments, and both are read-time work nothing does yet. Accepted, the field
-would hold whatever somebody last typed under a name saying otherwise, which
-is worse than a plain number because nobody knows to maintain it. The field
-TYPES still work: a `progress` or `rollup` field with `progress: manual` (or
-no configuration at all) is a number somebody writes, and every filter on this
-page applies to it.
+**Three settings are refused because nothing fills them.** A `rollup:` block,
+`progress: auto` and a `tracking:` list all say a value keeps itself up to
+date, and this build computes none of it — a rollup is a correlated aggregate
+over a relation, automatic progress is a per-task count of subtasks, checklist
+items or asked comments, and `tracking` is what that count would read. All of
+it is read-time work nothing does yet. Accepted, the field would hold whatever
+somebody last typed under a name saying otherwise, which is worse than a plain
+number because nobody knows to maintain it. `tracking` is refused **on a
+progress field too**, not only on the types that have no progress at all:
+`auto` is the only mode that would ever count the sources, so a list beside
+`progress: manual` is counted by nothing. The field TYPES still work: a
+`progress` or `rollup` field with `progress: manual` (or no configuration at
+all) is a number somebody writes, and every filter on this page applies to
+it.
 
 **An option is one value however it is written.** A choice field stores the
 option's *id*, and a write naming the option by its slug or its name resolves
