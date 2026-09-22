@@ -236,6 +236,24 @@ that would be stored, replicated and read by nothing, so the declaration is
 refused naming which types use it. A minimum above its maximum is refused at
 the declaration rather than at every write that then fails against it.
 
+These are the settings, and which types read each. They live under `config` on
+the declaration — where the catalogue read hands them back, and where the
+catalogue tools take them:
+
+| Setting | Type | The types that read it | What it does |
+|---|---|---|---|
+| `options` | list | `dropdown`, `labels`, `relationship` | The choices. A value stores the option's **id**, so renaming one keeps every task that chose it |
+| `unit` | string | `number`, `progress`, `rollup` | Rendered inline beside every value — `8 h` — so at most 16 bytes |
+| `precision` | integer, 0–6 | `number`, `progress`, `rollup` | How many decimal places a value may carry. Default **0**, whole numbers only. A value carrying more is refused naming the rule, never rounded |
+| `min` / `max` | number | `number`, `progress`, `rollup` | The range a value must fall in. Each is optional on its own, and `min: 0` is a floor — leaving it out is what means "no floor". A minimum above its maximum is refused |
+| `time` | boolean | `date` | True holds a time of day as well as a day, and then a bare date is refused rather than given an invented midnight. False truncates a timestamp to its date and says so |
+| `progress` | `manual` | `progress` | How the bar is filled. `auto` is refused — see below |
+| `multi` | boolean | `dropdown` | Lets one task carry more than one value, each its own filterable row. `labels`, `people` and `relationship` already hold several, so they need no flag |
+
+Beside them on the declaration itself, `applies_to` names the **type slugs**
+that carry the field; empty means every type. A task of a type a field does not
+apply to cannot hold a value for it, and cannot be required to.
+
 **Two settings are refused because nothing fills them.** A `rollup:` block and
 `progress: auto` both say a value keeps itself up to date, and this build
 computes neither — a rollup is a correlated aggregate over a relation and
@@ -299,6 +317,14 @@ Writing it is an **operator** gesture — `write_work_catalogue` — because a s
 adding a type to make its own create succeed is a seat editing the rules it is
 judged by, and the refusal it was working around is the signal a person needs
 to see.
+
+**A write is the read, edited.** The `fields` list REPLACES the declared set,
+and every declaration in it is whole: a key left out is *cleared*, `config` and
+its options included. So read the catalogue, change what you mean to change,
+and send it back — a field composed from scratch loses whatever it is not
+carrying. That is the same rule the list itself follows, and it is why the
+settings are spelled here exactly as the read spells them: the object you are
+handed is the object you send.
 
 A **project's own** field declarations are the project **lead's**, written with
 `write_project(fields: [...])`. That list REPLACES the project's declarations
