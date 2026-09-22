@@ -728,7 +728,12 @@ function assignedEmpty(scope: Scope, they: string): { title: string; description
  * The order somebody means to work in — theirs, or a lead's for them.
  *
  * IN THE STORED ORDER, never re-sorted: the order is the content — it is what
- * somebody decided — and sorting it discards the decision.
+ * somebody decided — and sorting it discards the decision. Which is why the
+ * rows are NUMBERED: a decision nothing on screen shows is a decision the
+ * reader cannot act on, and there is no drag here for the same reason nothing
+ * else on this screen writes — a rank is a value on the task, and dragging one
+ * would be the dashboard deciding a team's order. `set_priorities` is the
+ * gesture, and it is somebody's own.
  */
 function Priorities({
   mine,
@@ -756,11 +761,17 @@ function Priorities({
         />
       ) : (
         <div className="work-list">
+          {/* NUMBERED, because the order IS the content here. Every other tab
+              on this screen is a SET somebody has a claim on; this one is a
+              SEQUENCE somebody decided, and drawn as an ordinary run of rows
+              it reads exactly like the Watching list beside it — the one thing
+              the tab is about, invisible. */}
           <RowList
             rows={mine.priorities}
             now={now}
             chrome={chrome}
             hrefOf={(row) => href(["work", row.key])}
+            ordinals
           />
         </div>
       )}

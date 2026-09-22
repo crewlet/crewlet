@@ -719,6 +719,50 @@ test("an anonymous reader gets the credential sentence, not a menu of refusals",
   expect(screen.queryByText(/pick somebody above/)).toBeNull();
 });
 
+// THE ORDER IS THE CONTENT, so it is DRAWN. Every other tab on this screen is
+// a set somebody has a claim on; Priorities is a sequence somebody decided,
+// and as an ordinary run of rows it reads exactly like the Watching list
+// beside it — the one thing the tab is about, invisible.
+test("the priorities are numbered in the order they were stored", async () => {
+  location.hash = "#/me?tab=priorities";
+  serving({
+    viewer: ada,
+    work_items: noWork,
+    work_my_work: {
+      ...emptyDay,
+      priorities: [
+        task({ key: "ENG-5", title: "first" }),
+        task({ key: "ENG-9", title: "second" }),
+        task({ key: "ENG-2", title: "third" }),
+      ],
+    },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("first")).toBeTruthy());
+  const places = [...container.querySelectorAll(".work-cell-ord")].map((el) => el.textContent);
+  expect(places).toEqual(["1", "2", "3"]);
+  // AND IN THE STORED ORDER, never re-sorted: the keys are not ascending, and
+  // a list that sorted them would discard the decision it exists to show.
+  const rows = [...container.querySelectorAll(".work-row")].map(
+    (el) => el.querySelector(".work-key")?.textContent,
+  );
+  expect(rows).toEqual(["ENG-5", "ENG-9", "ENG-2"]);
+});
+
+// AND NO OTHER CLAIM IS NUMBERED. A place on a list that nobody arranged is a
+// rank the engine never stored, read as one somebody did.
+test("a claim that is a set rather than a sequence draws no places", async () => {
+  location.hash = "#/me?tab=watching";
+  serving({
+    viewer: ada,
+    work_items: noWork,
+    work_my_work: { ...emptyDay, watching_recent: [task({ key: "ENG-3" })] },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
+  expect(container.querySelector(".work-cell-ord")).toBeNull();
+});
+
 // THE INBOX IS NOT ONE OF THE CLAIMS. What REACHED somebody is a different
 // question from what is ON them, and it is the landing screen of this product:
 // the card that drew it here was the inbox in a narrower column with a smaller

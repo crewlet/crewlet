@@ -2497,6 +2497,34 @@ details > summary.int-summary::-webkit-details-marker {
      key beside it. */
   column-gap: var(--space-3);
 }
+/* A LIST WHOSE ORDER IS ITS CONTENT OPENS WITH THE PLACE, and the track is
+   declared on the LIST because that is where every track here lives — a row
+   is a subgrid of whatever its list has, so a row cannot grow a column on its
+   own. Both sets gain it, for the reason the narrow set is declared beside the
+   wide one at all: a track list is POSITIONAL, and a set that drifts from the
+   other hands every cell the wrong column and says nothing about it.
+
+   AND THE OPENING TRACK CARRIES THE ROW'S INSET, which is now this one rather
+   than the priority mark's — a subgrid item's padding comes out of the first
+   track it spans, so a bare width there resolves to nothing and the value
+   overflows onto the cell beside it. 20px is two tabular digits at `--fs-3xs`,
+   which is the whole range a stored queue has (`tracker.MaxPriorities` is 32).
+   The priority mark keeps the bare 16px it needs, one column along. */
+.work-rows[data-ordinals="true"] {
+  grid-template-columns:
+    calc(var(--row-inline) + 20px) 16px 74px auto minmax(0, 1fr)
+    auto auto auto auto;
+  --work-rows-narrow: calc(var(--row-inline) + 20px) 16px 70px auto minmax(0, 1fr);
+}
+/* THE PLACE READS FROM THE ROW'S OWN LEFT EDGE, like the mark beside it, and
+   it is TABULAR: a 9 that becomes a 10 in a proportional face moves the key
+   column under the pointer on the one list a reader is scanning down. */
+.work-cell-ord {
+  justify-content: flex-start;
+  font-size: var(--fs-3xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
 .work-row {
   display: grid;
   grid-template-columns: subgrid;

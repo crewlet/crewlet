@@ -320,6 +320,7 @@ export function WorkRow({
   now,
   chrome = {},
   keyOf,
+  ordinal,
 }: {
   row: WorkSummary;
   href: string;
@@ -330,6 +331,15 @@ export function WorkRow({
   /** A blocker's KEY from its id, where this list holds its row — see
    *  [blockedBy]. */
   keyOf?: (id: string) => string | undefined;
+  /**
+   * This row's PLACE in a list whose order is its content — see [RowList].
+   *
+   * A COLUMN RATHER THAN A PREFIX on the title: the rank is data about the
+   * row, and written into the title it would be sorted with it, copied with
+   * it and read aloud as part of it. The list declares the track, so it is
+   * omitted where the list has none.
+   */
+  ordinal?: number;
 }) {
   return (
     <a
@@ -344,6 +354,10 @@ export function WorkRow({
           place left. So the row owns the cells and the marks only decide what
           goes in them: an unestimated, undated, unassigned task still lines its
           status up with the task above it. */}
+      {/* THE PLACE SOMEBODY PUT THIS ROW IN, where the list has an order that
+          IS its content. Absent everywhere else, and the track with it — a
+          subgrid row's cells have to match the tracks the list declared. */}
+      {ordinal !== undefined && <span className="work-cell work-cell-ord">{ordinal}</span>}
       <span className="work-cell work-cell-prio">
         <PriorityMark priority={row.priority} />
       </span>
@@ -410,7 +424,16 @@ export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | und
   return held.length > 1 ? `Blocked · ${named} +${held.length - 1}` : `Blocked · ${named}`;
 }
 
-/** A stack of rows under a heading, absent when it holds nothing. */
+/**
+ * A stack of rows under a heading, absent when it holds nothing.
+ *
+ * `ordinals` IS FOR THE ONE LIST WHOSE ORDER IS ITS CONTENT. A queue somebody
+ * arranged is not a list that happens to be in an order — the order is what
+ * was decided — and drawn as an ordinary run of rows it is indistinguishable
+ * from the same tasks sorted by date. It is the LIST's own decision rather
+ * than the row's, because the tracks are the list's: a row cannot grow a
+ * column its list did not declare.
+ */
 export function RowList({
   rows,
   now,
@@ -418,6 +441,7 @@ export function RowList({
   hrefOf,
   onOpen,
   selected,
+  ordinals,
 }: {
   rows: WorkSummary[];
   now: number;
@@ -425,6 +449,8 @@ export function RowList({
   hrefOf: (row: WorkSummary) => string;
   onOpen?: (row: WorkSummary) => void;
   selected?: string;
+  /** Number each row by its place in `rows`, from 1. */
+  ordinals?: boolean;
 }) {
   // THE LIST IS WHAT CAN RESOLVE AN EDGE. A dependency names the blocking
   // task's id, and the key a reader recognises is on that task's own row — so
@@ -433,8 +459,8 @@ export function RowList({
   // quadratic over a page of a hundred.
   const keys = new Map(rows.map((row) => [row.id, row.key]));
   return (
-    <div className="work-rows">
-      {rows.map((row) => (
+    <div className="work-rows" data-ordinals={ordinals ? "true" : undefined}>
+      {rows.map((row, at) => (
         <WorkRow
           key={row.id}
           row={row}
@@ -444,6 +470,7 @@ export function RowList({
           selected={selected === row.key}
           onOpen={onOpen ? () => onOpen(row) : undefined}
           keyOf={(id) => keys.get(id)}
+          ordinal={ordinals ? at + 1 : undefined}
         />
       ))}
     </div>
