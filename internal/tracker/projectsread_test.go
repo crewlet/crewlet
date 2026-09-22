@@ -201,6 +201,10 @@ func TestTheProjectCensusIsNarrowedWithTheListing(t *testing.T) {
 	// would report two archived where the filtered question has one.
 	seedProject(t, r, tracker.Project{Key: "GON", Name: "Gone",
 		Unit: "dissolved", Archived: true})
+	// THE CHART THE TWO SPELLING CASES BELOW RESOLVE THROUGH: one team
+	// whose id is `plat` and whose name is what these rows were filed
+	// under, which is the pair a company gets the day it adds an id.
+	platform := chart{{Key: "plat", Name: "platform"}}
 
 	for _, c := range []struct {
 		name         string
@@ -211,6 +215,16 @@ func TestTheProjectCensusIsNarrowedWithTheListing(t *testing.T) {
 		{"unit with nothing archived", tracker.ProjectQuery{Unit: "dissolved"}, 0, 1},
 		{"q on the purpose", tracker.ProjectQuery{Q: "lights"}, 1, 0},
 		{"q matching nothing", tracker.ProjectQuery{Q: "nothing at all"}, 0, 0},
+		// AND BY EITHER SPELLING OF THE UNIT, because the rows are: a
+		// team's id and its name are one narrowing, so a census cut by
+		// one spelling beside rows cut by both would count a segment the
+		// listing does not draw.
+		{"the unit's id", tracker.ProjectQuery{Unit: "plat", Units: platform}, 1, 1},
+		{"the unit's name", tracker.ProjectQuery{Unit: "platform", Units: platform}, 1, 1},
+		{"the unit's name folded", tracker.ProjectQuery{Unit: "PLATFORM", Units: platform}, 1, 1},
+		// A TEAM THE CHART NEVER HAD still narrows to nothing rather than
+		// widening to the company.
+		{"a unit nobody has", tracker.ProjectQuery{Unit: "Legal", Units: platform}, 0, 0},
 	} {
 		q := c.q
 		q.Archived = tracker.ArchivedExclude
@@ -480,9 +494,13 @@ func TestAProjectsUnitIsResolvedAgainstTheChart(t *testing.T) {
 		Unit: "platform"})
 	seedProject(t, r, tracker.Project{Key: "GON", Name: "Gone", Unit: "dissolved"})
 
-	rows := byKey(r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude, Units: chart{
-		"platform": {"Platform", tracker.LeadRef{Handle: "ada", Kind: tracker.AuthorAgent}},
-	}}))
+	rows := byKey(r.projects(tracker.ProjectQuery{
+		Archived: tracker.ArchivedExclude,
+		Units: chart{{
+			Key: "platform", Name: "Platform",
+			Lead: tracker.LeadRef{Handle: "ada", Kind: tracker.AuthorAgent},
+		}},
+	}))
 	if got := rows["OPS"].Unit; !got.Resolved || got.Name != "Platform" {
 		t.Fatalf("OPS's unit is %+v, want the chart's own name and resolved", got)
 	}
@@ -643,14 +661,22 @@ func TestADescriptionGroupsFieldsAndNamesTheShadowed(t *testing.T) {
 }
 
 // chart is a test Units: the org this reader deliberately does not hold.
-type chart map[string]struct {
-	name string
-	lead tracker.LeadRef
-}
+//
+// IT ANSWERS EITHER SPELLING, folded, because that is the seam's contract —
+// a fake matching only the key would certify readers against a chart the
+// engine does not have.
+type chart []tracker.ChartUnit
 
-func (c chart) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
-	unit, found := c[name]
-	return unit.name, unit.lead, found
+func (c chart) AllUnits() []tracker.ChartUnit { return c }
+
+func (c chart) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	for _, unit := range c {
+		if strings.ToLower(unit.Key) == ref || strings.ToLower(unit.Name) == ref {
+			return unit, true
+		}
+	}
+	return tracker.ChartUnit{}, false
 }
 
 func keys(l tracker.ProjectListing) []string {

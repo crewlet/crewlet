@@ -29,13 +29,14 @@ func TestAProjectsLeadIsNamedByTheSeatsOwnHandle(t *testing.T) {
 	}}}
 	o.Normalize()
 
-	display, lead, found := ChartUnits(o).ResolveUnit("Platform")
+	unit, found := ChartUnits(o).ResolveUnit("Platform")
 	if !found {
 		t.Fatal("Platform did not resolve")
 	}
-	if display != "Platform" {
-		t.Errorf("display = %q, want Platform", display)
+	if unit.Name != "Platform" {
+		t.Errorf("display = %q, want Platform", unit.Name)
 	}
+	lead := unit.Lead
 	if lead.Handle != "ada" {
 		t.Errorf("lead.Handle = %q, want ada — the seat's own handle, not a "+
 			"slug of its display name", lead.Handle)
@@ -58,10 +59,60 @@ func TestAnInheritedLeadKeepsItsOwnHandleToo(t *testing.T) {
 	}}}
 	o.Normalize()
 
-	if _, lead, found := ChartUnits(o).ResolveUnit("Navigation"); !found ||
-		lead.Handle != "ada" {
+	if unit, found := ChartUnits(o).ResolveUnit("Navigation"); !found ||
+		unit.Lead.Handle != "ada" {
 		t.Errorf("Navigation's lead = %+v (found %v), want ada inherited from "+
-			"Platform", lead, found)
+			"Platform", unit.Lead, found)
+	}
+}
+
+// THE SEAM ANSWERS EITHER SPELLING AND HANDS BACK THE KEY, which is the whole
+// of what the two halves of this need: a write stores the key, so that a
+// rename does not move the work, and a screen renders the name.
+//
+// It resolved through an EXACT, case-sensitive name match, so `unit:
+// engineering` on a company with a unit named "Engineering" was refused with
+// "This company has no team", and a unit's id resolved to nothing at all —
+// which is the id being unusable everywhere it is supposed to be the durable
+// spelling.
+func TestTheUnitSeamAnswersEitherSpellingWithTheKey(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
+		ID: "plat", Name: "Platform", Lead: "Ada Okonkwo",
+		Roles: []*org.Role{
+			{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman},
+		},
+	}, {
+		// A UNIT WITH NO ID, whose key IS its name — the shape every
+		// company has until somebody opts in.
+		Name: "Navigation", Lead: "Ada Okonkwo",
+	}}}
+	o.Normalize()
+
+	for _, tc := range []struct {
+		ref  string
+		key  string
+		name string
+	}{
+		{"plat", "plat", "Platform"},
+		{"Platform", "plat", "Platform"},
+		{"PLATFORM", "plat", "Platform"},
+		{"  plat  ", "plat", "Platform"},
+		{"navigation", "Navigation", "Navigation"},
+	} {
+		unit, found := ChartUnits(o).ResolveUnit(tc.ref)
+		switch {
+		case !found:
+			t.Errorf("%q did not resolve", tc.ref)
+		case unit.Key != tc.key:
+			t.Errorf("%q resolved to key %q, want %q — the key is what a "+
+				"write stores", tc.ref, unit.Key, tc.key)
+		case unit.Name != tc.name:
+			t.Errorf("%q resolved to name %q, want %q", tc.ref, unit.Name, tc.name)
+		}
+	}
+	if _, found := ChartUnits(o).ResolveUnit("Design"); found {
+		t.Error("a unit nobody has resolved — a write refuses it by name")
 	}
 }
 
@@ -115,6 +166,54 @@ func TestAUnitsLeadResolvesByItsIDAndByItsName(t *testing.T) {
 	for _, unit := range []string{"plat", "Platform", "PLAT", "nav", "Navigation"} {
 		if got := UnitLeadOf(o, unit); got != "ada" {
 			t.Errorf("the lead of %q is %q, want ada", unit, got)
+		}
+	}
+}
+
+// A PROJECT'S CHART-OWNED UNIT IS THE UNIT'S KEY, and its name is the
+// project's own display name beside it.
+//
+// The project row is what every task filed into it takes its filed unit from,
+// and a filed unit is never rewritten. So writing the NAME here filed the
+// company's work under a spelling that moves the day somebody renames the
+// team — which is precisely what `id:` exists to prevent, on the one path
+// that writes most of it.
+func TestTheChartFilesAProjectUnderTheUnitsKey(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
+		ID: "plat", Name: "Platform", Purpose: "the platform", Project: "PLAT",
+		// A SEAT'S OWN PROJECT still says where in the company it sits,
+		// and that home is the unit's key for the same reason.
+		Roles: []*org.Role{{Name: "Ada", DeclaredHandle: "ada", Project: "ADA"}},
+	}, {
+		// A UNIT WITH NO ID is keyed by its name, which is the same
+		// string this wrote before — the id is what makes the two differ.
+		Name: "Product", Project: "PROD",
+	}}}
+	o.Normalize()
+
+	filed := map[string]tracker.ChartProject{}
+	for _, project := range chartProjects(o) {
+		filed[project.Key] = project
+	}
+	for _, tc := range []struct {
+		project string
+		unit    string
+		name    string
+	}{
+		{"PLAT", "plat", "Platform"},
+		{"ADA", "plat", "Ada"},
+		{"PROD", "Product", "Product"},
+	} {
+		got, held := filed[tc.project]
+		switch {
+		case !held:
+			t.Errorf("the chart names no project %s", tc.project)
+		case got.Unit != tc.unit:
+			t.Errorf("%s files into unit %q, want %q — what a task's filed "+
+				"unit is taken from has to be the key", tc.project, got.Unit, tc.unit)
+		case got.Name != tc.name:
+			t.Errorf("%s is named %q, want %q", tc.project, got.Name, tc.name)
 		}
 	}
 }

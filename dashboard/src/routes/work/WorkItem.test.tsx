@@ -283,6 +283,74 @@ test("a task routed where it was filed says so once", () => {
   expect(screen.getByText("Routes to")).toBeTruthy();
 });
 
+// A TEAM IS DRAWN BY ITS NAME AND FOLLOWED BY ITS KEY.
+//
+// What the row holds is the unit's KEY — its `id` on a company that gave its
+// units one, a word chosen so that a rename moves nothing and therefore a word
+// nobody reads. The panel rendered that raw and said `eng` while the same
+// company's board column said Engineering. The address keeps the key, which
+// the engine matches against the whole set of that team's spellings.
+test("a unit reads as the team's name and links by the stored key", () => {
+  render(
+    <ItemProps
+      detail={detail({
+        task: task({ filed_unit: "eng", routing_unit: "plat" }),
+        units: {
+          filed: { key: "eng", name: "Core Engineering", resolved: true },
+          routing: { key: "plat", name: "Platform", resolved: true },
+        },
+      })}
+      chrome={{}}
+      project={project()}
+    />,
+  );
+  const filed = screen.getByText("Core Engineering").closest("a");
+  expect(filed?.getAttribute("href")).toContain("unit=eng");
+  const routed = screen.getByText("Platform").closest("a");
+  expect(routed?.getAttribute("href")).toContain("unit=plat");
+  // AND THE KEY IS NOT WHAT IS READ, on either row.
+  expect(screen.queryByText("eng")).toBeNull();
+  expect(screen.queryByText("plat")).toBeNull();
+});
+
+// A TEAM THE CHART NO LONGER HAS IS A FINDING, marked the way the project
+// directory marks the same one: the stored key in a warning tag, unlinked,
+// because a team that has left the chart is something to correct rather than
+// somewhere to go.
+test("a unit the chart has lost is marked rather than linked", () => {
+  render(
+    <ItemProps
+      detail={detail({
+        task: task({ filed_unit: "dissolved", routing_unit: "dissolved" }),
+        units: {
+          filed: { key: "dissolved", resolved: false },
+          routing: { key: "dissolved", resolved: false },
+        },
+      })}
+      chrome={{}}
+      project={project()}
+    />,
+  );
+  const pill = screen.getByTitle("The current org chart has no such unit");
+  expect(pill.textContent).toBe("dissolved");
+  expect(pill.closest("a")).toBeNull();
+});
+
+// AND AN ANSWER WITH NO RESOLUTION BESIDE IT STILL DRAWS THE ROW, because the
+// record is on the task either way: a node holding no chart answers the raw
+// key, and a row that vanished would be a task filed into nothing.
+test("a unit with no resolution beside it still reads and links", () => {
+  render(
+    <ItemProps
+      detail={detail({ task: task({ filed_unit: "eng", routing_unit: "eng" }) })}
+      chrome={{}}
+      project={project()}
+    />,
+  );
+  const raw = screen.getByText("eng").closest("a");
+  expect(raw?.getAttribute("href")).toContain("unit=eng");
+});
+
 // ---------------------------------------------------------------------------
 // Links
 // ---------------------------------------------------------------------------

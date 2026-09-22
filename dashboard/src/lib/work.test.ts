@@ -1430,6 +1430,53 @@ test("an axis names its own empty key", () => {
   expect(axisLabel("status", "")).toBe("No status");
 });
 
+// A UNIT KEY IS THE ONE AXIS THIS CLIENT CANNOT NAME FOR ITSELF. What a row
+// holds is the unit's `id` on a company that set one — a word chosen so that a
+// rename moves nothing — and the anonymous org projection carries no ids, so
+// the engine's own column label is the only name for it. Given one, a chip and
+// the heading it was cut from say the same word; without one the key stands,
+// which is what the address holds and what the filter takes.
+test("a unit reads by the name its answer gave, and by its key otherwise", () => {
+  expect(axisLabel("unit", "eng")).toBe("eng");
+  expect(axisLabel("unit", "eng", { unitName: () => "Engineering" })).toBe("Engineering");
+  expect(axisLabel("routing_unit", "eng", { unitName: () => "" })).toBe("eng");
+  expect(axisLabel("unit", "")).toBe("No unit");
+});
+
+// AND THE TEAM'S OWN COLUMN ROUND-TRIPS, which is the whole of what a unit
+// column's overflow link does: the engine now heads that column with the
+// team's NAME over a key that is its `id`, so a patch built from the label
+// would narrow to a value no row holds. The patch carries the column's KEY,
+// the engine folds either spelling onto it, and the chip reads the name back
+// through the same answer the heading came from — which is how `ItemsView`
+// builds `unitName`. Written the other way round, following "12 more →" out of
+// the Engineering column landed on an empty list chipped "Engineering".
+test("a unit column's overflow carries the key and chips the name", () => {
+  const column = { key: "eng", label: "Engineering", count: 12, rows: [] };
+  expect(groupLabel("unit", column)).toBe("Engineering");
+
+  const patch = filterPatchForGroup("unit", column.key);
+  expect(patch).toEqual({ shape: "list", group_by: "unit", group: "eng" });
+
+  // THE ANSWER IS WHAT NAMES IT, exactly as the screen asks: the column whose
+  // key the address holds.
+  const unitName = (key: string) => (key === column.key ? column.label : "");
+  expect(axisLabel("unit", patch.group ?? "", { unitName })).toBe("Engineering");
+});
+
+// AND A TEAM IS AN ORDINARY FILTER KEY, arriving from an item's own "Filed
+// into" line rather than from a control: it narrows the query, it carries a
+// chip, and the chip clears it like any other.
+test("a unit filter is one chip that clears its own key", () => {
+  const chips = filterChips(
+    { ...NO_FILTERS, unit: "eng" },
+    { unitName: (key) => (key === "eng" ? "Engineering" : "") },
+  );
+  expect(chips.map((c) => c.param)).toEqual(["unit"]);
+  expect(chips[0]?.value).toBe("Engineering");
+  expect(anyFilter({ ...NO_FILTERS, unit: "eng" })).toBe(true);
+});
+
 // ---------------------------------------------------------------------------
 // The scope segment
 // ---------------------------------------------------------------------------

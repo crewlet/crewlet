@@ -47,7 +47,9 @@ type Unit struct {
 	// OPTIONAL, and absent means exactly today's behaviour: [Unit.Key]
 	// falls back to the name. Adding one to a unit that already has work
 	// filed against it does not rewrite those rows and does not have to —
-	// a filter on a unit matches the SET of its id and its name.
+	// a filter on a unit matches the SET of its id and its name, which is
+	// [Organization.UnitByRef]'s promise and is where every durable unit
+	// reference in the engine is resolved.
 	//
 	// IT DOES NOT STOP A RENAME RE-ONBOARDING THE SEATS BENEATH IT. That
 	// is a different mechanism: onboarding turns on the unit's NAME, which
@@ -138,6 +140,12 @@ type Unit struct {
 // EVERYTHING DURABLE KEYS ON THIS and everything a person reads keys on
 // [Unit.Name]. The two are the same string on a company that set no ids,
 // which is what makes the field optional rather than a migration.
+//
+// Which is also why nothing durable may compare against it directly. A row
+// written before an id was added holds the name and a row written after it
+// holds the id, so the two spellings coexist for the life of the deployment
+// and a reference is resolved back through [Organization.UnitByRef] — which
+// matches this OR the name — rather than equated with this.
 func (u *Unit) Key() string {
 	if u == nil {
 		return ""

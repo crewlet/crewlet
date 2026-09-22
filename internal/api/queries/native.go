@@ -183,6 +183,11 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	// surface: a screen renders the level and the lag beside the rows, so
 	// a person who asked for a stronger answer is shown the one they got.
 	q.Level = statelog.LevelFor(statelog.SurfaceDashboard, q.Level)
+	// AND THE CHART THE UNIT FILTERS RESOLVE THROUGH, set here for the
+	// reason the level is: it is a property of this SURFACE rather than of
+	// the grammar, so `unit=` takes a team's id or its name and finds the
+	// work filed under either — see [tracker.Units].
+	q.Units = s.chartUnits()
 	answer, err := s.Work.Tasks(ctx, q, now)
 	switch {
 	case errors.Is(err, tracker.ErrTooBroad):
@@ -271,8 +276,14 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// that explain it — and a detail that left them out rendered a task
 	// filed with a severity as one that carried none, beside a board that
 	// had just filtered on that very field.
+	//
+	// AND THE CHART, so the properties panel reads "Engineering" where the
+	// row holds `eng` — the same seam the board column and the project
+	// directory resolve through, so one screen cannot call a team two
+	// things. See [tracker.TaskDetail.Units].
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments: true, History: true, Links: true, Fields: true,
+		Units: s.chartUnits(),
 	}, fresh)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
@@ -326,6 +337,11 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		Viewer:    viewer,
+		// THE CHART, so `container=unit:engineering` and
+		// `container=unit:eng` reach one strip — the same rule that
+		// upper-cases a project key, for the container kind that has
+		// two spellings. See [tracker.Units].
+		Units: s.chartUnits(),
 		// THE CALLER'S OWN, resolved to this surface's default when they
 		// said nothing — which is `stale`, like every other dashboard
 		// poll. See [freshness] and [Sources.workItems].
@@ -659,7 +675,12 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	out, err := s.Work.Workload(ctx, tracker.WorkloadQuery{
-		Unit:  strings.TrimSpace(p.String("unit")),
+		Unit: strings.TrimSpace(p.String("unit")),
+		// THROUGH THE CHART, so `?unit=` takes the unit's id or its
+		// name — see [tracker.Units]. A screen sends whichever of the
+		// two it was handed, and the rows hold whichever was current
+		// when each was written.
+		Units: s.chartUnits(),
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())

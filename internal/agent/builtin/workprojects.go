@@ -61,8 +61,9 @@ func (t *listProjects) Parameters() map[string]any {
 					"purpose. Omit for every project.",
 			},
 			"unit": map[string]any{
-				"type":        "string",
-				"description": "Narrows to the projects one unit of the org chart owns.",
+				"type": "string",
+				"description": "Narrows to the projects one unit of the org " +
+					"chart owns, by that unit's id or its name.",
 			},
 			"archived": map[string]any{
 				"type": "string",

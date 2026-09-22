@@ -175,10 +175,25 @@ func TestAProjectReadFailureIsReported(t *testing.T) {
 	}
 }
 
+// stubUnits is a test chart holding ONE unit, which answers to its id or its
+// name in any case — the contract [tracker.Units] states and the engine's own
+// resolver keeps.
 type stubUnits struct{}
 
-func (stubUnits) ResolveUnit(string) (string, tracker.LeadRef, bool) {
-	return "Platform", tracker.LeadRef{Handle: "ada", Kind: tracker.AuthorAgent}, true
+func (stubUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
+	ref = strings.TrimSpace(ref)
+	if !strings.EqualFold(ref, "plat") && !strings.EqualFold(ref, "Platform") {
+		return tracker.ChartUnit{}, false
+	}
+	return tracker.ChartUnit{
+		Key: "plat", Name: "Platform",
+		Lead: tracker.LeadRef{Handle: "ada", Kind: tracker.AuthorAgent},
+	}, true
+}
+
+func (s stubUnits) AllUnits() []tracker.ChartUnit {
+	unit, _ := s.ResolveUnit("plat")
+	return []tracker.ChartUnit{unit}
 }
 
 // MY_WORK TAKES NO HANDLE, ever.

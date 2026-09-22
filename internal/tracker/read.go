@@ -543,12 +543,19 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	if len(q.Types) > 0 {
 		add("t.type IN ("+placeholders(len(q.Types))+")", anyOf(q.Types)...)
 	}
-	if len(q.Unit) > 0 {
-		add("t.filed_unit IN ("+placeholders(len(q.Unit))+")", anyOf(q.Unit)...)
+	// BOTH UNIT FILTERS MATCH EVERY SPELLING THEIR UNIT ANSWERS TO — see
+	// [unitSpellings]. `filed_unit` is a record of what was true and is
+	// never rewritten, so a company that gives a unit an id holds both
+	// spellings across its own history for ever: the filter resolves
+	// through the chart and matches the set rather than the one string
+	// somebody typed.
+	if spellings := unitSpellings(q.Units, q.Unit); len(spellings) > 0 {
+		add("t.filed_unit IN ("+placeholders(len(spellings))+")",
+			anyOf(spellings)...)
 	}
-	if len(q.RoutingUnit) > 0 {
-		add("t.routing_unit IN ("+placeholders(len(q.RoutingUnit))+")",
-			anyOf(q.RoutingUnit)...)
+	if spellings := unitSpellings(q.Units, q.RoutingUnit); len(spellings) > 0 {
+		add("t.routing_unit IN ("+placeholders(len(spellings))+")",
+			anyOf(spellings)...)
 	}
 	if handles := q.Assignee; len(handles) > 0 {
 		// `none` is a VALUE rather than a missing filter: "unassigned"
@@ -880,7 +887,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		// predicate and carry no join, so an axis expressed only as one
 		// would leave a header adding up the whole board while the rows
 		// showed a single column of it.
-		axis, err := compileGroup(q.GroupBy, fields, q.dayWindow())
+		axis, err := compileGroup(q.GroupBy, fields, q.dayWindow(), q.Units)
 		if err != nil {
 			return "", nil, err
 		}

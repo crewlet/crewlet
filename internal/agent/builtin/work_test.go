@@ -84,6 +84,7 @@ type fakeTracker struct {
 
 	projectQuery tracker.ProjectQuery
 	projects     tracker.ProjectListing
+	viewQuery    tracker.ViewQuery
 	detailQuery  tracker.ProjectDetailQuery
 	project      tracker.ProjectDetail
 
@@ -164,7 +165,8 @@ func (f *fakeTracker) Task(_ context.Context, idOrKey string, want tracker.Detai
 	return tracker.TaskDetail{}, fmt.Errorf("%w: %s", tracker.ErrNoTask, idOrKey)
 }
 
-func (f *fakeTracker) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
+func (f *fakeTracker) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
+	f.viewQuery = q
 	return tracker.ViewListing{}, nil
 }
 

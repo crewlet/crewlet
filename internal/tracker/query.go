@@ -238,6 +238,18 @@ type Query struct {
 	Unit        []string
 	RoutingUnit []string
 
+	// Units is the chart the two keys above are resolved through, so a
+	// filter naming a unit's id finds the work filed under its name and
+	// the other way round — see [Units] and [unitSpellings]. Nil matches
+	// what the caller typed, literally, which is the honest answer for a
+	// surface holding no chart.
+	//
+	// NOT PART OF THE GRAMMAR: it is the SURFACE's own chart rather than
+	// something a caller can write, so [ParseQuery] neither reads nor
+	// refuses a key for it, and a surface sets it beside the read level it
+	// resolves.
+	Units Units
+
 	Tags TagFilter
 
 	Types      []string
