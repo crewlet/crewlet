@@ -91,7 +91,7 @@ func newJoinHarness(t *testing.T) *joinHarness {
 			Health: func() statelog.Health {
 				return statelog.Health{
 					Position: statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_200},
-					CaughtUp: true,
+					Drained:  true,
 					Lag:      &lag,
 				}
 			},

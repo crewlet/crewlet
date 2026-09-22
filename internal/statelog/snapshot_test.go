@@ -80,7 +80,7 @@ func newSnapHarness(t *testing.T) *snapHarness {
 	floor := uint64(1)
 	h.health = statelog.Health{
 		Position:  statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_200},
-		CaughtUp:  true,
+		Drained:   true,
 		Floor:     statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
 		Lag:       &lag,
 		FirstSeq:  &first,
@@ -280,7 +280,7 @@ func TestEverySnapshotPreconditionSaysWhyItSkipped(t *testing.T) {
 			want: statelog.SkipDeferred,
 		},
 		"never drained the log": {
-			arrange: func(h *snapHarness) { h.health.CaughtUp = false },
+			arrange: func(h *snapHarness) { h.health.Drained = false },
 			want:    statelog.SkipUnhydrated,
 		},
 		// THE ONE THE OTHER TERMS CANNOT SEE. Lag is clamped at zero, so

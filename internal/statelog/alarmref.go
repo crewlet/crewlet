@@ -33,8 +33,8 @@ func AlarmReference() string {
 // this is prose: "apply.lag.seconds > StallGrace" is precise and says nothing
 // to somebody who has just been paged.
 var alarmMeaning = map[Kind]string{
-	KindApplyLag: "This node is more than a minute behind the log. Its seats " +
-		"move if it stays behind for thirty.",
+	KindApplyLag: "This node is more than a minute behind the log. Being " +
+		"behind does not move its seats; a position that stops moving does.",
 	KindReadRefusals: "Reads are being refused for something other than " +
 		"ordinary lag, and have been for longer than a heartbeat.",
 	KindBarrierSlow: "The read barrier — the append every linearizable read " +

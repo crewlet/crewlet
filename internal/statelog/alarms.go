@@ -308,8 +308,10 @@ var table = []rule{
 				r.ApplyLag > StallGrace
 		},
 		remedy: "Check this node's applier: `crewlet retention status` names the " +
-			"domain and its position. A node that stays behind past the deferral " +
-			"grace loses its seats to a peer.",
+			"domain and its position. A node that is behind keeps the seats it " +
+			"holds and claims no new ones; it gives them up only if its position " +
+			"stops moving for the stall grace, or it holds a record it cannot " +
+			"decode past the deferral grace.",
 	},
 	{
 		kind: KindReadRefusals,

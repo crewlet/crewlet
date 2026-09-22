@@ -99,7 +99,7 @@ const ApplyRetryBudget = StallGrace / 2
 
 // Health is one registered domain's readiness.
 //
-// # FOURTEEN FIELDS, DECLARED ONCE
+// # FIFTEEN FIELDS, DECLARED ONCE
 //
 // This struct is cited from the framework's contracts, from the readiness
 // gate, from the operator surface and from the register's own heartbeat, and
@@ -137,9 +137,34 @@ type Health struct {
 	// build that can read them would resume.
 	DeferredFrom uint64
 
-	// CaughtUp reports having drained to nothing pending at least once,
-	// and not being stalled since.
-	CaughtUp bool
+	// Drained reports having applied this domain's log to nothing pending
+	// at least once, and not having stalled since.
+	//
+	// A HISTORY, NOT AN INSTANT, and the distinction is the whole reason
+	// the field exists beside [Health.Lag]. Whether this node is behind
+	// RIGHT NOW is the lag; whether its rows have ever been a whole state
+	// is this. The two were one bool once, assigned `lag == 0` on every
+	// heartbeat, and the readers that wanted the history got the instant:
+	// on a single node every write to the tracker put one record on the
+	// log the applier had not yet consumed, so the bool went false for one
+	// heartbeat and [Health.Healthy] read the node as a WRONG copy — seven
+	// seats released, reclaimed five seconds later, six times in eight
+	// minutes, on a company doing nothing but filing work items.
+	//
+	// IT IS THE APPLIER'S OWN OBSERVATION rather than a sampled lag, for
+	// the reason a sample cannot answer a question about a series: a
+	// heartbeat that looks every ten seconds can miss every moment a busy
+	// log is empty, and a latch that never latches is a refusal nothing
+	// clears. The applier sees each one — the fetch the broker answered
+	// with nothing is the drain — and [Runner.Drained] is that record.
+	//
+	// ONE READER, AND IT IS THE DONOR GATE: may this node hand a peer a
+	// copy of its rows. That question is about whether the rows were ever
+	// whole, and the separate question of how far they have since fallen
+	// behind is [Health.Lag] against [SnapshotLagSlack]. Neither readiness
+	// gate reads this — admission wants the instant and the shed wants a
+	// fault, and neither is a history.
+	Drained bool
 
 	// Stalled reports an applied prefix that has not moved for the stall
 	// grace. A first-class state rather than a symptom: a stalled node's
@@ -270,15 +295,34 @@ func (h Health) AheadOfLog() bool {
 	return h.LastSeq != nil && h.Position.Seq > *h.LastSeq
 }
 
-// Healthy reports whether this domain's state permits admitting seats.
+// Healthy reports whether this domain's state permits KEEPING the seats this
+// node already holds.
+//
+// # It answers "is this copy WRONG", never "is this copy BEHIND"
+//
+// That is the whole line between it and [Health.Established], which gates
+// admission. A copy that is behind catches up on its own, so withholding
+// claims is the entire remedy and dropping work in hand would be pure loss; a
+// copy that is wrong cannot catch up, so the work has to move. Every term
+// below is of the second kind.
 //
 // # What does NOT make it false, and why
 //
-// Holding records this build cannot decode does not, on its own. Folding that
-// into "stalled" sheds a company's seats fleet-wide on a routine rolling
-// upgrade — one upgraded writer taking every un-upgraded node out of service
-// at once, which is exactly the outage the retain rule exists to prevent,
-// arriving through the applier instead of the codec.
+// BEING BEHIND DOES NOT — not by a record, not by ten thousand, and not
+// because this node has yet to drain the log a first time. The reading that
+// conflated the two was `lag == 0` recomputed per heartbeat: on a single node
+// every tracker write put one record on the log the applier had not consumed
+// yet, so this went false for one heartbeat and the sweep released all seven
+// of the company's seats, reclaiming them about five seconds later — six
+// times in eight minutes, with a real model that is every turn on the node
+// interrupted by somebody filing a work item. A prefix that stops MOVING is a
+// different fact and it is [Health.Stalled], which is below.
+//
+// Holding records this build cannot decode does not either, on its own.
+// Folding that into "stalled" sheds a company's seats fleet-wide on a routine
+// rolling upgrade — one upgraded writer taking every un-upgraded node out of
+// service at once, which is exactly the outage the retain rule exists to
+// prevent, arriving through the applier instead of the codec.
 //
 // # And what does
 //
@@ -296,7 +340,11 @@ func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
 		h.AheadOfLog() || h.StreamRecreated {
 		return false
 	}
-	if !h.CaughtUp || h.Stalled {
+	// A FROZEN PREFIX, which is the one term here that a lag resembles and
+	// is not: a node that owes progress and has made none for the stall
+	// grace answers every expectation out of rows that stopped, where a
+	// node that is merely behind is applying its way out of it.
+	if h.Stalled {
 		return false
 	}
 	if h.Deferred > 0 && deferredSince.Held && now.Sub(deferredSince.Since) > DeferralGrace {
@@ -324,6 +372,13 @@ func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
 // looks perfectly caught up while applying nothing, for ever. It is decided
 // from [Health.LastSeq] rather than from Lag, because Lag is clamped at zero
 // and reads that state as caught up.
+//
+// STRICT IS THE INSTANT, NOT THE HISTORY. It asks whether this node is behind
+// RIGHT NOW, because it gates a seat about to attach and act on these rows —
+// a node inside the trim floor still serves rows that are behind, and a seat
+// reading one answers "there is no such item" about work it was just handed.
+// [Health.Drained] is the opposite question and belongs to the opposite gate:
+// what a node may KEEP is not decided on a lag (see [Health.Healthy]).
 func (h Health) Established(strict bool) (bool, ReadRefusal) {
 	// THE AUTHORITATIVE TERM IS THE PUBLISHED FLOOR. The stream's own
 	// first sequence may only raise it.
@@ -346,7 +401,10 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 	if h.AheadOfLog() || h.StreamRecreated {
 		return false, RefuseWrongStream
 	}
-	if strict && !h.CaughtUp {
+	// THE LAG ITSELF, and it is non-nil by the check above: a node with
+	// records left to apply holds a PREFIX of what the log says, whether
+	// or not it has ever held the whole of it.
+	if strict && *h.Lag > 0 {
 		return false, RefuseBehind
 	}
 	return true, ""

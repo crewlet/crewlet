@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// EVERY FIELD THE READINESS DECISIONS READ IS ASSIGNED BY health().
+// EVERY FIELD A DECISION READS IS ASSIGNED BY health().
 //
 // This is the test whose absence let the whole readiness path be dead code.
 // [statelog.Health] has thirteen fields; [stateLog.health] assembled seven of
@@ -40,11 +40,18 @@ import (
 func TestEveryHealthInputIsPopulated(t *testing.T) {
 	t.Parallel()
 
-	// The fields [statelog.Health.Refusal] and [statelog.Health.Healthy]
-	// read. Listed here rather than derived, because the list IS the
-	// claim: a field added to a decision and not to this list is a field
-	// nobody asked to be produced.
-	want := []string{"Err", "Stalled", "Evicted", "Floor", "CaughtUp", "Deferred",
+	// The fields [statelog.Health.Refusal], [statelog.Health.Healthy] and
+	// the snapshot gate read. Listed here rather than derived, because the
+	// list IS the claim: a field added to a decision and not to this list
+	// is a field nobody asked to be produced.
+	//
+	// THREE DECISIONS RATHER THAN TWO, because `Drained` has no other
+	// reader: the shed deliberately does not turn on it — a copy that is
+	// behind is not a copy that is wrong — and a list scoped to the two
+	// readiness functions would let the one thing that DOES need it, the
+	// gate deciding whether this node may donate a snapshot, go back to
+	// reading a zero value.
+	want := []string{"Err", "Stalled", "Evicted", "Floor", "Drained", "Deferred",
 		"LastSeq", "StreamRecreated"}
 
 	fset := token.NewFileSet()
@@ -77,9 +84,9 @@ func TestEveryHealthInputIsPopulated(t *testing.T) {
 	})
 	for _, field := range want {
 		if !assigned[field] {
-			t.Errorf("health() never mentions Health.%s, which Refusal or Healthy "+
-				"reads — so that decision turns on a zero value and the state it "+
-				"is meant to catch goes unreported", field)
+			t.Errorf("health() never mentions Health.%s, which Refusal, Healthy "+
+				"or the snapshot gate reads — so that decision turns on a zero "+
+				"value and the state it is meant to catch goes unreported", field)
 		}
 	}
 }

@@ -447,10 +447,18 @@ func (e *Engine) NativeHydrated() bool {
 // catches up, so withholding claims is the whole remedy and dropping work in
 // hand would be pure loss. This is about a copy that is WRONG — an applier
 // halted at a record it cannot decode, an eviction whose peers are dropping
-// everything this node writes, rows below a trim floor with a hole nothing
-// will fill, or a record held past [statelog.DeferralGrace]. A seat left
-// running on any of those answers its own tools out of a copy the fleet has
-// already abandoned, and D122 is the rule that says it must not.
+// everything this node writes, rows below a trim floor (or a floor nobody
+// could read) with a hole nothing will fill, a checkpoint naming a stream
+// that is not this one, an applied prefix frozen past [statelog.StallGrace],
+// or a record held past [statelog.DeferralGrace]. A seat left running on any
+// of those answers its own tools out of a copy the fleet has already
+// abandoned, and D122 is the rule that says it must not.
+//
+// A LAG IS NEVER ONE OF THEM, which is what the log line below means by
+// "wrong rather than behind" — and for as long as the health underneath
+// derived "has this node's copy ever been whole" from "is it level this
+// instant", that line was false on every firing: one unapplied tracker record
+// made a solo node unfit for a heartbeat and moved all seven of its seats.
 //
 // A node with no native backend is trivially serviceable, which is what a
 // company on Jira and Confluence has.
