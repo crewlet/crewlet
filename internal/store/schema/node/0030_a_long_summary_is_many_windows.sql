@@ -1,0 +1,94 @@
+-- An episode's summary is embedded IN WINDOWS, so `episodes.embedding` holds
+-- several vectors rather than one — and this column says how many.
+--
+-- # What was wrong with one
+--
+-- The episodist cut every task summary at its first 8 000 bytes and embedded
+-- that. The cut was silent: no marker, no column, no log line, nothing on the
+-- row to say it had happened. Everything past it reached no vector, so it
+-- reached no `query_episodes` result and no `## Similar prior work` prefetch —
+-- a seat asked to do again what it had already done recalled nothing, from its
+-- own memory of doing it.
+--
+-- What was lost was SEARCHABILITY and never the text: `task_summary` has
+-- always held the whole thing, and `Episodes.Recent`, `Episodes.ForConversation`
+-- and the `query_episodes` builtin's recent and conversation modes all return
+-- it in full. Only the similarity path could not reach past the cut.
+--
+-- The fix is the one `schema/replicated/0015` already made for the knowledge
+-- corpus: split the text into overlapping windows, embed every window, and
+-- score the row as its NEAREST window. See internal/learning/episodist.go for
+-- the window size and why it is what it is.
+--
+-- # Why a count column, and not arithmetic on the blob's length
+--
+-- The vectors are packed end to end in the existing BLOB, so the decoder has to
+-- know where to split. `length(embedding) / (4 * width)` looks like it answers
+-- that and does not: the width is a RUNTIME property (see the `embedding`
+-- column's own comment above), so a row embedded by one model and read under
+-- another can divide EXACTLY and yield a window count that is arithmetically
+-- clean and completely wrong — three 1 536-wide vectors are 18 432 bytes, which
+-- is also six 768-wide ones. Read that way, recall would hand
+-- `vector_distance_cos` six slices of somebody else's embedding space and rank
+-- a seat's memory on the result, silently.
+--
+-- With the count on the row, `length(embedding) = embedding_windows * ?` is an
+-- exact width check again — the same guard the single-vector shape had, and the
+-- reason it exists is unchanged: a company that changes embedding model must
+-- find recall SKIPPING the rows it cannot compare rather than erroring on them
+-- or scoring them on nonsense.
+--
+-- # Why DEFAULT 1, and why nothing is re-embedded
+--
+-- Every row written before this migration holds exactly one vector, so 1 is not
+-- a fallback here — it is the true value for all of them, and the column is a
+-- correct statement about the existing table the moment it is added.
+--
+-- Those rows keep the vector they have, which covers their first 8 000 bytes
+-- and no more. That is deliberate. NOTHING RE-EMBEDS AN EPISODE: unlike the
+-- knowledge corpus, which has a fleet-singleton duty that refills `kb_vectors`
+-- from the sources on its own sweep, an episode's vector is made once by the
+-- episodist as the turn's record is written and never revisited. So clearing
+-- these embeddings to force a rebuild would not force one — it would delete the
+-- only vector those rows will ever have, and trade a long episode whose tail is
+-- unsearchable for one that is unsearchable entirely. New episodes are whole
+-- from here.
+--
+-- # Why ALTER rather than the rebuild 0015 needed
+--
+-- `replicated/0015` had to drop and recreate its table because the window
+-- ordinal joined its PRIMARY KEY and SQLite cannot add a column to a key in
+-- place. Nothing here changes the key: the windows live inside the blob the row
+-- already has, one row per episode still, so this is one added column over a
+-- table whose every existing row is already correct under it.
+--
+-- One row per episode is also what keeps a seat's memory replicable. Episode
+-- rows ride the memsync COMPACTED CHANGELOG (one subject per row, one retained
+-- message per subject, and deliberately NO deletes — see
+-- internal/learning/memsync), so a side table keyed by (episode, window) would
+-- need a second subject family whose rows could never shrink. Packed into the
+-- row, every window of an episode is replaced atomically by the one message
+-- that carries the row.
+ALTER TABLE episodes ADD COLUMN embedding_windows INTEGER NOT NULL DEFAULT 1;
+
+-- The widest window set a seat holds, answered without a scan.
+--
+-- Recall generates one ordinal per window before it can ask for a distance per
+-- window, so it has to know how many — and the honest question is
+-- MAX(embedding_windows) for the seat. Asked over the per-seat time index that
+-- is a walk of every one of the seat's rows to read one integer, which is the
+-- same work the recall scan itself does; asked from INSIDE the recall
+-- statement it was re-run per row and cost 8.5 seconds where the single-vector
+-- statement cost 11 ms (measured, 2 000 episodes at 1 536 dimensions). Over
+-- this index it is one seek, measured at 0.14 ms on the same fixture.
+--
+-- PARTIAL ON `embedding_windows > 1`, which is what keeps it nearly empty: a
+-- summary short enough to be one window is almost every summary, so the only
+-- rows here are the long ones. It still answers exactly, because every row it
+-- excludes has a count of 1 (one vector) or 0 (no vector), and a seat with no
+-- row in the index therefore has a maximum of 1 — which is what recall's
+-- COALESCE supplies. Same trade episodes_consolidated_idx and
+-- episodes_agent_conversation_idx make above, for the same reason.
+CREATE INDEX episodes_agent_windows_idx
+    ON episodes (agent_handle, embedding_windows)
+    WHERE embedding_windows > 1;

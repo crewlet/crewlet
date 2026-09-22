@@ -38,6 +38,14 @@ func ep(id, handle string, at time.Time) learning.Episode {
 	}
 }
 
+// win is one vector as the single-window set [learning.Episode.Embeddings]
+// holds.
+//
+// Almost every episode has exactly this shape — a summary short enough to be
+// one window is almost every summary — so the tests that are not ABOUT
+// windowing say so once here rather than spelling the extra slice each time.
+func win(v ...float32) [][]float32 { return [][]float32{v} }
+
 func mustAppend(t *testing.T, e *learning.Episodes, episode learning.Episode) bool {
 	t.Helper()
 	wrote, err := e.Append(context.Background(), episode)
@@ -205,7 +213,7 @@ func TestAnEmbeddingSurvivesAndAMissingOneIsNotAFailure(t *testing.T) {
 	// it.
 	e := episodes(t)
 	withVec := ep("a", "ceo", base)
-	withVec.Embedding = []float32{0.1, 0.2, 0.3, 0.4}
+	withVec.Embeddings = win(0.1, 0.2, 0.3, 0.4)
 	mustAppend(t, e, withVec)
 	mustAppend(t, e, ep("b", "ceo", base.Add(time.Minute)))
 
@@ -217,11 +225,12 @@ func TestAnEmbeddingSurvivesAndAMissingOneIsNotAFailure(t *testing.T) {
 	for _, g := range got {
 		byID[g.ID] = g
 	}
-	if len(byID["a"].Embedding) != 4 || byID["a"].Embedding[0] != 0.1 {
-		t.Errorf("embedding = %v", byID["a"].Embedding)
+	if len(byID["a"].Embeddings) != 1 || len(byID["a"].Embeddings[0]) != 4 ||
+		byID["a"].Embeddings[0][0] != 0.1 {
+		t.Errorf("embeddings = %v", byID["a"].Embeddings)
 	}
-	if byID["b"].Embedding != nil {
-		t.Errorf("an absent embedding came back as %v", byID["b"].Embedding)
+	if byID["b"].Embeddings != nil {
+		t.Errorf("an absent embedding came back as %v", byID["b"].Embeddings)
 	}
 }
 
@@ -233,13 +242,13 @@ func TestAWrongWidthEmbeddingIsRefusedAtWrite(t *testing.T) {
 	// silently stops working, with no error anywhere.
 	e := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	bad := ep("a", "ceo", base)
-	bad.Embedding = []float32{0.1, 0.2}
+	bad.Embeddings = win(0.1, 0.2)
 	if _, err := e.Append(context.Background(), bad); err == nil {
 		t.Fatal("a wrong-width embedding was written")
 	}
 	// The counterfactual: the configured width goes in.
 	good := ep("b", "ceo", base)
-	good.Embedding = []float32{0.1, 0.2, 0.3, 0.4}
+	good.Embeddings = win(0.1, 0.2, 0.3, 0.4)
 	if _, err := e.Append(context.Background(), good); err != nil {
 		t.Errorf("a correctly-sized embedding was refused: %v", err)
 	}
@@ -249,11 +258,11 @@ func TestRecallRanksBySimilarity(t *testing.T) {
 	t.Parallel()
 	e := episodes(t)
 	near := ep("near", "ceo", base)
-	near.Embedding = []float32{1, 0, 0, 0}
+	near.Embeddings = win(1, 0, 0, 0)
 	far := ep("far", "ceo", base.Add(time.Minute))
-	far.Embedding = []float32{0, 1, 0, 0}
+	far.Embeddings = win(0, 1, 0, 0)
 	mid := ep("mid", "ceo", base.Add(2*time.Minute))
-	mid.Embedding = []float32{0.9, 0.4, 0, 0}
+	mid.Embeddings = win(0.9, 0.4, 0, 0)
 	for _, x := range []learning.Episode{near, far, mid} {
 		mustAppend(t, e, x)
 	}
@@ -289,7 +298,7 @@ func TestRecallSkipsRowsWithNoEmbedding(t *testing.T) {
 	e := episodes(t)
 	mustAppend(t, e, ep("blind", "ceo", base))
 	seen := ep("seen", "ceo", base)
-	seen.Embedding = []float32{1, 0, 0, 0}
+	seen.Embeddings = win(1, 0, 0, 0)
 	mustAppend(t, e, seen)
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
@@ -309,11 +318,11 @@ func TestRecallIsScopedToTheSeatAndToRawEpisodes(t *testing.T) {
 	// one turn that did all of them.
 	e := episodes(t)
 	mine := ep("mine", "ceo", base)
-	mine.Embedding = []float32{1, 0, 0, 0}
+	mine.Embeddings = win(1, 0, 0, 0)
 	theirs := ep("theirs", "cto", base)
-	theirs.Embedding = []float32{1, 0, 0, 0}
+	theirs.Embeddings = win(1, 0, 0, 0)
 	cluster := ep("cluster", "ceo", base)
-	cluster.Embedding = []float32{1, 0, 0, 0}
+	cluster.Embeddings = win(1, 0, 0, 0)
 	cluster.Kind = learning.KindCompacted
 	cluster.Count = 12
 	for _, x := range []learning.Episode{mine, theirs, cluster} {
@@ -345,7 +354,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 	e := episodes(t)
 	for i, id := range []string{"a", "b", "c"} {
 		x := ep(id, "ceo", base.Add(time.Duration(i)*time.Minute))
-		x.Embedding = []float32{1, 0, 0, 0}
+		x.Embeddings = win(1, 0, 0, 0)
 		mustAppend(t, e, x)
 	}
 	first, err := e.Recall(context.Background(), learning.RecallQuery{
@@ -377,7 +386,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 	same := episodes(t)
 	for _, id := range []string{"m", "a", "z"} {
 		x := ep(id, "ceo", base)
-		x.Embedding = []float32{1, 0, 0, 0}
+		x.Embeddings = win(1, 0, 0, 0)
 		mustAppend(t, same, x)
 	}
 	tied, err := same.Recall(context.Background(), learning.RecallQuery{
@@ -397,6 +406,54 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 		if got := hitIDs(again); !slices.Equal(got, want) {
 			t.Fatalf("fully-tied ranking is unstable: %v then %v", want, got)
 		}
+	}
+}
+
+// THE WIDTH GUARD IS EXACT, and the window count is what makes it exact again.
+//
+// A row's blob is N vectors packed end to end, so "is this row in the query's
+// embedding space" is `length(embedding) = embedding_windows * width` and
+// nothing weaker. Divisibility is the weaker one that looks right: a
+// three-window row of 4-wide vectors is 48 bytes, which divides exactly by a
+// 2-wide probe — so a company that changed embedding model would find rows
+// from the old space admitted, sliced along boundaries that are not theirs,
+// and scored by vector_distance_cos on the result.
+//
+// The cost is not a wrong number in a field nobody reads. The bad row SORTS,
+// and it spends a slot of the LIMIT before the Go pass can refuse it — so a
+// real memory is pushed out of the answer by a row that cannot be an answer at
+// all, which is a recall that silently under-delivers rather than one that
+// errors. That is exactly the failure [store.DB.EncodeVector] refuses
+// non-finite vectors to avoid, arriving by the other door.
+func TestAnEpisodeFromAnotherEmbeddingSpaceNeverSpendsARecallSlot(t *testing.T) {
+	t.Parallel()
+	// No configured width, which is what lets one store hold rows from two
+	// embedding spaces — the state a company that changed model is in.
+	e := episodes(t)
+
+	// The row from the OLD space: three 4-wide windows, 48 bytes. Its first
+	// two floats are the query's own vector, so read at the query's width
+	// it would score a PERFECT match and sort ahead of everything.
+	wrongSpace := ep("wrong-space", "ceo", base.Add(time.Hour))
+	wrongSpace.Embeddings = [][]float32{{1, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}
+	// The row that genuinely answers, in the current 2-wide space, at a
+	// similarity above the floor but below a perfect match.
+	current := ep("real", "ceo", base)
+	current.Embeddings = win(0.9, 0.436)
+	for _, x := range []learning.Episode{wrongSpace, current} {
+		mustAppend(t, e, x)
+	}
+
+	hits, err := e.Recall(context.Background(), learning.RecallQuery{
+		Handle: "ceo", Embedding: []float32{1, 0}, Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Episode.ID != "real" {
+		t.Fatalf("hits = %v, want the one row in this embedding space — a row "+
+			"from another one took the slot and was then dropped in Go, so the "+
+			"seat recalled nothing", hitIDs(hits))
 	}
 }
 
@@ -420,15 +477,15 @@ func TestUndefinedSimilarityIsSkippedRatherThanRanked(t *testing.T) {
 	// and a provider returning a non-finite value.
 	e := episodes(t)
 	good := ep("good", "ceo", base)
-	good.Embedding = []float32{1, 0, 0, 0}
+	good.Embeddings = win(1, 0, 0, 0)
 	zero := ep("zero", "ceo", base)
-	zero.Embedding = []float32{0, 0, 0, 0}
+	zero.Embeddings = win(0, 0, 0, 0)
 	nan := ep("nan", "ceo", base)
-	nan.Embedding = []float32{float32(math.NaN()), 0, 0, 0}
+	nan.Embeddings = win(float32(math.NaN()), 0, 0, 0)
 	inf := ep("inf", "ceo", base)
-	inf.Embedding = []float32{float32(math.Inf(1)), 0, 0, 0}
+	inf.Embeddings = win(float32(math.Inf(1)), 0, 0, 0)
 	narrow := ep("narrow", "ceo", base)
-	narrow.Embedding = []float32{1, 0}
+	narrow.Embeddings = win(1, 0)
 	for _, x := range []learning.Episode{good, zero, nan, inf, narrow} {
 		mustAppend(t, e, x)
 	}
@@ -514,10 +571,10 @@ func TestAPoisonedEmbeddingDoesNotCostARealHit(t *testing.T) {
 	t.Parallel()
 	e := episodes(t)
 	poison := ep("poison", "ceo", base.Add(3*time.Minute))
-	poison.Embedding = []float32{float32(math.NaN()), 0, 0, 0}
+	poison.Embeddings = win(float32(math.NaN()), 0, 0, 0)
 	for i, v := range [][]float32{{1, 0, 0, 0}, {0.99, 0.1, 0, 0}, {0.95, 0.2, 0, 0}} {
 		good := ep(fmt.Sprintf("good-%d", i), "ceo", base.Add(time.Duration(i)*time.Minute))
-		good.Embedding = v
+		good.Embeddings = win(v...)
 		mustAppend(t, e, good)
 	}
 	mustAppend(t, e, poison)
@@ -547,7 +604,7 @@ func TestANonFiniteEmbeddingCostsTheVectorAndNotTheEpisode(t *testing.T) {
 	t.Parallel()
 	e := episodes(t)
 	bad := ep("bad", "ceo", base)
-	bad.Embedding = []float32{1, float32(math.Inf(-1)), 0, 0}
+	bad.Embeddings = win(1, float32(math.Inf(-1)), 0, 0)
 	if _, err := e.Append(context.Background(), bad); err != nil {
 		t.Fatalf("a non-finite embedding failed the whole write: %v", err)
 	}
@@ -558,7 +615,7 @@ func TestANonFiniteEmbeddingCostsTheVectorAndNotTheEpisode(t *testing.T) {
 	if len(got) != 1 || got[0].ID != "bad" {
 		t.Fatalf("recent = %v, want the episode written without its vector", ids(got))
 	}
-	if got[0].Embedding != nil {
-		t.Errorf("the non-finite vector was stored as %v", got[0].Embedding)
+	if got[0].Embeddings != nil {
+		t.Errorf("the non-finite vector was stored as %v", got[0].Embeddings)
 	}
 }

@@ -901,6 +901,67 @@ func (l *Lifecycle) sweepOrphans(ctx context.Context, handle string, orphans []E
 	return n, nil
 }
 
+// patternLogDetail is how much of a compacted row's pattern sentence reaches
+// the pass's log line.
+//
+// ONE SHORT SENTENCE IS WHAT WAS ASKED FOR. [CompactorSystemPrompt] requires
+// `common_task_pattern` to be "declarative and short", and 120 bytes is around
+// twenty English words — so in the ordinary case this cuts nothing at all, and
+// what it bounds is the answer that ignored the instruction. That is the whole
+// job here: `episode_cluster_compacted` exists so an operator watching a pass
+// can tell WHICH pattern was folded, beside the three counts on the same line,
+// and a model that pasted a document into that field would bury every one of
+// them.
+//
+// WHERE THE WHOLE SENTENCE IS, which is what makes a cut legitimate at all.
+// The `episode_id` on the same log line says WHICH row is meant, and there
+// are TWO copies of that row — named separately because they fail differently:
+//
+//   - The `common_task_pattern` column of the row this transaction just
+//     committed, in this node's own store.
+//   - The SEAT'S MEMORY CHANGELOG. `episodes` is one of the tables
+//     internal/learning/memsync carries, and its registry names
+//     `common_task_pattern` among the columns; a compacted row is an INSERT,
+//     so the node's next publish cycle — or the flush a seat gets when it is
+//     released — puts the whole row on the memory stream under its own
+//     subject. That stream retains one message per subject and carries no age
+//     bound, so what sits there is the row's current value for as long as the
+//     stream lives, and a memory delete deliberately does not travel to
+//     remove it. It is the better of the two routes back: it is readable from
+//     a running fleet, while the column sits in a file the engine holds
+//     exclusively while it runs. A node with no broker or no store publishes
+//     nothing (memsync.New answers nil), and there the column is alone.
+//
+// NOTHING RENDERS THE COLUMN BACK TODAY, which is the honest other half and
+// was checked rather than assumed. `query_episodes` prints an episode's
+// `task_summary`, and a compacted row has none — [Lifecycle.buildCompacted]
+// writes the pattern and leaves the turn-shaped prose columns empty, because
+// this row is not a turn. Recall excludes compacted rows by default
+// ([RecallQuery.Kinds]). The projection the dashboard's memory rows are built
+// from leaves the column out too — it ships the turn-shaped fields and a
+// `compacted` flag, so a folded row reads there as an empty summary with a
+// count. So reading the sentence back means going to one of the two copies
+// above rather than to a screen. That is a gap in the READ side rather than a
+// reason to widen this budget — a log line sized to carry a value nobody can
+// look up is a log line pretending to be a store.
+//
+// Contrast [modelAnswerDetail], which is larger for exactly the opposite
+// reason — what that one quotes has no copy at all, which is why its own
+// answer is a debug line carrying the value whole.
+const patternLogDetail = 120
+
+// patternForLog previews a compacted row's pattern for a log field.
+//
+// Through [textcut.Ellipsis]: bytes, cut on a rune boundary, and MARKED. The
+// marker is the load-bearing part — an operator comparing this line against
+// the row has to be able to tell a pattern the model wrote short from one this
+// line shortened, and a silently clipped sentence reads as the whole claim.
+//
+// A function rather than the budget spelled at the call site, because the
+// budget is a decision with a reason (see [patternLogDetail]) and a number
+// typed into a log call is a decision nobody can find again.
+func patternForLog(pattern string) string { return textcut.Ellipsis(pattern, patternLogDetail) }
+
 // foldCluster summarises one cluster and replaces its members with the
 // summary, keeping the exemplars.
 //
@@ -939,6 +1000,25 @@ func (l *Lifecycle) foldCluster(ctx context.Context, handle string, cluster []Ep
 	if err != nil {
 		log.WarnContext(ctx, "episode_cluster_not_summarised",
 			"agent_handle", handle, "cluster_size", len(cluster), "error", err)
+		// THE WHOLE ANSWER, ON ITS OWN LINE. The message above quotes
+		// [modelAnswerDetail] bytes of it, and nothing else in this
+		// system holds a model answer that failed to parse: the summary row
+		// is never written, and no event carries a completion's content. So
+		// without this line the quote in that message would be the value
+		// being destroyed rather than shortened, which is the one thing a
+		// cut here must not do.
+		//
+		// DEBUG, because it is prose in a log field: bounded only by the
+		// call's own max_tokens (`compaction_budget_tokens`, 4000 by
+		// default — on the order of 16 KB), which is far too much for the
+		// line an operator has to SEE. The warning above is that line; this
+		// is the one they turn on once they have seen it.
+		var undecodable *UndecodableAnswerError
+		if errors.As(err, &undecodable) {
+			log.DebugContext(ctx, "episode_summary_undecodable",
+				"agent_handle", handle, "cluster_size", len(cluster),
+				"answer", undecodable.Answer)
+		}
 		return 0, false, nil
 	}
 
@@ -958,10 +1038,27 @@ func (l *Lifecycle) foldCluster(ctx context.Context, handle string, cluster []Ep
 		return 0, false, err
 	}
 	log.InfoContext(ctx, "episode_cluster_compacted",
-		"agent_handle", handle, "cluster_size", len(cluster),
-		"exemplars_kept", len(exemplars), "raw_deleted", deleted,
-		"pattern", textcut.Ellipsis(row.CommonTaskPattern, 120))
+		compactedLogFields(handle, row, len(cluster), len(exemplars), deleted)...)
 	return deleted, true, nil
+}
+
+// compactedLogFields is the `episode_cluster_compacted` line, as values.
+//
+// A FUNCTION BECAUSE TWO OF THESE FIELDS ARE A PAIR. `pattern` is a preview
+// (see [patternForLog]) and `episode_id` is the row it was previewed from, so
+// a line carrying the first without the second is a shortened sentence with
+// nowhere to read the rest — which is the one shape a cut must never take. An
+// argument list assembled inside a log call is a pair no test can hold; this
+// one is held by TestTheCompactedLogLineNamesTheRowItPreviews.
+func compactedLogFields(handle string, row Episode, clusterSize, exemplarsKept int, rawDeleted int64) []any {
+	return []any{
+		"agent_handle", handle,
+		"cluster_size", clusterSize,
+		"exemplars_kept", exemplarsKept,
+		"raw_deleted", rawDeleted,
+		"episode_id", row.ID,
+		"pattern", patternForLog(row.CommonTaskPattern),
+	}
 }
 
 // splitExemplars picks the members that stay raw and the ones that go.
@@ -1064,9 +1161,15 @@ func (l *Lifecycle) buildCompacted(handle string, cluster, exemplars []Episode, 
 		// skills_used stays empty. A union over the members would make
 		// one row claim every skill the pattern ever touched, and the
 		// column is per-turn everywhere else that reads it.
-		ReviewOutcome:     outcome,
-		Duration:          total,
-		Embedding:         s.Embedding,
+		ReviewOutcome: outcome,
+		Duration:      total,
+		// ONE WINDOW, and it is not a special case that got left behind:
+		// this vector is over the compactor's own summary sentence, which
+		// the prompt requires to be short, so there is nothing to window.
+		// [Episode.Embeddings] holds a set because a TURN's summary is
+		// unbounded; a summary of summaries is bounded by the model call
+		// that produced it.
+		Embeddings:        oneWindow(s.Embedding),
 		Kind:              KindCompacted,
 		Count:             len(cluster),
 		WorkKey:           foldKey(ids),
@@ -1168,35 +1271,39 @@ func toolJaccard(a, b []string) float64 {
 
 // insertEpisodeTx writes one episode inside a caller's transaction.
 //
-// It binds [episodeInsertSQL], the same statement Episodes.Append uses, so a
-// summary row is written through exactly the columns every reader scans. The
-// conflict clause on that statement is what makes a repeated fold a no-op.
+// It binds [episodeInsertSQL] through [episodeInsertArgs], the same statement
+// and the same argument list Episodes.Append uses, so a summary row is written
+// through exactly the columns every reader scans. That used to be a promise in
+// this comment over a second hand-written list of twenty-five positional binds;
+// it is one list now, which is what makes the promise checkable. The conflict
+// clause on the statement is what makes a repeated fold a no-op.
 func insertEpisodeTx(ctx context.Context, tx *sql.Tx, db *store.DB, ep Episode) error {
-	var blob any
-	if len(ep.Embedding) > 0 {
-		packed, err := db.EncodeVector(ep.Embedding)
-		if err != nil {
-			// The summary is what the LLM call bought; its vector only
-			// decides whether recall can reach the row. Refusing the row
-			// here would spend the call again next pass and fail the same
-			// way, so the row lands unembedded and the reason is logged.
-			log.WarnContext(ctx, "compacted_episode_not_embedded",
-				"episode", ep.ID, "error", err)
-		} else {
-			blob = packed
-		}
+	blob, windows, err := (&Episodes{db: db}).encodeEmbedding(ep.Embeddings)
+	if err != nil {
+		// The summary is what the LLM call bought; its vector only
+		// decides whether recall can reach the row. Refusing the row
+		// here would spend the call again next pass and fail the same
+		// way, so the row lands unembedded and the reason is logged.
+		log.WarnContext(ctx, "compacted_episode_not_embedded",
+			"episode", ep.ID, "error", err)
+		blob, windows = nil, 0
 	}
-	_, err := tx.ExecContext(ctx, episodeInsertSQL,
-		ep.ID, ep.Handle, ep.Role, ep.TaskID, ep.TurnID,
-		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
-		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
-		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob,
-		string(ep.Kind), ep.Count, jsonList(ep.ExemplarTurnIDs),
-		store.NullText(ep.ConsolidatedInto), ep.CommonTaskPattern, ep.CommonOutcome,
-		ep.SuccessRate, jsonList(ep.SubjectsInvolved), ep.NotablePatterns,
-		store.NullText(ep.WorkKey), store.NullText(ep.ConversationKey),
-	)
+	_, err = tx.ExecContext(ctx, episodeInsertSQL, episodeInsertArgs(ep, blob, windows)...)
 	return err
+}
+
+// oneWindow wraps a single vector as the one-window set [Episode.Embeddings]
+// holds, and answers nil for an absent one.
+//
+// A named helper rather than a literal at each call site, because [][]float32
+// has two different empty values — nil and a slice holding one empty vector —
+// and only the first is what "there is no embedding" means to the writer and
+// to recall.
+func oneWindow(v []float32) [][]float32 {
+	if len(v) == 0 {
+		return nil
+	}
+	return [][]float32{v}
 }
 
 // deleteEpisodes removes rows by id, SCOPED TO THE SEAT.
@@ -1350,13 +1457,58 @@ Rules:
   the agent will see it as low-signal.
 `
 
+// toolsPerTurnShown clamps how much of one turn's tool sequence reaches the
+// prompt.
+//
+// THE OPENING OF A PROCEDURE IS WHAT DISTINGUISHES IT. Clustering already
+// pooled these turns on the Jaccard overlap of their whole sequences, so the
+// model is not being asked which turns belong together — it is being asked
+// what they have in common, and the first eight calls carry the shape of the
+// work (search, read, comment, hand off) where the tail is usually the same
+// tool repeated. A sequence is bounded only by the turn's round cap
+// (`max_tool_rounds`), so a handful of long turns rendered whole would crowd
+// out the prose in [perTurnDetail] on every other member of the cluster.
+//
+// THE COUNT OF THE REST IS PRINTED beside it — "(+N more)" — because the one
+// thing the model must not read is a clipped procedure as a short one. And
+// nothing is lost at the moment this renders: each member's whole sequence is
+// its own `tool_sequence` column, which is what the fold about to happen is
+// summarising away by design.
+//
+// Eight rather than a number typed into the loop: it was spelled twice, once
+// as the slice bound and once as the subtrahend under it, which is a pair that
+// can drift into a "(+N more)" naming the wrong N.
+const toolsPerTurnShown = 8
+
 // perTurnDetail clamps how much of one turn's prose reaches the prompt.
 //
 // A cluster can be as large as the batch (200 turns), and every turn renders
-// four lines. At 280 characters each for the task and its summary that is roughly
+// four lines. At 280 BYTES each for the task and its summary that is roughly
 // 120 KB, about 30k tokens, in a single call — affordable once a month per
 // seat. Without the clamp one turn carrying a pasted stack trace sets the size
 // of the call.
+//
+// BYTES AND NOT CHARACTERS, which is what this said until the unit was checked
+// against the function it is handed to: [oneLine] spends it through
+// [textcut.Ellipsis], whose budget is bytes (its package doc contrasts itself
+// with ledger.Elide, which counts runes, for exactly this confusion). The
+// arithmetic above was always a byte budget — 120 KB is what bounds the call —
+// so the number is right and only the word was wrong. On prose that is not
+// ASCII the clamp therefore falls sooner than a reader counting characters
+// expects, and a summary in CJK reaches the compactor at about a third of the
+// words an English one does. That is the honest trade for a bound this layer
+// can actually count: a token budget needs a tokenizer per provider and a rune
+// budget bounds nothing about the size of the call.
+//
+// WHERE THE WHOLE PROSE IS: in the `task_summary` and `plan_summary` columns
+// of the very rows this pass is reading, for as long as those rows exist. What
+// ends that is the fold itself, which deletes every member but the exemplars —
+// deliberately, because deleting them IS compaction, and this render is the
+// prompt asking for the summary that replaces them. So the clamp costs
+// nothing: at the moment it happens the whole text is one column away, and
+// what removes it afterwards is the operation, not the clamp. The cut is
+// MARKED by Ellipsis, which is what stops the model reading a clipped stack
+// trace as a short one and writing that down as the pattern.
 const perTurnDetail = 280
 
 // RenderCluster is the user half of the compaction prompt: the cluster as a
@@ -1373,8 +1525,8 @@ func RenderCluster(c Cluster) string {
 			// tool sequence reads as a shorter procedure rather than a
 			// clipped one — which is the pattern it then writes down.
 			shown := ep.ToolSequence
-			tools = strings.Join(shown[:min(8, len(shown))], ", ")
-			if dropped := len(shown) - 8; dropped > 0 {
+			tools = strings.Join(shown[:min(toolsPerTurnShown, len(shown))], ", ")
+			if dropped := len(shown) - toolsPerTurnShown; dropped > 0 {
 				tools += fmt.Sprintf(" (+%d more)", dropped)
 			}
 		}
@@ -1409,6 +1561,10 @@ func oneLine(s string) string {
 // object into one struct throws it away whenever any other field comes back
 // the wrong shape — a model answering "subjects_involved": "nobody" instead of
 // a list would cost the summary the LLM call just bought.
+//
+// A failure is an [UndecodableAnswerError] CARRYING THE ANSWER WHOLE; only its
+// message is bounded. Nothing else keeps an answer that did not parse, so this
+// return value is the only copy of it anywhere.
 func ParseSummary(raw string) (Summary, error) {
 	text := strings.TrimSpace(raw)
 	for _, candidate := range modelJSONCandidates(text) {
@@ -1426,8 +1582,39 @@ func ParseSummary(raw string) (Summary, error) {
 			NotablePatterns:   jsonText(obj["notable_patterns"]),
 		}, nil
 	}
-	return Summary{}, fmt.Errorf("learning: no JSON object in the compactor's answer (%s)",
-		textcut.Ellipsis(text, 200))
+	return Summary{}, &UndecodableAnswerError{Answer: raw}
+}
+
+// UndecodableAnswerError reports an answer from the compactor that held no
+// JSON object, and CARRIES THAT ANSWER WHOLE.
+//
+// The shortening is in the MESSAGE and nowhere else. Nothing in this system
+// stores a model answer that failed to parse — the summary row is never
+// written, and no event carries a completion's content — so this value is the
+// only copy in existence, and an error that quoted 400 bytes and dropped the
+// rest would be deleting the one thing a person debugging it needs. A caller
+// reaches the rest with errors.As; [Lifecycle.foldCluster] is the caller that
+// does.
+type UndecodableAnswerError struct {
+	// Answer is the model's reply exactly as it arrived, whitespace and all.
+	Answer string
+}
+
+// Error quotes at most [modelAnswerDetail] bytes of the answer, marked where
+// it was cut — the package's one budget for what a model's answer may spend
+// in something a person reads, and its doc says why 400.
+//
+// It only has to CLASSIFY the failure — prose instead of JSON, an apology
+// around a fence, an empty answer, an object that breaks halfway — because the
+// answer itself is not lost to it: the error carries it whole, and
+// [Lifecycle.foldCluster] logs that at debug.
+//
+// Trimmed for the quote only, never on [UndecodableAnswerError.Answer]: a
+// model that answered with three hundred bytes of newlines would otherwise
+// spend the whole budget proving it, while the field keeps what arrived.
+func (e *UndecodableAnswerError) Error() string {
+	return fmt.Sprintf("learning: no JSON object in the compactor's answer (%s)",
+		textcut.Ellipsis(strings.TrimSpace(e.Answer), modelAnswerDetail))
 }
 
 // jsonText reads one string field, answering "" for absent or wrong-typed.

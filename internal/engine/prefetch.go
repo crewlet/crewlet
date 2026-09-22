@@ -40,7 +40,7 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 		SummarizeMaxTokens: company.Config.Learning.Reflect.SummarizeMaxTokens,
 	}
 	if db := e.backends.Store; db != nil {
-		src.Diary = learning.NewDiary(db)
+		src.Diary = e.diary(db)
 		src.Episodes = learning.NewEpisodes(db)
 		src.Counterparties = learning.NewCounterparties(db)
 		src.Skills = learning.NewSkills(db)

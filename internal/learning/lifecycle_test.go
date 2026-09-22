@@ -1172,8 +1172,8 @@ func TestACompactedRowRoundTripsThroughTheEpisodeScanner(t *testing.T) {
 	if c.NotablePatterns != "escalated twice" || c.CommonOutcome != "done" {
 		t.Errorf("prose fields: %+v", c)
 	}
-	if len(c.Embedding) != 4 || c.Embedding[3] != 0.4 {
-		t.Errorf("embedding = %v", c.Embedding)
+	if len(c.Embeddings) != 1 || len(c.Embeddings[0]) != 4 || c.Embeddings[0][3] != 0.4 {
+		t.Errorf("embeddings = %v, want the summary's one window", c.Embeddings)
 	}
 	if c.ConsolidatedInto != "" || c.ConversationKey != "" {
 		t.Errorf("a summary spans conversations and belongs to no skill: %+v", c)
@@ -1211,8 +1211,8 @@ func TestASummaryLandsEvenWhenItsVectorCannot(t *testing.T) {
 	if len(compacted) != 1 || compacted[0].CommonTaskPattern != "still useful" {
 		t.Fatalf("summary = %+v", compacted)
 	}
-	if compacted[0].Embedding != nil {
-		t.Errorf("embedding = %v, want none stored", compacted[0].Embedding)
+	if compacted[0].Embeddings != nil {
+		t.Errorf("embeddings = %v, want none stored", compacted[0].Embeddings)
 	}
 }
 
@@ -1695,7 +1695,7 @@ func BenchmarkRecallScan(b *testing.B) {
 			}
 			for i := range n {
 				ep := rawEp(fmt.Sprintf("e%04d", i), t0.Add(time.Duration(i)*time.Minute))
-				ep.Embedding = vec()
+				ep.Embeddings = [][]float32{vec()}
 				if _, err := e.Append(b.Context(), ep); err != nil {
 					b.Fatal(err)
 				}
@@ -1704,6 +1704,77 @@ func BenchmarkRecallScan(b *testing.B) {
 			b.ResetTimer()
 			for b.Loop() {
 				if _, err := e.Recall(context.Background(), q); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkRecallOneLongEpisode is the OTHER axis of the same latency budget:
+// not how many episodes a seat has, but how many WINDOWS its longest one was
+// embedded in.
+//
+// It exists because BenchmarkRecallScan cannot see this. Every row it seeds is
+// one window, which is the shape of almost every episode — so the fixture that
+// documents the per-turn cost is exactly the fixture in which the window count
+// is invisible. The number below is one 150-window episode (a ~600 KB task
+// summary, the upper end [DefaultEmbedTimeout]'s own arithmetic says a budget
+// covers) among 2 000 ordinary rows. Re-measured at the pin, 10 iterations:
+//
+//	no long row      10.3 ms
+//	one at 20        10.5 ms
+//	one at 150       24.9 ms
+//
+// Folded into ONE branch — every row taking the ordinal subquery rather than
+// only the multi-window ones — the same three cells are 12.2 ms, 17.5 ms and
+// 61.8 ms: the long row taxes every OTHER row in the seat, because `ord` is as
+// long as the widest episode and each candidate re-scans it to learn that it
+// has one window. A 20-window episode is a ~70 KB summary and costs 44% of
+// every recall that seat runs until the fold takes it. See the plan comment in
+// Recall.
+//
+// The residue at 150 is that row's own arithmetic and is quadratic in its
+// windows: substr over a packed blob loads the whole blob per call.
+func BenchmarkRecallOneLongEpisode(b *testing.B) {
+	const dim = 1536
+	for _, windows := range []int{0, 20, 150} {
+		b.Run(fmt.Sprint(windows), func(b *testing.B) {
+			db, err := store.Open(b.Context(), filepath.Join(b.TempDir(), "l.db"),
+				store.Options{EmbeddingDim: dim})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.Cleanup(func() { _ = db.Close() })
+			e := NewEpisodes(db)
+			rng := rand.New(rand.NewPCG(1, 2))
+			vec := func() []float32 {
+				v := make([]float32, dim)
+				for i := range v {
+					v[i] = rng.Float32()
+				}
+				return v
+			}
+			for i := range 2000 {
+				ep := rawEp(fmt.Sprintf("e%04d", i), t0.Add(time.Duration(i)*time.Minute))
+				ep.Embeddings = [][]float32{vec()}
+				if _, err := e.Append(b.Context(), ep); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if windows > 0 {
+				long := rawEp("long", t0.Add(3000*time.Minute))
+				for range windows {
+					long.Embeddings = append(long.Embeddings, vec())
+				}
+				if _, err := e.Append(b.Context(), long); err != nil {
+					b.Fatal(err)
+				}
+			}
+			q := RecallQuery{Handle: "ceo", Embedding: vec(), Limit: 5}
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := e.Recall(b.Context(), q); err != nil {
 					b.Fatal(err)
 				}
 			}

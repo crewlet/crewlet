@@ -416,3 +416,108 @@ func TestTrimmingASeatUnderTheCapChangesNothing(t *testing.T) {
 		t.Fatalf("seat holds %d entries, want 3", len(rows))
 	}
 }
+
+// embeddingDiary is a diary with a vector backend attached, the way the
+// engine builds every diary it writes through.
+func embeddingDiary(t *testing.T, embed learning.Embed) *learning.Diary {
+	t.Helper()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "e.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return learning.NewDiary(db, learning.WithEmbedding(embed))
+}
+
+// A note is embedded ON THE WAY IN, or recall can never see it.
+//
+// The invariant is the whole of what [learning.WithEmbedding] buys: neither
+// writer produces a vector, so if the store does not make one the row's
+// embedding column is NULL, the recall scan skips it whatever the query, and
+// the failure is silent — the write succeeds and the note simply never comes
+// back. The unembedded half is in the same test on purpose: it is what makes
+// the embedded half a claim about this wiring rather than about recall.
+func TestAWrittenNoteIsEmbeddedSoRecallCanFindIt(t *testing.T) {
+	t.Parallel()
+	embed := func(context.Context, string) ([]float32, error) {
+		return []float32{1, 0, 0, 0}, nil
+	}
+	query := learning.RecallQuery{Embedding: []float32{1, 0, 0, 0}}
+
+	wired := embeddingDiary(t, embed)
+	mustWrite(t, wired, longEntry("kept", "a", "the release train leaves on Thursdays", base))
+	hits, err := wired.Recall(context.Background(), "a", query, base.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Entry.ID != "kept" {
+		t.Errorf("hits = %v, want the note the write embedded", diaryHitIDs(hits))
+	}
+
+	bare := diary(t)
+	mustWrite(t, bare, longEntry("kept", "a", "the release train leaves on Thursdays", base))
+	hits, err = bare.Recall(context.Background(), "a", query, base.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Recall without an embedder: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Errorf("hits = %v, want none: a diary with no embedder stores no vector",
+			diaryHitIDs(hits))
+	}
+}
+
+// An embedder that fails costs the VECTOR, never the NOTE.
+//
+// The note cannot be reconstructed — the turn that produced it is over — and
+// the vector can, by nothing more than a re-embed. A write that failed here
+// would turn a rate-limited provider into lost memory.
+func TestAnEmbedderFailureStillStoresTheNote(t *testing.T) {
+	t.Parallel()
+	d := embeddingDiary(t, func(context.Context, string) ([]float32, error) {
+		return nil, errors.New("rate limited")
+	})
+	mustWrite(t, d, longEntry("kept", "a", "still worth keeping", base))
+
+	got, err := d.Recent(context.Background(), "a", base.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "kept" {
+		t.Fatalf("recent = %v, want the note the embedder could not vectorise",
+			entryIDs(got))
+	}
+	if len(got[0].Embedding) != 0 {
+		t.Errorf("embedding = %v, want none", got[0].Embedding)
+	}
+}
+
+// A VECTOR THE CALLER BROUGHT IS NOT REPLACED.
+//
+// An entry arriving with an embedding is a caller that knows better than the
+// store — a test pinning one, or a backfill re-embedding an old row — and
+// spending a provider call to overwrite it would make the store the authority
+// on a value it was handed.
+func TestAWriterSuppliedVectorIsKeptAndNotReEmbedded(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	d := embeddingDiary(t, func(context.Context, string) ([]float32, error) {
+		calls++
+		return []float32{0, 1, 0, 0}, nil
+	})
+	e := longEntry("mine", "a", "pinned", base)
+	e.Embedding = []float32{1, 0, 0, 0}
+	mustWrite(t, d, e)
+
+	if calls != 0 {
+		t.Errorf("the embedder was called %d times for an entry that had a vector", calls)
+	}
+	hits, err := d.Recall(context.Background(), "a",
+		learning.RecallQuery{Embedding: []float32{1, 0, 0, 0}}, base.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Entry.ID != "mine" {
+		t.Errorf("hits = %v, want the entry ranked on the vector its writer brought",
+			diaryHitIDs(hits))
+	}
+}

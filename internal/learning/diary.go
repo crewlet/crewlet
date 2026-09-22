@@ -30,9 +30,28 @@ const (
 // A note is meant to be re-read in a later turn's prompt, so its cost is paid
 // on every turn that recalls it, not once — and it is read back into the
 // relevance filter's candidate pool as well, which is what makes an unbounded
-// row a bound on nothing. Two thousand characters is a long paragraph and a
-// short page; past that the model is writing a document, and a document
-// belongs in the knowledge base where colleagues can read it too.
+// row a bound on nothing. Two thousand is a long paragraph and a short page;
+// past that the model is writing a document, and a document belongs in the
+// knowledge base where colleagues can read it too.
+//
+// TWO THOUSAND BYTES, WHICH THE NAME DOES NOT SAY. Both enforcers spend it
+// through len() on a Go string — [PersistDecider.write] here and the
+// `reflect_and_persist` builtin's own guard, which takes this constant rather
+// than declaring a second one — so the unit is bytes and the two agree, which
+// is the property this constant exists for. The number is right either way:
+// prose in English is one byte a character, so nothing about the paragraph
+// this is sized against moves. What moves is prose that is not ASCII, where
+// the cap falls at roughly 660 characters of CJK rather than 2 000, and a seat
+// writing in one of those languages is asked to be about a third as long.
+//
+// THE BYTE IS THE UNIT ANY OF THIS CAN HONESTLY COUNT, which is why the fix is
+// not a rune count here. What the cap is really rationing is prompt budget, so
+// the true unit is tokens — and a token count needs a tokenizer per provider,
+// at a boundary that has no provider in it. Between the two proxies, a byte is
+// the one both writers and the store's own column already agree on; a rune
+// count in one writer and a byte count in the other would be precisely the
+// disagreement this constant was hoisted to end. See [perTurnDetail] for the
+// same choice made for the same reason one layer up.
 //
 // HERE rather than beside either writer. There are two — the reflect_and_persist
 // tool and the post-turn PersistDecider — and they disagreed: the tool refused
@@ -73,7 +92,34 @@ type DiaryEntry struct {
 	RetrievalCount  int
 	LastRetrievedAt time.Time
 
+	// Embedding is the vector [Diary.Recall] ranks on.
+	//
+	// FILLED AT THE WRITE, not by the caller: [Diary.Write] embeds
+	// [DiaryEntry.Content] when the diary was built with [WithEmbedding]
+	// and the entry carries no vector of its own. Both writers hand the
+	// store a note and nothing else — [PersistDecider.write] and the
+	// `reflect_and_persist` builtin — so the store is the one place the
+	// rule can be stated once, for the same reason [MaxContentChars] is
+	// stated here rather than beside either of them: a vector one writer
+	// produced and the other did not would make a note's recallability
+	// depend on which path wrote it.
+	//
+	// ONE VECTOR, NOT A WINDOW SET, which is where this differs from
+	// [Episode.Embeddings]: a note is bounded at [MaxContentChars] by every
+	// writer, and that bound is inside [EpisodeWindowBytes] — the window an
+	// episode summary has to be split into — so there is nothing here to
+	// split and no window count to carry.
+	//
+	// EMPTY IS A FIRST-CLASS STATE, and there are two ways to reach it: a
+	// company that configures no providers.embeddings has no embedder to
+	// give the diary, and an embedder that failed on this write leaves the
+	// note without one. Either way the note is written and [Diary.Recall]
+	// then matches nothing for that row, so the `## Personal memory` block's
+	// similarity ∪ recency pool falls back to its recency half. That is the
+	// right way round: the note cannot be reconstructed later and the vector
+	// can, by nothing more than a re-embed.
 	Embedding []float32
+
 	CreatedAt time.Time
 }
 
@@ -83,10 +129,41 @@ func (d DiaryEntry) Expired(now time.Time) bool {
 }
 
 // Diary is a seat's private observation log.
-type Diary struct{ db *store.DB }
+type Diary struct {
+	db *store.DB
+
+	// embed fills [DiaryEntry.Embedding] on the way in, or is nil where a
+	// company configured no vector backend. See [WithEmbedding].
+	embed Embed
+}
+
+// DiaryOption configures a diary at construction.
+type DiaryOption func(*Diary)
+
+// WithEmbedding gives a diary the vector backend its writes need.
+//
+// OPTIONAL RATHER THAN AN ARGUMENT because most callers open a diary to READ
+// — the dashboard's query source, the turn-start prefetch, the retention
+// sweep — and a read takes its query vector from its own caller, so handing
+// those three a provider would be a dependency none of them uses. Inside the
+// engine every diary, read and write alike, is built by one constructor that
+// passes this, so "does this one embed?" is not a per-site decision there.
+//
+// A nil embedder is allowed and means the same thing as omitting the option:
+// a company with no providers.embeddings writes notes with no vector. See
+// [DiaryEntry.Embedding] for what that costs.
+func WithEmbedding(embed Embed) DiaryOption {
+	return func(d *Diary) { d.embed = embed }
+}
 
 // NewDiary wraps a database handle.
-func NewDiary(db *store.DB) *Diary { return &Diary{db: db} }
+func NewDiary(db *store.DB, opts ...DiaryOption) *Diary {
+	d := &Diary{db: db}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d
+}
 
 // Write records one observation.
 func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
@@ -107,6 +184,14 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 		return fmt.Errorf("learning: a %q entry needs a deadline", DiaryShort)
 	case e.Kind == DiaryLong && !e.TTLUntil.IsZero():
 		return fmt.Errorf("learning: a %q entry must not carry a deadline", DiaryLong)
+	}
+
+	// THE VECTOR IS MADE HERE, before anything is encoded, and only when the
+	// caller brought none: an entry that already carries one was given it by
+	// whoever built it, and re-embedding would spend a provider call to
+	// replace a value somebody chose.
+	if len(e.Embedding) == 0 {
+		e.Embedding = d.vector(ctx, e)
 	}
 
 	// Same policy as an episode's embedding, and for the same reason — see
@@ -135,6 +220,42 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 		return fmt.Errorf("learning: write diary entry %s: %w", e.ID, err)
 	}
 	return nil
+}
+
+// vector embeds a note's content, or reports none.
+//
+// NEVER AN ERROR, which is the whole policy: the note is what cannot be
+// reconstructed and the vector is what can, so a provider that is rate
+// limited, slow or misconfigured costs this note's similarity hits and never
+// the note. The failure is logged where it happens, because a seat whose
+// diary silently stopped being recallable looks exactly like a seat that
+// learned nothing.
+//
+// NO SECOND DEADLINE. One note is one call — a note is bounded at
+// [MaxContentChars], so there is no window set to bound the way
+// [DefaultEmbedTimeout] bounds an episode's — and the embeddings provider
+// already bounds the call it makes. A timeout here would be a second opinion
+// about one round trip, free to disagree with the first.
+func (d *Diary) vector(ctx context.Context, e DiaryEntry) []float32 {
+	if d.embed == nil || strings.TrimSpace(e.Content) == "" {
+		return nil
+	}
+	v, err := d.embed(ctx, e.Content)
+	if err != nil {
+		log.WarnContext(ctx, "diary_embedding_failed", "entry", e.ID,
+			"agent_id", e.AgentID, "error", err.Error(),
+			"detail", "the note is stored without a vector, so recall will not "+
+				"surface it; the recency half of the memory pool still will")
+		return nil
+	}
+	// NIL RATHER THAN AN EMPTY SLICE, for the reason [Episodist.vector]
+	// gives: only nil is what [DiaryEntry.Embedding] documents as "no
+	// vector", and an empty one would reach the encoder as a vector of
+	// nothing.
+	if len(v) == 0 {
+		return nil
+	}
+	return v
 }
 
 const diaryColumns = `id, agent_id, kind, content, ttl_until, source, turn_id,
@@ -215,6 +336,10 @@ func (d *Diary) Recent(ctx context.Context, agentID string, now time.Time, limit
 // Live means unexpired, applied here as well as by the background sweep,
 // because the sweep runs on a timer and a memory that has just passed its
 // deadline is exactly as wrong as one that passed it a week ago.
+//
+// It answers empty for a row with no vector, which is a real and supported
+// state rather than a failure — see [DiaryEntry.Embedding] for the two ways
+// a note reaches the store without one.
 func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now time.Time) ([]DiaryHit, error) {
 	if agentID == "" {
 		return nil, fmt.Errorf("learning: diary recall needs an agent")

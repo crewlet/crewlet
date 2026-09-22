@@ -49,13 +49,32 @@ type Episode struct {
 	ReviewOutcome string
 	Duration      time.Duration
 
-	// Embedding is the task summary's vector, or nil when the embeddings
-	// provider was unreachable at write time.
+	// Embeddings are the task summary's vectors, one per WINDOW of it, in
+	// the order the windows were read — or nil when the embeddings provider
+	// was unreachable at write time.
+	//
+	// SEVERAL, because a summary is not bounded and one vector represents
+	// one subject: the episodist splits a long summary into overlapping
+	// windows and embeds every one, so nothing is cut and every byte reaches
+	// some vector. [Episodist.Reflect] fills it; see [EpisodeWindowBytes]
+	// for the window and node migration 0030 for how the set is stored.
+	//
+	// A short summary — which is almost every one — is exactly one window,
+	// so this holds a single vector and the row is byte-for-byte what it was
+	// before windowing existed.
+	//
+	// Recall scores an episode as its NEAREST window (see [Episodes.Recall]),
+	// never as a mean: a turn is worth recalling because one part of what it
+	// did matches, not because all of it does.
+	//
+	// THE ORDINAL IS NOT AN ADDRESS. Nothing maps a window back to the slice
+	// of text it came from, so a window the store refuses (a non-finite
+	// vector) is dropped rather than held as a gap, and the rest still rank.
 	//
 	// Nil is a supported state, not a failure: recall skips such rows while
 	// the time-window and outcome queries still surface them. A transient
 	// outage must never cost an episode.
-	Embedding []float32
+	Embeddings [][]float32
 
 	Kind  Kind
 	Count int
@@ -90,11 +109,37 @@ const episodeInsertSQL = `
 INSERT INTO episodes (
 	id, agent_handle, agent_role, task_id, turn_id, started_at, ended_at,
 	plan_summary, task_summary, tool_sequence, skills_used, review_outcome,
-	duration_ms, embedding, kind, count, exemplar_turn_ids,
+	duration_ms, embedding, embedding_windows, kind, count, exemplar_turn_ids,
 	consolidated_into_skill_id, common_task_pattern, common_outcome,
 	success_rate, subjects_involved, notable_patterns, work_key, conversation_key
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (agent_handle, work_key) DO NOTHING`
+
+// episodeInsertArgs binds [episodeInsertSQL], once, for every writer of the
+// table.
+//
+// ONE ARGUMENT LIST, and it is not tidiness: the statement is bound
+// POSITIONALLY, so a second hand-written list is a second chance to pair a
+// column with the wrong value — and the failure is silent wherever the two
+// types agree, which for this table's fourteen TEXT columns is most of it. The
+// lifecycle's compacted-row insert used to keep its own copy under a comment
+// promising it matched; the promise is now the code.
+//
+// blob and windows come from [Episodes.encodeEmbedding] together, because they
+// are one fact about one value: a blob of N packed vectors and a count that
+// said anything but N would make recall read somebody else's bytes as a vector.
+func episodeInsertArgs(ep Episode, blob any, windows int) []any {
+	return []any{
+		ep.ID, ep.Handle, ep.Role, ep.TaskID, ep.TurnID,
+		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
+		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
+		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob, windows,
+		string(ep.Kind), ep.Count, jsonList(ep.ExemplarTurnIDs),
+		store.NullText(ep.ConsolidatedInto), ep.CommonTaskPattern, ep.CommonOutcome,
+		ep.SuccessRate, jsonList(ep.SubjectsInvolved), ep.NotablePatterns,
+		store.NullText(ep.WorkKey), store.NullText(ep.ConversationKey),
+	}
+}
 
 // Append records one episode, at most once per (seat, work key).
 //
@@ -130,20 +175,12 @@ func (e *Episodes) Append(ctx context.Context, ep Episode) (bool, error) {
 	if ep.Count < 1 {
 		ep.Count = 1
 	}
-	blob, err := e.encodeEmbedding(ep.Embedding)
+	blob, windows, err := e.encodeEmbedding(ep.Embeddings)
 	if err != nil {
 		return false, err
 	}
 	res, err := e.db.SQL().ExecContext(ctx, episodeInsertSQL,
-		ep.ID, ep.Handle, ep.Role, ep.TaskID, ep.TurnID,
-		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
-		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
-		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob,
-		string(ep.Kind), ep.Count, jsonList(ep.ExemplarTurnIDs),
-		store.NullText(ep.ConsolidatedInto), ep.CommonTaskPattern, ep.CommonOutcome,
-		ep.SuccessRate, jsonList(ep.SubjectsInvolved), ep.NotablePatterns,
-		store.NullText(ep.WorkKey), store.NullText(ep.ConversationKey),
-	)
+		episodeInsertArgs(ep, blob, windows)...)
 	if err != nil {
 		return false, fmt.Errorf("learning: append episode %s: %w", ep.ID, err)
 	}
@@ -154,8 +191,14 @@ func (e *Episodes) Append(ctx context.Context, ep Episode) (bool, error) {
 	return n > 0, nil
 }
 
-// encodeEmbedding packs a vector, refusing one of the wrong width and
-// DEGRADING one that is not finite.
+// encodeEmbedding packs the window vectors END TO END and reports how many
+// landed, refusing one of the wrong width and DEGRADING one that is not finite.
+//
+// The count is returned beside the bytes rather than derived from them, and
+// node migration 0030 is where that argument is written down: the width is a
+// runtime property, so `len(blob) / (4 * width)` can divide exactly under a
+// model the row was not embedded with and hand recall a window count that is
+// arithmetically clean and entirely wrong.
 //
 // The width is checked because the column is a plain BLOB: Turso does not
 // enforce a declared vector width (measured), so a mismatched vector stores
@@ -163,30 +206,56 @@ func (e *Episodes) Append(ctx context.Context, ep Episode) (bool, error) {
 // seat whose recall silently stops working, with no error anywhere. That is a
 // configuration fault, and the write fails.
 //
-// A NaN or an infinity is a different thing and gets the opposite answer: the
-// row is written WITHOUT its embedding, exactly as if the provider had been
-// unreachable. Failing the write instead would cost the episode, and an
+// A NaN or an infinity is a different thing and gets the opposite answer: that
+// WINDOW is dropped and the rest are kept, exactly as if the provider had been
+// unreachable for it. Failing the write instead would cost the episode, and an
 // episode is the record of a turn that really happened — the one thing this
 // subsystem may not lose to a bad response from an embeddings API. Storing it
-// anyway is not an option either: [store.ErrVectorNotFinite] says why.
-func (e *Episodes) encodeEmbedding(v []float32) (any, error) {
-	if len(v) == 0 {
-		return nil, nil
+// anyway is not an option either: [store.ErrVectorNotFinite] says why. Dropping
+// one window rather than the whole set is what [Episode.Embeddings] means by
+// the ordinal not being an address: nothing maps a vector back to its slice of
+// text, so a shorter set still ranks the row on everything that did embed.
+func (e *Episodes) encodeEmbedding(windows [][]float32) (any, int, error) {
+	if len(windows) == 0 {
+		return nil, 0, nil
 	}
-	blob, err := e.db.EncodeVector(v)
-	switch {
-	case errors.Is(err, store.ErrVectorNotFinite):
-		log.Warn("episode_embedding_discarded", "error", err.Error())
-		return nil, nil
-	case err != nil:
-		return nil, fmt.Errorf("learning: encode embedding: %w", err)
+	var packed []byte
+	kept := 0
+	for at, window := range windows {
+		if len(window) == 0 {
+			continue
+		}
+		blob, err := e.db.EncodeVector(window)
+		switch {
+		case errors.Is(err, store.ErrVectorNotFinite):
+			log.Warn("episode_embedding_window_discarded",
+				"window", at, "windows", len(windows), "error", err.Error())
+			continue
+		case err != nil:
+			// A WIDTH FAULT FAILS THE WRITE, because it is the same
+			// fault for every window: the vectors came from one call
+			// to one provider, so a second window would report the
+			// same mismatch and the row must not land half-embedded
+			// under a configuration nobody has noticed is wrong.
+			return nil, 0, fmt.Errorf("learning: encode embedding window %d of %d: %w",
+				at, len(windows), err)
+		}
+		packed = append(packed, blob...)
+		kept++
 	}
-	return blob, nil
+	if kept == 0 {
+		// Every window was refused, which is the same outcome as an
+		// unreachable provider: the row lands, recall skips it, and the
+		// time-window queries still surface it.
+		return nil, 0, nil
+	}
+	return packed, kept, nil
 }
 
 const episodeColumns = `id, agent_handle, agent_role, task_id, turn_id,
 	started_at, ended_at, plan_summary, task_summary, tool_sequence,
-	skills_used, review_outcome, duration_ms, embedding, kind, count,
+	skills_used, review_outcome, duration_ms, embedding, embedding_windows,
+	kind, count,
 	exemplar_turn_ids, consolidated_into_skill_id, common_task_pattern,
 	common_outcome, success_rate, subjects_involved, notable_patterns,
 	work_key, conversation_key`
@@ -196,6 +265,7 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 		ep                                     Episode
 		started, ended, durationMS             int64
 		embedding                              []byte
+		windows                                int
 		kind                                   string
 		toolSeq, skills, exemplars, subjects   string
 		consolidated, workKey, conversationKey sql.NullString
@@ -203,7 +273,8 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 	if err := rows.Scan(
 		&ep.ID, &ep.Handle, &ep.Role, &ep.TaskID, &ep.TurnID,
 		&started, &ended, &ep.PlanSummary, &ep.TaskSummary, &toolSeq,
-		&skills, &ep.ReviewOutcome, &durationMS, &embedding, &kind, &ep.Count,
+		&skills, &ep.ReviewOutcome, &durationMS, &embedding, &windows,
+		&kind, &ep.Count,
 		&exemplars, &consolidated, &ep.CommonTaskPattern,
 		&ep.CommonOutcome, &ep.SuccessRate, &subjects, &ep.NotablePatterns,
 		&workKey, &conversationKey,
@@ -222,18 +293,53 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 	ep.WorkKey = store.Text(workKey)
 	ep.ConversationKey = store.Text(conversationKey)
 	if len(embedding) > 0 {
-		vec, err := store.DecodeVector(embedding)
+		vectors, err := splitWindows(embedding, windows)
 		if err != nil {
-			// A row whose vector cannot be read is still a usable episode
-			// for the time-window and outcome queries. Losing the whole
-			// row over its recall vector would be a worse trade than
-			// losing the recall.
-			log.Warn("episode_embedding_undecodable", "episode", ep.ID, "error", err)
+			// A row whose vectors cannot be read is still a usable
+			// episode for the time-window and outcome queries. Losing
+			// the whole row over its recall vector would be a worse
+			// trade than losing the recall.
+			log.Warn("episode_embedding_undecodable", "episode", ep.ID,
+				"windows", windows, "bytes", len(embedding), "error", err)
 		} else {
-			ep.Embedding = vec
+			ep.Embeddings = vectors
 		}
 	}
 	return ep, nil
+}
+
+// splitWindows unpacks the blob into the window vectors it holds.
+//
+// THE COUNT IS ASKED FOR, NOT INFERRED. The blob is the windows packed end to
+// end with no separator, so the only thing that can say where one ends is the
+// `embedding_windows` column written beside it — and node migration 0030 has
+// the arithmetic showing why guessing from the length is not a weaker answer
+// but a wrong one.
+//
+// A row whose length is not a whole multiple of its count is REFUSED rather
+// than split on the nearest boundary that works: the two disagree only if the
+// row was written by something that did not keep them together, and a plausible
+// split of an implausible row is a vector made of two half-vectors, which
+// ranks against every query and means nothing.
+func splitWindows(blob []byte, windows int) ([][]float32, error) {
+	if windows < 1 {
+		return nil, fmt.Errorf("learning: %d bytes of embedding are labelled %d windows",
+			len(blob), windows)
+	}
+	if len(blob)%windows != 0 {
+		return nil, fmt.Errorf("learning: %d bytes of embedding do not divide into %d windows",
+			len(blob), windows)
+	}
+	width := len(blob) / windows
+	out := make([][]float32, 0, windows)
+	for at := 0; at < len(blob); at += width {
+		vector, err := store.DecodeVector(blob[at : at+width])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, vector)
+	}
+	return out, nil
 }
 
 // defaultEpisodeListing and defaultConversationListing are what [Episodes.Recent]

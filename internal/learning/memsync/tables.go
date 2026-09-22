@@ -99,7 +99,17 @@ var tables = []table{
 			"id", "agent_handle", "agent_role", "task_id", "turn_id",
 			"started_at", "ended_at", "plan_summary", "task_summary",
 			"tool_sequence", "skills_used", "review_outcome", "duration_ms",
-			"embedding", "kind", "count", "exemplar_turn_ids",
+			// THE WINDOW COUNT TRAVELS WITH THE BLOB IT DESCRIBES, and
+			// is not optional: `embedding` holds one vector per window of
+			// the summary, packed end to end, and the count is the only
+			// thing that says where one ends (node migration 0030 has
+			// the arithmetic). Carried without it, a three-window row
+			// would arrive on the new node labelled with the column's
+			// default of one — and recall's width check would then read
+			// it as a vector three times too wide and skip the row on
+			// every query. A seat that moved node would look exactly as
+			// if it had never been embedded.
+			"embedding", "embedding_windows", "kind", "count", "exemplar_turn_ids",
 			"consolidated_into_skill_id", "common_task_pattern",
 			"common_outcome", "success_rate", "subjects_involved",
 			"notable_patterns", "work_key", "conversation_key",
