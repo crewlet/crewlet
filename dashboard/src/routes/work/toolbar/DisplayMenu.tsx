@@ -8,10 +8,20 @@
  * read as the same kind of thing, and a company with four saved views had a
  * strip of nine. Group by and Sort were selects in the filter bar, appearing
  * on some shapes and not others, which moved every control beside them. The
- * table's own column set was a URL key with no control at all.
+ * grid's own column set was a URL key with no control at all.
  *
  * All four are the same question — how do I want to look at this — and none of
  * them narrows the answer, which is why they are here and not among the chips.
+ *
+ * # Columns are offered on both grid shapes
+ *
+ * The list and the table are ONE grid drawn in two column sets, so both have
+ * columns to choose and this menu offers whichever set is active. It offered
+ * them on the table alone while the two were two components, under a rule that
+ * read "the column set belongs to the table, which is the one shape with
+ * columns" — a sentence that described the implementation rather than the
+ * product, and the only thing making it true was that the list had no columns
+ * to give. See `routes/work/shapes/Grid.tsx`.
  *
  * # It writes `shape=`, never `view=`
  *
@@ -24,8 +34,8 @@
  *
  * A calendar's axis IS the date, so it has no grouping to set; a board's
  * second axis is a swimlane grid rather than a band in a band, so it has no
- * Then by; and the column set belongs to the table, which is the one shape
- * with columns. A control that wrote a key its shape drops is a control whose
+ * Then by; and a board, a calendar and a timeline have no columns to choose
+ * between. A control that wrote a key its shape drops is a control whose
  * effect the reader cannot see.
  */
 
@@ -39,7 +49,7 @@ import {
   VisibilityGlyph,
 } from "@crewlethq/icons/glyphs";
 import { GROUP_AXES, SORTS, groupAxisOptions, secondAxisOptions, type Shape } from "~/lib/work.ts";
-import { tableColumnChoices } from "../shapes/Table.tsx";
+import { columnChoices, isGridShape } from "../shapes/Grid.tsx";
 
 /** The five shapes, each with the mark it is drawn as in the strip. */
 const SHAPES: { value: Shape; label: string; Glyph: typeof ListGlyph }[] = [
@@ -62,7 +72,7 @@ export interface DisplayMenuProps {
    */
   axis: string;
   /** The company's list rather than one project's, which decides whether the
-   *  table has a Project column to offer. */
+   *  grid has a Project column to offer. */
   workspace: boolean;
   /** What the shape would be with no `shape=` on the address — a view's own. */
   viewShape: Shape;
@@ -83,7 +93,14 @@ export interface DisplayMenuProps {
   groupBy: string;
   groupBy2: string;
   sort: string;
-  /** The table's chosen columns, as `cols=` holds them. */
+  /**
+   * The ACTIVE SET's chosen columns, as `cols.<shape>=` holds them.
+   *
+   * The screen reads the key for the shape that is on and hands the value
+   * here, because `cols=` is keyed per shape: the two sets differ in default
+   * and in ORDER, and a value written against one and read against the other
+   * draws a row nobody arranged. See `routes/work/shapes/Grid.tsx`.
+   */
   cols: string;
   onShape: (shape: Shape) => void;
   onGroupBy: (axis: string) => void;
@@ -140,9 +157,12 @@ function DisplayPanel({
   // the query does; see [groupAxisOptions] for the row it no longer lists
   // twice.
   const grouped = shape !== "calendar";
-  const nested = shape === "list" || shape === "table";
+  const nested = isGridShape(shape);
   const chosen = new Set(cols ? cols.split(",").filter(Boolean) : []);
-  const columns = shape === "table" ? tableColumnChoices(workspace) : [];
+  // THE ACTIVE SET'S OWN CHOICES. Both grid shapes have columns and they are
+  // not the same columns in the same order, so the set is asked for by shape
+  // rather than derived once — see `shapes/Grid.tsx`.
+  const columns = isGridShape(shape) ? columnChoices(shape, workspace) : [];
 
   return (
     <div className="work-menu work-display">
@@ -205,12 +225,12 @@ function DisplayPanel({
         </label>
       )}
 
-      {shape === "table" && (
+      {columns.length > 0 && (
         <>
           <div className="work-display-label">Columns</div>
           <div className="work-display-cols">
             {columns.map((column) => {
-              // AN EMPTY `cols=` IS THE DEFAULT SET, not an empty table —
+              // AN EMPTY `cols=` IS THE DEFAULT SET, not an empty grid —
               // `DataGrid` reads it that way, so the checkboxes show the
               // default until somebody moves one.
               const on = chosen.size === 0 ? !column.optional : chosen.has(column.key);
@@ -229,8 +249,10 @@ function DisplayPanel({
                       else next.add(column.key);
                       // THE DECLARATION ORDER, never the click order: `cols=`
                       // is read as the order to DRAW them in, so a set built
-                      // from a Set's insertion order would rearrange the table
-                      // every time somebody ticked a box.
+                      // from a Set's insertion order would rearrange the grid
+                      // every time somebody ticked a box. It is also why the
+                      // key is per shape — the order it carries is the ACTIVE
+                      // set's, and the other set declares another one.
                       onCols(
                         columns
                           .filter((c) => next.has(c.key))

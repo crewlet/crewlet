@@ -465,7 +465,7 @@ func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
 		StartAt: day("2031-04-17T00:00:00Z"),
 	}
 
-	moved := tracker.TaskDeltas(before, after)
+	moved := tracker.TaskDeltas(before, after, nil)
 	for field, want := range map[string]tracker.Delta{
 		// THE WHOLE INSTANT: a day compares equal to itself
 		// whenever a move stays inside one, and it names the wrong
@@ -501,7 +501,7 @@ func TestClearingASizeIsAChange(t *testing.T) {
 	t.Parallel()
 	sized := tracker.Task{ID: "t-1", Points: 8, EstimateMinutes: 45}
 	cleared := tracker.Task{ID: "t-1"}
-	moved := tracker.TaskDeltas(sized, cleared)
+	moved := tracker.TaskDeltas(sized, cleared, nil)
 	if got := moved["points"]; got != (tracker.Delta{From: "8", To: ""}) {
 		t.Errorf("points = %+v, want 8 → nothing", got)
 	}
@@ -510,7 +510,7 @@ func TestClearingASizeIsAChange(t *testing.T) {
 	}
 	// And a task that never had either reports no change at all, rather
 	// than two deltas from nothing to nothing.
-	if moved := tracker.TaskDeltas(cleared, cleared); len(moved) != 0 {
+	if moved := tracker.TaskDeltas(cleared, cleared, nil); len(moved) != 0 {
 		t.Errorf("an unchanged task moved %+v", moved)
 	}
 }
@@ -539,7 +539,7 @@ func TestASameDayScheduleMoveIsRecorded(t *testing.T) {
 	before := tracker.Task{ID: "t-1", DueAt: morning, StartAt: morning}
 	after := tracker.Task{ID: "t-1", DueAt: evening, StartAt: evening}
 
-	moved := tracker.TaskDeltas(before, after)
+	moved := tracker.TaskDeltas(before, after, nil)
 	for _, field := range []string{"due", "start"} {
 		got, held := moved[field]
 		if !held {
@@ -580,7 +580,7 @@ func TestAnAllDayDueDateIsNotTruncatedToTheWrongDay(t *testing.T) {
 	before := tracker.Task{ID: "t-1"}
 	after := tracker.Task{ID: "t-1", DueAt: berlinMidnight, DueAllDay: true}
 
-	got := tracker.TaskDeltas(before, after)["due"]
+	got := tracker.TaskDeltas(before, after, nil)["due"]
 	if got.To != "2031-04-15T22:00:00Z" {
 		t.Errorf("due = %q, want the stored instant: a day rendered here is "+
 			"rendered without the zone that decided it", got.To)

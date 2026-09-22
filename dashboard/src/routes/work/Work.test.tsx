@@ -617,9 +617,9 @@ test("a saved view's grouping heads the list's columns by name", async () => {
     },
   });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-band")).toBeTruthy());
-  expect(container.querySelector(".work-band")?.textContent).toContain("Ada Okonkwo");
-  expect(container.querySelector(".work-band")?.textContent).not.toContain("ada");
+  await waitFor(() => expect(container.querySelector(".grid-band-head")).toBeTruthy());
+  expect(container.querySelector(".grid-band-head")?.textContent).toContain("Ada Okonkwo");
+  expect(container.querySelector(".grid-band-head")?.textContent).not.toContain("ada");
 });
 
 /** A company with one project — the listing every list-screen case needs,
@@ -743,6 +743,236 @@ test("a column chip takes its name from the effective axis", async () => {
   expect(chips).toContain("Assignee");
   expect(chips).toContain("Ada Okonkwo");
   expect(chips).not.toContain("Column");
+});
+
+// ---------------------------------------------------------------------------
+// The grid: one renderer, two column sets
+// ---------------------------------------------------------------------------
+
+/**
+ * The head row as it is drawn, in order — a glyph head reading "".
+ *
+ * BY TEXT AND IN ORDER, because a set is not a set of names: `cols=` carries
+ * the order as well as the selection, which is the whole reason the key is per
+ * shape. A comparison that sorted these would pass on a table drawing the
+ * list's arrangement.
+ */
+const heads = (container: HTMLElement) =>
+  [...container.querySelectorAll(".grid-th")].map((el) => (el.textContent ?? "").trim());
+
+/** What the list draws with nothing chosen: the compact row, as columns. */
+const LIST_SET = ["", "Key", "Status", "Title", "Due", "", "", "Updated"];
+
+/** And the table's: one field per column, the identity first. */
+const TABLE_SET = [
+  "Key",
+  "",
+  "Title",
+  "Status",
+  "Priority",
+  "Assignee",
+  "Project",
+  "Due",
+  "Updated",
+];
+
+// TWO DEFAULT SETS, ONE RENDERER. The list and the table were two components
+// over one answer, so every rule the grid had — one track list, a capped shrink
+// column, the card a row becomes on a phone, the cursor `j` and `k` walk — the
+// list simply did not have. What is left of the difference is which columns are
+// on and in what order.
+test("the list and the table are the same grid drawn in two column sets", async () => {
+  serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
+  const asList = mountWork();
+  await waitFor(() => expect(asList.container.querySelector(".grid-wrap")).toBeTruthy());
+  expect(heads(asList.container)).toEqual(LIST_SET);
+  cleanup();
+
+  location.hash = "#/work?shape=table";
+  serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
+  const asTable = mountWork();
+  await waitFor(() => expect(asTable.container.querySelector(".grid-wrap")).toBeTruthy());
+  expect(heads(asTable.container)).toEqual(TABLE_SET);
+  // ONE GRID, both times: the list is not a hand-rolled panel any more, so it
+  // has a head row at all and every column of it is sized by the same tracks.
+  expect(asTable.container.querySelectorAll(".grid-wrap").length).toBe(1);
+});
+
+// `cols=` SELECTS WITHIN THE ACTIVE SET, and a name that set does not hold is
+// ignored rather than drawn or refused. `restore` is a real column — the trash
+// listing's — so this is the shape a stale link actually takes rather than a
+// nonsense word.
+test("cols narrows within the active set and ignores what the set does not hold", async () => {
+  location.hash = "#/work?cols.list=key,title,restore";
+  serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".grid-wrap")).toBeTruthy());
+  expect(heads(container)).toEqual(["Key", "Title"]);
+});
+
+// AND A `cols=` NAMING NOTHING THE SET HOLDS LEAVES THE DEFAULT STANDING,
+// rather than a grid with no columns at all.
+test("a cols naming nothing this set draws falls back to the default set", async () => {
+  location.hash = "#/work?cols.list=restore,removed_by";
+  serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".grid-wrap")).toBeTruthy());
+  expect(heads(container)).toEqual(LIST_SET);
+});
+
+// THE KEY IS PER SHAPE, which is what stops one arrangement destroying the
+// other. `cols=` carries an ORDER and that order is the SET's, so a value
+// written against the table and read against the list draws the list's columns
+// in the table's arrangement — a row nobody asked for, and one no validation
+// can catch, because every name in it is legal in both sets.
+test("each shape keeps its own column arrangement", async () => {
+  location.hash = "#/work?shape=table&cols.list=key,title";
+  serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".grid-wrap")).toBeTruthy());
+  // The list's narrowing is on the address and the table pays no attention.
+  expect(heads(container)).toEqual(TABLE_SET);
+  cleanup();
+
+  location.hash = "#/work?shape=table&cols.table=key,title";
+  serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
+  const own = mountWork();
+  await waitFor(() => expect(own.container.querySelector(".grid-wrap")).toBeTruthy());
+  expect(heads(own.container)).toEqual(["Key", "Title"]);
+});
+
+// AND THE DISPLAY MENU OFFERS COLUMNS ON BOTH GRID SHAPES. It offered them on
+// the table alone, under a rule that read "the column set belongs to the table,
+// which is the one shape with columns" — which described the implementation
+// rather than the product: the only thing making it true was that the list was
+// a different component with no columns to give.
+test("the Display menu offers the active set's columns on the list too", async () => {
+  serving({
+    work_views: savedWith({}),
+    work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true },
+    work_projects: oneProject,
+  });
+  mountWork();
+  await openDisplay();
+  await waitFor(() => expect(screen.getByText("Columns")).toBeTruthy());
+  // THROUGH THE DOCUMENT, not the mount's own container: the menu is a
+  // `Popover`, so its panel is portalled out of the tree the screen rendered.
+  const boxes = [...document.querySelectorAll(".work-display-col")].map(
+    (el) => el.textContent ?? "",
+  );
+  // THE WHOLE VOCABULARY, not only what is drawn: the four the compact set
+  // leaves off are choices here rather than columns a reader has to switch
+  // shape to reach.
+  expect(boxes).toEqual([
+    "Priority",
+    "Key",
+    "Status",
+    "Title",
+    "Project",
+    "Due",
+    "Start",
+    "Points",
+    "Estimate",
+    "Type",
+    "Assignee",
+    "Updated",
+  ]);
+  const ticked = [...document.querySelectorAll<HTMLInputElement>(".work-display-col input")]
+    .map((box, at) => (box.checked ? boxes[at] : null))
+    .filter(Boolean);
+  // AND THE TICKS ARE THE DEFAULT SET until somebody moves one.
+  expect(ticked).toEqual([
+    "Priority",
+    "Key",
+    "Status",
+    "Title",
+    "Due",
+    "Type",
+    "Assignee",
+    "Updated",
+  ]);
+});
+
+// A BAND SAYS BOTH NUMBERS, on either shape. The engine's count is over the
+// whole group and the rows under it are a page, so a heading reading `3` over
+// two visible rows is the number a person plans against — the rule the grid's
+// own bands already kept and the hand-rolled list restated.
+test("a grouped answer draws bands with the engine's count on both shapes", async () => {
+  const grouped = {
+    work_items: {
+      items: [],
+      groups: [{ key: "todo", count: 3, rows: [row("1"), row("2")] }],
+      total_hint: 3,
+      complete: true,
+    },
+  };
+  for (const shape of ["list", "table"]) {
+    location.hash = `#/work?shape=${shape}&group_by=status`;
+    serving(grouped);
+    const { container } = mountWork();
+    await waitFor(() => expect(container.querySelector(".grid-band-head")).toBeTruthy());
+    const band = container.querySelector(".grid-band-head")!;
+    expect(band.textContent, shape).toContain("To do");
+    expect(band.textContent, shape).toContain("2 of 3");
+    expect(container.querySelectorAll(".grid-row").length, shape).toBe(2);
+    cleanup();
+  }
+});
+
+// A SECOND AXIS IS A BAND INSIDE A BAND, on either shape — and the table drew
+// NEITHER. `buildItemsParams` sends `group_by2` for both, the answer comes back
+// with the rows under `subgroups` rather than under `groups[].rows`, and a grid
+// that read only `rows` drew one empty heading per group with every row of the
+// answer nowhere on the screen.
+test("a twice-grouped answer nests its bands and keeps its rows", async () => {
+  const nested = {
+    work_items: {
+      items: [],
+      groups: [
+        {
+          key: "todo",
+          count: 2,
+          rows: [],
+          subgroups: [{ key: "ada", count: 2, rows: [row("1", { assignee: "ada" }), row("2")] }],
+        },
+      ],
+      total_hint: 2,
+      complete: true,
+    },
+  };
+  for (const shape of ["list", "table"]) {
+    location.hash = `#/work?shape=${shape}&group_by=status&group_by2=assignee`;
+    serving(nested);
+    const { container } = mountWork();
+    await waitFor(() => expect(container.querySelectorAll(".grid-row").length).toBe(2));
+    const bands = [...container.querySelectorAll(".grid-band-head")].map((el) => el.textContent);
+    expect(bands.length, shape).toBe(2);
+    expect(bands[0], shape).toContain("To do");
+    expect(bands[1], shape).toContain("Ada Okonkwo");
+    // THE OUTER BAND COUNTS WHAT IS UNDER IT, sub-bands included — read off
+    // its own `rows` it reported every twice-grouped group as holding nothing.
+    expect(bands[0], shape).toContain("2");
+    cleanup();
+  }
+});
+
+// THE END OF A COMPLETE ANSWER IS SAID ON BOTH SHAPES. The list closed with it
+// and the table closed with "N loaded" — a count the toolbar three lines above
+// already carries — so the one shape a reader picks to compare a field was the
+// one that could not tell them whether they were looking at all of it.
+test("the foot says the end of it on both shapes", async () => {
+  for (const shape of ["list", "table"]) {
+    location.hash = `#/work?shape=${shape}`;
+    serving({
+      work_items: { items: [row("1"), row("2")], groups: [], total_hint: 2, complete: true },
+    });
+    const { container } = mountWork();
+    await waitFor(() => expect(container.querySelector(".grid-foot")).toBeTruthy());
+    expect(container.querySelector(".grid-foot")?.textContent, shape).toBe(
+      "That is all of it · 2 items",
+    );
+    cleanup();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -1125,7 +1355,7 @@ test("a container with no default view opens on the list", async () => {
     work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true },
   });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-list")).toBeTruthy());
+  await waitFor(() => expect(container.querySelector(".grid-wrap")).toBeTruthy());
   // A LIST IS A PAGED QUESTION rather than a set of columns, which is the half
   // of this that reaches the engine.
   expect(asked(query).limit).toBe(100);
@@ -1265,8 +1495,8 @@ test("a complete list closes with the end of it and an incomplete one does not",
     work_items: { items: [row("1"), row("2")], groups: [], total_hint: 2, complete: true },
   });
   const whole = mountWork();
-  await waitFor(() => expect(whole.container.querySelector(".work-foot")).toBeTruthy());
-  expect(whole.container.querySelector(".work-foot")?.textContent).toBe(
+  await waitFor(() => expect(whole.container.querySelector(".grid-foot")).toBeTruthy());
+  expect(whole.container.querySelector(".grid-foot")?.textContent).toBe(
     "That is all of it · 2 items",
   );
   cleanup();
@@ -1281,8 +1511,8 @@ test("a complete list closes with the end of it and an incomplete one does not",
     },
   });
   const paged = mountWork();
-  await waitFor(() => expect(paged.container.querySelector(".work-list")).toBeTruthy());
-  expect(paged.container.querySelector(".work-foot")).toBeNull();
+  await waitFor(() => expect(paged.container.querySelector(".grid-wrap")).toBeTruthy());
+  expect(paged.container.querySelector(".grid-foot")).toBeNull();
 });
 
 // AND A NARROWING CHANGES THE NOUN AND NOTHING ELSE. It never says how many the
@@ -1295,8 +1525,8 @@ test("a narrowed list says its rows are the ones that match, and counts nothing 
     work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true },
   });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-foot")).toBeTruthy());
-  expect(container.querySelector(".work-foot")?.textContent).toBe(
+  await waitFor(() => expect(container.querySelector(".grid-foot")).toBeTruthy());
+  expect(container.querySelector(".grid-foot")?.textContent).toBe(
     "That is all of it · 1 item matches",
   );
 });

@@ -136,10 +136,17 @@ export function typeName(slug: string | undefined, types?: WorkTypeDef[]): strin
  * This is that column, in the only form a dense one-line row has room for.
  *
  * AND A PHRASE, because `kind.replaceAll("_", " ")` after an actor's name reads
- * "ada watchers". Only the kinds an apply can compare two documents for produce
- * deltas — `tracker.TaskDeltas` covers sixteen task fields and nothing else —
- * so `watchers`, `checklist`, `archived`, `reparented` and the whole comment
- * family reach the reader through this column alone.
+ * "ada watchers". A kind carries deltas exactly when an APPLY CAN COMPARE TWO
+ * DOCUMENTS for it, and `tracker.TaskDeltas` now compares every field a patch
+ * can move — so `watchers`, `checklist`, `archived` and `reparented` say what
+ * moved and this phrase says what happened. What still reaches the reader
+ * through this column ALONE is what no comparison can produce: the comment
+ * family, which is a thread rather than a field of the task; `purged`, whose
+ * subject no longer exists to compare; and a plain `removed` or `restored`,
+ * where the only delta a tombstone holds is `removed_with` and a task removed
+ * on its own went with nothing. The count is deliberately not stated — the
+ * rule is, because a field added to the comparison tomorrow would falsify a
+ * number nothing here gates.
  *
  * ONE DECLARATION, held against `tracker.ChangeKinds` by
  * `internal/tracker/client_gate_test.go`: this is a closed set the engine owns
@@ -640,7 +647,17 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
       return statusLabel(value, ctx.statuses);
     case "type":
       return typeName(value, ctx.types);
+    // A FIELD WHOSE VALUE IS PEOPLE, which travels as HANDLES: the one a task
+    // is assigned to, the one who reported it, and the three sets
+    // `tracker.TaskDeltas` sorts before it stores them — the watchers, the
+    // handles that muted the task, and its collaborators. A handle nobody can
+    // resolve renders as the handle, which is what `seatName` already does:
+    // a seat the chart no longer holds still moved this field.
     case "assignee":
+    case "reporter":
+    case "watchers":
+    case "muted":
+    case "collaborators":
       return people(value);
     case "tags":
       return value
@@ -658,10 +675,13 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
     case "estimate":
       return /^\d+m$/.test(value) ? fmtMinutes(Number(value.slice(0, -1))) : value;
     // A FIELD WHOSE VALUE IS OTHER TASKS, which travels as their IDS: three of
-    // `tracker.RelationKinds`, the `blocking` mirror, and the ordered queue a
-    // person record carries. NOT `page`, which is the fourth relation kind and
-    // names a wiki page — resolving it here would be claiming a page is a task,
-    // and the answer deliberately leaves those ids out of its map.
+    // `tracker.RelationKinds`, the `blocking` mirror, the ordered queue a
+    // person record carries, the parent a re-parent moves a task between, and
+    // the root a cascade removed it with. The last two are SCALARS rather than
+    // lists and take the same arm, because one id splits into one member. NOT
+    // `page`, which is the fourth relation kind and names a wiki page —
+    // resolving it here would be claiming a page is a task, and the answer
+    // deliberately leaves those ids out of its map.
     //
     // AN ID THE ANSWER DID NOT RESOLVE RENDERS AS THE ID. The map omits what
     // the answering node holds no row for — a record naming a counterparty it
@@ -673,6 +693,8 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
     case "duplicates":
     case "blocking":
     case "priorities":
+    case "parent":
+    case "removed_with":
       return value
         .split(", ")
         .map((id) => ctx.taskKey?.(id) || id)

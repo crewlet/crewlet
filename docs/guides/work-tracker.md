@@ -363,11 +363,20 @@ A **view** is a saved query with a shape. Five shapes:
 - **`table`** — one field per column, which is what you want when the question
   is about a *field* rather than about a task: "which of these is the biggest",
   "who holds the overdue ones", "what is unestimated". A list draws each task
-  as a block you read one at a time, so comparing one field down it means
+  as a compact row you read one at a time, so comparing one field down it means
   finding the same badge at a different place on every row; a table puts every
   value of a column at one place and sorts at its head. The sort it writes is
   the query's own `sort=`, so it orders the **whole set** rather than the page
   that happens to be loaded.
+
+  The list and the table are **the same grid drawn with two column sets**.
+  Both sort at their heads, both draw the bands a grouping puts them in, both
+  become one labelled card per row on a phone — the difference is which
+  columns are on, the order they are in, and how a value is drawn (the list's
+  priority is the mark that opens its row, the table's is the word in a
+  sortable column). **Display → Columns** offers the active set's own choices
+  on either, and the choice is remembered per shape, so arranging the table
+  does not rearrange the list.
 
 ### What a board groups on
 
@@ -586,7 +595,7 @@ that container a seat owns, and one about CHANGE rather than about state:
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
-| `list_projects` | every project work is filed into, with how much open work each holds, when its work last changed and who changed it, and who leads it. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
+| `list_projects` | every project work is filed into, with how much open work each holds, when its work last changed and who changed it, and who leads it. `archived` picks the set — `false` (the default) for the live ones, `only` for the retired ones alone, `true` for both — and `sort` orders the whole company before the page is taken (`key`, `name`, `unit`, `open`, `done`, `closed`, `last_change`, each with an optional leading `-`), so `-open` is where the pile actually is rather than the biggest of the fifty keys that sort first. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
 | `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
@@ -651,23 +660,61 @@ now waits on, or no longer does. It holds for **quiet** changes too — most
 project, view, catalogue and tag edits wake nobody, and the row still says
 what they did.
 
-Two things the values are deliberately not. They are the **stored** form — a
+**What a task's own row can carry**, whatever kind it was filed under — one
+commit may move several of these, and the row names each one it moved:
+
+| Field | What it says |
+|---|---|
+| `title` `status` `assignee` `priority` `project` `type` `tags` | the columns a board is read by |
+| `due` `due_all_day` `start` `estimate` `points` | the schedule and the sizing. The flag is recorded beside the instant because an all-day date is stored as the company's own midnight, so making a midnight due date all-day moves the flag and leaves the instant where it was |
+| `reporter` `watchers` `muted` `collaborators` | who filed it, who follows it, who opted out of hearing, who is doing it with you |
+| `parent` `routing_unit` `archived` `removed_with` | where it sits, whose lead hears about it, whether it is filed away, and — when a removal cascaded — the item it went with |
+| `waiting_on` `linked` `duplicates` `page` `blocking` | the four kinds of link it authors, and the mirror a blocker carries |
+| `checklists` | one entry per named list, as `Setup: 3 of 5 done`, plus `(1 promoted)` where an item became a sub-item. A list that arrived is on the `to` side alone and one that was deleted on the `from` side alone |
+| `fields` | the custom values that moved, by **slug**, as `severity=high` — a choice by its option's slug, a multi-valued field's members joined with `/`, and a count of any whose field this project no longer declares |
+| `body` | that the description changed and how big it now is (`980 bytes → 1204 bytes`, or `— → 1204 bytes` written and `980 bytes → —` cleared) — never the prose |
+
+Three things the values are deliberately not. They are the **stored** form — a
 status slug, a whole timestamp, an item's id — rather than what a screen shows,
 because the same row is written identically by every node in a fleet and a
 rendering would depend on the reader's time zone and on the company's current
-vocabulary; the dashboard resolves them. And a collection is **bounded**: a row
+vocabulary; the dashboard resolves them. A collection is **bounded**: a row
 is a line in a log rather than a copy of the object, so a long list is cut at a
 whole member and ends with a count of what it left out (`+12 more`), and a
 list whose members a person does not read — an inbox, say — is recorded as its
-size.
+size. And the two largest things a task holds are **marked rather than
+carried**: a description can be 32 KiB and a checklist tree 256 items, so the
+row says that they moved and by how much, and the change record it stores
+beside them holds the rest.
 
-A dependency is where the stored form would otherwise show: an edge records the
-other item by its **id**, because its key belongs to that item's own row and a
-history row is written once and corrected by nothing. So the **answer** carries
-a `keys` map naming the items its deltas point at, resolved when the question is
-asked rather than when the change was made — which is what lets a screen draw
-"Waiting on: — → ENG-2" from a row that stored a uuid. An item this node has not
-applied is simply missing from the map, and a reader falls back to the id.
+**A notification card carries all of that but the custom fields.** The card is
+built at the write, from the item as it stood and as it will stand; naming a
+custom field takes the project's catalogue, which only the node applying the
+change has open. So a wake for a custom-field edit says a field was edited and
+the history row says which one and what it became. Everything else — a watcher
+added, a checklist ticked off, a description rewritten — reads the same on
+both.
+
+**And the woken seat reads them.** A change wake's prompt carries a **What
+changed** block: one `field: from → to` line per delta, in the engine's own
+field names, with an em dash for a side that was empty, and the change's own
+excerpt under it where there is one. Without it a wake named the kind and
+nothing else — "The status changed by ana." — and the seat had to read the
+task to learn what the status now was, which still left the value it moved
+**from** unrecoverable, because that side is nowhere on the task. A comment is
+the exception: its body is the comment, and the opener has already quoted it.
+
+A dependency is where the stored form would otherwise show, and so are a
+re-parent and a cascade removal: each records the other item by its **id**,
+because its key belongs to that item's own row and a history row is written
+once and corrected by nothing. So the **answer** carries a `keys` map naming
+the items its deltas point at — every link a task authors except `page`, which
+names a knowledge-base page rather than an item, plus the `blocking` mirror, a
+person's priority queue, and the `parent` and `removed_with` scalars — resolved
+when the question is asked rather than when the change was made. That is what
+lets a screen draw "Waiting on: — → ENG-2", or "Parent: — → ENG-2", from a row
+that stored a uuid. An item this node has not applied is simply missing from
+the map, and a reader falls back to the id.
 
 The three project reads are a seat's for the same reason the catalogue read
 is: a create refuses a project the company does not have, a type it has not
@@ -682,6 +729,31 @@ else — so nothing writes them here at all; its field declarations and its
 default assignee are the **lead's**, and archiving the project
 itself takes a person's own credential. Every one of those is gated inside the
 verb, and each refusal names who can.
+
+**An archived project stays reachable, and it is SELECTED rather than let
+through.** Archiving stops a project taking new items and keeps every one it
+already holds, so it is not what anybody means by "the projects" — and a
+directory that hid half the company would not be a directory. Every reader of
+the listing therefore names one of three sets: the live projects, the retired
+ones alone, or both (`archived=false|only|true` on the API, `list_projects`'
+`archived` argument for a seat, and the **Active / Archived / All** segment on
+the dashboard's Projects screen, which is what those three spell). The middle
+one is the one a two-valued flag could not express: a reader who wanted the
+retired projects had to ask for both sets and narrow what came back, which is
+a filter over a PAGE — the answer stops at 200 rows — so on a company with
+more live projects than that, the page held no archived row at all and the
+screen reported a company that had retired dozens as having archived nothing.
+The listing's `total` counts whichever set was asked for, never a wider one.
+
+Selecting a set leaves one question a caller cannot answer from the rows it
+got back — an empty answer says the *set* is empty, never whether the
+*company* is — so the listing also carries a **census**: `active` and
+`archived`, counted under the same `q` and `unit` as the rows and without the
+archival term. That is what lets a screen tell "no projects yet" from "every
+project archived" without asking twice, and it is why the Projects directory
+can say a company has filed nothing while sitting on its Active segment, and
+can tell a reader whose company wound a programme down exactly how many
+projects are waiting under Archived.
 
 An operator holds the same thirteen and more that no seat does, including the
 two below. `remove_work_item` puts an item
@@ -785,7 +857,8 @@ screens rather than one:
   is one press away. Two menus decide what is on the list and how it is drawn —
   **Filter** adds a narrowing, and each one is a removable chip under the bar;
   **Display** holds the shape (list, board, table, calendar, timeline), the
-  grouping, the order and, on a table, the columns. Grouped on a status, a
+  grouping, the order and — on the list and the table, which are one grid with
+  a column set each — the columns. Grouped on a status, a
   status group or a priority, the board and the list draw every value the
   company declares and say which of them are empty, because those three are
   closed sets whose order means something; grouped on an assignee, a tag or a

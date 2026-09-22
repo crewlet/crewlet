@@ -28,6 +28,16 @@ const (
 	MetaExcerpt    = "excerpt"
 	MetaLate       = "late"
 
+	// MetaDeltas is WHAT MOVED, already rendered — one `field: from → to`
+	// line per delta the record carries, written by [changedText].
+	//
+	// RENDERED AT THE PARSE rather than carried typed, because the spine's
+	// envelope is a string map and this is the only side of the boundary
+	// where [Notify.Fields] still exists: a prompt is handed a
+	// [notify.Inbound] and has no route back to the record. Prose in
+	// metadata is what [MetaExcerpt] already is.
+	MetaDeltas = "deltas"
+
 	// MetaObject and MetaObjectID are WHAT the change was about, and they
 	// exist because one of the two routable kinds is not a task. The
 	// prompt keys its opener on the object rather than on the change kind:
@@ -181,6 +191,15 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	}
 	if record.Notify.Excerpt != "" {
 		metadata[MetaExcerpt] = record.Notify.Excerpt
+	}
+	// WHAT MOVED, not only that something did. The record has carried
+	// these deltas since the first wake and nothing rendered them, so a
+	// seat woken by a status change was told "The status changed by ada."
+	// and had to spend a tool round to learn what it changed TO — and the
+	// side it moved FROM is not on the task at all, so that round could
+	// never recover it.
+	if text := changedText(record.Notify.Fields); text != "" {
+		metadata[MetaDeltas] = text
 	}
 	if record.Notify.Late {
 		// THE FLAG A READER NEEDS to understand why they are hearing

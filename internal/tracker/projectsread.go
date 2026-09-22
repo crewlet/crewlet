@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -100,6 +101,48 @@ type ProjectRow struct {
 	Version  uint64 `json:"version"`
 }
 
+// ProjectCensus is how many projects each archival set holds.
+//
+// NARROWED BY `q` AND `unit`, AND BY NOTHING ELSE — it is the listing's own
+// question minus its archival term. A directory narrowed to one unit that
+// reported the whole company's archived count would offer a reader a segment
+// that is empty under the filter they are looking through.
+//
+// IT EXISTS BECAUSE A SEGMENTED SCREEN CANNOT ASK TWICE. Selecting one set
+// (which is what [ArchivedMode] is for) means an empty answer no longer says
+// whether the company has no projects or has archived every one of them — two
+// states one sentence cannot cover, and a reader acts on them differently. The
+// alternative was a screen that either guessed, hedged in its own copy, or
+// asked a second question per segment; the counts are one aggregate over rows
+// the listing is already scanning.
+type ProjectCensus struct {
+	Active   int `json:"active"`
+	Archived int `json:"archived"`
+}
+
+// Count is how many projects one archival mode selects out of this census.
+//
+// THE LISTING'S OWN `total` IS THIS, rather than a second `COUNT(*)` beside
+// it: a total counted separately from the census is a number that can disagree
+// with the one drawn beside it on the same screen.
+func (c ProjectCensus) Count(mode ArchivedMode) int {
+	switch mode {
+	case ArchivedExclude:
+		return c.Active
+	case ArchivedOnly:
+		return c.Archived
+	case ArchivedInclude:
+		return c.Active + c.Archived
+	}
+	// UNREACHABLE THROUGH [Reader.Projects], which refuses a mode that is
+	// not one before it reads. Zero rather than a panic, because an
+	// arithmetic helper is not where a bad enum should be discovered.
+	return 0
+}
+
+// Total is every project the census counted, whichever set was asked for.
+func (c ProjectCensus) Total() int { return c.Active + c.Archived }
+
 // ProjectListing is the answer.
 type ProjectListing struct {
 	Projects []ProjectRow `json:"projects"`
@@ -110,6 +153,12 @@ type ProjectListing struct {
 	// carries the rationale.
 	Total     int  `json:"total"`
 	Truncated bool `json:"truncated,omitempty"`
+
+	// Census is the same question's answer for BOTH archival sets, so a
+	// caller that selected one can still tell an empty set from an empty
+	// company — see [ProjectCensus]. `Total` is [ProjectCensus.Count] of
+	// the mode that was asked for.
+	Census ProjectCensus `json:"census"`
 
 	Level          statelog.ReadLevel `json:"read_level"`
 	LogSeq         uint64             `json:"log_seq"`
@@ -155,6 +204,84 @@ const MaxProjectsPerAnswer = 200
 // row grows a field.
 const MaxProjectsPerToolAnswer = 50
 
+// ProjectSort is one ordering a projects listing may be asked for.
+//
+// A CLOSED SET OVER `tracker_projects`' OWN COLUMNS, because the ordering has
+// to be the ENGINE's. The listing is bounded at [MaxProjectsPerAnswer] and an
+// ordering applied AFTER that bound orders the page rather than the company:
+// `sort=-open` over a key-ordered first two hundred answers "the most open
+// work among the projects whose keys sort first", which is not a question
+// anybody asked and reads exactly like the answer to the one they did.
+//
+// THE LEAD IS NOT IN THE SET AND CANNOT BE. A project's lead is resolved at
+// READ time against the epoch's chart ([Units]) — the tracker holds no org, so
+// there is no column to order by, and a key naming one would be this package
+// claiming an ordering it cannot produce.
+type ProjectSort string
+
+// The seven orderings. Each reads a column the project row already carries, so
+// every one of them orders the whole asked set rather than a page of it.
+const (
+	ProjectSortKey        ProjectSort = "key"
+	ProjectSortName       ProjectSort = "name"
+	ProjectSortUnit       ProjectSort = "unit"
+	ProjectSortOpen       ProjectSort = "open"
+	ProjectSortDone       ProjectSort = "done"
+	ProjectSortClosed     ProjectSort = "closed"
+	ProjectSortLastChange ProjectSort = "last_change"
+)
+
+// ProjectSorts is every ordering, in the order a refusal names them.
+var ProjectSorts = []ProjectSort{
+	ProjectSortKey, ProjectSortName, ProjectSortUnit,
+	ProjectSortOpen, ProjectSortDone, ProjectSortClosed, ProjectSortLastChange,
+}
+
+// ProjectSortNames is the same list as wire strings, for the surfaces that
+// quote it back at a caller who spelled one wrong — and for the gate that
+// holds the directory's own copy of it against this one.
+func ProjectSortNames() []string {
+	out := make([]string, len(ProjectSorts))
+	for i, k := range ProjectSorts {
+		out[i] = string(k)
+	}
+	return out
+}
+
+// Valid reports whether this is one of the seven orderings.
+//
+// THE ZERO VALUE IS NOT ONE, and unlike [ArchivedMode]'s it is still a
+// meaningful field value — see [ProjectQuery.Sort]. The difference is what the
+// two absences would hide: an ordering nobody asked for changes the ORDER of
+// an answer, where an archival set nobody asked for decides which projects are
+// in it at all.
+func (k ProjectSort) Valid() bool { return slices.Contains(ProjectSorts, k) }
+
+// projectSortColumns is the expression each ordering reads.
+//
+// A TABLE KEYED ON THE TYPED ENUM rather than a `switch` in the SQL builder,
+// because these strings are interpolated into the statement: a map that only a
+// [ProjectSort] can index is what says no caller's text ever reaches it.
+var projectSortColumns = map[ProjectSort]string{
+	ProjectSortKey:    "p.key",
+	ProjectSortOpen:   "p.open_count",
+	ProjectSortDone:   "p.done_count",
+	ProjectSortClosed: "p.closed_count",
+
+	// LOWERED, and not `COLLATE NOCASE`. These two are prose typed by
+	// whoever wrote the org chart, and BINARY — this store's default,
+	// which the tracker's schema keeps everywhere for the manual order's
+	// sake (`TestNoCollateInTracker`) — sorts every lowercase name after
+	// every uppercase one. `lower()` is a function on the READ rather than
+	// a collation on the column, so the rank algebra's comparison is
+	// untouched, and a directory of tens of rows pays a scan over a column
+	// nothing indexes either way.
+	ProjectSortName: "lower(p.name)",
+	ProjectSortUnit: "lower(p.unit)",
+
+	ProjectSortLastChange: "p.last_change_at",
+}
+
 // ProjectQuery asks for a company's projects.
 type ProjectQuery struct {
 	// Q narrows by a case-insensitive substring of the key, the name or
@@ -165,8 +292,27 @@ type ProjectQuery struct {
 	// its spellings — its id or its name, in any case.
 	Unit string
 
-	// Archived includes the archived ones; absent excludes them.
-	Archived bool
+	// Archived is WHICH SET, and [Reader.Projects] refuses a query that
+	// does not say — on the same terms as the absent [ProjectQuery.Level]
+	// beside it, because this struct is built as a literal at every call
+	// site and so has no constructor to carry a default.
+	//
+	// IT SELECTS RATHER THAN WIDENS. This was a `bool` that INCLUDED the
+	// archived ones, which is two answers to a three-answer question: a
+	// screen wanting the retired ones alone had to ask for both sets and
+	// narrow the page it got back — so past [MaxProjectsPerAnswer] active
+	// projects it was narrowing a page holding no archived row at all, and
+	// reported a company with dozens of them as having archived nothing.
+	Archived ArchivedMode
+
+	// Sort orders the whole asked set, and Descending reverses it.
+	//
+	// THE ZERO VALUE IS [ProjectSortKey] ASCENDING, which is the order this
+	// listing has always had. [ProjectSortKey] is also the TIEBREAK under
+	// every other ordering, so two projects level on the sorted column come
+	// back in one stable order rather than whichever the planner walked.
+	Sort       ProjectSort
+	Descending bool
 
 	// Limit bounds the rows, clamped to [MaxProjectsPerAnswer].
 	Limit int
@@ -188,6 +334,62 @@ type ProjectQuery struct {
 	MaxLagSeq uint64
 }
 
+// ParseProjectQuery reads the five keys this listing's GRAMMAR owns — `q`,
+// `unit`, `archived`, `sort` and `limit` — and refuses a value by name.
+//
+// ONE PARSE FOR BOTH SURFACES. A REST call and a seat's `list_projects` ask
+// the same question through different bags, and a grammar written twice is how
+// `archived=only` comes to mean one thing on a screen and another in a tool —
+// which is precisely the failure [Query]'s own one-parse rule exists to
+// prevent. [MapParams] is what lets a tool's argument map through it.
+//
+// WHAT IT DOES NOT FILL is what is not the grammar's: the freshness keys are
+// [ParseFreshness]'s, [ProjectQuery.Units] is the surface's own chart seam,
+// and the LIMIT IS PARSED BUT NOT CLAMPED, because the two surfaces clamp to
+// different ceilings ([MaxProjectsPerAnswer] and [MaxProjectsPerToolAnswer])
+// and each one's reason is its own.
+//
+// AN ABSENT `archived` RESOLVES HERE and not in the reader: this is the
+// surface's own default, and [Reader.Projects] refuses a query that reaches it
+// without one.
+func ParseProjectQuery(p Params) (ProjectQuery, error) {
+	q := ProjectQuery{
+		Q:        strings.TrimSpace(p.String("q")),
+		Unit:     strings.TrimSpace(p.String("unit")),
+		Archived: ArchivedExclude,
+		Limit:    p.Int("limit", 0),
+	}
+	if raw := strings.TrimSpace(p.String("archived")); raw != "" {
+		mode := ArchivedMode(raw)
+		if !mode.Valid() {
+			return ProjectQuery{}, fmt.Errorf("tracker: archived is one of %s, "+
+				"and %q is none of them", strings.Join(ArchivedModeNames(), ", "),
+				raw)
+		}
+		q.Archived = mode
+	}
+	if raw := strings.TrimSpace(p.String("sort")); raw != "" {
+		// THE SAME `-<key>` GRAMMAR THE TASK LISTING'S `sort=` TAKES,
+		// because it is the same control writing it: every grid in the
+		// dashboard puts `-<column>` in the URL. ONE TERM rather than
+		// that grammar's comma-separated list — a directory of tens of
+		// rows is ordered by one column and its tiebreak, and the
+		// control that writes this key can express nothing else.
+		descending := strings.HasPrefix(raw, "-")
+		// NOT NAMED `sort`: the standard library's package of that name
+		// is imported here, and a local shadowing it is a trap for the
+		// next reader rather than a compile error.
+		order := ProjectSort(strings.TrimPrefix(raw, "-"))
+		if !order.Valid() {
+			return ProjectQuery{}, fmt.Errorf("tracker: sort is one of %s, "+
+				"each optionally with a leading `-` for descending, and %q is "+
+				"none of them", strings.Join(ProjectSortNames(), ", "), raw)
+		}
+		q.Sort, q.Descending = order, descending
+	}
+	return q, nil
+}
+
 // Projects answers the company's projects with their maintained counts.
 func (r *Reader) Projects(ctx context.Context, q ProjectQuery) (
 	ProjectListing, error) {
@@ -196,6 +398,19 @@ func (r *Reader) Projects(ctx context.Context, q ProjectQuery) (
 		return ProjectListing{}, fmt.Errorf("tracker: this project read " +
 			"names no level — a surface resolves an absent read_level to its " +
 			"own default before it reads")
+	}
+	// AND NO ARCHIVAL SET IS THE SAME KIND OF SILENCE, refused for the same
+	// reason: the answer's MEMBERSHIP turns on it, and a default applied
+	// here would be one no caller had chosen and none could see.
+	if !q.Archived.Valid() {
+		return ProjectListing{}, fmt.Errorf("tracker: this project read names "+
+			"no archival set — `archived` is one of %s, and a surface resolves "+
+			"an absent one to its own default before it reads",
+			strings.Join(ArchivedModeNames(), ", "))
+	}
+	if q.Sort != "" && !q.Sort.Valid() {
+		return ProjectListing{}, fmt.Errorf("tracker: %q is not a project sort "+
+			"key — one of %s", q.Sort, strings.Join(ProjectSortNames(), ", "))
 	}
 	limit := q.Limit
 	if limit <= 0 || limit > MaxProjectsPerAnswer {
@@ -212,12 +427,15 @@ func (r *Reader) Projects(ctx context.Context, q ProjectQuery) (
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		rows, total, err := readProjectRows(ctx, tx, q, limit)
+		rows, census, err := readProjectRows(ctx, tx, q, limit)
 		if err != nil {
 			return err
 		}
-		listing.Projects, listing.Total = rows, total
-		listing.Truncated = total > len(rows)
+		// THE TOTAL IS THE CENSUS'S OWN ARITHMETIC, never a second count:
+		// one number cannot then disagree with the two drawn beside it.
+		listing.Projects, listing.Census = rows, census
+		listing.Total = census.Count(q.Archived)
+		listing.Truncated = listing.Total > len(rows)
 		position, applied, err := readCheckpoint(ctx, tx)
 		if err != nil {
 			return err
@@ -248,43 +466,63 @@ func projectListScope() statelog.ScopeSet {
 	return statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised()
 }
 
-// readProjectRows reads the projects a query names.
+// readProjectRows reads the projects a query names, and the census of both
+// archival sets under the same narrowing.
+//
+// THE NARROWING AND THE ARCHIVAL TERM ARE BUILT APART, because the census is
+// the listing's question MINUS the archival term and the rows are it WITH one.
+// Folded into one clause they could not both be asked.
 func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
-	limit int) ([]ProjectRow, int, error) {
+	limit int) ([]ProjectRow, ProjectCensus, error) {
 
-	where := []string{}
+	// narrowing is `q` and `unit`: what the caller asked ABOUT, as opposed
+	// to which archival set they asked FOR.
+	narrowing := []string{}
 	var args []any
-	if !q.Archived {
-		where = append(where, "p.archived = 0")
-	}
 	// EITHER SPELLING OF THE UNIT, through the chart — see [unitSpellings].
 	// A project row is chart-owned and rewritten by the next epoch apply,
 	// so it holds the current key within a beat of one being added; the
 	// set is what keeps the filter answering in the beat before that, and
 	// what lets a caller filter by the name a screen showed them.
+	//
+	// IN THE NARROWING, so the CENSUS is cut by the same spellings as the
+	// rows: the two numbers beside a directory are the same question asked
+	// of both archival sets, and a census narrowed by one spelling beside
+	// rows narrowed by two would count what it did not list.
 	if spellings := unitSpellings(q.Units, []string{q.Unit}); len(spellings) > 0 {
-		where = append(where, "p.unit IN ("+placeholders(len(spellings))+")")
+		narrowing = append(narrowing, "p.unit IN ("+placeholders(len(spellings))+")")
 		args = append(args, anyOf(spellings)...)
 	}
 	if term := strings.TrimSpace(q.Q); term != "" {
 		// THE KEY, THE NAME AND THE PURPOSE, because a filter box is
 		// typed into by somebody who remembers one of the three. LIKE
 		// with the term escaped, which is what [likeEscape] is for.
-		where = append(where, `(p.key LIKE ? ESCAPE '\' OR p.name LIKE ? `+
+		narrowing = append(narrowing, `(p.key LIKE ? ESCAPE '\' OR p.name LIKE ? `+
 			`ESCAPE '\' OR p.purpose LIKE ? ESCAPE '\')`)
 		pattern := "%" + likeEscape(term) + "%"
 		args = append(args, pattern, pattern, pattern)
 	}
-	clause := ""
-	if len(where) > 0 {
-		clause = " WHERE " + joinAnd(where)
+	narrowed := ""
+	if len(narrowing) > 0 {
+		narrowed = " WHERE " + joinAnd(narrowing)
 	}
 
-	var total int
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM tracker_projects p`+clause, args...).
-		Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("tracker: count the projects: %w", err)
+	// ONE AGGREGATE FOR BOTH SETS, grouped on the column that divides them
+	// — and it replaces the `COUNT(*)` that answered `total` alone, so the
+	// listing is no more queries than it was.
+	census, err := readProjectCensus(ctx, tx, narrowed, args)
+	if err != nil {
+		return nil, ProjectCensus{}, err
+	}
+
+	// EXACTLY THE ASKED SET. [ArchivedInclude] is the only mode with no
+	// term, because it is the only one asking for both.
+	clause := narrowed
+	switch q.Archived {
+	case ArchivedExclude:
+		clause = appendTerm(narrowed, "p.archived = 0")
+	case ArchivedOnly:
+		clause = appendTerm(narrowed, "p.archived = 1")
 	}
 
 	rows, err := tx.QueryContext(ctx, `
@@ -293,10 +531,10 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 		       p.closed_count, p.last_change_at, p.last_change_actor,
 		       p.last_change_actor_kind, p.archived, p.version
 		FROM tracker_projects p`+clause+`
-		ORDER BY p.key
+		ORDER BY `+projectOrderBy(q)+`
 		LIMIT ?`, append(args, limit)...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("tracker: read the projects: %w", err)
+		return nil, ProjectCensus{}, fmt.Errorf("tracker: read the projects: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -311,7 +549,7 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 			&row.Counts.Done, &row.Counts.Closed, &change.At,
 			&change.Actor, &change.ActorKind, &archived,
 			&row.Version); err != nil {
-			return nil, 0, fmt.Errorf("tracker: scan a project: %w", err)
+			return nil, ProjectCensus{}, fmt.Errorf("tracker: scan a project: %w", err)
 		}
 		row.Archived = archived != 0
 		row.LastChange = change.value()
@@ -319,9 +557,92 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("tracker: read the projects: %w", err)
+		return nil, ProjectCensus{}, fmt.Errorf("tracker: read the projects: %w", err)
 	}
-	return out, total, nil
+	return out, census, nil
+}
+
+// appendTerm ANDs one more term onto a clause that may be empty.
+func appendTerm(clause, term string) string {
+	if clause == "" {
+		return " WHERE " + term
+	}
+	return clause + " AND " + term
+}
+
+// readProjectCensus counts both archival sets under one narrowing.
+//
+// GROUPED RATHER THAN TWO COUNTS, so the two halves are read in one pass over
+// one set of rows and cannot be taken from different snapshots — which,
+// inside the read's own transaction, is a property this does not have to think
+// about and would lose the moment somebody moved one of them.
+func readProjectCensus(ctx context.Context, tx *sql.Tx, narrowed string,
+	args []any) (ProjectCensus, error) {
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT p.archived, COUNT(*) FROM tracker_projects p`+narrowed+
+			` GROUP BY p.archived`, args...)
+	if err != nil {
+		return ProjectCensus{}, fmt.Errorf("tracker: count the projects: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var census ProjectCensus
+	for rows.Next() {
+		var archived, count int
+		if err := rows.Scan(&archived, &count); err != nil {
+			return ProjectCensus{}, fmt.Errorf("tracker: scan the project census: %w", err)
+		}
+		// ANY NON-ZERO IS ARCHIVED, which is how every other reader of
+		// this column reads it — the schema defaults it to 0 and the
+		// applier writes `boolInt`, but a column is not a bool and a
+		// reader that tested `== 1` would drop a row nobody can see.
+		if archived != 0 {
+			census.Archived += count
+			continue
+		}
+		census.Active += count
+	}
+	if err := rows.Err(); err != nil {
+		return ProjectCensus{}, fmt.Errorf("tracker: count the projects: %w", err)
+	}
+	return census, nil
+}
+
+// projectOrderBy is the ordering clause one query compiles to.
+//
+// IT IS BUILT FROM THE ENUM AND NEVER FROM A STRING, and the caller has
+// already been refused if the key is not one — [Reader.Projects] is the one
+// entry point and it checks before it reads.
+func projectOrderBy(q ProjectQuery) string {
+	column, ok := projectSortColumns[q.Sort]
+	if !ok {
+		// AN ABSENT ORDERING IS THE KEY, which is what the tiebreak
+		// below is anyway — so this arm emits `p.key` once rather than
+		// twice.
+		return "p.key"
+	}
+	direction := ""
+	if q.Descending {
+		direction = " DESC"
+	}
+	clause := column + direction
+	if q.Sort == ProjectSortLastChange {
+		// AN ABSENT INSTANT SORTS LAST IN BOTH DIRECTIONS. SQLite orders
+		// NULL first ascending and last descending, so the default would
+		// open a newest-first directory with every project nothing has
+		// been filed into — and "nothing recorded" is not the smallest
+		// value, it is not a value. It is the rule the grid drawing
+		// these rows already states for the same column.
+		clause = "p.last_change_at IS NULL, " + clause
+	}
+	if q.Sort == ProjectSortKey {
+		return clause
+	}
+	// THE TIEBREAK, so two projects level on the sorted column come back
+	// in one stable order. Without it the planner's walk decides, and a
+	// directory reshuffles its equal rows between two identical polls.
+	return clause + ", p.key"
 }
 
 // lastChangeColumns is the three columns as they come off the row.

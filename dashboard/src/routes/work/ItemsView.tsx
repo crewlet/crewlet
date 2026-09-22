@@ -42,9 +42,8 @@ import { QueryState } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import { Board } from "./shapes/Board.tsx";
 import { CalendarView } from "./shapes/Calendar.tsx";
-import { List } from "./shapes/List.tsx";
 import { TimelineView } from "./shapes/Timeline.tsx";
-import { TableView, removalsOf } from "./shapes/Table.tsx";
+import { WorkGrid, colsParam, isGridShape, removalsOf } from "./shapes/Grid.tsx";
 import { FilterMenu } from "./toolbar/FilterMenu.tsx";
 import { DisplayMenu } from "./toolbar/DisplayMenu.tsx";
 import { FilterChips } from "./toolbar/FilterChips.tsx";
@@ -153,7 +152,15 @@ export function ItemsView({ project = "" }: { project?: string }) {
   const [blocked, setBlocked] = useParam("blocked", "");
   const [due, setDue] = useParam("due", "");
   const [removed, setRemoved] = useParam("removed", "");
-  const [cols, setCols] = useParam("cols", "");
+  // THE COLUMN SET IS THE SHAPE'S, so there is a key per grid shape rather
+  // than one `cols=` read against whichever set happens to be on. Both are
+  // read unconditionally — a hook's key is an argument and this is one
+  // component, so branching here would be a branch in the hook order — and
+  // the active one is handed to the Display menu. [colsParam] is what keeps
+  // these two spellings the same as the ones the grid reads. See
+  // `shapes/Grid.tsx` for why one shared key is wrong.
+  const [listCols, setListCols] = useParam(colsParam("list"), "");
+  const [tableCols, setTableCols] = useParam(colsParam("table"), "");
   const fields = useFieldFilters();
 
   const container = project ? `project:${project}` : "workspace";
@@ -197,6 +204,9 @@ export function ItemsView({ project = "" }: { project?: string }) {
   const viewShape: Shape = shapeOf(chosenView, views);
   const shape: Shape = isShape(shapeKey) ? shapeKey : viewShape;
   const detail = overview.data;
+  // AND THE ACTIVE SET'S VALUE, for the menu that writes it.
+  const cols = shape === "table" ? tableCols : listCols;
+  const setCols = shape === "table" ? setTableCols : setListCols;
 
   // THE VIEW SETS THE SCOPE, and it is the view's own `status_group` read back
   // through the segment that expresses it. [buildItemsParams] spreads a view's
@@ -631,8 +641,14 @@ export function ItemsView({ project = "" }: { project?: string }) {
                 overflowHref={boardOverflowHref}
               />
             )}
-            {!nothingShown && shape === "list" && (
-              <List
+            {/* ONE BRANCH FOR BOTH GRID SHAPES. The list and the table are one
+                renderer drawn in two column sets — see `shapes/Grid.tsx` — so
+                a second arm here would be a second copy of every prop they
+                already share, which is what let the two drift apart in the
+                first place. */}
+            {!nothingShown && isGridShape(shape) && (
+              <WorkGrid
+                shape={shape}
                 rows={rows}
                 groups={bands}
                 // THE AXIS THE QUERY WAS SENT ON, not the one in the URL: a
@@ -643,32 +659,19 @@ export function ItemsView({ project = "" }: { project?: string }) {
                 chrome={chrome}
                 detail={detail}
                 now={now}
+                workspace={!project}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
                 onOpen={(row) => openPeek({ kind: "item", id: row.key })}
                 onOverflow={(axis, key) => openOverflow({ group_by: axis, group: key }, "replace")}
                 overflowHref={listOverflowHref}
-                // THE SHAPE DRAWS IT, so the sentence sits inside the list's own
+                removals={inTrash ? removals : undefined}
+                // THE GRID DRAWS IT, so the sentence sits inside the grid's own
                 // panel as the last thing under the rows — where a foot rendered
                 // by this screen would be a detached line under a bordered box.
                 // The words are `endNote`'s, once, for every shape that takes
                 // one.
                 foot={foot}
-              />
-            )}
-            {!nothingShown && shape === "table" && (
-              <TableView
-                rows={rows}
-                groups={bands}
-                axis={String(params.group_by ?? "")}
-                chrome={chrome}
-                detail={detail}
-                now={now}
-                workspace={!project}
-                selected={peek?.kind === "item" ? peek.id : ""}
-                hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
-                removals={inTrash ? removals : undefined}
               />
             )}
             {!nothingShown && shape === "timeline" && (

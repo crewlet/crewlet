@@ -340,7 +340,26 @@ export function Segmented<T extends string>({
   /** `icon` is a NAME rather than a node, so the size step below is decided
       once here rather than at each of the nine call sites — the shape
       `Dialog`, `ObjectHeader` and `cells` already take a mark in. */
-  options: { value: T; label: ReactNode; icon?: MarkName; title?: string }[];
+  /**
+   * `count` is how many things the option selects, where the caller has the
+   * engine's own number for it. It is drawn in the same `count-chip` the
+   * tab strip's count uses, so one figure does not read two ways on one
+   * screen — and it is INSIDE the button, so a radio announces "Archived 2"
+   * rather than leaving the number as unattached text beside a control.
+   *
+   * A NUMBER RATHER THAN A NODE, deliberately: a count is a count, and a
+   * prop taking a node here is how one call site starts drawing a word in
+   * the chip. `0` is a value and draws — "Archived 0" is exactly what a
+   * reader needs to know before they click it — so an option with nothing
+   * to say passes no count at all.
+   */
+  options: {
+    value: T;
+    label: ReactNode;
+    count?: number;
+    icon?: MarkName;
+    title?: string;
+  }[];
   onChange: (value: T) => void;
   size?: "sm";
   ariaLabel: string;
@@ -405,6 +424,7 @@ export function Segmented<T extends string>({
         >
           {o.icon && <Mark name={o.icon} size="xs" />}
           {o.label}
+          {o.count != null && <span className="count-chip t-num">{o.count}</span>}
         </button>
       ))}
     </div>

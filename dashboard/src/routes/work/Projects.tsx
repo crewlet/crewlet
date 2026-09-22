@@ -26,14 +26,26 @@
  * one click further, from the panel's own `Open ↗` or from any click the
  * browser treats as "open elsewhere".
  *
- * # The sort is the reader's and it is in the URL
+ * # The sort is the reader's, it is in the URL, and the ENGINE applies it
  *
- * `DataGrid` writes it, so a directory ordered by open work can be sent to
- * somebody, survives a reload and comes back from Back the way it went.
+ * `DataGrid` writes `sort=`, so a directory ordered by open work can be sent
+ * to somebody, survives a reload and comes back from Back the way it went.
+ * The key then travels to the engine rather than being applied here, because
+ * the answer is a PAGE: the listing stops at the engine's own 200
+ * (`MaxProjectsPerAnswer`) and a sort applied after that orders the rows that
+ * survived the key order — so `-open` meant "the most open work among the
+ * projects whose keys sort first", which reads exactly like the answer to the
+ * question it is not. `serverSorted` is what tells the grid not to re-sort
+ * the page it was handed.
+ *
+ * The corollary is that a column the ENGINE cannot order by is not sortable
+ * here either: Lead is resolved against the org chart at read time and the
+ * tracker holds no chart, so there is no column behind it. Sorting it on the
+ * client alone would be the same page-ordering bug wearing one column.
  */
 
 import { useMemo } from "react";
-import { useParam } from "~/app/router.tsx";
+import { buildHash, useParam, useRoute } from "~/app/router.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
@@ -55,6 +67,112 @@ import type { WorkProjectRow } from "~/protocol/index.ts";
 const SHOWN = ["active", "archived", "all"] as const;
 type Shown = (typeof SHOWN)[number];
 
+/**
+ * The segment, as the engine's own `archived=` mode.
+ *
+ * TWO VOCABULARIES ON PURPOSE. `shown=` is a SCREEN segment — which tab a
+ * link opens — and `archived=` is the query parameter the engine's three-mode
+ * enum is spelled in (`tracker.ArchivedMode`, the same one the work list
+ * takes). Mapping between them is one object; collapsing them would either put
+ * `archived=only` in a route people share or invent a second name for a mode
+ * the engine already has.
+ */
+const ASKED: Record<Shown, "false" | "only" | "true"> = {
+  active: "false",
+  archived: "only",
+  all: "true",
+};
+
+/**
+ * The orderings the ENGINE takes, as the dashboard's own copy.
+ *
+ * It is a copy by necessity — this is a separate build in a separate language
+ * and cannot import `tracker.ProjectSorts` — so a Go gate holds it against
+ * that list in both directions (`internal/tracker/client_gate_test.go`). The
+ * drift it catches is silent and total: a header carrying a key the engine
+ * refuses turns one click into a `bad_params` refusal over the whole screen,
+ * and an ordering the engine grew that no header offers is one nobody can
+ * reach.
+ */
+const PROJECT_SORT_KEYS = ["key", "name", "unit", "open", "done", "closed", "last_change"] as const;
+
+/**
+ * What the directory opens on.
+ *
+ * WHERE THE PILE IS, which is the question a directory of containers is
+ * opened to answer — and it is the engine's answer over every project now
+ * rather than this page's over the first two hundred keys. Both this page and
+ * the grid read `sort=` through `useParam` with this same fallback, so the two
+ * cannot disagree about what an absent key means.
+ */
+const DEFAULT_SORT = "-open";
+
+/**
+ * What an empty answer means, per segment — and there are only two here.
+ *
+ * ONE SENTENCE PER QUESTION, because each segment now asks a different one.
+ * "No project matches" was the old copy and it named a narrowing this screen
+ * does not have: there is no filter box, so a reader told nothing matched had
+ * nothing to widen.
+ *
+ * THE ACTIVE ONE SAYS WHERE THE PROJECTS WENT, and it can, because the answer
+ * carries the CENSUS of both sets. An empty Active answer is either a company
+ * with no projects or a company that has archived every one of them, and the
+ * page used to be unable to tell — so it hedged, naming both ways it happens
+ * in one sentence and sending the reader to look. A hedge is what a screen
+ * writes when it is missing a number; this one now has the number, so it says
+ * how many are archived and offers the segment that holds them.
+ *
+ * `all` is absent because it is unreachable: an empty answer on ANY segment
+ * with a zero census is a company with no projects, which [NoProjectsYet]
+ * replaces the whole grid with.
+ */
+const EMPTY = {
+  archived: {
+    icon: "view_column" as const,
+    title: "No project is archived",
+    hint: "An archived project keeps its work and stops taking new items.",
+  },
+};
+
+/**
+ * The Active segment's empty state, which needs the census to write.
+ *
+ * A FUNCTION RATHER THAN A CONSTANT because the sentence turns on a number the
+ * engine sent. With archived work to point at it points at it, by count and
+ * with a link; with none, the company has projects that are neither active nor
+ * archived, which cannot happen — so the only remaining case is the one the
+ * grid is not drawing, and the honest line is the plain one.
+ */
+function activeEmpty(archived: number, href: string) {
+  if (archived > 0) {
+    return {
+      icon: "view_column" as const,
+      title: "No project is active",
+      hint: (
+        <>
+          {/* THE TYPOGRAPHIC APOSTROPHE, which is what every other sentence
+              in this product uses — the JSX ones spell it `&rsquo;` and a
+              string has to carry the character itself. */}
+          {archived === 1
+            ? "The company’s one project has been archived"
+            : `All ${archived} of the company’s projects have been archived`}
+          {" — "}
+          <a className="t-link" href={href}>
+            see them under Archived
+          </a>
+          , where each keeps its work.
+        </>
+      ),
+    };
+  }
+  return {
+    icon: "view_column" as const,
+    title: "No project is active",
+    hint: "A project appears the moment a unit in the company configuration declares its `project` key.",
+  };
+}
+
 export function Projects() {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -64,35 +182,52 @@ export function Projects() {
     ? (shownRaw as Shown)
     : "active";
   const { open: openPeek } = usePeekControls();
+  const route = useRoute();
+  // WHERE THE ARCHIVED ONES ARE, as a real href rather than a handler: the
+  // empty state offers it as a link, so it is middle-clickable and copyable
+  // like every other way into a segment. THE REST OF THE QUERY IS KEPT —
+  // a reader who sorted, or who arrives with a filter the API takes, does not
+  // lose it by following a sentence that was only ever about the segment.
+  const archivedHref = useMemo(() => {
+    const query = new URLSearchParams(route.query);
+    query.set("shown", "archived");
+    return buildHash(route.path, query);
+  }, [route]);
+  // THE GRID'S OWN KEY, READ HERE TOO. `DataGrid` writes `sort=` from a header
+  // click and this page sends it to the engine, so both read it through
+  // `useParam` with the same fallback — one key, one meaning, one default.
+  //
+  // AND A KEY THAT IS NOT ONE FALLS BACK, exactly as `shown` above does. A URL
+  // is hand-editable and outlives a build, so a link carrying an ordering this
+  // engine does not take would otherwise meet a `bad_params` refusal — which
+  // the frame renders as the SCREEN being at fault and offers no retry for,
+  // over a whole directory, because of one stale query key.
+  const [sortRaw] = useParam("sort", DEFAULT_SORT);
+  const sort = PROJECT_SORT_KEYS.includes(
+    sortRaw.replace(/^-/, "") as (typeof PROJECT_SORT_KEYS)[number],
+  )
+    ? sortRaw
+    : DEFAULT_SORT;
 
-  // EVERY PROJECT, which is what a directory is. The engine's own limit is
-  // what bounds it, and the answer says when it stopped short.
+  // EVERY PROJECT IN THE ASKED SET, which is what a directory is. The engine's
+  // own limit is what bounds it, and the answer says when it stopped short.
   //
-  // `archived` IS ASKED FOR, never filtered out of an answer that never had
-  // them: the listing excludes archived rows unless the question says
-  // otherwise (`internal/tracker/projectsread.go` ANDs `p.archived = 0`), so a
-  // client-side narrowing over the default answer left the Archived segment
-  // permanently empty — and, on a company whose every project is archived, it
-  // said the company had filed nothing at all.
+  // THE SEGMENT IS THE QUESTION, not a narrowing of a wider answer. The engine
+  // selects exactly the set named (`tracker.ArchivedMode`), so the rows that
+  // arrive ARE the segment and `total` counts it. The page used to ask for
+  // both sets and filter the answer here: past the engine's 200 the page it
+  // filtered held no archived row at all, so the Archived segment said "No
+  // project is archived" about a company that had retired dozens.
   //
-  // IT WIDENS RATHER THAN SELECTS: the engine's flag INCLUDES the archived
-  // ones, so "archived only" is still this screen's own narrowing over the
-  // wider answer.
+  // AND THE ORDER IS ASKED FOR TOO, for the same reason — see the module doc.
   const state = useQuery(
     "work_projects",
-    { limit: 200, ...(shown === "active" ? {} : { archived: true }) },
+    { limit: 200, archived: ASKED[shown], sort },
     { pollMs: 60_000 },
   );
   usePageCoverage(state.data);
 
-  const all = useMemo(() => state.data?.projects ?? [], [state.data]);
-  const rows = useMemo(
-    () =>
-      all.filter((p) =>
-        shown === "all" ? true : shown === "archived" ? !!p.archived : !p.archived,
-      ),
-    [all, shown],
-  );
+  const rows = useMemo(() => state.data?.projects ?? [], [state.data]);
   // WHAT `[` AND `]` WALK, in the order the grid is in — published by the list
   // that holds it, which is the only thing that knows that order.
   usePeekNeighbours(
@@ -112,30 +247,44 @@ export function Projects() {
     [rows],
   );
 
-  // HOW MANY PROJECTS THE COMPANY HAS, which is the answer's own number and
-  // not this page's. `work_projects` carries `total` beside a `truncated` that
-  // is `total > len(rows)` (`internal/tracker/projectsread.go`), and the
-  // sentence read neither: past the engine's own 200 it said "200 projects"
-  // about a company with three hundred, with nothing on screen to say so.
+  // THE ANSWER'S OWN NUMBERS. `work_projects` carries `total` beside a
+  // `truncated` that is `total > len(rows)`, and this sentence read neither:
+  // past the engine's own 200 it said "200 projects" about a company with
+  // three hundred, with nothing on screen to say so.
   //
-  // THE ARCHIVED SEGMENT IS THE ONE THAT CANNOT USE IT. The engine's flag
-  // INCLUDES the archived rows rather than selecting them, so the total it
-  // counted covers the active ones too while this page shows only the archived
-  // half — printing it there would be a number about a set the grid is not
-  // drawing. What is honest on that segment is the count on screen, and the
-  // note below carries the rest.
+  // "N of M" NOW READS ON EVERY SEGMENT, which is what selecting rather than
+  // widening bought. `total` counts the set this segment asked for, so on
+  // Archived it is how many projects are archived — where the widening flag
+  // made it a count of the whole company beside a grid drawing the retired
+  // half, and the sentence had to drop the comparison on exactly the segment
+  // that needed it most.
   const listed = rows.length;
-  const answered = all.length;
-  const answerTotal = state.data?.total ?? answered;
+  const answerTotal = state.data?.total ?? listed;
   const short = !!state.data?.truncated;
-  // THE "N of M" FORM ONLY WHERE M IS THIS PAGE'S OWN QUESTION: on the Archived
-  // segment the sentence says what is on screen and the note carries the total,
-  // because "12 of 340 projects" there would compare an archived set against a
-  // count of the whole company.
-  const counted = short && shown !== "archived" ? `${listed} of ${answerTotal}` : `${listed}`;
-  const noun =
-    (short && shown !== "archived" ? answerTotal : listed) === 1 ? "project" : "projects";
+  const counted = short ? `${listed} of ${answerTotal}` : `${listed}`;
+  const noun = (short ? answerTotal : listed) === 1 ? "project" : "projects";
 
+  // THE CENSUS OF BOTH SETS, which is what stops this page guessing. Selecting
+  // one set is what makes the listing honest and it is also what makes an
+  // empty answer ambiguous — no projects, or every project archived — so the
+  // engine sends both counts under the same narrowing the rows were read
+  // under. Nothing here derives them from the rows: on the Active segment the
+  // archived count has no row on screen to be derived from, which is the whole
+  // point.
+  const census = state.data?.census;
+  const active = census?.active ?? 0;
+  const archived = census?.archived ?? 0;
+  // A COMPANY WITH NOTHING FILED, on WHICHEVER segment the reader landed on —
+  // and they land on Active. Before the census this could only be said from
+  // All, so the default segment of a brand-new company showed a grid's empty
+  // state instead of the page that says what a project is.
+  const nothingAtAll = !!census && active + archived === 0;
+
+  // A HEAD IS A BUTTON WHERE IT CARRIES `sortValue`, so the columns that do
+  // are exactly the engine's seven orderings — `Projects.test.tsx` holds the
+  // two lists against each other, and the Go gate holds `PROJECT_SORT_KEYS`
+  // against the engine's own. Under `serverSorted` the accessors are never
+  // called; they stay because they say what each column's value IS.
   const columns = useMemo<GridColumn<WorkProjectRow>[]>(
     () => [
       {
@@ -160,7 +309,12 @@ export function Projects() {
         key: "lead",
         header: "Lead",
         shrink: true,
-        sortValue: (row) => row.lead?.handle ?? "",
+        // NOT SORTABLE, and it cannot be. A project's lead is resolved at
+        // READ time against the epoch's org chart — the tracker holds no
+        // chart, so there is no column behind this cell and no `sort=lead`
+        // for the engine to take. Ordering it here alone would order the
+        // PAGE, which is the bug the rest of this screen just stopped
+        // doing, wearing one column.
         cell: (row) =>
           row.lead?.handle ? (
             <SeatCell handle={row.lead.handle} name={index.byHandle.get(row.lead.handle)?.name} />
@@ -274,25 +428,40 @@ export function Projects() {
         </span>
         {short && (
           <span className="t-caption">
-            The engine answered {answered} of the company&rsquo;s {answerTotal}, ordered by key, so
-            these counts cover only the projects listed.
+            The engine answered {listed} of {answerTotal}, in the order asked for, so these counts
+            cover only the projects listed.
           </span>
         )}
         <span className="spacer" />
+        {/* THE CENSUS ON THE SEGMENTS, so the switch says what is behind each
+            option before it is pressed — which is what the counts are for on
+            a control whose whole job is to change the set. Only while the
+            engine has answered: a count drawn from a missing census would be
+            three zeroes that read as a company with nothing.
+
+            ALL CARRIES NONE. Its count is the sum of the two beside it, and a
+            third figure that is the other two added up is arithmetic on
+            screen rather than a fact. */}
         <Segmented
           value={shown}
           onChange={(value) => setShown(value)}
           ariaLabel="Which projects"
           options={[
-            { value: "active", label: "Active" },
-            { value: "archived", label: "Archived" },
+            { value: "active", label: "Active", count: census?.active },
+            { value: "archived", label: "Archived", count: census?.archived },
             { value: "all", label: "All" },
           ]}
         />
       </div>
 
       <QueryState error={state.error} loading={state.loading}>
-        {state.data && all.length === 0 ? (
+        {/* A COMPANY WITH NO PROJECTS, SAID ON WHATEVER SEGMENT THE READER IS
+            ON — and they land on Active. The census is what makes it sayable
+            from anywhere: `active + archived === 0` is the company having
+            nothing, where an empty ANSWER is only ever the segment having
+            nothing. Gated on All, this page greeted a brand-new company with
+            a grid's empty state on its own default segment. */}
+        {nothingAtAll ? (
           <NoProjectsYet />
         ) : (
           <DataGrid
@@ -317,16 +486,20 @@ export function Projects() {
             onRowActivate={peekRow<WorkProjectRow>((row) =>
               openPeek({ kind: "project", id: row.key }),
             )}
-            defaultSort="-open"
+            defaultSort={DEFAULT_SORT}
+            // THE ORDER IS THE ENGINE'S — see the module doc. Without this
+            // the grid would re-sort the page it was handed, which on a
+            // truncated answer is the ordering bug this screen just stopped
+            // making, one layer up.
+            serverSorted
             footer={<ProjectProgressLegend />}
-            empty={{
-              icon: "view_column",
-              title: shown === "archived" ? "No project is archived" : "No project matches",
-              hint:
-                shown === "archived"
-                  ? "An archived project keeps its work and stops taking new items."
-                  : "Every project this company has is listed under All.",
-            }}
+            // EACH SEGMENT'S OWN EMPTINESS, because each one asked a
+            // different question — and the Active one is WRITTEN FROM THE
+            // CENSUS, so it says how many are archived and links to them
+            // rather than hedging about which of two things happened. `All`
+            // never reaches here: an empty All answer with a zero census is
+            // the state above, and a non-zero census cannot answer nothing.
+            empty={shown === "archived" ? EMPTY.archived : activeEmpty(archived, archivedHref)}
           />
         )}
       </QueryState>

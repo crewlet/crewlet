@@ -66,9 +66,26 @@ func (t *listProjects) Parameters() map[string]any {
 					"chart owns, by that unit's id or its name.",
 			},
 			"archived": map[string]any{
-				"type": "boolean",
-				"description": "True also lists retired projects. Default " +
-					"false — no new work is filed into one.",
+				"type": "string",
+				"enum": tracker.ArchivedModeNames(),
+				"description": "Which set: `false` for the live projects, " +
+					"`only` for the retired ones alone, `true` for both. " +
+					"Default `false` — no new work is filed into a retired " +
+					"project.",
+			},
+			"sort": map[string]any{
+				"type": "string",
+				// THE ENGINE'S OWN LIST, rendered rather than retyped:
+				// a description naming a key the parse refuses is a
+				// refusal a model cannot act on. No `enum`, because the
+				// leading `-` doubles the set and a fourteen-entry
+				// enumeration teaches a model less than the sentence.
+				"description": "Orders the whole company's projects before " +
+					"the page is taken, so `-open` is the most open work " +
+					"anywhere rather than the most open of one page. One of " +
+					strings.Join(tracker.ProjectSortNames(), ", ") +
+					", each optionally with a leading `-` for descending. " +
+					"Default " + string(tracker.ProjectSortKey) + ".",
 			},
 			"limit": map[string]any{
 				"type": "integer",
@@ -98,26 +115,32 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if !ok || t.deps.Reader == nil {
 		return unconfigured(tracker.ListProjectsTool), nil
 	}
+	// THE SAME GRAMMAR THE SCREEN'S `archived=` AND `sort=` ARE, parsed by
+	// the one function that owns them — see [tracker.ParseProjectQuery]. A
+	// model that spelled one wrong is told what is accepted rather than
+	// quietly answered about a different set.
+	q, err := tracker.ParseProjectQuery(tracker.MapParams(args))
+	if err != nil {
+		// CLIPPED, because the refusal quotes the model's OWN argument
+		// back at it and a smuggled newline breaks the render — see
+		// [clip], which is also why it is not shortened.
+		//nolint:nilerr // A tool failure is a RESULT the caller reads.
+		return failed(clip(err.Error())), nil
+	}
 	// THE SEAT'S OWN PAGE, which is smaller than the listing's own cap and
 	// has to be: two hundred rows encode at ≈ 93 KiB and [jsonAnswer]
 	// REFUSES a tool answer past [ToolAnswerBytes] rather than cutting it,
 	// so the tracker's screen-sized cap reached a model as advice to narrow
 	// and no projects at all. A page with `total` beside it is the honest
 	// answer — see [tracker.MaxProjectsPerToolAnswer].
-	limit := argInt(args, "limit", 0)
-	if limit <= 0 || limit > tracker.MaxProjectsPerToolAnswer {
-		limit = tracker.MaxProjectsPerToolAnswer
+	if q.Limit <= 0 || q.Limit > tracker.MaxProjectsPerToolAnswer {
+		q.Limit = tracker.MaxProjectsPerToolAnswer
 	}
-	listing, err := reader.Projects(ctx, tracker.ProjectQuery{
-		Q:        strings.TrimSpace(argString(args, "q")),
-		Unit:     strings.TrimSpace(argString(args, "unit")),
-		Archived: argBool(args, "archived"),
-		Limit:    limit,
-		Units:    t.deps.Units,
-		// THE SEAT'S OWN LEVEL, like every other read here — see
-		// [seatReadLevel] for why it is a name and not a literal.
-		Level: seatReadLevel,
-	})
+	q.Units = t.deps.Units
+	// THE SEAT'S OWN LEVEL, like every other read here — see
+	// [seatReadLevel] for why it is a name and not a literal.
+	q.Level = seatReadLevel
+	listing, err := reader.Projects(ctx, q)
 	if err != nil {
 		return failed(readFailure(tracker.ListProjectsTool, err)), nil
 	}

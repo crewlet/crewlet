@@ -370,7 +370,7 @@ func onlyProject(t *testing.T, r *roundTrip) tracker.ProjectRow {
 // onlyRow is one project out of the listing, by key.
 func onlyRow(t *testing.T, r *roundTrip, key string) tracker.ProjectRow {
 	t.Helper()
-	for _, row := range r.projects(tracker.ProjectQuery{}).Projects {
+	for _, row := range r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude}).Projects {
 		if row.Key == key {
 			return row
 		}

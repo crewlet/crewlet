@@ -132,13 +132,17 @@ describe("when there is no honest answer", () => {
 
 test("every field name is one the engine writes, spelled its way", () => {
   // The rail labels it "Estimate" and the task row calls the number
-  // `estimate_minutes`; the history bag calls it `estimate`. Held against
+  // `estimate_minutes`; the history bag calls it `estimate`. "Watching" is
+  // `watchers` and "Routes to" is `routing_unit`. Held against
   // `tracker.TaskDeltas` by `internal/tracker/attribution_test.go` — this half
   // only pins the shape so a rename here is visible in the diff.
   expect([...CHANGE_FIELDS]).toEqual([
     "title",
     "status",
     "assignee",
+    "reporter",
+    "collaborators",
+    "watchers",
     "priority",
     "project",
     "type",
@@ -147,5 +151,42 @@ test("every field name is one the engine writes, spelled its way", () => {
     "start",
     "estimate",
     "points",
+    "routing_unit",
   ]);
+});
+
+test("the people and routing rows can be attributed", () => {
+  // THE ROWS THE RAIL DRAWS WITHOUT A LINE ARE THE POINT. Reporter,
+  // Collaborators, Watching and "Routes to" rendered no provenance at all
+  // until `tracker.TaskDeltas` started comparing those fields — a watcher
+  // arrived and the rail could not say who added them, which is the one thing
+  // this product can answer that a tracker cannot.
+  const who = attribution([
+    change({
+      actor: "ada",
+      actor_kind: "human",
+      kind: "watchers",
+      fields: {
+        reporter: { from: "", to: "bo" },
+        collaborators: { from: "bo", to: "bo, cy" },
+        watchers: { from: "bo", to: "bo, ada" },
+        routing_unit: { from: "Engineering", to: "Platform" },
+      },
+    }),
+  ]);
+  for (const field of ["reporter", "collaborators", "watchers", "routing_unit"] as const) {
+    // DECLARED AND RESOLVED, both halves: `by()` on the rail takes a
+    // [ChangeField], so a name missing from the list is a row that cannot ask
+    // the question — and one in the list that the log never keys is a row that
+    // asks and is answered with nothing.
+    expect([...CHANGE_FIELDS]).toContain(field);
+    expect(who.get(field)?.actor).toBe("ada");
+    expect(who.get(field)?.cleared).toBe(false);
+  }
+  // AND A SET EMPTIED IS A CLEARING like any other value: the last watcher
+  // leaving is a record the log holds, and the row reads "cleared by".
+  const emptied = attribution([
+    change({ actor: "ada", fields: { watchers: { from: "bo", to: "" } } }),
+  ]);
+  expect(emptied.get("watchers")?.cleared).toBe(true);
 });

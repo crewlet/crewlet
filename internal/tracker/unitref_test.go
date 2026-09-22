@@ -173,19 +173,23 @@ func TestAProjectsUnitKeyRendersAsItsName(t *testing.T) {
 	r := newRoundTrip(t)
 	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations", Unit: "plat"})
 
-	rows := byKey(r.projects(tracker.ProjectQuery{Units: nimbus}))
+	rows := byKey(r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude, Units: nimbus}))
 	got := rows["OPS"].Unit
 	if !got.Resolved || got.Name != "Platform" || got.Key != "plat" {
 		t.Fatalf("OPS's unit is %+v, want the stored key with the team's "+
 			"current name beside it", got)
 	}
 	for _, ref := range []string{"plat", "Platform", "platform"} {
-		listed := keys(r.projects(tracker.ProjectQuery{Unit: ref, Units: nimbus}))
+		listed := keys(r.projects(tracker.ProjectQuery{
+			Archived: tracker.ArchivedExclude, Unit: ref, Units: nimbus,
+		}))
 		if len(listed) != 1 || listed[0] != "OPS" {
 			t.Errorf("unit=%s lists %v, want [OPS]", ref, listed)
 		}
 	}
-	if listed := keys(r.projects(tracker.ProjectQuery{Unit: "Legal", Units: nimbus})); len(listed) != 0 {
+	if listed := keys(r.projects(tracker.ProjectQuery{
+		Archived: tracker.ArchivedExclude, Unit: "Legal", Units: nimbus,
+	})); len(listed) != 0 {
 		t.Errorf("unit=Legal lists %v, want nothing", listed)
 	}
 }

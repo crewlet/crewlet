@@ -390,10 +390,38 @@ test("a relation delta reads as the other task's key where the answer knew it", 
     ),
   ).toBe(`Waiting on: ${EMPTY_VALUE} → ENG-2`);
   // EVERY FIELD WHOSE VALUE IS TASKS, so one added to the engine's set and
-  // missed here is a column of uuids rather than a silent omission.
-  for (const field of ["waiting_on", "linked", "duplicates", "blocking", "priorities"]) {
+  // missed here is a column of uuids rather than a silent omission. The last
+  // two are SCALARS — a task has one parent and went with one root — and they
+  // take the same arm because one id splits into one member.
+  for (const field of [
+    "waiting_on",
+    "linked",
+    "duplicates",
+    "blocking",
+    "priorities",
+    "parent",
+    "removed_with",
+  ]) {
     expect(describeHistory(change({ fields: { [field]: ["t-2"] } }), ctx)).toContain("ENG-2");
   }
+  // A RE-PARENT, WHICH IS THE PAIR ARM AND THE KIND THIS WAS ADDED FOR: the
+  // row read "changed its parent" and named neither end until `TaskDeltas`
+  // started comparing the field.
+  expect(
+    describeHistory(
+      change({ kind: "reparented", fields: { parent: { from: "", to: "t-2" } } }),
+      ctx,
+    ),
+  ).toBe(`Parent: ${EMPTY_VALUE} → ENG-2`);
+  // AND AN UNRESOLVED PARENT IS ITS ID, on the side the answer could not
+  // resolve and not on the other: a node that has not applied the old parent
+  // still knows where the task went.
+  expect(
+    describeHistory(
+      change({ kind: "reparented", fields: { parent: { from: "t-9", to: "t-2" } } }),
+      ctx,
+    ),
+  ).toBe("Parent: t-9 → ENG-2");
   // AND `page` IS NOT ONE OF THEM. It is the fourth relation kind and it names
   // a wiki page, so the answer leaves its ids out of the map entirely and
   // resolving it here would be claiming a page is a task.
@@ -406,6 +434,39 @@ test("a relation delta reads as the other task's key where the answer knew it", 
   // engine appends when it cuts a long collection at a whole member.
   expect(describeHistory(change({ fields: { blocking: ["t-2", "t-9", "+12 more"] } }), ctx)).toBe(
     "Blocking: ENG-2, t-9, +12 more",
+  );
+});
+
+// A PEOPLE FIELD IS HANDLES, and every other surface on this screen says the
+// name. The engine stores what it can write identically on N nodes — a handle
+// — and the chart that turns one into "Ada Lovelace" is the reader's, which is
+// the same division a status slug and a due instant take. A watcher row that
+// read `agent-ceo` sat inches under a Watching row reading "Agent CEO", which
+// is the failure the assignee arm was already written against.
+test("a people delta reads as the seat's name where the chart knew it", () => {
+  const ctx: LabelContext = { seatName: (h) => (h === "ada" ? "Ada Lovelace" : h) };
+  // A SET TRAVELS JOINED WITH ", " (wake.go sorts it first), so it resolves
+  // member by member and an unknown handle stays a handle — a seat the chart
+  // no longer holds still moved this field.
+  expect(
+    describeHistory(
+      change({ kind: "watchers", fields: { watchers: { from: "", to: "ada, zz" } } }),
+      ctx,
+    ),
+  ).toBe(`Watchers: ${EMPTY_VALUE} → Ada Lovelace, zz`);
+  // EVERY FIELD WHOSE VALUE IS PEOPLE, for the reason the task-id loop above
+  // gives: one added to the engine's set and missed here is a column of
+  // handles nobody asked for.
+  for (const field of ["assignee", "reporter", "watchers", "muted", "collaborators"]) {
+    expect(
+      describeHistory(change({ fields: { [field]: { from: "", to: "ada" } } }), ctx),
+    ).toContain("Ada Lovelace");
+  }
+  // AND `routing_unit` IS NOT ONE OF THEM, although it sits beside them in the
+  // same comparison: a unit is not a seat, and resolving it through the chart's
+  // people would answer with whatever seat happens to share the name.
+  expect(describeHistory(change({ fields: { routing_unit: { from: "", to: "ada" } } }), ctx)).toBe(
+    `Routing unit: ${EMPTY_VALUE} → ada`,
   );
 });
 

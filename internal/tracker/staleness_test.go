@@ -107,11 +107,17 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 			}},
 		{"work_projects",
 			func() error {
-				_, err := reader.Projects(ctx, tracker.ProjectQuery{Level: stale, MaxLag: time.Second})
+				_, err := reader.Projects(ctx, tracker.ProjectQuery{
+					Archived: tracker.ArchivedExclude,
+					Level:    stale, MaxLag: time.Second,
+				})
 				return err
 			},
 			func() error {
-				_, err := reader.Projects(ctx, tracker.ProjectQuery{Level: stale, MaxLagSeq: 1})
+				_, err := reader.Projects(ctx, tracker.ProjectQuery{
+					Archived: tracker.ArchivedExclude,
+					Level:    stale, MaxLagSeq: 1,
+				})
 				return err
 			}},
 		{"work_project",
@@ -214,7 +220,8 @@ func TestAReaderWithNoBoundAnswersHoweverFarBehindItIs(t *testing.T) {
 	}
 	ctx := t.Context()
 	if _, err := reader.Projects(ctx, tracker.ProjectQuery{
-		Level: statelog.ReadStale,
+		Archived: tracker.ArchivedExclude,
+		Level:    statelog.ReadStale,
 	}); err != nil {
 		t.Errorf("an unbounded stale read refused: %v", err)
 	}

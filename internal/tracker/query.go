@@ -182,6 +182,29 @@ const (
 	ArchivedOnly    ArchivedMode = "only"
 )
 
+// ArchivedModes is every mode, in the order a refusal names them.
+var ArchivedModes = []ArchivedMode{ArchivedExclude, ArchivedInclude, ArchivedOnly}
+
+// ArchivedModeNames is the same list as wire strings, for the surfaces that
+// have to quote it back at a caller who spelled one wrong.
+func ArchivedModeNames() []string {
+	out := make([]string, len(ArchivedModes))
+	for i, m := range ArchivedModes {
+		out[i] = string(m)
+	}
+	return out
+}
+
+// Valid reports whether this is one of the three modes.
+//
+// THE ZERO VALUE IS NOT ONE OF THEM, deliberately. "" is what a caller who has
+// not answered the question carries, and the question has three answers rather
+// than two — so every surface that takes one either resolves the absence to
+// its own default before reading ([Query.parseArchived], over the default
+// [Parse] already set) or refuses it by name ([Reader.Projects], which builds
+// its query from a struct literal and so has no constructor to carry one).
+func (m ArchivedMode) Valid() bool { return slices.Contains(ArchivedModes, m) }
+
 // Sort is one ordering term.
 type Sort struct {
 	Key        string
@@ -933,14 +956,16 @@ func (q *Query) parseShowClosed(p Params) error {
 }
 
 func (q *Query) parseArchived(p Params) error {
-	switch value := ArchivedMode(p.String("archived")); value {
-	case "":
-	case ArchivedExclude, ArchivedInclude, ArchivedOnly:
-		q.Archived = value
-	default:
-		return fmt.Errorf("tracker: archived is false, true or only, and %q is "+
-			"none of them", value)
+	value := ArchivedMode(p.String("archived"))
+	// ABSENT IS NOT A FOURTH STATE: it leaves the default [Parse] set.
+	if value == "" {
+		return nil
 	}
+	if !value.Valid() {
+		return fmt.Errorf("tracker: archived is %s, and %q is none of them",
+			strings.Join(ArchivedModeNames(), ", "), value)
+	}
+	q.Archived = value
 	return nil
 }
 

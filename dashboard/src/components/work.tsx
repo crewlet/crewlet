@@ -391,8 +391,14 @@ export function WorkRow({
  * blocker the caller's own filter excluded is an id this list holds no row for,
  * and the honest rendering is the count rather than an invented key. That is
  * also why the resolver is the LIST's — only a list knows which rows it has.
+ *
+ * EXPORTED, because there are two lists now: this row, which every embedded
+ * task list draws, and the work screen's grid, whose compact column set draws
+ * the same badge in its title cell. One sentence rather than two, for the
+ * reason every other mark in this file is shared — the second copy is the one
+ * that stops saying `Blocked · ENG-4 +2` the day somebody changes this one.
  */
-function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | undefined): string {
+export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | undefined): string {
   // `open` IS THE FLAG THE EDGE CARRIES, and `false` is a settled fact rather
   // than a missing one — the blocker has finished. An edge that says nothing is
   // counted as open, because `blocked` on the row is exactly "some entry here
