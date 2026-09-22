@@ -249,12 +249,23 @@ writer on that node, never by the whole 16 seconds.
 
 A writer that does not reach the front within `store.busy_timeout_seconds`
 fails retryably and rejoins the line, logged as `store_tx_retry` naming the
-knob. With three domains applying and a bulk update in flight, the default
-five seconds is close to the three transactions a fourth writer can
-legitimately wait behind — so that log line on a node doing bulk work is the
-signal to raise it rather than a fault. Raise the knob before you widen
-anything else: a longer per-waiter bound lets one stuck holder block the line
-for longer, and this way the line still drains in order.
+knob.
+
+**The default does not scale with the number of domains, on purpose.** Five
+seconds is half the dashboard's 10 s query timeout, and that is the whole
+derivation: a busy wait *longer* than the timeout above it turns lock
+contention into a request that fails with nothing to show. What a waiter can
+legitimately queue behind, on the other hand, is roughly one bounded
+transaction per other applier on the node — about two seconds each — so with
+every state-log domain applying and a bulk update in flight, the legitimate
+wait is already past five seconds and grows with each domain the engine gains.
+
+That is why `store_tx_retry` on a node doing bulk work is a **signal to raise
+the knob, not a fault**: the writer rejoins the line and the work lands, one
+round later. Raise it toward — never past — the query timeout above it, and
+raise it before you widen anything else: a longer per-waiter bound lets one
+stuck holder block the line for longer, and this way the line still drains in
+order.
 
 **No apply transaction is ever aborted by a commit elsewhere in the database,
 and none is ever re-run because of one.** Every write transaction takes the
