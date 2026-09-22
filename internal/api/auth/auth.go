@@ -45,6 +45,7 @@ package auth
 import (
 	"context"
 	"crypto/subtle"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -225,6 +226,10 @@ type Guard struct {
 	// construction on anything but a loopback bind of an unreleased
 	// binary — see devprincipal.go.
 	dev *DevPrincipal
+
+	// trusted are the CIDR blocks whose forwarded headers this deployment
+	// believes, parsed once at wiring time. See client.go.
+	trusted []*net.IPNet
 }
 
 // BindSeats installs the chart lookup that lets a bound credential act as its
@@ -269,8 +274,18 @@ func New(b *config.Bootstrap) *Guard {
 	return &Guard{
 		tokens: tokens, ceiling: auth.MaxGrants,
 		stepUp: auth.Session.StepUp(), now: time.Now,
+		trusted: TrustedProxies(b),
 	}
 }
+
+// Client is the address a per-source rule keys on, resolved through this
+// deployment's trusted proxies. See client.go.
+//
+// ON THE GUARD rather than a free function, because the trusted blocks are
+// Tier A's and every caller that needs a client address is already holding a
+// guard — a second parse somewhere else is a second answer to "is this peer
+// the proxy", and the two would drift the day somebody edited one.
+func (g *Guard) Client(r *http.Request) string { return Client(r, g.trusted) }
 
 // Tokens reports how many credentials are loaded, for the same startup line.
 func (g *Guard) Tokens() int { return len(g.tokens) }
@@ -472,7 +487,11 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 				// The candidate value is NEVER logged: a rejected token
 				// is still a credential, and a log is a place it would
 				// outlive the request.
-				"remote", remoteHost(r))
+				// THE RESOLVED CLIENT, not the peer. Behind a
+				// proxy every line would otherwise name the
+				// proxy, which is the one address that tells an
+				// operator nothing about who is guessing.
+				"remote", g.Client(r))
 			// THE SAME REFUSAL ENVELOPE EVERY OTHER SURFACE
 			// ANSWERS WITH. This was a hand-written JSON literal
 			// and a hand-set header pair — the shape that drifts,
