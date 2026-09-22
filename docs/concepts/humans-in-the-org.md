@@ -102,7 +102,7 @@ server to act as a seat. So the item records `sarah` as its reporter and its
 watcher, while her colleagues assign work to `sarah-chen`.
 
 Both of those are **her**. Every question that answers "mine" — My work's
-seven blocks, the inbox, her own record — matches the seat handle *or* the
+seven tabs, the inbox, her own record — matches the seat handle *or* the
 operator id bound to it, and reports the answer under the seat. Bind the token
 and your own work is on your own screen; leave it unbound and you are an
 operator outside the chart, acting as `operator:<id>`, which is an ordinary

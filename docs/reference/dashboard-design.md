@@ -286,6 +286,31 @@ is a way of drawing any query, and mixed into one strip the two read as the
 same kind of thing. That is also why `view=` and `shape=` are two keys:
 switching a saved board to a list must not throw the saved filters away.
 
+**And a narrowing the SCREEN is is not a filter either — it is LOCKED.** One
+list serves three screens, and two of them are that list narrowed to something
+the reader did not choose: `#/work/{KEY}` is the work in one project, `#/me`'s
+Assigned tab is the work on one person. A locked narrowing is held to four
+rules, and each one is a way the same defect appears if it is broken:
+
+- It is **applied under everything else**, after every key the reader set and
+  every default a saved view supplied, so nothing can widen the list past the
+  thing the screen is about.
+- It is **not offered** in the Filter menu. A row there is a second answer to a
+  question the screen has already answered, and choosing it writes a key the
+  lock overwrites — a control that does nothing.
+- It draws **no chip**, because a chip is removable and this is not. A chip
+  that will not come off is a control reporting a state the reader cannot
+  reach.
+- It is **not in the URL**. The screen's own key is what addresses it —
+  `#/me?handle=cto`, a project's path segment — so a second key naming the same
+  fact is a second place for the answer to be written, and the two can differ.
+
+It follows that a locked narrowing does not make a list "filtered": the empty
+state that blames a narrowing and offers to clear it is for a filter that is
+actually on, and over a locked one it would name a control the reader has no
+way to press. What a host screen says instead is its own sentence, about its
+own subject.
+
 ### The sparse state
 
 Every screen above is drawn, argued about and reviewed on a company with work
@@ -443,7 +468,7 @@ because every single-modifier combination worth having is already the browser's.
 | Route | Page | Tabs / views |
 |---|---|---|
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
-| `#/me` | **My work** — the seven claims on one person's attention | `tab=assigned\|priorities\|asks\|unblocked\|collaborating\|watching\|checklist` · `handle=` (an operator reading somebody else's day) |
+| `#/me` | **My work** — the seven claims on one person's attention | `tab=assigned\|priorities\|asks\|unblocked\|collaborating\|watching\|checklist` · `handle=` (an operator reading somebody else's day) · on the Assigned tab, `shape=`, `cols.list=` / `cols.table=` and the filter grammar, with the assignee LOCKED and `view=` absent — the screen's own tabs are its strip |
 | `#/work` | **All work** | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` (the active shape's column set) + the filter grammar |
 | `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page | `shown=active\|archived\|all` · `sort=` |
 | `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
