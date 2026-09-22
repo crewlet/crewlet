@@ -25,6 +25,19 @@ A few things worth knowing when deploying Crewlet:
   identities (Atlassian/GitLab/Slack tokens) are separate service accounts —
   scope them minimally; the engine never needs a personal admin token at
   runtime (provisioning CLIs do need an admin credential, once).
+- **Session cookies are signed with the Tier A keyring, and a deployment
+  without one cannot serve sign-ins.** The engine refuses to build a session
+  signer from a keyring that cannot sign for the fleet, rather than falling
+  back to a per-process key: with a fallback, every ingress node would accept
+  only cookies it minted itself, so a browser would be signed in on whichever
+  node its request happened to reach. The cookie is `HttpOnly`, `Secure`,
+  `SameSite=Lax` and carries the `__Host-` prefix on any deployment whose
+  `api.external_url` is not plain http, which is what stops a sibling
+  subdomain writing one. It carries no login, no address and no grants —
+  only ids, two deadlines and a MAC — so a cookie recovered from a proxy log
+  discloses nothing and authenticates nothing. **Dropping a keyring entry ends
+  every session signed under it**; see the rotation runbook in
+  `docs/concepts/secret-store.md`.
 - **The API's read surface is open by default.** Writes and every `/config`
   route require a token from `api.auth.tokens`; reads do not, so `/events`,
   `/agents/{id}/memory` and `/ws/stream` serve full LLM transcripts to anyone

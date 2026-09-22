@@ -169,8 +169,8 @@ func New(opts Options) *Signer {
 	}
 	s := &Signer{keys: map[string][]byte{}, now: now}
 	for _, key := range opts.Material.Keys {
-		tag := keyTag(opts.Domain, key.ID)
-		s.keys[tag] = deriveKey(opts.Domain, key.ID, key.Material)
+		tag := KeyTag(opts.Domain, key.ID)
+		s.keys[tag] = DeriveKey(opts.Domain, key.ID, key.Material)
 		if key.ID == opts.Material.ActiveID {
 			s.activeTag = tag
 		}
@@ -247,19 +247,25 @@ func (s *Signer) sign(key []byte, payload string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// keyTag names one key inside one domain, in a form a URL path can carry.
-func keyTag(domain, id string) string {
+// KeyTag names one key inside one domain, in a form a URL path or a cookie
+// value can carry.
+//
+// EXPORTED FOR THE SECOND CONSUMER. internal/iam/session mints a bearer of its
+// own shape under its own domain, and it must tag the key the same way — a
+// second derivation of "which key signed this" would be this package's own
+// one-implementation rule broken by the package that states it.
+func KeyTag(domain, id string) string {
 	sum := sha256.Sum256([]byte("tag|" + domain + "|" + id))
 	return base64.RawURLEncoding.EncodeToString(sum[:])[:tagLen]
 }
 
-// deriveKey is one key's signing key for one domain.
+// DeriveKey is one key's signing key for one domain.
 //
 // The id is bound in beside the material so that two keyring entries that
 // somehow carried the same material still sign differently, and so that a key
 // moved to another id is a different key rather than the same one wearing a
 // new name.
-func deriveKey(domain, id, material string) []byte {
+func DeriveKey(domain, id, material string) []byte {
 	sum := sha256.Sum256([]byte("key|" + domain + "|" + id + "|" + material))
 	return sum[:]
 }

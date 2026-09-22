@@ -25,9 +25,11 @@ state log is signed under it, because the broker has no auth of its own and a
 record is an instruction the next node applies. `crewlet secrets keygen` mints
 one and prints the export line; a node without one refuses to start, naming the
 field. Every node of a fleet needs the **same** keyring — one keyed differently
-would refuse every peer's records. See
+would refuse every peer's records, and every browser signed in against one
+would be signed out on the next request that reached another. See
 [Secret store](../concepts/secret-store.md) for what else it does and for the
-zero-downtime rotation runbook.
+zero-downtime rotation runbook — adding a key and flipping `active_key_id`
+logs nobody out, and **dropping a key early is what ends live sessions**.
 
 ```yaml
 # crewlet.yaml (Tier A)

@@ -290,6 +290,14 @@ the `dependencies` label Dependabot applies itself) sorted to the bottom. The
 last category carries the catch-all `*`, so a pull request with no labels still
 appears.
 
+**A release that changes what the fleet keyring signs needs a paragraph**, and
+it is the one operator consequence a pull request title reliably cannot carry.
+The keyring signs every state-log record, the two per-run sandbox tokens and
+every session cookie, and the rotation runbook's last step — drop the old key —
+now also ends every session still signed under it. An operator who reads only
+the titles will do that step at the old cadence and sign their whole company
+out.
+
 If a release ever needs prose the titles cannot carry — a migration note, a
 breaking change worth a paragraph — put it in `release.header` or
 `release.footer` in `.goreleaser.yaml`, which wrap the generated list rather

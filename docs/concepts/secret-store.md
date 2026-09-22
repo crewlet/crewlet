@@ -168,10 +168,12 @@ whatever it was written to precede.
 ### Rotating the keyring, with nothing in flight lost
 
 The keyring seals the company's secrets and also signs the two **per-run
-tokens** a sandbox carries: the OTLP receiver's and the MCP bridge's. Those
-travel in a URL path, are minted on the node that starts a run and verified on
-whichever node the box can reach, and a detached coding run holds one for as
-long as the run lasts, which outlives a rollout.
+tokens** a sandbox carries — the OTLP receiver's and the MCP bridge's — and
+every **session cookie** a signed-in browser holds. The tokens travel in a URL
+path, are minted on the node that starts a run and verified on whichever node
+the box can reach, and a detached coding run holds one for as long as the run
+lasts, which outlives a rollout. A cookie is the same shape of problem with a
+longer life and a person on the other end of it.
 
 So a token **names the key that signed it**, the same way a sealed value's
 envelope carries the id of the key that sealed it, and a verifier looks that id
@@ -188,12 +190,22 @@ That makes the rotation a runbook with no window in it:
    still on the ring.
 4. **Run `crewlet secrets rekey`** to re-seal the stored values under the new
    active key.
-5. **Drop** the old key once the longest token lifetime has passed *and* every
-   state log has trimmed past the records signed under it. From that moment a
-   token or a record signed under it is refused, which is the point. Dropping
-   it while a log still holds such records leaves those records unappliable on
-   a node replaying from the floor, which reports itself as retained records
-   rather than as data loss — add the key back and they apply.
+5. **Drop** the old key once the longest token lifetime has passed, every
+   state log has trimmed past the records signed under it, *and* the absolute
+   session lifetime (`api.auth.session.absolute`) has elapsed since step 3.
+   From that moment a token, a record or a cookie signed under it is refused,
+   which is the point. Dropping it while a log still holds such records leaves
+   those records unappliable on a node replaying from the floor, which reports
+   itself as retained records rather than as data loss — add the key back and
+   they apply.
+
+   **Dropping it early is what signs people out.** A session cookie names the
+   key it was signed under, so every browser still holding one minted before
+   step 3 is refused the moment that key leaves the ring, and its owner sees a
+   sign-in screen. Sessions move onto the new key by themselves — a cookie is
+   re-issued under the *active* key the first time it is used after step 3 —
+   so waiting out the absolute lifetime is waiting for the sessions nobody has
+   touched since the flip.
 
 Nodes may restart in any order at every step, because a key is either on a
 node's ring or it is not, and tokens name which one they need. There is no

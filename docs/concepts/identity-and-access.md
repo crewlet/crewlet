@@ -206,6 +206,111 @@ seat does not exist.
 
 ---
 
+## The session cookie
+
+A signed-in browser holds one cookie, and it is **signature-stateless and
+row-stateful** because neither half works alone. A purely stateless cookie
+cannot be revoked before it expires, so off-boarding somebody would be
+impossible. A purely stateful one — an opaque id into a table — costs a
+database read for every forged cookie an attacker sends, and has nothing to say
+at all until the row it names has been applied on the node the request reached.
+
+```
+__Host-crewlet_session=v2.<key tag>.<generation>.<lineage>~<rotation>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>.<mac>
+                        Path=/; HttpOnly; Secure; SameSite=Lax
+```
+
+The name is `__Host-crewlet_session` when `api.external_url` is https, and
+`crewlet_session` on a loopback http deployment — the `__Host-` prefix requires
+`Secure`, and a browser rejects the `Set-Cookie` outright without it, so a
+sign-in would appear to succeed and then not stick. The scheme comes from the
+*configured* url rather than from the request, because the engine sits behind a
+TLS-terminating proxy and reads no `r.TLS`.
+
+Every field is there because a node has to answer with it and has no other way
+to know it:
+
+| Field | What it is for |
+|---|---|
+| key tag | Which keyring entry signed this, so a verifier looks one key up rather than trying each — which is what makes adding a key zero-downtime |
+| generation | The fleet-wide counter `crewlet iam invalidate-all` moves, so one write ends every session in the company |
+| lineage | The session's identity, the subject its records arbitrate on, and — being a uuid7 — the instant it began, which the rotation index is derived from |
+| rotation | The window this cookie was issued in, derived from the session's age rather than recorded anywhere |
+| person | So a node can read their row without first reading the session's |
+| epoch | The person's revocation epoch at sign-in: a node that has **not yet applied** the session's start record still holds proof the sign-in happened |
+| start position | What turns "no row" into the two answers it actually is |
+| absolute expiry | Never moved by a re-issue |
+| idle expiry | Moved by every re-issue, with no store write at all |
+
+Nothing in it is secret and nothing in it grants anything alone: a bearer in a
+proxy log discloses a lineage, a person id and two deadlines, and is worthless
+without the mac. It deliberately carries nothing *about* the person — no login,
+no address, no grants — because a cookie is the value most likely to end up
+somewhere nobody meant it to.
+
+**There is no validation cache**, and that is not an omission — there is
+nothing to cache. The lookup is a local read of a replicated row and a map
+lookup on a pinned chart view, and the store is never on a network path from
+the request.
+
+### Rotation is derived, so an hour of use writes nothing
+
+The rotation index is the session's age in `session.rotate_after` windows, and
+the age is the instant inside the lineage's own uuid7. Any node recomputes it
+with no I/O and nothing is written anywhere — the design this replaces wrote
+one record per session per hour, which measured at ten per person per working
+day and nine tenths of the authentication trail, to keep a clock in a log.
+
+What an index can and cannot prove is worth stating, because it is easy to
+expect more of it. With no rotation record a node holds two numbers: the index
+the cookie carries and the index the clock implies. A cookie whose index is
+*behind* the clock is produced by two completely different things — somebody
+who stopped at noon and came back at two, and somebody replaying a cookie they
+captured — and **they are the same bytes**. So a lagging index is served and
+re-issued rather than treated as theft; treating it as theft does not detect
+theft with a false-positive rate, it detects idleness. What bounds a captured
+cookie instead is the idle deadline, the absolute deadline and the revocation
+epoch.
+
+What *is* positive evidence, and does bump the person's epoch and end every
+session they hold, is an index the engine could not have issued: one ahead of
+the clock by more than the two-minute overlap. An index somebody *edited* never
+reaches that check at all — it is inside the signed payload, so the bearer is
+refused as malformed first.
+
+### Validation is three-valued, twice
+
+The session and the seat are resolved by two tables with the same shape,
+because each is a row in a domain that **lags independently**.
+
+| What this node's rows say about the session | Reads | Writes | Step-up surfaces |
+|---|---|---|---|
+| Signature valid, rotation index current or in overlap, row present, the row's epoch equals the bearer's and the person's, generation current, both deadlines unexpired | serve | serve | serve if `reauth_at` is current |
+| Row ended, the person's epoch ahead of the bearer's, the person suspended, or the generation moved | 401 `session_revoked` | 401 | 401 |
+| Rotation index ahead of the window past the overlap | 401, and the epoch bump is published | 401 | 401 |
+| Row absent, and this node's iam position covers the bearer's start position | 401 `session_revoked` | 401 | 401 |
+| Row absent, this node below the bearer's start position, applier lag under 60 s | serve: the signature and the epoch are the proof | 503 `identity_unavailable` | 503, no grace |
+| The iam applier stalled past 60 s, the person's bucket deferred, or the replicated store answers `ErrNoEstate` | 503 | 503 | 503 |
+| Not a bearer of this format at all | 401 | 401 | 401 |
+
+| What this node's chart view says about the seat | Answer |
+|---|---|
+| The person holds no binding | The seatless arm: the login is the handle, and the chart is never consulted |
+| Seat present in the view, `kind: human`, not tombstoned | The seat's handle is the actor |
+| Seat absent or tombstoned, and this node's chart position covers the binding's | 403 forbidden **naming the seat**; never a fall-through to an empty handle |
+| Seat absent, and this node's chart position is below the binding's, chart applier lag under 60 s | 503 `identity_unavailable` naming the chart |
+| The chart applier stalled past 60 s, or the view is not built | 503 |
+
+**503 and never 401 on a node that is behind.** A browser reads 401 as "sign in
+again" and discards the cookie, so one stalled applier answering 401 would log
+everybody on that node out and stampede the identity provider with the
+re-authentications. The grace exists only for the arm a lagging node can
+honestly serve — reads of a session it has not yet seen — and it ends at the
+same sixty seconds the alarm table already calls a stall, so a node serving
+stale identity is by definition a node already alarmed.
+
+---
+
 ## The authority table: one function decides
 
 A grant says what a principal *carries*. It does not say whether they may do a
