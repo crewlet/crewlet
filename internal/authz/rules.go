@@ -107,16 +107,16 @@ const (
 	ActionChartImport      Action = "chart.import"
 
 	// --- the company's own controls --------------------------------- //
-	ActionConfigRead     Action = "config.read"
-	ActionConfigWrite    Action = "config.write"
-	ActionSecretList     Action = "secrets.list"
-	ActionSecretReveal   Action = "secrets.reveal"
-	ActionSecretWrite    Action = "secrets.write"
-	ActionSetupRead      Action = "setup.read"
-	ActionSetupConnect   Action = "setup.connect"
-	ActionFleetOperate   Action = "fleet.operate"
-	ActionTranscriptRead Action = "transcripts.read"
-	ActionSandboxRun     Action = "run_sandbox"
+	ActionConfigRead   Action = "config.read"
+	ActionConfigWrite  Action = "config.write"
+	ActionSecretList   Action = "secrets.list"
+	ActionSecretReveal Action = "secrets.reveal"
+	ActionSecretWrite  Action = "secrets.write"
+	ActionSetupRead    Action = "setup.read"
+	ActionSetupConnect Action = "setup.connect"
+	ActionFleetOperate Action = "fleet.operate"
+	ActionAuditRead    Action = "audit.read"
+	ActionSandboxRun   Action = "run_sandbox"
 )
 
 // rule is one verb's row: which class decides it, and — for [ClassOperator]
@@ -233,16 +233,16 @@ var rules = map[Action]rule{
 	ActionChartRuntime: {class: ClassOperator, grant: iam.GrantConfigWrite},
 	ActionChartImport:  {class: ClassOperator, grant: iam.GrantConfigWrite},
 
-	ActionConfigRead:     {class: ClassOperator, grant: iam.GrantConfigRead},
-	ActionConfigWrite:    {class: ClassOperator, grant: iam.GrantConfigWrite},
-	ActionSecretList:     {class: ClassOperator, grant: iam.GrantConfigRead},
-	ActionSecretReveal:   {class: ClassOperator, grant: iam.GrantSecretRead},
-	ActionSecretWrite:    {class: ClassOperator, grant: iam.GrantSecretWrite},
-	ActionSetupRead:      {class: ClassOperator, grant: iam.GrantConfigRead},
-	ActionSetupConnect:   {class: ClassOperator, grant: iam.GrantConfigWrite},
-	ActionFleetOperate:   {class: ClassOperator, grant: iam.GrantFleetOperate},
-	ActionTranscriptRead: {class: ClassOperator, grant: iam.GrantTranscriptRead},
-	ActionSandboxRun:     {class: ClassOperator, grant: iam.GrantSandboxRun},
+	ActionConfigRead:   {class: ClassOperator, grant: iam.GrantConfigRead},
+	ActionConfigWrite:  {class: ClassOperator, grant: iam.GrantConfigWrite},
+	ActionSecretList:   {class: ClassOperator, grant: iam.GrantConfigRead},
+	ActionSecretReveal: {class: ClassOperator, grant: iam.GrantSecretRead},
+	ActionSecretWrite:  {class: ClassOperator, grant: iam.GrantSecretWrite},
+	ActionSetupRead:    {class: ClassOperator, grant: iam.GrantConfigRead},
+	ActionSetupConnect: {class: ClassOperator, grant: iam.GrantConfigWrite},
+	ActionFleetOperate: {class: ClassOperator, grant: iam.GrantFleetOperate},
+	ActionAuditRead:    {class: ClassOperator, grant: iam.GrantAuditRead},
+	ActionSandboxRun:   {class: ClassOperator, grant: iam.GrantSandboxRun},
 }
 
 // Actions is every verb this build authorizes, sorted, for the walks that ask

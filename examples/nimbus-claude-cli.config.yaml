@@ -211,7 +211,7 @@ api:
     # a default.
     max_grants:
       - state:read
-      - transcripts:read
+      - audit:read
       - config:read
       - secrets:read
       - work:write
@@ -229,7 +229,7 @@ api:
         token: "${CREWLET_API_TOKEN_FOUNDER}"
         grants:
           - state:read
-          - transcripts:read
+          - audit:read
           - config:read
           - secrets:read
           - work:write

@@ -195,7 +195,7 @@ api:
     # silently locks out whatever it left out.  These are the ten.
     max_grants:
       - state:read
-      - transcripts:read
+      - audit:read
       - config:read
       - secrets:read
       - work:write
@@ -222,7 +222,7 @@ api:
         # inferred.  This one is the founder's, so it is all ten.
         grants:
           - state:read
-          - transcripts:read
+          - audit:read
           - config:read
           - secrets:read
           - work:write

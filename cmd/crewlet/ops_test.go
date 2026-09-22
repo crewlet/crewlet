@@ -172,12 +172,12 @@ func bootstrapForURL(t *testing.T, serverURL string) string {
 		"  auth:\n"+
 		"    max_grants: [state:read, config:read, config:write, secrets:read,\n"+
 		"                 secrets:write, work:write, knowledge:write,\n"+
-		"                 transcripts:read, fleet:operate, sandbox:run]\n"+
+		"                 audit:read, fleet:operate, sandbox:run]\n"+
 		"    tokens:\n"+
 		"      - id: ops\n        token: %s\n"+
 		"        grants: [state:read, config:read, config:write, secrets:read,\n"+
 		"                 secrets:write, work:write, knowledge:write,\n"+
-		"                 transcripts:read, fleet:operate, sandbox:run]\n"+
+		"                 audit:read, fleet:operate, sandbox:run]\n"+
 		"secrets:\n  active_key_id: k1\n  keys:\n"+
 		"    - id: k1\n      material: \"bWF0ZXJpYWw=\"\n",
 		filepath.Join(dir, "index.db"), host, port, host, port, cliFixtureToken)

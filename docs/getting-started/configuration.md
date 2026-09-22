@@ -758,7 +758,7 @@ api:
     bootstrap: open     # open (default) | closed — whether POST
                         #   /auth/bootstrap may create the first person
     max_grants:         # THE CEILING. Required once port is set
-      [state:read, transcripts:read, config:read, secrets:read,
+      [state:read, audit:read, config:read, secrets:read,
        work:write, knowledge:write, config:write, secrets:write,
        fleet:operate, sandbox:run]
     session:

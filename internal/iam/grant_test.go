@@ -42,7 +42,7 @@ func TestTheReadGrantsAreTheOnesAnOpenPostureCouldEverOpen(t *testing.T) {
 			writes = append(writes, g)
 		}
 	}
-	wantReads := []Grant{GrantStateRead, GrantTranscriptRead, GrantConfigRead, GrantSecretRead}
+	wantReads := []Grant{GrantStateRead, GrantAuditRead, GrantConfigRead, GrantSecretRead}
 	if !slices.Equal(reads, wantReads) {
 		t.Errorf("the read grants are %v, want %v", reads, wantReads)
 	}

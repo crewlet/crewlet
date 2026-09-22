@@ -40,7 +40,7 @@ const (
 	// recalling another's episodes or writing into another's diary would
 	// make the per-seat memory a shared one". An operator READING a seat's
 	// memory is a different surface with a grant of its own
-	// ([iam.GrantTranscriptRead] over /agents/{id}/memory), and admitting
+	// ([iam.GrantAuditRead] over /agents/{id}/memory), and admitting
 	// it here too would be a second answer to one question — which is the
 	// drift this whole package exists to remove.
 	ClassSelf Class = "self"

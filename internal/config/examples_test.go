@@ -297,13 +297,13 @@ api:
   auth:
     backend: none
     max_grants: [state:read, config:read, config:write, secrets:read,
-                 secrets:write, work:write, knowledge:write, transcripts:read,
+                 secrets:write, work:write, knowledge:write, audit:read,
                  fleet:operate, sandbox:run]
     tokens:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
         grants: [state:read, config:read, config:write, secrets:read,
-                 secrets:write, work:write, knowledge:write, transcripts:read,
+                 secrets:write, work:write, knowledge:write, audit:read,
                  fleet:operate, sandbox:run]
 
 secrets:

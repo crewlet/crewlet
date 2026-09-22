@@ -108,13 +108,19 @@ opinion, and a blank must not read as a ceiling of nothing.
 | Grant | What it opens |
 |---|---|
 | `state:read` | What the company is doing: the board, the pages, the roster, the org chart, the fleet, budgets, schedules — the ordinary dashboard read |
-| `transcripts:read` | What a turn actually *said*: `/events`, `/agents/{id}/memory` and the turn frames on `/ws/stream` carry full prompts, tool arguments and diary entries |
+| `audit:read` | The *record* of what happened: `/events`, `/agents/{id}/memory` and the turn frames on `/ws/stream` carry full prompts, tool arguments and diary entries, and `/iam/audit` carries the identity estate's own trail beside them |
 | `config:read` | The company document — the org chart, every integration, and the *names* of every credential the company holds or has not set yet |
 | `secrets:read` | Revealing a stored credential's value (the one `/secrets` route that returns one, which needs an explicit `?reveal=true` and logs the access) |
 
-`state:read` and `transcripts:read` are separate on purpose: showing somebody
-the board and showing them every prompt an agent was ever given are not one
+`state:read` and `audit:read` are separate on purpose: showing somebody the
+board and showing them every prompt an agent was ever given are not one
 decision.
+
+`audit:read` is **one** grant over both trails rather than a transcript read
+and an audit read, because they have one audience and one question — what did
+this company do, and who asked it to. An agent's turn names the principal that
+woke it and a sign-in names the session every later turn carried, so a reader
+holding one and refused the other could establish neither half.
 
 `config:read` also covers the `/setup` and `/secrets` *listings*. They carry no
 values, but the list of which credentials a company has **not** configured is a
@@ -731,7 +737,7 @@ inside a turn is not something a model reaches for.
 **Self has no admin path, and that is why it is its own rule.** A seat's memory
 tools take no handle at all, because an agent recalling another's episodes
 would make the per-seat memory a shared one. An operator *reading* a seat's
-memory is a different surface with a grant of its own (`transcripts:read` over
+memory is a different surface with a grant of its own (`audit:read` over
 `/agents/{id}/memory`), and admitting it here too would be a second answer to
 one question.
 

@@ -58,7 +58,7 @@ func TestAQuestionIsAnsweredOnlyToTheGrantItDeclares(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	r.Register("config", iam.GrantConfigRead, answersWith("the company"))
-	r.Register("events", iam.GrantTranscriptRead, answersWith("rows"))
+	r.Register("events", iam.GrantAuditRead, answersWith("rows"))
 
 	narrow := asking(t, iam.GrantStateRead)
 	if _, err := r.Answer(narrow, "config", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
@@ -133,7 +133,7 @@ func TestAQuestionIsRefusedToACallerNobodyResolved(t *testing.T) {
 func TestNobodyAskingIsADifferentRefusalFromLackingTheGrant(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	r.Register("events", iam.GrantTranscriptRead, answersWith("rows"))
+	r.Register("events", iam.GrantAuditRead, answersWith("rows"))
 
 	_, anonymous := r.Answer(iam.WithAnonymous(t.Context()), "events", nil, "")
 	if !errors.Is(anonymous, queries.ErrUnauthenticated) {
@@ -194,11 +194,11 @@ func TestAQuestionIsRetriedRatherThanRefusedWhenIdentityIsUnreadable(t *testing.
 func TestTheDeclaredGrantIsWhatAnswerEnforces(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	r.Register("events", iam.GrantTranscriptRead, answersWith(nil))
+	r.Register("events", iam.GrantAuditRead, answersWith(nil))
 	r.Register("config", iam.GrantConfigRead, answersWith(nil))
 
 	for what, want := range map[string]iam.Grant{
-		"events": iam.GrantTranscriptRead,
+		"events": iam.GrantAuditRead,
 		"config": iam.GrantConfigRead,
 		"nope":   "",
 	} {

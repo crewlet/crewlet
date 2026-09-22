@@ -290,7 +290,7 @@ as the first, which tells them to go and get a new credential.
 | Grant | What it reaches |
 |---|---|
 | `state:read` | The company's working state: `/agents`, `/org`, `/tools`, `/schedules`, `/budgets`, `/sandbox-runs`, `/work/*`, `/pages/*`, `/containers`, `/viewer`, `/stream/snapshot`, `/tokens/*`, `/ws/stream` |
-| `transcripts:read` | What an agent actually said and did: `/events*`, `/agents/{id}/memory`, and the turn, phase, trace, A2A-channel and conversation questions on the socket. Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
+| `audit:read` | The record of what happened: `/events*`, `/agents/{id}/memory`, the turn, phase, trace, A2A-channel and conversation questions on the socket, and `/iam/audit`. Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
 | `config:read` | `/config*`, `/company/export`, `/integrations`, and the org chart's **runtime half** (`/chart?runtime=true`) — a seat's model chain, its credentials, its sandbox cell and its `mcp_env` |
 | `secrets:read` | `/secrets*`. The listing carries no values and still says which credentials a company holds and when each last changed |
 | `work:write` | Filing and moving work, and `/operator/mcp`'s write half |

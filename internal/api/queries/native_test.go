@@ -254,14 +254,14 @@ func askNative(t *testing.T, s queries.Sources, what string, params map[string]a
 // prompts, tool arguments, diary entries, a seat's notes on who it has worked
 // with. They carry their own grant because the ordinary board reader must not
 // reach them — that is the whole of what splitting `state:read` from
-// `transcripts:read` buys.
+// `audit:read` buys.
 func askTranscripts(t *testing.T, s queries.Sources, what string,
 	params map[string]any) (any, error) {
 
 	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	return r.Answer(asGrants(t, "", iam.GrantStateRead, iam.GrantTranscriptRead),
+	return r.Answer(asGrants(t, "", iam.GrantStateRead, iam.GrantAuditRead),
 		what, params, "")
 }
 

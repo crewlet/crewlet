@@ -314,7 +314,7 @@ func Register(r *Registry, s Sources) {
 		r.Register("tokens", iam.GrantStateRead, s.tokens)
 	}
 	if s.Events != nil {
-		r.Register("events", iam.GrantTranscriptRead, s.events)
+		r.Register("events", iam.GrantAuditRead, s.events)
 		// THE SAME ROWS WITH A TIME AXIS, which the listing has no
 		// dimension for: a page of rows says what happened and nothing
 		// about when the company was busy. A second question rather than
@@ -322,22 +322,22 @@ func Register(r *Registry, s Sources) {
 		// shapes and one route returning either would make every caller
 		// branch on what came back — the same split `tokens` and
 		// `token_series` already carry.
-		r.Register("event_series", iam.GrantTranscriptRead, s.eventSeries)
-		r.Register("event", iam.GrantTranscriptRead, s.event)
-		r.Register("trace", iam.GrantTranscriptRead, s.trace)
+		r.Register("event_series", iam.GrantAuditRead, s.eventSeries)
+		r.Register("event", iam.GrantAuditRead, s.event)
+		r.Register("trace", iam.GrantAuditRead, s.trace)
 		// A turn is its own question, not a slice of the trace: one trace
 		// can span several turns and one turn several traces. See the
 		// answer, and migration 0014 which made it askable at all.
-		r.Register("turn", iam.GrantTranscriptRead, s.turn)
+		r.Register("turn", iam.GrantAuditRead, s.turn)
 		// AND THE LIST OF THEM, which did not exist: a turn is the unit
 		// of work this engine does and every other surface is a
 		// projection of one. The dashboard faked it by paging the raw
 		// feed sixty-one times and folding in the browser.
-		r.Register("turns", iam.GrantTranscriptRead, s.turns)
+		r.Register("turns", iam.GrantAuditRead, s.turns)
 		// The company's phase records, with their payloads. `events` cannot
 		// serve this: its listing never selects the payload, and a phase
 		// record without one has no prompts, no response and no decision.
-		r.Register("phases", iam.GrantTranscriptRead, s.phases)
+		r.Register("phases", iam.GrantAuditRead, s.phases)
 		// AND THE TIME AXIS. `tokens` is a breakdown whose every row is a
 		// sum over the whole window, so it cannot say WHEN — which is the
 		// question a cost explorer is for. Gated on the event store rather
@@ -485,10 +485,10 @@ func Register(r *Registry, s Sources) {
 		// empty lists for the rest — which is what a client needs to
 		// tell "this seat has learned nothing" from "this node does not
 		// keep that half".
-		r.Register("agent_memory", iam.GrantTranscriptRead, s.agentMemory)
+		r.Register("agent_memory", iam.GrantAuditRead, s.agentMemory)
 	}
 	if s.Channels != nil {
-		r.Register("a2a_channels", iam.GrantTranscriptRead, s.a2aChannels)
+		r.Register("a2a_channels", iam.GrantAuditRead, s.a2aChannels)
 	}
 	if s.WorkSearch != nil {
 		// SEARCH IS A QUESTION, not a filter on the board, and it is
@@ -501,7 +501,7 @@ func Register(r *Registry, s Sources) {
 	if s.Conversations != nil {
 		// SCOPED, like every other per-seat question — see
 		// [Sources.viewerHandle].
-		r.Register("conversations", iam.GrantTranscriptRead, s.conversations)
+		r.Register("conversations", iam.GrantAuditRead, s.conversations)
 	}
 	if s.Config != nil {
 		// OPERATOR-ONLY, all three. Reading the config document exposes

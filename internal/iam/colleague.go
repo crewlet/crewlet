@@ -14,7 +14,7 @@ import "slices"
 // orthogonal, and every attempt to fold them together names the same pair of
 // counterexamples:
 //
-//   - An auditor holds [GrantTranscriptRead] and [GrantConfigRead] over the
+//   - An auditor holds [GrantAuditRead] and [GrantConfigRead] over the
 //     whole deployment and is nobody's colleague: they must not be
 //     assignable, mentionable or delegable, because a seat that can be
 //     delegated to is a seat an agent will delegate to.

@@ -59,14 +59,22 @@ const (
 	// frames built from the same functions. The ordinary dashboard read.
 	GrantStateRead Grant = "state:read"
 
-	// GrantTranscriptRead reads what a turn actually SAID: /events,
-	// /agents/{id}/memory and the turn frames on /ws/stream carry full
-	// prompts, tool arguments and diary entries. Separate from
-	// [GrantStateRead] because internal/api/auth names exactly these
-	// three when it warns what allow_anonymous_read opens — showing
+	// GrantAuditRead reads the RECORD of what happened, whoever or
+	// whatever it happened to: /events, /agents/{id}/memory and the turn
+	// frames on /ws/stream, which carry full prompts, tool arguments and
+	// diary entries — and the identity estate's own trail, /iam/audit,
+	// beside them. Separate from [GrantStateRead] because showing
 	// somebody the board and showing them every prompt an agent was ever
 	// given are not one decision.
-	GrantTranscriptRead Grant = "transcripts:read"
+	//
+	// ONE GRANT OVER BOTH TRAILS rather than a transcript read and an
+	// audit read, because they have one audience and one question — what
+	// did this company do, and who asked it to — and the two answers are
+	// the same answer read from two tables: an agent's turn names the
+	// principal that woke it, and a sign-in names the session every later
+	// turn carried. A reader holding one and refused the other could
+	// establish neither half of that.
+	GrantAuditRead Grant = "audit:read"
 
 	// GrantConfigRead reads the company document. Its own grant, and not
 	// [GrantStateRead], for the reason /config is guarded even for reads:
@@ -143,7 +151,7 @@ const (
 // one principal's slice of it is a sentence that reads wrong either way.
 var AllGrants = []Grant{
 	GrantStateRead,
-	GrantTranscriptRead,
+	GrantAuditRead,
 	GrantConfigRead,
 	GrantSecretRead,
 	GrantWorkWrite,
@@ -160,7 +168,7 @@ var AllGrants = []Grant{
 // without a reader deciding what class it is in.
 var grantAccess = map[Grant]Access{
 	GrantStateRead:      AccessRead,
-	GrantTranscriptRead: AccessRead,
+	GrantAuditRead:      AccessRead,
 	GrantConfigRead:     AccessRead,
 	GrantSecretRead:     AccessRead,
 	GrantWorkWrite:      AccessWrite,

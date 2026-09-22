@@ -95,7 +95,7 @@ api:
                     #   one-time code this node writes beside its store.
     max_grants:     # THE CEILING on what this deployment will ever let a
                     #   directory record confer. Required once a port is set.
-      [state:read, transcripts:read, config:read, secrets:read, work:write,
+      [state:read, audit:read, config:read, secrets:read, work:write,
        knowledge:write, config:write, secrets:write, fleet:operate, sandbox:run]
     tokens:         # at least one is REQUIRED once a port is set: every route
                     #   needs a credential, and this is also what creates the
@@ -103,7 +103,7 @@ api:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
         grants:     # what this credential may do — required and non-empty.
-          [state:read, transcripts:read, config:read, secrets:read, work:write,
+          [state:read, audit:read, config:read, secrets:read, work:write,
            knowledge:write, config:write, secrets:write, fleet:operate, sandbox:run]
 
 secrets:                  # REQUIRED. Every record on every state log — the
