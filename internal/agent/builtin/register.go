@@ -51,7 +51,7 @@ type Deps struct {
 	EpisodeLimit int
 
 	// SkillBodyMax caps a refined skill's body:
-	// learning.skill_refinement.max_body_chars. Zero takes
+	// learning.skill_refinement.max_body_bytes. Zero takes
 	// [DefaultSkillBodyMax].
 	SkillBodyMax int
 
@@ -481,7 +481,7 @@ const (
 	// DefaultEpisodeLimit is learning.episodic.retrieval_limit's default.
 	DefaultEpisodeLimit = 5
 
-	// DefaultSkillBodyMax is learning.skill_refinement.max_body_chars's
+	// DefaultSkillBodyMax is learning.skill_refinement.max_body_bytes's
 	// default: the ceiling on a refined skill's whole body.
 	DefaultSkillBodyMax = 20000
 )

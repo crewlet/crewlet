@@ -143,7 +143,7 @@ learning:                               # optional — agent-learning subsystem
                                         # is not settled yet. Both false leaves
                                         # the refiner unbuilt
     budget_tokens: 3000                 # soft cap on the refiner's LLM call
-    max_body_chars: 20000               # a refinement whose result exceeds this
+    max_body_bytes: 20000               # a refinement whose result exceeds this
                                         # is refused, not truncated
     max_versions_kept: 10               # history retention per skill (older pruned)
   skill_promotion:

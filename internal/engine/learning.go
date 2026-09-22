@@ -208,7 +208,7 @@ func refinerOptions(cfg config.SkillRefinement) learning.RefinerOptions {
 		OnSuccess:    &onSuccess,
 		OnFailure:    &onFailure,
 		MaxTokens:    cfg.BudgetTokens,
-		MaxBodyChars: cfg.MaxBodyChars,
+		MaxBodyBytes: cfg.MaxBodyBytes,
 		KeepVersions: cfg.MaxVersionsKept,
 	}
 }

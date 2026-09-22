@@ -87,7 +87,7 @@ func TestARefinementOverTheBodyCapIsRefused(t *testing.T) {
 	if !res.Failed {
 		t.Fatalf("a 200-character body was accepted under a cap of 100: %q", res.Output)
 	}
-	if !strings.Contains(res.Output, "max_body_chars") {
+	if !strings.Contains(res.Output, "max_body_bytes") {
 		t.Errorf("the refusal does not name the setting: %q", res.Output)
 	}
 	// REFUSED, not truncated, and therefore not written: half a procedure
@@ -105,8 +105,8 @@ func TestARefinementOverTheBodyCapIsRefused(t *testing.T) {
 // refusal has to NAME the limit or a model has nothing to aim at.
 func TestEveryDiaryWriterRefusesAnOverLongNoteAndNamesTheCap(t *testing.T) {
 	t.Parallel()
-	over := strings.Repeat("z", learning.MaxContentChars+1)
-	at := strings.Repeat("z", learning.MaxContentChars)
+	over := strings.Repeat("z", learning.MaxContentBytes+1)
+	at := strings.Repeat("z", learning.MaxContentBytes)
 
 	for _, tc := range []struct {
 		name string
@@ -142,7 +142,7 @@ func TestEveryDiaryWriterRefusesAnOverLongNoteAndNamesTheCap(t *testing.T) {
 			if !res.Failed {
 				t.Fatalf("an over-long note was accepted: %q", res.Output)
 			}
-			if !strings.Contains(res.Output, strconv.Itoa(learning.MaxContentChars)) {
+			if !strings.Contains(res.Output, strconv.Itoa(learning.MaxContentBytes)) {
 				t.Errorf("the refusal does not name the cap: %q", res.Output)
 			}
 			if wrote() {

@@ -217,7 +217,7 @@ type SkillRefinement struct {
 	AutoRefineOnSuccess Toggle `yaml:"auto_refine_on_success,omitempty" json:"auto_refine_on_success,omitzero" desc:"Append an observation when a skill's turn succeeded (default on)."`
 	AutoRefineOnFailure Toggle `yaml:"auto_refine_on_failure,omitempty" json:"auto_refine_on_failure,omitzero" desc:"Append a counter-example when it failed (default on)."`
 	BudgetTokens        int    `yaml:"budget_tokens,omitempty" json:"budget_tokens,omitempty" js:"min=0" desc:"Soft token cap per refinement."`
-	MaxBodyChars        int    `yaml:"max_body_chars,omitempty" json:"max_body_chars,omitempty" js:"min=0" desc:"Ceiling on a refined skill's body."`
+	MaxBodyBytes        int    `yaml:"max_body_bytes,omitempty" json:"max_body_bytes,omitempty" js:"min=0" desc:"Ceiling on a refined skill's body, in bytes."`
 	MaxVersionsKept     int    `yaml:"max_versions_kept,omitempty" json:"max_versions_kept,omitempty" js:"min=0" desc:"Archived versions kept for rollback."`
 }
 
@@ -231,7 +231,7 @@ func (s *SkillRefinement) OnFailure() bool { return s.AutoRefineOnFailure.Or(tru
 
 // DefaultSkillRefinement is the shipped defaults.
 func DefaultSkillRefinement() SkillRefinement {
-	return SkillRefinement{BudgetTokens: 3000, MaxBodyChars: 20000, MaxVersionsKept: 10}
+	return SkillRefinement{BudgetTokens: 3000, MaxBodyBytes: 20000, MaxVersionsKept: 10}
 }
 
 // Refines reports whether refinement runs, applying the true default.
@@ -240,7 +240,7 @@ func (s *SkillRefinement) Refines() bool { return s.Enabled.Or(true) }
 func (s *SkillRefinement) validate(path Path) error {
 	var p problems
 	p.wrap(nonNegative(path, "budget_tokens", s.BudgetTokens))
-	p.wrap(positive(path, "max_body_chars", s.MaxBodyChars))
+	p.wrap(positive(path, "max_body_bytes", s.MaxBodyBytes))
 	p.wrap(positive(path, "max_versions_kept", s.MaxVersionsKept))
 	return p.err()
 }

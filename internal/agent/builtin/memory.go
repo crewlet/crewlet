@@ -87,7 +87,7 @@ const maxEpisodeLimit = 25
 
 // diaryNoteMax bounds one written note, in BYTES.
 //
-// The store's own rule, not a second opinion about it: [learning.MaxContentChars]
+// The store's own rule, not a second opinion about it: [learning.MaxContentBytes]
 // is where it is stated, because the post-turn PersistDecider writes into the
 // same table and the two used to disagree — this path refused an over-long note
 // while that one stored it whole.
@@ -97,7 +97,7 @@ const maxEpisodeLimit = 25
 // model told it wrote 3 000 characters of CJK when it wrote 1 000 has been
 // handed a number it cannot reproduce by counting what it typed, and the
 // refusal's whole job is to let it aim.
-const diaryNoteMax = learning.MaxContentChars
+const diaryNoteMax = learning.MaxContentBytes
 
 // --- use_skill ------------------------------------------------------------ //
 

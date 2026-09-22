@@ -341,7 +341,7 @@ func TestARefinementPastTheBodyCapIsSkippedNotClipped(t *testing.T) {
 	db := newStore(t)
 	body := strings.Repeat("x", 200)
 	sk := seedSkill(t, db, "cut-a-release", body)
-	r := refiner(t, db, goodChoice, learning.RefinerOptions{MaxBodyChars: 210})
+	r := refiner(t, db, goodChoice, learning.RefinerOptions{MaxBodyBytes: 210})
 
 	out, err := r.Reflect(t.Context(), usedTurn("done", sk.ID))
 	if err != nil {

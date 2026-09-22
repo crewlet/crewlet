@@ -25,7 +25,7 @@ const (
 	DiaryShort DiaryKind = "diary_short"
 )
 
-// MaxContentChars bounds one written diary note, for EVERY writer.
+// MaxContentBytes bounds one written diary note, for EVERY writer.
 //
 // A note is meant to be re-read in a later turn's prompt, so its cost is paid
 // on every turn that recalls it, not once — and it is read back into the
@@ -60,7 +60,7 @@ const (
 // writers still differ in what they DO about it, and that difference is
 // deliberate: a model holding the text can tighten it and retry, so the tool
 // refuses; the decider has no one to ask, so it skips and says so.
-const MaxContentChars = 2000
+const MaxContentBytes = 2000
 
 // DiaryEntry is one private observation a seat made about its own work.
 //
@@ -99,13 +99,13 @@ type DiaryEntry struct {
 	// and the entry carries no vector of its own. Both writers hand the
 	// store a note and nothing else — [PersistDecider.write] and the
 	// `reflect_and_persist` builtin — so the store is the one place the
-	// rule can be stated once, for the same reason [MaxContentChars] is
+	// rule can be stated once, for the same reason [MaxContentBytes] is
 	// stated here rather than beside either of them: a vector one writer
 	// produced and the other did not would make a note's recallability
 	// depend on which path wrote it.
 	//
 	// ONE VECTOR, NOT A WINDOW SET, which is where this differs from
-	// [Episode.Embeddings]: a note is bounded at [MaxContentChars] by every
+	// [Episode.Embeddings]: a note is bounded at [MaxContentBytes] by every
 	// writer, and that bound is inside [EpisodeWindowBytes] — the window an
 	// episode summary has to be split into — so there is nothing here to
 	// split and no window count to carry.
@@ -232,7 +232,7 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 // learned nothing.
 //
 // NO SECOND DEADLINE. One note is one call — a note is bounded at
-// [MaxContentChars], so there is no window set to bound the way
+// [MaxContentBytes], so there is no window set to bound the way
 // [DefaultEmbedTimeout] bounds an episode's — and the embeddings provider
 // already bounds the call it makes. A timeout here would be a second opinion
 // about one round trip, free to disagree with the first.

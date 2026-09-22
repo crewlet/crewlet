@@ -1852,8 +1852,8 @@
             "null"
           ]
         },
-        "max_body_chars": {
-          "description": "Ceiling on a refined skill's body.",
+        "max_body_bytes": {
+          "description": "Ceiling on a refined skill's body, in bytes.",
           "minimum": 0,
           "type": "integer"
         },
