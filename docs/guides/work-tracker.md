@@ -1081,6 +1081,20 @@ and it exists because the thing that moved is not a row on a board:
 first reason in the precedence order wins and the rest are dropped. Somebody
 mentioned on a task they are watching hears that they were mentioned.
 
+**And nothing wakes you for your own write — under either of your names.** The
+person who made a change is dropped from its own wake: being told what you just
+did is a turn spent on nothing. The comparison is against **both** identities a
+person can write under, which matters for exactly one of them — a write you
+make through your own token is authored by the **token**, while the watch it
+leaves on the item is your **seat's**, so a founder filing work through their
+assistant would otherwise be woken by every item they filed and every comment
+they left. The record carries the seat beside the author for that one reader;
+nothing renders it, and the author field is untouched.
+
+The single exception is **`unblocked`**, and it is the exception because it is
+about a *different* task: closing a blocker is exactly the moment to be told
+that your own other work became workable.
+
 The order puts **what this change did to you** ahead of **the role you hold**.
 Being @-mentioned, being asked a question, having your question answered, and
 learning that somebody's work now waits on yours all outrank being the

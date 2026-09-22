@@ -110,7 +110,10 @@ the **seat** for the same reason: the watch her create leaves on the item, the
 project it is filed into when she names none, and the lead relation that
 decides which work she may point at another team. An address is not an
 attribution — nothing routes to a credential, so a token left in a watcher set
-is a colleague nobody can reach.
+is a colleague nobody can reach. It is also how the wake for a change knows not
+to come back to her: the record carries her seat beside the token that authored
+it, so work she files through her assistant wakes her colleagues and not
+her.
 
 Bind the token and your own work is on your own screen; leave it unbound and
 you are an operator outside the chart, acting as `operator:<id>`, which is an

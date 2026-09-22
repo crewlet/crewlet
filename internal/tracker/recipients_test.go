@@ -124,7 +124,7 @@ func TestALeadFilingAStrayStillReachesSomebody(t *testing.T) {
 			t.Fatalf("%s is an ordinary candidate; both leads are fallbacks", c.Handle)
 		}
 	}
-	routed := tracker.Route(cands, everyone, "backend-lead")
+	routed := tracker.Route(cands, everyone, tracker.PartyOf("backend-lead"))
 	if len(routed) != 1 || routed[0].Handle != "vp-engineering" {
 		t.Fatalf("a lead filing into their own team routed to %v; the whole "+
 			"point of the ordered list is that somebody still hears",
@@ -135,7 +135,7 @@ func TestALeadFilingAStrayStillReachesSomebody(t *testing.T) {
 	// list is a fallback CHAIN, not a distribution list: waking both the
 	// unit lead and the VP for every unassigned task is how a fallback
 	// becomes something people filter out.
-	both := tracker.Route(cands, everyone, "somebody-else")
+	both := tracker.Route(cands, everyone, tracker.PartyOf("somebody-else"))
 	if len(both) != 1 || both[0].Handle != "backend-lead" {
 		t.Fatalf("with both leads present the change routed to %v; the fallback "+
 			"is a chain and only its lowest rank is woken", handles(both))
@@ -153,7 +153,7 @@ func TestAFallbackYieldsToAnyOrdinaryCandidate(t *testing.T) {
 			ProjectLead:     "vp-engineering",
 		},
 	}, false)
-	routed := tracker.Route(cands, everyone, "bo")
+	routed := tracker.Route(cands, everyone, tracker.PartyOf("bo"))
 	if got := handles(routed); len(got) != 1 || got[0] != "ana" {
 		t.Fatalf("routed to %v; a fallback survives only when nothing ordinary "+
 			"did", got)
@@ -174,7 +174,7 @@ func TestTheNewUnitsLeadHearsEvenOnAWatchedTask(t *testing.T) {
 			Watchers: []string{"bo"},
 			RoutedTo: "platform-lead",
 		},
-	}, false), everyone, "cy")
+	}, false), everyone, tracker.PartyOf("cy"))
 	if !slices.Contains(handles(routed), "platform-lead") {
 		t.Fatalf("routed to %v and the new unit's lead is not among them",
 			handles(routed))
@@ -207,7 +207,7 @@ func TestOnlyAnUnblockedNoticeReachesTheActor(t *testing.T) {
 			"another task and is not deduped against reasons about this one: %+v",
 			len(cands), cands)
 	}
-	routed := tracker.Route(cands, everyone, "ana")
+	routed := tracker.Route(cands, everyone, tracker.PartyOf("ana"))
 	if len(routed) != 1 {
 		t.Fatalf("routed to %v, want ana alone under unblocked", handles(routed))
 	}
@@ -239,7 +239,7 @@ func TestAnUnwatchIsRecordedAndNotRouted(t *testing.T) {
 	if reasonOf(cands, "ana") != tracker.ReasonUnwatched {
 		t.Fatalf("the removed watcher is not a candidate at all: %+v", cands)
 	}
-	if got := tracker.Route(cands, everyone, "lead"); len(got) != 0 {
+	if got := tracker.Route(cands, everyone, tracker.PartyOf("lead")); len(got) != 0 {
 		t.Fatalf("an inbox-only candidate was routed to %v", handles(got))
 	}
 }
@@ -260,7 +260,8 @@ func TestADepartedHandleKeepsItsRowAndLosesItsWake(t *testing.T) {
 		t.Fatal("a departed handle is missing from the record of who the change " +
 			"concerned")
 	}
-	routed := tracker.Route(cands, func(h string) bool { return h != "gone" }, "bo")
+	routed := tracker.Route(cands, func(h string) bool { return h != "gone" },
+		tracker.PartyOf("bo"))
 	if slices.Contains(handles(routed), "gone") {
 		t.Fatalf("a departed handle was woken: %v", handles(routed))
 	}
@@ -304,7 +305,7 @@ func TestAnAnswerWakesTheAsker(t *testing.T) {
 	routed := tracker.Route(tracker.Candidates(&tracker.Notify{
 		Kind:     tracker.ChangeCommentResolved,
 		Snapshot: tracker.Snapshot{AnsweredAuthor: "founder"},
-	}, false), everyone, "eng-1")
+	}, false), everyone, tracker.PartyOf("eng-1"))
 	if got := handles(routed); len(got) != 1 || got[0] != "founder" {
 		t.Fatalf("an answer routed to %v rather than to whoever asked", got)
 	}

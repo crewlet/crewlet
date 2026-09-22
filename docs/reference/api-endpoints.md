@@ -2016,8 +2016,11 @@ person's** record and sign it with the token; `my_work`, `get_person` and
 `watch: true`, a comment and a create all record **that person** as the
 watcher; a create with no `project` files into their team's; and the lead
 relation `routing_unit` and `write_project` are gated on is resolved for them.
-An unbound token is an operator outside the chart and writes its own record
-under its own id, which is ordinary. See
+It is also what keeps a wake from coming back to you: the change you just made
+is not announced to the person who made it, and that exclusion reads the seat
+as well as the token — so filing work through your own assistant does not wake
+you about it. An unbound token is an operator outside the chart and writes its
+own record under its own id, which is ordinary. See
 [Humans in the org](../concepts/humans-in-the-org.md).
 
 A person's own credential also carries an **authority of its own**, bound or
