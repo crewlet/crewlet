@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -915,6 +916,14 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	importCompany := fs.String("import-company", "",
 		"Tier B config to make the active revision NOW, over whatever the "+
 			"fleet is running; -company only bootstraps an empty store")
+	// A FLAG AND NEVER A CONFIG FIELD, for the reason -mode is one and for
+	// a sharper one: `api.auth.disabled` was a field, and a field reaches
+	// production by being copied into an image. See auth.NewDevPrincipal
+	// for the two refusals behind it.
+	devPrincipal := fs.String("dev-principal", "",
+		"DEVELOPMENT ONLY: resolve every unauthenticated request to this "+
+			"login, carrying api.auth.max_grants. Refused unless api.host "+
+			"binds loopback AND this is a development build")
 	// ASSIGNED, NOT DECLARED: this function's error is NAMED, so that a
 	// deferred recorder can put a boot failure in the log file before the
 	// file closes (see below), and a `:=` here would shadow it — harmless
@@ -943,7 +952,8 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		fmt.Fprintln(stderr, "usage: crewlet run [<config.yaml>] "+
 			"[-company <company.yaml> | -import-company <company.yaml>] "+
 			"[-log-level …] [-log-format …] [-log-file …] [-debug] "+
-			"[-roles …] [-mode …] [-api-host …] [-api-port …]")
+			"[-roles …] [-mode …] [-api-host …] [-api-port …] "+
+			"[-dev-principal …]")
 		return errors.New("name at most one config document")
 	}
 	if file != "" {
@@ -1033,6 +1043,29 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// HTTP at all and make every integration go deaf.
 	if err = overrideNode(boot, fs, *roles, *apiHost, *apiPort); err != nil {
 		return err
+	}
+	// AFTER THE OVERRIDES, because -api-host is one of them and the
+	// loopback refusal reads `api.host`: built before, it would judge the
+	// file's bind on a run that moved it, in either direction — refusing a
+	// legitimate `-api-host 127.0.0.1` and, far worse, permitting the flag
+	// on a run whose -api-host opened the node to the network.
+	//
+	// AND BEFORE ANYTHING STARTS. Its refusals are about this build and
+	// this bind, so a run that cannot have what it asked for fails here
+	// rather than booting an engine and then serving without it.
+	dev, err := auth.NewDevPrincipal(*devPrincipal, boot)
+	if err != nil {
+		return err
+	}
+	if dev != nil {
+		// LOUD, EVERY BOOT. The whole surface is open to this machine,
+		// and a line nobody sees is how a developer leaves it on for a
+		// week and forgets what they are looking at.
+		log.Warn("api_dev_principal_enabled",
+			"login", *devPrincipal, "bind", boot.API.Host,
+			"hint", "every request with no credential is authenticated as "+
+				"this principal; this is refused on anything but a loopback "+
+				"bind of a development build")
 	}
 	// THE MODE IS A FLAG AND NEVER A CONFIG FIELD, deliberately. Every
 	// node of the fleet restarts into it and out of it again, three times
@@ -1219,7 +1252,7 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// /ready report honestly that it holds no seats yet, and a webhook that
 	// arrives in the window is retained rather than dropped because the
 	// mailboxes are created before any claiming (see Node.Start).
-	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, log)
+	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, dev, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
@@ -1406,7 +1439,7 @@ func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets
 // serveAPI binds the HTTP surface, or reports that this node serves none.
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
-	configSurface *configapi.Service, log *slog.Logger,
+	configSurface *configapi.Service, dev *auth.DevPrincipal, log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
 		// A real posture: a worker-only node runs no dashboard, no REST
@@ -1621,7 +1654,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// credential a human seat claims, so somebody at the dashboard
 		// acts as themselves rather than as the token they hold.
 		BoundSeat: e.BoundSeat,
-		Runtime:   runtime,
+		// NIL ON EVERY ORDINARY RUN — `-dev-principal` is what builds
+		// one, and it was refused at boot on anything but a loopback
+		// bind of a development build.
+		DevPrincipal: dev,
+		Runtime:      runtime,
 		// THE ENGINE'S OWN RECEIVER, not a second one built here. The API
 		// verifies tokens this process's engine minted, and two receivers
 		// would sign with two per-process keys unless a keyring happened

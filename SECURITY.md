@@ -73,9 +73,36 @@ A few things worth knowing when deploying Crewlet:
   it could not be closed durably because it was an `omitempty` bool whose safe
   value was its zero, so `false` did not survive an export round trip. A
   deliberately public reader is a named `api.auth.tokens` entry holding read
-  grants and nothing else. `api.auth.disabled`, which authenticated the *empty*
-  credential into full operator authority with no bind check anywhere, is gone
-  with it.
+  grants and nothing else. What stays reachable without one is a short fixed
+  list — the probes, the signed webhook edges, the per-run token paths, and the
+  dashboard shell, which ships no data — and it is a list of *exemptions*
+  rather than a posture anything can widen.
+
+  `api.auth.disabled`, which authenticated the *empty* credential into full
+  operator authority with no bind check anywhere, is gone with it.
+  `crewlet run -dev-principal <login>` is what replaces it for local work, and
+  it is a **flag rather than a config field** because a field reaches
+  production by being copied into an image. It is refused unless `api.host`
+  binds loopback *and* the binary is a development build, grants
+  `api.auth.max_grants` and no more, and logs a warning on every boot that
+  enables it.
+- **Carrying a credential is not the same as being allowed to use it.** Every
+  route and every socket question declares one of ten grants, and both
+  transports are decided by the same registry, so a question cannot be reached
+  by choosing a channel. A route registered with no grant is a build failure
+  rather than a route that answers to anyone.
+- **A cross-site write is refused by its `Origin`.** CORS decides who may
+  *read* an answer; on a state change that is the part an attacker does not
+  need, so a separate check refuses a non-read whose `Origin` is not an address
+  this deployment is reached at. An absent `Origin` is allowed for a bearer
+  client — a cross-site page cannot make a bearer travel — and refused for a
+  cookie-authenticated request, which a browser would always have sent one on.
+- **A node that cannot read identity answers `503`, never `401`.** The
+  principal a node could not check and the principal that presented nothing are
+  the same empty value, and reporting the first as the second tells everybody
+  holding a valid credential that theirs is invalid for the length of the
+  outage — which is how a company gets taught to reset working passwords during
+  one.
 - **`api.auth.max_grants` is the ceiling, and it is required.** A person's
   grants live in the replicated store and an identity provider's group mapping
   is written at the provider — neither is in a tier this deployment's operator

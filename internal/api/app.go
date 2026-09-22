@@ -199,6 +199,17 @@ type Options struct {
 	// an unbound one already means.
 	BoundSeat func(operatorID string) string
 
+	// DevPrincipal is the identity an unauthenticated request resolves to
+	// on a development run, or nil.
+	//
+	// BUILT BY THE CALLER, not from the bootstrap here, because it is a
+	// FLAG rather than a config field and its refusals are boot-time: a
+	// released binary and a bind other machines can reach are both refused
+	// by [auth.NewDevPrincipal], which `crewlet run` calls before it ever
+	// builds this. A field would be copied into an image, which is exactly
+	// how `api.auth.disabled` reached production.
+	DevPrincipal *auth.DevPrincipal
+
 	// Bootstrap supplies the auth posture. Nil is permitted and is not the
 	// same as absent config: the guard then refuses every write, because
 	// nobody has said who may make one.
@@ -353,7 +364,8 @@ func New(opts Options) (*App, error) {
 	}
 
 	a := &App{
-		guard:        auth.New(opts.Bootstrap).BindSeats(opts.BoundSeat),
+		guard: auth.New(opts.Bootstrap).BindSeats(opts.BoundSeat).
+			WithDevPrincipal(opts.DevPrincipal),
 		csrf:         auth.NewCSRF(opts.Bootstrap),
 		secure:       servedOverHTTPS(opts.Bootstrap),
 		state:        state,

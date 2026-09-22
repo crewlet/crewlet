@@ -210,10 +210,16 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > holding a stale token sees "retrying" for ever.
 >
 > **The guard is always mounted**, whether or not Tier A is present. An API
-> built without `api.auth` configuration has no token, and a route that needs
-> one is therefore refused rather than served: reads work, every write and the
-> whole of `/config`, `/secrets`, `/setup`, `/chart` and `/company` answers `401`. There is no way to start a
-> process that serves those writes without a guard in front of them.
+> built without `api.auth` configuration has no token, so no candidate can
+> match and every guarded route answers `401` — which is all of them bar the
+> exemptions above. There is no way to start a process that serves this
+> surface without a guard in front of it.
+>
+> **A cross-site write is refused by its `Origin`** with `403 csrf_origin`,
+> whatever credential it carries. The match is `api.external_url`'s own origin
+> plus every `api.auth.allowed_origins` entry; reads and the exempt routes are
+> never refused for theirs. See
+> [Identity and Access § A cross-site write is refused by its Origin](../concepts/identity-and-access.md#a-cross-site-write-is-refused-by-its-origin).
 >
 > **Every `/webhooks/*` route fails closed.** They are exempt from the bearer
 > token because each verifies its provider's signature instead — so a route
@@ -222,7 +228,41 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > the delivery flows once the secret is set; nothing is discarded, and nothing
 > unsigned is ever recorded, published, or shown on the dashboard.
 
-Plus the always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up), [`/chart/*` and `/company/export`](#chart--the-org-chart-auth-gated), and [`/operator/mcp`](#operatormcp--your-own-assistant). `/setup` and `/chart` are guarded on their READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack, and so is the shape of the company itself.
+Plus the surfaces whose reads are as sensitive as their writes: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up), [`/chart/*` and `/company/export`](#chart--the-org-chart-auth-gated), and [`/operator/mcp`](#operatormcp--your-own-assistant). The list of which credentials a company has not configured yet is a map of what to attack, and so is the shape of the company itself.
+
+### Which grant a route needs
+
+Holding a credential is not the same as being allowed to use it here. Every
+route and every socket question declares one of the
+[ten grants](../concepts/identity-and-access.md#grants-the-ten-things-there-are-to-allow),
+and a principal that does not carry it is refused with `403` — including a
+Tier A token, whose declared grants are intersected with `api.auth.max_grants`
+on every request.
+
+| Grant | What it reaches |
+|---|---|
+| `state:read` | The company's working state: `/agents`, `/org`, `/tools`, `/schedules`, `/budgets`, `/sandbox-runs`, `/work/*`, `/pages/*`, `/containers`, `/viewer`, `/stream/snapshot`, `/tokens/*`, `/ws/stream` |
+| `transcripts:read` | What an agent actually said and did: `/events*`, `/agents/{id}/memory`, and the turn, phase, trace, A2A-channel and conversation questions on the socket. Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
+| `config:read` | `/config*`, `/company/export`, `/integrations`, and the org chart's **runtime half** (`/chart?runtime=true`) — a seat's model chain, its credentials, its sandbox cell and its `mcp_env` |
+| `secrets:read` | `/secrets*`. The listing carries no values and still says which credentials a company holds and when each last changed |
+| `work:write` | Filing and moving work, and `/operator/mcp`'s write half |
+| `knowledge:write` | Writing the company's own pages |
+| `config:write` | `PUT`/`PATCH /config`, `/chart/batch`, the rename and import routes, and `/setup`'s writes |
+| `secrets:write` | `POST`/`DELETE /secrets/*` |
+| `fleet:operate` | The deployment rather than the company: `/fleet`, `/work/retention*`, `/backup`, `/budgets/reset` |
+| `sandbox:run` | Starting a coding run |
+
+A question asked on the socket is decided by the same declaration the REST
+route is — one registry, both transports — so there is no way round a grant by
+choosing a channel.
+
+**And a node that cannot read identity answers `503`, never `403`.** The
+principal a node could not check and the principal that carries nothing are
+the same empty value, and reporting the first as the second tells everybody
+holding a good credential that theirs is invalid for as long as the outage
+lasts. So an unreadable identity estate is `503 identity_unavailable` with a
+`Retry-After`, and only a credential this node positively checked and refused
+is a `401` or a `403`.
 
 ### Security headers on every response
 

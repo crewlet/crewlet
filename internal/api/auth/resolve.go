@@ -136,6 +136,13 @@ func intersect(declared, ceiling []iam.Grant) []iam.Grant {
 // [iam.From] is what every surface downstream reads and a second channel would
 // be a second answer.
 func (g *Guard) Resolve(r *http.Request) *http.Request {
+	// THE DEVELOPMENT PRINCIPAL FIRST, and only for a request that
+	// presented nothing. It is nil on every build that did not ask for it
+	// and on every posture that refused it at construction, so this is a
+	// nil check on an ordinary run. See devprincipal.go.
+	if dev := g.devResolution(r); dev != nil {
+		return r.WithContext(iam.WithPrincipal(r.Context(), *dev))
+	}
 	candidate := g.Credential(r)
 	if candidate == "" {
 		return r.WithContext(iam.WithAnonymous(r.Context()))

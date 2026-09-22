@@ -493,6 +493,96 @@ stale identity is by definition a node already alarmed.
 
 ---
 
+## Every route is guarded, and the exemptions are the list
+
+There is no "read posture" to configure and no way to open the surface. A
+request that presents no credential is refused wherever it lands, **except** on
+the routes below — which are exempt because each authenticates by other means,
+or because a client must reach it to obtain a credential at all.
+
+| Route | Why it is exempt |
+|---|---|
+| `/health`, `/ready` | Probes. An orchestrator holds no token, and a liveness check that answers 401 is a liveness check that fails. Exact paths, never prefixes — a `/health-admin` added later must not inherit this. |
+| `/webhooks/…` | Every one verifies a provider signature over the body before doing anything, which is a stronger check than a shared bearer. Includes the Slack OAuth landing page, which a browser reaches mid-install with no token in hand. |
+| `/otlp/…`, `/mcp/…` | The per-run signed token **in the path** is the credential. Both are reached from *inside a sandbox*, which is the one place the API's own token must never go: it reads the whole company, and the box is running generated code. |
+| `/`, `/dashboard`, `/favicon.ico`, `/static/…` | The page that prompts for a credential cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch. |
+
+Everything else needs one, **reads included**. `allow_anonymous_read` used to
+decide this and defaulted to open, so `/events`, `/agents/{id}/memory` and
+`/ws/stream` served full LLM transcripts — prompts, tool arguments, diary
+entries — and the roster named everybody who works here, to anyone who could
+reach the port. It could not be closed durably either: it was an `omitempty`
+bool whose safe value was its zero, so `false` did not survive an export round
+trip and a deployment that had closed it re-opened itself the first time its
+config went through `PUT /config`.
+
+A deliberately public read surface is now an `api.auth.tokens` entry holding
+read grants and nothing else — listable, revocable without a restart, and
+present in the audit log.
+
+There is deliberately no list of *especially* guarded routes to go with this
+one. Guarded is what a route **is**; each surface states its own authority
+where it is enforced, as a grant on the route and an
+[authority rule](#the-authority-table-one-function-decides) deciding whether
+this caller may do that.
+
+### `/operator` is not under `/mcp/`
+
+The operator MCP surface files and moves work and writes the company's
+knowledge base, and the credential's own name is what lands on each record as
+the author. `/mcp/` is exempt **wholesale**, so mounting it there would have put
+a writable company surface behind no credential at all. It has its own
+always-guarded prefix for exactly that reason.
+
+---
+
+## A cross-site write is refused by its Origin
+
+A browser's same-origin policy stops an attacker's page **reading** a
+cross-origin response. It does not stop the request being *sent* — a form post
+and a `fetch` with `credentials: include` both leave the browser and arrive
+here with whatever the browser attaches automatically. On a state-changing
+request, reading the answer is the part an attacker does not need. CORS
+therefore does not cover this, and a separate check does.
+
+The rule, on every method that is not a read:
+
+- **A present `Origin` that does not match is refused**, with `403`
+  `csrf_origin`. This is the whole of the browser case: a browser sends the
+  header on every non-GET it makes, cross-site or not, and cannot be talked out
+  of it.
+- **An absent `Origin` is allowed** *unless* the request authenticated by
+  cookie. Every non-browser client sends none — curl, the operator CLI, a CI
+  pipeline — and refusing them would refuse the callers this API mostly has, to
+  close a hole none of them can be used for: a bearer is attached by script, so
+  a cross-site page holding no token cannot make one travel.
+- **A cookie with no `Origin` is refused**, which is the one arm the rule above
+  must not swallow. A browser always sends the header on a non-GET, so a
+  cookie-authenticated request carrying none did not come from the browser the
+  cookie was issued to.
+
+**What counts as a match** is `api.external_url`'s own origin plus every
+`api.auth.allowed_origins` entry — the same list CORS reads, meaning the same
+thing here: another address this deployment is genuinely reached at. A
+deployment behind two hostnames names both, or the second one's writes are
+refused with a message saying exactly that. The **path is dropped** from the
+comparison: `api.external_url` legitimately carries one for a path-routing
+proxy, while a browser at `https://ops.example.com/crewlet` still sends
+`Origin: https://ops.example.com`, so comparing the whole value would refuse
+every write from precisely the deployment shape the path exists for.
+
+Reads are never refused for their origin — refusing one would break every
+cross-origin dashboard the CORS allowance exists to serve, to prevent a request
+that alters nothing. The exempt routes above are not refused either: a vendor's
+webhook delivery is a POST from a server carrying no `Origin` and verifying a
+signature of its own, and refusing it would take every integration off the air.
+
+A deployment that names **no** address permits no origin at all, which is the
+fail-closed direction: nobody has said where this deployment is reached, so no
+cross-origin claim can be believed.
+
+---
+
 ## The authority table: one function decides
 
 A grant says what a principal *carries*. It does not say whether they may do a

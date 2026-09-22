@@ -350,7 +350,12 @@ func (b BootstrapAccess) Valid() bool { return slices.Contains(BootstrapAccesses
 // `disabled` authenticated the EMPTY credential into full operator authority,
 // with no check on the bind address anywhere. `crewlet run -dev-principal`
 // replaces it: a flag rather than a field, because a field gets copied into an
-// image, and refused unless the external URL is loopback.
+// image, and refused unless `api.host` BINDS loopback and the binary is a
+// development build. The bind rather than `api.external_url`, deliberately and
+// unlike `api.auth.local`'s insecure rule: that one is about whether a cookie
+// crosses plaintext through a proxy, where the external address is the truth,
+// and this is about who can open a socket to this process, where the bind
+// is.
 //
 // Both are refused by name if they appear — see retiredBootstrapFields.
 type APIAuth struct {

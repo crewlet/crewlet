@@ -315,7 +315,7 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil, log)
+	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestANodeWithoutTheIngressRoleBindsNoListener(t *testing.T) {
 	boot.API.Port = freePort(t)
 	boot.Node.Roles = []string{"seats", "workers"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
 	boot := bootstrapFor(t, port)
 	boot.Node.Roles = []string{"seats"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestANodeRunningNoSeatsBindsNoBridgeListener(t *testing.T) {
 	boot := bootstrapFor(t, port)
 	boot.Node.Roles = []string{"workers"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -673,7 +673,7 @@ func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSur
 		t.Fatalf("reconciler: %v", err)
 	}
 	return serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
-		logging.Get("test"))
+		nil, logging.Get("test"))
 }
 
 // testEngine builds a real engine on an embedded stream in a temp directory.
@@ -1729,4 +1729,112 @@ func TestEveryNilMeansTrustOptionIsWiredAtTheOneAPICall(t *testing.T) {
 				field)
 		}
 	}
+}
+
+// EVERY FLAG `run` REGISTERS APPEARS IN ITS OWN USAGE SYNOPSIS.
+//
+// That synopsis is the only help an operator sees at the moment they got the
+// arguments wrong, and a flag missing from it is one they do not reach for.
+// Its own comment records that it has been short THREE times — first the three
+// logging flags, which are exactly what somebody diagnosing this reaches for,
+// then -import-company, then -log-file — which is three silent regressions in
+// one string with nothing watching it. This is what watches it.
+//
+// A SOURCE ASSERTION because there is nothing at runtime to catch: a missing
+// flag parses, runs and works, and the only symptom is somebody not knowing it
+// exists.
+//
+// -config is the one exclusion, and the synopsis says why: its value is the
+// leading positional, and naming it a second time is the error being reported.
+func TestRunsUsageSynopsisNamesEveryFlagItRegisters(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, "main.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var registered []string
+	var synopsis string
+	for _, decl := range parsed.Decls {
+		fn, isFunc := decl.(*ast.FuncDecl)
+		if !isFunc || fn.Name.Name != "runEngine" || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, isCall := n.(*ast.CallExpr)
+			if !isCall || len(call.Args) == 0 {
+				return true
+			}
+			sel, isSel := call.Fun.(*ast.SelectorExpr)
+			if !isSel {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "String", "Bool", "Int", "Duration", "Float64":
+				if name, ok := stringLiteral(call.Args[0]); ok {
+					registered = append(registered, name)
+				}
+			}
+			// The synopsis is the concatenated literal handed to the
+			// Fprintln that starts "usage: crewlet run".
+			if sel.Sel.Name == "Fprintln" && len(call.Args) == 2 {
+				if text, ok := concatLiterals(call.Args[1]); ok &&
+					strings.HasPrefix(text, "usage: crewlet run") {
+					synopsis = text
+				}
+			}
+			return true
+		})
+	}
+
+	// THE CONTROLS. A walk that found no flags, or no synopsis, passes
+	// every assertion below and protects nothing.
+	if len(registered) < 8 {
+		t.Fatalf("found %d flags on run's set (%v); the walk is not reading it",
+			len(registered), registered)
+	}
+	if synopsis == "" {
+		t.Fatal("run's usage synopsis was not found; this case is reading the " +
+			"wrong function or the string was reshaped")
+	}
+
+	for _, name := range registered {
+		if name == "config" {
+			continue
+		}
+		if !strings.Contains(synopsis, "-"+name) {
+			t.Errorf("-%s is registered by `run` and missing from its usage "+
+				"synopsis, so an operator who needs it is never told it "+
+				"exists:\n%s", name, synopsis)
+		}
+	}
+}
+
+// stringLiteral is an unquoted string literal, or false for anything else.
+func stringLiteral(e ast.Expr) (string, bool) {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	v, err := strconv.Unquote(lit.Value)
+	return v, err == nil
+}
+
+// concatLiterals flattens a `"a" + "b" + "c"` chain, which is how a long
+// message is written in this tree. Anything else in the chain gives up rather
+// than guessing.
+func concatLiterals(e ast.Expr) (string, bool) {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		return stringLiteral(v)
+	case *ast.BinaryExpr:
+		if v.Op != token.ADD {
+			return "", false
+		}
+		left, okL := concatLiterals(v.X)
+		right, okR := concatLiterals(v.Y)
+		return left + right, okL && okR
+	}
+	return "", false
 }

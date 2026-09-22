@@ -494,8 +494,8 @@ var retiredBootstrapFields = map[string]string{
 		"bind address anywhere, which made one unset environment variable a " +
 		"total bypass. For local development run `crewlet run -dev-principal " +
 		"<login>`: a flag rather than a config field, because a field gets " +
-		"copied into an image, and refused unless `api.external_url` is a " +
-		"loopback address",
+		"copied into an image, and refused unless `api.host` binds loopback " +
+		"AND the binary is a development build",
 	"Store.driver": "`store.driver` is no longer a setting: it chose between " +
 		"two store implementations and there is one. Turso is the database; " +
 		"the mainline-SQLite fallback and the CREWLET_STORE_DRIVER variable " +

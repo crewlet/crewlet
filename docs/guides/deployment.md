@@ -862,13 +862,20 @@ pool  = max(8, GOMAXPROCS) readers
 process — the database engine is embedded, so a query is not a round trip to a
 server — and a connection that cannot get a core buys queue depth rather than
 concurrency. GOMAXPROCS is therefore the honest ceiling, and 8 is the floor
-because the dashboard's socket admits four concurrent queries **per socket** and
-a company is routinely watched from more than one tab. It was a flat `4` before:
-a number describing one socket, on a host of any size, so three tabs offered
-twelve concurrent scans to a pool of four and the engine's own reads queued
-behind whichever four arrived first — on a 16-core node exactly as on a laptop.
-Nothing said so, and the only fix was to set this field by hand on every
-deployment that outgrew one tab.
+because the dashboard's socket admits four concurrent queries **per principal**
+and a company is routinely watched by more than one operator — so the floor is
+two full dashboards. It was a flat `4` before: a number describing one socket,
+on a host of any size, so three tabs offered twelve concurrent scans to a pool
+of four and the engine's own reads queued behind whichever four arrived first —
+on a 16-core node exactly as on a laptop. Nothing said so, and the only fix was
+to set this field by hand on every deployment that outgrew one tab.
+
+The **unit** was the other half of that, and it was wrong for longer. The cap
+was per socket, so "two full dashboards" described a deployment that could not
+exist: one person with three tabs already exceeded the floor. It is per
+principal now, so a person's tabs share one allowance and the arithmetic above
+holds for the first time. See
+[Scaling Out § The socket's admission semaphore](../concepts/scaling.md#the-sockets-admission-semaphore).
 
 **The reserved connection is held, not merely counted.** Connections are handed
 out first-come-first-served, so a spare one nobody holds is taken by the first

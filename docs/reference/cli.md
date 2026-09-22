@@ -99,6 +99,7 @@ crewlet run [<config.yaml>] [-company PATH | -import-company PATH] [-debug]
             [-log-level LEVEL] [-log-format FORMAT] [-log-file PATH]
             [-mode MODE]
             [-roles ROLE[,ROLE...]] [-api-host HOST] [-api-port PORT]
+            [-dev-principal LOGIN]
 ```
 
 Reads Tier A bootstrap and starts the agent engine.
@@ -144,10 +145,52 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-api-port PORT` | Bind port, overriding `api.port`. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint, so every integration goes deaf. That is why leaving the flag off is not the same as passing `0`. |
 | `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers — and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
 | `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. See [Running a Fleet](../guides/fleet.md). |
+| `-dev-principal LOGIN` | **Development only.** Resolve every request that presents no credential to `dev:LOGIN`, carrying `api.auth.max_grants` and no more. It is what `api.auth.disabled` should have been, and it is **refused** unless *both* hold: `api.host` binds a loopback address, and the binary is a development build. See below. |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run".
 
 The four overrides — `-roles`, `-api-host`, `-api-port` and `-log-file` — are the fields whose right value depends on *where the process is running* rather than on what the company is: which job this node does, where its HTTP surface binds, and which path on this host its log lands on. Everything else in Tier A belongs in the file, where it can be reviewed — including the log file's own shape and rotation caps, which describe the disk rather than the invocation.
+
+### `-dev-principal`, and why it is a flag
+
+Opening the dashboard on a laptop means having a token, and the reflex is to
+look for a switch that turns authentication off. There was one — Tier A's
+`api.auth.disabled` — and it authenticated the **empty** credential into full
+operator authority with no check on the bind address anywhere, so one unset
+environment variable was a total bypass of every gate, on any deployment,
+reachable by anyone who could reach the port. It is retired; a file still
+carrying it is refused by name.
+
+`-dev-principal` is the thing somebody actually wanted, with the two guards
+that field never had:
+
+- **`api.host` must bind a loopback address** (`127.0.0.1`, `::1`,
+  `localhost`). That is the only check that physically stops another machine
+  reaching this. It judges the *bind* rather than `api.external_url`,
+  deliberately and unlike `api.auth.local`'s `accept_insecure` rule: that one
+  is about whether a session cookie crosses plaintext through a proxy, where
+  the external address is the truth, and this is about who can open a socket
+  to the process, where the bind is. The check runs **after** `-api-host` is
+  applied, so moving the bind on the command line moves the decision with it.
+- **The binary must be a development build.** A bind is a setting, and a
+  setting reaches production by being copied — a compose file, a Helm value, a
+  base image somebody forked. The release pipeline stamps a version at link
+  time; anything the engine cannot positively recognise as a development build
+  refuses the flag, whatever its configuration says. That is why this is a
+  flag and not a config field: a field is the thing that gets copied.
+
+It grants `api.auth.max_grants` and no more, so an operator who has narrowed
+their ceiling has narrowed this too, and every boot that enables it logs
+`api_dev_principal_enabled` at **warn** naming the login and the bind.
+
+A credential that IS presented still wins — a Tier A token resolves as itself,
+and a *wrong* token is still refused with a `401` rather than quietly served
+as the development principal, which would hide exactly the typo you are about
+to spend an afternoon on.
+
+For anything reachable from another machine, the answer is an
+`api.auth.tokens` entry: listable, revocable without a restart, and present in
+the audit log.
 
 Publishing knowledge and tool skills is its own command rather than a flag on `run`: an engine that published on every boot would rewrite a company's knowledge base from whatever tree the deploying machine happened to have. Use [`crewlet confluence import`](#crewlet-confluence-import), and [`crewlet config import`](#crewlet-config-import) to load the first company revision.
 

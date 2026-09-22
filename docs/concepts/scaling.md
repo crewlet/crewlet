@@ -199,15 +199,27 @@ they are deliberately different mechanisms.
 
 ### The socket's admission semaphore
 
-One WebSocket may have **four queries running at once**
-(`stream.MaxInFlightQueries`). Queries run on their own goroutines so a store
-scan cannot stall the live feed, and the bound is a token pool taken **on the
-read loop's own goroutine**: a burst past it pauses the reader rather than
-piling up as blocked goroutines, so the backpressure is where it can be seen.
-Four is what one screen issues at once — the agent page opens with three.
+One **principal** may have **four queries running at once**
+(`stream.MaxInFlightQueries`), across every socket they hold. Queries run on
+their own goroutines so a store scan cannot stall the live feed, and the bound
+is a token pool taken **on the read loop's own goroutine**: a burst past it
+pauses the reader rather than piling up as blocked goroutines, so the
+backpressure is where it can be seen. Four is what one screen issues at once —
+the agent page opens with three.
 
-It is per SOCKET, not per node, and that is the load a company's store actually
-sees: three tabs is twelve concurrent scans.
+**Per principal is what makes the pool below it sized correctly.** It was per
+SOCKET, with nothing tying a person's second tab to their first, so three tabs
+offered twelve concurrent scans and six offered twenty-four — against a reader
+floor of eight, which was itself derived as "two full dashboards at four
+queries each". The sizing was right and the unit was wrong, so one person with
+three tabs already exceeded what the pool was built to hold, and what queued
+behind them was the engine's own reads.
+
+Per principal, N tabs belonging to one person share one allowance, and a second
+operator's burst is unaffected by the first's — which is the property a single
+node-wide cap could not have had: one person opening six tabs would have been
+an outage for everybody else's dashboard. So the load a company's store sees
+is **four per operator at the dashboard**, not four per tab.
 
 ### The store's reserved connection
 
@@ -239,7 +251,7 @@ rather than a scan.
 The failure it stops has the same shape as the one the pinned writers exist to
 break:
 
-1. A socket storm arrives: N dashboards, four concurrent queries each, every
+1. A socket storm arrives: N operators, four concurrent queries each, every
    one of them a scan.
 2. They take every connection.
 3. The identity lookup that would let those very requests be decided queues

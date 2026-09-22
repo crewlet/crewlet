@@ -219,6 +219,12 @@ type Guard struct {
 	// Nil is an ordinary wiring — a guard built before any company is
 	// active — and answers as an unbound credential does.
 	boundSeat func(operatorID string) string
+
+	// dev is the development principal an unauthenticated request resolves
+	// to, or nil. Installed by [Guard.WithDevPrincipal], refused at
+	// construction on anything but a loopback bind of an unreleased
+	// binary — see devprincipal.go.
+	dev *DevPrincipal
 }
 
 // BindSeats installs the chart lookup that lets a bound credential act as its
