@@ -147,4 +147,15 @@ slack-apps.json
 # of every suite on one machine, reached this branch through a `git add`.
 # Nothing here builds from the root, so no build goes red and no diff review
 # is drawn to a path everybody's eye skips.
-node_modules/
+#
+# AND NO TRAILING SLASH, which is the same failure arriving by the one door
+# the pattern above still left open. A slash means "a directory and only a
+# directory", and the dependency tree is not always one: an isolated worktree
+# has no install of its own, so `dashboard/node_modules` there is a SYMLINK
+# into the main checkout's — a link, not a directory, so `node_modules/` did
+# not match it and `git status` listed it as untracked. That is one `git add`
+# from committing a symlink pointing at an absolute path on one machine, which
+# every other checkout resolves to nothing. Without the slash the pattern
+# covers both, and the cost is a file literally named `node_modules` that
+# nothing creates.
+node_modules

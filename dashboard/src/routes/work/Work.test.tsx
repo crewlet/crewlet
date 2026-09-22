@@ -1075,7 +1075,12 @@ test("a removed row names who removed it, from the feed rather than the row", as
           effective_at: "2031-04-15T00:00:00Z",
           kind: "removed",
           actor: "ada",
-          actor_kind: "seat",
+          // THE ENGINE'S OWN VOCABULARY. `tracker.AuthorKind` mints `agent`,
+          // `human`, `operator` and `system` and nothing else — this fixture
+          // said `seat`, which is what the cell it exercises used to compare
+          // against, so the two agreed with each other and neither agreed with
+          // the wire.
+          actor_kind: "agent",
           subject_kind: "task",
           subject_id: "t-1",
           subject_key: "ENG-9",
