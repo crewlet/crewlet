@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 )
 
 // DocumentVersion is the shape version every stored object here carries, on the
@@ -401,23 +403,23 @@ func checkList(field string, values []string) error {
 // carried as unknown, so the next encode writes the stale carried copy back
 // over what the caller set. A test asserts every declared name is covered.
 var (
-	unitFields = fieldSet(Unit{}, "former_keys", "name", "type", "purpose",
+	unitFields = jsoncarry.Names(Unit{}, "former_keys", "name", "type", "purpose",
 		"goals", "channel", "project", "space", "knowledge_refs", "parent_key",
 		"lead", "runtime", "last_change")
-	seatFields = fieldSet(Seat{}, "former_handles", "name", "email", "backstory",
+	seatFields = jsoncarry.Names(Seat{}, "former_handles", "name", "email", "backstory",
 		"goal", "responsibilities", "behavioral_guidelines", "project", "space",
 		"unit_key", "runtime", "last_change")
-	changeFields = fieldSet(Change{}, "actor", "actor_kind", "operator_id",
+	changeFields = jsoncarry.Names(Change{}, "actor", "actor_kind", "operator_id",
 		"revision", "fields", "summary", "turn_id", "quiet")
 )
 
 // EncodeUnit renders a unit.
-func EncodeUnit(u Unit) ([]byte, error) { return encode(u, u.Extra) }
+func EncodeUnit(u Unit) ([]byte, error) { return jsoncarry.Encode(u, u.Extra) }
 
 // DecodeUnit reads a unit.
 func DecodeUnit(data []byte) (Unit, error) {
 	var u Unit
-	extra, err := decodeInto(data, &u, unitFields)
+	extra, err := jsoncarry.Decode(data, &u, unitFields)
 	if err != nil {
 		return Unit{}, fmt.Errorf("chart: decode unit: %w", err)
 	}
@@ -429,12 +431,12 @@ func DecodeUnit(data []byte) (Unit, error) {
 }
 
 // EncodeSeat renders a seat.
-func EncodeSeat(s Seat) ([]byte, error) { return encode(s, s.Extra) }
+func EncodeSeat(s Seat) ([]byte, error) { return jsoncarry.Encode(s, s.Extra) }
 
 // DecodeSeat reads a seat.
 func DecodeSeat(data []byte) (Seat, error) {
 	var s Seat
-	extra, err := decodeInto(data, &s, seatFields)
+	extra, err := jsoncarry.Decode(data, &s, seatFields)
 	if err != nil {
 		return Seat{}, fmt.Errorf("chart: decode seat: %w", err)
 	}
@@ -446,12 +448,12 @@ func DecodeSeat(data []byte) (Seat, error) {
 }
 
 // EncodeChange renders a change.
-func EncodeChange(c Change) ([]byte, error) { return encode(c, c.Extra) }
+func EncodeChange(c Change) ([]byte, error) { return jsoncarry.Encode(c, c.Extra) }
 
 // DecodeChange reads a change.
 func DecodeChange(data []byte) (Change, error) {
 	var c Change
-	extra, err := decodeInto(data, &c, changeFields)
+	extra, err := jsoncarry.Decode(data, &c, changeFields)
 	if err != nil {
 		return Change{}, fmt.Errorf("chart: decode change: %w", err)
 	}
@@ -467,75 +469,4 @@ func checkVersion(got int) error {
 		return ErrUnknownVersion{Got: got, Want: DocumentVersion}
 	}
 	return nil
-}
-
-// encode marshals a record and folds unknown fields back in. A carried field
-// LOSES to a known one, so a stale carried copy can never undo the write that
-// set it.
-func encode(record any, extra map[string]json.RawMessage) ([]byte, error) {
-	data, err := json.Marshal(record)
-	if err != nil {
-		return nil, fmt.Errorf("chart: encode: %w", err)
-	}
-	if len(extra) == 0 {
-		return data, nil
-	}
-	var merged map[string]json.RawMessage
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := json.Unmarshal(data, &merged); err != nil {
-		return nil, fmt.Errorf("chart: encode: %w", err)
-	}
-	for name, value := range extra {
-		if _, known := merged[name]; !known {
-			merged[name] = value
-		}
-	}
-	out, err := json.Marshal(merged)
-	if err != nil {
-		return nil, fmt.Errorf("chart: encode: %w", err)
-	}
-	return out, nil
-}
-
-// decodeInto unmarshals into out and returns the fields out has no home for.
-func decodeInto(data []byte, out any, known map[string]bool) (map[string]json.RawMessage, error) {
-	if err := json.Unmarshal(data, out); err != nil {
-		return nil, err
-	}
-	var all map[string]json.RawMessage
-	if err := json.Unmarshal(data, &all); err != nil {
-		return nil, err
-	}
-	var extra map[string]json.RawMessage
-	for name, value := range all {
-		if known[name] {
-			continue
-		}
-		if extra == nil {
-			extra = map[string]json.RawMessage{}
-		}
-		extra[name] = value
-	}
-	return extra, nil
-}
-
-// fieldSet is the JSON names a struct defines: the ones a zero value marshals,
-// plus the omitempty names given explicitly.
-func fieldSet(v any, omitted ...string) map[string]bool {
-	data, err := json.Marshal(v)
-	if err != nil {
-		panic("chart: a record type does not marshal: " + err.Error())
-	}
-	var named map[string]json.RawMessage
-	if err := json.Unmarshal(data, &named); err != nil {
-		panic("chart: a record type does not marshal to an object: " + err.Error())
-	}
-	out := make(map[string]bool, len(named)+len(omitted))
-	for name := range named {
-		out[name] = true
-	}
-	for _, name := range omitted {
-		out[name] = true
-	}
-	return out
 }

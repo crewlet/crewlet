@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 )
 
 // RecordVersion is the record shape THIS BUILD can decode.
@@ -305,7 +307,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 		}
 	}
 	var rec MutationRecord
-	extra, err := decodeInto(payload, &rec, recordFields, env.V)
+	extra, err := jsoncarry.Decode(payload, &rec, recordFields)
 	if err != nil {
 		return MutationRecord{RecordEnvelope: env}, fmt.Errorf("pages: decode "+
 			"the record on %s: %w", env.Subject, err)
@@ -325,7 +327,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 // two implementations of that rule are one place where a stale carried copy
 // undoes the write that set it.
 func Encode(rec MutationRecord) ([]byte, error) {
-	data, err := encode(rec, rec.Extra)
+	data, err := jsoncarry.Encode(rec, rec.Extra)
 	if err != nil {
 		return nil, fmt.Errorf("pages: encode the record on %s: %w",
 			rec.Subject, err)
@@ -340,6 +342,6 @@ func Encode(rec MutationRecord) ([]byte, error) {
 // them, and a name missing here is decoded into the struct AND carried as
 // unknown — so the next encode writes the stale carried copy back over what
 // the caller set.
-var recordFields = fieldSet(MutationRecord{}, "op_id", "created_at", "gen",
+var recordFields = jsoncarry.Names(MutationRecord{}, "op_id", "created_at", "gen",
 	"writer", "expect", "mutation", "actor", "actor_kind", "operator_id",
 	"turn_id", "chain", "notify")
