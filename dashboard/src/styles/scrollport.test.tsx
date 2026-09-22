@@ -44,12 +44,14 @@ import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
  * # What it does not cover
  *
  * The work list is the one surface walked here, because it is the one whose
- * bands render from plain props. The other four bands that take
- * `--sticky-top` — `.grid-head` and `.grid-band-head` in the data grid,
- * `.list-day` on Activity, `.inbox-detail` on Inbox — draw inside screens that
- * need the store, and standing all four up would buy less than it would cost to
- * keep honest. `STICKY` is derived from every sheet regardless, so a band added
- * to THIS tree is covered the moment it appears.
+ * bands render from plain props. Five other rules take `--sticky-top` —
+ * `.grid-head` and `.grid-band-head` in the data grid, `.work-item-side` on an
+ * item page, `.list-day` on Activity and `.inbox-detail` on Inbox — and every
+ * one of them draws inside a screen that needs the store, so standing all five
+ * up would buy less than it would cost to keep honest. The roster is derived
+ * from every sheet regardless, so a band added to THIS tree is covered the
+ * moment it appears, and the day one of those five is rendered here by
+ * something else it is covered with no change to this file.
  */
 
 /**
