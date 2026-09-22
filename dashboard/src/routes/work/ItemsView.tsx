@@ -1032,7 +1032,7 @@ function EmptyList({
               : `All ${archivedProjects} of the company’s projects have been archived`}
             , so nothing is listed here — an archived project keeps its work and stops taking new
             items.{" "}
-            <a className="t-link" href={href(["work", "projects"], { shown: "archived" })}>
+            <a className="prose-link" href={href(["work", "projects"], { shown: "archived" })}>
               See them under Archived
             </a>
             .

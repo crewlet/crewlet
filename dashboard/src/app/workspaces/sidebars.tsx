@@ -109,7 +109,7 @@ export function useWorkSidebar(): SidebarSection[] {
               {archived === 1
                 ? "The company’s one project is archived."
                 : `All ${archived} of the company’s projects are archived.`}{" "}
-              <a className="t-link" href={href(["work", "projects"], { shown: "archived" })}>
+              <a className="prose-link" href={href(["work", "projects"], { shown: "archived" })}>
                 See them under Archived
               </a>
               .
