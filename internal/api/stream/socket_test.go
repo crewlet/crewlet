@@ -546,8 +546,8 @@ func TestABadFrameTokenDoesNotDowngradeAnAuthenticatedSocket(t *testing.T) {
 func TestQueriesRunConcurrentlyUpToTheBound(t *testing.T) {
 	t.Parallel()
 	// Concurrent so a store scan cannot stall the live feed, and bounded
-	// so an unbounded fan-out from one tab cannot starve the engine's own
-	// writes.
+	// so an unbounded fan-out cannot starve the engine's own writes. What
+	// the bound is PER is the case below this one.
 	entered := make(chan struct{}, stream.MaxInFlightQueries*4)
 	release := make(chan struct{})
 	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any, _ string) (any, error) {
@@ -580,6 +580,119 @@ func TestQueriesRunConcurrentlyUpToTheBound(t *testing.T) {
 	case <-entered:
 		t.Errorf("more than %d queries ran at once", stream.MaxInFlightQueries)
 	case <-time.After(250 * time.Millisecond):
+	}
+}
+
+// ONE PRINCIPAL'S TABS SHARE ONE IN-FLIGHT BUDGET.
+//
+// The bound was per SOCKET, and nothing tied a person's second tab to their
+// first: three tabs offered twelve concurrent scans to a reader pool whose
+// floor is eight, and internal/store sized that floor as "two full dashboards
+// at four queries each" — a derivation one person with three tabs already
+// broke. What queued behind them was the engine's own reads.
+func TestOnePrincipalsTabsShareOneInFlightBudget(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{}, stream.MaxInFlightQueries*8)
+	release := make(chan struct{})
+	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any, _ string) (any, error) {
+		entered <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil, nil
+	})
+	defer close(release)
+
+	// THREE TABS, all presenting the same credential — which is the shape
+	// this is about: one person, several screens.
+	var conns []*websocket.Conn
+	for range 3 {
+		conn, _, err := f.dial(t, "")
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		next(t, conn)
+		conns = append(conns, conn)
+	}
+	for i, conn := range conns {
+		for j := range stream.MaxInFlightQueries * 2 {
+			write(t, conn, map[string]any{
+				"kind": "query", "id": i*100 + j, "what": "events",
+			})
+		}
+	}
+	// The bound is the PERSON's, so exactly four run however many tabs
+	// asked. Per socket this would admit twelve.
+	for range stream.MaxInFlightQueries {
+		select {
+		case <-entered:
+		case <-time.After(10 * time.Second):
+			t.Fatal("queries did not run concurrently")
+		}
+	}
+	select {
+	case <-entered:
+		t.Errorf("more than %d queries ran at once across one principal's tabs",
+			stream.MaxInFlightQueries)
+	case <-time.After(250 * time.Millisecond):
+	}
+}
+
+// AND A SECOND PRINCIPAL IS UNAFFECTED BY THE FIRST'S BURST, which is the
+// property a single shared cap could never have: one person opening six tabs
+// would have been a denial of service against everybody else's dashboard.
+func TestASecondPrincipalGetsItsOwnInFlightBudget(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{}, stream.MaxInFlightQueries*8)
+	release := make(chan struct{})
+	f := newSocket(t, func(a *config.APIAuth) {
+		a.Tokens = []config.APIToken{
+			{ID: "founder", Token: fixtureToken},
+			{ID: "second", Token: "a-second-operators-own-credential"},
+		}
+	}, func(ctx context.Context, _ string, _ map[string]any, _ string) (any, error) {
+		entered <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil, nil
+	})
+	defer close(release)
+
+	// The first principal takes its whole budget and holds it.
+	first, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, first)
+	for i := range stream.MaxInFlightQueries * 2 {
+		write(t, first, map[string]any{"kind": "query", "id": i, "what": "events"})
+	}
+	for range stream.MaxInFlightQueries {
+		select {
+		case <-entered:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the first principal's queries did not run")
+		}
+	}
+
+	// The second still gets its own four, with the first's still blocked.
+	second, _, err := f.dial(t, "a-second-operators-own-credential")
+	if err != nil {
+		t.Fatalf("dial as the second principal: %v", err)
+	}
+	next(t, second)
+	for i := range stream.MaxInFlightQueries {
+		write(t, second, map[string]any{"kind": "query", "id": 500 + i, "what": "events"})
+	}
+	for range stream.MaxInFlightQueries {
+		select {
+		case <-entered:
+		case <-time.After(10 * time.Second):
+			t.Fatal("a second operator queued behind the first's burst")
+		}
 	}
 }
 

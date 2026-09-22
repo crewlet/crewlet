@@ -1,0 +1,101 @@
+package stream
+
+import "testing"
+
+// ONE PRINCIPAL GETS ONE CHANNEL, however many sockets they hold.
+//
+// This is the whole of the per-principal property, asserted at the unit rather
+// than only through a socket: two sockets that were handed DIFFERENT channels
+// would each admit a full burst, and the socket-level case would still pass on
+// a timing accident if the second tab's queries happened to arrive late.
+func TestOnePrincipalGetsOneBudgetHoweverManySockets(t *testing.T) {
+	t.Parallel()
+	b := newBudgets()
+	first, releaseFirst := b.acquire("founder")
+	second, releaseSecond := b.acquire("founder")
+	if first != second {
+		t.Error("a principal's second socket got its own channel, so their " +
+			"tabs each admit a full burst")
+	}
+	// And a different principal does NOT share it, which is the control:
+	// one channel for everybody would pass the assertion above and make
+	// one person's burst everybody else's outage.
+	other, releaseOther := b.acquire("second-operator")
+	if other == first {
+		t.Error("two principals share one budget")
+	}
+	releaseFirst()
+	releaseSecond()
+	releaseOther()
+}
+
+// AND AN ENTRY DOES NOT OUTLIVE THE SOCKETS THAT MADE IT.
+//
+// The key is a principal, so entries are created by anybody who can
+// authenticate. Kept for the life of the process, that is one channel per
+// person who has ever opened a tab, held alive by nothing — a leak that grows
+// with the company and never shrinks, and one nothing else here would report.
+func TestABudgetIsReleasedWithTheLastSocketHoldingIt(t *testing.T) {
+	t.Parallel()
+	b := newBudgets()
+	_, releaseFirst := b.acquire("founder")
+	_, releaseSecond := b.acquire("founder")
+	if got := b.tracked(); got != 1 {
+		t.Fatalf("tracked = %d after two sockets for one principal, want 1", got)
+	}
+	releaseFirst()
+	// STILL HELD, because a socket is still open. Released here, the
+	// remaining socket's queries would run against a budget the next
+	// acquire replaces — a second full burst beside the one in flight.
+	if got := b.tracked(); got != 1 {
+		t.Fatalf("tracked = %d while a socket is still open, want 1", got)
+	}
+	releaseSecond()
+	if got := b.tracked(); got != 0 {
+		t.Errorf("tracked = %d after the last socket closed, want 0: an entry "+
+			"per principal who has ever connected grows for the life of the "+
+			"process", got)
+	}
+}
+
+// A RELEASE THAT ARRIVES TWICE DOES NOT EVICT A BUDGET SOMEBODY ELSE ACQUIRED.
+//
+// serveSocket defers its release, and a second path unwinding through the same
+// socket is exactly where one runs twice. The interleaving that costs is the
+// one below: between the two calls another tab of the SAME person acquires a
+// fresh entry, and a second decrement takes that live one out — after which
+// the next tab builds a budget beside the queries already running under it,
+// which is the per-socket allowance back by a longer route.
+//
+// Guarding the decrement against zero does not reach this: the entry the
+// second release finds is a legitimate one with a legitimate count. Only a
+// release that cannot happen twice does.
+func TestAReleaseThatArrivesTwiceDoesNotEvictALiveBudget(t *testing.T) {
+	t.Parallel()
+	b := newBudgets()
+	slots, release := b.acquire("founder")
+	release()
+
+	// The person's next tab, arriving between the two releases.
+	live, releaseLive := b.acquire("founder")
+	defer releaseLive()
+
+	release() // the duplicate
+	if got := b.tracked(); got != 1 {
+		t.Fatalf("tracked = %d, want the live socket's budget still held", got)
+	}
+	// AND IT IS STILL THE SAME ONE. An entry evicted and rebuilt has the
+	// right COUNT and the wrong channel, so counting alone would pass on
+	// exactly the bug this is about.
+	again, releaseAgain := b.acquire("founder")
+	defer releaseAgain()
+	if again != live {
+		t.Error("the live socket's budget was evicted by a duplicate release, " +
+			"so the next tab runs a second full burst beside it")
+	}
+	// The control: the first socket's own budget is gone, or the
+	// assertions above would pass on a release that did nothing at all.
+	if again == slots {
+		t.Error("the first release freed nothing")
+	}
+}

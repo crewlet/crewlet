@@ -14,15 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 )
 
-// MaxInFlightQueries bounds how many queries one socket may have running.
-//
-// Queries run CONCURRENTLY so a store scan cannot stall the live feed, but each
-// can take a connection from a pool the engine shares — so an unbounded fan-out
-// from one tab would starve the engine's own writes. Four covers the most one
-// screen issues at once (the agent page opens with three) and makes a burst
-// queue rather than pile up.
-const MaxInFlightQueries = 4
-
 // The close codes this socket ends a connection with, on top of the ones the
 // WebSocket standard already defines.
 //
@@ -258,6 +249,12 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// THE BUDGET IS ACQUIRED BEFORE ANY FRAME IS READ and released when
+	// this socket is done, so a person's tabs share one allowance for
+	// exactly as long as they are open. See budget.go.
+	slots, releaseBudget := svc.budgets.acquire(operatorID)
+	defer releaseBudget()
+
 	client := NewClient()
 	// REGISTERED BEFORE THE SNAPSHOT. See Hub.Register: the overlap is
 	// deduped by the client, and the gap the other order leaves is not.
@@ -276,7 +273,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	})
 
 	client.Reply(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
-	code, reason := readLoop(ctx, conn, svc.Hub(), client, query, operatorID)
+	code, reason := readLoop(ctx, conn, svc.Hub(), client, query, operatorID, slots)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -340,12 +337,16 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // and [FrameDegraded].
 func readLoop(ctx context.Context, conn *websocket.Conn,
 	hub *Hub, client *Client, query Query, operatorID string,
+	slots chan struct{},
 ) (websocket.StatusCode, string) {
-	// The concurrency bound, as a token pool. Queries run on their own
+	// THE CONCURRENCY BOUND ARRIVES FROM THE SERVICE rather than being
+	// made here, and that is the whole of the per-principal change: a
+	// channel built in this function is one socket's, so a person's second
+	// tab got a second full allowance. Queries still run on their own
 	// goroutines so a store scan cannot stall the live feed, and a burst
 	// past the bound queues here rather than piling into the engine's
-	// connection pool.
-	slots := make(chan struct{}, MaxInFlightQueries)
+	// connection pool — it is now this PERSON's burst that queues rather
+	// than this tab's.
 	var running sync.WaitGroup
 	defer running.Wait()
 

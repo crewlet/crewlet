@@ -135,9 +135,16 @@ const (
 	// with the engine writing it.
 	//
 	// EIGHT, which is two full dashboards: the socket's query channel
-	// admits four concurrent queries PER SOCKET
-	// (internal/api/stream.MaxInFlightQueries), and a company is
-	// routinely watched from more than one tab.
+	// admits four concurrent queries per PRINCIPAL
+	// (internal/api/stream.MaxInFlightQueries), and a company is routinely
+	// watched by more than one operator.
+	//
+	// THE UNIT IS WHAT MAKES THAT TRUE. The cap was per SOCKET, so this
+	// floor described a deployment that could not exist: one person with
+	// three tabs already offered twelve concurrent scans to it, and what
+	// queued behind them was the engine's own reads. Per principal, a
+	// person's tabs share one allowance, so "two full dashboards" is the
+	// quantity this number actually holds.
 	// The floor exists for the small host, where GOMAXPROCS is 1 or 2 and
 	// the derivation below would otherwise size the pool for the CPU and
 	// leave a single dashboard queueing against itself.
@@ -149,8 +156,9 @@ const (
 	//
 	// ONE. It is a reservation rather than extra headroom because headroom
 	// is exactly what a burst consumes: database/sql hands connections out
-	// first-come-first-served, so a socket storm — N tabs × four in-flight
-	// queries each, every one of them a scan — takes every connection and
+	// first-come-first-served, so a socket storm — N operators × four
+	// in-flight queries each, every one of them a scan — takes every
+	// connection and
 	// the identity read queues behind all of them. That inverts the
 	// dependency: the reads that are waiting are the ones identity has to
 	// clear, so the queue feeds itself, exactly as the reader/writer loop
@@ -179,7 +187,9 @@ const (
 // queries". That number described ONE socket, on a host of any size: a company
 // watched from three tabs offered twelve concurrent scans to a pool of four,
 // and the engine's own reads — a seat's tool lookups, the coverage probes, the
-// health body — queued behind whichever eight of them arrived first. Worse, it
+// health body — queued behind whichever eight of them arrived first. (The
+// twelve is gone at its own end too: that cap is per PRINCIPAL now, so the
+// three tabs are four scans rather than twelve.) Worse, it
 // did not move with the machine: a 16-core node ran the same four connections
 // as a laptop, so the one knob that would have fixed it (`store.max_open_conns`)
 // had to be set by hand on every deployment that outgrew one tab, and nothing
