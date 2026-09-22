@@ -284,9 +284,10 @@ type Options struct {
 	// is ABSENT, which is the honest shape for a company on Jira and
 	// Confluence: there is nothing here it could manage.
 	//
-	// ALWAYS GUARDED — see [auth.GuardedPrefixes]. It writes to the
-	// company, and the credential's own name is what lands on each record
-	// as the author.
+	// GUARDED, like every route the exemption list does not name. It
+	// writes to the company, and the credential's own name is what lands
+	// on each record as the author — so a request with no principal has
+	// nobody to attribute the write to.
 	Operator *opsmcp.Server
 
 	// Budgets is the fleet's token counter. Supplied separately from

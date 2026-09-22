@@ -219,11 +219,11 @@ func (s *Server) Handler() http.Handler {
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return s.srv }, nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// THE GUARD IS THE APP'S, not a second one here: this path is in
-		// [auth.GuardedPrefixes], so a request that reaches this handler
-		// has already presented a valid operator token. Reading the
-		// principal off the context rather than re-checking it is what
-		// keeps one decision about who may write.
+		// THE GUARD IS THE APP'S, not a second one here: this path is
+		// not on [auth.Unguarded]'s exemption list, so a request that
+		// reaches this handler has already presented a valid operator
+		// token. Reading the principal off the context rather than
+		// re-checking it is what keeps one decision about who may write.
 		//
 		// IT IS READ THROUGH [auth.Caller] so the two arms it used to
 		// fold together stay apart: a caller who presented nothing is

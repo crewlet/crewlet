@@ -136,15 +136,21 @@ func TestAWriteWithNoOperatorIsRefused(t *testing.T) {
 	}
 }
 
-// THE SURFACE IS ALWAYS GUARDED, and it is the auth package that says so.
+// THE SURFACE IS NEVER ANONYMOUS, and it is the auth package that says so.
 // Mounting it under /mcp/ — which is exempt wholesale so a sandbox box with
 // no API token can reach its seat's tools — would have put a writable company
 // surface behind no credential at all.
+//
+// ASKED AS "IS IT EXEMPT" rather than "is it on the guarded list", because the
+// list is gone: guarded is what a route IS now, and the only way this surface
+// opens again is by landing on the exemption.
 func TestTheOperatorSurfaceIsNeverAnonymous(t *testing.T) {
 	t.Parallel()
-	if !auth.AlwaysGuarded(opsmcp.Path) {
-		t.Fatalf("%s is not on the always-guarded list, so allow_anonymous_read "+
-			"opens a surface that files work", opsmcp.Path)
+	for _, path := range []string{opsmcp.Path, opsmcp.Path + "/", opsmcp.Path + "/tools"} {
+		if auth.Unguarded(path) {
+			t.Fatalf("%s is exempt from the guard, so a surface that files "+
+				"work is reachable with no credential", path)
+		}
 	}
 	if strings.HasPrefix(opsmcp.Path, "/mcp/") {
 		t.Fatalf("%s is under the sandbox bridge's exempt prefix", opsmcp.Path)

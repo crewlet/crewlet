@@ -1,24 +1,45 @@
-// Package auth is the API's bearer-token guard.
+// Package auth is where a request acquires an identity.
 //
-// Tier A lists the accepted tokens under api.auth.tokens. Each entry has an id,
-// recorded as the author of any write made with it, and a token resolved from
-// the environment at startup. The middleware wraps the whole mux: it extracts
-// the bearer token, compares it in constant time, and either attaches the
-// operator id to the request context or answers 401.
+// EVERY REQUEST LEAVES THE MIDDLEWARE CARRYING ONE, and that is the property
+// the rest of the API is built on. A credential that matched resolves to a
+// principal; one that did not is [iam.Anonymous]; a node that could not tell is
+// [iam.Unknown]. Downstream nothing asks "is there a token" — it asks what the
+// principal may do, with a grant, through [iam.From] or the [Caller] shape that
+// has no second value to drop.
 //
-// WHAT IT GUARDS IS A POLICY DECISION, NOT A FIXED PREFIX. Writes and the whole
-// of /config, /secrets and /setup always need a token — see [GuardedPrefixes],
-// which is the list, and the per-prefix rationale beside it. Reads follow
-// allow_anonymous_read, which defaults to open — [Guard.Requires] is the one place that rule is written
-// down, and both the HTTP middleware and the WebSocket handshake consult it, so
-// the two cannot end up guarded in one place and open in the other.
+// # What is guarded is everything, and the list is of what is not
 //
-// The guard is mounted UNCONDITIONALLY. Mounting it only when Tier A is
-// present, while gating the /config write surface on a store being configured,
-// is two independent conditions deciding one security property — coinciding
-// only because every real caller happens to supply both. Tier A supplies the POSTURE, never the existence of
-// a check: with no tokens at all, no candidate can match, so reads serve and
-// every write and all of /config, /secrets and /setup is refused.
+// It used to be the other way round: a list of prefixes that always needed a
+// token, with everything else following `allow_anonymous_read`, which defaulted
+// to open and could not be closed durably because it was an `omitempty` bool
+// whose safe value was its zero. Under it /events, /agents/{id}/memory and
+// /ws/stream served full LLM transcripts — prompts, tool arguments, diary
+// entries — to anyone who could reach the port. There is no such posture now:
+// [Unguarded] is the whole of the exemption, every other route needs a
+// credential whatever its method, and a deliberately public read surface is a
+// named token entry holding read grants and nothing else.
+//
+// That is also why there is no longer a list of ALWAYS-guarded prefixes. With
+// every route guarded, a list saying which ones especially are would have no
+// caller and no meaning, and each of those surfaces now states its own
+// authority where it is enforced: a grant on the route, and internal/authz
+// deciding whether THIS caller may do THAT.
+//
+// # Where a principal comes from
+//
+// One resolver, in resolve.go, over the credential shapes Tier A can express.
+// The guard is mounted UNCONDITIONALLY: mounting it only when Tier A carries
+// tokens would be two independent conditions deciding one security property,
+// coinciding only because every real caller happens to supply both. Tier A
+// supplies the POSTURE — which credentials exist and what ceiling their grants
+// are cut to — never the existence of a check.
+//
+// # And two gates beside it
+//
+// [CSRF] refuses a state change a cross-site page could have caused, and
+// [CORS] decides who may read an answer. They are separate because they answer
+// different questions: same-origin policy stops an attacker's page READING a
+// response, which on a write is the part they do not need.
 package auth
 
 import (
@@ -38,61 +59,6 @@ import (
 )
 
 var log = logging.Get("api.auth")
-
-// GuardedPrefixes are the surfaces that always need a token, reads included,
-// and are never eligible for allow_anonymous_read.
-//
-//   - /config: reading it exposes the whole company document — its org chart,
-//     its integrations, the shape of every credential it holds — and writing
-//     it changes the company.
-//   - /secrets: the fleet's credential store. Even the listing, which carries
-//     no values, says which credentials a company holds and when each last
-//     changed, and one route returns a value outright.
-//   - /setup: connecting an integration. It answers with the NAMES of the
-//     credentials a company holds, which of them are unset, and the
-//     third-party app pages an administrator would visit, and it writes
-//     both the secret store and the company document. Reads included, for
-//     the same reason /secrets guards its listing: the map of what a
-//     company has not configured is worth as much to an attacker as the
-//     configuration.
-//   - /operator: the operator MCP surface, which FILES AND MOVES WORK and
-//     writes the company's own knowledge base. A write is a write whatever
-//     allow_anonymous_read opens, and it is the credential's own name that
-//     lands on each record as the author — so a request with no token has
-//     nobody to attribute the write to. It is deliberately NOT under /mcp/,
-//     which is exempt wholesale for the sandbox bridge, so a box holding no
-//     API token can reach its seat's tools: mounting a writable company
-//     surface there would have put it behind no credential at all.
-//   - /chart: the company's org chart. Writing it hires, moves and renames
-//     people, and one half of every object it serves — a seat's model chain,
-//     its credentials, its sandbox cell, its mcp_env — is the company
-//     configuration under another name. The READ is guarded for /config's
-//     own reason: the structure alone is the shape of the company, and the
-//     route that serves the other half is the one an attacker wants most.
-//     Each route is decided a second time against internal/authz, which is
-//     what says whether THIS caller may do THAT; this list is only what says
-//     a caller must be somebody.
-//   - /company: the authored document, whole and unstripped, for a round
-//     trip through a file. It is /chart's other half by a different name.
-//
-// In the order the slice declares, and A LIST rather than one constant,
-// because the alternative was a second const somewhere else and a second
-// `HasPrefix` beside it — and the two would have drifted the day a third
-// surface was added, each staying self-consistent while one of them stopped
-// being consulted.
-var GuardedPrefixes = []string{
-	"/config", "/secrets", "/setup", "/operator", "/chart", "/company",
-}
-
-// AlwaysGuarded reports whether a path is on one of those surfaces.
-func AlwaysGuarded(path string) bool {
-	for _, prefix := range GuardedPrefixes {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-	return false
-}
 
 // unguardedExact and unguardedPrefixes are the routes served without a bearer
 // token, because they authenticate by other means or because a client must
@@ -382,27 +348,6 @@ func (g *Guard) Presented(r *http.Request) (string, bool) {
 	return g.Operator(g.Credential(r))
 }
 
-// Requires reports whether this request must carry a credential.
-//
-// The whole rule, in one function, and the rule is now: everything but
-// [Unguarded]. The method no longer enters into it.
-//
-// WHAT THAT CLOSED is worth naming rather than leaving to the reader: /events,
-// /agents/{id}/memory and /ws/stream carry full LLM transcripts — prompts, tool
-// arguments, diary entries — and the roster names everybody who works here.
-// `allow_anonymous_read` served all of it to anyone who could reach the port,
-// by default, and could not be closed durably because it was an `omitempty`
-// bool whose safe value was its zero. A deliberately public read surface is a
-// named token entry holding read grants and nothing else.
-//
-// The method and the path are still both taken, because the SIGNATURE is what
-// the socket handshake and the middleware share and a narrower one would make
-// them two rules. [AlwaysGuarded] and [IsRead] remain for the authorization
-// layer above, which does still classify by verb.
-func (g *Guard) Requires(path, _ string) bool {
-	return !Unguarded(path)
-}
-
 // operatorKey carries the authenticated operator id down the handler chain.
 type operatorKey struct{}
 
@@ -502,7 +447,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		// runs everywhere.
 		r = g.Resolve(r)
 		principal, how := iam.From(r.Context())
-		if !g.Requires(path, r.Method) {
+		if Unguarded(path) {
 			next.ServeHTTP(w, r)
 			return
 		}

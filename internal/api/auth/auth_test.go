@@ -59,66 +59,66 @@ func serve(t *testing.T, g *auth.Guard, method, path, header string) (*http.Resp
 // diary entries.
 func TestEveryGuardedRouteNeedsACredentialWhateverTheMethod(t *testing.T) {
 	t.Parallel()
+	// THROUGH THE MIDDLEWARE, because the method is what this case is
+	// about and [auth.Unguarded] does not take one: asked of the predicate,
+	// the loop below would be one tautology repeated seven times. The
+	// middleware is where a verb could still be branched on, so it is the
+	// only place the claim can be held.
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
 
 	for _, method := range []string{
 		"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE",
 	} {
 		for _, path := range []string{"/events", "/agents", "/agents/x/memory"} {
-			if !g.Requires(path, method) {
-				t.Errorf("%s %s served without a credential", method, path)
+			res, _ := serve(t, g, method, path, "")
+			if res.StatusCode != http.StatusUnauthorized {
+				t.Errorf("%s %s answered %d without a credential, want 401",
+					method, path, res.StatusCode)
 			}
 		}
 	}
-}
-
-func TestConfigIsGuardedEvenForReads(t *testing.T) {
-	t.Parallel()
-	// Reading it exposes the whole company document, and writing it
-	// changes the company — so it is never eligible for anonymous read.
-	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
-	for _, path := range []string{"/config", "/config/", "/config/revisions", "/config/audit"} {
-		if !g.Requires(path, "GET") {
-			t.Errorf("GET %s served without a token", path)
-		}
+	// The counterfactual: the credential IS served, or the case above would
+	// pass on a guard that refused everything.
+	if res, _ := serve(t, g, http.MethodGet, "/events", "Bearer secret"); res.StatusCode != http.StatusOK {
+		t.Errorf("a valid credential answered %d", res.StatusCode)
 	}
 }
 
-func TestSecretsIsGuardedEvenForReads(t *testing.T) {
-	t.Parallel()
-	// The fleet's credential store. Even the listing, which carries no
-	// values, says which credentials a company holds and when each last
-	// changed — and one route returns a value outright. Anonymous read is
-	// ON by default, so leaving this off the list would serve the whole
-	// inventory to anyone who could reach the port.
-	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
-	for _, path := range []string{
-		"/secrets", "/secrets/", "/secrets/GITLAB_TOKEN",
-		"/secrets/GITLAB_TOKEN?reveal=true",
-	} {
-		if !g.Requires(path, "GET") {
-			t.Errorf("GET %s served without a token", path)
-		}
-	}
-}
-
-// EVERY ALWAYS-GUARDED PREFIX IS ACTUALLY CONSULTED.
+// THE SURFACES THAT CARRY THE COMPANY ITSELF ARE GUARDED, reads included, and
+// so is everything beneath each of them.
 //
-// The list and the check are one function apart, and the failure mode of a
-// prefix that is declared but not consulted is silent: the surface serves
-// anonymously in the default posture and nothing anywhere reports it.
-func TestEveryAlwaysGuardedPrefixIsEnforced(t *testing.T) {
+// This used to be a declared list — `GuardedPrefixes` — because everything NOT
+// on it followed `allow_anonymous_read` and served by default. The list is gone
+// with that posture: guarded is what a route IS unless [auth.Unguarded] exempts
+// it. What still has to be asserted is that none of these six ever lands on the
+// exemption list, because that is the one edit that would open them again, and
+// each is a surface whose READ is as sensitive as its write:
+//
+//   - /config: the whole company document — its org chart, its integrations,
+//     and every ${VAR} reference in it by name.
+//   - /secrets: the fleet's credential store. Even the listing, carrying no
+//     values, says which credentials a company holds and when each last
+//     changed, and one route returns a value outright.
+//   - /setup: the map of which credentials a company has NOT configured, which
+//     is worth as much to an attacker as the configuration.
+//   - /operator: the operator MCP surface, which files and moves work and
+//     writes the knowledge base. Deliberately not under /mcp/, which is exempt
+//     wholesale for the sandbox bridge.
+//   - /chart and /company: the org chart, whose other half is a seat's model
+//     chain, credentials, sandbox cell and mcp_env — the company configuration
+//     under another name.
+func TestTheCompanysOwnSurfacesAreGuardedEvenForReads(t *testing.T) {
 	t.Parallel()
-	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
-	if len(auth.GuardedPrefixes) == 0 {
-		t.Fatal("no prefix is always guarded, so this asserts nothing")
-	}
-	for _, prefix := range auth.GuardedPrefixes {
-		if !g.Requires(prefix, "GET") {
-			t.Errorf("%s is declared always-guarded and served anyway", prefix)
-		}
-		if !auth.AlwaysGuarded(prefix + "/anything") {
-			t.Errorf("%s does not cover what is beneath it", prefix)
+	for _, prefix := range []string{
+		"/config", "/secrets", "/setup", "/operator", "/chart", "/company",
+	} {
+		for _, path := range []string{
+			prefix, prefix + "/", prefix + "/anything",
+			prefix + "/deep/er?reveal=true",
+		} {
+			if auth.Unguarded(path) {
+				t.Errorf("%s is exempt from the guard", path)
+			}
 		}
 	}
 }
@@ -128,13 +128,12 @@ func TestEveryAlwaysGuardedPrefixIsEnforced(t *testing.T) {
 // and they are the only thing that does.
 func TestOnlyTheDeclaredExemptionsAreUnguarded(t *testing.T) {
 	t.Parallel()
-	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
 	for _, path := range []string{"/health", "/ready", "/", "/webhooks/slack"} {
-		if g.Requires(path, "GET") {
+		if !auth.Unguarded(path) {
 			t.Errorf("%s is declared exempt and was guarded anyway", path)
 		}
 	}
-	if !g.Requires("/events", "GET") {
+	if auth.Unguarded("/events") {
 		t.Error("/events is not exempt and was served without a credential")
 	}
 }
@@ -144,9 +143,6 @@ func TestTheProbesAndTheShellAreNeverGuarded(t *testing.T) {
 	// An orchestrator has no token, and a liveness check that 401s is a
 	// liveness check that fails. The page that prompts for a token cannot
 	// itself require one.
-	g := guard(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	})
 	for _, path := range []string{
 		"/", "/health", "/ready", "/dashboard", "/favicon.ico",
 		"/health/", "/ready/", "/dashboard/",
@@ -156,7 +152,7 @@ func TestTheProbesAndTheShellAreNeverGuarded(t *testing.T) {
 		// reads the whole company. Its per-run signed token IS the check.
 		"/mcp/tok",
 	} {
-		if g.Requires(path, "GET") {
+		if !auth.Unguarded(path) {
 			t.Errorf("%s was guarded", path)
 		}
 	}
@@ -167,11 +163,8 @@ func TestASiblingOfAProbeIsGuarded(t *testing.T) {
 	// The exact/prefix split is the point. As prefixes, /health and /ready
 	// would silently have exempted any future route merely starting with
 	// those letters, on the day it was added.
-	g := guard(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	})
 	for _, path := range []string{"/health-admin", "/readyz-reset", "/healthz", "/dashboards"} {
-		if !g.Requires(path, "GET") {
+		if auth.Unguarded(path) {
 			t.Errorf("%s was exempted as if it were a probe", path)
 		}
 	}

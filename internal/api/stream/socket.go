@@ -225,7 +225,7 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 // applied a moment earlier, so the two can never disagree about where a
 // socket's token may ride.
 //
-// IT STILL ASKS [auth.Guard.Requires] rather than assuming the answer. The
+// IT STILL ASKS [auth.Unguarded] rather than assuming the answer. The
 // exemption list is that package's to state, and a socket path that somebody
 // later declares unguarded must open here rather than being refused by a
 // second, private copy of the rule.
@@ -248,7 +248,7 @@ func authenticate(guard *auth.Guard, r *http.Request) (string, bool) {
 	if guard.Credential(r) != "" {
 		return "", false
 	}
-	return "", !guard.Requires(auth.SocketPath, http.MethodGet)
+	return "", auth.Unguarded(auth.SocketPath)
 }
 
 // serveSocket runs one connection until it closes.
