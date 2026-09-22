@@ -214,8 +214,8 @@ Usage:
                               purge, which destroys a task and every row it
                               produced and which nothing undoes
   crewlet chat <cmd>          The company's own chat, as an operator: list and
-                              read rooms, say something, search, prune a room
-                              now, and import a Slack or Mattermost export
+                              read rooms, say something, search, and prune a
+                              room now
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends

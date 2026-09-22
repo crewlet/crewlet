@@ -834,23 +834,6 @@ func TestEveryPayloadRefusesWhatItWillNotWriteNamingTheField(t *testing.T) {
 			Links:  []string{strings.Repeat("u", chat.MaxLinkBytes+1)},
 			Author: "sarah-chen", AuthorKind: chat.AuthorAgent,
 		}},
-		{"an import with no provenance", "imported.vendor_id", chat.MessagePost{
-			V: 1, MessageID: uuid.NewString(), Body: "hi",
-			Author: "sarah-chen", AuthorKind: chat.AuthorAgent,
-			Imported: &chat.Imported{
-				Source: "slack", Author: "sarah-chen",
-				AuthorKind: chat.AuthorHuman, AuthoredAt: time.Now().UTC(),
-			},
-		}},
-		{"an import with no authored instant", "imported.authored_at",
-			chat.MessagePost{
-				V: 1, MessageID: uuid.NewString(), Body: "hi",
-				Author: "sarah-chen", AuthorKind: chat.AuthorAgent,
-				Imported: &chat.Imported{
-					Source: "slack", VendorID: "1699999999.000100",
-					Author: "sarah-chen", AuthorKind: chat.AuthorHuman,
-				},
-			}},
 		{"an edit that empties the message", "body", chat.MessageEdit{
 			V: 1, MessageID: uuid.NewString(),
 			EditedBy: "sarah-chen", EditedByKind: chat.AuthorHuman,
@@ -940,15 +923,6 @@ func TestTheShapesARealCompanyWritesAreAccepted(t *testing.T) {
 			Links:  []string{"https://example.com/build/42"},
 			Author: "ops", AuthorKind: chat.AuthorSystem,
 		},
-		chat.MessagePost{
-			V: 1, MessageID: uuid.NewString(), Body: "we shipped it last year",
-			Author: "sarah-chen", AuthorKind: chat.AuthorHuman,
-			Imported: &chat.Imported{
-				Source: "slack", VendorID: "1699999999.000100",
-				Author: "sarah-chen", AuthorKind: chat.AuthorHuman,
-				AuthoredAt: time.Date(2030, 11, 14, 9, 30, 0, 0, time.UTC),
-			},
-		},
 		chat.MessageEdit{
 			V: 1, MessageID: uuid.NewString(), Body: "shipping tomorrow",
 			EditedBy: "sarah-chen", EditedByKind: chat.AuthorHuman,
@@ -976,60 +950,5 @@ func TestTheShapesARealCompanyWritesAreAccepted(t *testing.T) {
 		if err := p.Validate(); err != nil {
 			t.Errorf("%T: a payload this package writes was refused: %v", p, err)
 		}
-	}
-}
-
-// AN IMPORT WAKES NOBODY, AND THE SHAPE IS WHAT SAYS SO.
-//
-// A year of somebody's Slack replayed onto the log is a year of posts that
-// already happened. A wake per imported message would page the whole company
-// about conversations it has already had, at once — so an import carries its
-// provenance and NO routing snapshot, and the wake filter asks about the
-// record's own shape rather than about a flag a writer sets and a version-gated
-// decode would have to read.
-func TestAnImportedMessageCarriesNoRoutingSnapshot(t *testing.T) {
-	t.Parallel()
-	post := chat.MessagePost{
-		V: 1, MessageID: uuid.NewString(), Body: "we shipped it last year",
-		Author: "sarah-chen", AuthorKind: chat.AuthorHuman,
-		Imported: &chat.Imported{
-			Source: "slack", VendorID: "1699999999.000100",
-			Author: "sarah-chen", AuthorKind: chat.AuthorHuman,
-			AuthoredAt: time.Date(2030, 11, 14, 9, 30, 0, 0, time.UTC),
-		},
-	}
-	if err := post.Validate(); err != nil {
-		t.Fatalf("an imported post was refused: %v", err)
-	}
-	body, err := json.Marshal(post)
-	if err != nil {
-		t.Fatalf("encode the post: %v", err)
-	}
-	data, err := chat.Encode(chat.MutationRecord{
-		RecordEnvelope: chat.RecordEnvelope{
-			V: chat.RecordVersion, OpID: uuid.NewString(),
-			Subject: chat.MessageSubject(uuid.NewString()), Op: chat.OpPost,
-			Scope: chat.ScopeSet{Subject: true},
-		},
-		Mutation: body, Actor: "import", ActorKind: chat.AuthorOperator,
-	})
-	if err != nil {
-		t.Fatalf("encode the record: %v", err)
-	}
-	rec, err := chat.Decode(data)
-	if err != nil {
-		t.Fatalf("decode the record: %v", err)
-	}
-	if rec.Notify != nil {
-		t.Fatal("an imported record carries a routing snapshot, so a migration " +
-			"would page the whole company about a year of old conversations")
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		t.Fatalf("read the encoding back: %v", err)
-	}
-	if _, present := fields["notify"]; present {
-		t.Error("a quiet record still writes a notify key, so the wake filter " +
-			"would have to look inside it rather than at the record's shape")
 	}
 }

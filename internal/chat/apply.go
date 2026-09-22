@@ -218,9 +218,7 @@ type applyContext struct {
 	// byte-identical on every node, and it is what the retention prune's
 	// time range is decidable against.
 	//
-	// It is also the ONLY instant this domain writes, with exactly one
-	// exception — an IMPORTED message's `authored_at`, which is display
-	// only and which nothing here orders on. The record's own authored
+	// It is the ONLY instant this domain writes. The record's own authored
 	// instant reaches no row: two people posting a second apart on nodes
 	// whose clocks disagree by a minute would otherwise render against an
 	// order the log does not have, differently on every node.

@@ -156,11 +156,6 @@ type Message struct {
 	// otherwise render differently on every node.
 	CreatedAt time.Time `json:"created_at"`
 
-	// Imported is the provenance of a message replayed from another
-	// surface, and nil for everything anybody actually said here. It
-	// carries the ONE instant on this log that is not the broker's.
-	Imported *Imported `json:"imported,omitempty"`
-
 	EditedAt     *time.Time `json:"edited_at,omitempty"`
 	EditedBy     string     `json:"edited_by,omitempty"`
 	EditedByKind AuthorKind `json:"edited_by_kind,omitempty"`

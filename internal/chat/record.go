@@ -133,11 +133,11 @@ type MutationRecord struct {
 	// ordered exactly like a loud one, and writes its history row like
 	// every other: quiet means it wakes nobody, and nothing else.
 	//
-	// AN IMPORT IS THE CASE THIS EXISTS FOR. A year of somebody's Slack
-	// replayed onto the log is a year of posts that must wake NOBODY —
-	// see [Imported] — and a flag on the payload would have to be read
-	// after a version-gated decode, by which point the record a newer
-	// build wrote has already been filed as routable.
+	// A SYSTEM NARRATION IS THE CASE THIS EXISTS FOR — the engine saying
+	// somebody joined, or a prune taking a year of a room. A flag on the
+	// payload would have to be read after a version-gated decode, by which
+	// point the record a newer build wrote has already been filed as
+	// routable.
 	Notify *Notify `json:"notify,omitempty"`
 
 	// Extra carries fields a newer build wrote, so a record round-trips

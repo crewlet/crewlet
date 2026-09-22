@@ -410,83 +410,6 @@ func (m MemberSet) Validate() error {
 	return checkMembers(m.Members, MaxMembers)
 }
 
-// Imported is the provenance of a message replayed from somewhere else.
-//
-// # What it is for, and why a record carrying it wakes nobody
-//
-// A company moving onto native chat brings a year of its Slack with it. Every
-// one of those messages is an ordinary post on this log — it has to be, or the
-// history is a second store with its own search and its own backup — and every
-// one of them is also a message that ALREADY HAPPENED. A wake per imported
-// message would page the whole company about a year of conversations it has
-// already had, at once, which is the single loudest failure this feature could
-// have on its first day.
-//
-// So an import carries this field and NO ROUTING SNAPSHOT: [MutationRecord]'s
-// `Notify` is nil, which is the shape the wake filter asks about. The rule is
-// enforced by the record's own shape rather than by a flag a writer sets,
-// because a flag is read after a version-gated decode and the filter runs
-// before one.
-type Imported struct {
-	// Source is the surface this came from — `slack`, `mattermost` — in
-	// the vocabulary
-	// [github.com/crewlet/crewlet/internal/integration.Kinds] uses, so an
-	// operator auditing a room can tell one migration from another.
-	Source string `json:"source"`
-
-	// VendorID is the message's id AT THE VENDOR, and it is what makes an
-	// import re-runnable: a second pass over the same export is refused by
-	// the applier's own row guard rather than by somebody remembering
-	// where the first pass stopped.
-	VendorID string `json:"vendor_id"`
-
-	// Author and AuthorKind are the RESOLVED seat, not the vendor's user
-	// id: resolution happens once, at import, where the roster that maps
-	// a vendor account to a seat is in hand. A record carrying the vendor
-	// id instead would need that roster again on every node, for ever,
-	// including after the person left.
-	Author     string     `json:"author"`
-	AuthorKind AuthorKind `json:"author_kind"`
-
-	// AuthoredAt is when it was said at the vendor.
-	//
-	// THE ONE INSTANT ON THIS LOG THAT IS NOT THE BROKER'S, and it has to
-	// be: every other message renders at the broker's own timestamp
-	// because that is what makes one node's copy byte-identical to
-	// another's, and an import whose messages rendered at the instant they
-	// were replayed would compress a year into an afternoon. It is
-	// DISPLAY ONLY — nothing orders on it, and the per-channel sequence
-	// still comes from log order.
-	AuthoredAt time.Time `json:"authored_at"`
-}
-
-// Validate refuses provenance that claims less than it must.
-func (i Imported) Validate() error {
-	if i.Source == "" {
-		return invalid("imported.source", "an imported message names no "+
-			"source, so nothing can tell one migration's messages from another's")
-	}
-	if i.VendorID == "" {
-		return invalid("imported.vendor_id", "an imported message names no "+
-			"vendor id — it is what makes a second pass over the same export a "+
-			"refusal rather than a duplicate conversation")
-	}
-	if i.Author == "" {
-		return invalid("imported.author", "an imported message names no "+
-			"resolved author; resolution happens at import, where the roster is")
-	}
-	if !i.AuthorKind.Valid() {
-		return invalid("imported.author_kind", "%q is not an author kind this "+
-			"build serves", i.AuthorKind)
-	}
-	if i.AuthoredAt.IsZero() {
-		return invalid("imported.authored_at", "an imported message states no "+
-			"authored instant, so a year of history would render at the instant "+
-			"it was replayed")
-	}
-	return nil
-}
-
 // MessagePost is somebody saying something. Its subject is the ROOM's message
 // stream, additively — see [KindMessage].
 type MessagePost struct {
@@ -525,10 +448,6 @@ type MessagePost struct {
 
 	Author     string     `json:"author"`
 	AuthorKind AuthorKind `json:"author_kind"`
-
-	// Imported is the provenance of a message replayed from another
-	// surface, and nil for everything anybody actually says here.
-	Imported *Imported `json:"imported,omitempty"`
 }
 
 // Validate refuses a post this build will not write.
@@ -557,9 +476,6 @@ func (m MessagePost) Validate() error {
 	if !m.AuthorKind.Valid() {
 		return invalid("author_kind", "%q is not an author kind this build "+
 			"serves", m.AuthorKind)
-	}
-	if m.Imported != nil {
-		return m.Imported.Validate()
 	}
 	return nil
 }

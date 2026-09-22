@@ -219,18 +219,6 @@ CREATE TABLE chat_messages (
     -- The BROKER'S OWN stored instant, which is what makes the retention
     -- prune's time range decidable identically on every node.
     created_at      INTEGER NOT NULL,
-    -- An imported message's ORIGINAL instant, 0 when the message was written
-    -- here. It is a second column rather than a different `created_at` because
-    -- the prune ranges on the broker's time: imported history is therefore
-    -- kept for its horizon measured from the CUTOVER, which is the number an
-    -- operator sizing this estate needs, and the transcript still renders the
-    -- year the conversation actually happened.
-    authored_at     INTEGER NOT NULL DEFAULT 0,
-    -- Where an imported message came from, and its id in that workspace, so a
-    -- second import of one archive writes nothing new. Empty on a message
-    -- somebody typed here.
-    imported_source TEXT    NOT NULL DEFAULT '',
-    imported_id     TEXT    NOT NULL DEFAULT '',
     edited_at       INTEGER,
     deleted_at      INTEGER,
     -- The position triple, so a cursor survives a reanchor: a composed version

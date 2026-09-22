@@ -30,7 +30,6 @@ subcommand below is served by it.
 | `crewlet chat post <id> -body TEXT` | Say something in a room, as the seat this token is bound to. `-link URL` repeats for what the message points at — there are no attachments — and `-op-id` retries an `unknown` outcome without saying it twice |
 | `crewlet chat search <text>` | Rank every room this seat may read, narrowed with `-channel`, `-author` and `-limit` |
 | `crewlet chat prune <id> -cutoff RFC3339 -confirm RFC3339` | Destroy everything a room said before an instant, on every node, now rather than at the [retention](../concepts/chat.md#retention) horizon. It has no inverse, so the cutoff is typed twice |
-| `crewlet chat import <dir>` | Replay a Slack or Mattermost export into rooms that already exist — threads, authors resolved to handles, original timestamps. Wakes nobody, and writes nothing the second time. `-map`, `-limit`, `-check` |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -772,48 +771,6 @@ inherit from a shell history, and there is no inverse.
 The sweep the retention duty runs is the same gesture on a schedule. This verb
 is what an erasure request or a credential pasted into a room needs, where
 waiting out `message_retention_days` is not an answer.
-
-### `crewlet chat import`
-
-```
-crewlet chat import <export-dir> [-map map.yaml] [-limit N] [-check]
-```
-
-Replays a Slack or Mattermost export into native rooms, preserving threads,
-resolving authors to seat handles and keeping the original timestamps. Imported
-history **wakes nobody** — a year of mentions arriving as live wakes would be
-tens of thousands of turns — and each message carries where it came from, so
-importing one archive twice writes nothing the second time.
-
-**It never creates a room.** The archive's channels are resolved against the
-rooms the operator's own seat is in, so what gets written is bounded by what
-that person can already reach.
-
-**An unmapped author stops the run before anything is written**, and every one
-of them is listed at once with the vendor's display *and* real name, plus the
-`authors:` lines to paste. The alternatives are all worse in the one store
-where "who said this" is the point: dropping the message takes a thread's shape
-with it, a placeholder handle makes the question unanswerable, and attributing
-to the migrating credential has one person saying everything. A mapped handle
-that is no longer a seat **is** accepted — somebody who left still said what
-they said.
-
-`-map` is a YAML document with exactly two keys, parsed strictly so a typo is
-refused rather than silently mapping nothing:
-
-```yaml
-channels:
-  engineering: c-eng        # archive channel name -> this company's room, by id or name
-authors:
-  U0FOUNDER: ada            # vendor user id -> seat handle
-```
-
-`-check` reads the archive, resolves everything and reports the plan without
-writing. `-limit` stops after N messages, and a slice is re-runnable like any
-other run.
-
-See [Chat § Migrating](../concepts/chat.md#migrating) for what the cutover
-looks like.
 
 ## `crewlet retention`
 

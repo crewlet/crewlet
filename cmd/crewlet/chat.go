@@ -51,7 +51,7 @@ import (
 // TestEveryChatVerbIsDispatchedAndDocumented asserts both directions, because
 // nothing else connects the list, the switch and the usage text.
 var chatSubcommands = []string{
-	"channels", "read", "post", "search", "prune", "import",
+	"channels", "read", "post", "search", "prune",
 }
 
 const chatUsage = `usage: crewlet chat <command> [<config.yaml>] [-url] [-token]
@@ -63,10 +63,6 @@ const chatUsage = `usage: crewlet chat <command> [<config.yaml>] [-url] [-token]
   crewlet chat prune <id>      Destroy everything said in a room before an
                                instant, now, rather than waiting for the
                                retention duty — there is no inverse
-  crewlet chat import <dir>    Replay a Slack or Mattermost export into rooms
-                               that already exist. Wakes nobody, keeps the
-                               original timestamps, and writes nothing the
-                               second time
 
 The author is never named here: the node resolves this token to the
 ` + "`kind: human`" + ` seat whose contact.crewlet_operator_id matches it, and a
@@ -100,8 +96,6 @@ func runChat(args []string, stdout, stderr io.Writer) error {
 		return chatSearch(rest, stdout, stderr)
 	case "prune":
 		return chatPrune(rest, stdout, stderr)
-	case "import":
-		return chatImport(rest, stdout, stderr)
 	}
 	// UNREACHABLE while the guard above and this switch name the same set,
 	// which is exactly what the test asserts. Returning rather than
@@ -361,17 +355,13 @@ func chatChannels(args []string, stdout, stderr io.Writer) error {
 // chatMessageRow is one message as the transcript carries it.
 type chatMessageRow struct {
 	Message struct {
-		ID         string    `json:"id"`
-		ThreadRoot string    `json:"thread_root"`
-		Author     string    `json:"author"`
-		Body       string    `json:"body"`
-		CreatedAt  time.Time `json:"created_at"`
-		Imported   *struct {
-			Source     string    `json:"source"`
-			AuthoredAt time.Time `json:"authored_at"`
-		} `json:"imported"`
-		DeletedAt *time.Time `json:"deleted_at"`
-		EditedAt  *time.Time `json:"edited_at"`
+		ID         string     `json:"id"`
+		ThreadRoot string     `json:"thread_root"`
+		Author     string     `json:"author"`
+		Body       string     `json:"body"`
+		CreatedAt  time.Time  `json:"created_at"`
+		DeletedAt  *time.Time `json:"deleted_at"`
+		EditedAt   *time.Time `json:"edited_at"`
 	} `json:"message"`
 	ChannelSeq int64 `json:"channel_seq"`
 }
@@ -440,18 +430,8 @@ func chatRead(args []string, stdout, stderr io.Writer) error {
 }
 
 // chatTranscriptLine renders one message.
-//
-// AN IMPORTED MESSAGE RENDERS AT THE INSTANT IT WAS SAID, which is the one
-// instant on this log that is not the broker's. Rendering it at `created_at`
-// instead would compress a year of somebody else's workspace into the
-// afternoon it was replayed — while the ORDER stays the log's, because the
-// per-channel sequence is what every node agrees on.
 func chatTranscriptLine(row chatMessageRow) string {
 	at, marker := row.Message.CreatedAt, ""
-	if row.Message.Imported != nil {
-		at, marker = row.Message.Imported.AuthoredAt, " (imported "+
-			row.Message.Imported.Source+")"
-	}
 	body := row.Message.Body
 	switch {
 	case row.Message.DeletedAt != nil:

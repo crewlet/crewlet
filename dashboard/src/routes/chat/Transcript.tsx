@@ -297,12 +297,6 @@ function Row({
           <span className="t-caption muted" title={fmtDateTime(message.created_at)}>
             {fmtTime(message.created_at)}
           </span>
-          {message.imported && (
-            <span className="t-caption muted">
-              imported from {message.imported.source}, said{" "}
-              {fmtDateTime(message.imported.authored_at)}
-            </span>
-          )}
         </div>
       )}
 

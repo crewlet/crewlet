@@ -296,50 +296,6 @@ func TestAChatPruneRefusesACutoffThatIsNotTypedTwice(t *testing.T) {
 	}
 }
 
-// A TRANSCRIPT IS READ, so it prints oldest first — and an imported message
-// renders at the instant it was SAID.
-//
-// The route answers newest-first because that is what a screen renders and
-// pages backwards from. A conversation read bottom-up in a terminal is not
-// one. And a message replayed from somebody else's workspace carries the one
-// instant on this log that is not the broker's; rendering it at `created_at`
-// would compress a year into the afternoon it was imported.
-func TestAChatReadPrintsOldestFirstAndDatesAnImportWhenItWasSaid(t *testing.T) {
-	t.Parallel()
-	fake := newChatRouteFake(t, http.StatusOK, `{
-		"read_level":"stale","complete":true,
-		"position":{"stream":"CREWLET_CHAT_LOG","seq":9},
-		"channel_id":"c-eng",
-		"messages":[
-		  {"channel_seq":2,"message":{"id":"m-2","author":"engineer",
-		   "body":"newest","created_at":"2031-03-24T04:36:00Z"}},
-		  {"channel_seq":1,"message":{"id":"m-1","author":"founder",
-		   "body":"oldest","created_at":"2032-01-01T00:00:00Z",
-		   "imported":{"source":"slack","vendor_id":"C0ENG/1.1",
-		   "authored_at":"2031-03-24T04:35:00Z"}}}
-		]}`)
-	out, _, err := chatCLI(t, fake.server.URL, "read", "c-eng")
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	oldest, newest := strings.Index(out, "oldest"), strings.Index(out, "newest")
-	if oldest < 0 || newest < 0 {
-		t.Fatalf("the transcript printed neither message:\n%s", out)
-	}
-	if oldest > newest {
-		t.Errorf("the transcript printed newest first, which is not how a "+
-			"conversation is read:\n%s", out)
-	}
-	if !strings.Contains(out, "2031-03-24T04:35:00Z") {
-		t.Errorf("the imported message did not render at the instant it was "+
-			"said:\n%s", out)
-	}
-	if strings.Contains(out, "2032-01-01T00:00:00Z") {
-		t.Errorf("the imported message rendered at the instant it was "+
-			"REPLAYED, which compresses a year into an afternoon:\n%s", out)
-	}
-}
-
 // AN INCOMPLETE ANSWER SAYS SO. A chat read is served from the rows this node
 // has applied, so "there is nothing here" and "this node has not caught up"
 // are different facts — and only one of them is about the company.

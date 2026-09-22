@@ -2673,17 +2673,6 @@ export interface ChatChannel {
   archived_at?: string;
 }
 
-/** Where an imported message came from. Present only on history `crewlet chat
- *  import` replayed, and its `authored_at` is the ONE instant on this log that
- *  is not the broker's. */
-export interface ChatImported {
-  source: string;
-  vendor_id: string;
-  author: string;
-  author_kind: ChatAuthorKind;
-  authored_at: string;
-}
-
 /** One message, whole. */
 export interface ChatMessage {
   v: number;
@@ -2704,7 +2693,6 @@ export interface ChatMessage {
   /** `@channel` — the room as a whole. */
   collective?: boolean;
   created_at: string;
-  imported?: ChatImported;
   edited_at?: string;
   edited_by?: string;
   edited_by_kind?: ChatAuthorKind;

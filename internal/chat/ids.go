@@ -134,30 +134,6 @@ func TurnMessageID(turnID, channelID string, ordinal int) (uuid.UUID, error) {
 	return derivedID(idFromTurn, turnID, channelID, strconv.Itoa(ordinal)), nil
 }
 
-// ImportedMessageID is the id of a message replayed from another surface, and
-// the operation id its record carries.
-//
-// (source, vendor id), which is the only pair that is stable across two passes
-// over one export. IT IS WHAT MAKES AN IMPORT RE-RUNNABLE: a second pass
-// derives the same ids, the applier's own insert declines every one of them,
-// and nobody has to remember where the first pass stopped. An id minted per
-// message would make a resumed import a second copy of the conversation.
-func ImportedMessageID(source, vendorID string) (uuid.UUID, error) {
-	source = strings.TrimSpace(source)
-	vendorID = strings.TrimSpace(vendorID)
-	switch {
-	case source == "":
-		return uuid.Nil, invalid("imported.source", "an imported message names "+
-			"no source, so two workspaces' exports would derive one id for two "+
-			"different remarks that happen to share a vendor id")
-	case vendorID == "":
-		return uuid.Nil, invalid("imported.vendor_id", "an imported message "+
-			"names no vendor id, which is the only thing about it that is "+
-			"stable across two passes over one export")
-	}
-	return derivedID(idFromImport, source, vendorID), nil
-}
-
 // derivedID is the one derivation, so no caller can join its segments
 // differently from any other.
 //

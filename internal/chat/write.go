@@ -1076,11 +1076,6 @@ type NewMessage struct {
 	// names a turn, because a turn may legitimately post twice — see
 	// [TurnMessageID].
 	Ordinal int
-
-	// Imported is the provenance of a message replayed from another
-	// surface, and nil for everything anybody actually says here. A record
-	// carrying it wakes NOBODY.
-	Imported *Imported
 }
 
 // Post says something in a room.
@@ -1132,11 +1127,6 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 	mentions := cleanHandles(in.Mentions)
 	if err := checkMentions(mentions); err != nil {
 		return Written{}, err
-	}
-	if in.Imported != nil {
-		if err := in.Imported.Validate(); err != nil {
-			return Written{}, err
-		}
 	}
 	id, err := s.messageID(actor, channelID, in)
 	if err != nil {
@@ -1202,22 +1192,13 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 				ThreadRoot: root, Mentions: named,
 				Collective: in.Collective, Links: in.Links,
 				Author: actor.Name(), AuthorKind: actor.Kind,
-				Imported: in.Imported,
-			}
-			if in.Imported != nil {
-				// AN IMPORT'S AUTHOR IS THE RESOLVED SEAT, not
-				// the operator running the migration: the actor
-				// on the envelope records who replayed the
-				// archive, and the message records who said it.
-				payload.Author = in.Imported.Author
-				payload.AuthorKind = in.Imported.AuthorKind
 			}
 			message = Message{
 				V: DocumentVersion, ID: id, ChannelID: room.ID,
 				ThreadRoot: root, Author: payload.Author,
 				AuthorKind: payload.AuthorKind, Body: in.Body,
 				Links: in.Links, Mentions: named,
-				Collective: in.Collective, Imported: in.Imported,
+				Collective: in.Collective,
 			}
 			notify, err := s.notifyOf(ctx, tx, actor, room, message, Routing{
 				ChannelKind: room.Kind, AuthorKind: actor.Kind,
@@ -1663,7 +1644,7 @@ func writtenRevision(result statelog.Result, read uint64) uint64 {
 func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Channel,
 	message Message, routing Routing) (*Notify, error) {
 
-	if message.Imported != nil || actor.Kind == AuthorSystem {
+	if actor.Kind == AuthorSystem {
 		return nil, nil
 	}
 	if routing.ThreadRoot != "" {
@@ -1734,14 +1715,11 @@ func (s *Store) employed(handles []string) []string {
 // operation id its record carries.
 //
 // THE RULE IS CHOSEN BY WHAT THE CALLER CAN PROVE, in one place so that no
-// surface can pick the other one: an import has a vendor id, a turn has a turn
-// and an ordinal, and a person has an idempotency key. See the head of ids.go
-// for why each is the only stable value its caller holds.
+// surface can pick the other one: a turn has a turn and an ordinal, and a
+// person has an idempotency key. See the head of ids.go for why each is the
+// only stable value its caller holds.
 func (s *Store) messageID(actor Actor, channelID string, in NewMessage) (string, error) {
 	switch {
-	case in.Imported != nil:
-		id, err := ImportedMessageID(in.Imported.Source, in.Imported.VendorID)
-		return id.String(), err
 	case actor.TurnID != "":
 		id, err := TurnMessageID(actor.TurnID, channelID, in.Ordinal)
 		return id.String(), err

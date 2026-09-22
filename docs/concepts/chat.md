@@ -229,11 +229,7 @@ choose the axis.
 
 ## Migrating
 
-[`crewlet chat import`](../reference/cli.md#crewlet-chat-import) reads a Slack or Mattermost export into native channels,
-preserving threads, resolving authors to handles and keeping the original
-timestamps. Imported history **wakes nobody** — a year of mentions arriving as
-live wakes would be tens of thousands of turns — and it carries where it came
-from, so importing one archive twice writes nothing the second time.
-
 Because the axis is exclusive, the cutover is a flip rather than an overlap.
 The old workspace stays readable in its own product for as long as you keep it.
+There is no importer: the engine does not replay another product's archive into
+native rooms.

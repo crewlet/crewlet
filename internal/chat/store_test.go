@@ -652,61 +652,6 @@ func TestAUnitRoomsLeadIsResolvedAtTheWrite(t *testing.T) {
 	}
 }
 
-// AN IMPORT WAKES NOBODY, AND A SECOND PASS OVER ONE ARCHIVE WRITES NOTHING
-// NEW.
-//
-// A year of somebody's Slack is a year of posts that already happened: a wake
-// per message would page the whole company about conversations it has already
-// had, at once. The rule is the record's SHAPE — no routing snapshot at all —
-// because a flag would be read after a version-gated decode that a newer
-// build's record does not survive.
-func TestAnImportWakesNobodyAndRunsTwice(t *testing.T) {
-	t.Parallel()
-	r := newWriteRound(t, agents().withPeople("jane"))
-	room := r.room(person("jane"), "launch", "eng")
-
-	from := &chat.Imported{
-		Source: "slack", VendorID: "1699999999.000100", Author: "eng",
-		AuthorKind: chat.AuthorAgent,
-		AuthoredAt: time.Date(2030, 11, 14, 9, 0, 0, 0, time.UTC),
-	}
-	first, err := r.store.Post(t.Context(), operatorFor("jane"), room.Channel.ID,
-		chat.NewMessage{Body: "@jane ping", Mentions: []string{"jane"}, Imported: from})
-	if err != nil {
-		t.Fatalf("import: %v", err)
-	}
-	if got := r.lastRecord(); got.Notify != nil {
-		t.Fatalf("an imported message carried a routing snapshot: %+v — a "+
-			"migration would page the company about a year of conversations "+
-			"it has already had", got.Notify)
-	}
-	r.drain()
-
-	second, err := r.store.Post(t.Context(), operatorFor("jane"), room.Channel.ID,
-		chat.NewMessage{Body: "@jane ping", Mentions: []string{"jane"}, Imported: from})
-	if err != nil {
-		t.Fatalf("the second pass over one export: %v — an interrupted import "+
-			"is re-run rather than resumed from a position somebody wrote down",
-			err)
-	}
-	r.drain()
-	if first.Message.ID != second.Message.ID {
-		t.Fatalf("two passes over one message derived %s and %s",
-			first.Message.ID, second.Message.ID)
-	}
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
-		room.Channel.ID); got != 1 {
-		t.Fatalf("two passes over one export wrote %d messages, want 1", got)
-	}
-	// AND THE CONVERSATION RENDERS THE YEAR IT ACTUALLY HAPPENED.
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages
-		WHERE id = ? AND authored_at > 0 AND imported_source = ?`,
-		first.Message.ID, "slack"); got != 1 {
-		t.Errorf("the imported message kept no provenance, so a year of " +
-			"history renders at the instant it was replayed")
-	}
-}
-
 // A DIRECT CONVERSATION OPENS ONCE, FROM EITHER SIDE.
 //
 // Its id IS the participant set, so two people opening it from two nodes

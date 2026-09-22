@@ -94,21 +94,6 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 	if erased {
 		return 0, nil
 	}
-	if p.Imported != nil {
-		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		seen, err := importedAlready(ctx, tx, *p.Imported)
-		if err != nil {
-			return 0, err
-		}
-		if seen {
-			// A SECOND PASS OVER ONE ARCHIVE WRITES NOTHING NEW.
-			// The guard is the vendor's own id rather than
-			// somebody remembering where the first pass stopped,
-			// which is what makes an interrupted import safe to
-			// simply run again.
-			return 0, nil
-		}
-	}
 
 	var seq int64
 	err = tx.QueryRowContext(ctx,
@@ -138,7 +123,7 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 		V: DocumentVersion, ID: p.MessageID, ChannelID: at.subject().ID,
 		ThreadRoot: p.ThreadRoot, Author: p.Author, AuthorKind: p.AuthorKind,
 		Body: p.Body, Links: p.Links, Mentions: p.Mentions,
-		Collective: p.Collective, CreatedAt: at.brokerAt, Imported: p.Imported,
+		Collective: p.Collective, CreatedAt: at.brokerAt,
 	}
 	document, err := EncodeMessage(message)
 	if err != nil {
@@ -156,15 +141,13 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO chat_messages
 			(id, channel_id, thread_root, author_handle, author_kind, body,
-			 links, channel_seq, created_at, authored_at, imported_source,
-			 imported_id, edited_at, deleted_at, log_stream, log_generation,
-			 log_seq, version, shard, document)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
+			 links, channel_seq, created_at, edited_at, deleted_at,
+			 log_stream, log_generation, log_seq, version, shard, document)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
 		message.ID, message.ChannelID, message.ThreadRoot, message.Author,
 		string(message.AuthorKind), message.Body, links, seq,
-		store.EncodeTime(at.brokerAt), importedAt(p.Imported),
-		importedSource(p.Imported), importedID(p.Imported),
+		store.EncodeTime(at.brokerAt),
 		at.position.Stream, at.position.Generation, int64(at.position.Seq),
 		at.packed, search.ShardOf(chatShardSource, message.ID), document)
 	if err != nil {
@@ -884,27 +867,6 @@ func reactionsFull(ctx context.Context, tx *sql.Tx, r Reaction) (bool, error) {
 	return mine == 0 && distinct >= MaxReactionEmoji, nil
 }
 
-// importedAlready reports whether this vendor message is already on this log.
-//
-// THE GUARD IS THE VENDOR'S OWN ID, which is what makes an interrupted import
-// safe to run again: a second pass writes nothing new rather than a second
-// copy of a year's conversation.
-func importedAlready(ctx context.Context, tx *sql.Tx, from Imported) (bool, error) {
-	var one int
-	err := tx.QueryRowContext(ctx, `
-		SELECT 1 FROM chat_messages
-		WHERE imported_source = ? AND imported_id = ? LIMIT 1`,
-		from.Source, from.VendorID).Scan(&one)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return false, nil
-	case err != nil:
-		return false, fmt.Errorf("chat: read the import guard for %s/%s: %w",
-			from.Source, from.VendorID, err)
-	}
-	return true, nil
-}
-
 // noteMessage records a live frame for a record that changed an existing
 // message.
 func (a *Applier) noteMessage(at applyContext, message storedMessage) {
@@ -962,32 +924,4 @@ func encodeLinks(links []string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
-}
-
-// The imported provenance, as the three columns hold it. Absent on everything
-// anybody actually said here.
-//
-// `authored_at` IS A LITERAL ZERO rather than an encoded zero time, because
-// the column's own default is 0 and [store.EncodeTime] of a zero time is a
-// very large negative number — which every range predicate, the retention
-// prune's included, reads as the distant past.
-func importedAt(from *Imported) int64 {
-	if from == nil {
-		return 0
-	}
-	return store.EncodeTime(from.AuthoredAt)
-}
-
-func importedSource(from *Imported) string {
-	if from == nil {
-		return ""
-	}
-	return from.Source
-}
-
-func importedID(from *Imported) string {
-	if from == nil {
-		return ""
-	}
-	return from.VendorID
 }
