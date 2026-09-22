@@ -79,7 +79,18 @@ function rules(): [string, string][] {
     for (const chunk of bare.split("}")) {
       const at = chunk.lastIndexOf("{");
       if (at < 0) continue;
-      const selector = chunk.slice(0, at).trim().replace(/\s+/g, " ");
+      // AND FROM THE BRACE BEFORE IT, which is the other half of the same
+      // hazard: a rule inside an at-rule shares its chunk with that at-rule's
+      // prelude, so everything-before-the-brace reads as
+      // `@media (max-width: 860px) { .work-rows` and is then discarded as an
+      // at-rule. Nothing in these sheets declares an `overflow` or a sticky
+      // band inside a media query today, so the hole is invisible — which is
+      // exactly the shape of failure this file exists to catch, and the day
+      // one is added the gate would have gone quiet rather than red.
+      const selector = chunk
+        .slice(chunk.lastIndexOf("{", at - 1) + 1, at)
+        .trim()
+        .replace(/\s+/g, " ");
       if (!selector || selector.startsWith("@")) continue;
       out.push([selector, chunk.slice(at + 1)]);
     }
