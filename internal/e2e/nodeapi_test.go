@@ -3,19 +3,24 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -43,6 +48,26 @@ func serveAPI(
 
 // wireAPI is the API half of a node, wired to the engine beside it the way
 // cmd/crewlet wires it, and served on a test listener.
+//
+// # IT IS A SECOND COPY OF THE COMPOSITION ROOT, and that has a cost
+//
+// cmd/crewlet's own wiring is the other one, and the two are deliberately not
+// the same function: this one serves a subset of the surfaces, on a test
+// listener, with a sped-up tick and an amend hook. What they DO share is
+// every required seam, and nothing compares the two lists.
+//
+// So a required option added there and missed here is not a compile error —
+// it is [api.New] or [setupapi.New] refusing by name, at run time, in THIS
+// package. And this package declares internal/solo, so `make test` never
+// reaches it: the refusal lands only in `make test-solo`, which is a separate
+// CI job. Measured: the chart surface and the per-seat write path were added
+// to cmd/crewlet and missed here, and every cluster case failed four bring-up
+// attempts with `setupapi: Options.Seats required` while the shared suite
+// stayed green.
+//
+// When you add a required seam to cmd/crewlet, add it here in the same
+// change, and run BOTH suites. CLAUDE.md says the same thing in one line: a
+// run of `make test` by itself has not exercised the fleet.
 //
 // ONE WIRING FOR EVERY CASE HERE, because there is one wiring: the API is built
 // from the engine's own store, broker and coordination plane, and reads its
@@ -109,8 +134,12 @@ func wireAPI(
 		return fail("integration status", err)
 	}
 	setupSurface, err := setupapi.New(setupapi.Options{
-		Company:     company,
-		Config:      configSurface,
+		Company: company,
+		Config:  configSurface,
+		// THE OTHER HALF OF A COMPANY, exactly as cmd/crewlet passes it:
+		// a seat's own document is the org chart's rather than the stored
+		// revision's, so a per-seat submission writes through the engine.
+		Seats:       e,
 		Secrets:     fleetsecrets.New(backends.Fleet, nil),
 		Resolve:     e.LookupSecret,
 		Passes:      e.SetupRunner(),
@@ -130,9 +159,31 @@ func wireAPI(
 		return fail("backup", err)
 	}
 
+	// The chart surface, wired as cmd/crewlet wires it. It is REQUIRED by
+	// api.New rather than optional, because a narrower answer built around
+	// a nil — an absent route, a 503 — reads as deliberate and hides the
+	// wiring mistake.
+	chartSurface, err := chartapi.New(chartapi.Options{
+		Reader: e.Chart(),
+		Authority: func(actor string, kind chart.AuthorKind,
+			grants []iam.Grant) chartapi.Writer {
+			return e.ChartWriter().As(actor, kind, grants)
+		},
+		Principal: func(r *http.Request) iam.Principal {
+			return auth.Principal(r.Context(), e.BoundSeat)
+		},
+		Chart:   engine.ChartAuthorityOf(e),
+		Fleet:   e,
+		Company: company,
+	})
+	if err != nil {
+		return fail("chart surface", err)
+	}
+
 	opts := api.Options{
 		Bootstrap:    boot,
 		Runtime:      runtime,
+		Chart:        chartSurface,
 		QueueBackend: backends.Queue.Backend(),
 		Sources: queries.Sources{
 			Events:  backends.Store.Events(),

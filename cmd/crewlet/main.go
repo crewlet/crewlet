@@ -1404,38 +1404,6 @@ func companyConfig(e *engine.Engine) (*config.Company, *org.Organization) {
 // failure that looks exactly like an attack and resolves only on restart.
 func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets() }
 
-// boundSeatOf maps an operator credential to the chart seat that claims it.
-//
-// THE BINDING IS WRITTEN ON THE SEAT and not on the token, which is the org
-// model's own decision and the reason this lookup is a walk rather than an
-// index: Tier A is the root of trust and may never read Tier B, so a `seat:`
-// field on the token would have the trusted tier depending on the untrusted
-// one. The chart says which credential is a person instead.
-//
-// A NODE WITH NO COMPANY ANSWERS EMPTY, which is the honest answer and the
-// safe one: the caller is then a machine principal, decided by its grants
-// alone, rather than a person the engine guessed at.
-func boundSeatOf(e *engine.Engine) func(string) string {
-	return func(operatorID string) string {
-		if operatorID == "" {
-			return ""
-		}
-		_, view := companyConfig(e)
-		if view == nil {
-			return ""
-		}
-		for role := range view.AllRoles() {
-			if role.Contact == nil {
-				continue
-			}
-			if role.Contact.CrewletOperatorID == operatorID {
-				return role.Handle()
-			}
-		}
-		return ""
-	}
-}
-
 // serveAPI binds the HTTP surface, or reports that this node serves none.
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
@@ -1518,7 +1486,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// admin path. See internal/api/auth's principal.go, which goes
 		// with the rest of this posture when real sessions land.
 		Principal: func(r *http.Request) iam.Principal {
-			return auth.Principal(r.Context(), boundSeatOf(e))
+			return auth.Principal(r.Context(), e.BoundSeat)
 		},
 		// WHO LEADS WHOM, three-valued: a node that is booting, applying
 		// a revision or behind the log answers "cannot tell" rather than

@@ -189,3 +189,44 @@ func (e *Engine) ImportReady(ctx context.Context) (string, error) {
 		"— under its own reading of what a placement means. Finish the upgrade "+
 		"and import again.", who, floor, coord.ProtocolVersion), nil
 }
+
+// BoundSeat maps an operator credential to the chart seat that claims it.
+//
+// THE BINDING IS WRITTEN ON THE SEAT and not on the token, which is the org
+// model's own decision and the reason this lookup is a walk rather than an
+// index: Tier A is the root of trust and may never read Tier B, so a `seat:`
+// field on the token would have the trusted tier depending on the untrusted
+// one. The chart says which credential is a person instead.
+//
+// A NODE WITH NO COMPANY ANSWERS EMPTY, which is the honest answer and the
+// safe one: the caller is then a machine principal, decided by its grants
+// alone, rather than a person the engine guessed at. An empty id answers the
+// same way and is equally ordinary — an operator token that is nobody's is a
+// pipeline's.
+//
+// IT ANSWERS HERE rather than beside each caller because it is a fact about
+// the company this engine runs, and more than one surface has to decide
+// whether a credential is a PERSON: the CLI's principal resolver, and the
+// end-to-end harness that stands the same surfaces up. Written twice it would
+// be two answers to "who is this operator" — a request resolving to a seat on
+// one path and to a bare operator id on the other, with the audit feed showing
+// one person as two people, which is exactly the failure internal/iam's
+// namespace rules exist to make unrepeatable.
+func (e *Engine) BoundSeat(operatorID string) string {
+	if e == nil || operatorID == "" {
+		return ""
+	}
+	company := e.Company()
+	if company == nil || company.Org == nil {
+		return ""
+	}
+	for role := range company.Org.AllRoles() {
+		if role.Contact == nil {
+			continue
+		}
+		if role.Contact.CrewletOperatorID == operatorID {
+			return role.Handle()
+		}
+	}
+	return ""
+}
