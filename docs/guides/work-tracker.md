@@ -108,6 +108,12 @@ and a project's row in the directory carries it. A reference the chart no
 longer has is **marked** on each of those rather than printed as a name — it
 is a team that has left the chart, which is something to correct.
 
+A team that was given an id **after** it already had work filed into it has
+both spellings in its history, because nothing rewrites what was filed. That
+is invisible: **a team is one column**, whichever spelling each item was
+written under, with one count over all of it — see
+[what a board groups on](#what-a-board-groups-on).
+
 **Adding an id to a team that already has work does not rewrite that work,
 and does not need to.** A task's filed unit is a record of what was true and
 nothing in the engine rewrites one — these rows are derived from the ordered
@@ -393,6 +399,15 @@ each column into swimlanes:
 
 Every axis draws the absent value as its own labelled column — "nobody is
 assigned" is a question a board answers, not a row it hides.
+
+**`unit` and `routing_unit` group on the team, not on the string.** A unit
+answers to two spellings and a filed unit is a record of what was true when it
+was written, so a team given an id partway through its life has work stored
+under its name and work stored under its id. It is still **one column**, headed
+with the team's current name and counting all of it. Loading that column
+further takes either spelling — `group=eng` and `group=Engineering` reach the
+same one. A stored unit the chart no longer has keeps its own column under the
+literal the items hold, marked as a team that has left the chart.
 
 **`due:bucket` is the one that reads a calendar rather than a column.** Its six
 bands are the question somebody opens their own work to ask:
