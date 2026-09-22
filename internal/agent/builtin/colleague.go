@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 var log = logging.Get("agent.builtin")
@@ -159,6 +160,47 @@ func Corpus(o *org.Organization) []colleague.Seat {
 		out = append(out, seat)
 	}
 	return out
+}
+
+// Parties resolves a handle to that person's two identities, from the chart —
+// what [WorkDeps.Party] is wired with.
+//
+// HERE RATHER THAN IN [Corpus], because the roster deliberately leaves an
+// operator id out: that map is the exact-id index AND what `lookup_colleague`
+// renders, so a credential in it would appear beside somebody's Slack id as
+// though it were somewhere an agent could mention them. This is the same fact
+// asked for by name instead.
+//
+// A HANDLE NO SEAT HOLDS IS STILL A PARTY — somebody who has left, a handle on
+// old rows — because the question is about the ROWS and this lookup only ever
+// ADDS an alias.
+//
+// # It is the other direction of the same lookup, and cannot disagree with it
+//
+// `opsmcp.WorkActor` walks credential → seat and this walks seat → credential
+// — as does the dashboard's own `queries.Sources.partyOf` — and all of them go
+// through the one resolution in `org`: see [org.Organization.SeatByOperatorID],
+// whose own doc says why a `${VAR}` has to be resolved rather than compared. A
+// person bound for one direction and unbound for the other is a dashboard that
+// knows who they are and shows them nothing.
+//
+// A nil chart, or one this build has not loaded, answers the handle alone.
+func Parties(chart func() *org.Organization) func(string) tracker.Party {
+	return func(handle string) tracker.Party {
+		party := tracker.PartyOf(handle)
+		if chart == nil {
+			return party
+		}
+		o := chart()
+		if o == nil {
+			return party
+		}
+		// NIL LOOKUP, so a `${VAR}` binding resolves against this
+		// process's own environment, which is where every other
+		// consumer of `contact` resolves one.
+		party.OperatorID = o.SeatByHandle(handle).ResolvedOperatorID(nil)
+		return party
+	}
 }
 
 // describe renders one resolved colleague.

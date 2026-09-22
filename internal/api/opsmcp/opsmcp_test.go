@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -36,7 +37,7 @@ func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 	only := opsmcp.New(opsmcp.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
+			Merges: stubWorkMerger, Actor: opsmcp.WorkActor(nil),
 		},
 	})
 	if only == nil {
@@ -63,7 +64,7 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	t.Parallel()
 	ctx := auth.WithOperator(t.Context(), "ops-bot")
 
-	actor, err := opsmcp.WorkActor(ctx, nil)
+	actor, err := opsmcp.WorkActor(nil)(ctx, nil)
 	if err != nil {
 		t.Fatalf("WorkActor: %v", err)
 	}
@@ -115,6 +116,96 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	}
 }
 
+// AND A BOUND TOKEN ALSO SAYS WHO IT IS, which is a different field from who
+// it is attributed as.
+//
+// `contact.crewlet_operator_id` binds a Tier A token to a human seat, and that
+// binding answers the question the attribution rule above deliberately does
+// not: whose inbox, whose pins, whose queue. Left unresolved, a founder's own
+// assistant marked a person record named after their credential and their own
+// screen — which asks under their seat — showed an inbox where nothing had
+// ever been read.
+//
+// THE AUTHOR IS ASSERTED IN THE SAME CASE, because the one wrong fix here is
+// to let the seat take the author field over: that is a write attributed to a
+// person the caller named, and a tracker whose author field is chosen by the
+// writer is not an audit trail.
+func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
+	t.Parallel()
+	chart := func() *org.Organization {
+		o := &org.Organization{
+			Name: "Nimbus",
+			Roles: []*org.Role{
+				{Name: "Jane Founder", Kind: org.KindHuman,
+					Contact: &org.HumanContact{CrewletOperatorID: "founder"}},
+				{Name: "CTO"},
+			},
+		}
+		o.Normalize()
+		return o
+	}
+
+	bound, err := opsmcp.WorkActor(chart)(auth.WithOperator(t.Context(), "founder"), nil)
+	if err != nil {
+		t.Fatalf("WorkActor: %v", err)
+	}
+	if bound.Seat != "jane-founder" {
+		t.Errorf("a bound token resolved to seat %q, want jane-founder — the "+
+			"person tools key their record on this", bound.Seat)
+	}
+	if bound.Record() != "jane-founder" {
+		t.Errorf("the record this token writes is %q, want the person's",
+			bound.Record())
+	}
+	// THE ATTRIBUTION IS UNTOUCHED.
+	if bound.Handle != "founder" || bound.Kind != tracker.AuthorOperator ||
+		bound.OperatorID != "founder" {
+
+		t.Errorf("a bound token is attributed as %+v — the author is the "+
+			"credential and the kind says it is not a seat", bound)
+	}
+	// AND THE READ ASKS ABOUT BOTH NAMES, because the rows this person
+	// left behind before the binding carry the credential's.
+	if got := bound.Party().Handles(); len(got) != 2 ||
+		got[0] != "jane-founder" || got[1] != "founder" {
+
+		t.Errorf("the party is %v, want the seat first and the credential "+
+			"behind it", got)
+	}
+
+	// AN UNBOUND TOKEN IS AN ORDINARY STATE — an operator outside the org
+	// chart — and it writes under its own id exactly as before.
+	unbound, err := opsmcp.WorkActor(chart)(auth.WithOperator(t.Context(), "ci"), nil)
+	if err != nil {
+		t.Fatalf("WorkActor for an unbound token: %v", err)
+	}
+	if unbound.Seat != "" {
+		t.Errorf("an unbound token resolved to seat %q", unbound.Seat)
+	}
+	if unbound.Record() != "ci" {
+		t.Errorf("an unbound token writes %q's record, want its own", unbound.Record())
+	}
+
+	// AND A BUILD WITH NO CHART LOADED IS THE SAME ORDINARY STATE rather
+	// than a refusal: the surface is up before a company config is, and a
+	// write with no writer is the only thing this surface may not record.
+	for name, none := range map[string]func() *org.Organization{
+		"no chart seam":   nil,
+		"no chart loaded": func() *org.Organization { return nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := opsmcp.WorkActor(none)(
+				auth.WithOperator(t.Context(), "founder"), nil)
+			if err != nil {
+				t.Fatalf("WorkActor: %v", err)
+			}
+			if got.Seat != "" || got.Record() != "founder" {
+				t.Errorf("with %s the actor is %+v", name, got)
+			}
+		})
+	}
+}
+
 // A REQUEST WITH NO OPERATOR IS REFUSED, not written as nobody. This surface
 // writes to the company, and a write with no writer is the one thing it must
 // never record — so the failure is at the actor rather than deeper, where it
@@ -126,7 +217,7 @@ func TestAWriteWithNoOperatorIsRefused(t *testing.T) {
 		"an empty operator id":       auth.WithOperator(context.Background(), ""),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := opsmcp.WorkActor(ctx, nil); err == nil {
+			if _, err := opsmcp.WorkActor(nil)(ctx, nil); err == nil {
 				t.Error("a write with no operator was attributed rather than refused")
 			}
 			if _, err := opsmcp.PageActor(ctx, nil); err == nil {
@@ -159,7 +250,7 @@ func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	s := opsmcp.New(opsmcp.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
+			Merges: stubWorkMerger, Actor: opsmcp.WorkActor(nil),
 		},
 		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: opsmcp.PageActor},
 	})
@@ -293,7 +384,7 @@ func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
 	s := opsmcp.New(opsmcp.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
+			Merges: stubWorkMerger, Actor: opsmcp.WorkActor(nil),
 		},
 		Pages: builtin.PageDeps{
 			Reader: stubPageReader{}, Writer: stubPageWriter{},

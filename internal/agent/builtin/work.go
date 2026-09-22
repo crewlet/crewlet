@@ -202,6 +202,25 @@ type WorkDeps struct {
 	// colleague who joined this morning and admitting one who left.
 	Seats func() []colleague.Seat
 
+	// Party resolves a handle to the two identities that person's own
+	// records may be filed under — their seat, and the `api.auth` token
+	// bound to it with `contact.crewlet_operator_id`.
+	//
+	// A SEAM RATHER THAN A FIELD ON THE ROSTER, because [Corpus]
+	// deliberately leaves an operator id out: that map is both the
+	// exact-id index and what `lookup_colleague` renders, and a credential
+	// listed beside somebody's Slack id reads as somewhere an agent could
+	// mention them. This is the attribution key, asked for by name.
+	//
+	// A FUNCTION OF THE HANDLE rather than of the caller, because the
+	// party belongs to the person ASKED ABOUT: an operator reading a
+	// report's inbox is handed THAT person's two names from the chart,
+	// never the credential in their own hand.
+	//
+	// Nil answers the handle alone, which is the honest state for a
+	// surface with no chart loaded and the whole truth for every seat.
+	Party func(handle string) tracker.Party
+
 	// Units resolves a project's chart-owned unit at READ time — the
 	// tracker holds no org, because the applier may not read one. Nil
 	// renders every unit unresolved, which is honest rather than empty.
@@ -293,6 +312,21 @@ type Actor struct {
 	// answers "what did this credential do".
 	OperatorID string
 
+	// Seat is the chart seat that credential is BOUND to with
+	// `contact.crewlet_operator_id` — empty for an actor that already IS
+	// a seat, and for a token nobody bound.
+	//
+	// IT CHANGES NO ATTRIBUTION. [Actor.Handle] stays the author and
+	// [Actor.Kind] stays `operator`, because a tracker whose author field
+	// is chosen by the writer is not an audit trail. What it answers is
+	// the OTHER question a person surface asks — whose inbox, whose pins,
+	// whose queue, whose day — and that is the person rather than the
+	// credential in their hand. See [Actor.Record] and [Actor.Party].
+	//
+	// Resolved by the surface, because this package holds no chart: the
+	// operator MCP walks it with `org.Organization.SeatByOperatorID`.
+	Seat string
+
 	// TurnID is the RUN that produced this write — provenance, so an
 	// audit can walk from an item back to the execution that wrote it.
 	TurnID string
@@ -328,6 +362,30 @@ func (a Actor) OperationSeed() string {
 		return a.WorkKey
 	}
 	return a.TurnID
+}
+
+// Record is WHOSE OWN STATE this actor writes and reads: the seat the
+// credential is bound to, or the actor itself where nothing is bound.
+//
+// A seat answers its own handle, which is every in-engine caller. A bound
+// operator answers the person they are, so their assistant's marks and pins
+// land on that person's record rather than on a second one named after a
+// credential. An unbound token answers itself, which is an ordinary state —
+// an operator outside the org chart — and not an error.
+func (a Actor) Record() string {
+	if seat := strings.TrimSpace(a.Seat); seat != "" {
+		return seat
+	}
+	return a.Handle
+}
+
+// Party is who a personal READ is about: [Actor.Record] and, behind it, the
+// credential their older rows may be filed under.
+//
+// The alias is matched against and never rendered — see [tracker.Party] — so
+// a screen is never handed a token where a colleague's handle goes.
+func (a Actor) Party() tracker.Party {
+	return tracker.Party{Handle: a.Record(), OperatorID: a.OperatorID}
 }
 
 // settle waits for a write to reach this node's projection.
@@ -385,6 +443,18 @@ func (d WorkDeps) actor(ctx context.Context, turn *turnctx.Turn) (Actor, error) 
 		return d.Actor(ctx, turn)
 	}
 	return actorFor(turn)
+}
+
+// partyOf is who a personal read about `handle` is about — see
+// [WorkDeps.Party].
+//
+// NO SEAM RESOLVES TO THE HANDLE ALONE, which is exactly what this read did
+// before the seam existed and is still the whole truth for a seat.
+func (d WorkDeps) partyOf(handle string) tracker.Party {
+	if d.Party == nil {
+		return tracker.PartyOf(handle)
+	}
+	return d.Party(handle)
 }
 
 // turnKey is the idempotency key a comment carries, or "" outside a turn.

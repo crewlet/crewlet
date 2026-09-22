@@ -37,6 +37,18 @@ import (
 //	          notification, because being told what to do next by somebody
 //	          else is news and re-ordering your own list is not.
 //
+// # WHOSE record it is, which is not who wrote it
+//
+// All three authorities are about a PERSON, and a person is not the same thing
+// as the credential in their hand: a write made through somebody's own API
+// token is attributed to the TOKEN with author kind `operator`, deliberately,
+// because a tracker whose author field is chosen by the writer is not an audit
+// trail (see internal/api/opsmcp). So the subject these verbs key on is
+// [Writer.Record] — the seat the credential is bound to — while the author on
+// every record they publish stays [Writer.Actor]. Keyed on the actor instead,
+// a founder marking their own inbox through their own assistant wrote a second
+// person record named after their credential.
+//
 // # Why every verb reads the stored row first
 //
 // The three write disjoint parts of one document, so each has to carry the
@@ -89,14 +101,15 @@ const MaxSnoozeAhead = 365 * 24 * time.Hour
 
 // WriteInbox replaces a person's inbox state.
 //
-// ONLY ON BEHALF OF THAT PERSON. The engine writes this as the seat bound to
-// the human — see the file head — so the actor and the handle must be the
-// same, and the refusal says so rather than silently writing nothing.
+// ONLY ON BEHALF OF THAT PERSON — see the file head — so the handle must be
+// the one this writer IS, and the refusal says so rather than silently writing
+// nothing. Which handle that is comes from [Writer.Record]: a person acting
+// through their own credential is the seat it is bound to, not the token.
 func (w *Writer) WriteInbox(ctx context.Context, opID, handle string,
 	read, unread, snoozed []InboxEntry, reasons []Reason,
 	seenThrough Position) (WriteResult, error) {
 
-	if err := ownRecord(w.Actor, handle, "inbox"); err != nil {
+	if err := w.ownRecord(handle, "inbox"); err != nil {
 		return WriteResult{}, err
 	}
 	if err := checkInbox(read, unread, snoozed, reasons, w.Now()); err != nil {
@@ -123,7 +136,7 @@ func (w *Writer) WriteInbox(ctx context.Context, opID, handle string,
 func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 	pinnedViews []string, favorites []Favorite) (WriteResult, error) {
 
-	if err := ownRecord(w.Actor, handle, "pins"); err != nil {
+	if err := w.ownRecord(handle, "pins"); err != nil {
 		return WriteResult{}, err
 	}
 	pinnedViews = cleanHandles(pinnedViews)
@@ -182,7 +195,12 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 	priorities []string, authority PersonAuthority) (WriteResult, error) {
 
 	priorities = cleanHandles(priorities)
-	own := w.Actor == handle
+	// THE PERSON, NOT THE CREDENTIAL. A founder re-ordering their own
+	// queue through their own assistant is writing their OWN list, so it
+	// clears the stamp and wakes nobody — measured through the token it
+	// read as somebody else setting their queue, and the founder was
+	// notified that they had been given instructions by themselves.
+	own := w.Record() == handle
 	switch {
 	case !own && !authority.Lead && !authority.Person:
 		return WriteResult{}, fmt.Errorf("tracker: %s is a seat, is not %s and "+
@@ -279,14 +297,25 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 }
 
 // ownRecord refuses a write on somebody else's half of a person record.
-func ownRecord(actor, handle, what string) error {
-	if actor == handle {
+//
+// AGAINST [Writer.Record] RATHER THAN THE ACTOR, so a person writing through
+// their own credential passes: the record is keyed on who they ARE and the
+// author still names the token they used. Measured the other way, a bound
+// founder's assistant could only ever write the credential's own record and
+// never the founder's.
+//
+// THE REFUSAL NAMES THE RECORD THIS WRITER MAY WRITE, not the actor, because
+// those are now two different strings for exactly the caller this message is
+// for — and a refusal naming a token would send a reader looking for a person
+// by that name.
+func (w *Writer) ownRecord(handle, what string) error {
+	if w.Record() == handle {
 		return nil
 	}
 	return fmt.Errorf("tracker: %s cannot write %s's %s — it is written on "+
 		"behalf of the person whose it is, and somebody else's hand in it is "+
 		"the one thing it must never allow: %w",
-		actor, handle, what, statelog.ErrConflict)
+		w.Record(), handle, what, statelog.ErrConflict)
 }
 
 // checkInbox refuses an inbox nothing could render.
