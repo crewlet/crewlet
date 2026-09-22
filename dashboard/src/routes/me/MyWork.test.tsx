@@ -577,7 +577,12 @@ test("the page publishes the person's coverage, once", async () => {
     return answers;
   });
   for (const answer of published) {
-    expect((answer as { handle?: string }).handle).toBe("ada");
+    const record = answer as { handle?: string; held?: boolean };
+    expect(record.handle).toBe("ada");
+    // ASSERTED ON A FIELD ONLY THE PERSON'S RECORD CARRIES. Both personal
+    // reads answer under the same handle, so a screen that published the
+    // WRONG one would satisfy a handle check and nothing else.
+    expect(record.held).toBe(true);
   }
 });
 
