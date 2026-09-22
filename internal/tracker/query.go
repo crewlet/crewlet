@@ -297,13 +297,14 @@ type Query struct {
 	//
 	// POINTERS, because the empty string is a VALUE on every axis in this
 	// grammar: the absent-value column is a column a board DRAWS — "nobody
-	// is assigned", "untagged", "(not set)" — and `group=` is the spelling
-	// that loads it. Held as plain strings, the one column a board could
-	// not page was the one holding everything nobody had filled in, and
-	// the request that asked for it answered the WHOLE board instead,
-	// which is the widest possible reading of a narrowing somebody asked
-	// for. [Params.Has] tells "named and empty" from "absent", which is
-	// the same rule `blocked=` is read by and the one its own doc states.
+	// is assigned", "untagged", "no due date" — and `group=` is the
+	// spelling that loads it. Held as plain strings, the one column a
+	// board could not page was the one holding everything nobody had
+	// filled in, and the request that asked for it answered the WHOLE
+	// board instead, which is the widest possible reading of a narrowing
+	// somebody asked for. [Params.Has] tells "named and empty" from
+	// "absent", which is the same rule `blocked=` is read by and the one
+	// its own doc states.
 	Group    *string
 	Subgroup *string
 
@@ -320,6 +321,23 @@ type Query struct {
 	// the reader's own `time.Now()` made the row and the filter two
 	// different questions on two different clocks.
 	DayStart time.Time
+
+	// DayEnd and WeekEnd are the other two boundaries of that same
+	// calendar — the instant today ends, and the instant the
+	// Monday-anchored week it sits in does. They are what the
+	// `due:bucket` grouping cuts Today from This week from Later on.
+	//
+	// RESOLVED HERE, beside DayStart, rather than derived from it in SQL.
+	// A day is not always 24 hours and a week is not always 168: a
+	// daylight-saving transition makes one of each an hour shorter or
+	// longer, so `DayStart + 86 400 s` is a different instant from
+	// tomorrow's midnight twice a year in the company's own zone — and a
+	// band cut there would disagree with the `due=range:today..tomorrow`
+	// filter that means the same thing, which is the whole defect this
+	// axis exists to remove. [ResolveDate] owns that calendar, and these
+	// are its `tomorrow` and its `eow`.
+	DayEnd  time.Time
+	WeekEnd time.Time
 
 	Level statelog.ReadLevel
 
@@ -467,10 +485,22 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	if err != nil {
 		return Query{}, err
 	}
+	// AND THE TWO BOUNDARIES THAT DAY AND ITS WEEK END ON, from the same
+	// calendar in the same call — see [Query.DayEnd].
+	dayEnd, err := ResolveDate("tomorrow", now, loc)
+	if err != nil {
+		return Query{}, err
+	}
+	weekEnd, err := ResolveDate("eow", now, loc)
+	if err != nil {
+		return Query{}, err
+	}
 	q := Query{
 		Subtasks:   SubtasksCollapsed,
 		Archived:   ArchivedExclude,
 		DayStart:   dayStart.At,
+		DayEnd:     dayEnd.At,
+		WeekEnd:    weekEnd.At,
 		Dates:      map[string]DateFilter{},
 		View:       p.String("view"),
 		Preset:     p.String("preset"),
@@ -897,7 +927,7 @@ func (q *Query) parseArchived(p Params) error {
 var groupKeys = []string{
 	"status", "status_group", "assignee", "priority", "tag", "type",
 	"project", "unit", "routing_unit", "parent",
-	"due:day", "due:week", "start:week",
+	"due:day", "due:week", groupByDueBucket, "start:week",
 }
 
 func (q *Query) parseGrouping(p Params) error {

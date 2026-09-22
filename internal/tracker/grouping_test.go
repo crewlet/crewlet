@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -613,6 +614,349 @@ func TestASwimlaneBoardIsBoundedByItsCells(t *testing.T) {
 	if lanes == 0 {
 		t.Fatal("a two-axis board drew no lanes, so the cap assertion above " +
 			"is about a shape this reader does not produce")
+	}
+}
+
+// ---- the relative due bands ------------------------------------------- //
+
+// berlinAt is a wall-clock instant in the COMPANY's own zone.
+//
+// SPELLED AS A CALENDAR rather than resolved through [tracker.ResolveDate]:
+// these cases exist to pin where the bands cut, and a case that asked the
+// resolver for its own boundary would move with whatever it was asked to
+// hold. `wednesday` is 16:30 on Wednesday 2031-04-16 in Berlin, so the day is
+// the 16th and the Monday-anchored week runs 14–20 April.
+func berlinAt(t *testing.T, day, clock string) time.Time {
+	t.Helper()
+	at, err := time.ParseInLocation("2006-01-02 15:04:05.999999",
+		day+" "+clock, berlin)
+	if err != nil {
+		t.Fatalf("parse %s %s: %v", day, clock, err)
+	}
+	return at.UTC()
+}
+
+// seedDue files one task with a due date and a status group.
+func seedDue(h *readHarness, id string, due *time.Time, group tracker.StatusGroup) {
+	h.t.Helper()
+	h.seed(id, func(task *tracker.Task) {
+		task.DueAt = due
+		task.StatusGroup = group
+		if group == tracker.GroupDone {
+			task.Status = tracker.StatusDone
+		}
+	})
+}
+
+// bandOf is the band one task landed in, read back off the answer's columns.
+func bandOf(t *testing.T, answer tracker.Answer, id string) (string, bool) {
+	t.Helper()
+	for _, group := range answer.Groups {
+		for _, row := range group.Rows {
+			if row.ID == id {
+				return group.Key, true
+			}
+		}
+	}
+	return "", false
+}
+
+// THE BANDS CUT ON THE QUERY'S OWN DAY, AND ON ITS OWN WEEK.
+//
+// This is the whole of why the axis exists. The row's `overdue` flag and every
+// `due=` filter are already derived against the company's day start; the bands
+// a person reads their day in were cut in the browser, on the browser's
+// midnight and the browser's Monday. Two boundaries for one fact, and for
+// anybody whose local day differs from the company's they disagree by a whole
+// band. Every boundary below is stated in Berlin wall-clock, which is the
+// company's zone in this suite, so a band that moved to UTC midnight — or to
+// a rolling seven days — fails here rather than on somebody's screen.
+func TestTheDueBandsCutOnTheCompanysOwnCalendar(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+
+	// ONE TABLE, SEEDED AND THEN ASSERTED, so a case's expectation cannot
+	// drift from the row it was written for.
+	cases := []struct {
+		id    string
+		day   string
+		clock string
+		group tracker.StatusGroup
+		want  string
+	}{
+		// THE LAST INSTANT BEFORE THE DAY START, twice: the band that
+		// means "you missed this" is the one that also asks whether the
+		// work is still open.
+		{"open-yesterday", "2031-04-15", "23:59:59.999999",
+			tracker.GroupActive, "overdue"},
+		{"done-yesterday", "2031-04-15", "23:59:59.999999",
+			tracker.GroupDone, "earlier"},
+		// THE DAY START ITSELF is today, not yesterday.
+		{"day-start", "2031-04-16", "00:00:00", tracker.GroupNotStarted, "today"},
+		// AND THE LAST SECOND OF THE SAME DAY is still today — the case
+		// a browser cutting on its own midnight gets wrong first.
+		{"day-end", "2031-04-16", "23:59:59", tracker.GroupNotStarted, "today"},
+		// THE FIRST INSTANT AFTER IT is this week.
+		{"tomorrow", "2031-04-17", "00:00:00", tracker.GroupNotStarted, "this_week"},
+		// THE LAST INSTANT OF THE WEEK is still this week: the week is
+		// Monday-anchored, so it ends as Sunday the 20th does.
+		{"week-end", "2031-04-20", "23:59:59.999999",
+			tracker.GroupNotStarted, "this_week"},
+		// AND THE FIRST INSTANT AFTER IT is later.
+		{"next-monday", "2031-04-21", "00:00:00", tracker.GroupNotStarted, "later"},
+		// A FINISHED TASK IS NOT AUTOMATICALLY `earlier`: that band is
+		// work past its date, and this one's date has not come.
+		{"done-ahead", "2031-04-18", "09:00:00", tracker.GroupDone, "this_week"},
+		// AND ONE WITH NO DATE AT ALL, which is a column rather than a
+		// row the board hides. Its empty clock is what says so.
+		{"undated", "", "", tracker.GroupNotStarted, ""},
+	}
+	for _, tc := range cases {
+		if tc.day == "" {
+			seedDue(h, tc.id, nil, tc.group)
+			continue
+		}
+		due := berlinAt(t, tc.day, tc.clock)
+		seedDue(h, tc.id, &due, tc.group)
+	}
+
+	answer := h.ask(map[string]any{
+		"container": "project:ENG", "group_by": "due:bucket",
+		// THE FINISHED WORK HAS TO BE IN THE ANSWER for `earlier` to be
+		// reachable at all — it is empty on an open-only read by
+		// construction, which is the point of it being its own band.
+		"show_closed": "true",
+	})
+
+	for _, tc := range cases {
+		got, held := bandOf(t, answer, tc.id)
+		if !held {
+			t.Errorf("task %s is in no band at all", tc.id)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("task %s bands as %q, want %q — the bands, the "+
+				"overdue flag and every due= filter are cut on one "+
+				"boundary or a screen showing two of them disagrees",
+				tc.id, got, tc.want)
+		}
+	}
+
+	// THE UNDATED COLUMN IS LABELLED, because a board draws a heading
+	// over it and an empty string is not one.
+	undated := groupOf(t, answer, "")
+	if undated.Label != "No due date" {
+		t.Errorf("the undated band reads %q, want the sixth heading",
+			undated.Label)
+	}
+}
+
+// AND THE OVERDUE BAND IS THE ROW'S OWN OVERDUE FLAG.
+//
+// `overdue` means open AND past its date — which is exactly what
+// [tracker.TaskRow.Overdue] and the `due=overdue` filter mean, from the same
+// instant. A band derived from the date alone would put work somebody
+// delivered late under a heading claiming they still owe it.
+func TestTheOverdueBandIsTheRowsOverdueFlag(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+
+	yesterday := berlinAt(t, "2031-04-15", "09:00:00")
+	seedDue(h, "open-late", &yesterday, tracker.GroupActive)
+	seedDue(h, "done-late", &yesterday, tracker.GroupDone)
+
+	answer := h.ask(map[string]any{
+		"container": "project:ENG", "group_by": "due:bucket",
+		"show_closed": "true",
+	})
+	for _, group := range answer.Groups {
+		for _, row := range group.Rows {
+			if wantOverdue := group.Key == "overdue"; row.Overdue != wantOverdue {
+				t.Errorf("task %s bands as %q and carries overdue=%v — the "+
+					"band and the flag are one predicate or a row "+
+					"contradicts its own heading",
+					row.ID, group.Key, row.Overdue)
+			}
+		}
+	}
+	if _, held := bandOf(t, answer, "done-late"); !held {
+		t.Fatal("the finished task is in no band, so this case would pass " +
+			"against a reader that never returned it")
+	}
+	// AND AN OPEN-ONLY READ HAS NO `earlier` BAND, because nothing in it
+	// can be past its date and finished.
+	open := h.ask(map[string]any{
+		"container": "project:ENG", "group_by": "due:bucket",
+	})
+	for _, group := range open.Groups {
+		if group.Key == "earlier" {
+			t.Errorf("an open-only answer drew an Earlier band holding %d "+
+				"tasks, and nothing open can be in one", group.Count)
+		}
+	}
+}
+
+// A BAND IS A COLUMN, so `group=` narrows to it — including the hint.
+//
+// The count hint and the totals share the query's compiled predicate and carry
+// no join, so the axis has to be expressible as one join-free expression. An
+// axis that needed a join would leave the header adding up the whole board
+// while the rows showed a single band of it.
+func TestADueBandNarrowsTheWholeQuery(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+
+	today := berlinAt(t, "2031-04-16", "08:00:00")
+	alsoToday := berlinAt(t, "2031-04-16", "23:59:59")
+	tomorrow := berlinAt(t, "2031-04-17", "10:00:00")
+	yesterday := berlinAt(t, "2031-04-15", "10:00:00")
+	seedDue(h, "today-a", &today, tracker.GroupNotStarted)
+	seedDue(h, "today-b", &alsoToday, tracker.GroupActive)
+	seedDue(h, "this-week", &tomorrow, tracker.GroupNotStarted)
+	seedDue(h, "overdue", &yesterday, tracker.GroupActive)
+	seedDue(h, "undated", nil, tracker.GroupNotStarted)
+
+	answer := h.ask(map[string]any{
+		"container": "project:ENG", "group_by": "due:bucket",
+		"group": "today",
+	})
+	if len(answer.Groups) != 1 || answer.Groups[0].Key != "today" {
+		var keys []string
+		for _, group := range answer.Groups {
+			keys = append(keys, group.Key)
+		}
+		t.Fatalf("group=today drew the columns %v, want only the one asked "+
+			"for", keys)
+	}
+	band := answer.Groups[0]
+	got := map[string]bool{}
+	for _, row := range band.Rows {
+		got[row.ID] = true
+	}
+	if len(got) != 2 || !got["today-a"] || !got["today-b"] {
+		t.Errorf("group=today carries %v, want exactly the two tasks due "+
+			"today", got)
+	}
+	if band.Count != 2 {
+		t.Errorf("the today column counts %d, want 2", band.Count)
+	}
+	// THE HINT IS THE NARROWED SET'S, which is what makes the header of a
+	// single-column view describe that column.
+	if answer.TotalHint != 2 {
+		t.Errorf("group=today reports a total hint of %d over the whole "+
+			"query, want the 2 rows the column holds — the hint and the "+
+			"column disagree, so the axis is not narrowing the shared "+
+			"predicate", answer.TotalHint)
+	}
+	// AND THE UNDATED BAND NARROWS BY THE SAME SPELLING every other axis's
+	// absent value takes.
+	undated := h.ask(map[string]any{
+		"container": "project:ENG", "group_by": "due:bucket",
+		"group": "",
+	})
+	if undated.TotalHint != 1 {
+		t.Errorf("group= (the undated band) reports a hint of %d, want the "+
+			"1 task with no due date", undated.TotalHint)
+	}
+}
+
+// THE BANDS HOLD THEIR DECLARED ORDER, however few of them are drawn.
+//
+// A day is read Overdue, Earlier, Today, This week, Later, No due date. Order
+// the columns by size instead and the headings re-shuffle every time work
+// moves between them, which is a board nobody can learn the shape of — so the
+// fixture makes the LAST band the biggest, and a size-ordered axis fails here.
+func TestTheDueBandsKeepTheirDeclaredOrder(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+
+	yesterday := berlinAt(t, "2031-04-15", "10:00:00")
+	today := berlinAt(t, "2031-04-16", "10:00:00")
+	nextMonth := berlinAt(t, "2031-05-20", "10:00:00")
+	seedDue(h, "overdue", &yesterday, tracker.GroupActive)
+	seedDue(h, "today", &today, tracker.GroupNotStarted)
+	for _, id := range []string{"later-a", "later-b", "later-c"} {
+		seedDue(h, id, &nextMonth, tracker.GroupNotStarted)
+	}
+	seedDue(h, "undated", nil, tracker.GroupNotStarted)
+
+	answer := h.ask(map[string]any{
+		"container": "project:ENG", "group_by": "due:bucket",
+	})
+	var drawn []string
+	for _, group := range answer.Groups {
+		drawn = append(drawn, group.Key)
+	}
+	// NO `earlier` AND NO `this_week`: a band nothing is in is not drawn,
+	// and the four that are keep their places.
+	want := []string{"overdue", "today", "later", ""}
+	if len(drawn) != len(want) {
+		t.Fatalf("the answer drew the bands %v, want %v", drawn, want)
+	}
+	for i := range want {
+		if drawn[i] != want[i] {
+			t.Fatalf("the answer drew the bands %v, want %v — the declared "+
+				"order is the axis's own, and the biggest column is last "+
+				"here precisely so a size-ordered one fails", drawn, want)
+		}
+	}
+	// AND EACH HEADING IS THE WORD A PERSON READS, not the stored slug.
+	for _, want := range []struct{ key, label string }{
+		{"overdue", "Overdue"}, {"today", "Today"},
+		{"later", "Later"}, {"", "No due date"},
+	} {
+		if got := groupOf(t, answer, want.key).Label; got != want.label {
+			t.Errorf("the %q band reads %q, want %q", want.key, got, want.label)
+		}
+	}
+}
+
+// AND THE BANDS SURVIVE BEING THE INNER AXIS OF A SWIMLANE BOARD.
+//
+// The bands are the one axis whose EXPRESSION carries values of its own —
+// three instants, four placeholders — and a placeholder binds in textual
+// order. As a lane the expression is written into the SELECT of a statement
+// that already carries the outer axis's join and the outer column's own
+// predicate, so an arrangement that bound the expression's values with the
+// join's silently cuts the bands on whatever number happened to be next.
+func TestTheDueBandsAreAnInnerAxisToo(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+
+	yesterday := berlinAt(t, "2031-04-15", "10:00:00")
+	today := berlinAt(t, "2031-04-16", "10:00:00")
+	h.seed("ana-overdue", func(task *tracker.Task) {
+		task.DueAt, task.Assignee = &yesterday, "ana"
+		task.StatusGroup = tracker.GroupActive
+	})
+	h.seed("ana-today", func(task *tracker.Task) {
+		task.DueAt, task.Assignee = &today, "ana"
+	})
+	h.seed("bob-today", func(task *tracker.Task) {
+		task.DueAt, task.Assignee = &today, "bob"
+	})
+
+	answer := h.ask(map[string]any{
+		"container": "project:ENG", "group_by": "assignee",
+		"group_by2": "due:bucket",
+	})
+	ana := groupOf(t, answer, "ana")
+	var lanes []string
+	for _, lane := range ana.Subgroups {
+		lanes = append(lanes, lane.Key)
+	}
+	if len(lanes) != 2 || lanes[0] != "overdue" || lanes[1] != "today" {
+		t.Fatalf("ana's lanes are %v, want overdue then today", lanes)
+	}
+	for _, lane := range ana.Subgroups {
+		if len(lane.Rows) != 1 {
+			t.Errorf("ana's %q lane carries %d rows, want 1",
+				lane.Key, len(lane.Rows))
+		}
+	}
+	bob := groupOf(t, answer, "bob")
+	if len(bob.Subgroups) != 1 || bob.Subgroups[0].Key != "today" {
+		t.Errorf("bob's lanes are %v, want only today", bob.Subgroups)
 	}
 }
 

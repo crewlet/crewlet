@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Grouping: the board's columns, and why a grouped answer is a different shape
@@ -121,7 +123,16 @@ type groupAxis struct {
 	// Expr is what the value is, and Join what it needs to reach it.
 	Expr string
 	Join string
-	Args []any
+
+	// ExprArgs and JoinArgs are what each of those two binds, and they
+	// are SEPARATE because a placeholder binds in TEXTUAL order and the
+	// two halves are written in different places: the expression appears
+	// in the SELECT of the count statement and in the WHERE of every
+	// narrowed one, the join always between them. Held as one list they
+	// were correct only for an axis whose expression carried no values,
+	// which every axis did until the relative due bands arrived with four.
+	ExprArgs []any
+	JoinArgs []any
 
 	// Multi marks an axis on which one task appears in SEVERAL groups —
 	// only a tag today. It is not an error: a task with three labels is on
@@ -142,6 +153,13 @@ type groupAxis struct {
 	// no such order and falls back to the largest column first.
 	Order []string
 
+	// Labels is what a person reads where the stored value is not the
+	// word: a custom field's option ids, and the relative due bands'
+	// slugs. Absent on every axis that stores the word already, because a
+	// label derived where none is needed would be a second name for one
+	// value.
+	Labels map[string]string
+
 	// Exists is the JOIN-FREE form of this axis as a predicate, used when
 	// `group=<value>` narrows the whole query. It has to be join-free
 	// because the narrowed predicate is shared with the count hint and
@@ -157,13 +175,22 @@ func (a groupAxis) filter(key string) (string, []any) {
 		return a.Exists(key)
 	}
 	if key == "" {
-		return "(" + a.Expr + " IS NULL OR " + a.Expr + " = '')", nil
+		// THE EXPRESSION IS WRITTEN TWICE HERE, so whatever it binds is
+		// bound twice: a second copy taking its arguments from the
+		// predicate beside it is how an expression with values of its
+		// own silently answers a different question.
+		return "(" + a.Expr + " IS NULL OR " + a.Expr + " = '')",
+			append(append([]any{}, a.ExprArgs...), a.ExprArgs...)
 	}
-	return a.Expr + " = ?", []any{key}
+	return a.Expr + " = ?", append(append([]any{}, a.ExprArgs...), key)
 }
 
 // compileGroup turns a grouping key into its axis.
-func compileGroup(key string, fields map[string]resolvedField) (groupAxis, error) {
+//
+// `window` is the query's own calendar, which only the relative due bands
+// read — see [dayWindow].
+func compileGroup(key string, fields map[string]resolvedField,
+	window dayWindow) (groupAxis, error) {
 	if ref, ok := strings.CutPrefix(key, FieldKeyPrefix); ok && ref != "" {
 		field, held := fields[ref]
 		if !held {
@@ -191,9 +218,15 @@ func compileGroup(key string, fields map[string]resolvedField) (groupAxis, error
 			Join: " LEFT JOIN tracker_field_values gv ON gv.task_id = t.id" +
 				" AND gv.field_id = ? AND " +
 				strings.ReplaceAll(liveFieldValue, "v.", "gv.") + pin,
-			Args:  []any{field.ID},
-			Multi: field.Multi,
-			Unset: "(not set)",
+			JoinArgs: []any{field.ID},
+			Multi:    field.Multi,
+			Unset:    "(not set)",
+			// FROM THE LABEL MAP, never by inverting
+			// [resolvedField.Options]: that one holds two keys per
+			// option, so an inversion picks the slug or the name by
+			// Go's randomised map iteration and a column heading
+			// would differ between two requests to one node.
+			Labels: field.Labels,
 			Exists: func(key string) (string, []any) {
 				inner := "SELECT 1 FROM tracker_field_values v " +
 					"WHERE v.task_id = t.id AND v.field_id = ? AND " +
@@ -254,8 +287,166 @@ func compileGroup(key string, fields map[string]resolvedField) (groupAxis, error
 		return groupAxis{Expr: weekBucket("t.due_at"), Unset: "(no due date)"}, nil
 	case "start:week":
 		return groupAxis{Expr: weekBucket("t.start_at"), Unset: "(no start date)"}, nil
+	case groupByDueBucket:
+		return dueBucketAxis(window)
 	}
 	return groupAxis{}, fmt.Errorf("tracker: %q is not a grouping", key)
+}
+
+// groupByDueBucket is the grouping key for the relative due bands.
+//
+// A CONSTANT, unlike every axis key beside it, because the two places that
+// name one are in different files here: a key in [groupKeys] the switch below
+// does not compile parses cleanly and then fails the read it was accepted
+// for.
+const groupByDueBucket = "due:bucket"
+
+// dayWindow is the calendar a relative grouping cuts on: the query's own day
+// start, the instant that day ends, and the instant its week does.
+//
+// CARRIED FROM THE QUERY rather than derived in SQL from one instant, and
+// [Query.DayEnd] says why: a day is not always 24 hours and a week is not
+// always 168, so arithmetic on the day start lands somewhere the `due=`
+// filters do not, twice a year.
+type dayWindow struct {
+	Start   time.Time
+	DayEnd  time.Time
+	WeekEnd time.Time
+}
+
+// dayWindow is the calendar this query resolved for itself.
+func (q Query) dayWindow() dayWindow {
+	return dayWindow{Start: q.DayStart, DayEnd: q.DayEnd, WeekEnd: q.WeekEnd}
+}
+
+// dueBucket is one band of [groupByDueBucket].
+//
+// # ONE BOUNDARY FOR ONE FACT
+//
+// "Overdue · Today · This week · Later" is the question somebody opens their
+// own work to ask, and it is the one grouping a company cannot answer from a
+// stored value: every other axis reads a column, and this one reads a column
+// against a calendar. Computed by the reader it is cut on the READER's
+// midnight and the reader's week, while the engine derives [TaskRow.Overdue]
+// and compiles every `due=` filter against the COMPANY's day start — so for
+// anybody whose local day differs from the company's, a task landed under
+// "Earlier" on a row the same answer flagged as due today and not overdue.
+// As an axis the bands, the flag and the filters are cut once, in one place,
+// from [Query.DayStart] and the two boundaries beside it.
+//
+// # AND THERE ARE SIX BANDS, not the five a day is usually read in
+//
+// `overdue` means OPEN and past its date, so work that was finished late is
+// past its date and not overdue: calling it Overdue would be a false claim
+// about work somebody delivered, and calling it Today would invent a date
+// nobody set. [dueEarlier] is where it belongs. It is empty on an answer that
+// carries only open work — which is every answer that does not ask for
+// `show_closed` — because nothing there can be in it.
+type dueBucket string
+
+const (
+	dueOverdue  dueBucket = "overdue"
+	dueEarlier  dueBucket = "earlier"
+	dueToday    dueBucket = "today"
+	dueThisWeek dueBucket = "this_week"
+	dueLater    dueBucket = "later"
+
+	// dueNone is a task with no due date, and it is the EMPTY key for the
+	// reason every other axis's absent value is: [groupCounts] labels that
+	// column from [groupAxis.Unset], and `group=` narrows to it by the
+	// same spelling on every axis in the grammar.
+	dueNone dueBucket = ""
+)
+
+// dueBands is the axis's DECLARED ORDER and the word each band is drawn
+// under, in ONE table so the two can never disagree — and the two derived
+// forms below are what the axis is actually built from, so neither is a
+// second list to keep in step.
+var dueBands = []struct {
+	Key   dueBucket
+	Label string
+}{
+	{dueOverdue, "Overdue"},
+	{dueEarlier, "Earlier"},
+	{dueToday, "Today"},
+	{dueThisWeek, "This week"},
+	{dueLater, "Later"},
+	// NO PARENTHESES, unlike the `(no due date)` on `due:day`: there the
+	// label is the parenthetical this grammar uses for a value simply
+	// missing from an open set, and here it is the sixth HEADING of a
+	// closed one, read in the same voice as the five above it.
+	{dueNone, "No due date"},
+}
+
+// dueBandOrder and dueBandLabels are [dueBands] read the two ways the axis
+// needs it, derived ONCE rather than per query.
+var dueBandOrder, dueBandLabels = func() ([]string, map[string]string) {
+	order := make([]string, 0, len(dueBands))
+	labels := make(map[string]string, len(dueBands))
+	for _, band := range dueBands {
+		order = append(order, string(band.Key))
+		labels[string(band.Key)] = band.Label
+	}
+	return order, labels
+}()
+
+// dueBucketAxis is [groupByDueBucket] compiled.
+func dueBucketAxis(window dayWindow) (groupAxis, error) {
+	// A ZERO CALENDAR IS REFUSED RATHER THAN CUT ON. Every boundary here
+	// is a resolved instant and the zero one is 1 January year one, so a
+	// window nobody resolved does not fail — it silently answers `later`
+	// for every dated task in the company. [ParseQuery] resolves all
+	// three; a [Query] built any other way has to as well.
+	if window.Start.IsZero() || window.DayEnd.IsZero() || window.WeekEnd.IsZero() {
+		return groupAxis{}, fmt.Errorf("tracker: group_by=%s needs the day, "+
+			"day-end and week-end boundaries ParseQuery resolves, and this "+
+			"query carries none", groupByDueBucket)
+	}
+	expr, args := dueBucketCase(window)
+	return groupAxis{
+		Expr: expr, ExprArgs: args,
+		Order: dueBandOrder,
+		// THE UNSET COLUMN'S LABEL COMES FROM THE SAME TABLE as the
+		// other five, so the six headings are declared once.
+		Unset:  dueBandLabels[string(dueNone)],
+		Labels: dueBandLabels,
+	}, nil
+}
+
+// dueBucketCase renders the bands as ONE self-contained CASE.
+//
+// SELF-CONTAINED AND JOIN-FREE, because `group=today` narrows the WHOLE query
+// through [groupAxis.filter]: the count hint and the totals share that
+// predicate and carry no join, so an axis that needed one would leave a header
+// adding up the whole board while the rows showed a single band of it.
+//
+// THE ARMS ARE ORDERED AND EACH NARROWS WHAT THE ONE BEFORE IT LEFT. Past the
+// first two every dated row is at or after the day start, so `< DayEnd` is
+// today and `< WeekEnd` is the rest of this week. The first arm carries the
+// open condition because that is what `overdue` MEANS — the same condition
+// [openGroupsSQL] gives the `due=overdue` filter — and the second is what is
+// left of "past its date": work that was finished late.
+//
+// On a Sunday the week ends where the day does, so the `this_week` arm matches
+// nothing. That is the honest answer for a Monday-anchored week rather than a
+// rolling seven days, which would band a task under "this week" that the
+// `due=eow` bound beside it excludes.
+//
+// The bounds are MICROSECONDS, which is what [store.EncodeTime] writes.
+func dueBucketCase(window dayWindow) (string, []any) {
+	arm := func(bucket dueBucket) string { return " THEN '" + string(bucket) + "'" }
+	return "CASE" +
+			" WHEN t.due_at IS NULL" + arm(dueNone) +
+			" WHEN t.due_at < ? AND t.status_group IN (" + openGroupsSQL + ")" +
+			arm(dueOverdue) +
+			" WHEN t.due_at < ?" + arm(dueEarlier) +
+			" WHEN t.due_at < ?" + arm(dueToday) +
+			" WHEN t.due_at < ?" + arm(dueThisWeek) +
+			" ELSE '" + string(dueLater) + "' END",
+		[]any{
+			store.EncodeTime(window.Start), store.EncodeTime(window.Start),
+			store.EncodeTime(window.DayEnd), store.EncodeTime(window.WeekEnd),
+		}
 }
 
 // dayBucket renders an instant column as its own calendar day, in UTC.
@@ -308,7 +499,11 @@ func groupCounts(ctx context.Context, tx *sql.Tx, axis groupAxis,
 	          GROUP BY g
 	          ORDER BY ` + order + `
 	          LIMIT ?`
-	bound := append(append([]any{}, axis.Args...), args...)
+	// IN STATEMENT ORDER: the expression is written in the SELECT, the
+	// join after it, the predicate after that — and a placeholder binds
+	// where it is written.
+	bound := append(append([]any{}, axis.ExprArgs...), axis.JoinArgs...)
+	bound = append(bound, args...)
 	rows, err := tx.QueryContext(ctx, query, append(bound, limit+1)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("tracker: count the groups: %w", err)
@@ -358,41 +553,43 @@ func groupRows(ctx context.Context, tx *sql.Tx, axis groupAxis, key string,
 	// carries the axis's join for the GROUP BY's sake, so comparing the
 	// joined column is one predicate rather than a second subquery.
 	clause, values := axis.joinedFilter(key)
-	rows, _, err := readTasksJoined(ctx, tx, axis.Join, axis.Args,
+	rows, _, err := readTasksJoined(ctx, tx, axis.Join, axis.JoinArgs,
 		"("+where+") AND "+clause,
 		append(append([]any{}, args...), values...), terms, limit, dayStart)
 	return rows, err
 }
 
 // joinedFilter is the axis as a predicate on the column its own join reached.
+//
+// The expression's own bindings ride with it for the reason [groupAxis.filter]
+// gives, and the empty key writes it twice there too.
 func (a groupAxis) joinedFilter(key string) (string, []any) {
 	if key == "" {
-		return "(" + a.Expr + " IS NULL OR " + a.Expr + " = '')", nil
+		return "(" + a.Expr + " IS NULL OR " + a.Expr + " = '')",
+			append(append([]any{}, a.ExprArgs...), a.ExprArgs...)
 	}
-	return a.Expr + " = ?", []any{key}
+	return a.Expr + " = ?", append(append([]any{}, a.ExprArgs...), key)
 }
 
-// groupLabels fills in what a person reads where the store keeps an id.
+// groupLabels fills in what a person reads where the stored value is not the
+// word.
 //
-// ONLY A CUSTOM FIELD'S OPTIONS NEED IT TODAY: every other axis stores the
-// word already, and a label derived where none is needed would be a second
-// name for one value.
-func groupLabels(groups []Group, key string, fields map[string]resolvedField) {
-	ref, ok := strings.CutPrefix(key, FieldKeyPrefix)
-	if !ok || ref == "" {
+// FROM THE AXIS, which is the only frame that knows: a custom field's options
+// are the company's own and a due band's slug is this package's, and a caller
+// holding nothing but the grouping KEY would have to resolve the field again
+// to find either. Every other axis leaves [groupAxis.Labels] empty, because a
+// label derived where none is needed would be a second name for one value.
+//
+// THE UNSET COLUMN KEEPS WHAT [groupCounts] GAVE IT, which is why this only
+// fills a label that is still empty: that one comes from [groupAxis.Unset] on
+// every axis in the grammar.
+func groupLabels(groups []Group, axis groupAxis) {
+	if len(axis.Labels) == 0 {
 		return
 	}
-	field, held := fields[ref]
-	if !held || len(field.Labels) == 0 {
-		return
-	}
-	// FROM THE LABEL MAP, never by inverting [resolvedField.Options]:
-	// that one holds two keys per option, so an inversion picks the slug
-	// or the name by Go's randomised map iteration and a column heading
-	// would differ between two requests to one node.
 	for i := range groups {
 		if groups[i].Label == "" {
-			groups[i].Label = field.Labels[groups[i].Key]
+			groups[i].Label = axis.Labels[groups[i].Key]
 		}
 	}
 }
@@ -486,7 +683,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	if err := checkGroupBreadth(ctx, tx, q, where, args); err != nil {
 		return grouped{}, err
 	}
-	axis, err := compileGroup(q.GroupBy, fields)
+	axis, err := compileGroup(q.GroupBy, fields, q.dayWindow())
 	if err != nil {
 		return grouped{}, err
 	}
@@ -513,7 +710,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	if err != nil {
 		return grouped{}, err
 	}
-	groupLabels(groups, q.GroupBy, fields)
+	groupLabels(groups, axis)
 
 	for i := range groups {
 		rows, err := groupRows(ctx, tx, axis, groups[i].Key, where, args,
@@ -544,7 +741,7 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, outer groupAxis, key string,
 	where string, args []any, terms []sortTerm, rowsPer int) ([]Group, int, error) {
 
-	inner, err := compileGroup(q.GroupBy2, fields)
+	inner, err := compileGroup(q.GroupBy2, fields, q.dayWindow())
 	if err != nil {
 		return nil, 0, err
 	}
@@ -555,8 +752,10 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	scoped := "(" + where + ") AND " + outerClause
 	bound := append(append([]any{}, args...), outerArgs...)
 	joined := groupAxis{
-		Expr: inner.Expr, Join: outer.Join + inner.Join,
-		Args:  append(append([]any{}, outer.Args...), inner.Args...),
+		Expr: inner.Expr, ExprArgs: inner.ExprArgs,
+		Join: outer.Join + inner.Join,
+		JoinArgs: append(append([]any{}, outer.JoinArgs...),
+			inner.JoinArgs...),
 		Multi: inner.Multi, Unset: inner.Unset,
 	}
 	// BOTH JOINS' ARGUMENTS RIDE ON THE AXIS, in statement order: the
@@ -573,7 +772,7 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	if err != nil {
 		return nil, 0, err
 	}
-	groupLabels(counts, q.GroupBy2, fields)
+	groupLabels(counts, inner)
 	for i := range counts {
 		rows, err := groupRows(ctx, tx, joined, counts[i].Key, scoped, bound,
 			terms, rowsPer, q.DayStart)

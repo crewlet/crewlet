@@ -880,7 +880,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		// predicate and carry no join, so an axis expressed only as one
 		// would leave a header adding up the whole board while the rows
 		// showed a single column of it.
-		axis, err := compileGroup(q.GroupBy, fields)
+		axis, err := compileGroup(q.GroupBy, fields, q.dayWindow())
 		if err != nil {
 			return "", nil, err
 		}
