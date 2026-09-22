@@ -124,9 +124,8 @@ func TestARefusalInAnUnknownShapeIsNotReportedAsSilence(t *testing.T) {
 //
 // The bound is a CEILING rather than a guide, so the marker fits INSIDE it:
 // [textcut.Within], not Ellipsis. One marking policy for one value class —
-// this arm, the shared fallback beside it and the other three vendors that
-// share the rule all cut the same way, because a commit shipping two
-// policies for one value is how they stop agreeing.
+// this arm and the shared fallback beside it cut the same way, because a
+// commit shipping two policies for one value is how they stop agreeing.
 func TestARefusalMessageIsBoundedMarkedAndRuneSafe(t *testing.T) {
 	t.Parallel()
 	// Multi-byte throughout, so a byte slice anywhere inside it is invalid

@@ -1508,7 +1508,8 @@ that cap rather than at the end of the trace. Follow the trace rather
 than expecting the feed to hold every cause it named — and where
 `truncated` is set, the recovery is partial by exactly that cut: the
 trace read is ordered forwards, so it returns the oldest 500 rows of
-that trace and a sibling below them is in neither answer.
+that trace and a sibling past them — newer than the 500th — is in
+neither answer.
 
 **Your cursor and your window bound the trace expansion too.** Both reads
 behind an `agent` page — the direct matches, and the other rows of their
@@ -1661,7 +1662,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 
 | `kind` | When | `data` |
 |--------|------|--------|
-| `snapshot` | First envelope after the upgrade succeeds, and again on reconnect. | Same payload as `GET /stream/snapshot` — agents carry their in-flight `live_call`, so a reconnect re-renders the live row. |
+| `snapshot` | Sent at open, and again on reconnect. | Same payload as `GET /stream/snapshot` — agents carry their in-flight `live_call`, so a reconnect re-renders the live row. |
 | `event`    | Every engine event published to `crewlet.events.>`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, payload }` — the same shape as a `/events` row, plus the full event `payload` (from which the snapshot feed's `failed` flag is derived).  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; `agent_turn_progress` events (per tool-call round, tagged with `turn_id` / `phase` / `iteration`) stream the in-flight call before its phase record exists. |
 | `agents`   | After an event moved one or more agents. | The changed agents' overlays, each with its `role` — the *result* of applying the event, so a client merges them rather than running its own state machine over the raw stream. |
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |

@@ -37,16 +37,10 @@ import (
 
 // OneSidedRepairAge is how old an edge must be before the duty repairs it.
 //
-// IT IS [ClaimStale], thirty seconds, DERIVED from it rather than spelled as a
-// second literal beside it. The two are ONE quantity — how long a gesture that
-// is still running may reasonably take to reach its own last step — and a
-// literal whose comment merely asserts it matches another is how one of a pair
-// moves and the other silently does not, which is this tree's most repeated
-// lesson (`textcut`, `whsec`, `jsprovision`). Shorter and the duty races live
-// writers, publishing a mirror the gesture was about to publish itself — two
-// records on one subject where one would do, and a second wake for the
-// blocker's assignee. Longer and a dependency written during a node's restart
-// sits unannounced for no reason.
+// Shorter and the duty races live writers, publishing a mirror the gesture was
+// about to publish itself — two records on one subject where one would do, and
+// a second wake for the blocker's assignee. Longer and a dependency written
+// during a node's restart sits unannounced for no reason.
 //
 // It is measured against the AUTHORED instant carried on the EDGE rather than
 // against the task's `updated_at`, because any unrelated edit resets that

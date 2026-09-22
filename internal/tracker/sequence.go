@@ -116,16 +116,16 @@ const (
 
 	// ClaimTTL is how long the durable claim a walking sequence holds
 	// survives unrenewed. FOUR HEARTBEATS, so three consecutive misses are
-	// survivable and the fourth hands the walk to the duty.
+	// survivable.
 	ClaimTTL = 60 * time.Second
 
 	// ClaimHeartbeat is how often the holder renews that claim — a quarter
 	// of [ClaimTTL], which is the arithmetic its own comment rests on.
 	ClaimHeartbeat = 15 * time.Second
 
-	// ClaimStale is when a duty may complete somebody else's abandoned
-	// walk: half the TTL past its last heartbeat, which is the point at
-	// which a holder that is still alive would have renewed twice.
+	// ClaimStale is half the TTL past its last heartbeat, which is the
+	// point at which a holder that is still alive would have renewed
+	// twice.
 	ClaimStale = 30 * time.Second
 )
 
@@ -762,9 +762,9 @@ func (h *held) beat(ctx context.Context) {
 		case <-ticker.C:
 			// A FAILED RENEW IS NOT FATAL HERE. The claim's TTL is four
 			// heartbeats, so three misses are survivable, and the walk
-			// that would be abandoned on the fourth is idempotent and
-			// completed by the duty. Tearing the walk down on the first
-			// blip would abandon more of them, not fewer.
+			// that would be abandoned on the fourth is idempotent.
+			// Tearing the walk down on the first blip would abandon more
+			// of them, not fewer.
 			_, _ = h.claims.Renew(ctx, h.resource, h.owner, h.epoch, ClaimTTL)
 		}
 	}

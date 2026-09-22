@@ -383,7 +383,7 @@ func TestEveryRenderedStreamCarriesItsOwnDropCount(t *testing.T) {
 		}
 	}
 	// With nothing on stderr the failure tail falls to what was parsed out
-	// of stdout, which is a substring of that stream and inherits its cap.
+	// of stdout.
 	quiet := &rawResult{stdout: "out", droppedStdout: 11}
 	if got := quiet.failureTailText("parsed"); !strings.Contains(got, "11") {
 		t.Errorf("a parsed answer did not inherit stdout's drop count:\n%s", got)
