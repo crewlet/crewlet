@@ -620,7 +620,15 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 		return nil, fmt.Errorf("tracker: read the history of %s: %w", taskID, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var out []HistoryEntry
+	// SIZED TO THE PAGE, which is what [readActivity] does over the same
+	// table for the same reason: `limit` is known before the first scan,
+	// and growing from nil reallocates six times on the way to a default
+	// page of [DetailHistoryDefault]. It also holds the rule
+	// [readProjectRows] states at length — an answer's list is `[]` and
+	// never nil — although a task's history has no reachable empty case to
+	// exercise it: a create writes a row, so every task this reader can
+	// find has at least one.
+	out := make([]HistoryEntry, 0, limit)
 	for rows.Next() {
 		var e HistoryEntry
 		var actorKind, fields string
@@ -662,7 +670,8 @@ func readLinks(ctx context.Context, tx *sql.Tx, taskID string) ([]DetailLink, er
 		LEFT JOIN tracker_tasks t ON t.id = %s
 		WHERE %s = ?
 		ORDER BY r.kind, %s`
-	var out []DetailLink
+	// NEVER NIL — see [readHistory] and [readProjectRows].
+	out := []DetailLink{}
 	for _, q := range []struct {
 		statement string
 		derived   bool

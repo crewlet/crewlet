@@ -145,6 +145,11 @@ func (c ProjectCensus) Total() int { return c.Active + c.Archived }
 
 // ProjectListing is the answer.
 type ProjectListing struct {
+	// Projects is EMPTY RATHER THAN ABSENT when the asked set holds none,
+	// and never nil: the field carries no `omitempty`, so a nil slice is
+	// `"projects": null` on the wire — a third state beside "some" and
+	// "none" that every reader has to have thought about, and the one this
+	// listing's own client had not. See [readProjectRows].
 	Projects []ProjectRow `json:"projects"`
 
 	// Total is how many projects match the filter, and Truncated says the
@@ -538,7 +543,16 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []ProjectRow
+	// AN ANSWER'S LIST IS NEVER NIL, and that is a wire property rather
+	// than a taste: [ProjectListing.Projects] carries no `omitempty`, so a
+	// nil slice here encodes as `"projects": null` and the only client of
+	// this answer reads `projects?.length === 0` to decide whether the
+	// company has any. On a company with none that test was `undefined ===
+	// 0` — false — so the landing screen drew the ordinary list instead of
+	// the panel that says where a project comes from, and did it on exactly
+	// the day-one state the panel exists for. Every fixture said `[]`,
+	// because a fixture is written by somebody who knows the answer.
+	out := make([]ProjectRow, 0, limit)
 	for rows.Next() {
 		var row ProjectRow
 		var unit string
