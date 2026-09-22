@@ -2221,9 +2221,22 @@ details > summary.int-summary::-webkit-details-marker {
   padding: 0 var(--space-2) var(--space-2);
   /* THE COLUMN SCROLLS, NOT THE PAGE — see the section head. */
   overflow-y: auto;
+  /* A LANE IS A RANGE, NOT A CEILING. `flex: 1 1 auto` below fills whatever
+     height the TALLEST lane sets, which answers a short column next to a long
+     one and nothing else: a board whose lanes are all short — one status, one
+     card — had no tall lane to take a height from, so the body closed
+     directly under its single card (measured at 105px, in a column 138px tall
+     head and all) and read as a stray panel somebody left on the screen
+     rather than as a place work belongs.
+     260px is two cards' worth of lane: a card with a title, a foot and the
+     gap under it measures ~97px, so two plus the column's own bottom inset is
+     ~210px, and the rest is the empty run that says this lane takes more.
+     The ceiling stays, and the two are a real range rather than one bound:
+     under a viewport shorter than ~420px the `62dvh` term falls below the
+     floor and the floor wins, which is the right way round — a lane that can
+     hold one card and scroll beats a lane too short to hold one. */
+  min-height: 260px;
   max-height: min(62dvh, 620px);
-  /* Fills whatever height the tallest lane sets, so a short column is a
-     lane with space rather than a panel that ended. */
   flex: 1 1 auto;
 }
 .work-col-foot {
@@ -2401,8 +2414,27 @@ details > summary.int-summary::-webkit-details-marker {
      what state — and each is a fixed or content width, so the title always
      starts at one x. It used to open with the type icon and put the status
      after the title, which is the one arrangement where the state of a task
-     moves with the length of its name. */
-  grid-template-columns: 16px 74px auto minmax(0, 1fr) auto auto auto auto;
+     moves with the length of its name.
+
+     THE FIRST TRACK CARRIES THE ROW'S OWN INSET AS WELL AS THE MARK. A
+     subgrid item's margin, border and padding are SUBTRACTED from the first
+     and last tracks it spans, and `.work-row` below pads itself by
+     `--row-inline` so a hover tints the row edge to edge rather than a box
+     floating inside the panel. A browser adds that inset back when it sizes a
+     CONTENT-based track — the trailing `auto` holding the timestamp comes out
+     16px wider, which is why the right-hand end has always looked right — but
+     it cannot add it to a fixed one. `--row-inline` is `--space-4`, 16px at
+     the default density, and the priority track was a bare `16px`: the cell
+     resolved to EXACTLY ZERO wide, the mark overflowed it into the gutter,
+     and it came to rest on the key. Measured at 1400px: the mark spanning
+     [37,49] against a key starting at 49, so `↑LEAD-3` read as one identifier
+     with a stray character on the front.
+     STATED AS THE TOKEN PLUS A LITERAL, which is also the only form that
+     holds at every density: the inset term is `--space-4` and follows the
+     density multiplier exactly as the row's padding does, while the mark is a
+     glyph of a fixed size and does not. A literal 32px would be right at one
+     setting and wrong at the other two. */
+  grid-template-columns: calc(var(--row-inline) + 16px) 74px auto minmax(0, 1fr) auto auto auto auto;
   /* THE GUTTER BELONGS TO WHOEVER OWNS THE TRACKS. On a subgridded axis a
      row's own `column-gap` is ignored and the parent's is used — so declared
      on the row it silently became zero, and a type icon sat on top of the
@@ -2527,7 +2559,19 @@ details > summary.int-summary::-webkit-details-marker {
   background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
-  overflow: hidden;
+  /* THE LIST MAKES NO SCROLLPORT OF ITS OWN — the same rule `.grid-wrap` gives
+     in frame.css, and for the same reason. What the panel wants is the rows
+     rounded off at its own radius, which `clip` does exactly as `hidden` did;
+     what `hidden` ADDS is a scroll container, and a sticky box is confined to
+     its nearest one. This panel has no height constraint — it grows to its
+     rows — so its scroll offset is permanently 0, and every `.work-band` above
+     was positioned `--sticky-top` (48px) DOWN from the top of the list rather
+     than held under the toolbar: the band left its own slot blank and painted
+     over the first row of its own group, which was in the DOM, drawn, and
+     covered. Measured on a grouped list at 1400px — the "To do" band at y=137
+     over a first row at y=126, with the 89-126 strip empty. The scroller is
+     `.screen`, which is what the band sticks against now. */
+  overflow: clip;
   min-width: 0;
 }
 .work-band-group {
@@ -2977,13 +3021,23 @@ a.work-cal-chip {
 @media (max-width: 860px) {
   /* The rail becomes a scrolling strip of chips above the head: a company
      with nine projects still needs to reach all nine. */
-  /* FOUR COLUMNS ON A PHONE: type, key, title, status. The tracks are
+  /* FOUR COLUMNS ON A PHONE, and they are the four the ROW still renders, in
+     the order it renders them: key, status, title, type. The tracks are
      re-declared on the LIST, since that is where they live — a row is a
-     subgrid of whatever the list has — and the three cells that are gone
-     are dropped rather than emptied, or they would each still hold a
-     column of nothing. */
+     subgrid of whatever the list has — and the four items that are gone are
+     dropped rather than emptied, or they would each still hold a column of
+     nothing. A `display: none` item takes no track, so what is left simply
+     moves up: the key lands in track one, which is why this list is NOT the
+     desktop list with four tracks lopped off.
+
+     AND TRACK ONE CARRIES THE ROW'S INSET, for the reason the desktop list
+     gives at length: a subgrid item's padding is subtracted from its first
+     and last tracks, so a bare `16px` here left the KEY in a cell zero wide
+     and `PROD-4` painted straight over the status pill beside it. Measured at
+     700px. It is 70px because that is the key's own width, not the mark's —
+     the mark is not drawn at this size at all. */
   .work-rows {
-    grid-template-columns: 16px 70px minmax(0, 1fr) auto;
+    grid-template-columns: calc(var(--row-inline) + 70px) auto minmax(0, 1fr) auto;
   }
   .work-cell-prio,
   .work-cell-due,

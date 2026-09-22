@@ -213,6 +213,29 @@ export function AsksTag({ count }: { count?: number }) {
 }
 
 /**
+ * Whether a card's foot has a single mark to draw.
+ *
+ * EVERY MARK DECIDES ITS OWN ABSENCE by rendering nothing — every mark but
+ * one. [Assignee] draws a dashed "nobody" square instead, deliberately, and
+ * that square's job is to hold a COLUMN OPEN on `.work-row`, which is a grid:
+ * a cell that disappeared there would take its track with it and pull every
+ * later column one place left. A card is inline flow and has no track to hold,
+ * so on a task nobody has touched — no priority, no due date, no estimate, not
+ * blocked, unassigned — the foot came out as that ghost and nothing else,
+ * floated on its own under the title, reading as a control somebody could
+ * press rather than as the absence of five facts.
+ *
+ * So the foot is drawn only when something goes in it, and the ghost stays on
+ * rows. The predicate restates each mark's own emptiness rule from the same
+ * fields, which is the one copy of it and the price of asking the question
+ * BEFORE rendering: a container cannot ask a child that drew nothing whether
+ * it did. A mark that gains a field is a mark that adds it here.
+ */
+function hasFootMarks(row: WorkSummary): boolean {
+  return Boolean(row.blocked || row.due || row.points || row.estimate_min || row.assignee);
+}
+
+/**
  * One task as a board card.
  *
  * The three rows are fixed — identity, title, facts — so a column of cards
@@ -248,17 +271,19 @@ export function BoardCard({
         <PriorityMark priority={row.priority} />
       </div>
       <div className="work-card-title clamp">{row.title}</div>
-      <div className="work-card-foot">
-        {row.blocked && (
-          <Tag variant="danger" appearance="outline">
-            Blocked
-          </Tag>
-        )}
-        <DueMark due={row.due} overdue={row.overdue} now={now} />
-        <SizeMark points={row.points} minutes={row.estimate_min} />
-        <span className="spacer" />
-        <Assignee handle={row.assignee} seatName={chrome.seatName} />
-      </div>
+      {hasFootMarks(row) && (
+        <div className="work-card-foot">
+          {row.blocked && (
+            <Tag variant="danger" appearance="outline">
+              Blocked
+            </Tag>
+          )}
+          <DueMark due={row.due} overdue={row.overdue} now={now} />
+          <SizeMark points={row.points} minutes={row.estimate_min} />
+          <span className="spacer" />
+          <Assignee handle={row.assignee} seatName={chrome.seatName} />
+        </div>
+      )}
     </a>
   );
 }

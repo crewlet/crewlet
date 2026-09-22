@@ -1589,6 +1589,16 @@ What replaced it:
   on List to x≈1338 on Board and x≈1155 on Calendar, and the Overdue chip
   wrapped to a line of its own ~1,200px from the count. A wrap breaks between
   groups.
+- **A panel that rounds a run of rows clips; it does not hide.** The offset
+  above only means anything while the screen is the band's own scroller, and a
+  sticky box is held by the nearest one: a panel wrapped around the rows with
+  `overflow: hidden` becomes that scroller, and because such a panel grows to
+  its rows it can never scroll, so its own offset is permanently zero and the
+  band is pushed `--sticky-top` DOWN from the top of the panel instead. The
+  grouped work list did exactly that — every band left its slot blank and
+  painted over the first row of its own group, one task per group in the DOM,
+  drawn and covered. `overflow: clip` rounds the corners identically and makes
+  no scroller, which is the same decision the data grid's wrap records.
 
 Three rows of buttons, and a table, that behaved differently from a keyboard
 than they looked:
@@ -2400,6 +2410,33 @@ is one of the rules on this page applied to a tracker.
   a value it does not have: an undated, unassigned, unestimated task lines
   its status up with the task above it rather than pulling every later
   column one place left.
+- **And a row's own inset comes out of the tracks at its ends.** A subgrid
+  item's padding is SUBTRACTED from the first and last track it spans, and the
+  row pads itself so a hover tints it edge to edge rather than as a box
+  floating inside the panel. A browser hands that back where the track is
+  sized from content and cannot where it is fixed — so a fixed opening track
+  the same width as the inset resolves to nothing at all. Both of the list's
+  breakpoints had one: on the desktop list the priority mark overflowed a
+  zero-wide cell and came to rest on the key, so `↑LEAD-3` read as one
+  identifier with a stray character on the front; on the phone list, where the
+  mark is not drawn and the key is the first item, the key painted over the
+  status pill beside it. An end track states the inset as well as the column.
+- **A card is not a row, so it holds nothing open.** The dashed "nobody"
+  square exists to keep a row's assignee COLUMN from collapsing; a card is
+  inline flow and has no column to keep. So a card draws its foot only when
+  something goes in it — blocked, a due date, a size, an assignee — and a task
+  nobody has touched is a key and a title. Drawn unconditionally, the foot of
+  such a card was that dashed square alone under the title, which reads as a
+  control somebody could press rather than as the absence of five facts. One
+  fact brings the foot back, and the square with it: "nobody holds this, and
+  it is due on Monday" is the pair a board column is scanned for.
+- **A board lane is a range, not a ceiling.** A lane stretches to whatever
+  height the tallest lane on the board sets, which answers a short column
+  beside a long one and nothing else: a board whose lanes are ALL short — one
+  status, one card — has no tall lane to take a height from, and the lane
+  closed directly under its single card at 138px, reading as a stray panel
+  somebody left on the screen rather than as a place work belongs. So the lane
+  carries a floor of two cards' worth of room as well as its scroll ceiling.
 - **Nothing is drawn for the default.** `normal` priority is what a task gets
   when nobody said, so it is most of a board — a mark on every card is a mark
   that says nothing, and it buries the four that ARE urgent. A due date drops
