@@ -651,6 +651,23 @@ things follow from that, and each is a rule a new column has to keep:
   Without it the card gets a bare mark on a line of its own between two
   labelled ones, which reads as a rendering fault rather than as a value.
   `app/source.test.ts` is what stops one reaching a screen.
+- **A cell with nothing in it is not a line.** A column draws no value on a row
+  that has none — `PriorityMark` renders null for `normal`, which nearly every
+  task is, and every mark whose rule is "nothing is drawn for the default" does
+  the same. In the table that is an empty track under a head, which is correct
+  and is what keeps the row's columns lined up. Here the head is gone and the
+  label is the CELL's own, so the card opened with `PRIORITY` alone on a line
+  with nothing beside it, on every ordinary row — the labelled form of the
+  dashed placeholder the board card already stopped drawing. `.grid-cell:empty`
+  is what drops it, and it is `:empty` rather than a column predicate because
+  the constraint here is the opposite of the board card's: a container cannot
+  ask a child that drew nothing whether it did, and the element has to stay in
+  the DOM regardless, since the wide layout's tracks are positional and
+  dropping it would move every later value one column left. The browser has
+  already rendered it, so `:empty` is it answering — and generated content is
+  not a child node, so the label's own `::before` does not defeat it. A cell
+  drawing a marked absence has content and keeps its line, which is the
+  distinction `EmptyValue` exists to make.
 - **A value wraps rather than being cut.** `.truncate` is right for a cell that
   IS one line of a fixed column and wrong once the column is gone: at 390px it
   cut the one field the reader opened the list for and left the rest of the

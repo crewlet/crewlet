@@ -463,6 +463,18 @@ export function DataGrid<T>({
     // a rendering fault rather than as a value. The head cannot carry the word
     // — that is what made it a glyph — so the column says it separately, and
     // the card is the only layout that spends it.
+    //
+    // THE LABEL IS SET UNCONDITIONALLY AND THE SHEET DROPS THE LINE. A column
+    // draws no value on a row that has none — `PriorityMark` renders null for
+    // `normal`, which nearly every task is — and in the card that left the
+    // label alone on a line: `PRIORITY` with nothing beside it. Nothing here
+    // can see that, because a component that renders null is an element like
+    // any other until the browser draws it; `.grid-cell:empty` in `frame.css`
+    // is the browser answering, and the element has to stay in the DOM anyway
+    // or the wide layout's positional tracks move. What this file owes that
+    // rule is that a cell with no value has no child nodes — which is what
+    // `DataGrid.test.tsx` holds, since a mark wrapped in an always-rendered
+    // span would defeat it silently.
     const inner = shownColumns.map((column) => (
       <span
         key={column.key}

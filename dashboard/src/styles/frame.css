@@ -2194,6 +2194,30 @@ button.histogram-bar[data-empty]:hover {
      the longest single word the product declares today, CONVERSATION, is
      93.09px and never breaks. `anywhere` puts the min-content size at one
      character, so the basis is what the box IS, whatever a head says. */
+  /* AND A CELL WITH NOTHING IN IT IS NOT A LINE.
+     A column draws no value on a row that has none — `PriorityMark` returns
+     null for `normal`, which is what nearly every task is, and the same is
+     true of any mark whose whole rule is "nothing is drawn for the default".
+     In a table that cell is an empty track under a head, which is correct and
+     is what keeps the row's columns lined up. Here the head is gone and the
+     label is the cell's own, so the card opened with `PRIORITY` on a line by
+     itself with nothing beside it, on every ordinary row — the labelled form
+     of the dashed placeholder the board card already stopped drawing.
+
+     `:empty` IS THE ONLY THING THAT KNOWS. A container cannot ask a child that
+     drew nothing whether it did, which is why the board card asks a predicate
+     BEFORE rendering and pays for it by restating each mark's emptiness rule —
+     a price worth paying there, because the foot is a box that must not exist.
+     Here the cell exists either way (the wide layout's tracks are positional,
+     so dropping the element would move every later value one column left), and
+     the browser has already rendered it: `:empty` is it answering. Generated
+     content is not a child node, so the `::before` below does not defeat this
+     — and a cell that draws an em dash or any other marked absence HAS content
+     and stays, which is the distinction `EmptyValue` exists to make. */
+  .grid-cell:empty {
+    display: none;
+  }
+
   .grid-cell[data-label]::before {
     content: attr(data-label);
     flex: 0 0 7rem;

@@ -288,6 +288,20 @@ describe("the frame's layout", () => {
     // carries no attribute, draws no label, and takes both tracks rather than
     // leaving an empty label column beside it.
     expect(narrow).toContain(".grid-cell[data-label]::before");
+
+    // AND A CELL WITH NOTHING IN IT IS NOT A LINE. A column draws no value on
+    // a row that has none — `PriorityMark` renders null for `normal`, which
+    // nearly every task is — and in a table that is an empty track under a
+    // head, which is what keeps the columns lined up. Here the label is the
+    // cell's own, so the card opened with `PRIORITY` alone on a line, on every
+    // ordinary row. `:empty` is the only thing that can see it: a container
+    // cannot ask a child that drew nothing whether it did, and the element has
+    // to stay in the DOM regardless, because the wide layout's tracks are
+    // positional. Generated content is not a child node, so the `::before`
+    // above does not defeat it, and a cell drawing a marked absence has
+    // content and keeps its line. The DOM half — that an empty cell really is
+    // childless — is `app/frame/DataGrid.test.tsx`'s.
+    expect(block(narrow, ".grid-cell:empty")).toMatch(/display:\s*none/);
     // AND THE LABELS LINE UP without a shared track: a fixed flex basis is
     // what a flex line has instead of a grid column.
     expect(narrow).toMatch(/content:\s*attr\(data-label\)/);
