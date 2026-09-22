@@ -25,11 +25,36 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// pinned is the clock every test runs on. Pinned rather than time.Now because
-// two of the five schemes sign a timestamp and check it against a replay
-// window: a suite on the real clock would assert about the window's edges by
-// sleeping.
-var pinned = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+// pinned is the clock every test runs on, frozen once for the whole run.
+// Frozen rather than time.Now per call because two of the five schemes sign a
+// timestamp and check it against a replay window: a suite on a moving clock
+// would assert about the window's edges by sleeping.
+//
+// RELATIVE TO NOW rather than a calendar date, because the receiver's clock is
+// not the only one in play. [store.EventLog.List] floors every read at
+// [store.EventHistory] before the REAL clock, so an absolute fixture stops
+// being readable thirty days after whoever typed it — and does it SILENTLY,
+// with Append reporting success and List answering with an empty log, which
+// reads as a receiver that recorded nothing rather than as an expired fixture.
+// `2026-08-23` was green in CI on 21 September and failed every event-log
+// assertion in this package on the 22nd.
+var pinned = time.Now().UTC().Truncate(time.Second)
+
+// THE SUITE'S CLOCK HAS TO STAY INSIDE THE WINDOW THE EVENT LOG WILL READ.
+// Outside it, every assertion that goes through [edge.rows] stops testing what
+// it names and starts reporting an empty log — which is the failure above, and
+// it is indistinguishable from a receiver that never wrote. Asserted rather
+// than trusted, because the expiry is a property of the calendar and nothing
+// else in this package would ever mention it.
+func TestTheSuiteClockIsInsideTheEventLogsReadFloor(t *testing.T) {
+	t.Parallel()
+	if age := time.Since(pinned); age >= store.EventHistory {
+		t.Fatalf("the suite clock is %s old, at or past the event log's %s read "+
+			"floor: every row this suite writes is invisible to List, and an "+
+			"expired fixture reads exactly like a receiver that recorded nothing",
+			age, store.EventHistory)
+	}
+}
 
 // recorder is a queue.Publisher that keeps what it was given, and can be made
 // to fail.
