@@ -28,7 +28,7 @@ services:
     # exactly like a line with nothing to update, and a green run named a
     # GitLab nobody could identify afterwards. Multi-arch incl. arm64 since
     # 18.1.
-    image: gitlab/gitlab-ee:19.3.2-ee.0
+    image: gitlab/gitlab-ee:19.4.0-ee.0
     profiles: [gitlab]
     hostname: gitlab.local
     shm_size: "256m"                         # image default 64 MB is too small
