@@ -137,9 +137,9 @@ export function typeName(slug: string | undefined, types?: WorkTypeDef[]): strin
  *
  * AND A PHRASE, because `kind.replaceAll("_", " ")` after an actor's name reads
  * "ada watchers". Only the kinds an apply can compare two documents for produce
- * deltas — `tracker.TaskDeltas` covers twelve task fields and nothing else — so
- * `watchers`, `relations`, `checklist`, `archived`, `reparented` and the whole
- * comment family reach the reader through this column alone.
+ * deltas — `tracker.TaskDeltas` covers sixteen task fields and nothing else —
+ * so `watchers`, `checklist`, `archived`, `reparented` and the whole comment
+ * family reach the reader through this column alone.
  *
  * ONE DECLARATION, held against `tracker.ChangeKinds` by
  * `internal/tracker/client_gate_test.go`: this is a closed set the engine owns
@@ -259,6 +259,18 @@ export interface LabelContext {
    * "nobody in particular", which renders the owner's name rather than "you".
    */
   viewer?: string;
+  /**
+   * What a task id is CALLED, for the fields whose value is another task.
+   *
+   * A relation delta carries the other task's id rather than its key, and for
+   * the same reason `deltaValue` renders an instant rather than a day: the
+   * record is the state log's, written identically by N nodes, and a key
+   * belongs to the other task's own row — so a node that had not applied that
+   * task would store a different string, for ever, in a table nothing repairs.
+   * The answer resolves what it can (`WorkActivityAnswer.keys`) and this is how
+   * it reaches the sentence.
+   */
+  taskKey?: (id: string) => string;
 }
 
 /**
@@ -560,6 +572,26 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
       return /^\d+m$/.test(value) ? fmtMinutes(Number(value.slice(0, -1))) : value;
     case "health":
       return healthLabel(value);
+    // A FIELD WHOSE VALUE IS OTHER TASKS, which travels as their IDS: three of
+    // `tracker.RelationKinds`, the `blocking` mirror, and the ordered queue a
+    // person record carries. NOT `page`, which is the fourth relation kind and
+    // names a wiki page — resolving it here would be claiming a page is a task,
+    // and the answer deliberately leaves those ids out of its map.
+    //
+    // AN ID THE ANSWER DID NOT RESOLVE RENDERS AS THE ID. The map omits what
+    // the answering node holds no row for — a record naming a counterparty it
+    // has not applied, or anything past the answer's own cap — and a value
+    // nobody can explain is still a value somebody set, where a blank reads as
+    // a task with no name.
+    case "waiting_on":
+    case "linked":
+    case "duplicates":
+    case "blocking":
+    case "priorities":
+      return value
+        .split(", ")
+        .map((id) => ctx.taskKey?.(id) || id)
+        .join(", ");
     // The checkbox vocabulary [fieldValueText] already uses. "false" is a real
     // side of this delta — an UN-archive — so both sides render.
     case "archived":

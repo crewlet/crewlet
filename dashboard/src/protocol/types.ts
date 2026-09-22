@@ -3145,6 +3145,19 @@ export interface WorkActivityRecord {
 
 export interface WorkActivityAnswer {
   records: WorkActivityRecord[];
+  /** The key of every task id these records NAME, resolved on the answering
+   *  node — a relation delta carries the other task's id, because a key belongs
+   *  to that task's own row and a history row is written once by N nodes and
+   *  repaired by nothing. So the id is what the record claims and the key is
+   *  what this answer resolves, which is the same split `subject_key` already
+   *  takes.
+   *
+   *  ABSENT IS NOT EMPTY, in both directions. An id the answering node holds no
+   *  row for is left OUT rather than mapped to "" — a deferred record names a
+   *  task this node has not applied, and a blank key renders as a task with no
+   *  name — and a page whose deltas name nothing resolvable carries no map at
+   *  all, so a reader guards for undefined rather than for `{}`. */
+  keys?: Record<string, string>;
   /** Resumes exactly after the last row, as a log POSITION — a bare sequence
    *  names no stream and no generation, so a cursor built from one cannot
    *  survive a reanchor. */

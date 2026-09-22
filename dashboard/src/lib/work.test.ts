@@ -358,6 +358,40 @@ test("a change with nothing recorded against it names its kind", () => {
   expect(describeChange(record({ kind: "project_updated" }), {})).toBe("project updated");
 });
 
+// A RELATION NAMES ANOTHER TASK BY ID, and for the reason a due date travels as
+// an instant: the record is the state log's, written identically by N nodes, and
+// a key belongs to the other task's own row — so a node that had not applied
+// that task would store a different string for ever. The answer resolves what it
+// can and the surface renders it, which is the same division every other value
+// in this file takes.
+test("a relation delta reads as the other task's key where the answer knew it", () => {
+  const ctx: LabelContext = { taskKey: (id) => (id === "t-2" ? "ENG-2" : "") };
+  expect(
+    describeHistory(
+      change({ kind: "relations", fields: { waiting_on: { from: "", to: "t-2" } } }),
+      ctx,
+    ),
+  ).toBe(`Waiting on: ${EMPTY_VALUE} → ENG-2`);
+  // EVERY FIELD WHOSE VALUE IS TASKS, so one added to the engine's set and
+  // missed here is a column of uuids rather than a silent omission.
+  for (const field of ["waiting_on", "linked", "duplicates", "blocking", "priorities"]) {
+    expect(describeHistory(change({ fields: { [field]: ["t-2"] } }), ctx)).toContain("ENG-2");
+  }
+  // AND `page` IS NOT ONE OF THEM. It is the fourth relation kind and it names
+  // a wiki page, so the answer leaves its ids out of the map entirely and
+  // resolving it here would be claiming a page is a task.
+  expect(describeHistory(change({ fields: { page: ["t-2"] } }), ctx)).toBe("Page: t-2");
+  // AN ID THE ANSWER DID NOT RESOLVE RENDERS AS ITSELF. The commonest reason is
+  // a counterparty this node has not applied, and a value nobody can explain is
+  // still a value somebody set — a blank would read as a task with no name.
+  expect(describeHistory(change({ fields: { waiting_on: ["t-9"] } }), ctx)).toBe("Waiting on: t-9");
+  // AND A LIST IS RESOLVED MEMBER BY MEMBER, including the `+N more` tail the
+  // engine appends when it cuts a long collection at a whole member.
+  expect(describeHistory(change({ fields: { blocking: ["t-2", "t-9", "+12 more"] } }), ctx)).toBe(
+    "Blocking: ENG-2, t-9, +12 more",
+  );
+});
+
 // A NOTIFICATION IS ADDRESSED AND A LOG IS NOT. `tracker.prioritisedWake` writes
 // the card the woken seat reads — "…of your priorities" — which is correct for
 // that seat and second person to every other reader of the company-wide log.

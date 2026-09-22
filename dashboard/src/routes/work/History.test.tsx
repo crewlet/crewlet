@@ -348,6 +348,24 @@ test("the lens draws its own coverage and publishes none", async () => {
   expect(rails().length).toBe(2);
 });
 
+// THE ANSWER'S OWN RESOLUTION REACHES THE SENTENCE. The delta carries the other
+// task's id; `keys` is what the answering node resolved it to, and the wiring
+// between the two is the part that can silently not happen.
+test("a relation delta names the other task by the key the answer resolved", async () => {
+  serving({
+    work_activity: {
+      records: [record({ kind: "relations", fields: { waiting_on: { from: "", to: "t-2" } } })],
+      keys: { "t-2": "ENG-2" },
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(container.querySelector(".work-log-what")).toBeTruthy());
+  const what = container.querySelector(".work-log-what")?.textContent ?? "";
+  expect(what).toContain("ENG-2");
+  expect(what).not.toContain("t-2");
+});
+
 /** The one record the engine writes in the second person. */
 const prioritised = () =>
   record({

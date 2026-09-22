@@ -170,6 +170,10 @@ export function HistoryView({
   // live from the poll.
   const [head, setHead] = useState<WorkActivityRecord[] | null>(null);
   const [older, setOlder] = useState<WorkActivityRecord[]>([]);
+  // WHAT THE OLDER PAGES RESOLVED, kept beside their rows for the same reason
+  // the rows are kept: a relation delta names another task by ID and only the
+  // answer that carried it resolved that id's key.
+  const [olderKeys, setOlderKeys] = useState<Record<string, string>>({});
   const [cursor, setCursor] = useState("");
   const [paging, setPaging] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -188,6 +192,7 @@ export function HistoryView({
   useEffect(() => {
     setHead(null);
     setOlder([]);
+    setOlderKeys({});
     setCursor("");
     setPageError(null);
   }, [container, kind, actor, windowKey]);
@@ -235,6 +240,7 @@ export function HistoryView({
       })) as WorkActivityAnswer;
       setHead(base);
       setOlder((prev) => [...prev, ...(page.records ?? [])]);
+      setOlderKeys((prev) => ({ ...prev, ...(page.keys ?? {}) }));
       setCursor(page.next_cursor ?? "");
     } catch (err) {
       setPageError(err instanceof Error ? err.message : "query_failed");
@@ -243,8 +249,21 @@ export function HistoryView({
     }
   }, [socket, params, next, head, live]);
 
+  // EVERY PAGE'S RESOLUTIONS, with the LIVE answer's last: an id resolves to
+  // one key at a time, and a task that has been re-keyed since an older page
+  // was fetched should read as what it is called now.
+  const keys = useMemo(
+    () => ({ ...olderKeys, ...(state.data?.keys ?? {}) }),
+    [olderKeys, state.data],
+  );
+
   const chrome: LabelContext = {
     seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    // WHAT A RELATION'S OTHER END IS CALLED. The delta carries that task's id,
+    // because a key belongs to its own row and a history row is written once by
+    // every node; the answer resolves what the answering node holds, and an id
+    // it did not resolve falls through to itself rather than to a blank.
+    taskKey: (id) => keys[id] ?? "",
     // WHO IS READING, so a sentence the engine addressed to the seat it woke
     // is re-addressed to whoever is looking at the log. The SEAT HANDLE and not
     // the operator id, because the records that carry such a sentence are a
