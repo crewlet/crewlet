@@ -2,11 +2,13 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -265,6 +267,117 @@ func seedOpID(revision, kind, key string) string {
 // Thirty seconds is the same figure [jsprovision] gives a clustered create,
 // which is the slowest thing that has already happened by the time this runs.
 const seedTimeout = 30 * time.Second
+
+// publishStagedChart publishes a chart an OFFLINE `crewlet config import`
+// left in this node's own database, and clears it.
+//
+// # Why this exists at all
+//
+// `crewlet config import` writes both halves of a company file when it can
+// reach a running node. With the engine STOPPED it can write only one: a
+// revision is a row in the node's database, and a chart is a record on an
+// ordered log that needs a broker no command-line process opens. So the
+// offline route STAGES the chart, and this is where the stage is redeemed.
+//
+// # It is NOT the seed, and the difference is the whole point
+//
+// [Engine.seedChart] runs only while the chart is EMPTY: it is a first
+// deployment's bootstrap, and a file that re-seeded a live company would
+// revert every hire made since. A stage is the opposite — an operator's
+// explicit "this file is the chart again", performed at a stopped node — so
+// it publishes whatever the chart currently holds, exactly as the API route
+// would have.
+//
+// # Published once, and safely more than once
+//
+// The stage is TAKEN in one transaction before the publish, so the ordinary
+// path writes one record. A crash between the take and the publish loses the
+// stage, which is why the take happens first: losing it costs an operator a
+// re-run of a command they still have, where publishing it twice would write
+// a second record on the subject every structural write in the company
+// serialises behind. The import ledger absorbs the duplicate either way.
+func (e *Engine) publishStagedChart(ctx context.Context) error {
+	writer := e.ChartWriter()
+	if writer == nil || e.backends == nil || e.backends.Store == nil {
+		return nil
+	}
+	staged, found, err := e.backends.Store.StagedCharts().Take(ctx)
+	if err != nil || !found {
+		return err
+	}
+	body, err := secrets.Open(e.cipher, staged.Payload)
+	if err != nil {
+		return fmt.Errorf("engine: open the chart staged from %s: %w",
+			staged.SourcePath, err)
+	}
+	var authored chart.Authored
+	if err := json.Unmarshal(body, &authored); err != nil {
+		return fmt.Errorf("engine: decode the chart staged from %s: %w",
+			staged.SourcePath, err)
+	}
+	edges := authored.Edges()
+	if len(edges) == 0 {
+		return nil
+	}
+	// THE OP ID IS THE KEY, so a retry of a publish that lost its answer is
+	// the same operation rather than a second one.
+	result, err := writer.WriteImport(ctx, "staged:"+staged.ID, staged.ID, edges)
+	if err != nil {
+		return fmt.Errorf("engine: publish the chart staged from %s: %w",
+			staged.SourcePath, err)
+	}
+	last, err := e.seedContent(ctx, writer, authored, staged.ID)
+	if err != nil {
+		return err
+	}
+	if last.Seq == 0 {
+		last = result.Position
+	}
+	log.InfoContext(ctx, "chart_staged_published",
+		"source", staged.SourcePath, "key", staged.ID,
+		"units", len(authored.Units), "seats", len(authored.Seats),
+		"position", last.String(), "staged_by", staged.StagedBy)
+	// AND WAIT FOR THIS NODE'S OWN APPLIER, at the floor the last record
+	// landed at — [Engine.seedChart]'s own reason, one gesture along: the
+	// epoch installed next reads at the applier's cursor, and without the
+	// wait it reads a chart this publish has not reached.
+	if _, err := e.Chart().Read(ctx, statelog.Freshness{
+		Level: statelog.ReadStale, MinPosition: last,
+	}); err != nil {
+		log.WarnContext(ctx, "chart_staged_not_applied_yet", "key", staged.ID,
+			"error", err,
+			"detail", "the staged chart is published and this node has not "+
+				"applied it yet; the periodic rebuild converges within 30s")
+	}
+	return nil
+}
+
+// publishStagedChartAtBoot is [Engine.publishStagedChart] under the seed's own
+// deadline, and it never fails the boot — for [Engine.seedChartAtBoot]'s
+// reason, and with the same requirement that it never pass silently.
+func (e *Engine) publishStagedChartAtBoot(ctx context.Context) {
+	at, cancel := context.WithTimeout(ctx, seedTimeout)
+	defer cancel()
+	if err := e.publishStagedChart(at); err != nil {
+		log.WarnContext(ctx, "chart_staged_publish_failed", "error", err,
+			"detail", "this node could not publish the org chart an offline "+
+				"`crewlet config import` staged for it. The stage is spent, so "+
+				"re-run that import — against a running node this time, which "+
+				"publishes it directly")
+	}
+}
+
+// PublishStagedChartForTest redeems a stage from a test in this package's
+// external suite.
+//
+// EXPORTED FOR THE SUITE and nowhere else: the boot calls
+// [Engine.publishStagedChartAtBoot], which swallows every failure by design,
+// so a case driving the boot could not tell a publish that worked from one
+// that warned. A test that asserted the LOG LINE instead would be asserting
+// the wording rather than the behaviour.
+func (e *Engine) PublishStagedChartForTest(ctx context.Context) error {
+	return e.publishStagedChart(ctx)
+}
 
 // seedChartAtBoot is [Engine.seedChart] under its own deadline, and it never
 // fails the boot.

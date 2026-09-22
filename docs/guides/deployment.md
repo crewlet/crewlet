@@ -626,6 +626,14 @@ observable step rather than a side effect of startup.
 
 Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned company YAML is seeded separately (`crewlet config import`, or `crewlet run -company`).
 
+`crewlet config import` writes **both halves** of that file. Against a running
+node it sends the settings to `PUT /config` and the org chart to the chart's
+own routes, and every node converges with no restart. Against a **stopped**
+one it writes the settings to this node's store and **stages** the chart for
+the node's next start, because publishing a chart record needs a broker no
+command-line process opens. Either way the file is one gesture; only the
+timing differs.
+
 - **`-roles seats`** runs the agents — claims seat leases, boots the instances, processes their turns
 - **`-roles ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
 - **`-roles workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter

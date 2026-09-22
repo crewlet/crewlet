@@ -788,6 +788,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// nothing and an edited file places what it names without
 		// touching whoever was hired through the API. See seed.go.
 		e.seedChartAtBoot(ctx, company.Config)
+		// AND A CHART AN OFFLINE IMPORT STAGED. It is the opposite of
+		// the seed above and runs after it for that reason: the seed
+		// bootstraps an EMPTY chart from a file, and a stage is an
+		// operator's explicit "this file is the chart again", performed
+		// at a node they had deliberately stopped. Ordering it second
+		// is what makes a first boot that both seeds and redeems settle
+		// on the staged structure. See seed.go.
+		e.publishStagedChartAtBoot(ctx)
 		// AND THE VIEW THE SEED JUST WROTE. The composition prefers the
 		// view where there is one, so building it here is what makes the
 		// engine's first published company the one derived from rows

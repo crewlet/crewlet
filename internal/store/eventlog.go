@@ -25,6 +25,21 @@ const (
 	// forever, and a UI that cannot name the floor draws that as "the org
 	// went quiet". It is a named constant so the API can ship the number to
 	// a dashboard footer rather than each query inlining a literal.
+	//
+	// IT IS MEASURED AGAINST THE WALL CLOCK, which is a rule every FIXTURE
+	// has to obey and one of them did not. A caller's clock can be pinned
+	// and this floor cannot — deliberately, so a row's timestamp, the read
+	// floor and the retention sweep cannot disagree about what "now" is
+	// (see [now]). So a suite that pins an ABSOLUTE date and reads its own
+	// rows back works until the window passes that date, and then fails for
+	// ever, on every machine at once, with no change to any file and
+	// nothing in the failure naming a clock. internal/api/webhooks lost a
+	// whole package to exactly that. Anchor a fixture clock relative to
+	// time.Now.
+	//
+	// Appending BELOW the floor is still legal, and has to be: the floor's
+	// own tests and the retention sweep's prove what they prove by writing
+	// a stale row on purpose.
 	EventHistory = 30 * 24 * time.Hour
 
 	// EventRetention is how long rows are kept — one day past the read

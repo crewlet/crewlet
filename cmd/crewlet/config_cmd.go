@@ -226,6 +226,10 @@ type configStore struct {
 	configs *store.Configs
 	cipher  secrets.Cipher
 
+	// staged is where an offline import leaves the chart half for the
+	// next boot to publish. See [stageTheChart].
+	staged *store.StagedCharts
+
 	// events is where an erasure records that it happened.
 	//
 	// HELD HERE rather than reopened, because this handle is the one thing
@@ -272,6 +276,7 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 	}
 	return &configStore{
 		configs: db.Configs(), cipher: cipher, events: db.Events(),
+		staged:      db.StagedCharts(),
 		activeKeyID: boot.Secrets.ActiveKeyID,
 	}, func() { _ = db.Close() }, nil
 }
@@ -326,7 +331,9 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 		return fmt.Errorf("import %s: %w", path, err)
 	}
 	fmt.Fprintf(stdout, "imported %s as revision %s (sealed=%t)\n", path, id, cs.cipher != nil)
-	sayTheChartWasNotPublished(company, stdout)
+	if err := stageTheChart(ctx, cs, path, company, stdout); err != nil {
+		return err
+	}
 	fmt.Fprintln(stdout, publishNote)
 	return nil
 }
@@ -796,36 +803,71 @@ func settingsHalfOf(path string) ([]byte, error) {
 	return out, nil
 }
 
-// sayTheChartWasNotPublished tells an operator that the units and seats in the
-// file they just imported did not move.
+// stageTheChart leaves the file's org chart for this node's next boot to
+// publish.
 //
-// # Why this command writes one half and says so
+// # Why this command cannot publish it here
 //
-// A company file carries both halves — the settings and the org chart — and
-// this command runs OFFLINE, against the node's own store file with no broker
-// open. The settings are a row it can write; the chart is a record on an
-// ordered log, which needs the stream this process did not open.
+// A company file carries both halves, and this route runs OFFLINE, against
+// the node's own store file with no broker open. The settings are a row it
+// can write; the chart is a record on an ordered log, which needs the stream
+// this process did not open.
 //
-// So it writes what it can and says what it did not, rather than doing either
-// of the two silent things. Storing the whole file would store a revision no
-// node applies. Saying nothing would let an operator who moved a seat in their
-// file read "imported" and believe the seat moved.
+// # And why saying so is not enough on its own
 //
-// NOTHING IS LOST EITHER WAY: the chart this node runs is untouched, and it is
-// the same rule `-company` has always had — the store wins over a file once a
-// company exists.
-func sayTheChartWasNotPublished(company *config.Company, stdout io.Writer) {
+// It used to say so and stop, which is the right half of the answer and not
+// the whole of it. The gesture an operator is performing is "make this file
+// the company", and half of it silently did not happen until they went and
+// found a second, different command — on a node they had deliberately
+// stopped.
+//
+// So the chart is STAGED: written to this node's own database, sealed with
+// the same keyring the revision beside it uses, and published by the next
+// boot. Nothing is lost if the node never starts, and nothing is published
+// twice if it starts more than once — the import ledger is keyed on the
+// chart's own content, so a second landing is a no-op every node reaches the
+// same way.
+//
+// A COMPANY WITH NO CHART STAGES NOTHING, and that is not the same as staging
+// an empty one: an operator who wrote providers and no people has not asked
+// for every seat to be removed.
+func stageTheChart(ctx context.Context, cs *configStore, path string,
+	company *config.Company, stdout io.Writer) error {
+
 	if company == nil || (len(company.Roles) == 0 && len(company.Units) == 0) {
-		return
+		return nil
+	}
+	authored := config.AuthoredChart(company)
+	if len(authored.Edges()) == 0 {
+		return nil
+	}
+	body, err := json.Marshal(authored)
+	if err != nil {
+		return fmt.Errorf("encode the org chart in %s: %w", path, err)
+	}
+	// SEALED, for the reason the revision beside it is: an authored chart
+	// carries every seat's runtime half, and an offline import has NOT been
+	// through the chart writer — which is what turns a literal credential
+	// into a sealed reference. A file holding one would otherwise put it in
+	// this table in plaintext, where a backup copies it.
+	payload, err := secrets.Seal(cs.cipher, body)
+	if err != nil {
+		return fmt.Errorf("seal the org chart in %s: %w", path, err)
+	}
+	if err := cs.staged.Stage(ctx, store.StagedChart{
+		ID: chart.ImportKey(authored), Payload: payload,
+		SourcePath: path, StagedBy: currentOperator(),
+	}); err != nil {
+		return err
 	}
 	units, seats := countChart(company)
 	fmt.Fprintf(stdout,
-		"note: %d unit(s) and %d seat(s) in that file were NOT published — an "+
-			"org chart is a log of its own and this command writes the "+
-			"settings. The chart this company runs is unchanged. A first "+
-			"deployment gets its chart from `crewlet run -company <file>`, "+
-			"which seeds an empty one from the same document.\n",
-		units, seats)
+		"staged %d unit(s) and %d seat(s) for this node to publish at its next "+
+			"start — an org chart is a log of its own and this command has no "+
+			"broker open. The chart this company runs is unchanged until then; "+
+			"to publish it now, run the same command against a running node "+
+			"(`-api`).\n", units, seats)
+	return nil
 }
 
 // countChart is how many units and seats a file declares, AT ANY DEPTH.

@@ -226,6 +226,16 @@ var nodeEstatePlacements = []placement{
 			"row and drawing a fleet of one. The local write is best effort.",
 	},
 	{
+		Table: "chart_import_staged",
+		Why: "A chart an OFFLINE `crewlet config import` left for THIS node " +
+			"to publish at its next start, because no command-line process " +
+			"opens a broker. It is an intent held at one machine about a " +
+			"publish that machine will perform: replicating it would have " +
+			"every node in the fleet publish the same structure, which the " +
+			"import ledger would collapse — after N nodes had each written a " +
+			"record for it. Taken in one transaction and spent.",
+	},
+	{
 		Table: "secret_values",
 		Why: "The BOOTSTRAP half of the secret store only: values written " +
 			"while the engine was stopped, which internal/fleetsecrets " +

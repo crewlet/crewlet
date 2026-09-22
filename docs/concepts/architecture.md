@@ -545,7 +545,7 @@ What each of the four holds, in full:
 | **`agent_diary`** · **`episodes`** | Vector-indexed recall |
 | **`synthesized_skills`** · `synthesized_skill_versions` · `counterparty_profiles` · `agent_onboarding_markers` | The rest of the learning subsystem — skill induction and its versions, counterparty profiles, first-turn onboarding markers |
 | **`conversation_sessions`** | What this seat already said in that thread |
-| `company_config` · `scheduled_runs` · `secret_values` | Revisions, cron bookkeeping, and the secret store's bootstrap half |
+| `company_config` · `chart_import_staged` · `scheduled_runs` · `secret_values` | Revisions, an org chart an offline import staged for this node to publish at its next start, cron bookkeeping, and the secret store's bootstrap half |
 | `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
 | `statelog_adoption` | This node's own record of any peer snapshot it has adopted, which is what tells an operation minted before the join from one this node's ledger can answer for |
 | `chat_thread_follows` | EMPTY, and kept for one reason: rows written before the follows moved to coordination are carried onto the fleet at the next start, and a migration cannot do that — a `.sql` file has no KV client, and it runs before any Go code on every boot. Nothing reads or writes it at runtime. See node migration 0028 |

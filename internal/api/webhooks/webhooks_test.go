@@ -29,7 +29,25 @@ import (
 // two of the five schemes sign a timestamp and check it against a replay
 // window: a suite on the real clock would assert about the window's edges by
 // sleeping.
-var pinned = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+//
+// # RELATIVE TO NOW, and this is why
+//
+// It used to be an absolute date, and that is a TIME BOMB rather than a
+// fixture: every delivery here is written into the event log with THIS clock's
+// instant, and the log is read back over a window the store measures against
+// the WALL clock ([store.EventHistory], thirty days). A receiver's clock can
+// be pinned and the store's cannot — deliberately, so that a row's timestamp,
+// the read floor and the retention sweep cannot disagree about what "now" is.
+//
+// So an absolute date works until thirty days after the day somebody wrote
+// it, and then fails for ever, on every machine at once, with no change to
+// any file. That is exactly what happened: the rows were written, every
+// assertion read `0 rows`, and nothing in the failure named a clock.
+//
+// TRUNCATED TO THE HOUR so a rendered timestamp is stable within one run, and
+// an hour in the PAST rather than at `now` so no assertion here depends on a
+// clock that moved between two statements of one test.
+var pinned = time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
 
 // recorder is a queue.Publisher that keeps what it was given, and can be made
 // to fail.

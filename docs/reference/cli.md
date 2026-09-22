@@ -224,12 +224,26 @@ what is live and make it live (`GET /config/revisions/<UUID>/diff` and
 `POST /config/revisions/<UUID>/revert`), because `crewlet config diff` and
 `crewlet config activate` open the store the running engine holds.
 
-With the engine **stopped** it writes the SETTINGS to this node's own store and
-marks the revision active there, which the node publishes to the fleet at its
-next start. It cannot write the chart at all offline — that is a record on an
-ordered log, which needs the broker this process did not open — so it says how
-many units and seats it did not publish rather than doing either of the two
-silent things. The line it prints says which of the two routes it took.
+With the engine **stopped** it writes the SETTINGS to this node's own store
+and marks the revision active there, which the node publishes to the fleet at
+its next start. It cannot *publish* the chart offline — that is a record on an
+ordered log, and no command-line process opens a broker — so it **stages** it:
+the authored chart is written into this node's own database, sealed with the
+same keyring the revision beside it uses, and published by the next
+`crewlet run`. The line it prints says which of the two routes it took and how
+many units and seats are waiting.
+
+A stage is a **pending intent**, not a history: importing twice offline keeps
+only the second, because the first is a structure you changed your mind about.
+It is redeemed once — the boot takes it in one transaction before publishing —
+and a re-publish would be a no-op anyway, since the chart import is keyed on
+the chart's own content.
+
+A stage is also **not the boot seed**, and the difference matters: the seed
+runs only while the chart is EMPTY, because a file that re-seeded a live
+company would revert every hire made through the API since. A stage is your
+explicit "this file is the chart again", so it publishes over whatever the
+chart currently holds — exactly as the `-api` route would have.
 
 `-summary` is the audit note recorded with the revision (default
 `imported from <path>`). The revision history is the record of who changed what

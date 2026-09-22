@@ -116,7 +116,11 @@ applied. See
 
 **A fresh deployment's chart is seeded from the company file**, by `crewlet run
 -company company.yaml`, and only while the chart is empty — see
-[the boot seed](control-plane.md#the-boot-seed).
+[the boot seed](control-plane.md#the-boot-seed). An OFFLINE `crewlet config
+import` is the other way a file reaches the chart: it stages the chart in the
+node's own database and the next start publishes it. That one is not a seed —
+it publishes over whatever the chart holds, because it is your explicit "this
+file is the chart again".
 
 **Your `company.yaml` still holds both halves**, and always will. You author one
 document describing a company, `crewlet validate` reads it whole, and `crewlet

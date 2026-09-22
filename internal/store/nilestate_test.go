@@ -156,6 +156,7 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		// internal/tracker and internal/engine — every one of them a segfault
 		// before the guard above, not merely the one the retention tick hit.
 		"Configs":       func(t *testing.T) { _ = d.Configs() },
+		"StagedCharts":  func(t *testing.T) { _ = d.StagedCharts() },
 		"Events":        func(t *testing.T) { _ = d.Events() },
 		"SecretValues":  func(t *testing.T) { _ = d.SecretValues(nil) },
 		"ThreadFollows": func(t *testing.T) { _ = d.ThreadFollows() },
