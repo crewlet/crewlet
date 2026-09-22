@@ -38,7 +38,41 @@ describe("the latest change to each property", () => {
       actorKind: "agent",
       turnId: "t-9",
       at: "2026-03-01T12:00:00Z",
+      // A CHANGE THAT FILLED THE FIELD, which is what the rail needs to know
+      // before it draws a by-line under a blank one — see below.
+      cleared: false,
     });
+  });
+
+  test("says whether the change emptied the field", () => {
+    // THE ONE THING THAT LICENSES PROVENANCE UNDER A BLANK. A rail draws no
+    // "set by" under a value that is not there — it would claim a record of
+    // somebody setting nothing — and a change that took the value AWAY is a
+    // record the log genuinely holds, which reads "cleared by" instead.
+    // `tracker.Delta` carries `From` and `To` with no `omitempty`, so an
+    // emptied field is `to: ""` rather than an absent key.
+    const who = attribution([
+      change({
+        actor: "ada",
+        fields: {
+          due: { from: "2026-03-09T00:00:00Z", to: "" },
+          status: { from: "todo", to: "in_progress" },
+        },
+      }),
+    ]);
+    expect(who.get("due")?.cleared).toBe(true);
+    expect(who.get("status")?.cleared).toBe(false);
+  });
+
+  test("a delta this build cannot read claims no clearing either way", () => {
+    // The defensive arm: a payload whose shape is unreadable says nothing
+    // about whether a value was emptied, and `false` is the honest answer —
+    // it suppresses the by-line under an absent value rather than inventing
+    // a clearing nobody recorded.
+    const who = attribution([
+      change({ actor: "ada", fields: { status: "in_progress" as unknown as object } }),
+    ]);
+    expect(who.get("status")?.cleared).toBe(false);
   });
 
   test("the newest change wins, and the input order is what decides", () => {
