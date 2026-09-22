@@ -2413,6 +2413,15 @@ details > summary.int-summary::-webkit-details-marker {
      after the title, which is the one arrangement where the state of a task
      moves with the length of its name. */
   grid-template-columns: 16px 74px auto minmax(0, 1fr) auto auto auto auto;
+  /* AND THE NARROW SET IS THE SAME FOUR, DECLARED ONCE. Two different
+     questions ask for it — a WINDOW too small to hold eight columns, and a
+     BOX too small whatever the window is doing (a list inside a 420px peek)
+     — and neither can be asked in the other's terms, so there are two rules
+     at the foot of this file. What there may not be is two track lists: a
+     track list is POSITIONAL, so a set that drifts from the order above
+     hands a cell the wrong column and says nothing about it. Priority, key,
+     status, title — the same three opening tracks a reader scans down. */
+  --work-rows-narrow: 16px 70px auto minmax(0, 1fr);
   /* THE GUTTER BELONGS TO WHOEVER OWNS THE TRACKS. On a subgridded axis a
      row's own `column-gap` is ignored and the parent's is used — so declared
      on the row it silently became zero, and a type icon sat on top of the
@@ -2967,12 +2976,24 @@ a.work-cal-chip {
    the board, for a peek this screen used to own and no longer does, on a
    selector nothing has set since the frame took the peek over.
 
-   WHAT IS LEFT is the item page's own step, and the subtask list's. */
+   WHAT IS LEFT IS MEASURED FROM THE BOX, NOT THE WINDOW. The item page's own
+   step turns on how wide the PAGE COLUMN is, and that is the window less the
+   rail, less the workspace sidebar, less an open peek — every one of them a
+   thing the reader moves. A viewport number is a guess at their sum on the
+   day it was written, and it was wrong the moment a peek could open over any
+   screen: at 1280 with one open the item page kept a 300px rail beside a
+   171px body, which is the arrangement the threshold exists to prevent, at
+   twenty widths of window. `page` is the shell's own named container. */
 
-/* THE ITEM PAGE KEEPS ITS OWN THRESHOLD. It is a page rather than a pane
-   beside a board — there is no third column competing with it — so its
-   properties rail sits beside the body for as long as both are readable. */
-@media (max-width: 1180px) {
+/* THE ITEM PAGE'S RAIL SITS BESIDE ITS BODY while both are readable, and the
+   body's floor is the one already measured for the list: 444px is under what
+   a work row needs for a key, a title and an assignee (see
+   `--peek-drawer-max` in frame.css), and an item page draws that row for
+   every subtask. Beside it the rail is 300, the gap is `--space-4` and the
+   page's own inset is `--space-5` twice — 56px at normal density and 63.84 at
+   comfortable — so 444 + 300 + 64 = 808, and the WIDEST density is what the
+   one number has to clear, exactly as the peek's own threshold argues. */
+@container page (max-width: 808px) {
   .work-item {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2991,12 +3012,12 @@ a.work-cal-chip {
    and a phone, where the viewport query could only ever serve the last. */
 @container subtasks (max-width: 444px) {
   .work-rows {
-    grid-template-columns: 16px 70px minmax(0, 1fr) auto;
+    grid-template-columns: var(--work-rows-narrow);
   }
   /* DROPPED RATHER THAN EMPTIED, as the phone block does it: a hidden cell
      still holds a column of nothing. */
-  .work-cell-prio,
   .work-cell-due,
+  .work-cell-type,
   .work-cell-who,
   .work-row .work-row-when {
     display: none;
@@ -3006,16 +3027,25 @@ a.work-cal-chip {
 @media (max-width: 860px) {
   /* The rail becomes a scrolling strip of chips above the head: a company
      with nine projects still needs to reach all nine. */
-  /* FOUR COLUMNS ON A PHONE: type, key, title, status. The tracks are
+  /* FOUR COLUMNS ON A PHONE: priority, key, status, title. The tracks are
      re-declared on the LIST, since that is where they live — a row is a
-     subgrid of whatever the list has — and the three cells that are gone
-     are dropped rather than emptied, or they would each still hold a
-     column of nothing. */
+     subgrid of whatever the list has — and the four cells that are gone are
+     dropped rather than emptied, or they would each still hold a column of
+     nothing.
+
+     THIS WAS WRITTEN FOR THE OLD ORDER and not redone with it. The row used
+     to open with the TYPE icon and carry the status after the title; it now
+     opens with the priority mark and puts the status before it. The hidden
+     cells still named the priority, so on a phone the first surviving cell
+     was the KEY — in the 16px track meant for a glyph — and the status badge
+     sat in the 70px one meant for the key, with the title's flexible track
+     spent on a badge. The set itself is `--work-rows-narrow`, declared beside
+     the wide one, so the two orders cannot part again. */
   .work-rows {
-    grid-template-columns: 16px 70px minmax(0, 1fr) auto;
+    grid-template-columns: var(--work-rows-narrow);
   }
-  .work-cell-prio,
   .work-cell-due,
+  .work-cell-type,
   .work-cell-who,
   .work-row .work-row-when {
     display: none;

@@ -2453,7 +2453,11 @@ is one of the rules on this page applied to a tracker.
   column one place left. **And how wide the list is has never been a fact
   about the window** — a subtask list is 420px in a peek on a 2000px screen —
   so the narrow track set is a container query over the list's own box rather
-  than a viewport one.
+  than a viewport one, and the item page's rail-beside-body threshold is one
+  over the page column, which is the window less the rail, less the sidebar,
+  less an open peek. The narrow set is declared ONCE beside the wide one: a
+  track list is positional, so a second copy that missed a reordering hands
+  every cell the wrong column and says nothing about it.
 - **Nothing is drawn for the default.** `normal` priority is what a task gets
   when nobody said, so it is most of a board — a mark on every card is a mark
   that says nothing, and it buries the four that ARE urgent. A due date drops
