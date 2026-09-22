@@ -45,6 +45,7 @@ package iam
 import (
 	"regexp"
 	"slices"
+	"strings"
 )
 
 // Kind is what sort of thing a principal is.
@@ -117,3 +118,43 @@ func ValidLogin(s string) bool { return loginPattern.MatchString(s) }
 
 // ValidMachineHandle reports whether s is a well-formed machine handle.
 func ValidMachineHandle(s string) bool { return handlePattern.MatchString(s) }
+
+// NormalizeEmail is the form an email address is MATCHED on.
+//
+// LOWER-CASED AND PLUS-TAG STRIPPED. Inbound Jira and GitHub payloads identify
+// people by address, and a company routinely subscribes its seats with a
+// plus-addressed form (`notif+sarah-chen@example.com`) so vendor mail is
+// filterable — so the address on a record and the address in a payload are
+// routinely different strings naming one person.
+//
+// IT IS COMPUTED ONCE, AT THE WRITE, and stored or hashed. The alternative is
+// a LOWER(...) predicate over every row on every inbound webhook, which cannot
+// use an index and has to re-derive the plus rule in SQL, in a dialect where
+// this Go answer beside it would then be a second opinion.
+//
+// # Why it lives in the vocabulary leaf
+//
+// TWO DOMAINS MATCH ON IT and they must never disagree: the org chart derives
+// `chart_seats.email_index` from it so a vendor payload resolves to a seat,
+// and the identity estate derives a person's keyed BLIND from it so a sign-in
+// resolves to a person. Written twice, one address would reach a seat and a
+// different person — the two halves of "who is this" answering differently
+// about one string, which is the class of failure this package's namespace
+// rules exist to make unrepeatable. A leaf is where the shared answer can sit
+// without either domain importing the other.
+//
+// IT DOES NOT VALIDATE. An address that is not one is returned folded and
+// unchanged, because the caller that has to refuse one says so where the field
+// is named — a normaliser that refused would make every caller handle an error
+// for the same reason, in the same words, separately.
+func NormalizeEmail(email string) string {
+	email = strings.ToLower(strings.TrimSpace(email))
+	local, domain, ok := strings.Cut(email, "@")
+	if !ok {
+		return email
+	}
+	if tagged, _, cut := strings.Cut(local, "+"); cut {
+		local = tagged
+	}
+	return local + "@" + domain
+}

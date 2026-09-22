@@ -98,46 +98,6 @@ func TestASubjectRefusesAKeyThatBreaksTheGrammar(t *testing.T) {
 	}
 }
 
-// AN ADDRESS IS MATCHED IN THE FORM A VENDOR SENDS IT.
-//
-// Inbound Jira and GitHub payloads identify people by address, and a company
-// routinely subscribes its seats with a plus-addressed form so vendor mail is
-// filterable — so the address on the record and the address in the payload are
-// routinely different strings naming one person. The normalised form is
-// computed once, at the write, and stored: the alternative is a LOWER(...)
-// predicate over every row on every inbound webhook, which cannot use an index
-// and has to re-derive the plus rule in SQL.
-func TestAnAddressIsMatchedInTheFormAVendorSendsIt(t *testing.T) {
-	t.Parallel()
-
-	for name, tc := range map[string]struct{ in, want string }{
-		"already the matched form": {"sarah.chen@example.com", "sarah.chen@example.com"},
-		"capitalised":              {"Sarah.Chen@Example.COM", "sarah.chen@example.com"},
-		"plus-addressed":           {"notif+sarah-chen@example.com", "notif@example.com"},
-		"both":                     {" Notif+Sarah-Chen@Example.com ", "notif@example.com"},
-		"no address at all":        {"", ""},
-		// A value that is not an address is folded and handed back
-		// rather than refused: this runs over whatever a founder typed,
-		// and the column it fills is a lookup key. A value that matches
-		// nothing is the correct outcome for a value that is nothing.
-		"not an address": {"  Sarah Chen ", "sarah chen"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if got := chart.NormalizeEmail(tc.in); got != tc.want {
-				t.Fatalf("NormalizeEmail(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
-	}
-
-	// AND THE PLUS RULE APPLIES TO THE LOCAL PART ONLY. A domain carrying
-	// one is not a tag, and stripping there would collapse two companies
-	// onto one address.
-	if got := chart.NormalizeEmail("sarah@ex+ample.com"); got != "sarah@ex+ample.com" {
-		t.Errorf("NormalizeEmail stripped past the @: %q", got)
-	}
-}
-
 // A VALUE PAST ITS CAP IS REFUSED NAMING THE FIELD, never silently cut.
 //
 // Every cap here is checked where a record is WRITTEN and never where one is

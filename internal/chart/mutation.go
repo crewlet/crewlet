@@ -196,7 +196,7 @@ type SeatPayload struct {
 	Name string `json:"name,omitempty"`
 
 	// Email is the address a vendor payload identifies this person by. The
-	// applier derives `email_index` from it with [NormalizeEmail]; the
+	// applier derives `email_index` from it with [iam.NormalizeEmail]; the
 	// record carries what was AUTHORED, because that is what a person reads
 	// back out of the config.
 	Email string `json:"email,omitempty"`

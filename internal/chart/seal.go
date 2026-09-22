@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // WHAT A CHART RECORD MAY AND MAY NOT CARRY IN PLAINTEXT.
@@ -170,7 +171,7 @@ func (w *Writer) sealValue(ctx context.Context, object ObjectRef, field, value s
 // compared for equality, so a case-stable alphabet with no `=` is what makes
 // two nodes' values identical byte for byte without anybody normalising.
 func BlindIndex(key []byte, value string) string {
-	normalised := NormalizeEmail(value)
+	normalised := iam.NormalizeEmail(value)
 	if normalised == "" {
 		return ""
 	}

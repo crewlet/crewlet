@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -300,7 +301,7 @@ func priorEmail(prior Seat, found bool) string {
 // deciding which key this index is computed under — which is a lookup that
 // silently matches nothing the day the two disagree.
 func (w *Writer) BlindIndexFor(ctx context.Context, email string) (string, error) {
-	if NormalizeEmail(email) == "" {
+	if iam.NormalizeEmail(email) == "" {
 		return "", nil
 	}
 	if w.seal == nil {

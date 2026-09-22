@@ -276,31 +276,6 @@ func NormalizeKey(key string) string {
 	return strings.ToLower(strings.Join(strings.Fields(key), "-"))
 }
 
-// NormalizeEmail is the form a seat's address is matched on.
-//
-// LOWER-CASED AND PLUS-TAG STRIPPED, which is what `chart_seats.email_index`
-// holds. Inbound Jira and GitHub payloads identify people by address, and a
-// company routinely subscribes its seats with a plus-addressed form
-// (`notif+sarah-chen@example.com`) so vendor mail is filterable — so the
-// address on the record and the address in the payload are routinely different
-// strings naming one person.
-//
-// IT IS COMPUTED ONCE, AT THE WRITE, and stored. The alternative is a
-// LOWER(...) predicate over every row on every inbound webhook, which cannot
-// use an index and has to re-derive the plus rule in SQL — in a dialect where
-// this package's own Go answer would then be a second opinion.
-func NormalizeEmail(email string) string {
-	email = strings.ToLower(strings.TrimSpace(email))
-	local, domain, ok := strings.Cut(email, "@")
-	if !ok {
-		return email
-	}
-	if tagged, _, cut := strings.Cut(local, "+"); cut {
-		local = tagged
-	}
-	return local + "@" + domain
-}
-
 // ErrInvalid reports a value this domain refuses.
 var ErrInvalid = fmt.Errorf("chart: invalid")
 

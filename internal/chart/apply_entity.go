@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -550,7 +551,7 @@ func writeSeat(ctx context.Context, tx *sql.Tx, at applyContext, seat Seat) (int
 			document = excluded.document
 		WHERE excluded.version > chart_seats.version`,
 		seat.Handle, string(formerJSON), string(seat.Kind), seat.Name,
-		seat.Email, NormalizeEmail(seat.Email), seat.Backstory, seat.Goal,
+		seat.Email, iam.NormalizeEmail(seat.Email), seat.Backstory, seat.Goal,
 		seat.Project, seat.Space, seat.UnitKey,
 		store.EncodeTime(seat.CreatedAt), store.EncodeTime(seat.UpdatedAt),
 		at.packed, document)
