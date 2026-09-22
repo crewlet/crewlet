@@ -3,6 +3,7 @@ package chartapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -686,4 +687,83 @@ func mustMarshal(t *testing.T, v any) []byte {
 		t.Fatalf("marshal: %v", err)
 	}
 	return raw
+}
+
+// --- the fleet gate ---------------------------------------------------- //
+
+// fleetSays is a fleet that answers as told.
+type fleetSays struct {
+	reason string
+	err    error
+}
+
+func (f fleetSays) ImportReady(context.Context) (string, error) {
+	return f.reason, f.err
+}
+
+// TestAnImportIsRefusedWhileTheFleetIsMixedVersion, naming the node.
+//
+// An import rewrites EVERY placement in the chart, in one record on the
+// structure's own subject, and every node applies it — including one running
+// an older build, under its own reading of what a placement means. The two
+// are each individually correct and jointly wrong, which is the whole reason
+// the protocol is versioned.
+func TestAnImportIsRefusedWhileTheFleetIsMixedVersion(t *testing.T) {
+	t.Parallel()
+	const body = `{"revision":"rev-1","edges":[` +
+		`{"object":{"kind":"unit","id":"engineering"}}]}`
+
+	for _, c := range []struct {
+		name  string
+		fleet chartapi.Fleet
+		want  int
+		wrote bool
+	}{
+		{"a node is still on the older protocol",
+			fleetSays{reason: "node-2 is still running protocol 3"},
+			http.StatusConflict, false},
+		// CANNOT TELL IS NOT A REFUSAL. The fleet was not read, so
+		// nothing was established — and the remedy is a retry rather
+		// than finishing an upgrade that may not be happening.
+		{"this node cannot read the fleet",
+			fleetSays{err: errors.New("the coordination store is unreachable")},
+			http.StatusServiceUnavailable, false},
+		// AND THE CONTROL: a uniform fleet lands.
+		{"the fleet is uniform", fleetSays{}, http.StatusOK, true},
+		// A SURFACE WITH NO FLEET BEHIND IT applies no gate, which is
+		// what a single-node harness has.
+		{"no fleet at all", nil, http.StatusOK, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			w := &writer{}
+			svc, err := chartapi.New(chartapi.Options{
+				Reader:    &reader{},
+				Authority: func(string, chart.AuthorKind, []iam.Grant) chartapi.Writer { return w },
+				Principal: func(*http.Request) iam.Principal {
+					return leadOf(iam.GrantConfigWrite)
+				},
+				Chart: leads(), Fleet: c.fleet,
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			mux := http.NewServeMux()
+			if err := svc.Routes(mux); err != nil {
+				t.Fatalf("Routes: %v", err)
+			}
+			rec := post(mux, "/chart/import", body)
+			if rec.Code != c.want {
+				t.Fatalf("answered %d, want %d: %s", rec.Code, c.want, rec.Body)
+			}
+			if wrote := len(w.calls) > 0; wrote != c.wrote {
+				t.Errorf("published = %v, want %v", wrote, c.wrote)
+			}
+			if c.want == http.StatusConflict &&
+				!strings.Contains(rec.Body.String(), "node-2") {
+
+				t.Errorf("the refusal does not name the lagging node: %s", rec.Body)
+			}
+		})
+	}
 }

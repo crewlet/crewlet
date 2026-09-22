@@ -2,8 +2,6 @@ package engine
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -96,7 +94,10 @@ func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
 		// file would then have to be distinguished from.
 		return nil
 	}
-	revision := chartSeedKey(authored)
+	// THE DOMAIN'S OWN KEY, which `crewlet config import` computes
+	// the same way: two importers of one file must agree, or each
+	// rewrites every row the other already wrote.
+	revision := chart.ImportKey(authored)
 
 	// THE OP ID IS THE REVISION, so a retry of a seed that published and
 	// then lost its answer is the same operation rather than a second one.
@@ -254,27 +255,6 @@ func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
 // seedOpID is one seeded object's operation id.
 func seedOpID(revision, kind, key string) string {
 	return "seed:" + revision + ":" + kind + ":" + chart.NormalizeKey(key)
-}
-
-// chartSeedKey is the import key for one authored chart: a hash of its own
-// content.
-//
-// STABLE ACROSS PROCESSES AND NODES, which is the whole requirement — two
-// nodes booting the same file must produce the same key or each would import
-// the same structure under a name the other's ledger does not hold. So it is a
-// hash of the canonical JSON of the authored value rather than anything
-// derived from this process: no time, no node id, no map iteration (the
-// converter builds slices in document order, and the edge list is parents
-// before children).
-func chartSeedKey(authored chart.Authored) string {
-	body, err := json.Marshal(authored)
-	if err != nil {
-		// UNREACHABLE: Authored is slices of strings and named string
-		// types. Falling back to a time-based key would be worse than
-		// the failure, because it would re-import on every boot.
-		return "file:unencodable"
-	}
-	return fmt.Sprintf("file:%x", sha256.Sum256(body))
 }
 
 // seedTimeout bounds the seed's publish.

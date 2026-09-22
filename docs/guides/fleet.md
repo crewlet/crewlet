@@ -328,6 +328,22 @@ older nodes keep working, newer ones wait — visibly, with
 or is released. A rolling deploy converges because that is what a rolling
 deploy does.
 
+**A whole-company import waits for the same thing, and says so.** `crewlet
+config import` and `POST /chart/import` are refused with `409
+fleet_mixed_version` while any live lease is held at an older protocol, and
+the refusal names the node. It is the same question the seat gate asks, asked
+through the same function one level up: an import rewrites **every** placement
+in the chart, in one record, and every node applies it — including the older
+one, under its own reading of what a placement means. Finish the upgrade and
+import again.
+
+The two answer a failed read differently, and deliberately. The seat sweep
+runs every five seconds and treats an unreadable coordination store as "not
+blocked", because a transient blip that stopped every claim would turn a store
+hiccup into a fleet-wide stall. The import runs once, at your hand, and
+refuses: it costs you a retry, where proceeding costs you a chart every older
+node rewrites.
+
 Two consequences worth stating plainly:
 
 - **A stalled rollout stalls placement.** If you leave one old node

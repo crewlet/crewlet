@@ -110,6 +110,21 @@ type Writer interface {
 // somehow skipped its own check still cannot write a seat's credentials.
 type Authority func(actor string, kind chart.AuthorKind, grants []iam.Grant) Writer
 
+// Fleet answers whether this fleet is uniform enough to accept a
+// whole-company import.
+//
+// ONE METHOD, and its answer is a SENTENCE rather than a boolean: what an
+// operator needs is which node is holding the upgrade up, and a surface that
+// re-derived that from a floor would be a second opinion about a decision the
+// engine already takes for its own seat claims.
+//
+// EMPTY IS READY. An error is "cannot tell", which this surface renders as
+// 503 rather than as a refusal: a node that could not read the coordination
+// store has not established that an older build is running.
+type Fleet interface {
+	ImportReady(ctx context.Context) (reason string, err error)
+}
+
 // Principal is who is acting, resolved from the request.
 //
 // A SEAM BECAUSE THE ANSWER IS NOT THIS PACKAGE'S. What a request presented
@@ -130,6 +145,7 @@ type Service struct {
 	authority Authority
 	principal Principal
 	chart     authz.Chart
+	fleet     Fleet
 	company   func() (*config.Company, *org.Organization)
 	now       func() time.Time
 }
@@ -195,6 +211,12 @@ type Options struct {
 	// misleading answer this surface could give.
 	Company func() (*config.Company, *org.Organization)
 
+	// Fleet gates the whole-company import on a uniform fleet. OPTIONAL,
+	// and its absence means the gate is not applied — which is correct for
+	// a surface with no fleet behind it (a single-node test, a harness)
+	// and is why the engine always supplies one.
+	Fleet Fleet
+
 	// Now is injectable so a test can pin an operation id's timestamp.
 	Now func() time.Time
 }
@@ -223,6 +245,6 @@ func New(opts Options) (*Service, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Service{reader: opts.Reader, authority: opts.Authority,
-		principal: opts.Principal, chart: opts.Chart,
+		principal: opts.Principal, chart: opts.Chart, fleet: opts.Fleet,
 		company: opts.Company, now: now}, nil
 }

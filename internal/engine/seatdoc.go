@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -137,4 +138,54 @@ func (e *Engine) SetSeatDocument(ctx context.Context, handle string, body []byte
 			handle, summary, err)
 	}
 	return result.Result.Position, nil
+}
+
+// ImportReady reports why a whole-company import must wait, and empty when it
+// need not.
+//
+// # What it is protecting
+//
+// An import rewrites the placement of EVERY object in the chart, in one
+// record on the structure's own subject, and every node applies it. A node
+// running an older build applies that record under its own reading of what a
+// placement means — and the two are each individually correct and jointly
+// wrong, which is the whole reason the protocol is versioned at all.
+//
+// A seat host already refuses to CLAIM under the same condition. This is the
+// same question one level up, asked through the same function, because two
+// spellings of it would let the fleet start claiming under a rule the import
+// did not know about.
+//
+// # An unreadable coordination store is a REFUSAL here
+//
+// The seat sweep reads a failure as "not blocked", because it runs every five
+// seconds and a transient blip that stopped every claim would turn a store
+// hiccup into a fleet-wide stall. This runs once, at an operator's hand, so
+// the opposite reading is right: refusing costs them a retry, and proceeding
+// costs them a chart every older node rewrites.
+func (e *Engine) ImportReady(ctx context.Context) (string, error) {
+	// THE LEASE BACKEND, which is where a protocol lives: the estate
+	// beside it holds counters and ledgers rather than ownership.
+	fleet := e.backends.Coord
+	floor, lagging, err := coord.Lagging(ctx, fleet, coord.ProtocolVersion)
+	if err != nil {
+		return "", fmt.Errorf("engine: this node cannot read the fleet's "+
+			"protocol floor, so it cannot say whether an older build is still "+
+			"running — and an import lands on every node at once: %w", err)
+	}
+	if !lagging {
+		return "", nil
+	}
+	// THE NAME IS A COURTESY and never the decision. A second read that
+	// found nothing still leaves the refusal standing, because the floor
+	// is what said so.
+	who := coord.LaggingOwner(ctx, fleet, floor)
+	if who == "" {
+		who = "a node this read could not name"
+	}
+	return fmt.Sprintf("%s is still running protocol %d and this build speaks "+
+		"%d, so a rolling upgrade is in progress. An import rewrites every "+
+		"placement in the chart and every node applies it, including that one "+
+		"— under its own reading of what a placement means. Finish the upgrade "+
+		"and import again.", who, floor, coord.ProtocolVersion), nil
 }

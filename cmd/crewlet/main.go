@@ -175,6 +175,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runSecrets(rest, stdout, stderr)
 	case "config":
 		return runConfig(rest, stdout, stderr)
+	case "chart":
+		return runChart(rest, stdout, stderr)
 	case "migrate":
 		return runMigrate(rest, stdout, stderr)
 	case "budgets":
@@ -216,6 +218,8 @@ Usage:
                               produced and which nothing undoes
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
+  crewlet chart <cmd>         The company's org chart: show it, check it against
+                              the settings, read its history, export it
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
@@ -1520,6 +1524,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// a revision or behind the log answers "cannot tell" rather than
 		// telling every lead in the company that they lead nothing.
 		Chart: engine.ChartAuthorityOf(e),
+		// WHETHER A ROLLING UPGRADE IS STILL IN PROGRESS. An import
+		// rewrites every placement in the chart and every node applies
+		// it, so one running an older build would apply it under its
+		// own reading of what a placement means.
+		Fleet: e,
 		// The pair the continuous report evaluates, and the SAME
 		// accessor the roster and /health read.
 		Company: func() (*config.Company, *org.Organization) { return companyConfig(e) },

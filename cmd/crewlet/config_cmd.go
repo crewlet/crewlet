@@ -15,7 +15,10 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -635,7 +638,7 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 		return err
 	}
 	if strings.TrimSpace(t.apiURL) != "" {
-		return importThroughNode(ctx, boot, t, summary, stdout)
+		return importThroughNode(ctx, boot, t, company, summary, stdout)
 	}
 
 	cs, closeStore, err := openConfigStore(ctx, t.bootstrapPath)
@@ -645,35 +648,152 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 		}
 		// The engine holds its database, so this is the live case rather
 		// than a failure: go through the node that is holding it.
-		return importThroughNode(ctx, boot, t, summary, stdout)
+		return importThroughNode(ctx, boot, t, company, summary, stdout)
 	}
 	defer closeStore()
 	return importConfig(ctx, cs, t.path, company, summary, stdout)
 }
 
-// importThroughNode PUTs the document at a running node.
+// importThroughNode divides one file between the two surfaces that own its
+// halves, and writes both.
+//
+// # One file, two estates, and this is the only place that knows
+//
+// A company file carries the settings and the org chart, and always will: an
+// operator authors one document describing a company. The engine keeps them
+// apart — a revision is a stored document, a chart is an ordered log — and
+// `PUT /config` refuses a body carrying `roles:` or `units:` by name. So
+// somebody has to divide the file, and it is this command: the last place
+// that holds both halves and knows they arrived together.
+//
+// # THE SETTINGS TRAVEL AS THE OPERATOR'S OWN BYTES, MINUS TWO KEYS
+//
+// The file is parsed ONCE into a YAML node tree and the two chart keys are
+// DELETED from its root mapping. What is sent is what is left — comments,
+// anchors, `${VAR}` pointers and all — rather than a re-encoding of the
+// parsed Go value, because Tier B's secrets are pointers stored verbatim and
+// a round trip through the types would be a second opinion about a document
+// the node is about to form its own.
+//
+// # THE ORDER IS LOAD-BEARING, AND IT IS STRUCTURE FIRST
+//
+// The placement lands as ONE record on the chart's structure subject, and
+// each object's content follows on its own. That order is not a preference: a
+// content write STATES the unit it believes a seat sits in, and the domain
+// refuses a value that disagrees with the row — so content written before the
+// placement names a unit no row has yet.
+//
+// The SETTINGS go first of all, because a seat whose model chain names a
+// provider is only valid once that provider exists: the other order leaves a
+// window in which every seat the chart just created resolves to no model.
 func importThroughNode(ctx context.Context, boot *config.Bootstrap, t importTarget,
-	summary string, stdout io.Writer,
+	company *config.Company, summary string, stdout io.Writer,
 ) error {
+	settings, err := settingsHalfOf(t.path)
+	if err != nil {
+		return err
+	}
 	client, err := newConfigClient(boot, t.apiURL)
 	if err != nil {
 		return err
 	}
-	// THE FILE'S OWN BYTES travel, not a re-encoding of the parsed
-	// document: Tier B's secrets are `${VAR}` pointers stored verbatim, and
-	// the node forms its own opinion of the document anyway.
-	doc, err := os.ReadFile(t.path)
-	if err != nil {
-		return fmt.Errorf("company config %s: %w", t.path, err)
-	}
-	id, epoch, err := client.Import(ctx, doc, summary)
+	id, epoch, err := client.Import(ctx, settings, summary)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "imported %s as revision %s, active on epoch %d\n",
 		t.path, id, epoch)
 	fmt.Fprintf(stdout, "wrote to %s\n", client.Describe())
+
+	authored := config.AuthoredChart(company)
+	if len(authored.Edges()) == 0 {
+		// A COMPANY WITH NO UNITS AND NO SEATS is a real authoring state,
+		// and importing nothing would write a ledger row saying an empty
+		// structure had landed — which the next edited file would then
+		// have to be told apart from.
+		return nil
+	}
+	return publishChart(ctx, boot, t, authored, stdout)
+}
+
+// publishChart writes the chart half: the structure, then each object.
+func publishChart(ctx context.Context, boot *config.Bootstrap, t importTarget,
+	authored chart.Authored, stdout io.Writer,
+) error {
+	client, err := newChartClient(boot, t.apiURL)
+	if err != nil {
+		return err
+	}
+	// THE DOMAIN'S OWN KEY, which the boot seed computes the same way: two
+	// importers of one file must agree, or each rewrites every row the
+	// other already wrote and wakes everybody a second time.
+	revision := chart.ImportKey(authored)
+	at, err := client.ImportStructure(ctx, revision, authored.Edges())
+	if err != nil {
+		return fmt.Errorf("publish the org chart from %s: %w", t.path, err)
+	}
+	fmt.Fprintf(stdout, "published %d unit(s) and %d seat(s) at %s\n",
+		len(authored.Units), len(authored.Seats), at)
+
+	// EACH OBJECT'S CONTENT, on its own subject. The import record
+	// deliberately carries none: a chart of five hundred seats at this
+	// domain's prose bound is megabytes, and a broker's default max_payload
+	// is one mebibyte — so an import that carried content would be refused
+	// on exactly the companies large enough to need it.
+	for _, unit := range authored.Units {
+		if err := client.WriteUnit(ctx, unit); err != nil {
+			return fmt.Errorf("write the unit %s: %w", unit.Key, err)
+		}
+	}
+	for _, seat := range authored.Seats {
+		if err := client.WriteSeat(ctx, seat); err != nil {
+			return fmt.Errorf("write the seat %s: %w", seat.Handle, err)
+		}
+	}
+	fmt.Fprintf(stdout, "wrote to %s\n", client.Describe())
 	return nil
+}
+
+// settingsHalfOf is the file with its two chart keys removed.
+//
+// THE NODE TREE RATHER THAN THE PARSED VALUE, for the reason
+// [importThroughNode] gives: what travels is what the operator wrote. A
+// re-encoding would drop every comment, resolve every anchor and re-quote
+// every scalar, and the diff an operator reads afterwards would be of a
+// document nobody authored.
+func settingsHalfOf(path string) ([]byte, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("company config %s: %w", path, err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		// THE PARSE FAILURE IS THE LOADER'S TO REPORT, with its own line
+		// numbers: the caller has already read this file into a company,
+		// so reaching here at all means something changed underneath.
+		return nil, fmt.Errorf("company config %s: %w", path, err)
+	}
+	root := &doc
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		root = root.Content[0]
+	}
+	if root.Kind != yaml.MappingNode {
+		return raw, nil
+	}
+	kept := make([]*yaml.Node, 0, len(root.Content))
+	// A MAPPING'S CONTENT IS KEY, VALUE, KEY, VALUE, so the step is two.
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if slices.Contains(config.ChartKeys(), root.Content[i].Value) {
+			continue
+		}
+		kept = append(kept, root.Content[i], root.Content[i+1])
+	}
+	root.Content = kept
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return nil, fmt.Errorf("company config %s: %w", path, err)
+	}
+	return out, nil
 }
 
 // sayTheChartWasNotPublished tells an operator that the units and seats in the

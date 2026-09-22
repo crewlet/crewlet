@@ -874,6 +874,60 @@ func TestUsageAdvertisesEveryDispatchedCommand(t *testing.T) {
 				"can only be found by reading the source:\n%s", cmd, help)
 		}
 	}
+
+	// AND THE OTHER DIRECTION, which is the half this walk did not have:
+	// a usage line for a command the switch does not dispatch sends an
+	// operator to `unknown command`, with the binary's own help behind it.
+	// That is how a command REMOVED from the switch goes on being
+	// advertised, and a removal is exactly when nobody re-reads the help.
+	dispatched := map[string]bool{}
+	for _, cmd := range dispatchedCommands(t) {
+		dispatched[cmd] = true
+	}
+	for _, advertised := range advertisedCommands(t, help) {
+		if !dispatched[advertised] {
+			t.Errorf("usage names `crewlet %s` and run() dispatches no such "+
+				"command, so it answers `unknown command`", advertised)
+		}
+	}
+}
+
+// advertisedCommands returns the command word of every `crewlet <word>` line
+// in the usage text.
+//
+// THE FIRST WORD ONLY, because a usage line names the command and then its
+// shape — `crewlet budgets <cmd>`, `crewlet backup -dir PATH` — and the
+// switch dispatches on the word.
+func advertisedCommands(t *testing.T, help string) []string {
+	t.Helper()
+	var out []string
+	// THE USAGE BLOCK ONLY, which is what `Usage:` opens: the first line
+	// is `crewlet <version> — …`, and the config section below names
+	// flags rather than commands.
+	_, block, found := strings.Cut(help, "Usage:\n")
+	if !found {
+		t.Fatal("the help text has no usage block, so this half proves nothing")
+	}
+	block, _, _ = strings.Cut(block, "\nConfig:")
+	for _, line := range strings.Split(block, "\n") {
+		line = strings.TrimSpace(line)
+		rest, found := strings.CutPrefix(line, "crewlet ")
+		if !found {
+			continue
+		}
+		word, _, _ := strings.Cut(rest, " ")
+		// The flag spellings and the usage header's own first line.
+		if word == "" || strings.HasPrefix(word, "-") || strings.HasPrefix(word, "<") {
+			continue
+		}
+		if !slices.Contains(out, word) {
+			out = append(out, word)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("the usage text names no commands, so this half proves nothing")
+	}
+	return out
 }
 
 // dispatchedCommands returns the case values of the command switch in run().

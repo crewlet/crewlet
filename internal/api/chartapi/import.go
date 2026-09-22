@@ -88,6 +88,13 @@ func (s *Service) postImport(w http.ResponseWriter, r *http.Request) {
 				"chart, which is refused rather than guessed at"})
 		return
 	}
+	// THE FLEET FIRST, before anything is published. An import rewrites
+	// every placement in the chart in one record, and every node applies
+	// it — including one running an older build, under its own reading of
+	// what a placement means. See [Fleet].
+	if !s.fleetReady(w, r) {
+		return
+	}
 	edges := make([]chart.Edge, 0, len(body.Edges))
 	for _, e := range body.Edges {
 		edges = append(edges, chart.Edge{
@@ -181,4 +188,28 @@ func limitOf(r *http.Request) int {
 		return chart.HistoryLimit
 	}
 	return got
+}
+
+// fleetReady answers the request when a rolling upgrade is still in progress.
+//
+// 409 RATHER THAN 503, because this is not a node that is busy: the fleet is
+// in a state an import must not land in, and the remedy is to finish the
+// upgrade rather than to retry. A node that could not TELL answers 503, which
+// is the retryable one.
+func (s *Service) fleetReady(w http.ResponseWriter, r *http.Request) bool {
+	if s.fleet == nil {
+		return true
+	}
+	reason, err := s.fleet.ImportReady(r.Context())
+	switch {
+	case err != nil:
+		httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable,
+			map[string]string{"detail": err.Error()})
+		return false
+	case reason != "":
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
+			map[string]string{"error": "fleet_mixed_version", "detail": reason})
+		return false
+	}
+	return true
 }

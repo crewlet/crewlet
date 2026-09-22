@@ -26,8 +26,12 @@ subcommand below is served by it.
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
-| `crewlet config import <company.yaml>` | Load a company file's **settings** and activate them as a new `company_config` revision. The file's `roles:` and `units:` are the [org chart](../concepts/chart-domain.md)'s own domain and are NOT published — the command says so and names where they come from |
+| `crewlet config import <company.yaml>` | Load a company file and write **both halves**: the settings as a new `company_config` revision, and — through a running node — the `roles:` and `units:` to the [org chart](../concepts/chart-domain.md)'s own log. Offline it writes the settings alone and says so |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
+| `crewlet chart show` | The company's units and seats, with the log position the answer was read at |
+| `crewlet chart check` | Every way the chart and the applied settings disagree. **Exits non-zero on an error-class finding**, so a deploy can gate on it |
+| `crewlet chart history` | The company-wide reorganisation feed: who moved, who was hired, which team was dissolved |
+| `crewlet chart export [-out PATH]` | The chart as an authored document, whole and unstripped, for a round trip through a file |
 | `crewlet config show` | One-line summary of the active revision |
 | `crewlet config revisions [--limit N]` | List recent revisions (newest first) |
 | `crewlet config diff <UUID> [-against <UUID\|active>]` | Structural diff of two revisions — paths and values, always redacted on both sides |
@@ -175,11 +179,39 @@ crewlet config import <company.yaml> [-config PATH] [-api URL] [-summary STR]
 Validates the Tier B YAML and writes it as a new active revision, recording the
 previously-active revision as its `parent_revision_id`.
 
+**It writes both halves, and it is the only place that knows they came from
+one file.** A company file carries the settings and the org chart, and always
+will — you author one document describing a company. The engine keeps them
+apart, because they are two things with two lifetimes, and `PUT /config`
+refuses a body carrying `roles:` or `units:` by name. So this command divides
+the file:
+
+1. the **settings**, as the file's own bytes minus those two keys — comments,
+   anchors and `${VAR}` pointers intact — to `PUT /config`;
+2. the **structure**, as one record on the chart's own subject, to
+   `POST /chart/import`;
+3. each unit's and each seat's **content**, one record per object.
+
+The order is load-bearing rather than tidy. The settings go first because a
+seat whose model chain names a provider is only valid once that provider
+exists. The structure goes before the content because a content write states
+the unit it believes a seat sits in, and the domain refuses a value that
+disagrees with the row.
+
+The chart import is **keyed on the chart's own content hash**, the same key
+the [boot seed](#crewlet-run) computes, so re-importing an unchanged file is a
+no-op every node reaches the same way rather than a rewrite of every row.
+
+It is **refused while a rolling upgrade is in progress** — `409
+fleet_mixed_version`, naming the node still running the older protocol. An
+import rewrites every placement in the chart and every node applies it,
+including that one, under its own reading of what a placement means.
+
 **It reaches a running node.** The store is exclusive to one process, so
 against a live engine this cannot open the database — and it no longer needs
-to: it detects the held store and goes through that node's `PUT /config`
-instead, which stores the revision **and activates it fleet-wide**, so every
-node converges with no restart. `-api URL` names a node explicitly, which is
+to: it detects the held store and goes through that node's API instead, which
+stores the revision **and activates it fleet-wide**, so every node converges
+with no restart. `-api URL` names a node explicitly, which is
 also how this works from a machine that is not the node at all. This is the
 same routing [`crewlet secrets`](#crewlet-secrets) does for the fleet's secret
 store, and for the same reason: both estates live inside the engine's process.
@@ -192,9 +224,12 @@ what is live and make it live (`GET /config/revisions/<UUID>/diff` and
 `POST /config/revisions/<UUID>/revert`), because `crewlet config diff` and
 `crewlet config activate` open the store the running engine holds.
 
-With the engine **stopped** it writes to this node's own store and marks the
-revision active there, which the node publishes to the fleet at its next start.
-The line it prints says which of the two happened.
+With the engine **stopped** it writes the SETTINGS to this node's own store and
+marks the revision active there, which the node publishes to the fleet at its
+next start. It cannot write the chart at all offline — that is a record on an
+ordered log, which needs the broker this process did not open — so it says how
+many units and seats it did not publish rather than doing either of the two
+silent things. The line it prints says which of the two routes it took.
 
 `-summary` is the audit note recorded with the revision (default
 `imported from <path>`). The revision history is the record of who changed what
@@ -337,6 +372,54 @@ The org chart used to live inside the company document, so a human seat's person
 ---
 
 ---
+
+## `crewlet chart`
+
+```
+crewlet chart show|check|history|export [<config.yaml>] [-url URL] [-token STR] [-out PATH]
+```
+
+The company's [org chart](../concepts/chart-domain.md), from the command line.
+
+**Every one of these goes through a running node**, and that is not a
+limitation to route around. The chart is a LOG: a node's rows are derived from
+it by an applier the engine runs, and the store file is exclusive to whichever
+process holds it — so an offline read would be a second applier, and an
+offline write would be a record nothing published. `crewlet config` opens the
+store directly because a revision *is* a row; this cannot, and that difference
+is the whole shape of the command.
+
+**The editing gestures are deliberately not here.** Hiring, moving and
+renaming are the dashboard's and the [API](api-endpoints.md#chart--the-org-chart-auth-gated)'s,
+because each is a decision somebody makes about a person and none of them is
+improved by being typed. What the command line adds is the three reads a
+person wants in a terminal, and the export that makes a cold break a round
+trip.
+
+### `crewlet chart check`
+
+The [continuous report](../concepts/configuration.md#the-continuous-report-what-nothing-can-refuse-at-a-write):
+every way the chart and the applied settings disagree. Nothing refuses these
+at a write — the two halves are written by different people at different
+times — so this is where they surface.
+
+It **exits non-zero on an error-class finding**, which is what makes it usable
+in a deploy: a seat with no model at all is a company that does not work, and
+a command that reported one and exited 0 would be read as a pass by every
+pipeline that ran it. A warning-class finding is printed and exits 0.
+
+A node that evaluated **nothing** — no chart view, or no settings epoch — is
+an error rather than a pass, because no findings from a node that read nothing
+is the most misleading answer this command could print.
+
+### `crewlet chart export`
+
+The chart as an authored document, whole and **unstripped**, which is why it
+needs the grant that reads the company configuration: this is a round trip —
+the file you edit and import back — so a stripped export would be one that
+silently deletes half of every seat the moment somebody uses it. `-out PATH`
+writes it at `0600`, because it carries the names of every credential the
+company holds.
 
 ## `crewlet secrets`
 

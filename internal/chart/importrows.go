@@ -1,6 +1,10 @@
 package chart
 
-import "encoding/json"
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+)
 
 // TURNING AN AUTHORED COMPANY INTO ROWS, which is what an import does and
 // what the equivalence between the two derivations is measured over.
@@ -152,6 +156,35 @@ func (a Authored) Rows() Chart {
 // placement creates a stub for an object that is not there yet — but which
 // makes the record readable: an operator reading the log sees a chart being
 // built rather than a set of references in whatever order a map produced.
+// ImportKey is the ledger key for one authored chart: a hash of its own
+// content.
+//
+// STABLE ACROSS PROCESSES AND NODES, which is the whole requirement — two
+// nodes booting the same file, or a node and the command line importing it,
+// must produce the SAME key or each would import the same structure under a
+// name the other's ledger does not hold, and every one of them would rewrite
+// every row and wake everybody again.
+//
+// So it is a hash of the canonical JSON of the authored value and of nothing
+// derived from the process that computed it: no time, no node id, no map
+// iteration. The converter builds slices in document order and the edge list
+// is parents before children, which is what makes the JSON canonical without
+// anybody sorting it.
+//
+// HERE RATHER THAN BESIDE EITHER CALLER, because there are two — the boot
+// seed and `crewlet config import` — and a second implementation of a hash is
+// a key that agrees with itself and with nothing else.
+func ImportKey(a Authored) string {
+	body, err := marshal(a)
+	if err != nil {
+		// UNREACHABLE: Authored is slices of strings and named string
+		// types. Falling back to a time-based key would be worse than
+		// the failure, because it would re-import on every boot.
+		return "file:unencodable"
+	}
+	return fmt.Sprintf("file:%x", sha256.Sum256(body))
+}
+
 func (a Authored) Edges() []Edge {
 	out := make([]Edge, 0, len(a.Units)+len(a.Seats))
 	placed := map[string]bool{}
