@@ -269,7 +269,16 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 }
 
 // request wraps one record in the framework's own request shape.
-func (w *Writer) request(rec MutationRecord, opID string,
+//
+// THE RECORD IS TAKEN BY POINTER, and that is what lets a decide FILL IT. Half
+// the gestures in this domain form their payload inside the snapshot — a
+// revocation reads the epoch it is bumping, a seat claim reads the chart
+// position it was decided at, a removal reads the claims it is releasing — and
+// the framework may run a decide AGAIN against a fresh snapshot, so the
+// mutation the encode below reads has to be the one the last run produced.
+// Taken by value, every one of those wrote into a copy nothing encoded and
+// published an empty payload that every node then failed to decode.
+func (w *Writer) request(rec *MutationRecord, opID string,
 	pattern statelog.Pattern, decide func(*sql.Tx) error) statelog.Request {
 
 	// THE OP ID GOES ON THE RECORD, not only on the request. The framework
@@ -291,7 +300,7 @@ func (w *Writer) request(rec MutationRecord, opID string,
 					return statelog.Decision{}, err
 				}
 			}
-			payload, err := Encode(rec)
+			payload, err := Encode(*rec)
 			if err != nil {
 				return statelog.Decision{}, err
 			}

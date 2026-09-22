@@ -238,7 +238,8 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 
 	db := openReplicated(t)
 	for table, columns := range map[string][]string{
-		"iam_people":             {"login", "email_blind", "seat_id", "bucket"},
+		"iam_people": {"login", "email_blind", "seat_id", "chart_position",
+			"bucket"},
 		"iam_credentials":        {"bucket"},
 		"iam_invites":            {"bucket"},
 		"iam_bootstrap_codes":    {"bucket"},

@@ -118,11 +118,15 @@ const (
 	KindLogin ObjectKind = "login"
 
 	// KindSeat is a claim binding one person to one SEAT, by the seat's
-	// derived id.
+	// HANDLE.
 	//
-	// BY THE ID AND NOT THE HANDLE, because a rename moves a handle and
-	// this binding must survive one: the seat id is a UUIDv5 over the
-	// company name and the seat's ORIGIN handle, which nothing moves.
+	// BY THE HANDLE because there is nothing else to bind to: `chart_seats`
+	// is keyed on it and stores no derived id, so a binding to a UUIDv5 the
+	// chart never wrote down would resolve to nothing on every node. A
+	// rename is survived the way every other written-down reference to a
+	// seat survives one — through the chart's `former_keys_json`, whose own
+	// doc states the residue: a former handle goes on resolving until
+	// something else claims it, and then the claimant wins.
 	//
 	// The claim is on the SEAT rather than on the person because that is
 	// the side that must be exclusive: one seat is held by at most one

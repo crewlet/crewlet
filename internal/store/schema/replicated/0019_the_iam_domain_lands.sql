@@ -121,9 +121,33 @@ CREATE TABLE iam_people (
     -- already applied it.
     login              TEXT    NOT NULL DEFAULT '',
     email_blind        TEXT    NOT NULL DEFAULT '',
-    -- The seat this person is bound to, by its DERIVED id rather than its
-    -- handle: a rename moves a handle and this binding survives one.
+    -- The seat this person is bound to, by the HANDLE every other subsystem
+    -- already addresses a seat by — the mailbox, the external accounts, and
+    -- every `lead:` and `manages:` entry in the chart.
+    --
+    -- THE HANDLE AND NOT A DERIVED ID, because there is nothing else to bind
+    -- to: chart_seats is keyed on the handle and stores no derived id, and a
+    -- binding to a value no table carries would resolve to nothing on every
+    -- node. A rename is survived the way every other reference to a seat
+    -- survives one, through chart_seats.former_keys_json — and the residue is
+    -- the chart's own stated residue, that a former handle goes on resolving
+    -- until something else claims it.
     seat_id            TEXT    NOT NULL DEFAULT '',
+    -- The CHART POSITION the bind's decide read that seat row at.
+    --
+    -- IT IS WHAT MAKES THE SEAT LOOKUP THREE-VALUED, which is the whole reason
+    -- it is a column. A seat absent from this node's chart view means one of
+    -- two opposite things — the seat is gone, or this node has not applied the
+    -- hire yet — and the two answers are 403 and 503. Comparing this node's
+    -- own chart position against the value the bind recorded is what tells
+    -- them apart; without it, a node behind on the chart tells everybody it
+    -- has not caught up with that their seat does not exist.
+    --
+    -- A POSITION AND NOT A TIMESTAMP. Two nodes comparing wall clocks is what
+    -- the coordination layer states it never does, and a chart position is
+    -- comparable across a reanchor because it carries the generation in its
+    -- high bits.
+    chart_position     INTEGER NOT NULL DEFAULT 0,
     -- Sealed under this person's own key with their id as AAD. Ciphertext on
     -- every node, and unreadable on every node once a removal has destroyed
     -- the key.

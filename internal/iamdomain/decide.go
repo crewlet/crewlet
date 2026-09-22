@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -112,7 +113,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	// it there. What makes a retry of the whole gesture land once is the
 	// operation ledger, which is the mechanism for that anyway — the
 	// guarding row never was.
-	result, err := w.publish(ctx, w.request(rec, in.OpID, statelog.PatternArbitrated, nil))
+	result, err := w.publish(ctx, w.request(&rec, in.OpID, statelog.PatternArbitrated, nil))
 	return result.Position, err
 }
 
@@ -206,14 +207,8 @@ func (w *Writer) claim(ctx context.Context, kind ObjectKind, token, personID,
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	mutation, err := EncodeClaim(Claim{
-		V: DocumentVersion, Person: personID, Sealed: sealed,
-	})
-	if err != nil {
-		return statelog.Position{}, err
-	}
 	rec, err := w.record(subject, OpClaim, personID, PeopleScope(personID),
-		mutation, "")
+		nil, "")
 	if err != nil {
 		return statelog.Position{}, err
 	}
@@ -234,6 +229,7 @@ func (w *Writer) claim(ctx context.Context, kind ObjectKind, token, personID,
 		if held && holder != personID {
 			return &ErrClaimed{Kind: kind, Token: token, Holder: holder}
 		}
+		claim := Claim{V: DocumentVersion, Person: personID, Sealed: sealed}
 		if kind == KindSeat {
 			// THE CHART READ GUARANTEES NOTHING, and this is the one
 			// place in the domain that crosses a log. A seat lives on
@@ -246,11 +242,55 @@ func (w *Writer) claim(ctx context.Context, kind ObjectKind, token, personID,
 			if err := seatExists(ctx, tx, token); err != nil {
 				return err
 			}
+			// AND THE POSITION THAT READ WAS TAKEN AT GOES ON THE
+			// RECORD, which is the half that IS load-bearing. It is
+			// read in the SAME TRANSACTION as the seat row above, so
+			// the number states exactly what was seen: any node whose
+			// own chart position covers it has seen everything this
+			// decide saw, and one below it has not. That is what turns
+			// a seat missing from a node's view into two answers
+			// instead of one wrong one.
+			claim.ChartPosition = chartPositionOf(ctx, tx)
 		}
+		mutation, err := EncodeClaim(claim)
+		if err != nil {
+			return err
+		}
+		rec.Mutation = mutation
 		return nil
 	}
-	result, err := w.publish(ctx, w.request(rec, opID, statelog.PatternCreate, decide))
+	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternCreate, decide))
 	return result.Position, err
+}
+
+// chartPositionOf is the org chart log's checkpoint on THIS node, read inside
+// a decide's own transaction.
+//
+// ZERO WHEN IT CANNOT BE READ, and that is the safe direction rather than a
+// swallowed error. The value is a FLOOR a reader compares its own position
+// against, so zero says "this bind claims to have seen nothing", which every
+// node's position covers — and a seat absent from the view then answers 403
+// naming the seat rather than 503 for ever. The opposite default, refusing the
+// bind, would make a node that has never applied a chart record unable to bind
+// anybody to a seat at all, which is exactly the node a first company sets up
+// on.
+func chartPositionOf(ctx context.Context, tx *sql.Tx) uint64 {
+	var generation, seq int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT generation, seq FROM statelog_cursor WHERE stream = ?`,
+		topics.ChartLogStream).Scan(&generation, &seq)
+	if err != nil {
+		return 0
+	}
+	// UINT64 ON THE RECORD, int64 in the column, which is this domain's
+	// existing convention for a packed position ([Eviction.From] is the
+	// same). A packed position is never negative — the generation is a
+	// uint32 shifted 40, which cannot reach the sign bit — so the two
+	// forms name one value.
+	return uint64(statelog.Position{
+		Stream: topics.ChartLogStream, Generation: uint32(generation),
+		Seq: uint64(seq),
+	}.Packed())
 }
 
 // Release gives a claim back.
@@ -298,7 +338,7 @@ func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, opID,
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	result, err := w.publish(ctx, w.request(rec, opID, statelog.PatternArbitrated, decide))
+	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, decide))
 	_ = holder
 	return result.Position, err
 }
@@ -322,7 +362,16 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 		return statelog.Position{}, errors.New("iamdomain: a revocation needs " +
 			"a person and an operation id")
 	}
-	var mutation []byte
+	// THE RECORD IS FORMED INSIDE THE DECIDE, and that is what the
+	// framework's rounds mean: a decide may run AGAIN against a fresh
+	// snapshot, so the mutation the encode reads has to be the one the last
+	// run produced. [Writer.request] takes the record by pointer for
+	// exactly this.
+	rec, err := w.record(PersonSubject(personID), OpRevoke, personID,
+		PeopleScope(personID), nil, reason)
+	if err != nil {
+		return statelog.Position{}, err
+	}
 	decide := func(tx *sql.Tx) error {
 		var current int64
 		err := tx.QueryRowContext(ctx,
@@ -335,43 +384,13 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 			return fmt.Errorf("iamdomain: read person %s's epoch: %w",
 				personID, err)
 		}
-		mutation, err = EncodeRevocation(Revocation{
+		rec.Mutation, err = EncodeRevocation(Revocation{
 			V: DocumentVersion, Epoch: uint64(current) + 1,
 		})
 		return err
 	}
-	// THE RECORD IS FORMED TWICE, and that is what the framework's rounds
-	// mean: a decide may run again against a fresh snapshot, so the
-	// mutation it fills has to be the one the encode below reads. The
-	// closure over `mutation` is how the two stay one decision.
-	rec, err := w.record(PersonSubject(personID), OpRevoke, personID,
-		PeopleScope(personID), nil, reason)
-	if err != nil {
-		return statelog.Position{}, err
-	}
-	rec.OpID = opID
-	req := statelog.Request{
-		Subject: statelog.Subject{Kind: string(KindPerson), ID: personID},
-		Scope:   rec.Scope.Resolve(rec.Subject),
-		OpID:    opID,
-		Pattern: statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			if err := decide(tx); err != nil {
-				return statelog.Decision{}, err
-			}
-			rec.Mutation = mutation
-			payload, err := Encode(rec)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			env, err := Domain{}.Envelope(payload)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			return statelog.Decision{Payload: payload, Envelope: env}, nil
-		},
-	}
-	result, err := w.publish(ctx, req)
+	result, err := w.publish(ctx,
+		w.request(&rec, opID, statelog.PatternArbitrated, decide))
 	return result.Position, err
 }
 
@@ -412,48 +431,29 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	rec.OpID = opID
-	req := statelog.Request{
-		Subject: statelog.Subject{Kind: string(KindInvalidation)},
-		Scope:   rec.Scope.Resolve(rec.Subject),
-		OpID:    opID,
-		Pattern: statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			var current int64
-			err := tx.QueryRowContext(ctx,
-				`SELECT generation FROM iam_session_generation WHERE singleton = 0`).
-				Scan(&current)
-			switch {
-			case errors.Is(err, sql.ErrNoRows):
-				// NEVER BUMPED IS ZERO, which is what a bearer minted
-				// before anybody ever invalidated anything carries. The
-				// first bump therefore lands at 1 and ends exactly the
-				// cookies that predate it.
-				current = 0
-			case err != nil:
-				return statelog.Decision{}, fmt.Errorf("iamdomain: read the "+
-					"session generation: %w", err)
-			}
-			mutation, err := EncodeInvalidation(Invalidation{
-				V: GateRecordVersion, Generation: uint64(current) + 1,
-				By: w.Actor,
-			})
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			rec.Mutation = mutation
-			payload, err := Encode(rec)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			env, err := Domain{}.Envelope(payload)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			return statelog.Decision{Payload: payload, Envelope: env}, nil
-		},
+	decide := func(tx *sql.Tx) error {
+		var current int64
+		err := tx.QueryRowContext(ctx,
+			`SELECT generation FROM iam_session_generation WHERE singleton = 0`).
+			Scan(&current)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// NEVER BUMPED IS ZERO, which is what a bearer minted
+			// before anybody ever invalidated anything carries. The
+			// first bump therefore lands at 1 and ends exactly the
+			// cookies that predate it.
+			current = 0
+		case err != nil:
+			return fmt.Errorf("iamdomain: read the session generation: %w", err)
+		}
+		rec.Mutation, err = EncodeInvalidation(Invalidation{
+			V: GateRecordVersion, Generation: uint64(current) + 1,
+			By: w.Actor,
+		})
+		return err
 	}
-	result, err := w.publish(ctx, req)
+	result, err := w.publish(ctx,
+		w.request(&rec, opID, statelog.PatternArbitrated, decide))
 	return result.Position, err
 }
 
@@ -479,7 +479,7 @@ func (w *Writer) SetStage(ctx context.Context, personID string, stage iam.Stage,
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	result, err := w.publish(ctx, w.request(rec, opID, statelog.PatternArbitrated, nil))
+	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, nil))
 	return result.Position, err
 }
 
@@ -504,47 +504,38 @@ func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	rec.OpID = opID
-	req := statelog.Request{
-		Subject: statelog.Subject{Kind: string(KindPerson), ID: personID},
-		Scope:   rec.Scope.Resolve(rec.Subject),
-		OpID:    opID,
-		Pattern: statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			var claims Claims
-			err := tx.QueryRowContext(ctx, `
-				SELECT email_blind, login, seat_id FROM iam_people WHERE id = ?`,
-				personID).Scan(&claims.EmailBlind, &claims.Login, &claims.SeatID)
-			switch {
-			case errors.Is(err, sql.ErrNoRows):
-				// ALREADY GONE IS NOT AN ERROR. A removal is replayed
-				// on every node and re-delivered on any of them, and
-				// refusing the second would stall an applier over a
-				// record that has already taken effect.
-				return statelog.Decision{}, nil
-			case err != nil:
-				return statelog.Decision{}, fmt.Errorf("iamdomain: read person "+
-					"%s's claims: %w", personID, err)
-			}
-			mutation, err := EncodeRemoval(Removal{
-				V: GateRecordVersion, Released: claims,
-			})
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			rec.Mutation = mutation
-			payload, err := Encode(rec)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			env, err := Domain{}.Envelope(payload)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			return statelog.Decision{Payload: payload, Envelope: env}, nil
-		},
+	decide := func(tx *sql.Tx) error {
+		var claims Claims
+		err := tx.QueryRowContext(ctx, `
+			SELECT email_blind, login, seat_id FROM iam_people WHERE id = ?`,
+			personID).Scan(&claims.EmailBlind, &claims.Login, &claims.SeatID)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// NO ROW IS NOT A REASON TO PUBLISH NOTHING, and this arm
+			// used to be one. A person can be missing from THIS node's
+			// rows for two opposite reasons — they were already
+			// removed, or this node has not applied their enrolment yet
+			// — and a decide that quietly published nothing turned the
+			// second into a removal that silently did not happen. So it
+			// publishes, carrying an EMPTY released set, which is the
+			// truth: this snapshot knows of no claims to give back.
+			//
+			// The cost when they really were already removed is one
+			// record every node's own gate drops, which is what the
+			// removal gate is for — and a removal is the rarest write
+			// in this domain.
+			claims = Claims{}
+		case err != nil:
+			return fmt.Errorf("iamdomain: read person %s's claims: %w",
+				personID, err)
+		}
+		rec.Mutation, err = EncodeRemoval(Removal{
+			V: GateRecordVersion, Released: claims,
+		})
+		return err
 	}
-	result, err := w.publish(ctx, req)
+	result, err := w.publish(ctx,
+		w.request(&rec, opID, statelog.PatternArbitrated, decide))
 	return result.Position, err
 }
 
@@ -572,7 +563,7 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	result, err := w.publish(ctx, w.request(rec, in.OpID, statelog.PatternCreate, nil))
+	result, err := w.publish(ctx, w.request(&rec, in.OpID, statelog.PatternCreate, nil))
 	return result.Position, err
 }
 
@@ -602,7 +593,7 @@ func (w *Writer) CloseSession(ctx context.Context, lineage, reason, opID string)
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	result, err := w.publish(ctx, w.request(rec, opID, statelog.PatternArbitrated, nil))
+	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, nil))
 	return result.Position, err
 }
 

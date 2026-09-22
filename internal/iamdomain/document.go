@@ -118,6 +118,28 @@ type Claim struct {
 	// authenticated.
 	Sealed string `json:"sealed,omitempty"`
 
+	// ChartPosition is the org chart log's position the bind's decide read
+	// the seat row at, and it is set on a SEAT claim and on nothing else.
+	//
+	// IT IS THE FIELD THAT MAKES THE SEAT LOOKUP THREE-VALUED. A seat
+	// missing from a node's chart view means either that the seat is GONE
+	// or that this node has not applied the hire yet, and those are 403
+	// and 503 — opposite answers a reader cannot tell apart without a
+	// position to compare its own against. Without it a node behind on the
+	// chart tells everybody it has not caught up with that their seat does
+	// not exist.
+	//
+	// IT TRAVELS ON THE RECORD rather than being read per node, because it
+	// is a fact about WHEN THE DECISION WAS MADE: the node that decided is
+	// the only one that can state it, and every other node's own chart
+	// position is the thing being compared against it.
+	//
+	// A POSITION AND NOT AN INSTANT, for the reason the coordination layer
+	// gives for never comparing two nodes' wall clocks — and it is
+	// comparable across a reanchor because the generation rides in its
+	// high bits.
+	ChartPosition uint64 `json:"chart_position,omitempty"`
+
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
@@ -632,7 +654,8 @@ func checkVersion(got int) error {
 var (
 	personFields = jsoncarry.Names(Person{}, "name_sealed", "email_sealed",
 		"credentials", "grants")
-	claimFields      = jsoncarry.Names(Claim{}, "person", "sealed")
+	claimFields = jsoncarry.Names(Claim{}, "person", "sealed",
+		"chart_position")
 	invitationFields = jsoncarry.Names(Invitation{}, "sealed", "invited_by",
 		"grants", "expires_at", "person")
 	sessionFields = jsoncarry.Names(Session{}, "absolute_expires_at",

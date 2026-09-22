@@ -84,9 +84,18 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	// shape with a different target, and stating them apart is what stops a
 	// release needing to know who the holder was.
 	if at.record.Op == OpRelease {
+		// A RELEASED SEAT CLEARS ITS POSITION TOO. Left behind it would
+		// say a binding that no longer exists was decided against a
+		// chart this node has seen, which is a sentence about nothing —
+		// and the next bind would then read one claim's handle beside
+		// another's position until it overwrote both.
+		clear := column + ` = ''`
+		if kind == KindSeat {
+			clear += ", chart_position = 0"
+		}
 		result, err := tx.ExecContext(ctx, `
 			UPDATE iam_people
-			SET `+column+` = '', updated_at = ?, scoped_through = ?
+			SET `+clear+`, updated_at = ?, scoped_through = ?
 			WHERE `+column+` = ? AND scoped_through < ?`,
 			at.unix(), at.packed, at.record.Subject.ID, at.packed)
 		if err != nil {
@@ -110,9 +119,13 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	// arbitrates the ADDRESS, and a stale row carrying it is this node's
 	// own residue — so the apply is what makes the column single-holder,
 	// deterministically, on every node.
+	stale := column + ` = ''`
+	if kind == KindSeat {
+		stale += ", chart_position = 0"
+	}
 	cleared, err := tx.ExecContext(ctx, `
 		UPDATE iam_people
-		SET `+column+` = '', updated_at = ?, scoped_through = ?
+		SET `+stale+`, updated_at = ?, scoped_through = ?
 		WHERE `+column+` = ? AND id <> ? AND scoped_through < ?`,
 		at.unix(), at.packed, at.record.Subject.ID, at.record.Person, at.packed)
 	if err != nil {
@@ -138,14 +151,24 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	// The alternative order — person first — would leave a person nobody
 	// can find, holding an address somebody else may then take, which is
 	// the failure this estate has no index to refuse.
+	//
+	// A SEAT CLAIM ALSO WRITES THE CHART POSITION it was decided at, and
+	// the two move together for a reason: the position is only meaningful
+	// as a statement about the seat in the same row. A claim that set the
+	// handle and left a stale position behind would tell every reader that
+	// this node's view covers a decision it does not.
+	assign := column + " = excluded." + column
+	if kind == KindSeat {
+		assign += ", chart_position = excluded.chart_position"
+	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_people
-			(id, kind, stage, login, email_blind, seat_id,
+			(id, kind, stage, login, email_blind, seat_id, chart_position,
 			 name_sealed, email_sealed, shredded, bucket,
 			 created_at, updated_at, version, scoped_through, document)
-		VALUES (?, '', '', ?, ?, ?, x'', x'', 0, ?, ?, ?, 0, ?, x'')
+		VALUES (?, '', '', ?, ?, ?, ?, x'', x'', 0, ?, ?, ?, 0, ?, x'')
 		ON CONFLICT(id) DO UPDATE SET
-			`+column+` = excluded.`+column+`,
+			`+assign+`,
 			updated_at     = excluded.updated_at,
 			scoped_through = excluded.scoped_through
 		WHERE excluded.scoped_through > iam_people.scoped_through`,
@@ -153,6 +176,7 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 		claimColumn(KindLogin, kind, at.record.Subject.ID),
 		claimColumn(KindEmail, kind, at.record.Subject.ID),
 		claimColumn(KindSeat, kind, at.record.Subject.ID),
+		int64(claim.ChartPosition),
 		at.bucket(), at.unix(), at.unix(), at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: bind the %s claim on %s to %s: %w",

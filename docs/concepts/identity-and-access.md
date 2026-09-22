@@ -193,10 +193,16 @@ deadline nobody set is a session nobody bounded, and reading it as "never
 expires" turns a field somebody forgot to fill in into a credential that
 outlives the company.
 
-A seat binding carries a timestamp for the same reason. The org chart is edited
-live, so a binding read once at sign-in is stale the moment a revision moves —
-and a stale binding is somebody still writing as a seat the chart no longer
-gives them.
+A seat binding carries a **chart position** rather than a timestamp, and the
+difference is what makes the seat lookup three-valued. The org chart is a
+separate log with its own applier, so a seat missing from a node's view means
+one of two opposite things — the seat is *gone*, or this node has *not applied
+the hire yet* — and those answers are 403 and 503. The binding records the
+chart position the decision was made at, so any node can compare its own
+position against it and tell them apart. Comparing two nodes' wall clocks is
+what the coordination layer states it never does, and a node merely behind on
+the chart would otherwise tell everybody it has not caught up with that their
+seat does not exist.
 
 ---
 
@@ -330,10 +336,11 @@ claim arbitrates on.**
 |---|---|---|
 | An email address | `crewlet.iam.log.email.<blind>` | create-only, expectation zero |
 | A login | `crewlet.iam.log.login.<login>` | create-only, expectation zero |
-| A seat binding | `crewlet.iam.log.seat.<seat id>` | create-only, expectation zero |
+| A seat binding | `crewlet.iam.log.seat.<seat handle>` | create-only, expectation zero |
 | A session | `crewlet.iam.log.session.<lineage>` | create-only, expectation zero |
 | A person's own content | `crewlet.iam.log.person.<id>` | conditional on the row's version |
 | The first-person bootstrap | `crewlet.iam.log.bootstrap` | one object for the whole company |
+| Ending every session at once | `crewlet.iam.log.invalidation` | one object for the whole company |
 
 Two administrators enrolling one address publish to the same subject at the
 same expectation, the broker accepts exactly one, and the loser is told which
