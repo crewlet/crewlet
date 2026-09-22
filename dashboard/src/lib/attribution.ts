@@ -17,10 +17,9 @@
  *
  * The engine already answers it. `work_item` returns `history[]`, each entry
  * carrying `actor`, `actor_kind`, `turn_id`, `at` and a `fields` bag keyed on
- * the property names the rail renders — `status`, `assignee`, `due`, `points`,
- * `priority`, `start`, `title`, `type` — and the item screen already reads it
- * for the History tab. So this is a walk over data the page has in hand, not a
- * query, and it costs nothing to render.
+ * the tracker's own field names — every one [CHANGE_FIELDS] below names — and
+ * the item screen already reads it for the History tab. So this is a walk over
+ * data the page has in hand, not a query, and it costs nothing to render.
  *
  * # The window is why an absent answer is an answer
  *
@@ -47,16 +46,28 @@ const KINDS = new Set(["agent", "human", "operator", "system"]);
  *
  * THE NAMES ARE THE ENGINE'S, NOT THE RAIL'S. A property is labelled "Due" and
  * recorded as `due`; "Estimate" is `estimate` and not `estimate_minutes`, which
- * is what the task row calls the same number. A key that names no field
- * produces no attribution and no error — the line simply never appears — so
- * the list is declared once here, the type makes a typo a compile failure, and
+ * is what the task row calls the same number; "Watching" is `watchers` and
+ * "Routes to" is `routing_unit`. A key that names no field produces no
+ * attribution and no error — the line simply never appears — so the list is
+ * declared once here, the type makes a typo a compile failure, and
  * `internal/tracker/attribution_test.go` holds it against `TaskDeltas` so a
  * field added or renamed in Go cannot leave this silently short.
+ *
+ * ONE NAME PER ROW THE RAIL DRAWS, and no more: the four people-and-routing
+ * names below joined the list when `TaskDeltas` started comparing them, which
+ * is what turned "who added this watcher" from unanswerable into a walk over
+ * the log the page already holds. A delta the rail has no row for — `parent`,
+ * `archived`, `body`, the checklists — is deliberately absent rather than
+ * declared unused, because the gate reports the engine's unattributed fields
+ * and a name here with nowhere to render is a row somebody thinks exists.
  */
 export const CHANGE_FIELDS = [
   "title",
   "status",
   "assignee",
+  "reporter",
+  "collaborators",
+  "watchers",
   "priority",
   "project",
   "type",
@@ -65,6 +76,7 @@ export const CHANGE_FIELDS = [
   "start",
   "estimate",
   "points",
+  "routing_unit",
 ] as const;
 
 export type ChangeField = (typeof CHANGE_FIELDS)[number];

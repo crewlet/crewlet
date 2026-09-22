@@ -235,10 +235,16 @@ func TestOnlyTheDeltaFieldsThatNameTasksAreResolved(t *testing.T) {
 				kind, RelationPage)
 		}
 	}
-	// AND THE TWO BEYOND THE EDGES: the mirror a blocker carries, and a
-	// person's own queue, which is an ordered list of task ids and renders
-	// on the same page.
-	for _, field := range []string{"blocking", "priorities"} {
+	// AND THE FOUR BEYOND THE EDGES: the mirror a blocker carries, a
+	// person's own queue — an ordered list of task ids that renders on the
+	// same page — the parent a reparent moves a task between, and the root a
+	// cascade removed it with. The last two are scalars and are resolved all
+	// the same: [TaskDeltas] records them by ID like every relation, so
+	// leaving them out is what makes a reparent and a cascade removal the
+	// two rows on an item's History tab still rendering a uuid.
+	for _, field := range []string{
+		"blocking", "priorities", "parent", "removed_with",
+	} {
 		if !named[field] {
 			t.Errorf("the key map does not resolve %q, so that column renders "+
 				"uuids", field)

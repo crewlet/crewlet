@@ -644,13 +644,17 @@ the history row says which one and what it became. Everything else — a watcher
 added, a checklist ticked off, a description rewritten — reads the same on
 both.
 
-A dependency is where the stored form would otherwise show: an edge records the
-other item by its **id**, because its key belongs to that item's own row and a
-history row is written once and corrected by nothing. So the **answer** carries
-a `keys` map naming the items its deltas point at, resolved when the question is
-asked rather than when the change was made — which is what lets a screen draw
-"Waiting on: — → ENG-2" from a row that stored a uuid. An item this node has not
-applied is simply missing from the map, and a reader falls back to the id.
+A dependency is where the stored form would otherwise show, and so are a
+re-parent and a cascade removal: each records the other item by its **id**,
+because its key belongs to that item's own row and a history row is written
+once and corrected by nothing. So the **answer** carries a `keys` map naming
+the items its deltas point at — every link a task authors except `page`, which
+names a knowledge-base page rather than an item, plus the `blocking` mirror, a
+person's priority queue, and the `parent` and `removed_with` scalars — resolved
+when the question is asked rather than when the change was made. That is what
+lets a screen draw "Waiting on: — → ENG-2", or "Parent: — → ENG-2", from a row
+that stored a uuid. An item this node has not applied is simply missing from
+the map, and a reader falls back to the id.
 
 The three project reads are a seat's for the same reason the catalogue read
 is: a create refuses a project the company does not have, a type it has not

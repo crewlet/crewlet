@@ -649,13 +649,21 @@ func TestABodyEditRecordsAMarkerRatherThanTheProse(t *testing.T) {
 	}
 }
 
-// A RE-PARENT NAMES BOTH ENDS, BY ID.
+// A RE-PARENT NAMES BOTH ENDS, BY ID — AND THE ANSWER NAMES THE KEY.
 //
 // `reparented` was one of the kinds whose row read as the bare word: the
 // dashboard's own change table says so, and a person asking "where did this
 // move from" had nothing on the row to answer with. The id rather than the key
 // is `deltas.go`'s rule — a key is a fact about another task's row — and the
 // activity read resolves it against the rows this node holds when it answers.
+//
+// BOTH HALVES IN ONE CASE, because either alone is a uuid on somebody's
+// screen: the row's id is what the applier is free to write, and the key map
+// is the only thing that turns it into "Parent: — → ENG-2". `parent` is a
+// SCALAR delta and the map was built for the edge lists, so nothing but this
+// says the read asks about it — see
+// TestOnlyTheDeltaFieldsThatNameTasksAreResolved for the declaration the field
+// list is held against.
 func TestAReparentRecordsBothParentsByID(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -674,5 +682,18 @@ func TestAReparentRecordsBothParentsByID(t *testing.T) {
 		`{"parent":{"from":"","to":"t-parent"}}` {
 
 		t.Errorf("a re-parent recorded %s", got)
+	}
+
+	// THE KEY IS READ OFF THE ROW rather than written into this case: it is
+	// minted by the create from the project's own counter, so what the
+	// fixture calls the task is not what it is called.
+	want := r.task(t, "t-parent").Task.Key
+	if want == "" {
+		t.Fatal("the parent has no key, so this half asserts nothing")
+	}
+	answer := r.activity(tracker.ActivityQuery{Project: "ENG"})
+	if got := answer.Keys["t-parent"]; got != want {
+		t.Errorf("the answer resolves the new parent to %q, want %q — the "+
+			"item's History tab renders the uuid without it", got, want)
 	}
 }

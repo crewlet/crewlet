@@ -1251,6 +1251,7 @@ export function ItemProps({
           value: item.reporter ? (
             <SeatChip name={seatName(item.reporter)} handle={item.reporter} />
           ) : undefined,
+          setBy: by("reporter"),
         },
         // DROPPED rather than dashed: a task nobody is collaborating on has
         // no collaborators, which is not the same as an empty set of them.
@@ -1265,6 +1266,11 @@ export function ItemProps({
                     ))}
                   </span>
                 ),
+                // WHO LAST CHANGED THE SET, which is the honest claim a set
+                // can carry: the log records the whole membership on each
+                // side, so the line names the person who moved it and never
+                // which member they added.
+                setBy: by("collaborators"),
               },
             ]
           : []),
@@ -1288,6 +1294,10 @@ export function ItemProps({
                     ))}
                   </span>
                 ),
+                // `watchers` AND NOT `muted`, although the row draws both: a
+                // property carries one line, and who last changed who is
+                // WATCHING is the one a reader of this row is asking for.
+                setBy: by("watchers"),
               },
             ]
           : []),
@@ -1418,7 +1428,13 @@ export function ItemProps({
           // and it is shown only where it has MOVED, because the pair being
           // equal is the ordinary case and repeating it is noise.
           ...(item.routing_unit && item.routing_unit !== item.filed_unit
-            ? [{ label: "Routes to", value: item.routing_unit }]
+            ? [
+                {
+                  label: "Routes to",
+                  value: item.routing_unit,
+                  setBy: by("routing_unit"),
+                },
+              ]
             : []),
           ...((item.former_keys ?? []).length > 0
             ? [
