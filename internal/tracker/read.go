@@ -710,7 +710,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 			// THE ALIAS CARRIES ITS OPEN CONDITION, which is what makes
 			// it the same predicate as the preset that means the same
 			// thing rather than a second one that drifts.
-			add("t.status_group IN ('not_started','active')")
+			add("t.status_group IN (" + openGroupsSQL + ")")
 		}
 	}
 	for column, filter := range map[string]*NumFilter{
@@ -770,11 +770,11 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		// cancelled inside it is in the answer exactly as one done
 		// inside it is — which is what the finish stamp being by GROUP
 		// buys, and why the board's Cancelled column is not empty.
-		add("(t.status_group IN ('not_started','active') OR "+
+		add("(t.status_group IN ("+openGroupsSQL+") OR "+
 			"(t.finished_at IS NOT NULL AND t.finished_at >= ?))",
 			store.EncodeTime(now.Add(-q.ShowClosed.Recent)))
 	default:
-		add("t.status_group IN ('not_started','active')")
+		add("t.status_group IN (" + openGroupsSQL + ")")
 	}
 
 	if len(q.Any) > 0 {
