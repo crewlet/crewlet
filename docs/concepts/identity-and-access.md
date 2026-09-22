@@ -212,6 +212,78 @@ anonymous: the absence of an answer is not evidence of absence.
 
 ---
 
+## How the first person exists
+
+A fresh deployment's identity estate is **empty**. There is nobody to invite
+the first operator, and the Tier A token that could create one is a machine
+credential rather than a person — so without a way in, a company's only durable
+credential is a token in a config file, which is the one you least want it to
+be.
+
+So a node that finds an empty estate mints a **one-time code**, writes it beside
+its store at `0600`, and publishes its SHA-256 on the identity log. Nothing ever
+serves the code: the log line, the health body and the welcome screen carry its
+**path**. Reading it means having access to the host, which is the only
+credential a company genuinely has before it has any.
+
+```mermaid
+sequenceDiagram
+    participant Node
+    participant Log as Identity log
+    participant Person
+    Node->>Node: empty estate → mint a code
+    Node->>Node: write 0600 beside the store
+    Node->>Log: publish SHA-256 (one subject, fleet-wide)
+    Person->>Node: read the file on the host
+    Person->>Node: POST /auth/bootstrap {code, login, password}
+    Node->>Log: enrol the person (whole ceiling)
+    Node->>Log: spend the code
+    Node->>Node: remove the file
+    Node-->>Person: session cookie
+```
+
+Three things about that sequence are load-bearing:
+
+- **It arbitrates on one subject for the whole domain.** Two live bootstrap
+  codes is two ways into an engine that has no other way in, so two nodes
+  minting at once contend at the broker and exactly one wins.
+- **The code is spent on the log before the file is removed.** The record is
+  what every *other* node reads to know the company has started; a file deleted
+  first leaves a company that has an operator and a node that cannot prove it.
+- **The first person receives every grant the ceiling permits.** This is the
+  one stated exemption in the authority model, and it is taken at the moment
+  nobody holds a credential — the alternative is a first operator who cannot
+  grant themselves what they need in order to grant anybody anything.
+
+It **closes for good** the moment anybody is enrolled, whatever the
+configuration says, because what it creates is an operator carrying the whole
+ceiling. `api.auth.bootstrap: closed` shuts it from the start, which is right
+for a deployment restored from a backup where the answer is "ask somebody who
+already has an account".
+
+## Everybody after the first arrives by invitation
+
+An invitation is a **claim on an address by somebody who does not have a person
+yet**, so it arbitrates where an address does — which is what makes an invite
+and an enrolment for one address contend, and what makes two nodes redeeming
+one link contend with each other.
+
+What redeeming confers is decided **once, by whoever issued it**, rather than
+again by whoever happens to process the redemption. A redemption is therefore
+not a way to ask for more than was offered.
+
+**The GET renders and never spends.** A link is followed by things that are not
+the person it was sent to: a mail client prefetching, a security scanner opening
+every URL in a message, a chat app building a preview card. Every one of those
+is a GET, and an invitation spent by one is an account created for somebody who
+never saw it — or, far more often, a person told their link was already used by
+whoever scanned their mailbox. So the GET answers what the form needs to render
+and changes nothing; the POST is the person, having typed a password.
+
+Absent, redeemed and expired are **one refusal**, because the remedy is the same
+and telling them apart would say "this was already used" to somebody whose link
+merely aged out, and send them looking for who used it.
+
 ## Sessions go stale, and an unset deadline is stale
 
 Every principal carries the instant after which its proof of identity no longer

@@ -49,6 +49,33 @@ different with each.
   log and it may not. This is the only outcome a retry is correct for, and the
   retry carries the same operation id so the ledger collapses a duplicate.
 
+### Two pendings, and only one says something about the node
+
+There are two ways to get `pending`, and they carry opposite information about
+this node:
+
+- **It waited and the record did not arrive.** This node is behind. It is the
+  common one, and it is what the rest of this section is about.
+- **Nothing waited.** A caller asked for the answer the broker's acknowledgement
+  already establishes, because it has no use for the row.
+
+The answer says which: a `pending` that waited reports `waited: true`. Reported
+as one they would be indistinguishable, and a deliberate skip would read to an
+operator as a node falling behind under load — a health signal they would go
+and act on.
+
+**Exactly one write in this engine takes the second path**: a sign-in's session
+record. The cookie minted from it carries the record's own position, every node
+validates a bearer against its own applier, and a node below that position
+serves reads on the signature and the epoch alone — so the row this node would
+be waiting for is a row nothing in the answer reads. What the wait costs there
+is a quarter to half a second of parked browser fetch against a 50 ms credential
+verify, on the one request a person judges the whole product by.
+
+Nothing else may take it. A directory write answers `200` only once this node's
+rows carry it, because the caller's next read goes to this node and would not
+see what it just wrote.
+
 `pending` is the outcome an ordinary busy fleet produces most often under load:
 the applier is 16 seconds into a bulk apply and a small write's five-second wait
 for its own record expires. Five seconds is the applier's own stall grace

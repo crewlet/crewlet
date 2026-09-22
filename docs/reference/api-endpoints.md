@@ -153,6 +153,20 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply |
+| `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded** and throttled per source. Every failure answers one code at one deadline — see [below](#every-failed-sign-in-is-one-refusal) |
+| `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: which backend, whether the first-operator route is still open, the password floor. **Unguarded**, and it carries **no user list and no count of people** |
+| `POST` | `/auth/bootstrap` | **The first person.** Redeems a one-time code this node wrote to a file beside its store, 0600, and creates an operator carrying the whole `max_grants` ceiling — the one stated exemption in the authority model. **Unguarded**, and closed for good the moment anybody is enrolled |
+| `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential |
+| `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants and reach whoever issued it decided. **Unguarded** |
+| `GET` | `/auth/oidc/start` `/auth/oidc/callback` | The identity-provider round trip, with PKCE and a sealed 10-minute flight cookie so a login begun on one node finishes on another. **Unguarded** — a browser following a redirect carries nothing this engine issued. **Absent** where no provider is configured. Linking is explicit: a subject this estate holds no credential for is refused, never provisioned |
+| `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage, grants, colleague level and whether the next sensitive action will ask you to confirm your identity |
+| `POST` | `/auth/token` | Exchanges a **Tier A bearer** for a one-hour session cookie, carrying the token's own grants and nothing more. Its re-auth clock is zero, so every step-up surface refuses it — a config-file credential must not reach a surface that exists to require a person |
+| `POST` | `/auth/step-up` | Confirm who you are on a session that is already valid. The only route here that is **both guarded and throttled**: the caller is known, and unbounded retries against a known person is a password oracle with the enumeration already done |
+| `POST` | `/auth/totp` | Enrol a second factor. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a step-up |
+| `POST` | `/auth/totp/recovery` | Issue ten fresh single-use codes, retiring the old set. Answered **once**, in the clear; what is stored is their hashes, so a lost set is regenerated rather than recovered. Needs a step-up |
+| `POST` | `/auth/logout` | End **this** session. The cookie is cleared whatever the write did — a logout that answered 503 would leave somebody looking at a signed-in page on a shared machine |
+| `POST` | `/auth/logout/all` | End **every** session you hold, by bumping your own revocation epoch — the one move that is immediate on every node |
+| `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows and compared against the caller the guard resolved; `fleet:operate` may end one they do not own |
 | `GET` | `/viewer` | **Who is asking.** The presented credential's operator id, whether it is an operator one, and the seat that binds it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no credential at all, a credential no seat claims, and a bound one. An unbound token is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused |
 | `GET` | `/chart` | The company's **org chart** — its units, its seats, every `manages:` edge and every unit's lead — with the position the answer was read at. The **runtime half of every object is stripped** unless the caller asks for it AND may read it; the answer says which it got in `runtime`. **Always needs a token** (see [below](#chart--the-org-chart-auth-gated)) |
 | `GET` | `/chart/units` `/chart/seats` | One half each, for a client that renders people constantly and the tree once |
@@ -190,8 +204,11 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > set headers on a WebSocket. Only there: a token in the query string of any
 > other route authenticates nobody, because a URL lands in proxy logs and
 > browser history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
-> `/otlp/*`, `/mcp/*`, and the dashboard shell (`/`, `/dashboard`,
-> `/static/*`). See
+> `/otlp/*`, `/mcp/*`, the dashboard shell (`/`, `/dashboard`, `/static/*`),
+> and the five sign-in routes plus `/auth/invite/*` — a login cannot require a
+> login. That is an **exact list and not a `/auth/` prefix**: the same surface
+> ends sessions and enrols second factors, and a prefix would put those behind
+> no credential at all. See
 > [Configuration § Auth](../concepts/configuration.md#auth).
 >
 > **A token that is present and wrong is refused even where reads are open.**
@@ -229,6 +246,31 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > unsigned is ever recorded, published, or shown on the dashboard.
 
 Plus the surfaces whose reads are as sensitive as their writes: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up), [`/chart/*` and `/company/export`](#chart--the-org-chart-auth-gated), and [`/operator/mcp`](#operatormcp--your-own-assistant). The list of which credentials a company has not configured yet is a map of what to attack, and so is the shape of the company itself.
+
+### Every failed sign-in is one refusal
+
+`POST /auth/login` answers `401 sign_in_refused` for every way it can fail — a
+login nobody holds, a wrong password, a person suspended, a person removed, a
+second factor that does not check out — at the same wall-clock instant,
+measured from when the request arrived.
+
+**Both halves are needed.** A code that distinguished the arms would make the
+timing pad pointless, and a delay that distinguished them would make the single
+code pointless. A miss pays the same argon2 verify a hit does, through a
+fixed-cost decoy, because otherwise the *absence* of that cost is the answer.
+
+What that buys is that this surface is not a roster: a caller cannot learn who
+works here, nor test a list of addresses against it.
+
+The exceptions are specific, and each discloses nothing the caller did not
+already have:
+
+| Code | Why it is safe to be specific |
+|---|---|
+| `throttled` | Keyed on the **source**, not the subject. A stranger learns they are rate-limited, which they already knew. Keyed on a login it would be an oracle — "this account exists and I can lock it" |
+| `second_factor_required` | Reached only by somebody who already passed the first factor, so it discloses nothing to a stranger — and without it a client cannot tell "your password is wrong" from "now type your code", which are different screens |
+| `bootstrap_closed` | Says this company has started, which whoever can reach an unstarted one would find out by trying |
+| `invite_spent` | Read by somebody holding the link, which is already evidence it was issued to them. One code for redeemed, withdrawn and expired, because the remedy is the same and telling them apart would say "already used" to somebody whose link merely aged out |
 
 ### Which grant a route needs
 

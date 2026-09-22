@@ -90,7 +90,9 @@ api:
   auth:
     backend: none   # nobody signs in on a laptop — the token below is the
                     #   only credential. `local` adds passwords and a second
-                    #   factor; `oidc` hands sign-in to a provider.
+                    #   factor; `oidc` hands sign-in to a provider. On `local`,
+                    #   `POST /auth/bootstrap` creates the first person from a
+                    #   one-time code this node writes beside its store.
     max_grants:     # THE CEILING on what this deployment will ever let a
                     #   directory record confer. Required once a port is set.
       [state:read, transcripts:read, config:read, secrets:read, work:write,
@@ -432,6 +434,29 @@ human seat `contact.crewlet_operator_id` matching one of your
 `api.auth.tokens[].id`, and **My work** and the **Inbox** answer for that
 person. Until then the dashboard says so rather than guessing — an unbound
 token is an ordinary state, not a fault.
+
+### When people sign in rather than share a token
+
+`backend: none` is right for a laptop and wrong the moment more than one person
+uses this. On `local` or `oidc` the first operator is created once, from a
+**one-time code this node writes beside its store**:
+
+```
+2026-06-14 12:00 WARN engine  bootstrap_code_written path=/var/lib/crewlet/bootstrap-code
+```
+
+Read that file on the host, open the dashboard, and set a login and a password.
+Nothing ever serves the code — the log line, `/health` and the welcome screen
+carry its **path**, so reading it means having access to the machine, which is
+the only credential a company genuinely has before it has any. The file is
+removed when it is used, and the route closes for good the moment anybody is
+enrolled.
+
+Everybody after the first arrives by invitation, which confers exactly the
+grants and reach whoever issued it chose. A Tier A token stays — it is the way
+back in when the provider is down, and what a pipeline uses — but it is a
+machine credential rather than a person, and it is not how people should be
+signing in.
 
 Your own AI assistant can read and write the same records over MCP. Point any
 client at `/operator/mcp` with your API token:
