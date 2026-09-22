@@ -2026,10 +2026,28 @@ export interface WorkProjectRow {
   version: number;
 }
 
+/**
+ * How many projects each archival set holds, under the listing's own `q` and
+ * `unit` and nothing else.
+ *
+ * `archived=` SELECTS one set, which is what makes the listing honest and also
+ * what leaves an empty answer ambiguous: a screen asking for the live projects
+ * and getting none cannot tell a company with no projects from one that has
+ * archived every one of them, and a reader acts on those two oppositely. The
+ * census is the same question minus the archival term, so the screen never
+ * guesses and never asks twice.
+ */
+export interface WorkProjectCensus {
+  active: number;
+  archived: number;
+}
+
 export interface WorkProjectsAnswer {
   projects: WorkProjectRow[];
+  /** The count of the set that was ASKED for — `census` of that mode. */
   total: number;
   truncated?: boolean;
+  census: WorkProjectCensus;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;

@@ -45,7 +45,7 @@
  */
 
 import { useMemo } from "react";
-import { useParam } from "~/app/router.tsx";
+import { buildHash, useParam, useRoute } from "~/app/router.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
@@ -115,28 +115,63 @@ const DEFAULT_SORT = "-open";
  * does not have: there is no filter box, so a reader told nothing matched had
  * nothing to widen.
  *
- * THE ACTIVE ONE NAMES BOTH WAYS IT HAPPENS, and it has to. Each segment asks
- * for its own set now, so an empty Active answer is either a company with no
- * projects or a company that has archived every one of them — and only the
- * All segment can tell those apart. Claiming one of them is what this page did
- * before, in the wrong direction: a company winding a programme down was told
- * "No project has been created yet".
+ * THE ACTIVE ONE SAYS WHERE THE PROJECTS WENT, and it can, because the answer
+ * carries the CENSUS of both sets. An empty Active answer is either a company
+ * with no projects or a company that has archived every one of them, and the
+ * page used to be unable to tell — so it hedged, naming both ways it happens
+ * in one sentence and sending the reader to look. A hedge is what a screen
+ * writes when it is missing a number; this one now has the number, so it says
+ * how many are archived and offers the segment that holds them.
  *
- * `all` is absent because it is unreachable: an empty All answer is a company
- * with no projects, which [NoProjectsYet] replaces the whole grid with.
+ * `all` is absent because it is unreachable: an empty answer on ANY segment
+ * with a zero census is a company with no projects, which [NoProjectsYet]
+ * replaces the whole grid with.
  */
 const EMPTY = {
-  active: {
-    icon: "view_column",
-    title: "No project is active",
-    hint: "A project appears the moment a unit in the company configuration declares its `project` key — and one that has been archived moves to Archived, keeping its work.",
-  },
   archived: {
-    icon: "view_column",
+    icon: "view_column" as const,
     title: "No project is archived",
     hint: "An archived project keeps its work and stops taking new items.",
   },
-} as const;
+};
+
+/**
+ * The Active segment's empty state, which needs the census to write.
+ *
+ * A FUNCTION RATHER THAN A CONSTANT because the sentence turns on a number the
+ * engine sent. With archived work to point at it points at it, by count and
+ * with a link; with none, the company has projects that are neither active nor
+ * archived, which cannot happen — so the only remaining case is the one the
+ * grid is not drawing, and the honest line is the plain one.
+ */
+function activeEmpty(archived: number, href: string) {
+  if (archived > 0) {
+    return {
+      icon: "view_column" as const,
+      title: "No project is active",
+      hint: (
+        <>
+          {/* THE TYPOGRAPHIC APOSTROPHE, which is what every other sentence
+              in this product uses — the JSX ones spell it `&rsquo;` and a
+              string has to carry the character itself. */}
+          {archived === 1
+            ? "The company’s one project has been archived"
+            : `All ${archived} of the company’s projects have been archived`}
+          {" — "}
+          <a className="t-link" href={href}>
+            see them under Archived
+          </a>
+          , where each keeps its work.
+        </>
+      ),
+    };
+  }
+  return {
+    icon: "view_column" as const,
+    title: "No project is active",
+    hint: "A project appears the moment a unit in the company configuration declares its `project` key.",
+  };
+}
 
 export function Projects() {
   const org = useOrg();
@@ -147,6 +182,17 @@ export function Projects() {
     ? (shownRaw as Shown)
     : "active";
   const { open: openPeek } = usePeekControls();
+  const route = useRoute();
+  // WHERE THE ARCHIVED ONES ARE, as a real href rather than a handler: the
+  // empty state offers it as a link, so it is middle-clickable and copyable
+  // like every other way into a segment. THE REST OF THE QUERY IS KEPT —
+  // a reader who sorted, or who arrives with a filter the API takes, does not
+  // lose it by following a sentence that was only ever about the segment.
+  const archivedHref = useMemo(() => {
+    const query = new URLSearchParams(route.query);
+    query.set("shown", "archived");
+    return buildHash(route.path, query);
+  }, [route]);
   // THE GRID'S OWN KEY, READ HERE TOO. `DataGrid` writes `sort=` from a header
   // click and this page sends it to the engine, so both read it through
   // `useParam` with the same fallback — one key, one meaning, one default.
@@ -217,6 +263,22 @@ export function Projects() {
   const short = !!state.data?.truncated;
   const counted = short ? `${listed} of ${answerTotal}` : `${listed}`;
   const noun = (short ? answerTotal : listed) === 1 ? "project" : "projects";
+
+  // THE CENSUS OF BOTH SETS, which is what stops this page guessing. Selecting
+  // one set is what makes the listing honest and it is also what makes an
+  // empty answer ambiguous — no projects, or every project archived — so the
+  // engine sends both counts under the same narrowing the rows were read
+  // under. Nothing here derives them from the rows: on the Active segment the
+  // archived count has no row on screen to be derived from, which is the whole
+  // point.
+  const census = state.data?.census;
+  const active = census?.active ?? 0;
+  const archived = census?.archived ?? 0;
+  // A COMPANY WITH NOTHING FILED, on WHICHEVER segment the reader landed on —
+  // and they land on Active. Before the census this could only be said from
+  // All, so the default segment of a brand-new company showed a grid's empty
+  // state instead of the page that says what a project is.
+  const nothingAtAll = !!census && active + archived === 0;
 
   // A HEAD IS A BUTTON WHERE IT CARRIES `sortValue`, so the columns that do
   // are exactly the engine's seven orderings — `Projects.test.tsx` holds the
@@ -371,27 +433,35 @@ export function Projects() {
           </span>
         )}
         <span className="spacer" />
+        {/* THE CENSUS ON THE SEGMENTS, so the switch says what is behind each
+            option before it is pressed — which is what the counts are for on
+            a control whose whole job is to change the set. Only while the
+            engine has answered: a count drawn from a missing census would be
+            three zeroes that read as a company with nothing.
+
+            ALL CARRIES NONE. Its count is the sum of the two beside it, and a
+            third figure that is the other two added up is arithmetic on
+            screen rather than a fact. */}
         <Segmented
           value={shown}
           onChange={(value) => setShown(value)}
           ariaLabel="Which projects"
           options={[
-            { value: "active", label: "Active" },
-            { value: "archived", label: "Archived" },
+            { value: "active", label: "Active", count: census?.active },
+            { value: "archived", label: "Archived", count: census?.archived },
             { value: "all", label: "All" },
           ]}
         />
       </div>
 
       <QueryState error={state.error} loading={state.loading}>
-        {/* A COMPANY WITH NO PROJECTS IS ONLY KNOWABLE FROM `All`. Each
-            segment now asks for its own set, so an empty Active answer means
-            every project is archived — which is a real state of a company
-            winding a programme down, and telling that reader "no project has
-            been created yet" is the opposite of what the Archived segment
-            beside it would show them. Only the segment that asked for
-            everything can say the company has nothing. */}
-        {state.data && shown === "all" && listed === 0 ? (
+        {/* A COMPANY WITH NO PROJECTS, SAID ON WHATEVER SEGMENT THE READER IS
+            ON — and they land on Active. The census is what makes it sayable
+            from anywhere: `active + archived === 0` is the company having
+            nothing, where an empty ANSWER is only ever the segment having
+            nothing. Gated on All, this page greeted a brand-new company with
+            a grid's empty state on its own default segment. */}
+        {nothingAtAll ? (
           <NoProjectsYet />
         ) : (
           <DataGrid
@@ -424,9 +494,12 @@ export function Projects() {
             serverSorted
             footer={<ProjectProgressLegend />}
             // EACH SEGMENT'S OWN EMPTINESS, because each one asked a
-            // different question. `All` never reaches here — a company with
-            // no projects at all is the state above.
-            empty={shown === "archived" ? EMPTY.archived : EMPTY.active}
+            // different question — and the Active one is WRITTEN FROM THE
+            // CENSUS, so it says how many are archived and links to them
+            // rather than hedging about which of two things happened. `All`
+            // never reaches here: an empty All answer with a zero census is
+            // the state above, and a non-zero census cannot answer nothing.
+            empty={shown === "archived" ? EMPTY.archived : activeEmpty(archived, archivedHref)}
           />
         )}
       </QueryState>

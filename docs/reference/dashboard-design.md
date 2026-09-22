@@ -2707,17 +2707,23 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   projects directory's is about PROJECTS, so a company with no projects is told
   what a project is and that a unit's `project` key in the company
   configuration is what mints one.
-- **An empty SEGMENT is not an empty company**, and only the segment that asked
-  for everything can tell them apart. The projects directory's three segments
-  each ask the engine for their own set, so an empty **Active** answer is
-  either a company with no projects or one that has archived every one of them
-  — two states one sentence cannot cover. `All` is the only segment whose
-  emptiness *is* the company's, so it is the only one that says "No project has
-  been created yet"; Active names both ways it happens and points at Archived,
-  and Archived says nothing is archived. The screen used to read the first
-  answer it got as the company's, so a company winding a programme down was
-  greeted with "no project has been created yet" on the page its Archived
-  segment was about to list a dozen on.
+- **An empty SEGMENT is not an empty company — so the answer carries the
+  census.** The projects directory's three segments each ask the engine for
+  their own set, which is what makes the listing honest and is also what makes
+  an empty answer ambiguous: an empty **Active** answer is either a company
+  with no projects or one that has archived every one of them, and a reader
+  acts on those oppositely. The screen cannot derive the difference, because on
+  the Active segment the archived projects have no row on screen to be derived
+  from. So `work_projects` answers with a `census` of BOTH sets under the same
+  narrowing, and the page never guesses: `active + archived === 0` is the
+  company having nothing and draws "No project has been created yet" on
+  **whichever segment the reader is on** — which matters, because they land on
+  Active; an empty Active answer with archived projects behind it says how many
+  and links to them; and Archived says nothing is archived. The counts also sit
+  on the segment control itself, so the switch says what is behind each option
+  before it is pressed. A screen that hedges — one sentence naming both ways a
+  state happens — is a screen missing a number, and the fix is to send the
+  number rather than to word around it.
 
 Every empty state names what would fill it.
 

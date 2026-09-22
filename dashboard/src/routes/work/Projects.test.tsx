@@ -64,6 +64,9 @@ const project = (over: Partial<WorkProjectRow> = {}): WorkProjectRow => ({
   ...over,
 });
 
+/** A company with nothing filed, as the engine counts it. */
+const zero = { active: 0, archived: 0 };
+
 const mount = () =>
   render(
     <Router>
@@ -537,29 +540,79 @@ test("a refused listing is said to be a refusal", async () => {
 // has archived every one of them — and telling the second reader "no project
 // has been created yet" is the opposite of what the Archived segment beside it
 // would show them.
+// AND IT IS SAID ON WHICHEVER SEGMENT THE READER IS ON — which is Active,
+// because that is where the directory lands.
+//
+// The census is what makes it sayable from anywhere: `active + archived === 0`
+// is the COMPANY having nothing, where an empty answer is only ever the
+// SEGMENT having nothing. Gated on All, this greeted a brand-new company with
+// a grid's empty state on the one segment it actually opens on.
 test("a company with no projects is told what a project is and where one comes from", async () => {
-  location.hash = "#/work/projects?shown=all";
-  serving({ work_projects: { projects: [], total: 0, complete: true } });
-  mount();
-  await waitFor(() => expect(screen.getByText("No project has been created yet")).toBeTruthy());
-  expect(screen.getByText(/declares its `project` key/)).toBeTruthy();
-  expect(screen.queryByText("No work has been filed yet")).toBeNull();
-  // AND IT IS SAID ONCE: the lede above the grid is what the page IS, not a
-  // second copy of where a project comes from.
-  expect(screen.getAllByText(/declares its `project` key/)).toHaveLength(1);
+  for (const hash of [
+    "#/work/projects",
+    "#/work/projects?shown=active",
+    "#/work/projects?shown=archived",
+    "#/work/projects?shown=all",
+  ]) {
+    location.hash = hash;
+    serving({
+      work_projects: { projects: [], total: 0, census: zero, complete: true },
+    });
+    mount();
+    await waitFor(() => expect(screen.getByText("No project has been created yet")).toBeTruthy());
+    expect(screen.getByText(/declares its `project` key/)).toBeTruthy();
+    expect(screen.queryByText("No work has been filed yet")).toBeNull();
+    // AND IT IS SAID ONCE: the lede above the grid is what the page IS, not
+    // a second copy of where a project comes from.
+    expect(screen.getAllByText(/declares its `project` key/)).toHaveLength(1);
+    cleanup();
+  }
 });
 
-// AN EMPTY ACTIVE SEGMENT IS NOT A COMPANY WITH NO PROJECTS. A company winding
-// a programme down has archived every one of them, and the page used to greet
-// that reader with "No project has been created yet" — a claim the Archived
-// segment one click away contradicts.
-test("an empty active segment names both ways it happens", async () => {
-  location.hash = "#/work/projects?shown=active";
-  serving({ work_projects: { projects: [], total: 0, complete: true } });
+// AN EMPTY ACTIVE SEGMENT ON A COMPANY THAT HAS ARCHIVED EVERYTHING SAYS SO,
+// WITH THE COUNT AND A WAY THERE.
+//
+// This is what the census bought. The page could not tell "no projects" from
+// "every project archived", so it hedged — one sentence naming both, sending
+// the reader to go and look. A hedge is what a screen writes when it is
+// missing a number; it has the number now.
+test("an empty active segment says how many are archived and links to them", async () => {
+  location.hash = "#/work/projects?shown=active&sort=name";
+  serving({
+    work_projects: {
+      projects: [],
+      total: 0,
+      census: { active: 0, archived: 4 },
+      complete: true,
+    },
+  });
   mount();
   await waitFor(() => expect(screen.getByText("No project is active")).toBeTruthy());
+  // NOT the company-has-nothing page: this company has four.
   expect(screen.queryByText("No project has been created yet")).toBeNull();
-  expect(screen.getByText(/moves to Archived, keeping its work/)).toBeTruthy();
+  expect(screen.getByText(/All 4 of the company’s projects have been archived/)).toBeTruthy();
+
+  // A REAL LINK, so it is middle-clickable and copyable like every other way
+  // into a segment — and THE REST OF THE QUERY SURVIVES, so a reader who
+  // sorted does not lose it to a sentence that was only ever about the set.
+  const link = screen.getByText("see them under Archived") as HTMLAnchorElement;
+  expect(link.tagName).toBe("A");
+  const query = new URLSearchParams(link.getAttribute("href")!.split("?")[1]);
+  expect(query.get("shown")).toBe("archived");
+  expect(query.get("sort")).toBe("name");
+});
+
+// AND ONE ARCHIVED PROJECT IS NOT "ALL 1", because a count in a sentence is
+// prose and prose has a singular.
+test("a company with one archived project is not told about all 1 of them", async () => {
+  location.hash = "#/work/projects?shown=active";
+  serving({
+    work_projects: { projects: [], total: 0, census: { active: 0, archived: 1 }, complete: true },
+  });
+  mount();
+  await waitFor(() =>
+    expect(screen.getByText(/The company’s one project has been archived/)).toBeTruthy(),
+  );
 });
 
 // AND AN EMPTY ARCHIVED SEGMENT IS ITS OWN SENTENCE, which is only reachable
@@ -567,8 +620,44 @@ test("an empty active segment names both ways it happens", async () => {
 // client filtered.
 test("an empty archived segment says nothing is archived", async () => {
   location.hash = "#/work/projects?shown=archived";
-  serving({ work_projects: { projects: [], total: 0, complete: true } });
+  serving({
+    work_projects: { projects: [], total: 0, census: { active: 3, archived: 0 }, complete: true },
+  });
   mount();
   await waitFor(() => expect(screen.getByText("No project is archived")).toBeTruthy());
+  // NOT the company-has-nothing page: three are active.
   expect(screen.queryByText("No project has been created yet")).toBeNull();
+});
+
+// THE SEGMENTS CARRY THE CENSUS, so the switch says what is behind each option
+// before it is pressed — on a control whose whole job is to change the set.
+test("the segments carry the census counts", async () => {
+  serving({
+    work_projects: {
+      projects: [project()],
+      total: 1,
+      census: { active: 1, archived: 12 },
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  const options = [...container.querySelectorAll(".segmented button")];
+  expect(options.map((o) => o.textContent)).toEqual(["Active1", "Archived12", "All"]);
+  // THE COUNT IS INSIDE THE RADIO, so the option announces "Archived 12"
+  // rather than leaving the figure as loose text beside a control.
+  expect(options[1]?.querySelector(".count-chip")?.textContent).toBe("12");
+  // AND `All` CARRIES NONE: its count is the two beside it added up, which is
+  // arithmetic on screen rather than a fact.
+  expect(options[2]?.querySelector(".count-chip")).toBeNull();
+});
+
+// AND NO COUNTS BEFORE THE ENGINE HAS ANSWERED. Three zeroes on a control
+// read as a company with nothing, which is the one claim a screen must not
+// make while it is still asking.
+test("the segments carry no counts until the census arrives", async () => {
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  expect(container.querySelectorAll(".segmented .count-chip")).toHaveLength(0);
 });
