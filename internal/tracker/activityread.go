@@ -156,6 +156,13 @@ const MaxActivityRows = 200
 // turning a label into the most expensive part of the read — and past it the
 // remaining ids render as ids, which is the same degradation as an id this
 // node holds no row for and therefore needs no second shape.
+//
+// A TASK DETAIL'S OWN HISTORY SHARES IT and is nowhere near: that read is
+// capped at [DetailHistoryDefault] rows, so its walk cannot reach a fifth of
+// this even if every row moved every counterparty field. It is one number
+// because it bounds one walk — a second constant would be a second opinion
+// about what a rendering aid is allowed to cost, free to drift from this one
+// and with no reading of its own to justify it.
 const MaxActivityKeys = MaxActivityRows * 5
 
 // ActivityQuery asks for a slice of the feed.
