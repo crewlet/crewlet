@@ -412,6 +412,16 @@ export function ItemsView({ project = "", host }: { project?: string; host?: Ite
     types: catalogue.data?.types,
     statuses: detail?.statuses,
   };
+  // WHO THE FILTER MENU CAN OFFER, held still across renders. The menu builds
+  // its field list behind a memo keyed on this, and a fresh array literal in
+  // the JSX is a new identity every render — so that memo rebuilt every field,
+  // every option and every custom-field row on each poll and each keystroke in
+  // the substring box, while looking exactly like a memo that holds. The chart
+  // is what it derives from, and `index` already moves only when that does.
+  const roster = useMemo(
+    () => index.seats.map((s) => ({ handle: s.handle, name: s.name })),
+    [index],
+  );
   const labels = {
     statuses: detail?.statuses,
     types: catalogue.data?.types,
@@ -624,7 +634,7 @@ export function ItemsView({ project = "", host }: { project?: string; host?: Ite
           statuses={detail?.statuses}
           tags={detail?.tags}
           fields={catalogue.data?.fields}
-          seats={index.seats.map((s) => ({ handle: s.handle, name: s.name }))}
+          seats={roster}
         />
         {/* THE SUBSTRING BOX IS NOT THE SEARCH SCREEN, and the two looked like
             one control in a bar. This one narrows the rows on screen by key or
