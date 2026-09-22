@@ -124,7 +124,7 @@ test("the project count is the answer's total, and a short page says so", async 
   await waitFor(() => expect(screen.getByText(/2 of 340 projects/)).toBeTruthy());
   // AND WHAT THE OTHER NUMBERS COVER, which the count no longer implies: the
   // sums are over the rows that arrived.
-  expect(screen.getByText(/ordered by key/)).toBeTruthy();
+  expect(screen.getByText(/in the order asked for/)).toBeTruthy();
   cleanup();
 
   // A PAGE HOLDING EVERYTHING SAYS NOTHING EXTRA: "2 of 2" is one number
@@ -138,7 +138,7 @@ test("the project count is the answer's total, and a short page says so", async 
   });
   mount();
   await waitFor(() => expect(screen.getByText(/2 projects/)).toBeTruthy());
-  expect(screen.queryByText(/ordered by key/)).toBeNull();
+  expect(screen.queryByText(/in the order asked for/)).toBeNull();
 });
 
 // A ROW OPENS THE PEEK, which is the question a directory is read with — "is
@@ -373,37 +373,148 @@ test("the progress column carries one legend, naming what fills", async () => {
   ).toEqual(["Done", "Closed"]);
 });
 
-// AN ARCHIVED PROJECT KEEPS ITS WORK AND STOPS TAKING NEW ITEMS, so it is not
-// what a reader means by "the projects" — but it is still reachable, because a
-// directory that hides half the company is not a directory.
+// THE SEGMENT IS THE QUESTION, and each one names the engine's own mode.
 //
-// AND THE SEGMENT IS A QUESTION rather than a filter over the page. The engine
-// omits archived projects unless it is ASKED for them (`archived` in
-// `internal/tracker/projectsread.go`), so a segment that only hid rows this
-// client already held showed an empty Archived tab on every company that has
-// ever retired a project — the rows it was filtering were never in the answer.
-test("archived projects are behind their own segment", async () => {
-  const listing = {
+// `archived=` SELECTS a set (`tracker.ArchivedMode`), so the segment is a
+// parameter rather than a narrowing of a wider answer. It used to be both: the
+// page asked for the widened set and then filtered what came back, so past the
+// engine's own 200 the page it filtered held no archived row at all and the
+// Archived segment said "No project is archived" about a company that had
+// retired dozens.
+test("each segment asks the engine for its own archival set", async () => {
+  for (const [hash, want] of [
+    ["#/work/projects", "false"],
+    ["#/work/projects?shown=active", "false"],
+    ["#/work/projects?shown=archived", "only"],
+    ["#/work/projects?shown=all", "true"],
+  ] as const) {
+    location.hash = hash;
+    const query = serving({
+      work_projects: { projects: [project()], total: 1, complete: true },
+    });
+    mount();
+    await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+    expect(asked(query).archived).toBe(want);
+    cleanup();
+  }
+});
+
+// AND NOTHING IS NARROWED AFTERWARDS. The rows the engine sent ARE the segment,
+// so every one of them is drawn — a client filter over an answer that already
+// selected would be a second, invisible narrowing, and on the Archived segment
+// it was the one that emptied the screen.
+test("the archived segment draws every row the engine answered with", async () => {
+  location.hash = "#/work/projects?shown=archived";
+  serving({
     work_projects: {
-      projects: [project(), project({ key: "OLD", name: "Retired", archived: true })],
+      projects: [
+        project({ key: "OLD", name: "Retired", archived: true }),
+        // NO `archived` FLAG ON THE WIRE, which is what the engine sends
+        // for a row whose column is false — and `omitempty` means a
+        // client that re-derived the segment from it would drop a row
+        // the engine put in the archived answer.
+        project({ key: "GONE", name: "Wound down" }),
+      ],
       total: 2,
       complete: true,
     },
-  };
-  const query = serving(listing);
-  mount();
-  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
-  expect(screen.queryByText("Retired")).toBeNull();
-  // THE ACTIVE SEGMENT ASKS FOR THE DEFAULT ANSWER, which is the active ones:
-  // sending `archived=false` would be a third state the grammar does not have.
-  expect(asked(query).archived).toBeUndefined();
-  cleanup();
-
-  location.hash = "#/work/projects?shown=all";
-  const both = serving(listing);
+  });
   mount();
   await waitFor(() => expect(screen.getByText("Retired")).toBeTruthy());
-  expect(asked(both).archived).toBe(true);
+  expect(screen.getByText("Wound down")).toBeTruthy();
+  // AND THE TOTAL IS THE ARCHIVED SET'S OWN, which is what makes "N of M"
+  // readable on this segment at all: M used to count the whole company.
+  expect(screen.getByText(/2 projects/)).toBeTruthy();
+});
+
+// THE ORDER IS THE ENGINE'S, because the answer is a PAGE. A sort applied here
+// orders the rows that survived the key order, so `-open` meant "the most open
+// work among the projects whose keys sort first".
+test("the ordering is sent to the engine and not applied to the page", async () => {
+  location.hash = "#/work/projects";
+  const query = serving({
+    work_projects: { projects: [project()], total: 1, complete: true },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  // WHERE THE PILE IS, which is what this directory opens on.
+  expect(asked(query).sort).toBe("-open");
+  cleanup();
+
+  location.hash = "#/work/projects?sort=last_change";
+  const asc = serving({
+    work_projects: { projects: [project()], total: 1, complete: true },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  expect(asked(asc).sort).toBe("last_change");
+  cleanup();
+
+  // AND A KEY THE ENGINE DOES NOT TAKE FALLS BACK rather than being sent. A
+  // URL outlives a build and is hand-editable; sent, it would meet a
+  // `bad_params` refusal, which the frame draws as the screen being at fault
+  // and offers no retry for — a whole directory lost to one stale query key.
+  location.hash = "#/work/projects?sort=-lead";
+  const stale = serving({
+    work_projects: { projects: [project()], total: 1, complete: true },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  expect(asked(stale).sort).toBe("-open");
+});
+
+// THE ROWS ARE NOT RE-SORTED HERE. `serverSorted` is what says so, and without
+// it the grid re-orders the page it was handed the moment `sort=` names a
+// column — which on a truncated answer is the same page-ordering bug one layer
+// down.
+test("the grid draws the engine's order rather than re-sorting it", async () => {
+  location.hash = "#/work/projects?sort=-open";
+  serving({
+    work_projects: {
+      // THE ENGINE'S ORDER, deliberately NOT what `-open` would produce
+      // on the client: 1 before 9. A grid that re-sorted would put ENG
+      // first and the assertion below would catch it.
+      projects: [
+        project({ key: "PROD", name: "Product", task_counts: { open: 1, done: 0, closed: 0 } }),
+        project({ key: "ENG", task_counts: { open: 9, done: 0, closed: 0 } }),
+      ],
+      total: 2,
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Product")).toBeTruthy());
+  expect([...container.querySelectorAll(".grid-row .key-mark")].map((c) => c.textContent)).toEqual([
+    "PROD",
+    "ENG",
+  ]);
+});
+
+// EVERY ORDERING THE ENGINE TAKES IS A HEAD SOMEBODY CAN CLICK, and no other
+// head is one.
+//
+// `DataGrid` makes a head a BUTTON exactly where the column carries
+// `sortValue`, so the two lists have to be the same list. A head offering a
+// key the engine refuses turns one click into a `bad_params` refusal over the
+// whole screen; a key the engine grew with no head is an ordering nobody can
+// reach. The engine half of this pair is a Go gate over `PROJECT_SORT_KEYS`
+// (`internal/tracker/client_gate_test.go`).
+test("the sortable heads are exactly the orderings the engine takes", async () => {
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  const clickable = [...container.querySelectorAll(".grid-head button.grid-th")].map(
+    (h) => h.textContent,
+  );
+  expect(clickable).toEqual(["Key", "Project", "Unit", "Open", "Done", "Closed", "Last change"]);
+  // AND THE TWO THAT ARE NOT: a project's Lead is resolved against the org
+  // chart at read time and the tracker holds no chart, so there is no column
+  // to order by; Progress is a proportion, and one over four tasks and one
+  // over four hundred are the same number and not the same fact.
+  const plain = [...container.querySelectorAll(".grid-head [role='columnheader']")].map(
+    (h) => h.textContent,
+  );
+  expect(plain).toEqual(["Lead", "Progress"]);
 });
 
 // A REFUSED READ IS NOT A COMPANY THAT HAS FILED NOTHING — the same rule the
@@ -420,7 +531,14 @@ test("a refused listing is said to be a refusal", async () => {
 // screen's "No work has been filed yet" — a sentence about ITEMS on the one
 // screen whose rows are projects — so a reader was sent looking for work rather
 // than for the configuration that mints a project.
+//
+// AND ONLY `All` CAN SAY IT. Each segment asks for its own set now, so an
+// empty Active answer is either a company with no projects or a company that
+// has archived every one of them — and telling the second reader "no project
+// has been created yet" is the opposite of what the Archived segment beside it
+// would show them.
 test("a company with no projects is told what a project is and where one comes from", async () => {
+  location.hash = "#/work/projects?shown=all";
   serving({ work_projects: { projects: [], total: 0, complete: true } });
   mount();
   await waitFor(() => expect(screen.getByText("No project has been created yet")).toBeTruthy());
@@ -429,4 +547,28 @@ test("a company with no projects is told what a project is and where one comes f
   // AND IT IS SAID ONCE: the lede above the grid is what the page IS, not a
   // second copy of where a project comes from.
   expect(screen.getAllByText(/declares its `project` key/)).toHaveLength(1);
+});
+
+// AN EMPTY ACTIVE SEGMENT IS NOT A COMPANY WITH NO PROJECTS. A company winding
+// a programme down has archived every one of them, and the page used to greet
+// that reader with "No project has been created yet" — a claim the Archived
+// segment one click away contradicts.
+test("an empty active segment names both ways it happens", async () => {
+  location.hash = "#/work/projects?shown=active";
+  serving({ work_projects: { projects: [], total: 0, complete: true } });
+  mount();
+  await waitFor(() => expect(screen.getByText("No project is active")).toBeTruthy());
+  expect(screen.queryByText("No project has been created yet")).toBeNull();
+  expect(screen.getByText(/moves to Archived, keeping its work/)).toBeTruthy();
+});
+
+// AND AN EMPTY ARCHIVED SEGMENT IS ITS OWN SENTENCE, which is only reachable
+// now that the engine answers the archived set rather than the page this
+// client filtered.
+test("an empty archived segment says nothing is archived", async () => {
+  location.hash = "#/work/projects?shown=archived";
+  serving({ work_projects: { projects: [], total: 0, complete: true } });
+  mount();
+  await waitFor(() => expect(screen.getByText("No project is archived")).toBeTruthy());
+  expect(screen.queryByText("No project has been created yet")).toBeNull();
 });

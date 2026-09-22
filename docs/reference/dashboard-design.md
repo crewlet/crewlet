@@ -445,7 +445,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
 | `#/me` | **My work** — the seven claims on one person's attention | `tab=assigned\|priorities\|asks\|unblocked\|collaborating\|watching\|checklist` · `handle=` (an operator reading somebody else's day) |
 | `#/work` | **All work** | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` + the filter grammar |
-| `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page | `shown=active\|archived\|all` · `sort=` |
+| `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page. The segment and the sort are both the ENGINE's question: `shown=` becomes `archived=false\|only\|true` and `sort=` travels as it is written, because the answer stops at the engine's own 200 and anything applied after that orders — or narrows — a page rather than the company | `shown=active\|archived\|all` · `sort=key\|name\|unit\|open\|done\|closed\|last_change`, with a leading `-` for descending |
 | `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
@@ -2707,6 +2707,17 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   projects directory's is about PROJECTS, so a company with no projects is told
   what a project is and that a unit's `project` key in the company
   configuration is what mints one.
+- **An empty SEGMENT is not an empty company**, and only the segment that asked
+  for everything can tell them apart. The projects directory's three segments
+  each ask the engine for their own set, so an empty **Active** answer is
+  either a company with no projects or one that has archived every one of them
+  — two states one sentence cannot cover. `All` is the only segment whose
+  emptiness *is* the company's, so it is the only one that says "No project has
+  been created yet"; Active names both ways it happens and points at Archived,
+  and Archived says nothing is archived. The screen used to read the first
+  answer it got as the company's, so a company winding a programme down was
+  greeted with "no project has been created yet" on the page its Archived
+  segment was about to list a dozen on.
 
 Every empty state names what would fill it.
 
