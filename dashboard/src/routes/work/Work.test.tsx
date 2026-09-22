@@ -99,9 +99,11 @@ test("an overdue due date is marked and an on-time one is not", () => {
 });
 
 // NOBODY IS A STATE, and the one worth seeing: an unassigned item routes to
-// the project's lead, and a project with no lead routes to nobody at all.
+// the project's lead, and a project with no lead routes to nobody at all. On a
+// card it is drawn wherever the foot is drawn — beside the facts it belongs
+// with, never alone, which is the case below.
 test("an unassigned card draws the empty seat rather than a blank", () => {
-  const { container } = card();
+  const { container } = card({ due: "2031-09-01T00:00:00Z" });
   expect(container.querySelector(".work-nobody")).toBeTruthy();
   expect(screen.getByText("Unassigned")).toBeTruthy();
   cleanup();
@@ -115,6 +117,32 @@ test("an unassigned card draws the empty seat rather than a blank", () => {
   );
   expect(held.container.querySelector(".work-nobody")).toBeNull();
   expect(held.container.querySelector(".crewlet-avatar")?.textContent).toBe("AL");
+});
+
+// THE GHOST HOLDS A TRACK OPEN, AND A CARD HAS NO TRACK. On `.work-row` the
+// dashed square is a grid cell, and a cell that vanished would take its column
+// with it and pull every later one a place left — which is the case further
+// down. A card is inline flow, so on a task nobody has touched the same square
+// came out alone under the title, floating in a foot with nothing else in it
+// and reading as a control somebody could press. The foot is its marks: with
+// none of them it is not drawn, and one fact brings it back.
+test("a card with nothing set draws no foot, while the same task as a row keeps its cell", () => {
+  const bare = card().container;
+  expect(bare.querySelector(".work-card-foot")).toBeNull();
+  expect(bare.querySelector(".work-nobody")).toBeNull();
+  cleanup();
+  const asRow = render(<WorkRow row={row("1")} href="#/work/ENG-1" now={NOW} chrome={{}} />);
+  expect(asRow.container.querySelector(".work-nobody")).toBeTruthy();
+  cleanup();
+  // ONE MARK IS ENOUGH, and the ghost comes back with it: "nobody holds this,
+  // and it is due on Monday" is the pair a board column is scanned for.
+  const dated = card({ due: "2031-09-01T00:00:00Z" }).container;
+  expect(dated.querySelector(".work-card-foot")).toBeTruthy();
+  expect(dated.querySelector(".work-nobody")).toBeTruthy();
+  cleanup();
+  // And a card whose only fact is that it is blocked still has a foot, which
+  // is what says the predicate reads every mark rather than the assignee.
+  expect(card({ blocked: true }).container.querySelector(".work-card-foot")).toBeTruthy();
 });
 
 // A CARD IS A REAL ANCHOR, so middle-click and ⌘-click open the item's own

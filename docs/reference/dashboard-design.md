@@ -2229,6 +2229,15 @@ is one of the rules on this page applied to a tracker.
   a value it does not have: an undated, unassigned, unestimated task lines
   its status up with the task above it rather than pulling every later
   column one place left.
+- **A card is not a row, so it holds nothing open.** The dashed "nobody"
+  square exists to keep a row's assignee COLUMN from collapsing; a card is
+  inline flow and has no column to keep. So a card draws its foot only when
+  something goes in it — blocked, a due date, a size, an assignee — and a task
+  nobody has touched is a key and a title. Drawn unconditionally, the foot of
+  such a card was that dashed square alone under the title, which reads as a
+  control somebody could press rather than as the absence of five facts. One
+  fact brings the foot back, and the square with it: "nobody holds this, and
+  it is due on Monday" is the pair a board column is scanned for.
 - **A board lane is a range, not a ceiling.** A lane stretches to whatever
   height the tallest lane on the board sets, which answers a short column
   beside a long one and nothing else: a board whose lanes are ALL short — one
