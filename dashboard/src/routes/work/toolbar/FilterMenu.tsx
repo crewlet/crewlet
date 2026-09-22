@@ -200,6 +200,24 @@ function useFilterFields({
 }
 
 /**
+ * IS IT SET AT ALL — the one question every field answers.
+ *
+ * `null` and `not_null` are on EVERY type at the engine
+ * (`internal/tracker/fieldquery.go` says so beside its own per-type table),
+ * because this is a question about the ROW rather than about the value. So
+ * they are two rows on every field the panel draws, a typed one included: the
+ * panel offers them under the box rather than leaving them to a reader who
+ * happens to know the word, which is what a field with no declared options
+ * used to do — the placeholder states the type's comparisons, and "does this
+ * task have an estimate" was reachable only by typing `not_null` into a box
+ * whose own hint never mentioned it.
+ */
+const SET_QUESTIONS: FilterOption[] = [
+  { value: "not_null", label: "Is set" },
+  { value: "null", label: "Is not set" },
+];
+
+/**
  * One of the company's own fields, as a row of this panel.
  *
  * WHICH TYPES GET A LIST is decided by whether the field itself declares one:
@@ -209,15 +227,11 @@ function useFilterFields({
  * type admits are a table in `internal/tracker/coerce.go` and the docs, and a
  * control that re-spelled them here would be a second copy of it.
  *
- * `null` AND `not_null` ARE ON EVERY TYPE, because "is this set at all" is a
- * question about the ROW rather than about the value.
+ * [SET_QUESTIONS] ends every list this returns; on the typed branch, which
+ * returns no list at all, the panel draws the same two rows beside the box.
  */
 function customField(def: WorkFieldDef, seats: { handle: string; name: string }[]): FilterField {
   const param = `f.${def.slug}`;
-  const set: FilterOption[] = [
-    { value: "not_null", label: "Is set" },
-    { value: "null", label: "Is not set" },
-  ];
   const declared = def.config?.options ?? [];
   if (declared.length > 0) {
     return {
@@ -231,7 +245,7 @@ function customField(def: WorkFieldDef, seats: { handle: string; name: string }[
         ...declared
           .filter((o) => !o.archived)
           .map((o) => ({ value: o.slug, label: o.name || o.slug })),
-        ...set,
+        ...SET_QUESTIONS,
       ],
     };
   }
@@ -239,7 +253,7 @@ function customField(def: WorkFieldDef, seats: { handle: string; name: string }[
     return {
       param,
       label: def.name,
-      options: [{ value: "true", label: "Yes" }, { value: "false", label: "No" }, ...set],
+      options: [{ value: "true", label: "Yes" }, { value: "false", label: "No" }, ...SET_QUESTIONS],
     };
   }
   // A PEOPLE FIELD'S VALUES ARE THE ROSTER, which the panel already holds for
@@ -250,7 +264,7 @@ function customField(def: WorkFieldDef, seats: { handle: string; name: string }[
     return {
       param,
       label: def.name,
-      options: [...seats.map((s) => ({ value: s.handle, label: s.name })), ...set],
+      options: [...seats.map((s) => ({ value: s.handle, label: s.name })), ...SET_QUESTIONS],
     };
   }
   return { param, label: def.name, placeholder: placeholderFor(def.type) };
@@ -386,64 +400,105 @@ function FilterPanel({
         </Button>
       </div>
       {chosen.options ? (
-        <div className="work-menu-list">
-          {chosen.options.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className="work-menu-row"
-              aria-pressed={current === option.value}
-              onClick={() => {
-                // CHOOSING WHAT IS ALREADY CHOSEN TAKES IT OFF, which is the
-                // only way back to "any" without leaving the panel — and it is
-                // what the pressed state above promises.
-                onSet(chosen.param, current === option.value ? "" : option.value);
-                close();
-              }}
-            >
-              <span className="work-menu-check">
-                {current === option.value ? <CheckGlyph size="sm" /> : null}
-              </span>
-              <span className="truncate">{option.label}</span>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <form
-          className="work-menu-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            onSet(chosen.param, typed.trim());
+        <ValueRows
+          options={chosen.options}
+          current={current}
+          onPick={(value) => {
+            onSet(chosen.param, value);
             close();
           }}
-        >
-          <Input
-            width="full"
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            aria-label={`${chosen.label} filter`}
-            placeholder={chosen.placeholder}
-            autoFocus
-          />
-          <div className="work-menu-actions">
-            {current && (
-              <Button
-                size="small"
-                variant="tertiary"
-                onClick={() => {
-                  onSet(chosen.param, "");
-                  close();
-                }}
-              >
-                Remove
+        />
+      ) : (
+        <>
+          <form
+            className="work-menu-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              onSet(chosen.param, typed.trim());
+              close();
+            }}
+          >
+            <Input
+              width="full"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              aria-label={`${chosen.label} filter`}
+              placeholder={chosen.placeholder}
+              autoFocus
+            />
+            <div className="work-menu-actions">
+              {current && (
+                <Button
+                  size="small"
+                  variant="tertiary"
+                  onClick={() => {
+                    onSet(chosen.param, "");
+                    close();
+                  }}
+                >
+                  Remove
+                </Button>
+              )}
+              <Button size="small" type="submit">
+                Apply
               </Button>
-            )}
-            <Button size="small" type="submit">
-              Apply
-            </Button>
-          </div>
-        </form>
+            </div>
+          </form>
+          {/* THE SAME TWO ROWS A LISTED FIELD ENDS WITH — see [SET_QUESTIONS].
+              A typed field's box states the comparisons its TYPE admits, and
+              "is it set at all" is not one of them: it is a question about the
+              row, on every type, and it was reachable here only by typing a
+              word the placeholder never named. */}
+          <ValueRows
+            options={SET_QUESTIONS}
+            current={current}
+            onPick={(value) => {
+              onSet(chosen.param, value);
+              close();
+            }}
+          />
+        </>
       )}
+    </div>
+  );
+}
+
+/**
+ * One field's values, as the rows a reader picks between.
+ *
+ * ONE RENDERING for both branches of the panel, because the two agree about
+ * three things a second copy would have to keep agreeing about: the check sits
+ * in a fixed slot whether or not it is drawn, the pressed row is the value
+ * that is on, and PRESSING IT AGAIN TAKES IT OFF — which is the only way back
+ * to "any" without leaving the panel, and what the pressed state promises.
+ */
+function ValueRows({
+  options,
+  current,
+  onPick,
+}: {
+  options: FilterOption[];
+  /** What is applied, so exactly one row can be the pressed one. */
+  current: string;
+  /** The value to write — `""` where the reader chose what was already on. */
+  onPick: (value: string) => void;
+}) {
+  return (
+    <div className="work-menu-list">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className="work-menu-row"
+          aria-pressed={current === option.value}
+          onClick={() => onPick(current === option.value ? "" : option.value)}
+        >
+          <span className="work-menu-check">
+            {current === option.value ? <CheckGlyph size="sm" /> : null}
+          </span>
+          <span className="truncate">{option.label}</span>
+        </button>
+      ))}
     </div>
   );
 }
