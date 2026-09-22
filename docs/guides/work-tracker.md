@@ -475,6 +475,27 @@ with no gap and no repeat. Its `q` needs either a task, or a project **and** a
 `since` inside 90 days: an unscoped text search reads every change the company
 has ever made, and it has no cheaper mode to fall back to.
 
+**Every change carries its own before and after.** A row says what KIND of
+change it was (`status`, `view_saved`, `project_updated`, …) and, in `fields`,
+which values moved and from what to what — `{"status": {"from": "todo", "to":
+"in_progress"}}`. That holds for every kind, not only the ones about a task: a
+project reconciled from the org chart names the purpose or the unit that moved,
+a saved view names the query parameters that changed, a re-ordered priority
+list carries the order before and after, and a dependency names the item it
+now waits on, or no longer does. It holds for **quiet** changes too — most
+project, view, catalogue and tag edits wake nobody, and the row still says
+what they did.
+
+Two things the values are deliberately not. They are the **stored** form — a
+status slug, a whole timestamp, an item's id — rather than what a screen shows,
+because the same row is written identically by every node in a fleet and a
+rendering would depend on the reader's time zone and on the company's current
+vocabulary; the dashboard resolves them. And a collection is **bounded**: a row
+is a line in a log rather than a copy of the object, so a long list is cut at a
+whole member and ends with a count of what it left out (`+12 more`), and a
+list whose members a person does not read — an inbox, say — is recorded as its
+size.
+
 The three project reads are a seat's for the same reason the catalogue read
 is: a create refuses a project the company does not have, a type it has not
 declared and a required field left empty, and a model that cannot **read** any
