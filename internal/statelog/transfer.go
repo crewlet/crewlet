@@ -465,6 +465,14 @@ func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 // than a resume point, and the path is deterministic so the debris is always
 // this function's own.
 func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string) (int64, error) {
+	// A CALLER THAT HAS ALREADY GIVEN UP FETCHES NOTHING, for
+	// [CollectOffers]'s reason one step later: a request published now
+	// starts a donor streaming gigabytes at a joiner that will not read
+	// them, and holds the donor's transfer slot until its chunk wait
+	// expires.
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("statelog: fetch the artefact: %w", err)
+	}
 	deliver := nats.NewInbox()
 	sub, err := nc.SubscribeSync(deliver)
 	if err != nil {
@@ -484,8 +492,21 @@ func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string)
 	if err := nc.PublishRequest(offer.Fetch, nats.NewInbox(), []byte(deliver)); err != nil {
 		return 0, fmt.Errorf("statelog: ask %s for the artefact: %w", offer.Fetch, err)
 	}
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := nc.Flush(); err != nil {
+	// THE FLUSH TAKES THE CALLER'S CONTEXT, and the patience every other
+	// step of a transfer gets. A plain Flush is bounded by the client's
+	// own ten seconds and by nothing the caller holds, so a Stop or a
+	// signal that landed while the broker was slow to confirm the request
+	// sat that out — the one wait in the transfer the caller could not
+	// end. [TransferChunkWait] rather than a figure of its own: a broker
+	// that has not confirmed the request in the time a donor is given to
+	// send a chunk is a stalled transfer by the same measure.
+	flushCtx, cancelFlush := context.WithTimeout(ctx, TransferChunkWait)
+	err = nc.FlushWithContext(flushCtx)
+	cancelFlush()
+	if err != nil {
+		if ctx.Err() != nil {
+			return 0, fmt.Errorf("statelog: flush the fetch: %w", ctx.Err())
+		}
 		return 0, fmt.Errorf("statelog: flush the fetch: %w", err)
 	}
 

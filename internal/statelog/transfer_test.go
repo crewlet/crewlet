@@ -527,3 +527,60 @@ func TestACallersDeadlineIsNotBlamedOnTheDonor(t *testing.T) {
 		t.Fatal("an abandoned fetch left its partial file behind")
 	}
 }
+
+// A FETCH WHOSE CALLER HAS ALREADY GIVEN UP ASKS NO DONOR TO SEND.
+//
+// The fetch is the expensive half of a join: the request starts a donor
+// streaming the whole artefact and holds one of its transfer slots until the
+// chunk wait runs out. A joiner being stopped between choosing an offer and
+// fetching it must not start that, so the request is never published — which
+// is only observable from the donor's side, hence the sentinel: the listener
+// hears whatever reached the subject, in order, and the first thing it hears
+// must be the probe this case sent after the fetch returned.
+func TestAFetchWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
+	t.Parallel()
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open a broker: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
+			t.Errorf("stop the broker: %v", err)
+		}
+	})
+	fetch := statelog.SubjectFetchPrefix + "donor"
+	listener, err := q.DialOwned()
+	if err != nil {
+		t.Fatalf("dial the listener: %v", err)
+	}
+	t.Cleanup(listener.Close)
+	heard, err := listener.SubscribeSync(fetch)
+	if err != nil {
+		t.Fatalf("listen for the fetch: %v", err)
+	}
+	if err := listener.Flush(); err != nil {
+		t.Fatalf("flush the listener: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	dest := filepath.Join(t.TempDir(), "adopt.part")
+	if _, err := statelog.FetchArtefact(ctx, q.Conn(), statelog.Offer{Fetch: fetch}, dest); !errors.Is(err, context.Canceled) {
+		t.Fatalf("FetchArtefact under a cancelled context = %v, want the cancellation", err)
+	}
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("a fetch that never started left a file behind")
+	}
+
+	if err := q.Conn().Publish(fetch, []byte("sentinel")); err != nil {
+		t.Fatalf("publish the sentinel: %v", err)
+	}
+	first, err := heard.NextMsg(time.Minute)
+	if err != nil {
+		t.Fatalf("the listener heard nothing, not even the sentinel: %v", err)
+	}
+	if string(first.Data) != "sentinel" {
+		t.Fatalf("a donor was asked to send (%q) by a joiner whose caller had "+
+			"already given up", first.Data)
+	}
+}

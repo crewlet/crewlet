@@ -39,6 +39,14 @@ type joinHarness struct {
 	// stage the one thing the hold is a belt against: a fleet that
 	// trimmed past the artefact while it was in flight.
 	stillUsable func(context.Context, statelog.Manifest) error
+
+	// onClose runs as step 8 closes the live database, nil by default:
+	// the last moment before the install, which is where a case stages
+	// an interruption the rename must survive.
+	onClose func()
+	// reopenCtxErr is what the context the last reopen ran under said
+	// about itself when it was called.
+	reopenCtxErr error
 }
 
 func newJoinHarness(t *testing.T) *joinHarness {
@@ -164,10 +172,14 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 		},
 		Close: func(ctx context.Context) error {
 			h.closes.Add(1)
+			if h.onClose != nil {
+				h.onClose()
+			}
 			return h.joiner.Close()
 		},
 		Reopen: func(ctx context.Context) error {
 			h.reopens.Add(1)
+			h.reopenCtxErr = ctx.Err()
 			db, err := store.Open(ctx, filepath.Join(filepath.Dir(h.joinPath), "node.db"),
 				store.Options{})
 			if err != nil {
@@ -342,6 +354,43 @@ func TestAJoinAbandonedMidAdoptionIsNotAnEmptyFleet(t *testing.T) {
 		t.Fatalf("the tail was held %d time(s) and released %d — an abandoned "+
 			"join that keeps its hold stops the whole fleet trimming",
 			h.held.Load(), h.released.Load())
+	}
+}
+
+// AN INSTALL INTERRUPTED BEFORE ITS RENAME PUTS THE LIVE DATABASE BACK.
+//
+// Step 8 closes the live database and then runs the install, and when the
+// install fails the live file is still the live file, so reopening it is the
+// recovery. It is a ROLLBACK, and the failure it undoes is routinely the
+// cancellation itself: a Stop or a signal landing while the install
+// checkpoints. Reopened under the join's own context it failed alongside, and
+// a node whose install never happened was left with no replicated estate open
+// — every read [store.ErrNoEstate] — with nothing in the error to say so.
+func TestAnInterruptedInstallReopensTheLiveDatabase(t *testing.T) {
+	t.Parallel()
+	h := newJoinHarness(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// THE CANCELLATION LANDS AS THE LIVE DATABASE CLOSES, so the install's
+	// first step — checkpointing the prepared file under the join's
+	// context — is the one that fails, before any rename.
+	h.onClose = cancel
+
+	_, err := h.adopter(t).Join(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Join = %v, want the cancellation that interrupted the install", err)
+	}
+	if h.reopens.Load() != 1 {
+		t.Fatalf("the live database was reopened %d time(s) after a failed "+
+			"install, want once", h.reopens.Load())
+	}
+	if h.reopenCtxErr != nil {
+		t.Fatalf("the rollback reopened the live database under a context that "+
+			"was already %v — the failure it undoes is that very cancellation, "+
+			"so it fails too and the node is left with no estate", h.reopenCtxErr)
+	}
+	if err := h.joiner.Replicated().SQL().PingContext(t.Context()); err != nil {
+		t.Fatalf("the live database is not usable after the rollback: %v", err)
 	}
 }
 

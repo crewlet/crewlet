@@ -327,7 +327,21 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 		// The database is closed and the rename did not happen, so the
 		// live file is still the live file — reopening it is the
 		// recovery rather than an extra step.
-		_ = a.deps.Reopen(ctx)
+		//
+		// A ROLLBACK, so it takes [context.WithoutCancel]: the failure it
+		// undoes is routinely the cancellation itself — a Stop or a
+		// signal landing while the install checkpoints — and a reopen
+		// under that dead context fails too, leaving a node whose install
+		// never happened with no replicated estate open at all.
+		//
+		// AND ITS OWN FAILURE IS REPORTED rather than discarded, because
+		// that outcome is the worse of the two: the caller is told the
+		// install failed and must also be told the live database did not
+		// come back.
+		if reopenErr := a.deps.Reopen(context.WithoutCancel(ctx)); reopenErr != nil {
+			return Manifest{}, errors.Join(err, fmt.Errorf("statelog: reopen "+
+				"the live database after the failed install: %w", reopenErr))
+		}
 		return Manifest{}, err
 	}
 	if err := a.deps.Reopen(ctx); err != nil {
