@@ -2028,7 +2028,20 @@ details > summary.int-summary::-webkit-details-marker {
   gap: var(--space-1);
 }
 
-/* ---- The body, and the peek beside it ----------------------------------- */
+/* ---- The body ------------------------------------------------------------
+   ONE COLUMN, AND THE PEEK IS NOT IN IT. The tracker grew its own peek — a
+   second column of this grid, sized here, flipped to a drawer by a media
+   query of its own — and the frame took it over: `.app` carries a fourth
+   track for `--peek-w` and every screen in the product can open one. The
+   rules that sized it here matched `[data-peek="true"]` on THIS element,
+   which nothing has ever set: the attribute lives on the shell's root. So
+   they were dead the day the peek moved and stayed in the sheet, shipped in
+   the bundle, with a measured threshold in their comment that no longer
+   governed anything. CSS that matches nothing is indistinguishable from CSS
+   whose selector somebody broke.
+
+   WHERE THE THRESHOLD LIVES NOW is `--peek-drawer-max` in frame.css, with
+   its arithmetic written at the definition. */
 
 .work-body {
   display: grid;
@@ -2036,9 +2049,6 @@ details > summary.int-summary::-webkit-details-marker {
   gap: var(--space-4);
   align-items: start;
   min-width: 0;
-}
-.work-body[data-peek="true"] {
-  grid-template-columns: minmax(0, 1fr) 420px;
 }
 
 /* ---- The board ---------------------------------------------------------- */
@@ -2520,6 +2530,16 @@ details > summary.int-summary::-webkit-details-marker {
   gap: var(--space-4);
   min-width: 0;
 }
+/* THE SUBTASK LIST MEASURES ITSELF. A named container rather than an
+   anonymous one, because `.page` is a size container too and an unnamed
+   `@container` query binds to the NEAREST one — which would be this card
+   here and the page on any list that forgot the class, i.e. one rule
+   answering two different questions depending on where it was used. The
+   query is in the responsive block at the foot of this file. */
+.work-subtasks {
+  container: subtasks / inline-size;
+}
+
 /* ONLY THE RAIL STICKS — the main column is what scrolls past it. */
 .work-item-side {
   position: sticky;
@@ -2673,28 +2693,15 @@ a.work-cal-chip {
 }
 
 /* ---- Responsive ---------------------------------------------------------
-   Two steps, and each is where one of the layout's own promises stops being
-   keepable: the peek stops fitting beside the body before the rail stops
-   fitting beside the main column.
+   THE PEEK'S OWN STEP IS NOT HERE ANY MORE, and there is nothing left for
+   this file to say about it: the peek is a column of the shell's grid, and
+   `--peek-drawer-max` in frame.css is where it stops being one, with its
+   arithmetic at the definition. What stood here was a `@media (max-width:
+   1500px)` over `.work-body[data-peek="true"]` — a threshold measured from
+   the board, for a peek this screen used to own and no longer does, on a
+   selector nothing has set since the frame took the peek over.
 
-   THE FIRST STEP IS MEASURED FROM THE BOARD, not guessed. Three panes are
-   the sidebar, the project rail and the peek, and what is left over is the
-   board. A column is 292px and the gap is 12, so two columns need 596 and
-   three need 900 — and at 1280, a perfectly ordinary laptop, what was left
-   was 316. One column beside a detail panel is not a board. The threshold is
-   therefore where TWO columns still fit beside everything else, which is
-   around 1500, rather than the 1180 this was first written at: below it the
-   peek overlays, which costs nothing, because the board underneath is
-   exactly what the reader came back to. */
-
-@media (max-width: 1500px) {
-  .work-body[data-peek="true"] {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  /* The peek becomes a drawer over the body rather than a column beside it,
-     on the shell's own veil — a panel squeezed to 200px is a panel nobody
-     can read, and hiding it would lose the reader's selection. */
-}
+   WHAT IS LEFT is the item page's own step, and the subtask list's. */
 
 /* THE ITEM PAGE KEEPS ITS OWN THRESHOLD. It is a page rather than a pane
    beside a board — there is no third column competing with it — so its
@@ -2705,6 +2712,28 @@ a.work-cal-chip {
   }
   .work-item-side {
     position: static;
+  }
+}
+
+/* A SUBTASK LIST IS A LIST INSIDE A BOX, and the box is 420px in a peek
+   whatever the window is doing. `.work-rows` declares eight tracks and the
+   narrow set below the phone breakpoint is a VIEWPORT query, so a peek on a
+   wide screen got all eight: 90px of fixed tracks, seven gaps and four
+   content-sized cells resolve before the title's `minmax(0, 1fr)` and the
+   title is starved to almost nothing. The same 444px floor decides it, read
+   off the list's own container — one rule that serves the peek, the item page
+   and a phone, where the viewport query could only ever serve the last. */
+@container subtasks (max-width: 444px) {
+  .work-rows {
+    grid-template-columns: 16px 70px minmax(0, 1fr) auto;
+  }
+  /* DROPPED RATHER THAN EMPTIED, as the phone block does it: a hidden cell
+     still holds a column of nothing. */
+  .work-cell-prio,
+  .work-cell-due,
+  .work-cell-who,
+  .work-row .work-row-when {
+    display: none;
   }
 }
 

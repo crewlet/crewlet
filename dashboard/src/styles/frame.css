@@ -82,7 +82,22 @@
      427–443px: below the floor this number exists to hold, at twenty widths
      of window, with nothing to report it. The floor is what was measured; the
      threshold is arithmetic over it, the chrome AND the density, and it has
-     to be redone whenever any of the three moves. */
+     to be redone whenever any of the three moves.
+
+     AND THE BOARD'S OWN 1500 DOES NOT GOVERN IT. A second threshold was
+     measured once, from the tracker's board: three panes are the rail, the
+     sidebar and the peek, what is left is the board, a lane is 292 and at
+     1280 exactly one lane was left — "which is not a board" — so the peek
+     should overlay below about 1500. That measurement was about a peek this
+     SCREEN owned, as a column of its own body grid, and the rules enforcing
+     it matched an attribute nothing ever set; they have been deleted from
+     screens.css. The peek is the frame's now, one threshold for every screen,
+     so the quantity it turns on has to be the one common to all of them — a
+     LIST too narrow to read, which nothing can rescue. A board has its own
+     answer to a narrow body and it is horizontal scroll: lanes keep their
+     width and the reader pushes them, which is what `.work-board` does. A
+     list cannot scroll sideways without becoming unreadable, so the list is
+     what sets this number. */
   --peek-drawer-max: 1200px;
 }
 
@@ -1693,6 +1708,17 @@
   border-top: none;
 }
 
+/* A GROUP NOBODY HAS FILLED IN ANYWHERE, said once across both columns. Its
+   heading stays above it — the group exists and is empty, which is not the
+   same claim as an object that has no such group — and this is the sentence
+   the CALLER wrote for it. See PropertiesRail's own doc for why the rail does
+   not decide this for itself. */
+.props-empty {
+  grid-column: 1 / -1;
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
 /* WHO SET IT, under the value rather than beside it: the value is what the
    reader came for and the provenance is why they stayed. A line of its own so
    a long actor name cannot push the value out of the column. */
@@ -1701,6 +1727,27 @@
   margin-top: 2px;
   font-size: var(--fs-3xs);
   color: var(--text-muted);
+}
+
+/* THE `turn ↗` LINK IS ONE TOKEN, in the fact line and in the rail alike —
+   both render [SetByLine], so this is one rule rather than two that drift.
+
+   THE ARROW WAS ON A LINE OF ITS OWN, at every width, and no `white-space`
+   could have stopped it: `.t-link` already carries `nowrap`, and what breaks
+   here is not a wrap. `base.css` gives every `svg` `display: block` — right,
+   because the product's glyphs are overwhelmingly flex items and that is what
+   removes the inline baseline gap — and a BLOCK box inside an inline box
+   splits the inline box around it (CSS 2.1 § 9.2.1.1), so the anchor was cut
+   in two and the glyph took the second half. An inline-flex anchor has a
+   formatting context of its own, so the word and the arrow are one atomic
+   box that cannot be split or wrapped between. `align-items: center` is the
+   product's own convention for a glyph beside a word (`.work-type`,
+   `.work-prio`, uilet's own buttons), and the gap is in `em` so it tracks the
+   line's type step rather than the spacing scale, which is about layout. */
+.setby-turn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
 }
 
 /* ---- The log's time axis --------------------------------------------------

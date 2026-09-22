@@ -38,7 +38,16 @@ import {
   TypeIcon,
   type RowChrome,
 } from "~/components/work.tsx";
-import { Callout, Card, EmptyState, InlineCode, Skeleton, Tabs, Tag } from "@crewlethq/ui";
+import {
+  Callout,
+  Card,
+  EmptyState,
+  EmptyValue,
+  InlineCode,
+  Skeleton,
+  Tabs,
+  Tag,
+} from "@crewlethq/ui";
 import {
   DeleteGlyph,
   ArrowForwardGlyph,
@@ -187,17 +196,26 @@ export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number })
 }
 
 /**
- * The six facts a task is read by, in one order, on its page and in the rail.
+ * The five facts a task's PAGE is read by, in the rail's own order.
  *
- * ONE FUNCTION rather than two lists that happen to agree today. The page and
- * the peek are one definition of what a task shows — see this file's own doc —
- * and a header written twice is two orders as soon as somebody adds a seventh
- * fact, with the drift landing on the page nobody reads forty times a day.
+ * THE PAGE'S, AND NOT THE PEEK'S, and that is the whole of the difference
+ * between the two frames now. On the page `.work-item` puts the properties
+ * rail in a sticky side column BESIDE the body, so the header's line and the
+ * rail's rows are read across a gap — two readings of one object, the line to
+ * scan and the rows to study, which is what the fact line is for. In the peek
+ * there is one 420px column and the rail is a hundred pixels UNDER the header,
+ * so the same facts in both put Status, Type and Assignee on the screen twice
+ * within a screenful, before the description has been reached at all. A
+ * stacked header and rail are one reading. See [ObjectHeader]'s own doc, and
+ * [ItemPeek], which passes no facts.
+ *
+ * ONE FUNCTION rather than two lists that happen to agree today: what the page
+ * heads with and what the rail leads with are one order, so a sixth fact
+ * cannot land in one and not the other.
  *
  * THEY ARE THE PROPERTIES RAIL'S OWN LEADING ROWS, in the rail's own order:
  * status, priority and type out of State, the assignee out of People, the due
- * date out of Plan. A reader who scans the header and then the rail below it
- * is reading one object rather than re-learning it.
+ * date out of Plan.
  *
  * NO `setBy` HERE, deliberately, although a [Fact] carries one: who last moved
  * a field is what the rail answers row by row, and the same attribution drawn
@@ -206,7 +224,11 @@ export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number })
  *
  * AN ABSENT PRIORITY, TYPE OR DUE DATE IS DROPPED rather than dashed — a
  * [FactLine] renders no line for an undefined value — because a fresh task has
- * none of the three and a header of em dashes says less than a shorter one.
+ * none of the three and a header of en dashes says less than a shorter one.
+ * `none` is DROPPED here too, under the product's "nothing is drawn for the
+ * default" rule, where the rail's row states it as a word: a line that is
+ * scanned and a row that answers "what is this set to" are different
+ * questions, and the same value belongs in only one of the answers.
  * The assignee is the exception and is always drawn: nobody holding a task is
  * an answer a reader comes to this line for, stated in the rail's own words.
  */
@@ -225,10 +247,12 @@ function itemFacts({
     { label: "Status", value: <StatusBadge status={item.status} defs={chrome.statuses} /> },
     {
       label: "Priority",
-      // THE RAIL'S OWN CONDITION. `none` is the absence of a priority and
-      // `normal` is a priority somebody chose, which is why the word is asked
-      // for: a properties line answering "what is this set to" reads "normal"
-      // where a board card draws nothing at all.
+      // NOTHING IS DRAWN FOR THE DEFAULT, which is what a header line is for:
+      // `none` and `normal` are both what a task gets when nobody has decided,
+      // and a fact line carrying them on every task buries the one that is
+      // urgent. The rail's row is the other question — what is this set to —
+      // and answers `none` with the word. `word` is still asked for here
+      // because `normal` IS a choice somebody made when it is drawn at all.
       value:
         item.priority && item.priority !== "none" ? (
           <PriorityMark priority={item.priority} word />
@@ -397,9 +421,17 @@ export function WorkItem({ id }: { id: string }) {
  * a second copy of them here is how the tracker's peek came to be the only
  * peek in the product.
  *
- * AND THE HEADER IS THE PAGE'S, one size down — the same [ObjectHeader] over
- * the same [itemFacts], so the two frames of one task cannot come to name the
- * same six things in two orders.
+ * AND THE HEADER IS THE PAGE'S, one size down — the same [ObjectHeader],
+ * carrying the same identity and the same state marks, so the two frames of
+ * one task cannot come to head it two ways.
+ *
+ * WITH NO FACTS, WHICH IS THE ONE THING IT DOES NOT SHARE. A header and a
+ * properties rail stacked in ONE 420px column are one reading: the header's
+ * line said Status, Type and Assignee and the rail said all three again about
+ * a hundred pixels below it, so a third of the panel above the fold was the
+ * same answer twice and the description started under it. The page keeps its
+ * fact line because there the rail is in a column beside the header rather
+ * than under it. See [itemFacts].
  *
  * IT RESOLVES ITS OWN PEOPLE, like every other peek in the product. It used
  * to take a [RowChrome] instead, and the frame is what mounts it — from a
@@ -442,8 +474,11 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
               {/* THE PAGE'S OWN HEADER, one size down. It used to be a type
                   glyph, a mono key, a title line and a row of badges written
                   out here — four pieces of the page, re-drawn, which is how
-                  the two frames of one task came to say the same facts in two
-                  orders. */}
+                  the two frames of one task came to head it two ways.
+
+                  IDENTITY AND STATE MARKS ONLY: no `facts`, because the rail
+                  below is in the SAME column and states every one of them
+                  once. See this component's own doc. */}
               <ObjectHeader
                 size="peek"
                 kind="Item"
@@ -451,7 +486,6 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                 identifier={item.key}
                 title={item.title}
                 status={itemFlags(state.data)}
-                facts={itemFacts({ detail: state.data, chrome: inner, now })}
               />
               <div className="col gap-3">
                 {item.removed && <RemovedNote tomb={item.removed} now={now} />}
@@ -534,7 +568,16 @@ export function Subtasks({
   }
   if (rows.length === 0) return null;
   return (
-    <Card padding="none">
+    // THE LIST MEASURES ITS OWN BOX, NOT THE WINDOW. `.work-rows` declares
+    // eight tracks and drops to four inside a VIEWPORT query, so a subtask
+    // list in a 420px peek on a 1848px screen gets all eight: 90px of fixed
+    // tracks, seven gaps and four content-sized cells resolve before the
+    // title's `minmax(0, 1fr)`, and the title — the only thing on the row that
+    // says what the subtask IS — is starved to almost nothing. A row's columns
+    // belong to the list, and how wide the list is has never been a fact about
+    // the window. `.work-subtasks` is the size container the rule keys on, so
+    // one declaration serves the peek, the page and a phone.
+    <Card padding="none" className="work-subtasks">
       <Card.Header count={rows.length}>
         <Card.Title>Subtasks</Card.Title>
       </Card.Header>
@@ -1109,6 +1152,37 @@ export function ItemProps({
   // that instead. See [PropertiesRail].
   const groups: PropertyGroup[] = [
     {
+      // NO HEADING, AND FIRST. The project is the task's ADDRESS rather than
+      // its state, its people or its plan — which company workspace this piece
+      // of work lives in — so it heads the rail the way a page's container
+      // does, above the groups that describe the task itself.
+      //
+      // THE PEEK IS WHY IT HAD TO BE A ROW. The page reaches the project from
+      // the page bar's "Open on the board →"; the peek renders no page bar, so
+      // the only trace of the project in the panel was the `LEAD` prefix
+      // inside the key, which a reader who does not already know the key
+      // grammar cannot read and cannot follow.
+      properties: [
+        {
+          label: "Project",
+          // THE NAME WITH THE KEY BESIDE IT: the name is what a person calls
+          // it and the key is what every item, board and link is addressed by,
+          // and a row carrying only one of the two makes the reader translate.
+          // The project read is the same one that supplies this rail's
+          // vocabulary, so a panel that is still loading shows the key alone
+          // rather than waiting.
+          value: (
+            <span className="row gap-2">
+              {project?.name || item.project}
+              {project?.name && <span className="mono">{item.project}</span>}
+            </span>
+          ),
+          path: ["work", item.project],
+          setBy: by("project"),
+        },
+      ],
+    },
+    {
       name: "State",
       properties: [
         {
@@ -1118,10 +1192,27 @@ export function ItemProps({
         },
         {
           label: "Priority",
-          value:
-            item.priority && item.priority !== "none" ? (
-              <PriorityMark priority={item.priority} word />
-            ) : undefined,
+          // `none` IS A VALUE THE ENGINE MINTS, not an absence: a create
+          // defaults the field to it and the applier records the delta, so the
+          // change log carries "somebody set this" about a row that used to
+          // render as a dash — a blank with an attribution under it, which is
+          // the engine and the dashboard disagreeing on one screen.
+          // `internal/tracker/policy.go` states it: "PriorityNone is the
+          // default and is a real value rather than an absent one: 'nobody has
+          // said' and 'explicitly not urgent' are the same fact here." A rail
+          // answers what the field is SET TO, so it answers with the word —
+          // the same reasoning this rail already applied to `normal`. An
+          // absent priority is a different case and still dashes: no value
+          // reached this build at all.
+          value: !item.priority ? undefined : item.priority === "none" ? (
+            // NOT A [PriorityMark]: the mark is the four-step SCALE, drawn as
+            // a shape so it reads without its colour, and `none` is not a step
+            // on it. A glyph here would put an elevation beside a task that
+            // has none.
+            <span>none</span>
+          ) : (
+            <PriorityMark priority={item.priority} word />
+          ),
           setBy: by("priority"),
         },
         {
@@ -1197,6 +1288,14 @@ export function ItemProps({
     },
     {
       name: "Plan",
+      // NOTHING SCHEDULED IS ONE FACT, NOT FOUR. Every row here is a DASH when
+      // unset rather than dropped — a task has a due date, unset, which is not
+      // the same as a task that cannot have one — and on a fresh task that is
+      // a heading, a hairline and four dashes saying one thing four times,
+      // most of the vertical space between the header and the description in
+      // a peek. The group says it once and the reader still learns it. The
+      // rows come back the moment any one of them is filled.
+      whenAllAbsent: "Nothing scheduled: no dates, no estimate, no size.",
       properties: [
         {
           label: "Start",
@@ -1245,11 +1344,20 @@ export function ItemProps({
       name: "Fields",
       properties: (detail.fields ?? []).map((field) => {
         const state = fieldValueState(field);
+        // AN UNSET FIELD TAKES THE RAIL'S OWN ABSENCE, not the dash a list
+        // cell draws. `fieldValueText` answers `EMPTY_VALUE` for a value that
+        // is not there, which is right in a grid column and wrong here: the
+        // rail's mark carries "Not set" with it, and a bare en dash in a cell
+        // says nothing at all to a reader who cannot hover it. The row cannot
+        // simply be given no `value`, because the state word — undeclared,
+        // archived, from another tracker — is a fact about the DECLARATION
+        // and stays true of a field nobody has filled in.
+        const unset = field.value === null || field.value === undefined || field.value === "";
         return {
           label: field.name || field.slug || field.id,
           value: (
             <>
-              {fieldValueText(field, defs, seatName)}
+              {unset ? <EmptyValue label="Not set" /> : fieldValueText(field, defs, seatName)}
               {state && <span className="work-field-state">{state}</span>}
             </>
           ),

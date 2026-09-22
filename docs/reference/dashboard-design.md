@@ -571,7 +571,7 @@ set a fact, which on a product whose objects are mostly written by agents is
 the thing a reader asks about most. "In progress" is a different fact from
 "moved to in progress by ada, eleven minutes ago, in turn ↗".
 
-**An absent value is a decision.** Three different facts share one empty cell
+**An absent value is a decision.** Four different facts share one empty cell
 and they are not interchangeable:
 
 - the row is **dropped** — this object has no such property at all (a task with
@@ -579,11 +579,54 @@ and they are not interchangeable:
 - the row is a **dash** — the property exists and holds nothing (a task with no
   due date has a due date, unset);
 - the row **says something** — the empty state means something a reader should
-  know ("none — reflection uses the default").
+  know ("none — reflection uses the default");
+- the whole **group says something**, in one line, because every property in it
+  is absent — `whenAllAbsent`. A section of nothing is not the same claim as a
+  row of nothing: a fresh task spent a heading, a hairline and four dashes
+  learning the reader that nothing about it is scheduled, which in a 420px peek
+  is most of the space between the header and the description. "Nothing
+  scheduled: no dates, no estimate, no size." states it once, the heading stays
+  — the group exists and is empty, which is not the claim the *dropped* case
+  makes — and the rows come back the moment any one of them is filled.
 
-The caller says which, and there is no path by which forgetting produces a
-plausible-looking wrong one. `0` and `false` are values a property can hold and
-are rendered, never folded into "nothing set".
+The caller says which, on all four, and there is no path by which forgetting
+produces a plausible-looking wrong one. The fourth is deliberately an opt-in
+rather than something the rail works out for itself: a rail of annotation rows
+would fold into one sentence the day somebody cleared them, with nobody having
+decided that. `0` and `false` are values a property can hold and are rendered,
+never folded into "nothing set".
+
+**One attribution per change, not per row.** A create sets six fields at once,
+so six consecutive rows carried six identical copies of "agent-ceo · 21h ago ·
+turn ↗" — one sentence written out six times, which turned three rows of a
+peek into six lines. A **run** of consecutive properties sharing one (actor,
+instant, turn) draws ONE line, naming what it covers, under the last of them:
+"Status, Priority and Type · set by agent-ceo · 21h ago · turn ↗". It is the
+rule [A row is not a row](#a-row-is-not-a-row) already states for a feed —
+rows under one heading do not each repeat the actor — and a row that draws no
+line ends the run rather than being reached over, because a line naming
+"Status and Type" with a Priority between them is a claim the reader has to
+check.
+
+**And never an attribution under an absence.** Provenance under a dash claims
+the engine recorded somebody setting nothing. The one exception is a change
+that EMPTIED the field, which the log did witness, and it reads "cleared by"
+rather than "set by" — they are different events about the same blank cell.
+The wording is one component shared with the header's fact line, because
+written twice it had already drifted: the line said "set by ada" and the rail
+said a bare "ada", which under a value reads as who wrote the row.
+
+**A header and a rail stacked in one column are one reading.** On an object's
+page the rail sits BESIDE the header, in a sticky side column, so the header's
+fact line and the rail's rows are read across a gap — the line to scan in a
+second, the rows to study. In a **peek** both are in one 420px column with the
+rail a hundred pixels under the header, and there the same facts in both is not
+a second reading: it is the same answer given twice before the description has
+been reached. So a peek whose body is a properties rail passes NO facts and the
+rail states every property once; a peek with no rail under it — a unit, a
+revision — keeps its fact line, because there it is the only place the object's
+own values are stated. The caller decides, since the rule is about the frame's
+BODY rather than its header.
 
 ### A log is an axis, then its rows
 
@@ -686,6 +729,14 @@ being handed the row that opened it: the row carries what its list needed, a
 peek answers "what is this thing", and the two differ on every kind. It is
 also what lets a pasted `peek=` open on arrival, where no row exists.
 
+**A peek is one column, so it says everything once.** Its header carries the
+object's identity and its state marks; where a properties rail follows below,
+that rail states every property and the header carries no fact line — see
+[An object's own facts](#an-objects-own-facts). A list inside a peek measures
+ITS OWN box too: `.work-rows` drops to four columns on a container query
+rather than a viewport one, or a 420px panel on a wide screen gets the full
+eight-track row and the title is starved to nothing.
+
 **`[` and `]` walk the list, so the list publishes its order** with
 `usePeekNeighbours`. Only the list knows what the reader is looking at —
 sorted, filtered and paged as they left it — and a rail that stepped through
@@ -706,7 +757,7 @@ none of it:
 | `WorkspaceSidebar` | one workspace's tree, built from LIVE answers rather than a table — a hand-kept copy would be wrong the first time somebody adds a project |
 | `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link. It SHRINKS rather than wraps — see [The page bar shrinks](#the-page-bar-shrinks-and-breaks-on-its-own-width) |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
-| `ObjectHeader` | an object's eyebrow, title, state marks and up to six facts, in the same order on the page and in the peek. A fact may carry a `note` saying where its value came from — whether a duration was measured by the engine or derived from the events a page holds, what a token figure covers — for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
+| `ObjectHeader` | an object's eyebrow, title, state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from — whether a duration was measured by the engine or derived from the events a page holds, what a token figure covers — for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has eight — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `@crewlethq/ui`'s `Tabs`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
 | `DetailRail` | the peek's chrome — resizable, a drawer under 1200 px |
 | `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
@@ -2362,7 +2413,10 @@ is one of the rules on this page applied to a tracker.
   column is as wide as the widest value in it. The row also keeps a CELL for
   a value it does not have: an undated, unassigned, unestimated task lines
   its status up with the task above it rather than pulling every later
-  column one place left.
+  column one place left. **And how wide the list is has never been a fact
+  about the window** — a subtask list is 420px in a peek on a 2000px screen —
+  so the narrow track set is a container query over the list's own box rather
+  than a viewport one.
 - **Nothing is drawn for the default.** `normal` priority is what a task gets
   when nobody said, so it is most of a board — a mark on every card is a mark
   that says nothing, and it buries the four that ARE urgent. A due date drops
@@ -2371,11 +2425,20 @@ is one of the rules on this page applied to a tracker.
 - **Reading an item does not lose the board.** A plain click opens a PEEK
   beside the rows; ⌘-click and middle-click follow the anchor to the item's
   own page, because a card that cannot be opened in a tab is not a link.
-  Below about 1500px it becomes a DRAWER over the board rather than a third
-  column, and that threshold is measured rather than guessed: the sidebar,
-  the rail and the peek are three panes and the board is what is left, so at
-  1280 — an ordinary laptop — one board column was left beside a detail
-  panel, which is not a board.
+  Below `--peek-drawer-max` — 1200px, measured, and its arithmetic is at the
+  definition in `frame.css` — it becomes a DRAWER over the content rather than
+  a column beside it. That threshold is the FRAME's and governs every screen's
+  peek, so the quantity it turns on is the one common to all of them: a LIST
+  too narrow to read, whose floor is 444px, plus the chrome in front of it at
+  the widest density. The board once had a number of its own — three panes are
+  the rail, the sidebar and the peek, a lane is 292px, and at 1280 exactly one
+  lane was left beside a detail panel, "which is not a board", so the peek
+  should overlay below about 1500. That measured a peek the tracker's own
+  screen owned as a column of its own body grid; the frame took the peek over,
+  the rules enforcing 1500 matched an attribute nothing ever set, and they are
+  gone. A board's answer to a narrow body is horizontal scroll — lanes keep
+  their width and the reader pushes them — which is why the list, not the
+  board, is what sets the number.
 - **The charts answer the questions the numbers cannot.** A census bar says
   the shape of a project where three counts say only their sizes; a load bar
   is drawn against the HEAVIEST QUEUE on screen rather than an absolute
