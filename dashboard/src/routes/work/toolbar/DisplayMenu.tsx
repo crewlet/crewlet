@@ -49,6 +49,7 @@ import {
   VisibilityGlyph,
 } from "@crewlethq/icons/glyphs";
 import { GROUP_AXES, SORTS, groupAxisOptions, secondAxisOptions, type Shape } from "~/lib/work.ts";
+import { ColumnChooser } from "~/app/frame/DataGrid.tsx";
 import { columnChoices, isGridShape } from "../shapes/Grid.tsx";
 
 /** The five shapes, each with the mark it is drawn as in the strip. */
@@ -158,7 +159,6 @@ function DisplayPanel({
   // twice.
   const grouped = shape !== "calendar";
   const nested = isGridShape(shape);
-  const chosen = new Set(cols ? cols.split(",").filter(Boolean) : []);
   // THE ACTIVE SET'S OWN CHOICES. Both grid shapes have columns and they are
   // not the same columns in the same order, so the set is asked for by shape
   // rather than derived once — see `shapes/Grid.tsx`.
@@ -225,49 +225,13 @@ function DisplayPanel({
         </label>
       )}
 
-      {columns.length > 0 && (
-        <>
-          <div className="work-display-label">Columns</div>
-          <div className="work-display-cols">
-            {columns.map((column) => {
-              // AN EMPTY `cols=` IS THE DEFAULT SET, not an empty grid —
-              // `DataGrid` reads it that way, so the checkboxes show the
-              // default until somebody moves one.
-              const on = chosen.size === 0 ? !column.optional : chosen.has(column.key);
-              return (
-                <label key={column.key} className="work-display-col">
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    onChange={() => {
-                      const next = new Set(
-                        chosen.size === 0
-                          ? columns.filter((c) => !c.optional).map((c) => c.key)
-                          : chosen,
-                      );
-                      if (on) next.delete(column.key);
-                      else next.add(column.key);
-                      // THE DECLARATION ORDER, never the click order: `cols=`
-                      // is read as the order to DRAW them in, so a set built
-                      // from a Set's insertion order would rearrange the grid
-                      // every time somebody ticked a box. It is also why the
-                      // key is per shape — the order it carries is the ACTIVE
-                      // set's, and the other set declares another one.
-                      onCols(
-                        columns
-                          .filter((c) => next.has(c.key))
-                          .map((c) => c.key)
-                          .join(","),
-                      );
-                    }}
-                  />
-                  <span>{column.label}</span>
-                </label>
-              );
-            })}
-          </div>
-        </>
-      )}
+      {/* THE SHARED CHOOSER, which is where the two rules that are easy to get
+          wrong now live once — an empty `cols=` is the DEFAULT set rather than
+          an empty grid, and the value it writes is in DECLARATION order rather
+          than click order. The projects directory draws the same control over
+          its own columns; see [ColumnChooser]. What stays this menu's is WHICH
+          columns exist, which is per shape. */}
+      <ColumnChooser choices={columns} value={cols} onChange={onCols} />
 
       {/* WHAT THE VIEW ITSELF SAYS, and the way back to it. A reader who has
           overridden the shape has no other way to tell that they have: the

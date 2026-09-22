@@ -2117,6 +2117,12 @@ details > summary.int-summary::-webkit-details-marker {
 }
 
 /* The Display panel is a form rather than a list, so it is padded as one. */
+/* THE GEOMETRY OF A PANEL THAT LAYS OUT CONTROLS, which is what both menus
+   deciding how an answer is DRAWN take: the work list's Display menu, and the
+   projects directory's Columns menu over the same `ColumnChooser`. The name is
+   the first panel's and the three declarations are not about shapes, so a
+   second class carrying them would be a copy waiting to drift. `.work-menu`
+   above is the bare panel underneath it. */
 .work-display {
   gap: var(--space-3);
   padding: var(--space-3);
@@ -2159,27 +2165,6 @@ details > summary.int-summary::-webkit-details-marker {
   gap: var(--space-3);
   font-size: var(--fs-xs);
   color: var(--text-secondary);
-}
-.work-display-label {
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-.work-display-cols {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-1) var(--space-3);
-}
-.work-display-col {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: var(--size-target-min);
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
-  cursor: pointer;
 }
 .work-display-foot {
   padding-top: var(--space-2);

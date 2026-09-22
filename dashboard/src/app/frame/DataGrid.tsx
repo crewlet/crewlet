@@ -62,6 +62,116 @@ export interface GridColumn<T> {
   optional?: boolean;
 }
 
+/** One column a reader may turn on or off, as a chooser offers it. */
+export interface ColumnChoice {
+  key: string;
+  label: string;
+  /** Off until `cols=` names it. */
+  optional?: boolean;
+}
+
+/**
+ * The choices a chooser offers, DERIVED from the columns a grid draws.
+ *
+ * A chooser holding its own list of names would be a second declaration of the
+ * grid's columns — wrong the first time one is added, and indistinguishable
+ * from a correct one. This takes the three facts a chooser needs off the
+ * columns themselves, so a column added to a grid appears in its menu with no
+ * second edit.
+ *
+ * THE CELL RENDERERS ARE NEVER CALLED. A name and a flag are properties of the
+ * COLUMN, so nothing here touches a row — which is what lets a caller derive
+ * the choices from a column list built over a stub context.
+ */
+export function columnChoicesOf<T>(columns: GridColumn<T>[]): ColumnChoice[] {
+  return columns.map((column) => ({
+    key: column.key,
+    // THE HEAD, OR THE NAME THE COLUMN CARRIES WHERE THE HEAD IS A GLYPH —
+    // which is exactly what [GridColumn.label] is for on the card layout a
+    // narrow grid takes.
+    label:
+      typeof column.header === "string" && column.header
+        ? column.header
+        : (column.label ?? column.key),
+    optional: column.optional,
+  }));
+}
+
+/**
+ * The checkbox list a reader chooses columns with, wherever it is drawn.
+ *
+ * ONE IMPLEMENTATION, because the two rules below are not obvious and a second
+ * copy would have to re-derive both. It was the work list's Display menu
+ * alone; the projects directory now draws the same control beside its segment,
+ * and a screen whose grid has an optional column and no chooser is a column
+ * nobody can reach — which is what `#/work/projects` shipped as when Unit
+ * became optional.
+ *
+ * AN EMPTY `cols=` IS THE DEFAULT SET, NOT AN EMPTY GRID. [DataGrid] reads it
+ * that way, so the boxes have to show the default until somebody moves one —
+ * a chooser that drew an empty value as "nothing ticked" would say the grid is
+ * blank while it is drawing every ordinary column.
+ *
+ * IT WRITES THE DECLARATION ORDER, NEVER THE CLICK ORDER. `cols=` carries an
+ * ORDER as well as a selection, so a value built from a Set's insertion order
+ * would rearrange the grid every time somebody ticked a box.
+ *
+ * The caller owns the KEY: the work list's is per shape (`cols.list=` /
+ * `cols.table=`, since its two column sets declare two orders) and a screen
+ * with one grid takes the bare `cols=` — see [DataGrid]'s own `name` and
+ * `colsName`.
+ */
+export function ColumnChooser({
+  choices,
+  value,
+  onChange,
+  label = "Columns",
+}: {
+  choices: ColumnChoice[];
+  /** `cols=` as it stands, empty for the default set. */
+  value: string;
+  onChange: (cols: string) => void;
+  /** The heading above the boxes, where a menu wants another word. */
+  label?: string;
+}) {
+  if (choices.length === 0) return null;
+  const chosen = new Set(value ? value.split(",").filter(Boolean) : []);
+  return (
+    <>
+      <div className="grid-cols-label">{label}</div>
+      <div className="grid-cols-choices">
+        {choices.map((choice) => {
+          const on = chosen.size === 0 ? !choice.optional : chosen.has(choice.key);
+          return (
+            <label key={choice.key} className="grid-cols-choice">
+              <input
+                type="checkbox"
+                checked={on}
+                onChange={() => {
+                  const next = new Set(
+                    chosen.size === 0
+                      ? choices.filter((c) => !c.optional).map((c) => c.key)
+                      : chosen,
+                  );
+                  if (on) next.delete(choice.key);
+                  else next.add(choice.key);
+                  onChange(
+                    choices
+                      .filter((c) => next.has(c.key))
+                      .map((c) => c.key)
+                      .join(","),
+                  );
+                }}
+              />
+              <span>{choice.label}</span>
+            </label>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
 export interface GridBand<T> {
   key: string;
   label: ReactNode;
