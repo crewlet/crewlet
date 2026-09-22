@@ -31,6 +31,19 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 	if err != nil {
 		return 0, err
 	}
+	// WHAT THIS RECORD MOVES, READ BEFORE THE UPSERT REPLACES IT.
+	//
+	// The same frame [Applier.applyTask] computes its own deltas in, and
+	// the same rule: the delta is the APPLIER's, on every commit, loud or
+	// quiet. A document write carries no notification on almost every path
+	// — a project is reconciled from the chart, a view save and a person's
+	// bookkeeping wake nobody, and a catalogue edit is deliberately quiet
+	// — so a delta taken from the wake would have been no delta at all,
+	// which is exactly what this column held. See `deltas.go`.
+	moved, err := documentDeltas(ctx, tx, subject, c.record.Mutation)
+	if err != nil {
+		return 0, err
+	}
 	rows, err := a.upsertDocument(ctx, tx, table, key, c)
 	if err != nil {
 		return 0, err
@@ -52,10 +65,19 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 		if extra, err = a.explode(ctx, tx, subject, c); err != nil {
 			return 0, err
 		}
+	} else {
+		// THE VERSION GUARD SKIPPED THIS RECORD, so it wrote no
+		// document and moved no field. [Applier.applyTask] says the
+		// same thing on its own redelivery branch: the history row is
+		// still written, because a record that produced no object
+		// change is still something that happened — and a delta
+		// computed against a document a NEWER record has already
+		// replaced would name a move this record never made.
+		moved = nil
 	}
 	// A PROJECT, A VIEW OR A PERSON — none of which has an item key or a
 	// containing project, so both are honestly empty.
-	history, err := a.writeHistory(ctx, tx, c, subjectKeys{}, nil)
+	history, err := a.writeHistory(ctx, tx, c, subjectKeys{}, moved)
 	if err != nil {
 		return 0, err
 	}

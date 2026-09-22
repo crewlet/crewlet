@@ -367,20 +367,29 @@ func (w Wake) deltas() map[string]Delta { return TaskDeltas(w.Before, w.After) }
 // so a quiet status change wrote a history row with NO deltas, and
 // `status_entered_at` went on naming an older change than the task had
 // actually last made.
+//
+// IT IS THE TASK'S HALF OF ONE RULE, and `deltas.go` is the other: every apply
+// that writes a history row records what it moved, computed by the APPLIER
+// from the two states it holds. Read that file's head before adding a field
+// here — the bounds, the text forms and the reason a value is never a
+// rendering are stated there once for every object.
 func TaskDeltas(before, after Task) map[string]Delta {
-	moved := map[string]Delta{}
-	add := func(field, from, to string) {
-		if from != to {
-			moved[field] = Delta{From: from, To: to}
-		}
-	}
+	moved := deltaSet{}
+	add := moved.add
 	add("title", before.Title, after.Title)
 	add("status", string(before.Status), string(after.Status))
 	add("assignee", before.Assignee, after.Assignee)
 	add("priority", string(before.Priority), string(after.Priority))
 	add("project", before.Project, after.Project)
 	add("type", before.Type, after.Type)
-	add("tags", strings.Join(before.Tags, ", "), strings.Join(after.Tags, ", "))
+	// THE TAGS IN THE ORDER THEY ARE STORED, and BOUNDED — [listText]
+	// rather than a bare join. A task may carry [MaxTagsPerTask] tags
+	// whose slugs run to 64 characters each, which is 2.6 KiB on each side
+	// of one delta in a table nothing ever sweeps; the join had no bound
+	// at all. Not [sortedText], unlike an edge set: these are in the order
+	// a writer stated them, and re-ordering them here would rewrite every
+	// row this column has ever held.
+	add("tags", listText(before.Tags), listText(after.Tags))
 	// THE SCHEDULE MOVES TOO, and until a tool could set any of these
 	// nothing here could observe it: a due date, an estimate and a size
 	// had no producer in the tree, so their absence from this list was
@@ -407,25 +416,58 @@ func TaskDeltas(before, after Task) map[string]Delta {
 	add("start", instantText(before.StartAt), instantText(after.StartAt))
 	add("estimate", minutesText(before.EstimateMinutes), minutesText(after.EstimateMinutes))
 	add("points", pointsText(before.Points), pointsText(after.Points))
-	if len(moved) == 0 {
-		return nil
+	// AND THE EDGES, ONE FIELD PER RELATION KIND, because an edge change
+	// is a change to this task and the row that recorded it said only
+	// `relations`. Every dependency write is a task patch — a
+	// [Writer.Depend] sequence publishes `Relate` on the dependent and
+	// `Depend` on the blocker, and both land here — so the applier already
+	// holds both documents and the one thing missing was the comparison.
+	//
+	// HERE RATHER THAN AS A KIND OF ITS OWN, which is the choice this
+	// makes explicit: a [ChangeKind] says what HAPPENED and a delta says
+	// what MOVED, and they are different facts about one commit — the same
+	// separation [Applier.writeHistory] draws between the kind and
+	// `notified`. Keeping them apart is what lets `update_work_item`
+	// record a status move and an edge in ONE row, which a second kind
+	// could not have: one record has one kind.
+	//
+	// THE OTHER TASK BY ITS ID, never by its key. See `deltas.go`'s head:
+	// a key belongs to another task's row, a history row is written once
+	// and repaired by nothing, and a node that had not applied that task
+	// would store a different string for ever. Resolving it is the
+	// surface's, exactly as rendering a day is.
+	//
+	// ONE FIELD PER KIND, derived from [RelationKinds] rather than listed,
+	// so a fifth kind of edge is recorded with no second edit — the reason
+	// that slice exists.
+	for _, kind := range RelationKinds {
+		add(string(kind), relationText(before.Relations, kind),
+			relationText(after.Relations, kind))
 	}
-	if len(moved) > MaxDeltas {
-		// DETERMINISTICALLY, by field name: a card that showed a
-		// different thirty-two on two nodes would be one screen
-		// disagreeing with another about what changed.
-		names := make([]string, 0, len(moved))
-		for name := range moved {
-			names = append(names, name)
+	// AND THE MIRROR, under the word this package already uses for it:
+	// `blocking` is what [DependencyChange] calls the other direction and
+	// what [Reason] calls the wake it produces. It is a field of its own
+	// rather than a fifth relation kind because it is not an authored edge
+	// — it is the copy the blocker carries so a close can name who it
+	// unblocks.
+	add("blocking", sortedText(before.Dependents), sortedText(after.Dependents))
+	return moved.done()
+}
+
+// relationText is one kind's counterparties, as the text a delta carries.
+//
+// BY KIND rather than the whole set in one field, because the kinds are
+// unrelated facts: `waiting_on` is a dependency somebody has to clear and
+// `page` is a link to a wiki page, and folding them into one string would make
+// adding a link read as a change to what the task is waiting for.
+func relationText(relations []Relation, kind RelationKind) string {
+	others := make([]string, 0, len(relations))
+	for _, relation := range relations {
+		if relation.Kind == kind {
+			others = append(others, relation.Other)
 		}
-		sort.Strings(names)
-		trimmed := make(map[string]Delta, MaxDeltas)
-		for _, name := range names[:MaxDeltas] {
-			trimmed[name] = moved[name]
-		}
-		return trimmed
 	}
-	return moved
+	return sortedText(others)
 }
 
 // excerpt is what a card shows, cut rune-safely to the display limit.
