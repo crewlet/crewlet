@@ -10,7 +10,7 @@
  * to shape, and that each lens answers its own question.
  */
 
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Project, ProjectPeek } from "./Project.tsx";
@@ -356,4 +356,83 @@ test("the rail says an empty project is empty, where the page's list does", asyn
   );
   await waitFor(() => expect(screen.getByText("No work has been filed here yet.")).toBeTruthy());
   expect(container.querySelector(".work-census")).toBeNull();
+});
+
+// A LENS KEEPS ITS FILTERS.
+//
+// The three lenses are three readings of ONE container, not three screens — so
+// walking to History to see what moved and coming back must return the reader
+// to the list they left, narrowed as they left it. A lens that cleared the
+// query would make History a one-way trip: the way back would be re-adding
+// every chip by hand, which is what sends somebody to a second browser tab
+// instead.
+//
+// IT IS THE LINK BUILDER THAT DECIDES THIS, not the lens bodies. `useTab`
+// writes through `Navigator.section`, which copies the whole current query and
+// sets one key, so every other key survives by construction. Asserted here
+// because the alternative spelling is one line away and fails SILENTLY: a
+// setter that built a fresh `URLSearchParams` would drop every filter, and
+// each lens would still render perfectly on its own.
+test("a filter set on the Items lens survives a walk to History and back", async () => {
+  location.hash = "#/work/ENG?priority=urgent&assignee=ada";
+  const query = serving({
+    work_project: detail(),
+    work_items: { items: [], groups: [], complete: true },
+    work_activity: { records: [], complete: true },
+  });
+  mount();
+  await waitFor(() => expect(asked(query).priority).toBe("urgent"));
+  expect(asked(query).assignee).toBe("ada");
+
+  const lenses = () => screen.getByRole("tablist", { name: "Lens" });
+  fireEvent.click(within(lenses()).getByRole("tab", { name: "History" }));
+  await waitFor(() => {
+    const calls = query.mock.calls as unknown as [string, Record<string, unknown>?][];
+    expect(calls.findLast(([what]) => what === "work_activity")?.[1]?.container).toBe(
+      "project:ENG",
+    );
+  });
+  // THE NARROWING IS STILL ON THE ADDRESS while another lens is drawn. It has
+  // to be: the Items lens is unmounted, so the URL is the only thing holding
+  // what the reader asked for.
+  expect(location.hash).toContain("priority=urgent");
+  expect(location.hash).toContain("assignee=ada");
+
+  query.mockClear();
+  fireEvent.click(within(lenses()).getByRole("tab", { name: /^Items/ }));
+  await waitFor(() => expect(listRan(query)).toBe(true));
+  expect(asked(query).priority).toBe("urgent");
+  expect(asked(query).assignee).toBe("ada");
+});
+
+// AND THE ARRANGEMENT TRAVELS WITH THEM. `shape=`, the active set's `cols.*`
+// and `sort=` are not filters — they are how the same answer is DRAWN — but
+// they are URL keys on the same screen, so a lens switch that kept the
+// narrowing and dropped the drawing would be half a rule: a reader who
+// arranged the table, read the history and came back to the list shape would
+// have nothing on screen to say what happened.
+test("switching lens drops neither the shape, its columns nor the order", async () => {
+  location.hash = "#/work/ENG?shape=table&cols.table=key,title&sort=-due";
+  const query = serving({
+    work_project: detail(),
+    work_items: { items: [], groups: [], complete: true },
+    work_activity: { records: [], complete: true },
+  });
+  mount();
+  await waitFor(() => expect(asked(query).sort).toBe("-due"));
+
+  const lenses = () => screen.getByRole("tablist", { name: "Lens" });
+  fireEvent.click(within(lenses()).getByRole("tab", { name: "Overview" }));
+  await waitFor(() => expect(location.hash).toContain("lens=overview"));
+  expect(location.hash).toContain("shape=table");
+  expect(location.hash).toContain("cols.table=key%2Ctitle");
+  expect(location.hash).toContain("sort=-due");
+
+  query.mockClear();
+  fireEvent.click(within(lenses()).getByRole("tab", { name: /^Items/ }));
+  await waitFor(() => expect(listRan(query)).toBe(true));
+  expect(asked(query).sort).toBe("-due");
+  // AND THE KEY IS STILL ON THE ADDRESS, which is the half a re-asked query
+  // cannot show: `cols.*` is the grid's own and never reaches the wire.
+  expect(location.hash).toContain("cols.table=key%2Ctitle");
 });
