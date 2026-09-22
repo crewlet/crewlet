@@ -511,18 +511,25 @@ func counterpartyKeys(ctx context.Context, tx *sql.Tx, records []ActivityRecord,
 // `page` edge names a knowledge-base page, and a map that answered for one
 // would be claiming a page is a task.
 //
-// `blocking` and `priorities` are the two beyond the edges: the first is the
-// mirror a blocker carries, and the second is a person's own queue, which is
-// an ordered list of task ids and renders on the same page.
+// FOUR ARE BEYOND THE EDGES, and each one names a task for its own reason:
+// `blocking` is the mirror a blocker carries, `priorities` is a person's own
+// queue — an ordered list of task ids that renders on the same page —
+// `parent` is the task this one hangs under, and `removed_with` is the root a
+// cascade took it with. The last two are scalars rather than lists and are
+// resolved here all the same: [TaskDeltas] records both by ID for the reason
+// it records every relation by one — a key is a fact about another task's row
+// and a history row is repaired by nothing — so without them a reparent and a
+// cascade removal are the two rows on an item's own History tab that still
+// render a uuid.
 var counterpartyDeltaFields = func() []string {
-	out := make([]string, 0, len(RelationKinds)+2)
+	out := make([]string, 0, len(RelationKinds)+4)
 	for _, kind := range RelationKinds {
 		if kind == RelationPage {
 			continue
 		}
 		out = append(out, string(kind))
 	}
-	return append(out, "blocking", "priorities")
+	return append(out, "blocking", "priorities", "parent", "removed_with")
 }()
 
 // resolveTaskKeys reads the item keys of ids this node holds a row for.

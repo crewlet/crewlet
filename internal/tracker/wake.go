@@ -1,6 +1,9 @@
 package tracker
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"slices"
 	"sort"
 	"strconv"
@@ -355,7 +358,9 @@ func capParties(in []TaskParty, cap int) []TaskParty {
 // CAPPED AT THE DISPLAY LIMIT and no lower: the cap governs what a card SHOWS
 // and never what the mutation carries, and a writer that hit it should be
 // trimming what it shows rather than what it recorded.
-func (w Wake) deltas() map[string]Delta { return TaskDeltas(w.Before, w.After) }
+// THE WRITER HOLDS NO CATALOGUE, which is why the argument is nil here and
+// why a custom-field move is HISTORY-ONLY. See [TaskDeltas].
+func (w Wake) deltas() map[string]Delta { return TaskDeltas(w.Before, w.After, nil) }
 
 // TaskDeltas is what changed between two versions of a task.
 //
@@ -373,7 +378,24 @@ func (w Wake) deltas() map[string]Delta { return TaskDeltas(w.Before, w.After) }
 // from the two states it holds. Read that file's head before adding a field
 // here — the bounds, the text forms and the reason a value is never a
 // rendering are stated there once for every object.
-func TaskDeltas(before, after Task) map[string]Delta {
+//
+// # `declared` is the ONE thing the two frames do not share
+//
+// A task's custom-field values are keyed by field ID, so naming them takes the
+// project's catalogue — which the APPLIER holds (it reads the same
+// declarations to write the value rows) and the WRITER does not: a wake is
+// built by the tool from the snapshot it read, outside the write's own
+// transaction. Nil therefore means "no catalogue", and the comparison is
+// SKIPPED rather than keyed by uuid, because a delta reading
+// `0f3c…=3 → 0f3c…=5` is worse on every surface than no delta at all.
+//
+// That is the whole of the split, and it is deliberately the whole: every
+// OTHER field here is computed identically in both frames, because this
+// function was exported precisely so two frames could not disagree about what
+// moved. A field held back from the notification "because a card is one line"
+// would be that disagreement re-introduced by hand — and what a card shows is
+// already bounded, by [MaxDeltas].
+func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Delta {
 	moved := deltaSet{}
 	add := moved.add
 	add("title", before.Title, after.Title)
@@ -413,6 +435,15 @@ func TaskDeltas(before, after Task) map[string]Delta {
 	// that is both lossless and the same everywhere; rendering a day from
 	// it belongs to a surface, which knows the zone.
 	add("due", instantText(before.DueAt), instantText(after.DueAt))
+	// AND WHETHER THAT INSTANT IS A DAY, which is the one thing about a due
+	// date the instant cannot say. An all-day date is stored as the
+	// company's own midnight, so making a midnight due date all-day — or
+	// giving an all-day one a time of 00:00 — moves the flag and leaves the
+	// instant exactly where it was: without this the commonest way to reach
+	// that flag is a row saying the schedule changed and naming nothing.
+	// [boolText] rather than an absence, for `archived`'s reason: both
+	// states are present on every task.
+	add("due_all_day", boolText(before.DueAllDay), boolText(after.DueAllDay))
 	add("start", instantText(before.StartAt), instantText(after.StartAt))
 	add("estimate", minutesText(before.EstimateMinutes), minutesText(after.EstimateMinutes))
 	add("points", pointsText(before.Points), pointsText(after.Points))
@@ -451,7 +482,331 @@ func TaskDeltas(before, after Task) map[string]Delta {
 	// — it is the copy the blocker carries so a close can name who it
 	// unblocks.
 	add("blocking", sortedText(before.Dependents), sortedText(after.Dependents))
+	// AND THE REST OF WHAT A WRITER CAN MOVE, which recorded nothing at
+	// all. Every field below had a producer and no comparison, so the
+	// commit that changed it wrote a history row and a card carrying its
+	// KIND and nothing it changed — a `watchers` row that did not say who,
+	// an `archived` row that did not say which way, a `reparented` row that
+	// named neither parent. The kind is what HAPPENED and a delta is what
+	// MOVED, and a row with only the first is the exact failure the edge
+	// block above was added to end.
+	//
+	// WHAT IS STILL LEFT OUT IS WHAT A WRITER CANNOT MOVE, and it is left
+	// out because a delta describes a WRITE: a version, a log position and
+	// the instants are the row's own columns, a key and a rank have exactly
+	// two producers and neither is a patch ([TaskPatch.Mint] says so), a
+	// depth is a hint the applier re-derives from the closure, and a turn's
+	// spend writes no history row at all. A field that gains a patch field
+	// later belongs in the list below, for the reason the schedule block
+	// above gives: an absence nothing can produce is an absence nobody
+	// notices.
+	//
+	// THE THREE PEOPLE SETS ARE SETS, so they take [sortedText] like the
+	// edges and unlike `tags`: nothing orders them, [settleWatch] rebuilds
+	// the watcher list by removing a handle and appending it, and a caller
+	// may state a whole set it read in any order — so a delta over document
+	// order would record a change on every re-statement that moved nobody.
+	//
+	// AND `muted` IS ITS OWN FIELD RATHER THAN SUBTRACTED FROM `watchers`.
+	// [Wake.snapshot] subtracts because it is building a ROUTING list; a
+	// delta records what the DOCUMENT holds, and folding the two would make
+	// "was never watching" and "chose to stop" the same row — which is the
+	// distinction those two fields exist to keep.
+	add("reporter", before.Reporter, after.Reporter)
+	add("watchers", sortedText(before.Watchers), sortedText(after.Watchers))
+	add("muted", sortedText(before.Muted), sortedText(after.Muted))
+	add("collaborators",
+		sortedText(before.Collaborators), sortedText(after.Collaborators))
+	// THE PARENT BY ITS ID, for the reason every relation is by one: a key
+	// is a fact about another task's row and this row is repaired by
+	// nothing. The activity read resolves it against the rows this node
+	// holds at the instant it answers — see `deltas.go`'s head.
+	add("parent", scalarText(parentText(before.Parent)),
+		scalarText(parentText(after.Parent)))
+	// THE ROUTING UNIT AND NOT THE FILED ONE. [Task.FiledUnit] is
+	// immutable, so the only commit that could ever move it is the create,
+	// where it says exactly what `routing_unit` already says — one more key
+	// on every new task's row, carrying nothing a reader did not have.
+	add("routing_unit",
+		scalarText(before.RoutingUnit), scalarText(after.RoutingUnit))
+	// BOTH STATES PRESENT, which is [boolText]'s rule: "archived: — → true"
+	// would read as a field that had no value before, and every task has
+	// always had this one.
+	add("archived", boolText(before.Archived), boolText(after.Archived))
+	// AND WHICH ROOT A CASCADE TOOK THIS TASK WITH — the one thing a
+	// tombstone holds that the history row does not already carry.
+	//
+	// The other three members of a [Tombstone] are `By`, `Kind` and `At`,
+	// and those ARE the row's own `actor`, `actor_kind` and `created_at`;
+	// recording them would be one commit's facts written twice, in two
+	// columns a later reader can find disagreeing. `RemovedWith` has no
+	// second home, and without it a descendant's `removed` row and a task
+	// somebody removed on purpose are the same three words — "removed by
+	// ada" — meaning two different things, with nothing on either row to
+	// tell them apart.
+	add("removed_with", scalarText(removedWithText(before.Removed)),
+		scalarText(removedWithText(after.Removed)))
+	add("checklists", checklistText(before.Checklists), checklistText(after.Checklists))
+	if before.Body != after.Body {
+		// A MARKER AND NEVER THE PROSE. A body is [MaxBody] — 32 KiB —
+		// and `tracker_history` is never swept, so carrying both sides
+		// would put 64 KiB on one log line on every node for the life
+		// of the company; the mutation itself is already on this row's
+		// `document` column for anybody who needs the text.
+		// [deltaSet.mark] rather than `add` because the two markers read
+		// the same when an edit replaced one paragraph with another of
+		// the same length, and that is a change.
+		moved.mark("body", bodyText(before.Body), bodyText(after.Body))
+	}
+	if from, to, changed := fieldsText(before.Fields, after.Fields, declared); changed {
+		// THE CUSTOM VALUES, BY SLUG. [deltaSet.mark] for the second of
+		// that method's two reasons: each value is cut to
+		// [MaxDeltaElement], so two long values differing past the cut
+		// render the same although the field moved.
+		moved.mark("fields", from, to)
+	}
 	return moved.done()
+}
+
+// parentText is a task's parent, and the empty string when it is a root.
+//
+// THE EMPTY STRING RATHER THAN A WORD, so "— → 0f3c…" reads the way every
+// other absent value on a delta already does.
+func parentText(parent *string) string {
+	if parent == nil {
+		return ""
+	}
+	return *parent
+}
+
+// removedWithText is the root a cascade removed this task with, by its ID.
+//
+// BY ID for the reason the parent and every relation are: a key is a fact
+// about another task's row. Empty both for a live task and for one removed on
+// its own, which is the honest fold — neither went with anything.
+//
+// [removedWith], which binds the same fact into the task's own column, is
+// derived FROM this one, so the column and the delta cannot name two different
+// roots.
+func removedWithText(tomb *Tombstone) string {
+	if tomb == nil || tomb.RemovedWith == nil {
+		return ""
+	}
+	return *tomb.RemovedWith
+}
+
+// bodyText is how big a body is, and never a byte of it.
+//
+// BYTES RATHER THAN RUNES, because this is a statement about what the write
+// COST — the figure [MaxBody] is declared in, and the one a reader comparing
+// it against that cap needs. An absent body is the empty string, which every
+// renderer of a delta already draws as an em dash, so "— → 1204 bytes" is a
+// description written and "980 bytes → —" is one cleared: the two states the
+// marker has to tell apart, in the spelling this package uses for absence
+// everywhere else.
+func bodyText(body string) string {
+	if body == "" {
+		return ""
+	}
+	return strconv.Itoa(len(body)) + " bytes"
+}
+
+// checklistText is a task's checklists as COUNTS PER NAMED LIST.
+//
+// COUNTS BECAUSE THE ITEMS DO NOT FIT: a task carries up to [MaxChecklists]
+// lists holding [MaxChecklistItemsTotal] items between them, each with its own
+// text, so listing them would put a copy of the whole tree on both sides of
+// one log line in a table nothing sweeps. "3 of 5 done" is what a reader of a
+// change wants from a checklist, and the item-level detail is on this row's
+// `document` column for anybody who needs it.
+//
+// A LIST THAT ARRIVED OR LEFT IS NAMED BY BEING THERE — each side carries the
+// lists that state held, so an addition appears on the `to` side alone and a
+// removal on the `from` side alone, which is [paramsText]'s shape for the same
+// reason.
+//
+// PROMOTIONS ARE COUNTED SEPARATELY, and that is not decoration: promoting an
+// item to a subtask is a `checklist` commit ([markPromoted]) that moves
+// neither the done count nor the total, so counts alone would have left the
+// one checklist gesture this build actually has recording nothing.
+//
+// IN DOCUMENT ORDER, unlike the people sets above and like a person's
+// `priorities`: a checklist collection renders in the order it is stored, so
+// that order is something somebody arranged rather than an artefact of how a
+// set was assembled.
+func checklistText(lists []Checklist) string {
+	if len(lists) == 0 {
+		return ""
+	}
+	out := make([]string, 0, len(lists))
+	for _, list := range lists {
+		done, promoted := 0, 0
+		for _, item := range list.Items {
+			if item.Done {
+				done++
+			}
+			if item.PromotedTo != nil {
+				promoted++
+			}
+		}
+		entry := fmt.Sprintf("%s: %d of %d done", checklistName(list), done,
+			len(list.Items))
+		if promoted > 0 {
+			entry += fmt.Sprintf(" (%d promoted)", promoted)
+		}
+		out = append(out, entry)
+	}
+	return listText(out)
+}
+
+// checklistName is what a list is called, falling back to its id.
+//
+// THE ID IS ON THIS TASK'S OWN DOCUMENT, so quoting it breaks none of the
+// rules a task KEY would: it is not a fact about another row. A nameless list
+// rendering as ": 2 of 3 done" would be a line nobody can attach to anything.
+func checklistName(list Checklist) string {
+	if name := strings.TrimSpace(list.Name); name != "" {
+		return name
+	}
+	return list.ID
+}
+
+// fieldsText is the custom-field values that MOVED, as `slug=value` on each
+// side, and whether any moved at all.
+//
+// [paramsText]'S SHAPE, for [paramsText]'s reason: a task may carry
+// [MaxFieldValues] values of up to [MaxFieldValueBytes] each, so carrying the
+// whole map twice would put hundreds of kilobytes into a log line to show that
+// one number changed. Only the ids whose stored bytes differ appear, and both
+// sides of each — so an addition, a clearing and a re-pointing are three
+// different pictures.
+//
+// BY SLUG, WHICH TAKES THE CATALOGUE. A value is keyed by field ID precisely
+// so a rename never re-points it, and an id is a uuid: `declared` is what
+// turns it back into the word a person typed. A nil catalogue is the WRITER's
+// frame and yields nothing at all — see [TaskDeltas].
+//
+// A FIELD THIS PROJECT DOES NOT DECLARE IS COUNTED RATHER THAN NAMED. There is
+// no slug to name it with, its value is already outside every filter (see
+// `fieldvalues.go`'s foreign rows), and dropping it in silence would make a
+// commit that moved only such a value read as a commit that moved nothing.
+//
+// THE `changed` FLAG IS THE VALUES' OWN ANSWER, not the text's: the members
+// are cut at [MaxDeltaElement], so two long values differing past the cut
+// render the same and only the comparison above can tell them apart.
+func fieldsText(before, after map[string]json.RawMessage,
+	declared map[string]FieldDef) (string, string, bool) {
+
+	if declared == nil {
+		return "", "", false
+	}
+	ids := make([]string, 0, len(before)+len(after))
+	for id, was := range before {
+		if !bytes.Equal(after[id], was) {
+			ids = append(ids, id)
+		}
+	}
+	for id, now := range after {
+		if _, had := before[id]; !had && len(now) > 0 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return "", "", false
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+
+	type move struct{ slug, from, to string }
+	named := make([]move, 0, len(ids))
+	var wasUndeclared, isUndeclared int
+	for _, id := range ids {
+		field, known := declared[id]
+		if !known {
+			if len(before[id]) > 0 {
+				wasUndeclared++
+			}
+			if len(after[id]) > 0 {
+				isUndeclared++
+			}
+			continue
+		}
+		named = append(named, move{
+			slug: field.Slug,
+			from: fieldValueText(field, before[id]),
+			to:   fieldValueText(field, after[id]),
+		})
+	}
+	// ORDERED BY SLUG, because a map has no order and two nodes must write
+	// one string — and the two sides keep that one order, so a reader can
+	// line them up member for member.
+	sort.Slice(named, func(i, j int) bool { return named[i].slug < named[j].slug })
+	from := make([]string, 0, len(named)+1)
+	to := make([]string, 0, len(named)+1)
+	for _, m := range named {
+		if m.from != "" {
+			from = append(from, m.slug+"="+m.from)
+		}
+		if m.to != "" {
+			to = append(to, m.slug+"="+m.to)
+		}
+	}
+	if wasUndeclared > 0 {
+		from = append(from, countText(wasUndeclared)+" undeclared")
+	}
+	if isUndeclared > 0 {
+		to = append(to, countText(isUndeclared)+" undeclared")
+	}
+	return listText(from), listText(to), true
+}
+
+// fieldValueText is one stored custom-field value as the text a delta carries.
+//
+// THE OPTION'S SLUG FOR A CHOICE, which is the same decision `fields` itself
+// takes one level up: [coerceOption] stores the option's ID so a rename never
+// re-points a stored value, and the declaration in hand is what turns it back
+// into the word somebody chose. Left unresolved, the commonest custom field
+// there is would put a uuid on both sides of every change to it.
+//
+// A RELATIONSHIP KEEPS ITS TASK ID, which is the opposite answer for the
+// opposite reason: the option list is on the declaration this frame holds,
+// while the other task is another ROW, which `deltas.go`'s head forbids
+// quoting by key.
+//
+// EACH MEMBER OF A MULTI-VALUED FIELD IS BOUNDED AS IT IS BUILT. A field may
+// carry [MaxFieldValueSeq] members of up to [MaxTextareaBytes] each, and the
+// join would otherwise assemble megabytes to be cut to [MaxDeltaElement] by
+// the caller. "/" separates them because ", " already separates one field from
+// the next.
+func fieldValueText(field FieldDef, raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var members []json.RawMessage
+	if err := json.Unmarshal(raw, &members); err == nil {
+		out := make([]string, 0, len(members))
+		for _, member := range members {
+			out = append(out, textcut.Within(
+				fieldValueText(field, member), MaxDeltaElement))
+		}
+		return strings.Join(out, "/")
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		// A NUMBER, A BOOLEAN OR SOMETHING THIS BUILD DOES NOT KNOW: its
+		// own JSON, which is what the document holds and what somebody
+		// typed. Guessing a shape for it is how `"3"` and `3` stop
+		// comparing.
+		return string(raw)
+	}
+	if field.Type == FieldDropdown || field.Type == FieldLabels {
+		for _, option := range field.Config.Options {
+			if option.ID == text {
+				return option.Slug
+			}
+		}
+	}
+	return text
 }
 
 // relationText is one kind's counterparties, as the text a delta carries.

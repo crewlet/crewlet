@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/notify"
@@ -357,19 +358,91 @@ func changeLead(meta map[string]string, actor string) string {
 	return ""
 }
 
-// promptChanged renders the delta the record already carries.
+// promptChanged renders the deltas the record already carries, and the excerpt
+// beside them.
 //
 // NOT ON A COMMENT, whose body is the comment itself and is rendered by the
 // asked opener — repeating it under a "What changed" heading reads as two
 // different things having happened.
+//
+// THE DELTAS FIRST, THE EXCERPT AFTER. The excerpt is prose about the change
+// (a purge's reason, a new task's description); the deltas are the change. A
+// seat reads the heading for what moved and the paragraph for why, which is
+// the order it would ask the two questions in.
 func promptChanged(b *strings.Builder, n notify.Inbound) {
 	switch ChangeKind(n.EventType) {
 	case ChangeComment, ChangeCommentEdited:
 		return
 	}
-	if n.Body != "" {
-		b.WriteString("\n## What changed\n" + n.Body + "\n")
+	moved, said := n.Metadata[MetaDeltas], n.Body
+	if moved == "" && said == "" {
+		return
 	}
+	b.WriteString("\n## What changed\n")
+	if moved != "" {
+		b.WriteString(moved + "\n")
+	}
+	if said != "" {
+		if moved != "" {
+			b.WriteString("\n")
+		}
+		b.WriteString(said + "\n")
+	}
+}
+
+// changedText is one `field: from → to` line per delta, in the engine's own
+// field names.
+//
+// WHY THIS EXISTS AT ALL. [Notify.Fields] is documented as the deltas a card
+// renders and no card rendered it: the wake said "The status changed by ada."
+// and stopped, so the seat's only route to the value was a `get_work_item`
+// round — which cannot recover the side it moved FROM, because that side is
+// nowhere on the task. A wake that names the kind and not the move is the
+// same failure the history rows were fixed for, one surface along.
+//
+// THE STORED TEXT, NOT A RENDERING. `deltas.go` says a value's presentation
+// belongs to a surface that knows the reader's zone and the company's live
+// vocabulary; this surface knows neither — a prompt is assembled on whichever
+// node won the delivery — and a model reads `in_review` and a whole RFC3339
+// instant perfectly well. What it must never do is invent a label, because
+// the seat's own tools answer in these same names.
+//
+// SORTED BY FIELD NAME, because a map's range order differs between
+// iterations: two nodes rendering one record, or one node rendering a
+// redelivery of it, would otherwise build two different prompts from one
+// change — and a prompt is kept in the event store exactly as the model saw
+// it, so the difference is permanent and unexplainable.
+//
+// BOUNDED BY CONSTRUCTION: [MaxDeltas] caps the entries at the write and
+// [MaxDeltaValue] caps each side, so the block cannot outgrow its prompt and
+// nothing here needs a cut of its own.
+func changedText(fields map[string]Delta) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	var b strings.Builder
+	for _, name := range names {
+		delta := fields[name]
+		// AN EMPTY SIDE IS AN EM DASH, which is what every other surface
+		// draws for one: "assignee:  → ada" reads as a rendering fault
+		// where "assignee: — → ada" reads as an assignment.
+		b.WriteString("- " + name + ": " + orDash(delta.From) + " → " +
+			orDash(delta.To) + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// orDash is a value, or the em dash that stands for its absence.
+func orDash(value string) string {
+	if value == "" {
+		return "—"
+	}
+	return value
 }
 
 // promptContext is the recon pointer.

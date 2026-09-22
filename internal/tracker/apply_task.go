@@ -81,11 +81,36 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, fmt.Errorf("tracker: encode task %s at %s: %w", id, c.position, err)
 	}
+
+	// THE PROJECT'S FIELD DECLARATIONS, READ ONCE FOR BOTH READERS OF THEM.
+	//
+	// [Applier.explodeFieldValues] needs them to decide which typed column
+	// each value goes in, and [TaskDeltas] needs them to name a value by its
+	// SLUG rather than by the uuid it is keyed under. Two reads of one
+	// document in one transaction is waste, and the two could drift on a
+	// catalogue commit interleaved between them, so the read is hoisted
+	// here and the map is passed down.
+	//
+	// READ ONLY WHEN A SIDE CARRIES VALUES, which is what keeps this off the
+	// hot path: the overwhelming majority of task commits touch no custom
+	// field at all, and a company that declares none never reads a
+	// catalogue here. BOTH sides, because a commit that CLEARED every value
+	// still has to name what it cleared, and `next` alone would answer for
+	// neither. The guard is one line from its consumers so the invariant
+	// they rest on — a nil map means neither side had a value — is checkable
+	// by eye.
+	var declared map[string]FieldDef
+	if len(current.Fields) > 0 || len(next.Fields) > 0 {
+		if declared, err = declaredFields(ctx, tx, next.Project); err != nil {
+			return 0, err
+		}
+	}
+
 	rows, err := upsertTask(ctx, tx, next, document, c)
 	if err != nil {
 		return 0, err
 	}
-	children, err := a.explodeTask(ctx, tx, next, c)
+	children, err := a.explodeTask(ctx, tx, next, declared, c)
 	if err != nil {
 		return 0, err
 	}
@@ -104,7 +129,7 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if !held {
 		before = Task{}
 	}
-	applied := TaskDeltas(before, next)
+	applied := TaskDeltas(before, next, declared)
 	history, err := a.writeHistory(ctx, tx, c,
 		subjectKeys{Project: next.Project, Key: next.Key}, applied)
 	if err != nil {
@@ -545,7 +570,7 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 // handful of rows and is a pure function of the document, where a diff would
 // depend on what this node happened to hold.
 func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
-	task Task, c applyContext) (int, error) {
+	task Task, declared map[string]FieldDef, c applyContext) (int, error) {
 
 	written := 0
 	for _, child := range []struct {
@@ -659,13 +684,15 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 	// THE FIELD VALUES ARE THEIR OWN COLLECTION, and they are not in the
 	// loop above because the delete-then-insert there is keyed on task_id
 	// alone while this one needs the DECLARATIONS to decide which typed
-	// column each value goes in — a read the loop's shape has no room for.
+	// column each value goes in — which the loop's shape has no room for,
+	// and which [Applier.applyTask] reads and hands down rather than
+	// re-reading here.
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM tracker_field_values WHERE task_id = ?`, task.ID); err != nil {
 		return 0, fmt.Errorf("tracker: clear tracker_field_values for %s: %w",
 			task.ID, err)
 	}
-	values, err := a.explodeFieldValues(ctx, tx, task, c)
+	values, err := a.explodeFieldValues(ctx, tx, task, declared, c)
 	if err != nil {
 		return 0, err
 	}
@@ -1186,11 +1213,16 @@ func removedAt(task Task) any {
 	return store.EncodeTime(task.Removed.At)
 }
 
+// removedWith binds the cascade root into the task's own column, or NULL.
+//
+// DERIVED FROM [removedWithText], which is the delta's form of the same fact,
+// so the column and the history row cannot name two different roots.
 func removedWith(task Task) any {
-	if task.Removed == nil || task.Removed.RemovedWith == nil {
+	with := removedWithText(task.Removed)
+	if with == "" {
 		return nil
 	}
-	return *task.Removed.RemovedWith
+	return with
 }
 
 func nullableStringPtr(v *string) any {
