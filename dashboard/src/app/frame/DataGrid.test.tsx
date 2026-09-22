@@ -340,3 +340,25 @@ test("only a sortable column head is a button, and every button is named", () =>
     expect((button.getAttribute("aria-label") ?? button.textContent ?? "").trim()).not.toBe("");
   }
 });
+
+// AND A SORTABLE HEAD WHOSE HEAD IS NOT A WORD IS STILL NAMED.
+//
+// The rule above takes the unsortable glyph heads out of the button role. What
+// it cannot do is stop a SORTABLE column being declared with a glyph or an
+// empty head — an ordinary thing to want, since such a column already carries
+// its word in `label` for the card layout — and that renders a control whose
+// entire accessible name is the sort arrow.
+test("a sortable glyph head takes its name from the column's label", () => {
+  render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        rowKey={(r) => r.id}
+        columns={[
+          { key: "mark", header: "", label: "Priority", sortValue: (r) => r.id, cell: () => "·" },
+        ]}
+      />
+    </Router>,
+  );
+  expect(screen.getByRole("button", { name: "Priority" })).toBeTruthy();
+});

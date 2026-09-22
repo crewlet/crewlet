@@ -521,6 +521,17 @@ export function DataGrid<T>({
               className={className}
               onClick={() => headerClick(column)}
               aria-sort={sorted ? (sort?.desc ? "descending" : "ascending") : undefined}
+              // AND A SORTABLE HEAD IS NAMED EVEN WHERE ITS HEAD IS NOT A WORD.
+              // The rule above takes the unsortable glyph heads out of the
+              // button role; what it cannot do is stop a SORTABLE column being
+              // declared with a glyph or an empty head, which renders a
+              // control whose whole accessible name is the sort arrow. Such a
+              // column already carries the word separately for the phone's
+              // card layout (`label`, held by `app/source.test.ts`), so the
+              // name is there to be spent.
+              aria-label={
+                typeof column.header === "string" && column.header ? undefined : column.label
+              }
             >
               {body}
             </button>
