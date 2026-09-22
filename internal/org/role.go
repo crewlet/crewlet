@@ -357,6 +357,37 @@ func (c *HumanContact) ResolvedIdentities(lookup EnvLookup) []Identity {
 	return out
 }
 
+// ResolvedOperatorID is the `api.auth.tokens[].id` this seat is bound to, or
+// "" for a seat that names none.
+//
+// THE OTHER DIRECTION OF [Organization.SeatByOperatorID], and it exists
+// because both directions are now walked: that one answers "whose seat is this
+// credential", and this one answers "which credential does this person also
+// write under" — the question every personal READ has to ask, since a write
+// made through a token is attributed to the token's own name and the seat's
+// own blocks would otherwise never match it.
+//
+// IT IS THE RESOLVED VALUE, through [HumanContact.ResolvedIdentities], which
+// is what makes the two directions agree by construction rather than by two
+// copies of the same `${VAR}` handling: a company writing
+// `crewlet_operator_id: ${FOUNDER_ID}` gets the variable's value from both, an
+// unset variable matches nothing from both, and neither can ever be the raw
+// `${VAR}` text that no token could present.
+//
+// A nil lookup reads the process environment, matching every other consumer of
+// this field.
+func (r *Role) ResolvedOperatorID(lookup EnvLookup) string {
+	if r == nil {
+		return ""
+	}
+	for _, id := range r.Contact.ResolvedIdentities(lookup) {
+		if id.Transport == TransportCrewlet {
+			return id.ExternalID
+		}
+	}
+	return ""
+}
+
 // SlackIdentity is a seat's own Slack app: the signing secret its transport
 // verifies inbound deliveries with, and the bot token it resolves the seat's
 // own Slack identity from. Each agent has its own app, which is what makes an

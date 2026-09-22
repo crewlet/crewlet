@@ -1064,7 +1064,7 @@ func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 	_ time.Time) (tracker.InboxAnswer, error) {
 
 	return tracker.InboxAnswer{
-		Handle:         q.Handle,
+		Handle:         q.Who.Handle,
 		PrimaryReasons: tracker.DefaultPrimaryReasons,
 		Notices: []tracker.InboxNotice{{
 			RecordID: "rec-1", SubjectID: "i1", SubjectKey: "ENG-1",

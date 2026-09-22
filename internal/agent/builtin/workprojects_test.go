@@ -159,10 +159,10 @@ func TestMyWorkIsAlwaysTheTurnsOwnSeat(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
 	callWork(t, reg, tracker.MyWorkTool, map[string]any{"handle": "somebody-else"})
-	if trk.myWorkQuery.Handle != "eng" {
+	if trk.myWorkQuery.Who.Handle != "eng" {
 		t.Errorf("my_work read %q's day, want the turn's own seat — a tool "+
 			"that took a handle would hand one agent a colleague's queue",
-			trk.myWorkQuery.Handle)
+			trk.myWorkQuery.Who.Handle)
 	}
 	entry, ok := reg.Lookup(tracker.MyWorkTool)
 	if !ok {

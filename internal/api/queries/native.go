@@ -299,7 +299,7 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 // Absent is still the SHARED strip: no pins and no personal views but the
 // shared ones, which is what a screen draws before it knows who is looking,
 // and what the sidebar and the board ask for on every poll. That is why the
-// rule is [Sources.viewerPins] rather than [Sources.viewerHandle] — the
+// rule is [Sources.viewerPins] rather than [Sources.viewerParty] — the
 // refusal an absent handle earns on a question ABOUT somebody would refuse a
 // strip that has a perfectly good answer.
 func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
@@ -397,7 +397,7 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // workPerson answers one human's own state — their inbox, their queue and
 // their pins.
 //
-// SCOPED BY [Sources.viewerHandle], the same rule `work_my_work` and
+// SCOPED BY [Sources.viewerParty], the same rule `work_my_work` and
 // `work_inbox` take: an absent handle is the caller's own seat, and naming
 // anybody else's needs an operator credential.
 //
@@ -409,7 +409,7 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // to work on next, and who set that order. The parameter selected whose. A
 // scope rule two of the three personal questions follow is not a rule.
 func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
-	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
@@ -418,7 +418,11 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	state, err := s.Work.Person(ctx, tracker.PersonQuery{
-		Handle:      handle,
+		// BOTH OF THIS PERSON'S NAMES — see [Sources.viewerParty]. The
+		// record a person's own assistant has been writing is filed
+		// under the credential it wrote with, so a read of the seat
+		// alone reports an inbox nothing has ever been read in.
+		Who:         who,
 		Level:       fresh.Level,
 		MaxLag:      fresh.MaxLag,
 		MaxLagSeq:   fresh.MaxLagSeq,
@@ -775,11 +779,11 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 
 // workMyWork answers everything one person is expected to look at.
 func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
-	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.viewerHandle]. This
+	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.viewerParty]. This
 	// was registered operator-only and demanded a handle, which is why
 	// routes/MyWork.tsx picked the alphabetically first seat: there was no
 	// way for the screen to know whose day it was drawing.
-	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
@@ -788,7 +792,12 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	out, err := s.Work.MyWork(ctx, tracker.MyWorkQuery{
-		Handle: handle,
+		// BOTH OF THIS PERSON'S NAMES — see [Sources.viewerParty].
+		// Every block here matches rows by handle, and the rows a
+		// person's own credential wrote carry the TOKEN's name: the
+		// seven tabs a founder opened on their own day were empty
+		// while they were reporter and watcher on eleven items.
+		Who: who,
 		// THE CALLER'S OWN, defaulting to `stale`: this is a POLL of
 		// somebody's day, not a read-back of a write they just made —
 		// see [freshness] and [Sources.workItems].

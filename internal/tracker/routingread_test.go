@@ -30,7 +30,7 @@ func (r *roundTrip) routing(q tracker.RoutingQuery) tracker.RoutingAnswer {
 // recipient's own inbox — which is where every real caller gets one too.
 func recordOf(t *testing.T, r *roundTrip, handle string) string {
 	t.Helper()
-	inbox := r.inbox(tracker.InboxQuery{Handle: handle})
+	inbox := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf(handle)})
 	if len(inbox.Notices) == 0 {
 		t.Fatalf("%s has no notices, so there is no record to read", handle)
 	}

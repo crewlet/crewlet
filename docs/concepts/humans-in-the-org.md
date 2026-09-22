@@ -93,6 +93,26 @@ Read and snooze marks are the assistant's to write, not the screen's: the
 dashboard is read-only, and every write in this engine is attributed to
 somebody. What it shows is what the engine recorded.
 
+**Your own writes count as yours — and the record still names the token.**
+A work item you file through your assistant is attributed to the **credential**
+you filed it with, with author kind `operator`, never to your seat handle.
+That is deliberate and it stays: a tracker whose author field is chosen by the
+writer is not an audit trail, and there is no way to ask the operator tool
+server to act as a seat. So the item records `sarah` as its reporter and its
+watcher, while her colleagues assign work to `sarah-chen`.
+
+Both of those are **her**. Every question that answers "mine" — My work's
+seven blocks, the inbox, her own record — matches the seat handle *or* the
+operator id bound to it, and reports the answer under the seat. Bind the token
+and your own work is on your own screen; leave it unbound and you are an
+operator outside the chart, acting as `operator:<id>`, which is an ordinary
+state and not an error.
+
+One change that concerned you under both names is **one** notice, under the
+stronger of the two reasons — the same rule that already gives one handle one
+reason. And an operator reading somebody else's day is handed *that* person's
+two names from the chart, never the credential in their own hand.
+
 **The binding is written on the seat, not on the token.** Tier A is the root of
 trust and may never read Tier B — it holds the keys to the secret store — so a
 `seat:` field on an `api.auth.tokens[]` entry would have the trusted tier

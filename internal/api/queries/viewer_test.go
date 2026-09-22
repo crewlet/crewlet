@@ -123,8 +123,8 @@ func TestAPersonalQuestionDefaultsToTheCallersOwnSeat(t *testing.T) {
 	if _, err := askAsOperator(t, viewerSources(t, work), "work_my_work", nil); err != nil {
 		t.Fatalf("work_my_work with no handle: %v", err)
 	}
-	if work.myWorkQuery.Handle != "ana" {
-		t.Errorf("read %q's day, want the caller's own seat", work.myWorkQuery.Handle)
+	if work.myWorkQuery.Who.Handle != "ana" {
+		t.Errorf("read %q's day, want the caller's own seat", work.myWorkQuery.Who.Handle)
 	}
 }
 
@@ -137,8 +137,8 @@ func TestReadingAnotherPersonsDayNeedsAnOperatorCredential(t *testing.T) {
 	if !errors.Is(err, queries.ErrUnauthorized) {
 		t.Fatalf("anonymous read of bo's day = %v, want unauthorized", err)
 	}
-	if work.myWorkQuery.Handle != "" {
-		t.Errorf("the reader was called with %q anyway", work.myWorkQuery.Handle)
+	if work.myWorkQuery.Who.Handle != "" {
+		t.Errorf("the reader was called with %q anyway", work.myWorkQuery.Who.Handle)
 	}
 	// And WITH one it is allowed: an operator reading a report's day is a
 	// real thing to do, and the refusal above must not be "handles other
@@ -147,8 +147,8 @@ func TestReadingAnotherPersonsDayNeedsAnOperatorCredential(t *testing.T) {
 		map[string]any{"handle": "bo"}); err != nil {
 		t.Fatalf("an operator reading bo's day: %v", err)
 	}
-	if work.myWorkQuery.Handle != "bo" {
-		t.Errorf("read %q's day, want the handle the operator named", work.myWorkQuery.Handle)
+	if work.myWorkQuery.Who.Handle != "bo" {
+		t.Errorf("read %q's day, want the handle the operator named", work.myWorkQuery.Who.Handle)
 	}
 }
 
@@ -174,8 +174,8 @@ func TestTheInboxIsScopedTheSameWay(t *testing.T) {
 	if _, err := askAsOperator(t, viewerSources(t, work), "work_inbox", nil); err != nil {
 		t.Fatalf("work_inbox with no handle: %v", err)
 	}
-	if work.inboxQuery.Handle != "ana" {
-		t.Errorf("read %q's inbox, want the caller's own", work.inboxQuery.Handle)
+	if work.inboxQuery.Who.Handle != "ana" {
+		t.Errorf("read %q's inbox, want the caller's own", work.inboxQuery.Who.Handle)
 	}
 	if _, err := askNative(t, viewerSources(t, work), "work_inbox",
 		map[string]any{"handle": "bo"}); !errors.Is(err, queries.ErrUnauthorized) {

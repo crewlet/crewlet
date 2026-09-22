@@ -1764,6 +1764,26 @@ and the remedy is a line of company configuration rather than a different
 token. A surface that reported it as an authorization failure would send
 somebody looking for a credential that does not exist.
 
+**Three of the four read rows, and those three carry BOTH of that person's
+names.** A write made through somebody's own credential is attributed to the
+token, with author kind `operator` — never to a seat handle, because a tracker
+whose author field is chosen by the writer is not an audit trail — so one
+person's rows carry two names. `work_my_work`, `work_inbox` and `work_person`
+therefore match the seat handle **or** the `crewlet_operator_id` bound to it,
+and report the answer under the seat. A change that named both is one notice,
+under the stronger of the two reasons. `conversations` takes the handle alone:
+its rows are written by the seat's own turns and no credential appears in them.
+
+`work_views?viewer=` takes the same pair for the same reason — a saved view is
+owned by whoever wrote it and a pin lives on their own record, and both verbs
+exist only on the operator surface. Its **absent** case stays the shared strip
+rather than the caller's own seat: a strip is about a container, and the
+sidebar polls for it before anybody is known.
+
+The alias belongs to the person **asked about**, resolved from the chart —
+so an operator reading a report's day gets that report's own token id, never
+the one in the caller's hand.
+
 These were registered **operator-only** until recently, which made the one
 screen a human teammate lives on unreachable to them — and, for an operator,
 a stranger's day: the dashboard had no viewer at all, so "my work" fell back

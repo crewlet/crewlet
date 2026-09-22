@@ -89,7 +89,7 @@ func (t *getPerson) Call(ctx context.Context, args map[string]any) (tools.Result
 		return failed("Name whose state to read with `handle`."), nil
 	}
 	state, err := t.deps.Reader.Person(ctx, tracker.PersonQuery{
-		Handle: handle, Level: seatReadLevel,
+		Who: tracker.PartyOf(handle), Level: seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
 		return failed(readFailure(tracker.GetPersonTool, err)), nil
@@ -557,7 +557,7 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		return failed("Name whose inbox to read with `handle`."), nil
 	}
 	q := tracker.InboxQuery{
-		Handle:         handle,
+		Who:            tracker.PartyOf(handle),
 		PrimaryOnly:    argBool(args, "primary_only"),
 		Unread:         argBool(args, "unread"),
 		IncludeSnoozed: argBool(args, "include_snoozed"),

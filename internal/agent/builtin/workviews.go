@@ -76,7 +76,11 @@ func (t *listWorkViews) Call(ctx context.Context, args map[string]any) (tools.Re
 	}
 	listing, err := t.deps.Reader.Views(ctx, tracker.ViewQuery{
 		Container: container,
-		Viewer:    strings.TrimSpace(argString(args, "viewer")),
+		// ONE IDENTITY, because that is all a tool argument carries —
+		// see the same note on `get_my_work`. Resolving a credential to
+		// the seat it is bound to is the CHART's answer and this
+		// package holds none.
+		Viewer: tracker.PartyOf(strings.TrimSpace(argString(args, "viewer"))),
 		// THE SEAT'S OWN LEVEL, like every other tool read here: a
 		// caller that saves a view and then lists the strip sees the
 		// view it just saved — see [seatReadLevel].

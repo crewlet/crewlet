@@ -217,7 +217,7 @@ func (s *stubPages) Revision(_ context.Context, pageID string, version int,
 }
 
 // personalQuestions are the four scoped by the caller's own seat — see
-// Sources.viewerHandle. They refuse an anonymous caller who names somebody
+// Sources.viewerParty. They refuse an anonymous caller who names somebody
 // else, so a sweep that walks every native question has to present a
 // credential for these four. Named once rather than per sweep: the set grew
 // from one to four, and each sweep that spelled it as `== "work_my_work"`
@@ -545,8 +545,8 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 				t.Fatalf("%q reached the reader as %s %q, want %s %q", tc.raw,
 					w.views.Container.Kind, w.views.Container.ID, tc.kind, tc.id)
 			}
-			if w.views.Viewer != "ana" {
-				t.Fatalf("the viewer reached the reader as %q", w.views.Viewer)
+			if w.views.Viewer.Handle != "ana" {
+				t.Fatalf("the viewer reached the reader as %+v", w.views.Viewer)
 			}
 		})
 	}
@@ -593,8 +593,8 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 	}
 	// AND THE READER WAS NEVER ASKED, which is the half a refusal
 	// returned after the read would not have bought.
-	if w.views.Viewer != "" {
-		t.Errorf("the refused handle reached the reader as %q", w.views.Viewer)
+	if w.views.Viewer.Named() {
+		t.Errorf("the refused handle reached the reader as %+v", w.views.Viewer)
 	}
 
 	// AN OPERATOR NAMES ANYBODY'S: they hold the credential that writes
@@ -604,9 +604,9 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); err != nil {
 		t.Fatalf("an operator naming a seat's handle: %v", err)
 	}
-	if w.views.Viewer != "ada-okonkwo" {
+	if w.views.Viewer.Handle != "ada-okonkwo" {
 		t.Errorf("an operator's viewer reached the reader as %q, want ada-okonkwo",
-			w.views.Viewer)
+			w.views.Viewer.Handle)
 	}
 
 	// AND NAMING NOBODY IS STILL THE SHARED STRIP, anonymously: a real
@@ -616,8 +616,8 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 		map[string]any{"container": "workspace"}); err != nil {
 		t.Fatalf("the shared strip, asked anonymously: %v", err)
 	}
-	if w.views.Viewer != "" {
-		t.Errorf("an unnamed viewer reached the reader as %q, want empty", w.views.Viewer)
+	if w.views.Viewer.Named() {
+		t.Errorf("an unnamed viewer reached the reader as %+v, want empty", w.views.Viewer)
 	}
 }
 
