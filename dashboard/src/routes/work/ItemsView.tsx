@@ -169,7 +169,27 @@ export interface ItemsHost {
   empty: (scope: Scope) => { title: string; description: string };
 }
 
-export function ItemsView({ project = "", host }: { project?: string; host?: ItemsHost }) {
+export function ItemsView({
+  project = "",
+  host,
+  archivedProjects = 0,
+}: {
+  project?: string;
+  host?: ItemsHost;
+  /**
+   * How many of the company's projects are archived, where EVERY one of them
+   * is — the workspace screen's own fact, and zero everywhere else.
+   *
+   * It exists for one sentence. This list is narrowed to the active set by
+   * the item query's own default, so a company that has archived every
+   * project answers nothing here — and "nothing has been filed yet" is then
+   * false about a company holding hundreds of items. Only `Work.tsx` can say
+   * so, because only it reads `work_projects`' census; a second read from
+   * inside this list would be the same question asked twice, free to
+   * disagree with the sidebar drawn beside it.
+   */
+  archivedProjects?: number;
+}) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   // ONE CLOCK for the screen, ticking on its own: a relative time computed
@@ -734,6 +754,7 @@ export function ItemsView({ project = "", host }: { project?: string; host?: Ite
                 scope={scope}
                 project={project}
                 counts={detail?.task_counts}
+                archivedProjects={archivedProjects}
                 onClear={clearFilters}
                 host={host}
               />
@@ -938,6 +959,7 @@ function EmptyList({
   scope,
   project,
   counts,
+  archivedProjects,
   onClear,
   host,
 }: {
@@ -947,6 +969,8 @@ function EmptyList({
   project: string;
   /** The container's own maintained counts, where the container has them. */
   counts?: WorkTaskCounts;
+  /** Every project archived — see [ItemsView]'s own prop. Zero otherwise. */
+  archivedProjects?: number;
   onClear: () => void;
   /** The screen holding this list, where one is — see [ItemsHost.empty]. */
   host?: ItemsHost;
@@ -981,6 +1005,41 @@ function EmptyList({
   if (host) {
     const said = host.empty(scope);
     return <EmptyState size="compact" title={said.title} description={said.description} />;
+  }
+
+  // EVERY PROJECT ARCHIVED, WHICH IS WHY EVERY SCOPE IS EMPTY.
+  //
+  // BEFORE THE SCOPE BRANCHES, because the cause is the container rather than
+  // the switch: Open, Closed and All all answer nothing here, and each of the
+  // three sentences below would blame the segment or claim the company has
+  // filed nothing — over a company holding every item it ever filed, in
+  // projects it has retired. The reader's next move is the projects, not the
+  // scope switch, so this says how many there are and goes to them, which is
+  // the shape the directory's own Active empty state already takes.
+  //
+  // `Work.tsx` IS THE ONLY CALLER THAT CAN SAY SO, since the count is
+  // `work_projects`' census and this list never reads it — so at project
+  // scope and on a hosted list the number is zero and this arm never fires.
+  if (!project && archivedProjects) {
+    return (
+      <EmptyState
+        size="compact"
+        title="Every project is archived"
+        description={
+          <>
+            {archivedProjects === 1
+              ? "The company’s one project has been archived"
+              : `All ${archivedProjects} of the company’s projects have been archived`}
+            , so nothing is listed here — an archived project keeps its work and stops taking new
+            items.{" "}
+            <a className="prose-link" href={href(["work", "projects"], { shown: "archived" })}>
+              See them under Archived
+            </a>
+            .
+          </>
+        }
+      />
+    );
   }
 
   // NOTHING AT ALL. The All segment has every scope on screen already, so an

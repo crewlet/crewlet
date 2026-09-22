@@ -516,7 +516,7 @@ test("a refused project list is said to be a refusal, not an empty company", asy
 test("a company with no projects gets one empty state, not two", async () => {
   serving({
     work_items: { items: [], groups: [], complete: true },
-    work_projects: { projects: [], total: 0, complete: true },
+    work_projects: { projects: [], total: 0, census: { active: 0, archived: 0 }, complete: true },
   });
   const { container } = mountWork();
   await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
@@ -568,10 +568,77 @@ test("an empty scope says why, and only a filter says nothing matched", async ()
 test("a project list that answered with nothing says the company has filed nothing", async () => {
   serving({
     work_items: { items: [], groups: [], complete: true },
-    work_projects: { projects: [], total: 0, complete: true },
+    work_projects: { projects: [], total: 0, census: { active: 0, archived: 0 }, complete: true },
   });
   mountWork();
   await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
+});
+
+// THE FIXTURE ABOVE IS NOT WHAT THE ENGINE SENDS, WHICH IS HOW THIS SCREEN
+// SHIPPED BROKEN.
+//
+// `readProjectRows` returned a nil slice for a company with no projects and
+// `ProjectListing.Projects` carries no `omitempty`, so the wire said
+// `"projects": null` — and `projects?.length === 0` is `undefined === 0`,
+// which is false. Every case above hands the screen `projects: []`, because a
+// fixture is written by somebody who already knows the answer, so the suite
+// was green through every photograph of the real product drawing the ordinary
+// list on a brand-new company.
+//
+// THIS ONE IS THE ENGINE'S OWN BYTES, copied from what
+// `TestAnEmptyProjectListingEncodesAnEmptyArray` encodes — census, coverage
+// and all — so the screen is exercised against the answer it actually gets.
+// The engine's half of the fix is what makes it pass; the case is here so
+// that a regression on either side of the wire goes red.
+test("the engine's own empty-company answer draws the no-work panel", async () => {
+  serving({
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: {
+      projects: [],
+      total: 0,
+      census: { active: 0, archived: 0 },
+      read_level: "stale",
+      log_seq: 0,
+      applied_through: 0,
+      log_lag: 0,
+      complete: true,
+    },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+});
+
+// AND AN ALL-ARCHIVED COMPANY IS NOT AN EMPTY ONE.
+//
+// This read is the ACTIVE set — the engine's own default — so an empty answer
+// is two states a reader acts on oppositely, and gated on the rows this screen
+// read both as the first: a company with four archived projects holding every
+// item it ever filed was told "nothing can be filed until a unit declares a
+// `project` key, and this company has none", which is false twice over and is
+// the opposite of what `#/work/projects` said beside it. The census is what
+// tells them apart, which is why the answer carries both counts whatever the
+// limit.
+test("a company whose every project is archived is not told it has none", async () => {
+  serving({
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: {
+      projects: [],
+      total: 0,
+      census: { active: 0, archived: 4 },
+      complete: true,
+    },
+  });
+  mountWork();
+  // THE LIST, not the first-run panel — the work is there, in projects the
+  // reader has retired.
+  await waitFor(() => expect(screen.getByText("Every project is archived")).toBeTruthy());
+  expect(screen.queryByText("No work has been filed yet")).toBeNull();
+  expect(screen.getByText(/All 4 of the company’s projects have been archived/)).toBeTruthy();
+  // AND IT GOES TO THEM. The reader's next move is the projects rather than
+  // the scope switch, so the sentence carries the way there.
+  const link = screen.getByRole("link", { name: /See them under Archived/ });
+  expect(link.getAttribute("href")).toBe("#/work/projects?shown=archived");
 });
 
 // THE LIST IS HEADED BY THE AXIS THE QUERY WAS SENT ON. A saved view may
@@ -1483,7 +1550,7 @@ test("an unfiltered list with nothing open names the scope switch, not the filte
 test("a first-run company gets the page's own panel and no second one from the list", async () => {
   serving({
     work_items: { items: [], groups: [], total_hint: 0, complete: true },
-    work_projects: { projects: [], total: 0, complete: true },
+    work_projects: { projects: [], total: 0, census: { active: 0, archived: 0 }, complete: true },
   });
   mountWork();
   await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());

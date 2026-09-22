@@ -891,3 +891,50 @@ test("the history draws a mark per kind and never reprints the thread", async ()
   expect(container.querySelector(".work-hist-what a")).toBeNull();
   expect(container.querySelector(".work-hist-tail a")).toBeTruthy();
 });
+
+// AND IT NAMES THE OTHER TASK, rather than printing the uuid the delta holds.
+//
+// A re-parent, a cascade removal and every relation delta carry the other end
+// by its ID — a key belongs to that task's own row, and a history row is
+// written once by every node and repaired by nothing — so the ANSWER resolves
+// what this node holds and the sentence reads it from `detail.keys`. Handed no
+// resolver, these two tabs drew `Parent: — → 1d573f85-…` while `#/work/history`
+// drew `Parent: — → ENG-1` for the same commit, one click away.
+test("a re-parent names the parent, and an unresolved id stays an id", async () => {
+  serving({ work_items: { items: [], complete: true } });
+  render(
+    <Router>
+      <ItemBody
+        detail={detail({
+          keys: { "t-parent": "ENG-1" },
+          history: [
+            {
+              id: "h1",
+              kind: "reparented",
+              at: NOW_ISO,
+              log_seq: 1,
+              fields: { parent: { from: "", to: "t-parent" } },
+            },
+            // AN ID THE ANSWER DID NOT RESOLVE RENDERS AS THE ID — past the
+            // map's cap, or a counterparty this node has not applied. A blank
+            // there would read as a task with no name.
+            {
+              id: "h2",
+              kind: "relations",
+              at: NOW_ISO,
+              log_seq: 2,
+              fields: { waiting_on: { from: "", to: "t-unapplied" } },
+            },
+          ],
+        })}
+        chrome={{}}
+        now={NOW}
+      />
+    </Router>,
+  );
+  fireEvent.click(await screen.findByRole("tab", { name: /History/ }));
+
+  expect(screen.getByText(new RegExp(`Parent: ${EMPTY_VALUE} → ENG-1`))).toBeTruthy();
+  expect(screen.queryByText(/t-parent/)).toBeNull();
+  expect(screen.getByText(new RegExp(`Waiting on: ${EMPTY_VALUE} → t-unapplied`))).toBeTruthy();
+});

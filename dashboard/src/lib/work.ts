@@ -592,11 +592,23 @@ export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
  * record that starts carrying deltas is rendered by this function on the day it
  * does, with nothing here to change.
  *
- * TWO SHAPES, because a history entry's `fields` is sometimes a from/to pair
- * and sometimes the state the change produced — the applier writes the deltas
- * where it can compare two documents and the notification's own fields where it
- * cannot (a comment, a mention, an ask). A renderer that assumed one printed
- * `[object Object]` on the other.
+ * ONE SHAPE ARRIVES, AND THE SECOND ARM IS DEFENSIVE — which is the opposite
+ * of what this comment used to claim, and the claim cost somebody a bug report.
+ * It said the engine writes "the notification's own fields where it cannot
+ * compare two documents (a comment, a mention, an ask)", and therefore that a
+ * reader decoding only from/to pairs would silently drop those records.
+ * `internal/tracker/apply_history.go` refutes it in its own words — a comment's
+ * wake builds its deltas with `TaskDeltas` like every other, so the fallback
+ * branch there "can carry no key the one above could not" — and both of that
+ * column's producers are `map[string]Delta`, so every value on the wire is a
+ * pair and a comment stores `{}`. Measured over a company exercising comments
+ * with mentions and asks, status moves, re-parents and project writes: seven
+ * history rows, none of them anything but pairs.
+ *
+ * The `else` is kept anyway, because it costs one branch and it is the
+ * difference between a value nobody planned for rendering as itself and
+ * rendering as `[object Object]`. What it is NOT is a second shape the engine
+ * produces, and nothing should be built on the belief that it is.
  */
 function deltaSentence(fields: Record<string, unknown> | undefined, ctx: LabelContext): string {
   const said: string[] = [];

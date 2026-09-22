@@ -42,6 +42,17 @@ const ROWS: Row[] = [
   { id: "two", who: "cto" },
 ];
 
+/**
+ * A mark that draws nothing for the ordinary case, in the shape every one of
+ * them takes: a COMPONENT that returns null, so the grid holds an element and
+ * the DOM holds no child. `PriorityMark` is the real one — see
+ * `components/work.tsx` — and this stands in for it so the case says what it
+ * is about rather than importing a tracker into the frame's own suite.
+ */
+function Nothing() {
+  return null;
+}
+
 // THE ROUTER IS REAL, not a stub: `DataGrid` reads `sort=` and `cols=` off
 // the URL through `useParam`, and a grid without one throws before it renders
 // a row.
@@ -226,6 +237,60 @@ test("a cell carries its column's name, and only when that name is a word", () =
   // not a second head, so a glyph column still draws its glyph up there.
   const heads = [...container.querySelectorAll<HTMLElement>(".grid-head > *")];
   expect(heads.map((h) => h.textContent)).toEqual(["Id", "·", "", ""]);
+});
+
+// A CELL WITH NO VALUE HAS NO CHILD NODES, WHICH IS WHAT THE CARD DROPS IT ON.
+//
+// A column draws no value on a row that has none — `PriorityMark` renders null
+// for `normal`, which nearly every task is, and every mark whose rule is
+// "nothing is drawn for the default" does the same. In the table that is an
+// empty track under a head, which is correct and is what keeps the row's
+// columns lined up. Below 860px the head is gone and the label is the CELL's
+// own, so the card opened with `PRIORITY` on a line by itself, on every
+// ordinary row.
+//
+// `.grid-cell:empty { display: none }` in frame.css is the fix, because a
+// container cannot ask a child that drew nothing whether it did and the
+// element has to stay in the DOM regardless — the wide layout's tracks are
+// positional, so dropping it would move every later value one column left.
+// What THIS file owes that rule is its precondition: an empty cell really is
+// childless, which a mark wrapped in an always-rendered span would defeat
+// silently. The rule that reads it is asserted in styles/frame.test.ts, since
+// jsdom applies no media query and computes no layout.
+test("a cell with no value is childless, and keeps its column's name", () => {
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        rowKey={(r) => r.id}
+        columns={[
+          { key: "id", header: "Id", cell: (r) => r.id },
+          // THE MARK THAT DRAWS NOTHING FOR THE DEFAULT, in the shape every
+          // one of them takes: a component that returns null.
+          { key: "prio", header: "", label: "Priority", cell: () => <Nothing /> },
+          // AND A MARKED ABSENCE IS CONTENT. An em dash is a value somebody
+          // reads — "nobody holds this" — so its line stays.
+          { key: "who", header: "Who", cell: () => <span>—</span> },
+        ]}
+      />
+    </Router>,
+  );
+  const cells = [...container.querySelectorAll<HTMLElement>(".grid-row > .grid-cell")];
+  const prio = cells.filter((_, at) => at % 3 === 1);
+  const who = cells.filter((_, at) => at % 3 === 2);
+  expect(prio).toHaveLength(ROWS.length);
+  for (const cell of prio) {
+    expect(cell.childNodes).toHaveLength(0);
+    expect(cell.matches(":empty")).toBe(true);
+  }
+  for (const cell of who) expect(cell.matches(":empty")).toBe(false);
+
+  // AND THE COLUMN STILL SAYS ITS NAME, because the table layout is untouched:
+  // the head keeps its column and the cell keeps the word the card would draw
+  // on a row that HAS a priority.
+  expect(prio.map((c) => c.getAttribute("data-label"))).toEqual(ROWS.map(() => "Priority"));
+  const heads = [...container.querySelectorAll<HTMLElement>(".grid-head > *")];
+  expect(heads.map((h) => h.textContent)).toEqual(["Id", "", "Who"]);
 });
 
 // A SHRINK COLUMN CANNOT STARVE THE ONES THE LIST IS FOR.

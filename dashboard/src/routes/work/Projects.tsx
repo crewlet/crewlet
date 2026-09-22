@@ -330,6 +330,27 @@ export function Projects() {
         key: "unit",
         header: "Unit",
         shrink: true,
+        // OFF BY DEFAULT, because on a chart-owned company it is the Project
+        // column again. The engine mints a project the moment a unit declares
+        // its `project` key and names it after the unit, so every row of such
+        // a company read `Core` / `Core` and `Executives` / `Executives` —
+        // two of nine columns spending their width on one fact, on the screen
+        // whose other seven are the answer. The proposal's directory drew
+        // Project, Lead, the three counts, Progress and Last change, which is
+        // what the default set is now.
+        //
+        // AND IT IS A COLUMN RATHER THAN A DELETION, because the two names
+        // genuinely differ on a company whose projects are a SEAT's: a
+        // root-level seat carries its own `project` identity and belongs to no
+        // unit, and a unit can be renamed without the project following. Such
+        // a company turns it on with `cols=`, which carries the order as well
+        // as the selection — so the address names the whole set it wants.
+        //
+        // THE SORT KEY STAYS EITHER WAY: `sort=unit` is one of the engine's
+        // seven orderings, it is what the engine answers whether or not this
+        // screen draws the column, and a saved or shared address carrying it
+        // must not start refusing.
+        optional: true,
         sortValue: (row) => row.unit?.name ?? row.unit?.key ?? "",
         cell: (row) =>
           row.unit?.resolved === false ? (

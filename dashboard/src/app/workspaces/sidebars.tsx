@@ -24,6 +24,7 @@
 
 import { useMemo } from "react";
 import { destinationsOf } from "../nav.ts";
+import { href } from "~/app/router.tsx";
 import type { SidebarSection, SidebarRow } from "../frame/WorkspaceSidebar.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
@@ -68,6 +69,14 @@ export function useWorkSidebar(): SidebarSection[] {
           : { value: p.task_counts.open, of: "open items — the engine's own maintained count" },
     }));
 
+    // HOW MANY ARE ARCHIVED, where EVERY one of them is — the same census the
+    // directory and `#/work` read, so the three surfaces cannot disagree about
+    // whether a company has projects. Zero while the read is in flight or
+    // refused, which leaves the rail on the sentence that claims nothing: an
+    // answer with no census in it is not a census of nothing.
+    const census = projects.data?.census;
+    const archived = census && census.active === 0 ? census.archived : 0;
+
     // SAVED VIEWS ONLY. The builtin rows a container has without anybody
     // saving one are the list's own view strip, not destinations — a builtin
     // has no id, so there is nothing to address.
@@ -86,7 +95,28 @@ export function useWorkSidebar(): SidebarSection[] {
         key: "projects",
         label: "Projects",
         rows: projectRows,
-        empty: "No project has been created yet.",
+        // AN EMPTY ACTIVE SET IS TWO STATES, and this rail read both as the
+        // first: beside a `#/work/projects` saying "All 4 of the company's
+        // projects have been archived", it said "No project has been created
+        // yet" about the same four. The listing is the ACTIVE set — the
+        // engine's own default — so the rows cannot tell them apart and the
+        // CENSUS is what does, which is why the answer carries it whatever
+        // the limit. Said with the count and the way to them, on the same
+        // terms the directory's own empty state uses.
+        empty:
+          archived > 0 ? (
+            <>
+              {archived === 1
+                ? "The company’s one project is archived."
+                : `All ${archived} of the company’s projects are archived.`}{" "}
+              <a className="prose-link" href={href(["work", "projects"], { shown: "archived" })}>
+                See them under Archived
+              </a>
+              .
+            </>
+          ) : (
+            "No project has been created yet."
+          ),
       },
       {
         key: "views",

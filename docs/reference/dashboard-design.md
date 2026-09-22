@@ -482,7 +482,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
 | `#/me` | **My work** — the seven claims on one person's attention | `tab=assigned\|priorities\|asks\|unblocked\|collaborating\|watching\|checklist` · `handle=` (an operator reading somebody else's day) · on the Assigned tab, `shape=`, `cols.list=` / `cols.table=` and the filter grammar, with the assignee LOCKED and `view=` absent — the screen's own tabs are its strip |
 | `#/work` | **All work** | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` (the active shape's column set) + the filter grammar |
-| `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page. The segment and the sort are both the ENGINE's question: `shown=` becomes `archived=false\|only\|true` and `sort=` travels as it is written, because the answer stops at the engine's own 200 and anything applied after that orders — or narrows — a page rather than the company | `shown=active\|archived\|all` · `sort=key\|name\|unit\|open\|done\|closed\|last_change`, with a leading `-` for descending |
+| `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page. The segment and the sort are both the ENGINE's question: `shown=` becomes `archived=false\|only\|true` and `sort=` travels as it is written, because the answer stops at the engine's own 200 and anything applied after that orders — or narrows — a page rather than the company. **Unit is the one OPTIONAL column**: the engine mints a project the moment a unit declares its `project` key and names it after the unit, so on a chart-owned company Unit and Project are the same word on every row — two of nine columns spending their width on one fact. It is a column rather than a deletion because the two genuinely differ where a project is a root-level SEAT's, and `sort=unit` stays an ordering the engine takes whether or not the column is drawn | `shown=active\|archived\|all` · `sort=key\|name\|unit\|open\|done\|closed\|last_change`, with a leading `-` for descending · `cols=` to draw Unit (it carries the order as well as the selection, so it names the whole set) |
 | `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
@@ -651,6 +651,23 @@ things follow from that, and each is a rule a new column has to keep:
   Without it the card gets a bare mark on a line of its own between two
   labelled ones, which reads as a rendering fault rather than as a value.
   `app/source.test.ts` is what stops one reaching a screen.
+- **A cell with nothing in it is not a line.** A column draws no value on a row
+  that has none — `PriorityMark` renders null for `normal`, which nearly every
+  task is, and every mark whose rule is "nothing is drawn for the default" does
+  the same. In the table that is an empty track under a head, which is correct
+  and is what keeps the row's columns lined up. Here the head is gone and the
+  label is the CELL's own, so the card opened with `PRIORITY` alone on a line
+  with nothing beside it, on every ordinary row — the labelled form of the
+  dashed placeholder the board card already stopped drawing. `.grid-cell:empty`
+  is what drops it, and it is `:empty` rather than a column predicate because
+  the constraint here is the opposite of the board card's: a container cannot
+  ask a child that drew nothing whether it did, and the element has to stay in
+  the DOM regardless, since the wide layout's tracks are positional and
+  dropping it would move every later value one column left. The browser has
+  already rendered it, so `:empty` is it answering — and generated content is
+  not a child node, so the label's own `::before` does not defeat it. A cell
+  drawing a marked absence has content and keeps its line, which is the
+  distinction `EmptyValue` exists to make.
 - **A value wraps rather than being cut.** `.truncate` is right for a cell that
   IS one line of a fixed column and wrong once the column is gone: at 390px it
   cut the one field the reader opened the list for and left the rest of the
@@ -3008,6 +3025,22 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   before it is pressed. A screen that hedges — one sentence naming both ways a
   state happens — is a screen missing a number, and the fix is to send the
   number rather than to word around it.
+
+  **And the directory is not the only reader of it.** Every surface that draws
+  a conclusion from an empty project listing reads the same census, because
+  every one of them asks the ACTIVE set: the Work rail's Projects section, and
+  the `#/work` landing, which replaces the whole list with "No work has been
+  filed yet". Read from the ROWS, each concluded the first state — so a
+  company that had archived all four of its projects was told by the rail that
+  no project had been created and by the landing that nothing could be filed
+  until a unit declared a `project` key, both beside a directory saying all
+  four had been archived, and both false about a company holding every item it
+  ever filed. `active + archived === 0` is the only thing that draws the
+  first-run panel now; `active === 0 && archived > 0` keeps the ordinary list
+  and gives it an empty state naming the count with the way to
+  `#/work/projects?shown=archived` — the same sentence the directory's own
+  Active state writes, because it is the same fact. An answer carrying no
+  census concludes neither, on the rule its rows already followed.
 
 Every empty state names what would fill it.
 
