@@ -691,9 +691,14 @@ screens rather than one:
   the page as the company.
 - **History** (`#/work/history`) is the change log over a window you choose,
   with the kinds and the authors on this page as facets.
-- **A project** (`#/work/{KEY}`) opens on its work, with an **Overview** lens
-  for what the container itself declares — its statuses, its types, its labels
-  and its fields — and a **History** lens narrowed to it.
+- **A project** (`#/work/{KEY}`) opens on its work — the **Items** lens, which
+  says how many are open — with an **Overview** lens for what the container
+  itself declares (its statuses, its types, its labels and its fields) and a
+  **History** lens narrowed to it. Under the name is the project's purpose,
+  which is the `purpose` of the unit that declared its `project` key; a project
+  declared on a seat rather than on a unit has none, so the line says which
+  unit owns it instead. A project nothing has been filed into says so and names
+  the ways work arrives, rather than showing an empty list.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
 `/operator/mcp`. It serves the same work tools above, eleven more no seat is

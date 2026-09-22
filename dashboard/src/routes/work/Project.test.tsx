@@ -77,6 +77,18 @@ function asked(query: ReturnType<typeof serving>): Record<string, unknown> {
   return calls.findLast(([what]) => what === "work_items")?.[1] ?? {};
 }
 
+/** Whether the list was rendered at all — it is what asks `work_items`. */
+function listRan(query: ReturnType<typeof serving>): boolean {
+  const calls = query.mock.calls as unknown as [string, Record<string, unknown>?][];
+  return calls.some(([what]) => what === "work_items");
+}
+
+/** Document order, which is what "under the header" means. */
+function precedes(first: Element | null, second: Element | null): boolean {
+  if (!first || !second) return false;
+  return (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+}
+
 // A PROJECT IS AN OBJECT, so it wears the header every other object in this
 // product wears: who leads it, which unit owns it, and its three counts — the
 // facts a board can say none of from its rows. A HANDLE IS THE DATABASE'S WORD
@@ -88,6 +100,100 @@ test("the header says what the container is, in the company's own words", async 
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
   expect(screen.getByText("Platform")).toBeTruthy();
   expect(screen.getByText("Build and ship the product")).toBeTruthy();
+});
+
+// THE PURPOSE IS THE OBJECT'S LEDE, and it sits where a seat's goal sits: a
+// PageNote under the header, above everything else the page draws. It used to
+// come AFTER the census, so a chart stood between the object's name and the
+// sentence saying what it is for.
+test("the purpose is the sentence under the name, above the census", async () => {
+  serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Build and ship the product")).toBeTruthy());
+  const note = container.querySelector(".page-note");
+  expect(note?.textContent).toBe("Build and ship the product");
+  expect(precedes(container.querySelector(".object-head"), note)).toBe(true);
+  expect(precedes(note, container.querySelector(".work-census"))).toBe(true);
+});
+
+// AND A PROJECT THAT DECLARES NONE STILL HAS A LEDE. A project minted from a
+// SEAT's `project` key never carries a purpose at all — the chart has nowhere
+// to write one — so a page with a hole where its lede goes was the ordinary
+// case, not the exception. The fallback names the unit that owns it, and says
+// when nothing has been filed.
+test("a project with no purpose says whose it is, and whether anything is in it", async () => {
+  serving({
+    work_project: detail({ purpose: undefined, task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_items: { items: [], groups: [], complete: true },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(container.querySelector(".page-note")).toBeTruthy());
+  expect(container.querySelector(".page-note")?.textContent).toBe(
+    "ENG is Platform's project. Nothing has been filed in it yet.",
+  );
+  cleanup();
+
+  // WITH WORK IN IT, the second half is what would fill the missing sentence.
+  serving({
+    work_project: detail({ purpose: undefined }),
+    work_items: { items: [], groups: [], complete: true },
+  });
+  const filled = mount();
+  await waitFor(() => expect(filled.container.querySelector(".page-note")).toBeTruthy());
+  expect(filled.container.querySelector(".page-note")?.textContent).toMatch(
+    /^ENG is Platform's project\. A `purpose` on that unit/,
+  );
+});
+
+// A PROJECT WITH NOTHING FILED IN IT IS ITS OWN STATE, drawn from the
+// container's maintained counts rather than from a list that came back short —
+// so it is on screen before the grid has answered, and it REPLACES the list,
+// whose own "Nothing matches" is a claim about filters nobody set.
+test("an empty project says so instead of running the list", async () => {
+  const query = serving({
+    work_project: detail({ task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_items: { items: [], groups: [], complete: true },
+  });
+  mount();
+  await waitFor(() =>
+    expect(screen.getByText("No work has been filed in Engineering yet")).toBeTruthy(),
+  );
+  expect(screen.getByText(/create_work_item/)).toBeTruthy();
+  // AND THE WAY OUT, in the state itself rather than only in the page's own
+  // actions: a reader who opened the wrong key is one click from the company's.
+  const state = screen.getByText("No work has been filed in Engineering yet").closest("div");
+  expect(state?.querySelector("a")?.textContent).toBe("All work →");
+  expect(listRan(query)).toBe(false);
+});
+
+// EXCEPT IN THE TRASH, which the maintained counts cannot see: a removed task
+// leaves them, so a project whose every item was removed counts zero while the
+// trash has rows. Replacing the list there would hide what the reader went
+// looking for.
+test("a project whose work was all removed still opens its trash", async () => {
+  location.hash = "#/work/ENG?removed=true";
+  const query = serving({
+    work_project: detail({ task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_items: { items: [], groups: [], complete: true },
+    work_activity: { records: [], complete: true },
+  });
+  mount();
+  await waitFor(() => expect(listRan(query)).toBe(true));
+  expect(screen.queryByText("No work has been filed in Engineering yet")).toBeNull();
+});
+
+// THE LENS SAYS HOW MUCH IS BEHIND IT, from the count the header already
+// holds. Overview is a description rather than a collection and History is
+// paged, so neither takes one — a count of a loaded page would read as a count
+// of the lens.
+test("the Items lens carries the open count, and the other two carry none", async () => {
+  serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
+  mount();
+  await waitFor(() => expect(screen.getAllByRole("tab").length).toBe(3));
+  const tabs = screen.getAllByRole("tab");
+  expect(tabs[0]?.textContent).toBe("Items12");
+  expect(tabs[1]?.textContent).toBe("Overview");
+  expect(tabs[2]?.textContent).toBe("History");
 });
 
 // A PROJECT'S CENSUS IS A SHAPE AS WELL AS THREE NUMBERS, and the bar carries
@@ -118,8 +224,11 @@ test("the work is the lens a project opens on, scoped to this project", async ()
   });
   mount();
   await waitFor(() => expect(asked(query).container).toBe("project:ENG"));
-  const tabs = screen.getAllByRole("tab").map((el) => el.textContent);
-  expect(tabs).toEqual(["Items", "Overview", "History"]);
+  expect(screen.getAllByRole("tab").map((el) => el.textContent)).toEqual([
+    "Items12",
+    "Overview",
+    "History",
+  ]);
 });
 
 // A LENS IS A SECTION, so it is in the URL: a reader who walked to the
@@ -197,19 +306,43 @@ test("a key that resolves to nothing names the key", async () => {
 // THE PEEK AND THE PAGE READ THE SAME FACTS IN THE SAME ORDER, from one
 // definition: a reader who opens the rail from the directory must not have to
 // re-learn the project because the header put its owners where the row put its
-// counts.
-test("the rail draws the page's own facts", async () => {
+// counts. THE PARTS ARE ONE ORDER TOO — header, lede, findings, census — and
+// they were two: the page drew the census before the purpose and the rail drew
+// it after, and the page's warning callout sat above the object's own name.
+test("the rail draws the page's own facts, in the page's own order", async () => {
   serving({
-    work_project: detail(),
+    work_project: detail({ unit: { key: "gone", resolved: false } }),
     work_items: { items: [], groups: [], complete: true },
     work_activity: { records: [], complete: true },
   });
-  render(
+  const { container } = render(
     <Router>
       <ProjectPeek projectKey="ENG" />
     </Router>,
   );
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
-  expect(screen.getByText("Platform")).toBeTruthy();
+  const head = container.querySelector(".object-head");
+  const note = container.querySelector(".page-note");
+  const banner = screen.getByText(/routes to nobody/).closest(".crewlet-callout");
+  expect(precedes(head, note)).toBe(true);
+  expect(precedes(note, banner)).toBe(true);
+  expect(precedes(banner, container.querySelector(".work-census"))).toBe(true);
+});
+
+// AND THE RAIL SAYS WHY THERE IS NO CENSUS, which the page does not: the page
+// draws its own empty state in place of the list a few lines below, and the
+// rail has no lens under it to carry the sentence.
+test("the rail says an empty project is empty, where the page's list does", async () => {
+  serving({
+    work_project: detail({ task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_activity: { records: [], complete: true },
+  });
+  const { container } = render(
+    <Router>
+      <ProjectPeek projectKey="ENG" />
+    </Router>,
+  );
+  await waitFor(() => expect(screen.getByText("No work has been filed here yet.")).toBeTruthy());
+  expect(container.querySelector(".work-census")).toBeNull();
 });

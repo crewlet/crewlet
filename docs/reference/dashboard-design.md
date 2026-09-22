@@ -358,7 +358,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
-| `#/work/{KEY}` | **Project** | `lens=items\|overview\|history` · the same view strip and filter grammar, scoped to the project |
+| `#/work/{KEY}` | **Project** — the header says what the container is, its lede says what it is for, and **Items** carries the open count | `lens=items\|overview\|history` · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` (which change's routing) |
 | `#/goals` · `#/goals/{id}` | **Goals** | |
 | `#/company` | **Company** — the charter, the chart, and editing them | `lens=chart\|charter\|builder` (builder is *(operator)*) · `unit=` · `seat=` |
@@ -2254,7 +2254,7 @@ is one of the rules on this page applied to a tracker.
 ## Honest empty states
 
 A screen that renders a blank where data would go is a screen that cannot be
-trusted when it IS blank. Three distinctions the product makes everywhere:
+trusted when it IS blank. Four distinctions the product makes everywhere:
 
 - **Nothing happened** vs **nothing could be read.** "No events" on a fresh
   company and "no events" from a query the engine refused are the same empty
@@ -2284,6 +2284,21 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
   older rows the screen never saw, and a caption reading "some of this may be
   missing" is one nobody can act on where "Knowledge answered one page" says
   where to look.
+- **An empty CONTAINER** vs **a query that matched nothing.** A container says
+  its own emptiness, from what it already knows about itself, before the list
+  it holds has answered anything — and that state REPLACES the list rather than
+  sitting under it. A project page handed its whole body to the work list, so a
+  project nobody has ever filed anything in said "Nothing matches — no item
+  matches these filters. Widen them", with no filter set: a claim about a
+  narrowing that did not exist, on the day-one state of every project. It is
+  drawn from the project's own maintained counts now, names the project, and
+  says how work gets filed (a seat's `create_work_item`, an inbound webhook, a
+  schedule, or your own assistant at `/operator/mcp`). "Nothing matches" is
+  reserved for a query that genuinely narrowed. The same rule sorts the two
+  empty pages apart: the work list's empty state is about ITEMS and the
+  projects directory's is about PROJECTS, so a company with no projects is told
+  what a project is and that a unit's `project` key in the company
+  configuration is what mints one.
 
 Every empty state names what would fill it.
 
