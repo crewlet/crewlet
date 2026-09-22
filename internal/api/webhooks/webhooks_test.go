@@ -29,7 +29,27 @@ import (
 // two of the five schemes sign a timestamp and check it against a replay
 // window: a suite on the real clock would assert about the window's edges by
 // sleeping.
-var pinned = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+//
+// # Pinned RELATIVE to the real clock, never at a literal instant
+//
+// This receiver writes rows a case then reads back through the event log, and
+// [store.EventHistory] ANDs `event_time >= now() - 30 days` onto every list —
+// against the REAL clock, which no option here replaces. So an absolute date
+// is a fixture with an expiry date on it: this suite passed for a month, and
+// then, on a day nobody changed anything, ten of its cases began failing and
+// one panicked with an index out of range — because every row they had just
+// written was older than the floor that reads them back.
+//
+// AN HOUR BACK, which is comfortably inside that floor and unambiguously in
+// the past for anything that compares this instant against the real one —
+// while the replay windows are all evaluated against THIS clock, which the
+// edge is built with, so the offset is invisible to them.
+//
+// TRUNCATED TO THE SECOND because the Standard Webhooks timestamp travels as
+// a Unix second and the signature is computed over that string: a pin with a
+// fraction on it makes the signed instant and `pinned.Unix()` disagree by up
+// to a second, which is exactly the quantity the window cases measure.
+var pinned = time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 
 // recorder is a queue.Publisher that keeps what it was given, and can be made
 // to fail.
