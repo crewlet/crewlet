@@ -717,11 +717,20 @@ test("a bound reader is offered no row that returns them where they are", async 
 // anybody's handle needs a credential, so for an anonymous reader every row is
 // a refusal — and the screen's own sentence named that pick as the remedy.
 test("an anonymous reader gets the credential sentence, not a menu of refusals", async () => {
-  serving({ viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" } });
+  const query = serving({
+    viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+  });
   mount();
   await waitFor(() => expect(screen.getByText(/No credential is presented/)).toBeTruthy());
   expect(screen.queryByRole("combobox", { name: "Whose day" })).toBeNull();
   expect(screen.queryByText(/pick somebody above/)).toBeNull();
+  // AND THE LOAD STOPS BEING ASKED FOR. It is the picker's own question, and
+  // once the viewer answers there is no control for it to fill — the FIRST
+  // read is unavoidable, because until then this reader is indistinguishable
+  // from one who gets a picker, and delaying it for everybody to spare a read
+  // here would be the wrong trade.
+  const asked = query.mock.calls.filter((c) => c[0] === "work_workload").length;
+  expect(asked).toBe(1);
 });
 
 // THE ORDER IS THE CONTENT, so it is DRAWN. Every other tab on this screen is

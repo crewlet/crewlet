@@ -179,11 +179,6 @@ export function MyWork() {
   // EVERY SEAT AND EVERY PERSON the chart names, so the screen can be reached
   // with nobody chosen and still offer somebody.
   const index = useMemo(() => indexOrg(org), [org]);
-  // WHO IS CARRYING HOW MUCH, for the picker. One read over every handle at
-  // once — the alternative is a `work_my_work` per colleague, which is a round
-  // trip per option — and it is the whole company's rather than this person's,
-  // so it does not move when the day being read does.
-  const workload = useQuery("work_workload", undefined, { pollMs: 60_000 });
   const chrome: RowChrome = {
     seatName: (h) => index.byHandle.get(h)?.name ?? h,
   };
@@ -200,6 +195,25 @@ export function MyWork() {
   const whose = handle || viewer.handle;
   const ownDay = whose !== "" && whose === viewer.handle;
   const they = ownDay ? "you" : "them";
+
+  // WHO IS CARRYING HOW MUCH, for the picker. One read over every handle at
+  // once — the alternative is a `work_my_work` per colleague, which is a round
+  // trip per option — and it is the whole company's rather than this person's,
+  // so it does not move when the day being read does.
+  //
+  // POLLED ONLY WHERE THE PICKER IS DRAWN, which is the same condition: an
+  // anonymous reader is offered no picker, and a read over every handle in the
+  // company once a minute for a control nobody can see is a minute's work per
+  // minute for nothing. The FIRST read still goes out, because until the
+  // viewer answers this reader is indistinguishable from one who gets a
+  // picker — and delaying the counts for everybody to spare that one read is
+  // the wrong trade. 60s is the interval both other readers of this question
+  // already take (`routes/inbox/Inbox.tsx`, `routes/company/People.tsx`): a
+  // load is read, not watched.
+  const workload = useQuery("work_workload", undefined, {
+    enabled: !viewer.anonymous,
+    pollMs: 60_000,
+  });
 
   // NOT UNTIL SOMEBODY IS CHOSEN — `whose` is empty until the chart has
   // loaded, and the engine refuses this question without a handle.
