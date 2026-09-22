@@ -1589,6 +1589,48 @@ button.histogram-bar[data-empty]:hover {
   outline-offset: 1px;
 }
 
+/* THE DATES UNDER THE BARS, which is the half that makes the plot an axis. A
+   seven-day window holding one busy day drew a single bar hard against the
+   right edge of an empty box with nothing beneath it — which reads as a chart
+   that failed to load rather than as a company that was quiet until yesterday.
+
+   THE BORDER ABOVE IS THE AXIS LINE. `.histogram`'s own `border-bottom` already
+   rules it, so the ticks hang under that rule rather than drawing a second one.
+
+   ABSOLUTE, so a tick sits over the bucket it names. The labels are wider than
+   the bars they point at — five dates over ninety columns — so laid out in flow
+   they would push each other along the row and every one but the first would
+   name a bucket it is nowhere near. `ui/Histogram.tsx` computes each one's
+   percentage from its own bar index and pins the two ends to the edges, which
+   is the one place a centred label would hang off the card.
+
+   NO COLOUR OF ITS OWN: an axis label is ink, and the chart's one accent is
+   spent on the bars. */
+.histogram-figure {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.histogram-axis {
+  position: relative;
+  /* THE ROW IS AS TALL AS ONE LABEL, stated rather than left to the absolutely
+     positioned children — which contribute no height at all, so without this
+     the chart and whatever follows it would overlap. */
+  height: calc(var(--fs-3xs) * var(--lh-normal));
+  margin-top: 2px;
+}
+
+.histogram-tick {
+  position: absolute;
+  top: 0;
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  /* A COLUMN OF TIMES LINES UP or it reads as a jitter in the axis itself. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* ---- Facets --------------------------------------------------------------
    One dimension of a list, as a row of narrowing chips. WHAT THE COUNTS ARE
    COUNTS OF is said beside them — over the loaded page or over the whole
