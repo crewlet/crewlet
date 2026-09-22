@@ -1501,6 +1501,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// file at boot, and /config refuses a body carrying one BY NAME.
 	chartSurface, err := chartapi.New(chartapi.Options{
 		Reader: e.Chart(),
+		// WHO HOLDS A SEAT, or nil where this node cannot tell — see
+		// [seatHeld] for why the absence is the third value here.
+		Held: seatHeld(e),
 		// ONE WRITER PER PARTY, derived from the node's own. The chart's
 		// author is a property of the writer and never of the call — a
 		// chart whose author field is chosen by the caller is not an
@@ -1832,6 +1835,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Secrets: secretSurface,
 		Setup:   setupSurface,
 		Chart:   chartSurface,
+		// THE SAME ANSWER /chart/check reads, so a gauge on /health and
+		// the screen that renders the report cannot disagree.
+		SeatHeld: seatHeld(e),
 		// HOW A PERSON BECOMES A PRINCIPAL, or nil on a node that cannot
 		// serve one — see [signInSurface] for the two postures that
 		// produce a nil and why each is honest rather than a fault.

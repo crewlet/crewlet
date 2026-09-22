@@ -57,14 +57,14 @@ func TestASettingsRevisionRemovingAReferencedProviderIsReported(t *testing.T) {
 	view, settings := running()
 	// THE CONTROL FIRST: the pair as it stands is clean, so the case
 	// below is about the edit rather than about the fixture.
-	if got := chartapi.Evaluate(view, settings); len(got.Findings) != 0 {
+	if got := chartapi.Evaluate(view, settings, nil); len(got.Findings) != 0 {
 		t.Fatalf("the unchanged pair reports %v", got.Findings)
 	}
 
 	// The edit: somebody removes the provider the seat runs on.
 	settings.Providers.LLM = map[string]config.LLMProvider{"openai": {}}
 
-	got := chartapi.Evaluate(view, settings)
+	got := chartapi.Evaluate(view, settings, nil)
 	if len(got.Findings) != 1 {
 		t.Fatalf("findings = %+v, want exactly the seat that lost its model", got.Findings)
 	}
@@ -105,7 +105,7 @@ func TestANodeThatCouldNotEvaluateSaysSoRatherThanReportingNothingWrong(t *testi
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got := chartapi.Evaluate(c.view, c.cfg)
+			got := chartapi.Evaluate(c.view, c.cfg, nil)
 			if got.Evaluated {
 				t.Error("a node that read nothing reported an evaluation")
 			}
@@ -135,15 +135,15 @@ func TestTheReportNamesEveryWayTheTwoHalvesDisagree(t *testing.T) {
 		{"a manages entry naming nobody", func(v *org.Organization, _ *config.Company) {
 			v.Role("cto").Manages = []string{"ghost"}
 		}, chartapi.KindReferenceDangling},
-		{"a human seat nobody holds", func(v *org.Organization, _ *config.Company) {
+		{"a human seat nobody can be reached at", func(v *org.Organization, _ *config.Company) {
 			v.Role("cto").Kind = org.KindHuman
-		}, chartapi.KindSeatUnheld},
+		}, chartapi.KindSeatUnreachable},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			view, settings := running()
 			c.edit(view, settings)
-			got := chartapi.Evaluate(view, settings)
+			got := chartapi.Evaluate(view, settings, nil)
 			if got.Counts[c.want] == 0 {
 				t.Fatalf("counts = %v, want a %q", got.Counts, c.want)
 			}
@@ -159,7 +159,7 @@ func TestTheSelfCellNeedsNoSandboxBackend(t *testing.T) {
 	t.Parallel()
 	view, settings := running()
 	view.Role("sre").Sandbox = &org.RoleSandbox{Enabled: true, RunIn: "self"}
-	if got := chartapi.Evaluate(view, settings); len(got.Findings) != 0 {
+	if got := chartapi.Evaluate(view, settings, nil); len(got.Findings) != 0 {
 		t.Errorf("findings = %+v, want none — `self` runs in this process", got.Findings)
 	}
 }
@@ -195,7 +195,7 @@ func TestTheContinuousReportAndChartCheckNeverDisagree(t *testing.T) {
 	// because a struct compared against a decoded map would fail on key
 	// order rather than on content.
 	var direct map[string]any
-	if err := json.Unmarshal(mustMarshal(t, chartapi.Evaluate(view, settings)),
+	if err := json.Unmarshal(mustMarshal(t, chartapi.Evaluate(view, settings, nil)),
 		&direct); err != nil {
 		t.Fatalf("decode the evaluation: %v", err)
 	}
@@ -203,7 +203,67 @@ func TestTheContinuousReportAndChartCheckNeverDisagree(t *testing.T) {
 		t.Errorf("the route and the evaluation disagree:\n route: %s\n  eval: %s",
 			mustMarshal(t, body["report"]), mustMarshal(t, direct))
 	}
-	if want := chartapi.Evaluate(view, settings).Worst(); body["worst"] != string(want) {
+	if want := chartapi.Evaluate(view, settings, nil).Worst(); body["worst"] != string(want) {
 		t.Errorf("worst = %v, want %q", body["worst"], want)
+	}
+}
+
+// A HUMAN SEAT NOBODY IN THE DIRECTORY IS BOUND TO IS REPORTED, and the
+// directory is what answers rather than the seat's own contact block.
+//
+// These are two independent facts with different remedies: somebody who signs
+// in and gets no notifications, and somebody who is messaged constantly and
+// cannot open the dashboard as themselves. A seat can have either without the
+// other, and folded together whichever remedy a person tried first would
+// appear not to work.
+func TestAnUnheldSeatIsTheDirectorysAnswerAndNotTheContactBlocks(t *testing.T) {
+	t.Parallel()
+	view, settings := running()
+	view.Role("cto").Kind = org.KindHuman
+	// A CONTACT IDENTITY, so the unreachable arm is satisfied and anything
+	// this case reports is the directory's doing.
+	view.Role("cto").Contact = &org.HumanContact{MattermostUserID: "cto"}
+
+	held := chartapi.Evaluate(view, settings, func(string) bool { return true })
+	if held.Counts[chartapi.KindSeatUnheld] != 0 {
+		t.Errorf("a seat somebody holds was reported unheld: %v", held.Counts)
+	}
+	if held.Counts[chartapi.KindSeatUnreachable] != 0 {
+		t.Errorf("a seat with a contact identity was reported unreachable: %v",
+			held.Counts)
+	}
+
+	unheld := chartapi.Evaluate(view, settings, func(string) bool { return false })
+	if unheld.Counts[chartapi.KindSeatUnheld] == 0 {
+		t.Errorf("a seat nobody in the directory holds was not reported: %v",
+			unheld.Counts)
+	}
+}
+
+// AND A NODE THAT CANNOT TELL DOES NOT GUESS.
+//
+// This is the whole reason the seam is a nil-able function rather than a bool
+// inside the report. A node that runs no identity domain has a legitimately
+// EMPTY copy of that estate — it never applies the records — so asking it
+// produces false for every seat in the company, which renders as "nobody works
+// here" on a screen an operator is about to act on. The absence of a reader is
+// the third value, and the arm is SKIPPED.
+func TestANodeWithNoDirectoryReportsNoSeatUnheld(t *testing.T) {
+	t.Parallel()
+	view, settings := running()
+	view.Role("cto").Kind = org.KindHuman
+	view.Role("cto").Contact = &org.HumanContact{MattermostUserID: "cto"}
+
+	got := chartapi.Evaluate(view, settings, nil)
+	if got.Counts[chartapi.KindSeatUnheld] != 0 {
+		t.Errorf("a node that cannot read the directory reported %d seats "+
+			"unheld: a seats-only satellite would report every human seat in "+
+			"the company", got.Counts[chartapi.KindSeatUnheld])
+	}
+	// THE CONTROL: the arms that need no directory still fire, or this
+	// case would pass on a report that had stopped evaluating anything.
+	view.Role("cto").Contact = nil
+	if got := chartapi.Evaluate(view, settings, nil); got.Counts[chartapi.KindSeatUnreachable] == 0 {
+		t.Errorf("the contact arm stopped firing too: %v", got.Counts)
 	}
 }

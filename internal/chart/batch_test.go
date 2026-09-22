@@ -1,6 +1,7 @@
 package chart_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"slices"
@@ -20,12 +21,26 @@ import (
 // stored rows alone would get wrong — in one direction or the other.
 
 // validate runs a batch against the harness's own estate.
+//
+// OVER A DIRECTORY THAT HOLDS NOBODY, which is what every case in this file
+// is about: these are the chart's OWN rules — cycles, empty units, addresses —
+// and a directory that refused a removal would make each of them fail for a
+// reason they are not about. The cases that ARE about the directory supply
+// their own; see [harness.validateWith].
 func (h *harness) validate(batch chart.Batch) (
 	edges []chart.Edge, removed []chart.ObjectRef, err error) {
 
 	h.t.Helper()
+	return h.validateWith(batch, noHolders{})
+}
+
+// validateWith runs a batch against a directory a case names.
+func (h *harness) validateWith(batch chart.Batch, holders chart.Holders) (
+	edges []chart.Edge, removed []chart.ObjectRef, err error) {
+
+	h.t.Helper()
 	txErr := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
-		edges, removed, err = batch.Validate(h.t.Context(), tx)
+		edges, removed, err = batch.Validate(h.t.Context(), tx, holders)
 		return nil
 	})
 	if txErr != nil {
@@ -384,5 +399,128 @@ func TestSettingALeadDoesNotMoveTheUnitToTheRoot(t *testing.T) {
 			"engineering — an edge is full post-state, so a parent read from "+
 			"the operation rather than from the chart is an empty one",
 			edges[idx].Parent)
+	}
+}
+
+// noHolders is a directory that holds nobody, readably.
+//
+// NOT NIL, which is a different fact: nil is a node that cannot read the
+// directory at all and refuses every seat removal naming itself. This is a
+// node that read it and found nobody, which is the ordinary state of every
+// agent seat in a company.
+type noHolders struct{}
+
+func (noHolders) HolderOf(context.Context, *sql.Tx, string) (string, error) {
+	return "", nil
+}
+
+// heldBy is a directory in which one seat is held.
+type heldBy struct{ handle, login string }
+
+func (h heldBy) HolderOf(_ context.Context, _ *sql.Tx, handle string) (string, error) {
+	if handle == h.handle {
+		return h.login, nil
+	}
+	return "", nil
+}
+
+// unreadable is a directory this node could not read.
+type unreadable struct{ err error }
+
+func (u unreadable) HolderOf(context.Context, *sql.Tx, string) (string, error) {
+	return "", u.err
+}
+
+// A SEAT SOMEBODY HOLDS IS NOT REMOVED, and the refusal names them.
+//
+// The ordinary mistake this exists for: a reorganisation removes a seat a
+// colleague is still using, and what they get afterwards is a session that
+// signs in and leads nothing — every authority rule asking what they lead
+// falls through, with no message anywhere saying why.
+func TestARemoveOfAHeldSeatIsRefusedNamingThePerson(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	// CREATED AND REMOVED IN ONE BATCH, which is what the validator works
+	// over: these cases are about the rule rather than about persistence,
+	// and the removal's own check runs the same either way.
+	remove := chart.Batch{Operations: []chart.Operation{
+		op(chart.OpCreateUnit, chart.KindUnit, "eng", ""),
+		op(chart.OpCreateSeat, chart.KindSeat, "ana", "eng"),
+		op(chart.OpRemoveObject, chart.KindSeat, "ana", ""),
+	}}
+
+	_, _, err := h.validateWith(remove, heldBy{handle: "ana", login: "ana.admin"})
+
+	refused := refusal(t, err)
+	if refused.Rule != chart.RuleSeatHeld {
+		t.Fatalf("rule = %q, want %q", refused.Rule, chart.RuleSeatHeld)
+	}
+	if !strings.Contains(refused.Detail, "ana.admin") {
+		t.Errorf("the refusal does not name who holds the seat: %s", refused.Detail)
+	}
+
+	// THE CONTROL: a seat nobody holds is removed. Without it this case
+	// would pass on a validator that refused every removal.
+	if _, _, err := h.validate(remove); err != nil {
+		t.Errorf("a seat nobody holds was refused: %v", err)
+	}
+}
+
+// A NODE THAT CANNOT READ THE DIRECTORY REFUSES, NAMING ITSELF.
+//
+// This is the arm that makes the whole check worth having. A node that does
+// not run the identity domain holds an EMPTY copy of those rows, so reading
+// them answers "nobody holds this seat" for every seat in the company — which
+// would make a seats-only satellite the one place every removal succeeds, and
+// the one place it is least likely to be noticed.
+func TestASatelliteRefusesASeatRemoveNamingTheNode(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	remove := chart.Batch{Operations: []chart.Operation{
+		op(chart.OpCreateUnit, chart.KindUnit, "eng", ""),
+		op(chart.OpCreateSeat, chart.KindSeat, "ana", "eng"),
+		op(chart.OpRemoveObject, chart.KindSeat, "ana", ""),
+	}}
+
+	// NO DIRECTORY AT ALL, which is what a node outside the domain's
+	// declared set supplies.
+	_, _, err := h.validateWith(remove, nil)
+	refused := refusal(t, err)
+	if refused.Rule != chart.RuleDirectoryUnreadable {
+		t.Fatalf("rule = %q, want %q", refused.Rule, chart.RuleDirectoryUnreadable)
+	}
+	if !strings.Contains(refused.Detail, "node") {
+		t.Errorf("the refusal does not say the remedy is another node: %s",
+			refused.Detail)
+	}
+
+	// AND A DIRECTORY THAT FAILED TO READ, which is the same answer for a
+	// different reason: a removal decided without it silently orphans
+	// whoever holds the seat.
+	_, _, err = h.validateWith(remove, unreadable{err: errors.New("the estate is closed")})
+	if refusal(t, err).Rule != chart.RuleDirectoryUnreadable {
+		t.Errorf("an unreadable directory did not refuse the removal: %v", err)
+	}
+
+	// THE CONTROL: the same removal, on a node that read the directory and
+	// found nobody, goes through. Without it both arms above would pass on
+	// a validator that refused every seat removal.
+	if _, _, err := h.validateWith(remove, noHolders{}); err != nil {
+		t.Errorf("a readable directory holding nobody refused the removal: %v", err)
+	}
+}
+
+// AND A UNIT'S REMOVAL ASKS NOTHING OF THE DIRECTORY, which is the scope
+// control: a unit holds no person, so consulting it would refuse a removal on
+// a satellite for a reason that cannot apply.
+func TestAUnitRemovalNeedsNoDirectory(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	if _, _, err := h.validateWith(chart.Batch{Operations: []chart.Operation{
+		op(chart.OpCreateUnit, chart.KindUnit, "eng", ""),
+		op(chart.OpRemoveObject, chart.KindUnit, "eng", ""),
+	}}, nil); err != nil {
+		t.Errorf("an empty unit's removal consulted a directory it has no "+
+			"business asking: %v", err)
 	}
 }

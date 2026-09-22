@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -43,6 +44,8 @@ import (
 // leaves opening them to a surface that has a reason to — which is also what
 // keeps an identity read a keyed lookup rather than a round trip, and why
 // internal/store's reserved connection is enough for it.
+
+var log = logging.Get("iam.read")
 
 // Reader answers questions about this node's copy of the identity estate.
 type Reader struct {
@@ -568,4 +571,94 @@ func (r *Reader) SessionOwner(ctx context.Context, lineage string) (string, erro
 		return "", err
 	}
 	return owner, nil
+}
+
+// SeatHeld reports whether a seat handle is one somebody in this estate is
+// bound to.
+//
+// # A BOOL HERE, deliberately, and the third value is the reader's absence
+//
+// Everywhere else in this file an error is the unknown arm. This one answers
+// a REPORT rather than a request: the chart's continuous check asks it per
+// seat while rendering, and a per-seat error would make one unreadable row
+// fail a page that is otherwise correct. So a read this node cannot perform
+// answers FALSE and says so in the log — and the third value is carried one
+// level up, by the caller passing no reader at all on a node that does not
+// run this domain (see [chartapi.Held]).
+//
+// That division is what stops a seats-only satellite reporting every human
+// seat in the company as unheld: its copy of this estate is legitimately
+// empty because it never applies the domain, so it supplies no reader rather
+// than a reader that answers false for everybody.
+func (r *Reader) SeatHeld(ctx context.Context, handle string) bool {
+	if handle == "" {
+		return false
+	}
+	var held bool
+	if err := r.withTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM iam_people
+				 WHERE seat_id = ? AND shredded = 0 AND stage = ?)`,
+			handle, string(iam.StageActive)).Scan(&held)
+	}); err != nil {
+		log.Warn("iam_seat_held_unreadable", "handle", handle, "error", err)
+		return false
+	}
+	return held
+}
+
+// HolderOf names the person bound to a seat, read INSIDE a transaction the
+// caller supplies.
+//
+// # The transaction is the caller's, and that is the point
+//
+// It satisfies the chart domain's [chart.Holders], which is consulted inside
+// that domain's own decide — so this read has to join the snapshot the
+// decision is being made in rather than open one of its own. A second
+// transaction would see a different instant, which is the specific failure
+// the write authority's "take ONE snapshot" rule exists to prevent.
+//
+// # What it can and cannot promise
+//
+// It is ADVISORY across the domain boundary and the chart's own seam says so
+// at length: two logs, two appliers, two anchors, so a bind and a removal can
+// each pass their decide and both land. What it establishes is what THIS
+// node's copy of the directory says at this instant, which is the strongest
+// honest claim available and is enough for the case it exists for — somebody
+// removing a seat a colleague is still using.
+//
+// # An error is never "nobody"
+//
+// Unlike [Reader.SeatHeld], which answers a report per seat and swallows a
+// read it cannot perform, this answers a WRITE: a removal decided on an
+// unreadable directory is one that silently orphans whoever holds the seat.
+// So the error travels, and the chart refuses.
+func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, handle string) (string, error) {
+	if handle == "" {
+		return "", nil
+	}
+	var login string
+	err := tx.QueryRowContext(ctx, `
+		SELECT login FROM iam_people
+		 WHERE seat_id = ? AND shredded = 0 AND stage = ?
+		 LIMIT 1`, handle, string(iam.StageActive)).Scan(&login)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// NOBODY, and it is a finding rather than a failure: a seat the
+		// chart holds that no person is bound to is the ordinary state
+		// of every agent seat in the company.
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("iamdomain: read who holds seat %q: %w", handle, err)
+	}
+	if login == "" {
+		// A ROW WITH NO LOGIN is a person mid-enrolment — the claims
+		// land before the content record fills them in — and they hold
+		// the seat as surely as anybody. Naming them by their id would
+		// be worse than naming them not at all, so the refusal says
+		// somebody rather than nobody.
+		return "somebody who is still enrolling", nil
+	}
+	return login, nil
 }

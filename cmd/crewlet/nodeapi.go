@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
+	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -212,4 +214,31 @@ func signInProvider(boot *config.Bootstrap) *oidc.Provider {
 		RedirectURI:  boot.API.ExternalBase() + auth.PathAuthOIDCCallback,
 		RequireACR:   block.RequireACR,
 	}, nil, nil)
+}
+
+// seatHeld reports whether a seat is one somebody in the identity directory is
+// bound to, or nil on a node that cannot tell.
+//
+// # The nil is the third value, and it is the whole of this function
+//
+// A node that runs no identity domain has a legitimately EMPTY copy of that
+// estate — it never applies the records — so asking it produces false for
+// every seat in the company, which reads as "nobody works here". That is the
+// shape of the bug the continuous report already had for a different reason:
+// it read a seat's declared contact block, so a company managing its people
+// elsewhere saw every human seat reported.
+//
+// So a node with no reader supplies NO ANSWER, and the report skips that arm
+// rather than answering it. See [chartapi.Held].
+func seatHeld(e *engine.Engine) chartapi.Held {
+	reader := e.IAM()
+	if reader == nil {
+		return nil
+	}
+	return func(handle string) bool {
+		// THE BACKGROUND CONTEXT, because this is asked while rendering a
+		// report on a tick with no request to inherit: a per-seat read
+		// bound to a cancelled request would make a page half-answer.
+		return reader.SeatHeld(context.Background(), handle)
+	}
 }

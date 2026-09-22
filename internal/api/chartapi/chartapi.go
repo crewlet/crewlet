@@ -151,6 +151,7 @@ type Service struct {
 	chart     authz.Chart
 	fleet     Fleet
 	company   func() (*config.Company, *org.Organization)
+	held      Held
 	now       func() time.Time
 }
 
@@ -185,11 +186,21 @@ func (s *Service) report() Report {
 		return Report{Findings: []Finding{}}
 	}
 	settings, view := s.company()
-	return Evaluate(view, settings)
+	return Evaluate(view, settings, s.held)
 }
 
 // Options wire the service.
 type Options struct {
+	// Held reports whether a seat is one somebody in the identity
+	// directory is bound to, or nil where this node cannot tell.
+	//
+	// NIL IS AN ORDINARY WIRING rather than a mistake, and the report
+	// SKIPS the unheld arm rather than answering it: a node that runs no
+	// identity domain has a legitimately empty copy of that estate, and
+	// reading it as "nobody holds any seat" would report every human seat
+	// in the company. See [Held].
+	Held Held
+
 	// Reader answers the chart's rows. Required: a surface that could not
 	// read would serve writes whose result nobody can see.
 	Reader Reader
@@ -259,5 +270,5 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{reader: opts.Reader, authority: opts.Authority,
 		principal: opts.Principal, chart: opts.Chart, fleet: opts.Fleet,
-		company: opts.Company, now: now}, nil
+		company: opts.Company, held: opts.Held, now: now}, nil
 }

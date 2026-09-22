@@ -284,6 +284,36 @@ Absent, redeemed and expired are **one refusal**, because the remedy is the same
 and telling them apart would say "this was already used" to somebody whose link
 merely aged out, and send them looking for who used it.
 
+## The binding has two ends, and only one of them arbitrates
+
+A person is bound to a seat, and the two facts live in two domains: the
+directory holds `seat_id` on the person's row, and the chart holds the seat.
+Each has its own log, its own applier and its own arbitration anchor — so
+neither can refuse a write the other is making.
+
+What that means in practice:
+
+- **The bind arbitrates.** `iam.seat.<handle>` is a claim, create-only at an
+  expectation of zero, so two people cannot be bound to one seat: they contend
+  at the broker and exactly one wins.
+- **The seat's removal does not.** The chart's removal decide reads the
+  directory inside its own snapshot and refuses a seat somebody holds, naming
+  them — but a bind landing on the other log at the same instant passes its own
+  decide too. Both can land.
+
+The residue is a person bound to a seat that is not in the chart. That is a
+**named legal state** a duty reports, not corruption, and it is the honest
+price of two domains: arbitration across them would need one log, and one log
+for the chart and the directory would serialise every hire against every
+sign-in.
+
+**A node that cannot read the directory refuses the removal rather than
+allowing it.** A node running no identity domain holds an empty copy of those
+rows, so reading them answers "nobody holds this seat" for every seat in the
+company — which would make a seats-only satellite the one place every removal
+succeeds. The refusal names the node, because the remedy is to do it somewhere
+else.
+
 ## Sessions go stale, and an unset deadline is stale
 
 Every principal carries the instant after which its proof of identity no longer

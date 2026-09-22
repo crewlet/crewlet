@@ -268,7 +268,11 @@ func (a *App) report() chartapi.Report {
 		return chartapi.Report{}
 	}
 	settings, view := a.company()
-	return chartapi.Evaluate(view, settings)
+	// THE SAME SEAM THE /chart/check ROUTE USES, so a gauge on /health and
+	// the screen that renders the report can never disagree about whether
+	// a seat is held — which is the whole reason one evaluation feeds
+	// every surface.
+	return chartapi.Evaluate(view, settings, a.seatHeld)
 }
 
 // tickReadBudget bounds a read done for a push tick rather than a request.

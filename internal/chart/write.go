@@ -46,6 +46,11 @@ type Writer struct {
 	// decided against it is paired with an expectation.
 	db *store.DB
 
+	// holders reads who, in the identity directory, is bound to a seat.
+	// Nil is a node that does not run that domain, and every seat removal
+	// is then refused naming the node — see [Holders].
+	holders Holders
+
 	// Actor and ActorKind are who this writer acts as, and OperatorID and
 	// TurnID the provenance that travels with it. See this file's header
 	// for why they are here and not on each call.
@@ -155,6 +160,21 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 // hand them whatever the node itself holds. A party with no capabilities
 // passes nil and may author the public half, which is the honest answer for
 // an agent editing its own team.
+// WithHolders installs the identity directory this writer consults before a
+// seat removal, and returns the writer for chaining.
+//
+// CALLED ONCE AT WIRING TIME, like [Writer.As]'s siblings: the seam is read
+// inside a decide, and a writer whose directory moved under a write in flight
+// would decide two removals two ways.
+//
+// NIL IS A NODE THAT DOES NOT RUN THE IDENTITY DOMAIN, and every seat removal
+// through it is then REFUSED naming the node rather than allowed — see
+// [Holders].
+func (w *Writer) WithHolders(h Holders) *Writer {
+	w.holders = h
+	return w
+}
+
 func (w *Writer) As(actor string, kind AuthorKind, grants []iam.Grant) *Writer {
 	next := *w
 	next.Actor, next.ActorKind = actor, kind
@@ -225,7 +245,7 @@ func (w *Writer) WriteBatch(ctx context.Context, opID string, batch Batch) (
 			// batch that creates a unit and then fills it is valid,
 			// and the only one under which two moves that jointly
 			// close a cycle are refused.
-			edges, removed, err := batch.Validate(ctx, tx)
+			edges, removed, err := batch.Validate(ctx, tx, w.holders)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -287,7 +307,7 @@ func (w *Writer) WriteRemoval(ctx context.Context, opID string, batch Batch) (
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			edges, removed, err := batch.Validate(ctx, tx)
+			edges, removed, err := batch.Validate(ctx, tx, w.holders)
 			if err != nil {
 				return statelog.Decision{}, err
 			}

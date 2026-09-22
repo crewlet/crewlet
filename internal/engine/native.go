@@ -677,6 +677,21 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 	return nil
 }
 
+// holdersOrNil is the identity directory as the chart's seam, or a genuine
+// nil.
+//
+// THE CONVERSION IS EXPLICIT because a typed nil in an interface is not nil:
+// returning the pointer directly would hand the chart a non-nil Holders
+// wrapping a nil Reader, and every seat removal would panic instead of being
+// refused — which is the one shape worse than the empty-table read this
+// refusal exists to prevent.
+func (n *native) holdersOrNil() chart.Holders {
+	if n.iamReader == nil {
+		return nil
+	}
+	return n.iamReader
+}
+
 // IAM is this node's identity read side, or nil where the domain does not run.
 func (e *Engine) IAM() *iamdomain.Reader {
 	if e.native == nil {
@@ -728,7 +743,12 @@ func (n *native) openChart(e *Engine, sl *stateLog, nodeID string) error {
 	if err != nil {
 		return fmt.Errorf("engine: chart writer: %w", err)
 	}
-	n.chartWriter = writer
+	// THE DIRECTORY THE SEAT REMOVAL CONSULTS, or nil on a node that runs
+	// no identity domain — under which every seat removal here is REFUSED
+	// naming this node rather than decided on an empty table. See
+	// [chart.Holders]; openIAM ran before this, so the reader is whatever
+	// it established.
+	n.chartWriter = writer.WithHolders(n.holdersOrNil())
 	// THROUGH THE DOMAIN'S OWN READ AUTHORITY, so a level asked for is a
 	// level served: the refusal ladder, the coverage probe and the barrier
 	// a linearizable read waits through.

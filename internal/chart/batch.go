@@ -206,6 +206,26 @@ const (
 
 	// RuleTooManyOperations is a batch past [MaxBatchOperations].
 	RuleTooManyOperations = "the batch is too large"
+
+	// RuleSeatHeld is a removal of a seat somebody in the identity
+	// directory is bound to.
+	//
+	// ADVISORY, and the doc on [Batch.Validate] says why at length: this
+	// is a read of ANOTHER domain's rows inside this domain's snapshot,
+	// so it cannot arbitrate. What it buys is that the ordinary mistake —
+	// removing a seat somebody is still using — is refused with that
+	// person's name in the message.
+	RuleSeatHeld = "somebody holds the seat"
+
+	// RuleDirectoryUnreadable is a seat removal on a node that cannot see
+	// the identity directory at all.
+	//
+	// A REFUSAL AND NOT A PASS, which is the whole of it: a node that does
+	// not run the identity domain has a legitimately EMPTY copy of those
+	// rows, and reading that emptiness as "nobody holds this seat" would
+	// make a satellite the one place every removal succeeds. It names the
+	// node, because the remedy is to make the removal somewhere else.
+	RuleDirectoryUnreadable = "this node cannot read the directory"
 )
 
 // ReservedKeys are the unit keys and seat handles this engine will not let a
@@ -291,7 +311,7 @@ func refKey(ref ObjectRef) string {
 // It returns the EDGES the batch produces and the objects it removes, which is
 // exactly what the records published for it carry — so the validation and the
 // record are one pass rather than two that can disagree.
-func (b Batch) Validate(ctx context.Context, tx *sql.Tx) (
+func (b Batch) Validate(ctx context.Context, tx *sql.Tx, holders Holders) (
 	edges []Edge, removed []ObjectRef, err error) {
 
 	if len(b.Operations) > MaxBatchOperations {
@@ -323,6 +343,9 @@ func (b Batch) Validate(ctx context.Context, tx *sql.Tx) (
 		}
 		switch op.Kind {
 		case OpRemoveObject:
+			if refused := checkHeld(ctx, tx, i, op, holders); refused != nil {
+				return nil, nil, refused
+			}
 			gone = append(gone, ObjectRef{
 				Kind: op.Object.Kind, ID: NormalizeKey(op.Object.ID)})
 			// AND ANY EDGE THIS BATCH ALREADY STATED FOR IT GOES TOO.
@@ -364,6 +387,78 @@ func (b Batch) Validate(ctx context.Context, tx *sql.Tx) (
 		edges = append(edges, byObject[key])
 	}
 	return edges, gone, nil
+}
+
+// Holders reads WHO, IN THE IDENTITY DIRECTORY, IS BOUND TO A SEAT — from
+// inside this domain's own snapshot transaction.
+//
+// # It is ADVISORY, and that word is load-bearing
+//
+// The chart and the identity estate are two state-log domains: two logs, two
+// appliers, two arbitration anchors. A read of one inside the other's decide
+// sees whatever that node has applied, which is not what the OTHER log has
+// committed — so a bind and a removal can each pass their own decide and both
+// land. The residue is a person bound to a seat that no longer exists, which
+// is a NAMED legal state a duty reports, never corruption.
+//
+// What this buys is the ordinary mistake: somebody removes a seat a colleague
+// is still using, and the refusal carries that colleague's name. What it must
+// never be mistaken for is a boundary that did the work — an arbitration
+// across two domains would need one log, and one log for the chart and the
+// directory would serialise every hire against every sign-in.
+//
+// # Nil is a REFUSAL, not a pass
+//
+// A node that does not run the identity domain holds an empty copy of those
+// rows, so reading them would answer "nobody holds anything" for the whole
+// company. The removal is refused NAMING THE NODE instead — see
+// [RuleDirectoryUnreadable]. That is the one place this seam's absence is not
+// the third value but the second: a report may skip a finding it cannot
+// compute, and a WRITE may not proceed on evidence it does not have.
+type Holders interface {
+	// HolderOf names the person bound to a seat, empty for a seat nobody
+	// holds, and an ERROR for rows this node could not read.
+	HolderOf(ctx context.Context, tx *sql.Tx, handle string) (string, error)
+}
+
+// checkHeld refuses a seat removal the directory contradicts.
+func checkHeld(ctx context.Context, tx *sql.Tx, index int, op Operation,
+	holders Holders) *RefusalError {
+
+	if op.Object.Kind != KindSeat {
+		return nil
+	}
+	handle := NormalizeKey(op.Object.ID)
+	if holders == nil {
+		return &RefusalError{
+			Index: index, Rule: RuleDirectoryUnreadable,
+			Detail: fmt.Sprintf("seat %q cannot be removed here: this node "+
+				"does not run the identity domain, so its copy of the "+
+				"directory is empty for every seat and cannot say whether "+
+				"anybody holds this one. Make the removal on a node that "+
+				"serves people", handle),
+		}
+	}
+	holder, err := holders.HolderOf(ctx, tx, handle)
+	if err != nil {
+		return &RefusalError{
+			Index: index, Rule: RuleDirectoryUnreadable,
+			Detail: fmt.Sprintf("seat %q cannot be removed: the directory "+
+				"could not be read on this node, and a removal decided "+
+				"without it is one that silently orphans whoever holds the "+
+				"seat: %v", handle, err),
+		}
+	}
+	if holder != "" {
+		return &RefusalError{
+			Index: index, Rule: RuleSeatHeld,
+			Detail: fmt.Sprintf("seat %q is held by %s — removing it leaves "+
+				"them signed in as a seat that is not in the chart, so every "+
+				"authority rule asking what they lead falls through. Unbind "+
+				"them first, or remove the person", handle, holder),
+		}
+	}
+	return nil
 }
 
 // apply checks one operation against the working copy and advances it.

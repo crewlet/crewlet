@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -100,7 +101,8 @@ type App struct {
 
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
-	company func() (*config.Company, *org.Organization)
+	company  func() (*config.Company, *org.Organization)
+	seatHeld chartapi.Held
 
 	// estate answers whether the replicated estate can be read at the
 	// log's floor, for /ready. See [EstateFloor].
@@ -209,6 +211,15 @@ type Options struct {
 	// ask, and every credential is then unbound — which is exactly what
 	// an unbound one already means.
 	BoundSeat func(operatorID string) string
+
+	// SeatHeld reports whether a seat is one somebody in the identity
+	// directory is bound to, or nil on a node that cannot tell.
+	//
+	// NIL SKIPS THE QUESTION rather than answering it. A node that runs no
+	// identity domain has a legitimately empty copy of that estate, and
+	// reading it as "nobody holds any seat" would report every human seat
+	// in the company as unheld on /health — see [chartapi.Held].
+	SeatHeld chartapi.Held
 
 	// DevPrincipal is the identity an unauthenticated request resolves to
 	// on a development run, or nil.
@@ -410,8 +421,9 @@ func New(opts Options) (*App, error) {
 		// second field an embedder could set inconsistently with it:
 		// Sources.Company reads the CURRENT epoch, and "is there one" is
 		// the whole question [App.Configured] asks.
-		company: opts.Sources.Company,
-		estate:  opts.Estate,
+		company:  opts.Sources.Company,
+		seatHeld: opts.SeatHeld,
+		estate:   opts.Estate,
 	}
 	var err error
 	a.stream, err = stream.NewService(state, stream.Options{

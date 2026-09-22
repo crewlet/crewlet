@@ -47,6 +47,24 @@ import (
 // wrong, which is the failure mode the state log's alarm table exists to
 // prevent and this borrows wholesale.
 
+// Held reports whether a seat handle is one somebody in the identity directory
+// is bound to.
+//
+// # Consumer-defined, and THREE-VALUED by its absence rather than its return
+//
+// A nil Held means this node cannot answer the question at all — it runs no
+// identity domain, or has no directory behind this report — and the
+// [KindSeatUnheld] arm is then SKIPPED rather than answered. That is the
+// difference between "nobody holds this seat" and "I cannot tell", and
+// collapsing them is how a seats-only satellite reports every human seat in
+// the company as unheld: its own copy of the estate is legitimately empty
+// because it never applies that domain.
+//
+// A bool inside the function would be the wrong shape for the same reason a
+// bool is the wrong shape everywhere in this tree, and here the absence IS the
+// third value: a report that cannot ask does not guess.
+type Held func(handle string) bool
+
 // Severity orders a finding by what it costs.
 type Severity string
 
@@ -94,23 +112,37 @@ const (
 	// every later change on every node), so this is where it surfaces.
 	KindReferenceDangling FindingKind = "reference_dangling"
 
-	// KindSeatUnheld is a human seat nobody holds — no contact identity, so
-	// nothing can reach the person the seat is for and every notification
-	// addressed to it goes nowhere.
+	// KindSeatUnheld is a human seat NOBODY IN THE DIRECTORY IS BOUND TO.
+	// The seat exists in the chart, a turn can route work to it, and no
+	// person can sign in and act as it — so every authority rule asking
+	// "do you lead this" falls through, and the work waits for somebody
+	// who cannot arrive.
 	//
-	// UNTIL THERE IS AN IDENTITY DIRECTORY this reads a seat's declared
-	// contact block, which is the only evidence this build has. A company
-	// that manages its people elsewhere will see every human seat here
-	// until that directory exists, and that is honest rather than useful:
-	// the engine genuinely cannot reach them.
+	// IT READS THE DIRECTORY, which is what it could not do until one
+	// existed: this used to read a seat's declared CONTACT block, so a
+	// company that manages its people elsewhere saw every human seat
+	// reported here. That was honest and useless in the same breath, and
+	// it is a different question — see [KindSeatUnreachable].
 	KindSeatUnheld FindingKind = "seat_unheld"
+
+	// KindSeatUnreachable is a human seat with no contact identity, so
+	// nothing addressed to it reaches anybody on the chat surface this
+	// company runs.
+	//
+	// ITS OWN KIND rather than an arm of [KindSeatUnheld], because the two
+	// are independent facts with different remedies and a seat can have
+	// either without the other: somebody who signs in but gets no
+	// notifications, and somebody who is messaged constantly and cannot
+	// open the dashboard as themselves. Folded together, whichever remedy
+	// a person tried first would appear not to work.
+	KindSeatUnreachable FindingKind = "seat_unreachable"
 )
 
 // FindingKinds is every kind, for the walks and for a surface rendering a
 // legend.
 var FindingKinds = []FindingKind{
 	KindProviderUnknown, KindWorkerUnknown, KindSandboxUnconfigured,
-	KindReferenceDangling, KindSeatUnheld,
+	KindReferenceDangling, KindSeatUnheld, KindSeatUnreachable,
 }
 
 // Finding is one thing wrong with the company as it is actually running.
@@ -178,7 +210,7 @@ func (r Report) Worst() Severity {
 //
 // A NIL HALF IS "COULD NOT EVALUATE", never "nothing is wrong". See
 // [Report.Evaluated].
-func Evaluate(o *org.Organization, settings *config.Company) Report {
+func Evaluate(o *org.Organization, settings *config.Company, held Held) Report {
 	if o == nil || settings == nil {
 		return Report{Findings: []Finding{}}
 	}
@@ -188,7 +220,7 @@ func Evaluate(o *org.Organization, settings *config.Company) Report {
 	}
 	for role := range o.AllRoles() {
 		out.Seats++
-		out.Findings = append(out.Findings, seatFindings(role, settings)...)
+		out.Findings = append(out.Findings, seatFindings(role, settings, held)...)
 	}
 	for _, ref := range o.DanglingRefs() {
 		out.Findings = append(out.Findings, danglingFinding(ref))
@@ -215,7 +247,7 @@ func Evaluate(o *org.Organization, settings *config.Company) Report {
 }
 
 // seatFindings is everything wrong with one seat against these settings.
-func seatFindings(role *org.Role, settings *config.Company) []Finding {
+func seatFindings(role *org.Role, settings *config.Company, held Held) []Finding {
 	handle := role.Handle()
 	var out []Finding
 	for _, key := range missingProviders(role, settings) {
@@ -253,14 +285,25 @@ func seatFindings(role *org.Role, settings *config.Company) []Finding {
 				"sandbox gate",
 		})
 	}
-	if unheld(role) {
+	if unreachable(role) {
 		out = append(out, Finding{
-			Kind: KindSeatUnheld, Severity: SeverityWarning,
+			Kind: KindSeatUnreachable, Severity: SeverityWarning,
 			Object: handle,
 			Detail: fmt.Sprintf("%s is a human seat with no contact identity, "+
 				"so nothing addressed to it reaches anybody", handle),
 			Remedy: "give the seat a contact identity on the chat surface " +
 				"this company runs",
+		})
+	}
+	if role.IsHuman() && held != nil && !held(handle) {
+		out = append(out, Finding{
+			Kind: KindSeatUnheld, Severity: SeverityWarning,
+			Object: handle,
+			Detail: fmt.Sprintf("%s is a human seat nobody in the directory "+
+				"is bound to, so no person can sign in and act as it — work "+
+				"routed here waits for somebody who cannot arrive", handle),
+			Remedy: "invite the person who holds this seat, or bind an " +
+				"existing person to it",
 		})
 	}
 	return out
@@ -334,8 +377,8 @@ func sandboxUnbacked(role *org.Role, settings *config.Company) bool {
 	return settings.Providers.Sandbox == nil
 }
 
-// unheld reports a human seat nobody can be reached at.
-func unheld(role *org.Role) bool {
+// unreachable reports a human seat nobody can be reached at.
+func unreachable(role *org.Role) bool {
 	return role.IsHuman() && (role.Contact == nil || role.Contact.IsEmpty())
 }
 

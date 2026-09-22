@@ -114,6 +114,35 @@ continuous evaluation over the chart this node holds and the settings epoch it
 applied. See
 [the continuous report](configuration.md#the-continuous-report-what-nothing-can-refuse-at-a-write).
 
+**One of its findings reads the identity directory**, and what it says depends
+on whether this node has one. `seat_unheld` is a human seat nobody in the
+directory is bound to — a seat the chart holds, work routes to, and no person
+can sign in and act as. On a node that runs no identity domain that arm is
+**skipped rather than answered**: such a node's copy of that estate is
+legitimately empty, so reading it would report every human seat in the company
+as unheld. A report that cannot ask does not guess.
+
+**Removing a seat somebody holds is refused, and the refusal is advisory.** The
+chart's removal decide reads the directory inside its own snapshot and names
+the person, because the ordinary mistake is a reorganisation that takes out a
+seat a colleague is still using — after which they sign in and lead nothing,
+with no message anywhere saying why.
+
+It is *advisory* rather than arbitration, and the word matters. The chart and
+the identity estate are two domains: two logs, two appliers, two anchors. A
+bind and a removal can each pass their own decide and both land, and the
+residue — a person bound to a seat that no longer exists — is a named legal
+state a duty reports, never corruption. Arbitration across the two would need
+one log, and one log for the chart and the directory would serialise every
+hire against every sign-in.
+
+On a node that cannot read the directory the removal is **refused naming the
+node**, not allowed. That is the one place the seam's absence is a refusal
+rather than a skip: a report may omit a finding it cannot compute, and a write
+may not proceed on evidence it does not have — otherwise a seats-only
+satellite is the one place every removal succeeds, and the one place it is
+least likely to be noticed.
+
 **A fresh deployment's chart is seeded from the company file**, by `crewlet run
 -company company.yaml`, and only while the chart is empty — see
 [the boot seed](control-plane.md#the-boot-seed). An OFFLINE `crewlet config
