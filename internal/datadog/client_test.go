@@ -318,11 +318,11 @@ func TestListingRolesWalksEveryPage(t *testing.T) {
 
 // A NON-JSON REFUSAL DOES NOT PUT A WHOLE RESPONSE BODY INTO AN ERROR.
 //
-// That error becomes Finding.Detail, which integration.Observe stores WITHOUT
-// truncation into a State the fleet writes to one coordination key shared
-// with every other integration. A proxy's HTML page or a gateway 502 —
-// exactly what this client's read cap exists for — is the answer least likely
-// to be the JSON the decoder expects.
+// That error becomes Finding.Detail, which integration.Observe stores into a
+// State the fleet writes to one coordination key shared with every other
+// integration. A proxy's HTML page or a gateway 502 — exactly what this
+// client's read cap exists for — is the answer least likely to be the JSON
+// the decoder expects.
 //
 // AGAINST [httpx.RefusalDetail] rather than a literal, because a literal is
 // how the bound drifted from the budget it is supposed to be: 4 096 passed a

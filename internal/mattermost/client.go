@@ -90,8 +90,7 @@ type Error struct {
 	// carries a line saying so instead. EMPTY MEANS THE SERVER SENT AN
 	// EMPTY BODY and nothing else: [serverMessage] answers Mattermost's own
 	// envelope and hands every other outcome to [httpx.RefusalOf], which is
-	// the one place that invariant is enforced, for this vendor and the
-	// three others that share the rule.
+	// the one place that invariant is enforced.
 	Message string
 
 	// retryAfter is what the server asked for, when it asked. Honouring it
@@ -378,8 +377,7 @@ func (e *transportError) Unwrap() error { return e.err }
 // page's <title>, a titleless page named as the page it is, a plain sentence
 // as itself, and a body that was NOT read reported as exactly that with the
 // ceiling that refused it. Only a genuinely empty body yields "", and that
-// invariant lives in httpx rather than here because four vendor clients
-// depend on it and a rule written four times is a rule that drifts.
+// invariant lives in httpx rather than here.
 //
 // The vendor SHAPE stays with the vendor and the shared question — "this is
 // not a shape I know; what can I say?" — does not, which is the split
@@ -409,7 +407,7 @@ func serverMessage(contentType string, payload []byte, err error) string {
 			}
 		}
 	}
-	// EVERY OTHER OUTCOME IS [httpx.RefusalOf]'s, not a fourth copy of it.
+	// EVERY OTHER OUTCOME IS [httpx.RefusalOf]'s.
 	// A body that was not read is named with the ceiling that refused it; a
 	// proxy's HTML page becomes its <title>, and a titleless one becomes a
 	// line saying a page arrived rather than "" — which is what keeps the

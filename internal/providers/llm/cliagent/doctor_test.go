@@ -420,11 +420,10 @@ func TestACutProbeQuoteSaysWhereTheRestIs(t *testing.T) {
 
 // AND THE BLOCK IT NAMES IS ACTUALLY PRINTED, with the whole answer in it.
 //
-// THE POINT OF THE WHOLE PAIRING, and the half that had no test at all while
-// the recovery route was a log line: the only way to assert on one is to point
-// the process-wide sink at a buffer, which [logging.Configure]'s own doc
+// THE POINT OF THE WHOLE PAIRING: the only way to assert on a log line is to
+// point the process-wide sink at a buffer, which [logging.Configure]'s own doc
 // records as a measured failure and this package runs its cases in parallel.
-// A rendered report is assertable, which is most of why the route moved.
+// A rendered report is assertable.
 func TestTheReportPrintsTheWholeAnswerItPromised(t *testing.T) {
 	t.Parallel()
 	whole := strings.Repeat("x", saidShown) + "BEYOND-THE-BUDGET"
