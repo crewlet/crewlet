@@ -24,6 +24,45 @@ A numbering **gap** is normal and permanent. `ENG-7` exists, `ENG-8` never did,
 the two costs a number rather than risking two tasks sharing a key. A key is
 what people paste into chat, so it can never be ambiguous.
 
+### What a project row carries about its work
+
+Beside its own settings, every project carries two facts the engine maintains
+from the work filed into it — so a directory of projects answers "how much" and
+"how recently" without reading a task:
+
+| | What it is |
+|---|---|
+| **task counts** | `open`, `done` and `closed`: how many of the project's tasks are in each status **group**. Moved by the commit that moves a task between groups, that files one, that moves one to another project, or that removes or purges one. |
+| **last change** | when the project's work last changed and **who** changed it — a handle and which of the four author kinds it is (`agent`, `human`, `operator`, `system`), so a seat's write and a person's read differently. |
+
+Both are **maintained, never counted on the fly**: they are written by the same
+commit that changes the work, so drawing thirty projects costs thirty rows
+rather than a pass over every task and every change the company has ever made.
+
+**The last change is the newest entry of that project's own activity feed**
+(`task_activity`) — the same commit, the same instant, the same actor — so the
+two can never disagree. That decides what counts:
+
+- Every commit about a task in the project moves it: filing one, changing any
+  field, commenting, archiving, removing, restoring, purging — loud or quiet.
+- An agent's **turn** does not. A turn records what the work *cost*, not a
+  change to it; counting it would mark every project a seat is thinking in as
+  changing continuously.
+- Re-ordering the **board** does not. The manual order is not a change to any
+  task, and the feed does not carry it either.
+- Editing the **project itself** does not — a new default assignee, a field
+  declaration, an archive. The project's settings changing is not its work
+  changing.
+- A task **moved between projects** counts against the project it moved *to*,
+  which is where a reader following it up will look. Both projects' counts move.
+
+A project nobody has filed work into reports **no last change at all**, rather
+than an instant borrowed from its own creation: "nothing has ever been filed
+here" is the answer, and a made-up date would make an untouched project look
+freshly active. A company upgrading to this gets both columns filled from the
+change history it already holds, so no project reads as untouched because of
+when the engine was updated.
+
 ## Tasks
 
 | Field | What it is |
@@ -421,7 +460,7 @@ that container a seat owns, and one about CHANGE rather than about state:
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
-| `list_projects` | every project work is filed into, with how much open work each holds and who leads it |
+| `list_projects` | every project work is filed into, with how much open work each holds, when its work last changed and who changed it, and who leads it. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
 | `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
@@ -580,9 +619,25 @@ work sits in projects that unit owns.
 
 ## What a person can do
 
-**The dashboard** renders the board, the list, the calendar, the timeline, the
-table and the trash over the same queries a seat's tools use, against this
-node's own copy. Every answer says how far behind that copy is.
+**The dashboard** renders the same queries a seat's tools use, against this
+node's own copy, and every answer says how far behind that copy is. It is four
+screens rather than one:
+
+- **All work** (`#/work`) is the list. Two menus decide what is on it and how
+  it is drawn — **Filter** adds a narrowing, and each one is a removable chip
+  under the bar; **Display** holds the shape (list, board, table, calendar,
+  timeline), the grouping, the order and, on a table, the columns. The trash is
+  a filter here rather than a tab, which is what the engine says it is: a
+  listing carrying `removed=true`. The strip above the bar holds the views
+  somebody SAVED, never the five shapes.
+- **Projects** (`#/work/projects`) is the directory: every project with its
+  lead, the unit that owns it, its three maintained counts, how far along it is
+  and when its work last changed.
+- **History** (`#/work/history`) is the change log over a window you choose,
+  with the kinds and the authors on this page as facets.
+- **A project** (`#/work/{KEY}`) opens on its work, with an **Overview** lens
+  for what the container itself declares — its statuses, its types, its labels
+  and its fields — and a **History** lens narrowed to it.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
 `/operator/mcp`. It serves the same work tools above, ten more no seat is
@@ -832,9 +887,14 @@ screen: the notices `work_inbox` returns, each labelled with the one reason of
 twenty that routed it, beside what is waiting on a decision. Which person is
 decided by the API token — it is matched against every seat's
 `contact.crewlet_operator_id`, so the queue is theirs rather than the
-alphabetically first seat's — and `#/me` is that same person's own work, their
-priorities, asks and checklists. See [Humans in the
-org](../concepts/humans-in-the-org.md) for the binding.
+alphabetically first seat's — and `#/me` is that same person's own work: seven
+tabs, one per claim on their attention, each carrying its count on the strip so
+an unanswered question is visible without opening it. The **Assigned** tab is
+the tracker's own question rather than a bounded block, so it pages and counts
+like any other list, and it is banded by WHEN the work is due — overdue,
+today, this week, later, no date — because that is what somebody opens their
+own day to ask. See [Humans in the org](../concepts/humans-in-the-org.md) for
+the binding.
 
 The marks are the ASSISTANT'S. The dashboard is read-only, because every write
 here is attributed to somebody and a button in a browser would write as "the

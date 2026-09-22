@@ -14,7 +14,7 @@
  */
 
 import type { ReactNode } from "react";
-import { Avatar, Callout, Tag, cx } from "@crewlethq/ui";
+import { Avatar, Callout, Card, Tag, cx } from "@crewlethq/ui";
 import {
   ArrowUpwardGlyph,
   CalendarTodayGlyph,
@@ -278,6 +278,7 @@ export function WorkRow({
   selected,
   now,
   chrome = {},
+  keyOf,
 }: {
   row: WorkSummary;
   href: string;
@@ -285,6 +286,9 @@ export function WorkRow({
   selected?: boolean;
   now: number;
   chrome?: RowChrome;
+  /** A blocker's KEY from its id, where this list holds its row — see
+   *  [blockedBy]. */
+  keyOf?: (id: string) => string | undefined;
 }) {
   return (
     <a
@@ -292,32 +296,37 @@ export function WorkRow({
       href={href}
       onClick={rowPeekHandler(onOpen)}
     >
-      <TypeIcon type={row.type} types={chrome.types} />
-      <span className="work-key mono">{row.key}</span>
-      <span className="work-row-title truncate">
-        {row.title}
-        {row.blocked && (
-          <Tag variant="danger" appearance="outline">
-            Blocked
-          </Tag>
-        )}
-      </span>
-      {/* EVERY CELL EXISTS EVEN WHEN ITS VALUE DOES NOT. The marks below
-          each render nothing for an absent value — which is right on a
-          CARD, where they sit in inline flow — but this row is a grid,
-          and a child that disappears takes its track with it and pulls
-          every column after it one place left. So the row owns the cells
-          and the marks only decide what goes in them: an unestimated,
-          undated, unassigned task still lines its status up with the
-          task above it. */}
-      <span className="work-cell work-cell-status">
-        <StatusBadge status={row.status} defs={chrome.statuses} />
-      </span>
+      {/* EVERY CELL EXISTS EVEN WHEN ITS VALUE DOES NOT. The marks below each
+          render nothing for an absent value — which is right on a CARD, where
+          they sit in inline flow — but this row is a grid, and a child that
+          disappears takes its track with it and pulls every column after it one
+          place left. So the row owns the cells and the marks only decide what
+          goes in them: an unestimated, undated, unassigned task still lines its
+          status up with the task above it. */}
       <span className="work-cell work-cell-prio">
         <PriorityMark priority={row.priority} />
       </span>
+      <span className="work-key mono">{row.key}</span>
+      <span className="work-cell work-cell-status">
+        <StatusBadge status={row.status} defs={chrome.statuses} />
+      </span>
+      <span className="work-row-title truncate">
+        {row.title}
+        {/* WHICH TASK HOLDS THIS ONE UP, not merely that something does. The
+            row carries the edges, so the badge names the blocker a reader can
+            go to — and it names the first of them rather than all, because a
+            row is one line and a task waiting on four is still one fact. */}
+        {row.blocked && (
+          <Tag variant="danger" appearance="outline">
+            {blockedBy(row, keyOf)}
+          </Tag>
+        )}
+      </span>
       <span className="work-cell work-cell-due">
         <DueMark due={row.due} overdue={row.overdue} now={now} />
+      </span>
+      <span className="work-cell work-cell-type">
+        <TypeIcon type={row.type} types={chrome.types} />
       </span>
       <span className="work-cell work-cell-who">
         <Assignee handle={row.assignee} seatName={chrome.seatName} />
@@ -327,6 +336,31 @@ export function WorkRow({
       </span>
     </a>
   );
+}
+
+/**
+ * What a blocked task is waiting on, in the room one line has.
+ *
+ * A bare "Blocked" made every blocked task look alike on a list whose whole
+ * purpose is telling them apart, and the row already carries the edges
+ * (`waiting_on`) — so this names how many hold it up, and WHICH where it can.
+ *
+ * AN EDGE CARRIES AN ID AND NOT A KEY, deliberately: it is drawn between two
+ * rows on one page and `WorkSummary.id` is what they are matched on. So a
+ * blocker the caller's own filter excluded is an id this list holds no row for,
+ * and the honest rendering is the count rather than an invented key. That is
+ * also why the resolver is the LIST's — only a list knows which rows it has.
+ */
+function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | undefined): string {
+  // `open` IS THE FLAG THE EDGE CARRIES, and `false` is a settled fact rather
+  // than a missing one — the blocker has finished. An edge that says nothing is
+  // counted as open, because `blocked` on the row is exactly "some entry here
+  // is open" and the two must not disagree.
+  const held = (row.waiting_on ?? []).filter((edge) => edge.open !== false);
+  if (held.length === 0) return "Blocked";
+  const named = held.map((edge) => keyOf?.(edge.id)).find(Boolean);
+  if (!named) return held.length > 1 ? `Blocked · ${held.length}` : "Blocked";
+  return held.length > 1 ? `Blocked · ${named} +${held.length - 1}` : `Blocked · ${named}`;
 }
 
 /** A stack of rows under a heading, absent when it holds nothing. */
@@ -345,6 +379,12 @@ export function RowList({
   onOpen?: (row: WorkSummary) => void;
   selected?: string;
 }) {
+  // THE LIST IS WHAT CAN RESOLVE AN EDGE. A dependency names the blocking
+  // task's id, and the key a reader recognises is on that task's own row — so
+  // only a component holding the rows can turn one into the other. Built once
+  // per list rather than per row, because a lookup rebuilt inside the map is
+  // quadratic over a page of a hundred.
+  const keys = new Map(rows.map((row) => [row.id, row.key]));
   return (
     <div className="work-rows">
       {rows.map((row) => (
@@ -356,6 +396,7 @@ export function RowList({
           href={hrefOf(row)}
           selected={selected === row.key}
           onOpen={onOpen ? () => onOpen(row) : undefined}
+          keyOf={(id) => keys.get(id)}
         />
       ))}
     </div>
@@ -497,23 +538,43 @@ export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
   );
 }
 
-/** A labelled fact, in the one shape the head and the properties panel share. */
-export function Fact({
-  label,
-  children,
-  icon,
+/**
+ * A stack of tasks under a heading, as a card.
+ *
+ * THE SCREEN CHOOSES THE FRAME AND THIS IS ONE OF THEM. A seat's page stacks
+ * several of these among other cards, so a heading and a count are what tell
+ * one block from the next; My work draws the same rows under a TAB, where a
+ * card inside a tab panel is a second boundary around a thing that already has
+ * one. Both render [RowList], so a task looks the same wherever it appears.
+ *
+ * ABSENT WHEN IT HOLDS NOTHING, which is right for a stack: a page of seven
+ * "nothing here" panels buries the one that has something. A tab cannot do
+ * that — it would take its own name off the strip — which is why My work draws
+ * an empty state instead of this.
+ */
+export function TaskBlock({
+  title,
+  hint,
+  rows,
+  now,
+  chrome,
+  hrefOf,
 }: {
-  label: ReactNode;
-  children: ReactNode;
-  icon?: ReactNode;
+  title: string;
+  hint?: string;
+  rows: WorkSummary[];
+  now: number;
+  chrome?: RowChrome;
+  /** Where a row goes. The screen owns the address. */
+  hrefOf: (row: WorkSummary) => string;
 }) {
+  if (rows.length === 0) return null;
   return (
-    <div className="work-fact">
-      <div className="work-fact-label">{label}</div>
-      <div className="work-fact-value truncate">
-        {icon}
-        {children}
-      </div>
-    </div>
+    <Card padding="none">
+      <Card.Header subtitle={hint} count={rows.length}>
+        <Card.Title>{title}</Card.Title>
+      </Card.Header>
+      <RowList rows={rows} now={now} chrome={chrome} hrefOf={hrefOf} />
+    </Card>
   );
 }

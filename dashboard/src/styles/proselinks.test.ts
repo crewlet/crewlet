@@ -48,12 +48,19 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
-    where: "routes/work/Work.tsx",
+    where: "routes/work/shapes/Board.tsx",
     why:
-      "The two `N more →` links at the foot of a column and of a group. Each is " +
-      "a standalone call to action on its own line, not a word in a sentence, and " +
-      "`.work-col-foot a` draws it — so the reset is right and there is no prose " +
-      "for an underline to separate it from.",
+      "The `N more →` link at the foot of a column. It is a standalone call to " +
+      "action on its own line, not a word in a sentence, and `.work-col-foot a` " +
+      "draws it — so the reset is right and there is no prose for an underline " +
+      "to separate it from.",
+  },
+  {
+    where: "routes/work/shapes/List.tsx",
+    why:
+      "The same `N more →` link at the foot of a band, drawn by " +
+      "`.work-band-foot a` for the reason the board's entry above gives. The two " +
+      "shapes draw one answer and the link means the same thing in both.",
   },
   {
     where: "routes/knowledge/Pages.tsx",

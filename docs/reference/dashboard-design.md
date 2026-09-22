@@ -237,6 +237,41 @@ paragraph: every destination has a path of its own, no two share one, each
 resolves to the workspace it declares, no two workspaces own a first segment,
 and no reserved segment has the shape of a key the engine mints.
 
+### A filter is a chip; an arrangement is a menu
+
+The grammar above says where a control LIVES. This says what a control is, and
+it is the boundary the work screens lost first: a bar of eleven controls, five
+of which were pickers drawn whether or not they were set, so the two that were
+narrowing looked exactly like the nine that were not — and which of them
+appeared depended on the shape, so one switch sat at three different places on
+three tabs.
+
+Two kinds, and nothing is both:
+
+- A **filter** narrows the answer. It is added from one **Filter** menu, it is
+  drawn as a removable **chip** under the bar, and there is no chip for a
+  filter that is off — so an unfiltered list has no chip row at all. Taking a
+  chip off clears the one URL key it names.
+- An **arrangement** decides how the same answer is DRAWN — the shape, the
+  grouping, the order, a table's columns. All of it lives in one **Display**
+  menu, whose button says what is on, so the arrangement is readable without
+  opening anything.
+
+The one control outside both is the **scope** switch (open / closed /
+everything), which is always set to something: as a chip it would either be
+permanently present, which is not a chip, or absent on its default, which hides
+the one segment that decides whether finished work is on screen at all. Its
+third value has a NAME (`all`) rather than the empty string, because a key set
+to `""` is a key the router deletes — so the segment snapped back to its
+fallback on the next render, and the one segment whose whole job is to show
+finished work could not be selected.
+
+A **saved view** is neither: it is a query somebody arranged and put somewhere,
+so it is a tab in the strip. The five shapes are not tabs beside it — a shape
+is a way of drawing any query, and mixed into one strip the two read as the
+same kind of thing. That is also why `view=` and `shape=` are two keys:
+switching a saved board to a list must not throw the saved filters away.
+
 **Reserved segments cannot collide with keys.** Project and container keys are
 uppercase (`ENG`), item keys are `KEY-n`, everything else the engine mints is a
 uuid — and every reserved segment is lowercase. That is what lets `#/work/views`
@@ -342,11 +377,13 @@ because every single-modifier combination worth having is already the browser's.
 | Route | Page | Tabs / views |
 |---|---|---|
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
-| `#/me` | **My work** — the seven claims, plus what reached you | `handle=` (an operator reading somebody else's day) |
-| `#/work` | **All work** | `view=list\|board\|calendar\|timeline\|table\|trash` + the filter grammar |
+| `#/me` | **My work** — the seven claims on one person's attention | `tab=assigned\|priorities\|asks\|unblocked\|collaborating\|watching\|checklist` · `handle=` (an operator reading somebody else's day) |
+| `#/work` | **All work** | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` + the filter grammar |
+| `#/work/projects` | **Projects** — the directory: every project, its lead, its counts and how far along it is | `shown=active\|archived\|all` · `sort=` |
+| `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
-| `#/work/{KEY}` | **Project** | the same view strip, scoped to the project |
+| `#/work/{KEY}` | **Project** | `lens=items\|overview\|history` · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` (which change's routing) |
 | `#/company` | **Company** — the charter, the chart, and editing them | `lens=chart\|charter\|builder` (builder is *(operator)*) · `unit=` · `seat=` |
 | `#/company/people` | **People** — the one directory, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |

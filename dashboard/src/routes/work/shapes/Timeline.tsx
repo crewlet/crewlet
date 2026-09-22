@@ -24,7 +24,7 @@ import {
   type Timeline,
   type TimelineBar,
 } from "~/lib/timeline.ts";
-import { Assignee, PriorityMark, TypeIcon, type RowChrome } from "./work.tsx";
+import { Assignee, PriorityMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
 import { EmptyState, Tag, cx } from "@crewlethq/ui";
 import { TimelineGlyph } from "@crewlethq/icons/glyphs";
 import { plural } from "~/lib/format.ts";

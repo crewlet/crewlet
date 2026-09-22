@@ -112,13 +112,24 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		// through the project DOCUMENT, which this same upsert writes,
 		// and the relational copy that used to hold both scopes'
 		// declarations was rewritten per apply and read by nothing.
+		//
+		// THE MAINTAINED COLUMNS ARE LITERALS ON THE INSERT AND ABSENT
+		// FROM THE UPDATE, which is the whole of how a project document
+		// and the work filed into it stay separate: a create starts the
+		// census at zero and the last-change stamp at NOTHING — a
+		// project somebody has just declared has no work, and stamping
+		// its own creation would report every empty project as freshly
+		// active — and a later rename, a move between units or an
+		// archive leaves both alone, because the project's settings
+		// changing is not its work changing.
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_projects
 				(key, name, purpose, unit, chart_epoch, default_assignee,
 				 policy_version, archived, rank_respread_pending,
 				 rank_duplicate_pending, open_count, done_count, closed_count,
-				 created_at, updated_at, version, document)
-			VALUES (?,?,?,?,?,?,?,?,0,0,0,0,0,?,?,?,?)
+				 last_change_at, last_change_actor, last_change_actor_kind,
+				 last_change_seq, created_at, updated_at, version, document)
+			VALUES (?,?,?,?,?,?,?,?,0,0,0,0,0,NULL,'','',0,?,?,?,?)
 			ON CONFLICT (key) DO UPDATE SET
 				name = excluded.name, purpose = excluded.purpose,
 				unit = excluded.unit, chart_epoch = excluded.chart_epoch,

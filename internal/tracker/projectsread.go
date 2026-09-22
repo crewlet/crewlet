@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Reading a company's projects — the listing, and one project in full.
@@ -21,6 +22,12 @@ import (
 // over every task in every project — ran on every sixty-second dashboard poll
 // and was O(all tasks) for a number that changes on a handful of commits an
 // hour.
+//
+// `last_change` is the same bargain on the same row: the newest task commit's
+// instant and actor, written by the apply that writes the project's history
+// row ([Applier.stampProjectChange]) rather than sought per project per poll
+// in a table nothing ever sweeps. It is ABSENT rather than zero for a project
+// no work has been filed into — see [LastChange].
 //
 // # Both of these are SET reads
 //
@@ -78,6 +85,35 @@ type TaskCounts struct {
 	Closed int `json:"closed"`
 }
 
+// LastChange is when a project's work last changed and who changed it.
+//
+// MAINTAINED beside the counts and on the same terms — see
+// [Applier.stampProjectChange], which is the authority on which commits move
+// it. The instant is the AUTHORED one, which is what every other "when did
+// this last change" on these rows carries and what the activity feed displays
+// for the same commit.
+//
+// A POINTER, because a project nobody has filed work into has no answer and
+// the honest report of that is an ABSENCE. A zero instant here would render as
+// the year 1 on every empty project, and an instant defaulted to the project's
+// own creation would report a directory of untouched projects as freshly
+// active — both are a made-up value where the truth is "nothing yet".
+type LastChange struct {
+	At time.Time `json:"at"`
+
+	// Actor is the handle the commit was made under, and ActorKind which
+	// of the four kinds that handle belongs to. Both are the commit's
+	// own, so `ana` the person and `ana` the seat are distinguishable —
+	// a directory draws them differently, and an `operator` write is a
+	// token acting for the company rather than anybody's seat.
+	//
+	// Either may be empty: a record can carry no actor at all, and a
+	// change that happened with nobody named is still a change. The
+	// instant is what says the answer exists.
+	Actor     string     `json:"actor,omitempty"`
+	ActorKind AuthorKind `json:"actor_kind,omitempty"`
+}
+
 // ProjectRow is one project as a listing renders it.
 type ProjectRow struct {
 	Key     string `json:"key"`
@@ -89,6 +125,10 @@ type ProjectRow struct {
 
 	DefaultAssignee string     `json:"default_assignee,omitempty"`
 	Counts          TaskCounts `json:"task_counts"`
+
+	// LastChange is nil for a project no work has ever been filed into —
+	// see [LastChange].
+	LastChange *LastChange `json:"last_change,omitempty"`
 
 	Archived bool   `json:"archived,omitempty"`
 	Version  uint64 `json:"version"`
@@ -115,12 +155,39 @@ type ProjectListing struct {
 
 // MaxProjectsPerAnswer is how many projects one listing carries.
 //
-// TWO HUNDRED, which is ≈ 30 KB of rows and is the seat tool's own ceiling. A
-// company with more projects than that has a chart problem rather than a
-// paging problem, and the answer says `truncated` and `total` rather than
-// offering a cursor nobody would page: every screen that draws projects draws
-// all of them.
+// TWO HUNDRED, which is what a SCREEN takes: a company with more projects than
+// that has a chart problem rather than a paging problem, and the answer says
+// `truncated` and `total` rather than offering a cursor nobody would page —
+// every screen that draws projects draws all of them.
+//
+// IT IS NOT THE SEAT TOOL'S CEILING, although it said it was. Measured, an
+// ordinary row — an eight-character key, a twenty-character name, a
+// forty-character purpose, a resolved unit, a lead and a default assignee —
+// encodes at ≈ 610 bytes as a tool answer renders it (indented), so two
+// hundred of them is ≈ 93 KiB against a 64 KiB ceiling and the call is REFUSED
+// for weight somewhere around a hundred and forty projects. That is what
+// [MaxProjectsPerToolAnswer] is for.
 const MaxProjectsPerAnswer = 200
+
+// MaxProjectsPerToolAnswer is how many a SEAT's listing carries.
+//
+// FIFTY, and the figure is measured rather than round. A tool answer is read
+// by a model out of the same context window as everything else in the turn,
+// and `builtin.ToolAnswerBytes` REFUSES one past 64 KiB rather than cutting it
+// — so a cap that does not fit is not a large answer, it is a call that
+// returns nothing but advice to narrow. At ≈ 610 bytes a row these fifty
+// encode at ≈ 30 KiB, which leaves room for rows twice as long as the ones
+// measured (a company writes prose into a unit's purpose and nothing caps it)
+// before the tripwire is anywhere near.
+//
+// It is a PAGE rather than a refusal, on [MaxCatalogueOptions]'s own
+// reasoning: the answer carries `total` beside `truncated`, so a seat is told
+// what it is not seeing and has `q` and `unit` to narrow with. Fifty projects
+// is already more of a company than one answer can usefully teach a model.
+//
+// `TestEveryToolAnswerFitsToolAnswerBytes` is what re-measures this when the
+// row grows a field.
+const MaxProjectsPerToolAnswer = 50
 
 // ProjectQuery asks for a company's projects.
 type ProjectQuery struct {
@@ -250,7 +317,8 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 	rows, err := tx.QueryContext(ctx, `
 		SELECT p.key, p.name, p.purpose, p.unit, p.default_assignee,
 		       p.open_count, p.done_count,
-		       p.closed_count, p.archived, p.version
+		       p.closed_count, p.last_change_at, p.last_change_actor,
+		       p.last_change_actor_kind, p.archived, p.version
 		FROM tracker_projects p`+clause+`
 		ORDER BY p.key
 		LIMIT ?`, append(args, limit)...)
@@ -264,13 +332,16 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 		var row ProjectRow
 		var unit string
 		var archived int
+		var change lastChangeColumns
 		if err := rows.Scan(&row.Key, &row.Name, &row.Purpose, &unit,
 			&row.DefaultAssignee, &row.Counts.Open,
-			&row.Counts.Done, &row.Counts.Closed, &archived,
+			&row.Counts.Done, &row.Counts.Closed, &change.At,
+			&change.Actor, &change.ActorKind, &archived,
 			&row.Version); err != nil {
 			return nil, 0, fmt.Errorf("tracker: scan a project: %w", err)
 		}
 		row.Archived = archived != 0
+		row.LastChange = change.value()
 		row.Unit, row.Lead = resolveUnit(q.Units, unit)
 		out = append(out, row)
 	}
@@ -278,6 +349,30 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 		return nil, 0, fmt.Errorf("tracker: read the projects: %w", err)
 	}
 	return out, total, nil
+}
+
+// lastChangeColumns is the three columns as they come off the row.
+//
+// THE INSTANT IS THE NULLABLE ONE and the two strings are NOT NULL with an
+// empty default, which is the same division the columns are declared with:
+// "nothing has been filed here" is one fact, and "the commit named nobody" is
+// a different one that must not be able to hide it.
+type lastChangeColumns struct {
+	At        sql.NullInt64
+	Actor     string
+	ActorKind string
+}
+
+// value is the answer, or nil for a project with no work.
+func (c lastChangeColumns) value() *LastChange {
+	if !c.At.Valid {
+		return nil
+	}
+	return &LastChange{
+		At:        store.DecodeTime(c.At.Int64),
+		Actor:     c.Actor,
+		ActorKind: AuthorKind(c.ActorKind),
+	}
 }
 
 // resolveUnit renders a project's chart-owned unit against the chart.
@@ -455,13 +550,23 @@ func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
 	out.Version = project.Version
 	out.Unit, out.Lead = resolveUnit(q.Units, project.Unit)
 
+	// THE MAINTAINED COLUMNS ARE NOT ON THE DOCUMENT, so they are read
+	// from the row rather than decoded with everything above: the census
+	// and the last change are what the APPLIER derives from the work
+	// filed into the project, and the document is what a writer stated
+	// about the project itself.
+	var change lastChangeColumns
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := tx.QueryRowContext(ctx, `
-		SELECT open_count, done_count, closed_count FROM tracker_projects
+		SELECT open_count, done_count, closed_count, last_change_at,
+		       last_change_actor, last_change_actor_kind
+		FROM tracker_projects
 		WHERE key = ?`, key).Scan(&out.Counts.Open, &out.Counts.Done,
-		&out.Counts.Closed); err != nil {
+		&out.Counts.Closed, &change.At, &change.Actor,
+		&change.ActorKind); err != nil {
 		return fmt.Errorf("tracker: read the task counts of %s: %w", key, err)
 	}
+	out.LastChange = change.value()
 
 	out.Statuses = statusDefs()
 

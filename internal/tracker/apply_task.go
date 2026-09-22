@@ -897,34 +897,49 @@ func (a *Applier) maintainProjectCounts(ctx context.Context, tx *sql.Tx,
 	}
 	written := 0
 	if was != "" {
-		res, err := tx.ExecContext(ctx, fmt.Sprintf(
-			`UPDATE tracker_projects SET %s_count = MAX(%s_count - 1, 0) WHERE key = ?`,
-			was, was), current.Project)
-		if err != nil {
-			return 0, fmt.Errorf("tracker: lower the %s count of %s: %w",
-				was, current.Project, err)
-		}
-		n, err := affected(res)
+		n, err := moveProjectCount(ctx, tx, was, current.Project, -1)
 		if err != nil {
 			return 0, err
 		}
 		written += n
 	}
 	if is != "" {
-		res, err := tx.ExecContext(ctx, fmt.Sprintf(
-			`UPDATE tracker_projects SET %s_count = %s_count + 1 WHERE key = ?`,
-			is, is), next.Project)
-		if err != nil {
-			return 0, fmt.Errorf("tracker: raise the %s count of %s: %w",
-				is, next.Project, err)
-		}
-		n, err := affected(res)
+		n, err := moveProjectCount(ctx, tx, is, next.Project, +1)
 		if err != nil {
 			return 0, err
 		}
 		written += n
 	}
 	return written, nil
+}
+
+// moveProjectCount moves one of the three maintained counters by one.
+//
+// ONE STATEMENT BUILDER FOR THE THREE CALLERS — a task entering a bucket, a
+// task leaving one, and the purge that deletes the row instead of writing one.
+// The bucket is always [bucketOf]'s own closed answer and never a value off
+// the wire, which is what makes interpolating it into the column name safe: a
+// column cannot be a parameter.
+//
+// The decrement CLAMPS AT ZERO. A negative census is a number no screen can
+// render and no repair can interpret, and the clamp costs nothing on the path
+// where the count is right.
+func moveProjectCount(ctx context.Context, tx *sql.Tx, bucket, project string,
+	by int) (int, error) {
+
+	set := fmt.Sprintf(`%s_count = %s_count + 1`, bucket, bucket)
+	verb := "raise"
+	if by < 0 {
+		set = fmt.Sprintf(`%s_count = MAX(%s_count - 1, 0)`, bucket, bucket)
+		verb = "lower"
+	}
+	res, err := tx.ExecContext(ctx,
+		`UPDATE tracker_projects SET `+set+` WHERE key = ?`, project)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: %s the %s count of %s: %w",
+			verb, bucket, project, err)
+	}
+	return affected(res)
 }
 
 // bucketOf is which maintained count a task belongs to, or empty for a task
@@ -976,7 +991,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	// The row is read BEFORE it is deleted, because the marker records
 	// what the task WAS: a deletion whose key and project are empty is a
 	// marker nobody can resolve back to anything.
-	task, _, err := readTask(ctx, tx, id)
+	task, held, err := readTask(ctx, tx, id)
 	if err != nil {
 		return 0, err
 	}
@@ -987,6 +1002,30 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return 0, err
 	}
 	written := 0
+	// AND THE PROJECT'S CENSUS COMES DOWN WITH THE ROW.
+	//
+	// Every other departure from a bucket is a task RECORD and goes
+	// through [Applier.maintainProjectCounts]; a purge deletes the row
+	// instead of writing one, so nothing lowered the count it was in. A
+	// task purged while it was open left `open_count` one too high on
+	// every node — for ever, because these counts are MAINTAINED and
+	// nothing anywhere aggregates them back into agreement — and a purge
+	// does not require the task to have been removed first, so this is
+	// the ordinary shape rather than a corner of one.
+	//
+	// GATED ON THE ROW HAVING BEEN HERE, because the deletion gate lets
+	// this record's own redelivery through by op id (it is what wrote the
+	// marker) and every statement below is then a no-op. A second
+	// decrement would take the census one BELOW the truth, which is the
+	// half the clamp in [moveProjectCount] cannot see.
+	if bucket := bucketOf(task); held && bucket != "" {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		n, err := moveProjectCount(ctx, tx, bucket, task.Project, -1)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
 	for _, statement := range []struct {
 		sql  string
 		args []any

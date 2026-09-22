@@ -34,6 +34,9 @@ import { SeatScreen } from "~/routes/company/Seat.tsx";
 import { CompanyScreen, UnitScreen } from "~/routes/company/Company.tsx";
 import { Runs } from "~/routes/activity/Runs.tsx";
 import { Work } from "~/routes/work/Work.tsx";
+import { Project } from "~/routes/work/Project.tsx";
+import { Projects } from "~/routes/work/Projects.tsx";
+import { History } from "~/routes/work/History.tsx";
 import { WorkItem } from "~/routes/work/WorkItem.tsx";
 import { SavedViews } from "~/routes/work/SavedViews.tsx";
 import { WorkSearch } from "~/routes/work/WorkSearch.tsx";
@@ -62,14 +65,24 @@ import { NotFound } from "~/routes/NotFound.tsx";
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]*$/;
 
 function WorkRoutes({ rest }: { rest: string[] }) {
-  const [first, second, third] = rest;
+  const [first, second] = rest;
   if (!first) return <Work />;
   if (first === "views") return second ? <SavedViews key={second} id={second} /> : <SavedViews />;
   if (first === "search") return <WorkSearch />;
+  // THE TWO WORKSPACE-LEVEL LISTS, AND NEITHER TAKES A TAIL. Both answer a
+  // question about the whole company — which projects there are, and what has
+  // changed — so there is nothing under them to address: a project has its own
+  // route one line down, and a change is a record on the item it changed.
+  // Rendering the list with the tail dropped would put a trail over it naming
+  // a page nobody routed to, which is the defect the Admin arms record.
+  if (first === "projects" || first === "history") {
+    if (second) return <NotFound what={`“${rest.join("/")}” under Work`} />;
+    return first === "projects" ? <Projects /> : <History />;
+  }
   // A PROJECT OR AN ITEM — decided by the SHAPE of the key rather than by a
   // lookup, so the route resolves before any answer arrives.
   if (PROJECT_KEY.test(first)) {
-    return <Work key={first} project={first} />;
+    return <Project key={first} projectKey={first} />;
   }
   // A key or an id BOTH resolve, because the reader has whichever they were
   // shown: a person pastes ENG-42 out of chat, and every internal link carries

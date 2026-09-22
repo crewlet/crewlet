@@ -375,13 +375,18 @@ can read one while the next is running.
 Follow the turn to **Work** and **Knowledge**. Both are the engine's own —
 `tracker.backend` and `knowledge.backend` default to `native`, so your company
 has a tracker and a wiki from its first minute with nothing to set up. A seat
-files with `create_work_item` and writes with `write_page`; a board row opens
-the item beside the board, and ⌘-click opens its page.
+files with `create_work_item` and writes with `write_page`; a row opens the
+item beside the list, and ⌘-click opens its page. **Filter** and **Display** in
+the bar decide what is on the list and how it is drawn — a board, a table, a
+calendar or a timeline over the same rows — and **Projects** beside it is the
+directory of what your units have declared.
 
 **Bind your token to your seat** and the personal screens become yours: give a
 human seat `contact.crewlet_operator_id` matching one of your
 `api.auth.tokens[].id`, and **My work** and the **Inbox** answer for that
-person. Until then the dashboard says so rather than guessing — an unbound
+person. My work is one tab per claim on somebody's attention — what they hold,
+the order somebody put it in, the questions waiting on them — with every count
+on the strip. Until then the dashboard says so rather than guessing: an unbound
 token is an ordinary state, not a fault.
 
 Your own AI assistant can read and write the same records over MCP. Point any

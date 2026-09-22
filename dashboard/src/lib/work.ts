@@ -221,6 +221,8 @@ export interface LabelContext {
   types?: WorkTypeDef[];
   tags?: WorkProjectTag[];
   seatName?: (handle: string) => string;
+  /** The company's own fields, so a chip over one can say what it is called. */
+  fields?: WorkFieldDef[];
 }
 
 /**
@@ -233,8 +235,22 @@ export interface LabelContext {
  * either as a blank heading leaves a column of work nobody can name.
  */
 export function groupLabel(axis: string, group: WorkGroup, ctx: LabelContext = {}): string {
-  const key = group.key;
+  // THE SERVER'S OWN WORD WINS, where it gave one — it is the only party that
+  // can label a key this build has never heard of.
   if (group.label) return group.label;
+  return axisLabel(axis, group.key, ctx);
+}
+
+/**
+ * ONE VALUE OF ONE AXIS, in the company's own words.
+ *
+ * Split out of [groupLabel] because two surfaces now ask it and only one of
+ * them holds a `WorkGroup`: a column head has the group the answer returned,
+ * and a filter chip has nothing but the key out of the URL. Spelled a second
+ * time for the chip, a board narrowed to one column would have been headed
+ * "Ada Okonkwo" and chipped `ada-okonkwo` on the same screen.
+ */
+export function axisLabel(axis: string, key: string, ctx: LabelContext = {}): string {
   switch (axis) {
     case "status":
       return key ? statusLabel(key, ctx.statuses) : "No status";
@@ -255,6 +271,40 @@ export function groupLabel(axis: string, group: WorkGroup, ctx: LabelContext = {
   }
 }
 
+/**
+ * What an ARRANGEMENT control writes when the reader chooses none of it.
+ *
+ * THE EMPTY STRING MEANS "INHERIT", not "off", and the two are different
+ * answers wherever a saved view supplies a default. `buildItemsParams` resolves
+ * an arrangement as "the reader's, or the view's" — so a control writing `""`
+ * dropped the key and handed the question straight back to the view: a view
+ * grouping by assignee could not be ungrouped at all, because every attempt
+ * cleared the override and re-applied the view's own. The scope segment's
+ * third value has a name for exactly this reason; so does this.
+ *
+ * It never reaches the wire. `none` is not an axis or a sort key the engine
+ * has, and [buildItemsParams] resolves it to the absence of the key rather
+ * than sending it.
+ */
+export const EXPLICIT_NONE = "none";
+
+/**
+ * What an arrangement is actually set to: the reader's choice, the view's, or
+ * nothing.
+ *
+ * ONE RESOLVER for the grouping, the second grouping and the order, because
+ * all three are the same three-way question and a spelling per key is how one
+ * of them came to answer it differently. The PICKERS read this too, so the
+ * control shows what the query was sent with rather than what the URL happens
+ * to hold — which is the other half of the same defect: a saved view's
+ * grouping was in force while its picker sat on "No grouping".
+ */
+export function effectiveArrangement(asked: string, inherited: unknown): string {
+  if (asked === EXPLICIT_NONE) return "";
+  if (asked) return asked;
+  return typeof inherited === "string" ? inherited : "";
+}
+
 /** The axes a board may be cut on, with what each is called in the picker. */
 export const GROUP_AXES: { value: string; label: string }[] = [
   { value: "status", label: "Status" },
@@ -264,6 +314,11 @@ export const GROUP_AXES: { value: string; label: string }[] = [
   { value: "type", label: "Type" },
   { value: "tag", label: "Tag" },
 ];
+
+/** What an axis is CALLED, or "" for one this build does not offer. */
+export function axisName(axis: string): string {
+  return GROUP_AXES.find((a) => a.value === axis)?.label ?? "";
+}
 
 /** The orderings a list may ask for. */
 export const SORTS: { value: string; label: string }[] = [
@@ -551,13 +606,51 @@ export interface TrackerFilters {
   type: string;
   priority: string;
   assignee: string;
-  /** `open` (the default), `closed`, or empty for everything. */
+  /** One of the PROJECT's own labels — the set is a project's, never the
+   *  company's, so this narrows only where that set is known. */
+  tag: string;
+  /** One of [SCOPES]: `open` (the default), `closed` or `all`. */
   scope: string;
   groupBy: string;
+  /** The SECOND axis, drawn as bands inside the first — see [buildItemsParams]. */
+  groupBy2: string;
   group: string;
   sort: string;
   blocked: boolean;
-  overdue: boolean;
+  /**
+   * WHEN it is due, as the grammar's one `due` key.
+   *
+   * ONE KEY, NOT TWO. The bar carried an Overdue switch writing `overdue=true`
+   * while the grammar has a single `due` parameter that the calendar's own
+   * window also spends — so a screen offering both a switch and a date filter
+   * would have had two URL keys competing for one wire parameter and a
+   * precedence rule between them that nothing could state on screen. Overdue
+   * is now what it is on the wire: one value of this filter
+   * (`internal/tracker/dates.go` resolves it, carrying the open-status
+   * condition with it), beside the engine's own aliases.
+   */
+  due: string;
+  /**
+   * The trash, AS A FILTER, because that is what the engine says it is.
+   *
+   * `internal/tracker/viewsread.go`: "what makes it the trash is `removed=true`
+   * … any view carrying that parameter is a trash listing and a client may
+   * treat it as one". It was a TAB in the view strip beside five shapes — so a
+   * reader could reach removed work only by leaving whatever arrangement they
+   * were in, and a trash of one project's bugs was not expressible at all.
+   */
+  removed: boolean;
+  /**
+   * The company's OWN fields, by `f.<slug>`, exactly as the grammar spells
+   * them.
+   *
+   * A MAP RATHER THAN A KEY EACH, because the set is the company's: a build
+   * that named them would offer the fields it shipped knowing about, which is
+   * none of them. The screen collects every `f.` key off the address and hands
+   * them through — so a saved view's custom-field narrowing, a pasted URL and
+   * the Filter menu are one path rather than three.
+   */
+  fields: Record<string, string>;
 }
 
 export const NO_FILTERS: TrackerFilters = {
@@ -566,15 +659,28 @@ export const NO_FILTERS: TrackerFilters = {
   type: "",
   priority: "",
   assignee: "",
+  tag: "",
   scope: "open",
   groupBy: "",
+  groupBy2: "",
   group: "",
   sort: "",
   blocked: false,
-  overdue: false,
+  due: "",
+  removed: false,
+  fields: {},
 };
 
-/** Whether anything is narrowing the rows, so a Clear control can appear. */
+/**
+ * Whether anything is narrowing the rows, so a Clear control can appear.
+ *
+ * THE ARRANGEMENT IS NOT A NARROWING. `groupBy`, `groupBy2` and `sort` decide
+ * how the same answer is DRAWN — they are the Display menu's, not the filter
+ * chips' — and counting them here made Clear appear over a board nobody had
+ * filtered and then, pressed, flatten the arrangement the reader had chosen
+ * while removing nothing. `group` stays, because narrowing a board to one
+ * column narrows the whole query, totals included.
+ */
 export function anyFilter(f: TrackerFilters): boolean {
   return Boolean(
     f.q ||
@@ -582,11 +688,12 @@ export function anyFilter(f: TrackerFilters): boolean {
     f.type ||
     f.priority ||
     f.assignee ||
-    f.groupBy ||
+    f.tag ||
     f.group ||
-    f.sort ||
     f.blocked ||
-    f.overdue ||
+    f.due ||
+    f.removed ||
+    Object.keys(f.fields).length > 0 ||
     f.scope !== "open",
   );
 }
@@ -630,6 +737,7 @@ export function buildItemsParams(args: {
   set("type", filters.type);
   set("priority", filters.priority);
   set("assignee", filters.assignee);
+  set("tag", filters.tag);
 
   // OPEN AND CLOSED ARE STATUS GROUPS, not a boolean: the four groups are
   // what every rule in the tracker is written at, and `done` and `closed` are
@@ -668,9 +776,51 @@ export function buildItemsParams(args: {
   }
 
   if (filters.blocked) params.blocked = true;
-  if (filters.overdue) params.due = "overdue";
+  // THE GRAMMAR HAS ONE `due`, and the calendar branch below spends it on its
+  // own window — which is why that branch deletes this rather than relying on
+  // assignment order, and why the Filter menu does not offer a due filter on
+  // that shape at all.
+  if (filters.due) params.due = filters.due;
 
-  const axis = filters.groupBy || (typeof view.group_by === "string" ? view.group_by : "");
+  // A REMOVED TASK IS VERY OFTEN A FINISHED ONE, so this carries `show_closed`
+  // exactly as the builtin trash view does — the group predicate is ANDed
+  // unconditionally otherwise (`internal/tracker/read.go`), which is what hid
+  // every removal of anything already done. As a FLOOR rather than an
+  // override, for the reason the scope segment gives above: a view that
+  // narrowed the window it widened to keeps its own value.
+  if (filters.removed) {
+    params.removed = "true";
+    if (!params.show_closed) params.show_closed = "true";
+  }
+
+  // THE COMPANY'S OWN FIELDS, PASSED THROUGH VERBATIM. The grammar for a
+  // custom field is the engine's (`f.<slug>=<op>:<value>`, with the field's own
+  // natural comparison for a bare value), and a client that parsed it here
+  // would be a second copy of a table the engine refuses against — where a
+  // wrong operator is not an error but a clause that matches nothing, which
+  // reads as a board with no work on it.
+  for (const [key, value] of Object.entries(filters.fields)) {
+    if (value) params[key] = value;
+    else delete params[key];
+  }
+
+  const axis = effectiveArrangement(filters.groupBy, view.group_by);
+  // THE SECOND AXIS IS SENT ONLY BESIDE A FIRST, which is the engine's own
+  // refusal (`group_by2 was passed without group_by`) rather than a rule of
+  // ours — and it is dropped where it EQUALS the first, which the engine also
+  // refuses, because every row would then be alone in its own band. The
+  // control cannot offer the first axis as the second, so this covers a
+  // hand-edited URL rather than a reachable state.
+  const axis2 = effectiveArrangement(filters.groupBy2, view.group_by2);
+  // AND THE ORDER IS THE SAME THREE-WAY QUESTION. A view's own `sort` is
+  // spread into `params` above, so the reader's choice has to overwrite it and
+  // their explicit "default order" has to DELETE it — where an empty string
+  // deleted the override instead and handed the view's sort back.
+  const order = effectiveArrangement(filters.sort, view.sort);
+  const setSubAxis = () => {
+    if (axis && axis2 && axis2 !== axis) params.group_by2 = axis2;
+    else delete params.group_by2;
+  };
 
   if (shape === "board") {
     params.group_by = axis || "status";
@@ -678,18 +828,26 @@ export function buildItemsParams(args: {
     delete params.limit;
     delete params.cursor;
     delete params.group;
+    // NO SECOND AXIS ON A BOARD. A board's second axis is a swimlane GRID —
+    // cells, a cap that is the product of the two axes, and an overflow link
+    // per cell — which is a different drawing rather than a deeper band, and
+    // the Display menu does not offer it here. Sent anyway, by a view or by a
+    // hand-edited URL, it would come back as `subgroups` this shape draws
+    // nothing for: the rows would simply vanish from their columns.
+    delete params.group_by2;
   } else if (shape === "calendar") {
     // THE CALENDAR HAS ITS OWN AXIS, so a grouping brought in by a view is
     // dropped rather than sent: a grouped answer replaces the rows with
     // columns, and a month drawn from columns has nothing in its cells.
     delete params.group_by;
+    delete params.group_by2;
     delete params.group;
     delete params.group_limit;
     // AND ITS AXIS IS THE `due` KEY ITSELF, which the grammar has exactly one of
-    // — so the grid's window and the Overdue chip cannot both be asked for. The
-    // window wins, and the chip is therefore not offered on this shape at all
-    // (see `Work.tsx`): a pressed control whose narrowing is overwritten on the
-    // way to the wire is how a reader concludes their filter matched everything.
+    // — so the grid's window and a due filter cannot both be asked for. The
+    // window wins, and the filter is therefore not offered on this shape at all
+    // (see `FilterMenu`): a chip whose narrowing is overwritten on the way to
+    // the wire is how a reader concludes their filter matched everything.
     // Overdue work inside the window is already tinted in place.
     //
     // WRITTEN AS A DROP RATHER THAN LEFT TO THE OVERWRITE two branches above.
@@ -719,6 +877,10 @@ export function buildItemsParams(args: {
       delete params.group_by;
       delete params.group;
     }
+    // A BAND OF BANDS IS NOT A TIMELINE. Its own axis is the date, and a
+    // second grouping would nest one band inside another down a shared axis —
+    // which is a Gantt swimlane and not what this component draws.
+    delete params.group_by2;
     // MORE ROWS THAN A LIST, because a bar is one line where a list row is
     // three or four and the window is derived from the rows present: a
     // timeline paged at a hundred would draw a different axis on every page.
@@ -726,8 +888,9 @@ export function buildItemsParams(args: {
     // AND IT ARRIVES IN THE AXIS'S OWN ORDER unless the reader asked
     // otherwise, so the bars descend rather than zig-zag. The builtin view
     // carries the same value; this is what holds when a saved view or a
-    // filter change drops it.
-    params.sort = filters.sort || "start";
+    // filter change drops it — and what an explicit "default order" resolves
+    // to here, because a timeline's default IS its date axis.
+    params.sort = order || "start";
     return params;
   } else {
     // THE LIST AND THE TABLE ASK THE SAME QUESTION. They are two arrangements
@@ -742,20 +905,278 @@ export function buildItemsParams(args: {
       delete params.group_by;
       delete params.group;
     }
+    // THE ONE SHAPE PAIR A SECOND AXIS IS DRAWN IN: a band inside a band, down
+    // one column, which is what nesting means where every row is a line.
+    setSubAxis();
     params.limit = 100;
   }
 
   // THE SORT IS OMITTED where nobody asked for one, so the engine's own
   // default applies — the manual order inside a project and the most recently
   // touched across the company, which are two different right answers and
-  // neither is something a client should hard-code.
-  if (filters.sort) params.sort = filters.sort;
+  // neither is something a client should hard-code. A reader who chose that
+  // default over a view's own sort deletes the key the view spread in, which
+  // is what [EXPLICIT_NONE] is for.
+  if (order) params.sort = order;
+  else delete params.sort;
   return params;
 }
 
-/** Where a board column's overflow lands: the same rows as a list. */
+/**
+ * Where a board column's overflow lands: the same rows as a list.
+ *
+ * `shape`, NEVER `view`. The two are different keys now — a view is the saved
+ * QUERY and the shape is how it is drawn — and writing `view=list` here threw
+ * away whichever saved view the reader was on, so following "52 more" out of a
+ * saved board landed them on the container's default filters with the column
+ * narrowing applied to the wrong set.
+ */
 export function filterPatchForGroup(axis: string, key: string): Record<string, string> {
-  return { view: "list", group_by: axis, group: key };
+  return { shape: "list", group_by: axis, group: key };
+}
+
+// ---------------------------------------------------------------------------
+// The filter chips
+// ---------------------------------------------------------------------------
+
+/**
+ * One narrowing the reader applied, as the chip that says so and takes it off.
+ *
+ * WHY CHIPS AT ALL. The bar carried a control per field — a search box and five
+ * selects, each drawn whether or not it was set — so eleven controls stood
+ * between the reader and the rows, the two that were ON looked exactly like the
+ * nine that were not, and a shape that hid a picker (the calendar has no
+ * Group by) moved every control beside it. A chip is drawn only where a filter
+ * is applied, so the bar is empty on an unfiltered board and says the whole
+ * narrowing in one line on a filtered one.
+ *
+ * `param` IS THE URL KEY, which is what makes a chip removable without a table
+ * of removers beside this one: the screen clears the key the chip names.
+ */
+export interface FilterChipSpec {
+  /** The URL key this chip stands for, and what taking it off clears. */
+  param: string;
+  /** The field's own name — the whole chip on a switch, which has no value. */
+  label: string;
+  /** The relation, where there is one to state. */
+  verb?: string;
+  /** What it was set to, in the company's own words. */
+  value?: string;
+}
+
+/**
+ * Every applied filter, in one order, as the chips a screen draws.
+ *
+ * PURE, over values, for the reason this file's own preamble gives: a rule that
+ * can only be exercised by rendering a screen is a rule nobody re-measures, and
+ * every judgement here has a wrong form that reads as a different fact — a chip
+ * saying `ada-okonkwo` where the company says Ada Okonkwo, or `in_progress`
+ * where the team says Doing.
+ *
+ * THE SCOPE IS NOT A CHIP. Open / Closed / All is a three-valued switch that is
+ * always set to something, drawn in the bar beside these: as a chip it would
+ * either be permanently present (a chip that cannot be removed is not a chip)
+ * or absent on its default, which hides the one segment that decides whether
+ * finished work is on screen at all.
+ */
+export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterChipSpec[] {
+  const out: FilterChipSpec[] = [];
+  if (f.q) out.push({ param: "q", label: "Text", verb: "contains", value: f.q });
+  if (f.status) {
+    out.push({
+      param: "status",
+      label: "Status",
+      verb: "is",
+      value: statusLabel(f.status, ctx.statuses),
+    });
+  }
+  if (f.type)
+    out.push({ param: "type", label: "Type", verb: "is", value: typeName(f.type, ctx.types) });
+  if (f.priority) {
+    out.push({ param: "priority", label: "Priority", verb: "is", value: humanize(f.priority) });
+  }
+  if (f.assignee) {
+    out.push({
+      param: "assignee",
+      label: "Assignee",
+      verb: "is",
+      // UNASSIGNED IS A VALUE the grammar spells `none`, and it is the one a
+      // lead opens a board to ask for — printed raw it reads as a filter that
+      // failed to resolve somebody's name.
+      value: f.assignee === "none" ? "Unassigned" : (ctx.seatName?.(f.assignee) ?? f.assignee),
+    });
+  }
+  if (f.tag) {
+    out.push({
+      param: "tag",
+      label: "Tag",
+      verb: "is",
+      value: ctx.tags?.find((t) => t.slug === f.tag)?.label ?? f.tag,
+    });
+  }
+  if (f.due) out.push({ param: "due", label: "Due", verb: "is", value: dueFilterLabel(f.due) });
+  if (f.group) {
+    // THE COLUMN A BOARD WAS NARROWED TO, named by its own axis — the same
+    // resolver the column head uses, so the chip and the heading it came from
+    // say the same word.
+    out.push({
+      param: "group",
+      label: axisName(f.groupBy) || "Column",
+      verb: "is",
+      value: axisLabel(f.groupBy, f.group, ctx),
+    });
+  }
+  // THE SWITCHES LAST, because they have no value to read: a chip that is only
+  // a field name is a different shape from one that is a sentence, and mixing
+  // the two through the row makes the row look ragged rather than ordered.
+  if (f.blocked) out.push({ param: "blocked", label: "Blocked" });
+  if (f.removed) out.push({ param: "removed", label: "Removed items" });
+  // THE COMPANY'S OWN FIELDS, LAST AND IN THE ADDRESS'S OWN ORDER. Named from
+  // the catalogue where it has arrived and from the SLUG where it has not —
+  // which is a value a reader can still act on, rather than a chip that says
+  // nothing while a second read is in flight.
+  for (const [param, value] of Object.entries(f.fields)) {
+    const slug = param.slice("f.".length);
+    const def = ctx.fields?.find((d) => d.slug === slug || d.id === slug);
+    out.push({ param, label: def?.name || slug, verb: "is", value: fieldFilterValue(value) });
+  }
+  return out;
+}
+
+/**
+ * The due filters a person is offered, which are the ENGINE'S OWN ALIASES.
+ *
+ * Every value here is one `internal/tracker/dates.go` expands itself
+ * (`DateAlias`, plus `overdue`, which carries an open-status condition with
+ * it), so the control cannot compose a window the engine resolves differently
+ * from the word on the chip. A comparison this list does not offer —
+ * `gte:2026-01-01`, `range:sow..eom` — is still legal on the address and in a
+ * saved view, and the chip prints it back verbatim rather than re-wording it.
+ *
+ * THERE IS NO "no due date". The grammar has no `due=null`: `due` compiles to
+ * a comparison against a column, and `due_at IS NULL` is not one. Offering it
+ * would mean offering a filter that is refused.
+ */
+export const DUE_FILTERS: { value: string; label: string }[] = [
+  { value: "overdue", label: "Overdue" },
+  { value: "earlier", label: "Before today" },
+  { value: "thisweek", label: "This week" },
+  { value: "next7", label: "Next 7 days" },
+  { value: "thismonth", label: "This month" },
+  { value: "last7", label: "Last 7 days" },
+  { value: "lastmonth", label: "Last month" },
+];
+
+/** What a due filter reads as, or the value itself for one written by hand. */
+export function dueFilterLabel(value: string): string {
+  return DUE_FILTERS.find((d) => d.value === value)?.label ?? value;
+}
+
+/**
+ * What a custom-field filter reads as, WITHOUT parsing the grammar.
+ *
+ * The engine's spelling is `<op>:<value>` with the field's own natural
+ * comparison for a bare value, and the two forms a chip has to separate are
+ * `null` / `not_null` — which are questions about the ROW rather than about a
+ * value, and read as "nothing" and "anything" printed raw. Everything else is
+ * shown as the reader wrote it: a chip that re-worded `range:3..8` would be a
+ * second copy of a table the engine refuses against, and one wrong word there
+ * is a filter that matches nothing while the chip claims otherwise.
+ */
+function fieldFilterValue(value: string): string {
+  if (value === "null") return "not set";
+  if (value === "not_null") return "set";
+  return value;
+}
+
+// ---------------------------------------------------------------------------
+// When work is due, as bands
+// ---------------------------------------------------------------------------
+
+/**
+ * Which band of a person's day a task falls in.
+ *
+ * ONE PERSON'S LIST IS READ BY WHEN, not by status: "what have I missed, what
+ * is today, what is this week" is the question somebody opens their own work
+ * to ask, and an assignee's list grouped by status answers a different one —
+ * every task they hold is in progress or about to be.
+ *
+ * OVERDUE IS THE ROW'S OWN FLAG, never a comparison of ours. The engine derives
+ * it against the COMPANY's day start, and a browser re-deriving it from its own
+ * midnight is how one screen shows a task as overdue and another does not — the
+ * rule `DueMark` already keeps.
+ *
+ * WHICH IS WHY THERE IS A SIXTH BAND. `overdue` means open AND past its date,
+ * so a task that was finished late is past its date and not overdue — and
+ * calling it Overdue would be a false claim about work somebody delivered,
+ * while calling it Today would invent a date nobody set. `earlier` is where it
+ * belongs, and it is absent on the Open scope every one of these lists opens
+ * on, because nothing there can be in it.
+ */
+export type DueBucket = "overdue" | "earlier" | "today" | "week" | "later" | "none";
+
+/** The bands, in the order a day is read, each with the word it is drawn under. */
+export const DUE_BUCKETS: { key: DueBucket; label: string; tone: Tone }[] = [
+  { key: "overdue", label: "Overdue", tone: "critical" },
+  { key: "earlier", label: "Earlier", tone: "neutral" },
+  { key: "today", label: "Today", tone: "info" },
+  { key: "week", label: "This week", tone: "neutral" },
+  { key: "later", label: "Later", tone: "neutral" },
+  { key: "none", label: "No date", tone: "neutral" },
+];
+
+/**
+ * The last day of the week `now` falls in, MONDAY FIRST.
+ *
+ * The engine's relative week tokens start on Monday (`internal/tracker/dates.go`,
+ * and `WEEKDAYS` below draws the calendar the same way), so "this week" here is
+ * the same week a saved view's `eow` means. On a Sunday the band holds only
+ * today, which is the honest answer rather than a rolling seven days that would
+ * disagree with every other week in the product.
+ */
+function endOfWeekDay(now: number): string {
+  const at = new Date(now);
+  const sinceMonday = (at.getDay() + 6) % 7;
+  at.setDate(at.getDate() + (6 - sinceMonday));
+  return browserDay(at);
+}
+
+export function dueBucket(row: WorkSummary, now: number): DueBucket {
+  if (row.overdue) return "overdue";
+  const day = dayKey(row.due);
+  if (!day) return "none";
+  // A LOCAL `YYYY-MM-DD` COMPARES AS A STRING, because that spelling is
+  // lexicographic and chronological at once — which is why the calendar keys
+  // its cells with it too.
+  const today = browserDay(new Date(now));
+  if (day < today) return "earlier";
+  if (day === today) return "today";
+  return day <= endOfWeekDay(now) ? "week" : "later";
+}
+
+/**
+ * Rows as the bands a day is read in, EMPTY BANDS DROPPED.
+ *
+ * A band per bucket whether or not anything is in it would put five headings
+ * over a person holding one task, which is the page of seven "nothing here"
+ * panels this screen was rebuilt to stop.
+ */
+export function bandsByDue(
+  rows: WorkSummary[],
+  now: number,
+): { key: DueBucket; label: string; rows: WorkSummary[] }[] {
+  const held = new Map<DueBucket, WorkSummary[]>();
+  for (const row of rows) {
+    const key = dueBucket(row, now);
+    const band = held.get(key);
+    if (band) band.push(row);
+    else held.set(key, [row]);
+  }
+  return DUE_BUCKETS.filter((b) => held.has(b.key)).map((b) => ({
+    key: b.key,
+    label: b.label,
+    rows: held.get(b.key) ?? [],
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -903,11 +1324,26 @@ export function pageNote(shown: number, more: boolean, one: string, many?: strin
   return more ? `The newest ${plural(shown, one, many)}; there are more.` : "";
 }
 
+/**
+ * The three segments, and NONE OF THEM IS THE EMPTY STRING.
+ *
+ * "Everything" used to be spelled `""`, and a scope is a URL key: the router's
+ * own writer deletes a key set to the empty string (`Navigator.filter`), so
+ * choosing All wrote nothing, the parameter read back as its fallback — the
+ * view's own seeded scope, `open` on almost every container — and the segment
+ * snapped back to Open on the next render. The one segment whose whole job is
+ * to show finished work could not be selected at all. A zero value has to be
+ * meaningful or the type must refuse it; here it could not be meaningful, so
+ * the value has a name.
+ */
+export const SCOPES = ["open", "closed", "all"] as const;
+export type Scope = (typeof SCOPES)[number];
+
 /** A view's `status_group` mapped back onto the three segments. */
-export function scopeOf(group: string | undefined): string {
+export function scopeOf(group: string | undefined): Scope {
   if (group === "not_started,active") return "open";
   if (group === "done,closed") return "closed";
-  return "";
+  return "all";
 }
 
 /**
@@ -947,12 +1383,12 @@ export function scopeOf(group: string | undefined): string {
  * round trip no test could reach: deleting it left every suite green while the
  * tracker opened on every closed task the company has.
  */
-export function seededScope(view: Record<string, string> | undefined): string {
+export function seededScope(view: Record<string, string> | undefined): Scope {
   const group = view?.status_group;
   const scope = scopeOf(group);
-  if (scope) return scope;
+  if (scope !== "all") return scope;
   const widened = (view?.show_closed ?? "").trim();
-  if (!group && widened && widened !== "false") return "";
+  if (!group && widened && widened !== "false") return "all";
   return "open";
 }
 

@@ -10,8 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The history row, the effective instant, the entered stamp and the inbox —
-// the four things every commit produces besides its own object's row.
+// The history row, the effective instant, the entered stamp, the project's
+// last-change stamp and the inbox — the five things every commit produces
+// besides its own object's row.
 //
 // # A QUIET COMMIT WRITES A HISTORY ROW LIKE EVERY OTHER
 //
@@ -141,11 +142,104 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	if err != nil {
 		return 0, err
 	}
+	stamped, err := a.stampProjectChange(ctx, tx, c, keys.Project)
+	if err != nil {
+		return 0, err
+	}
 	inbox, err := a.writeInbox(ctx, tx, c, keys.Key)
 	if err != nil {
 		return 0, err
 	}
-	return rows + successors + inbox, nil
+	return rows + successors + stamped + inbox, nil
+}
+
+// stampProjectChange records that this commit changed the project's work, and
+// who made it.
+//
+// # Why it hangs off the HISTORY row rather than off the counts
+//
+// The three maintained counters move when a task ENTERS or LEAVES a status
+// group; this pair moves when anything about the work happens at all. The
+// write that knows about "anything at all" is the history row, which the
+// applier writes on every task commit — loud or quiet, a create, a field
+// change, a comment, an archive, a tombstone, a restore, a purge — and files
+// under the project the task is in. Hanging the stamp there makes one sentence
+// true that a reader can check from the screen: THE DIRECTORY'S LAST CHANGE IS
+// THE HEAD OF THAT PROJECT'S OWN ACTIVITY FEED. A row saying "changed two
+// minutes ago by ana" whose feed's newest entry is from last week is a
+// contradiction a person meets by clicking, and this is the only arrangement
+// in which it cannot arise.
+//
+// Three things therefore do NOT move it, and each is deliberate:
+//
+//   - A TURN. [Applier.applyTurn] adds an agent's spend to a task and writes
+//     no history row: what it records is what a turn COST, not a change to the
+//     work. Counting it would mark every project with a seat thinking in it as
+//     changed, continuously, while nothing about the work moved.
+//   - A RANK RE-ORDER. It is arbitrated on the project's own rank-order
+//     subject, writes no history row, and is the board's manual ORDER rather
+//     than a change to any task — the feed does not carry it either, and this
+//     column agrees with the feed by construction.
+//   - THE PROJECT DOCUMENT ITSELF. A rename, a new field declaration or an
+//     archive is filed under no project ([Applier.applyDocument] passes an
+//     empty [subjectKeys]), because the project's SETTINGS changing is not its
+//     WORK changing.
+//
+// And one case is worth naming because it looks like an omission: a task moved
+// OUT of a project stamps the project it moved TO and not the one it left,
+// although the one it left has a count that moves. That is the same rule, not
+// an exception to it — the commit's history row is filed where a reader
+// looking for it will be, which is the project the task is in now.
+//
+// # Why the AUTHORED instant
+//
+// This is a DISPLAYED instant, and every displayed instant in this domain is
+// the writer's own clock: `tracker_tasks.updated_at` beside it, this row's own
+// `updated_at`, and the `at` the activity feed renders for the very commit
+// this stamp names. A column that quoted the EFFECTIVE instant instead would
+// put a different kind of number next to those, and the two differ by exactly
+// the skew the feed already publishes as a figure rather than correcting. The
+// effective instant is what a DURATION is measured on — a status span, a
+// dependency's clearing time — and nothing measures a duration on this.
+//
+// The fleet agreement a derived instant usually needs comes from the guard
+// below rather than from the value: this is one record's own number copied
+// into a row, not an aggregate over several, so there is nothing here for two
+// nodes to compute differently.
+//
+// # Why the guard is the log position
+//
+// The three values are one record's, copied together, so the row must name the
+// commit HIGHEST IN THE LOG rather than whichever record this node applied
+// last. Two nodes at one checkpoint have seen the same set of records in
+// different orders, and these rows are compared byte for byte across the
+// fleet. The composed position is a total order every node already agrees on,
+// so `last_change_seq <` makes the write order-independent, idempotent under a
+// redelivery and correct for a record reprocessed below an applied successor —
+// with no clock comparison anywhere. An instant could not do it: two records
+// can share one, and the tie would go to whoever arrived first.
+func (a *Applier) stampProjectChange(ctx context.Context, tx *sql.Tx,
+	c applyContext, project string) (int, error) {
+
+	// A TASK COMMIT IN A PROJECT. The kind is checked rather than inferred
+	// from a non-empty key, so a later caller passing a project key for
+	// some other subject does not quietly move a column that means "this
+	// project's work".
+	if project == "" || c.subject().Kind != KindTask {
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tracker_projects
+		SET last_change_at = ?, last_change_actor = ?,
+		    last_change_actor_kind = ?, last_change_seq = ?
+		WHERE key = ? AND last_change_seq < ?`,
+		store.EncodeTime(c.authored()), c.record.Actor,
+		string(c.record.ActorKind), c.packed, project, c.packed)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: stamp %s's last change at %s: %w",
+			project, c.position, err)
+	}
+	return affected(res)
 }
 
 // raiseSuccessors re-derives the effective instant of every row ABOVE this
