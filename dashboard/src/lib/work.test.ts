@@ -26,6 +26,11 @@ import {
   dayKey,
   defaultView,
   describeChange,
+  endNote,
+  LANDING_SHAPE,
+  padGroups,
+  SCOPE_GROUPS,
+  STATUS_GROUPS,
   effectiveArrangement,
   EXPLICIT_NONE,
   describeHistory,
@@ -381,7 +386,7 @@ test("a people field resolves each handle to a name", () => {
 // Views and the query
 // ---------------------------------------------------------------------------
 
-test("a builtin view's shape is its own, and an unknown key draws the board", () => {
+test("a builtin view's shape is its own, and an unknown key draws the landing shape", () => {
   const views = [
     view({ key: "list", type: "list" }),
     view({ key: "calendar", type: "calendar" }),
@@ -392,12 +397,17 @@ test("a builtin view's shape is its own, and an unknown key draws the board", ()
   expect(shapeOf("saved", views)).toBe("calendar");
   // A STRIP THAT HAS NOT ARRIVED is the ordinary state of the first paint,
   // and a body that waited for it would flash empty on every navigation.
-  expect(shapeOf("board", [])).toBe("board");
+  expect(shapeOf("board", [])).toBe(LANDING_SHAPE);
 });
 
-test("the landing tab is the one the container marks, else the board", () => {
+// A CONTAINER NOBODY HAS SAVED A DEFAULT FOR OPENS ON THE LIST. A board's
+// information is the comparison across its lanes, so it is the worst shape at
+// low N — one card 292px wide in a 1500px field — where a list degrades to one
+// full-width row and keeps being a list. The board stays one press away.
+test("the landing tab is the one the container marks, else the list", () => {
   expect(defaultView([view({ key: "list" }), view({ key: "mine", default: true })])).toBe("mine");
-  expect(defaultView([view({ key: "list" })])).toBe("board");
+  expect(defaultView([view({ key: "board" })])).toBe("list");
+  expect(LANDING_SHAPE).toBe("list");
 });
 
 const build = (over: Partial<Parameters<typeof buildItemsParams>[0]> = {}) =>

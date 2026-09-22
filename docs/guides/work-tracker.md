@@ -674,13 +674,17 @@ work sits in projects that unit owns.
 node's own copy, and every answer says how far behind that copy is. It is four
 screens rather than one:
 
-- **All work** (`#/work`) is the list. Two menus decide what is on it and how
-  it is drawn — **Filter** adds a narrowing, and each one is a removable chip
-  under the bar; **Display** holds the shape (list, board, table, calendar,
-  timeline), the grouping, the order and, on a table, the columns. The trash is
-  a filter here rather than a tab, which is what the engine says it is: a
-  listing carrying `removed=true`. The strip above the bar holds the views
-  somebody SAVED, never the five shapes.
+- **All work** (`#/work`) is the list, and it opens as one: a container nobody
+  has saved a default view for lands on the list shape, because a board's
+  information is the comparison across its lanes — the best shape once work is
+  moving and the worst on a company with three items in one status. The board
+  is one press away. Two menus decide what is on the list and how it is drawn —
+  **Filter** adds a narrowing, and each one is a removable chip under the bar;
+  **Display** holds the shape (list, board, table, calendar, timeline), the
+  grouping, the order and, on a table, the columns. The trash is a filter here
+  rather than a tab, which is what the engine says it is: a listing carrying
+  `removed=true`. The strip above the bar holds the views somebody SAVED, never
+  the five shapes.
 - **Projects** (`#/work/projects`) is the directory: every project with its
   lead, the unit that owns it, its three maintained counts, how far along it is
   and when its work last changed.

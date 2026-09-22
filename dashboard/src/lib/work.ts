@@ -594,14 +594,36 @@ export function fieldValueState(field: WorkFieldValue): string {
  */
 export type Shape = WorkViewShape;
 
+/**
+ * WHAT A CONTAINER OPENS ON when nothing else decides it.
+ *
+ * THE LIST, BECAUSE A BOARD'S INFORMATION IS THE COMPARISON ACROSS ITS LANES.
+ * That makes it the worst shape at low N and the best at high N: four lanes
+ * holding one card between them say nothing a lane could not say alone, and
+ * the one card is a 292px object in a 1500px field. A list degrades to one
+ * full-width row, which is still a list — the same drawing at one item and at
+ * four hundred. So the landing shape is the one that never stops working, and
+ * the board is one press away in the Display menu, named by what it is for.
+ *
+ * NOT CONDITIONAL ON HOW MUCH WORK EXISTS. A landing screen whose shape
+ * changes as a company fills up is a screen nobody can learn, and the first
+ * item somebody files would silently redraw the page.
+ *
+ * AND IT IS THE CLIENT'S FALLBACK, not a builtin marked `default` in the
+ * engine: one view row may carry `default` and the applier settles that in the
+ * same transaction as the write, so a builtin claiming it would collide with
+ * whatever a company saved. This is what holds when nothing claims it.
+ */
+export const LANDING_SHAPE: Shape = "list";
+
 /** The shape a view is drawn in. */
 export function shapeOf(viewKey: string, views: WorkView[]): Shape {
   const view = views.find((v) => v.key === viewKey);
   if (view) return view.type;
-  // A KEY NOTHING RESOLVES DRAWS THE BOARD rather than nothing: a strip that
-  // has not arrived yet is the ordinary state of the first paint, and a body
-  // that waited for it would flash empty on every navigation.
-  return "board";
+  // A KEY NOTHING RESOLVES DRAWS [LANDING_SHAPE] rather than nothing: a strip
+  // that has not arrived yet is the ordinary state of the first paint, and a
+  // body that waited for it would flash empty on every navigation.
+  return LANDING_SHAPE;
 }
 
 /**
@@ -609,11 +631,11 @@ export function shapeOf(viewKey: string, views: WorkView[]): Shape {
  *
  * ONE ROW MAY CARRY `default` and the applier settles that in the same
  * transaction as the write, so there is never a second claim to fall back
- * from. Absent, the board: it is the shape that answers "what is moving",
- * which is the question somebody opening a tracker has.
+ * from. Absent, the key of the shape every container has without anybody
+ * saving one — see [LANDING_SHAPE] for why that is the list.
  */
 export function defaultView(views: WorkView[]): string {
-  return views.find((v) => v.default)?.key ?? "board";
+  return views.find((v) => v.default)?.key ?? LANDING_SHAPE;
 }
 
 /** A view's saved query, or an empty set of defaults. */

@@ -272,6 +272,22 @@ is a way of drawing any query, and mixed into one strip the two read as the
 same kind of thing. That is also why `view=` and `shape=` are two keys:
 switching a saved board to a list must not throw the saved filters away.
 
+### The sparse state
+
+Every screen above is drawn, argued about and reviewed on a company with work
+in it. A company's first week is the state every company passes through, and it
+is the one where each of these bands is conditional on data that does not exist
+yet — so the page a new operator meets is the one nobody designed. Five rules,
+each the answer to one thing that went missing at one item:
+- **The landing shape is the list.** A board's information is the comparison
+  ACROSS its lanes, which makes it the worst shape at low N and the best at
+  high N: four lanes holding one card between them say nothing one lane could
+  not, and that card is a 292 px object in a 1500 px field. A list degrades to
+  one full-width row and is still a list. So a container with no default view
+  opens as a list and the board is one press away in **Display** — and the
+  landing shape is never conditional on how much work exists, because a screen
+  that redraws itself as a company fills up is a screen nobody can learn.
+
 **Reserved segments cannot collide with keys.** Project and container keys are
 uppercase (`ENG`), item keys are `KEY-n`, everything else the engine mints is a
 uuid — and every reserved segment is lowercase. That is what lets `#/work/views`

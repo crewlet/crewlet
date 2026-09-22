@@ -913,7 +913,7 @@ test("the bar is two menus, a switch and a mark", async () => {
   expect(within(bar).getByText("Filter")).toBeTruthy();
   // The Display button SAYS WHAT IS ON, so the arrangement is readable without
   // opening anything — which is what the strip of shape tabs used to do.
-  expect(within(bar).getByText("Board · Status")).toBeTruthy();
+  expect(within(bar).getByText("List")).toBeTruthy();
   for (const label of ["Open", "Closed", "All"]) {
     expect(within(bar).getByText(label), `${label} is not in the bar`).toBeTruthy();
   }
@@ -1028,3 +1028,29 @@ test("the shape is a key beside the view rather than the same one", async () => 
   expect(asked(query).limit).toBe(100);
   expect(asked(query).group_by).toBeUndefined();
 });
+
+// ---------------------------------------------------------------------------
+// The sparse state
+// ---------------------------------------------------------------------------
+
+// THE LANDING SHAPE IS THE LIST, and nothing in the engine decides it: no
+// builtin view is marked `default`, so this fallback is what every company that
+// has saved nothing lands on. A board's information is the comparison ACROSS
+// its lanes, so at one item it is one 292px card in a 1500px field — where a
+// list degrades to one full-width row and is still a list.
+test("a container with no default view opens on the list", async () => {
+  const query = serving({
+    work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-list")).toBeTruthy());
+  // A LIST IS A PAGED QUESTION rather than a set of columns, which is the half
+  // of this that reaches the engine.
+  expect(asked(query).limit).toBe(100);
+  expect(asked(query).group_by).toBeUndefined();
+  expect(asked(query).group_limit).toBeUndefined();
+  // And the Display button says which shape is on without anything opening.
+  expect(screen.getByText("List")).toBeTruthy();
+  expect(container.querySelector(".work-board")).toBeNull();
+});
+
