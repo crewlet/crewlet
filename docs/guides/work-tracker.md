@@ -384,6 +384,15 @@ A **view** is a saved query with a shape. Five shapes:
   on either, and the choice is remembered per shape, so arranging the table
   does not rearrange the list.
 
+**Every container has six views without anybody saving one**: one per shape,
+plus `trash` — a table carrying `removed=true` and `show_closed=true`. The
+trash is a builtin *view* rather than a sixth shape because what makes it the
+trash is that parameter, not a way of drawing: a renderer keyed on the shape
+would have a shape whose meaning depended on a parameter it could be saved
+without. The builtins carry no id, so they are defaults rather than
+destinations — a client that offers the shapes as an arrangement (the
+dashboard does) shows only what somebody actually saved in its view strip.
+
 ### What a board groups on
 
 Any of these, as `group_by=` — and a second one as `group_by2=`, which splits
@@ -1271,10 +1280,15 @@ Three different gestures, and the difference matters:
 
 - **Remove** hides a task. Its rows stay and a restore brings it back — and
   `removed=true` is how you find one to restore: every other query excludes
-  removed work, which is what a board means, so the trash is a filter rather
-  than a screen. It is a filter every container ships a **tab** for
-  ([Views](#views)), because the one thing a person needs after an assistant
-  removes the wrong subtree is to see what was removed.
+  removed work, which is what a board means, so the trash is a **filter**
+  rather than a screen, and any listing carrying that parameter is a trash
+  listing. Every container ships a builtin `trash` **view** carrying it
+  ([Views](#views)), so the one thing a person needs after an assistant removes
+  the wrong subtree — seeing what was removed — is one saved query away on
+  every surface that reads them. On the dashboard it is the Filter menu's
+  **Removed items**, which is the same parameter reached the same way: a trash
+  of one project's bugs is a narrowing like any other, where a tab would have
+  been a place you leave your arrangement to get to.
 - **Delete** writes a marker. Every node drops every record about that task for
   ever, which is what stops a redelivery months later resurrecting it.
 - **Purge** removes the rows. Its report comes back in **three groups**: what
