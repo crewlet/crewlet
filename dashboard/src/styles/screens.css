@@ -2527,7 +2527,19 @@ details > summary.int-summary::-webkit-details-marker {
   background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
-  overflow: hidden;
+  /* THE LIST MAKES NO SCROLLPORT OF ITS OWN — the same rule `.grid-wrap` gives
+     in frame.css, and for the same reason. What the panel wants is the rows
+     rounded off at its own radius, which `clip` does exactly as `hidden` did;
+     what `hidden` ADDS is a scroll container, and a sticky box is confined to
+     its nearest one. This panel has no height constraint — it grows to its
+     rows — so its scroll offset is permanently 0, and every `.work-band` above
+     was positioned `--sticky-top` (48px) DOWN from the top of the list rather
+     than held under the toolbar: the band left its own slot blank and painted
+     over the first row of its own group, which was in the DOM, drawn, and
+     covered. Measured on a grouped list at 1400px — the "To do" band at y=137
+     over a first row at y=126, with the 89-126 strip empty. The scroller is
+     `.screen`, which is what the band sticks against now. */
+  overflow: clip;
   min-width: 0;
 }
 .work-band-group {

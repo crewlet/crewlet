@@ -1476,6 +1476,16 @@ What replaced it:
   on List to x≈1338 on Board and x≈1155 on Calendar, and the Overdue chip
   wrapped to a line of its own ~1,200px from the count. A wrap breaks between
   groups.
+- **A panel that rounds a run of rows clips; it does not hide.** The offset
+  above only means anything while the screen is the band's own scroller, and a
+  sticky box is held by the nearest one: a panel wrapped around the rows with
+  `overflow: hidden` becomes that scroller, and because such a panel grows to
+  its rows it can never scroll, so its own offset is permanently zero and the
+  band is pushed `--sticky-top` DOWN from the top of the panel instead. The
+  grouped work list did exactly that — every band left its slot blank and
+  painted over the first row of its own group, one task per group in the DOM,
+  drawn and covered. `overflow: clip` rounds the corners identically and makes
+  no scroller, which is the same decision the data grid's wrap records.
 
 Three rows of buttons, and a table, that behaved differently from a keyboard
 than they looked:
