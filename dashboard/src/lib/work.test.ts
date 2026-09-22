@@ -1443,6 +1443,27 @@ test("a unit reads by the name its answer gave, and by its key otherwise", () =>
   expect(axisLabel("unit", "")).toBe("No unit");
 });
 
+// AND THE TEAM'S OWN COLUMN ROUND-TRIPS, which is the whole of what a unit
+// column's overflow link does: the engine now heads that column with the
+// team's NAME over a key that is its `id`, so a patch built from the label
+// would narrow to a value no row holds. The patch carries the column's KEY,
+// the engine folds either spelling onto it, and the chip reads the name back
+// through the same answer the heading came from — which is how `ItemsView`
+// builds `unitName`. Written the other way round, following "12 more →" out of
+// the Engineering column landed on an empty list chipped "Engineering".
+test("a unit column's overflow carries the key and chips the name", () => {
+  const column = { key: "eng", label: "Engineering", count: 12, rows: [] };
+  expect(groupLabel("unit", column)).toBe("Engineering");
+
+  const patch = filterPatchForGroup("unit", column.key);
+  expect(patch).toEqual({ shape: "list", group_by: "unit", group: "eng" });
+
+  // THE ANSWER IS WHAT NAMES IT, exactly as the screen asks: the column whose
+  // key the address holds.
+  const unitName = (key: string) => (key === column.key ? column.label : "");
+  expect(axisLabel("unit", patch.group ?? "", { unitName })).toBe("Engineering");
+});
+
 // AND A TEAM IS AN ORDINARY FILTER KEY, arriving from an item's own "Filed
 // into" line rather than from a control: it narrows the query, it carries a
 // chip, and the chip clears it like any other.
