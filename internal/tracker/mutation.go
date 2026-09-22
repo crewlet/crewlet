@@ -1034,7 +1034,20 @@ func (s Snapshot) TaskID(subject Subject) string {
 type Notify struct {
 	Kind ChangeKind `json:"kind"`
 
-	// Fields are the deltas a card renders, capped at MaxDeltas.
+	// Fields is what this change MOVED, capped at MaxDeltas.
+	//
+	// It reaches the woken seat as the wake prompt's "What changed"
+	// block: the parser renders it with [changedText] and stamps it as
+	// [MetaDeltas], because the notification spine's envelope is a string
+	// map and the prompt is handed one of those rather than this record.
+	// It is also the history row's fallback for a record whose apply
+	// found nothing to compare — see `apply_history.go`, which prefers
+	// the applier's own comparison and reaches for this only where the
+	// two builds differ.
+	//
+	// The comment here used to say "the deltas a card renders" while
+	// nothing rendered them at all, and the wake that told a seat its
+	// task had moved status named neither side of the move.
 	Fields map[string]Delta `json:"fields,omitempty"`
 
 	CommentID string `json:"comment_id,omitempty"`

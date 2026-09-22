@@ -644,6 +644,15 @@ the history row says which one and what it became. Everything else — a watcher
 added, a checklist ticked off, a description rewritten — reads the same on
 both.
 
+**And the woken seat reads them.** A change wake's prompt carries a **What
+changed** block: one `field: from → to` line per delta, in the engine's own
+field names, with an em dash for a side that was empty, and the change's own
+excerpt under it where there is one. Without it a wake named the kind and
+nothing else — "The status changed by ana." — and the seat had to read the
+task to learn what the status now was, which still left the value it moved
+**from** unrecoverable, because that side is nowhere on the task. A comment is
+the exception: its body is the comment, and the opener has already quoted it.
+
 A dependency is where the stored form would otherwise show, and so are a
 re-parent and a cascade removal: each records the other item by its **id**,
 because its key belongs to that item's own row and a history row is written
