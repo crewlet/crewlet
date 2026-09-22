@@ -277,9 +277,9 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 	// above, where a linter can see it belongs to this response.
 	defer stream.stop()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(stream, httpx.RefusalBytes))
+		detail, err := httpx.ReadBody(stream, httpx.RefusalBytes)
 		return e2bProcessResult{}, fmt.Errorf("e2b: start: %d: %s",
-			resp.StatusCode, strings.TrimSpace(string(detail)))
+			resp.StatusCode, httpx.RefusalOf(resp.Header.Get("Content-Type"), detail, err))
 	}
 	return foldStream(stream, background)
 }
@@ -394,9 +394,9 @@ func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) 
 		return nil, nil
 	}
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
+		detail, err := httpx.ReadBody(resp.Body, httpx.RefusalBytes)
 		return nil, fmt.Errorf("e2b: read %s: %d: %s", path,
-			resp.StatusCode, strings.TrimSpace(string(detail)))
+			resp.StatusCode, httpx.RefusalOf(resp.Header.Get("Content-Type"), detail, err))
 	}
 	// +1 so an overrun is visible; see maxEnvdFile.
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxEnvdFile+1))
@@ -445,9 +445,9 @@ func (c *envdClient) writeFile(ctx context.Context, path string, content []byte)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
+		detail, err := httpx.ReadBody(resp.Body, httpx.RefusalBytes)
 		return fmt.Errorf("e2b: write %s: %d: %s", path,
-			resp.StatusCode, strings.TrimSpace(string(detail)))
+			resp.StatusCode, httpx.RefusalOf(resp.Header.Get("Content-Type"), detail, err))
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, httpx.DrainBytes))
 	return nil
