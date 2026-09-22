@@ -592,16 +592,20 @@ func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	listing, err := s.Work.Projects(ctx, tracker.ProjectQuery{
-		Q:        strings.TrimSpace(p.String("q")),
-		Unit:     strings.TrimSpace(p.String("unit")),
-		Archived: p.Bool("archived", false),
-		Limit:    p.Int("limit", 0),
-		Units:    s.chartUnits(),
-		// THE CALLER'S OWN — see [freshness].
-		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
-	})
+	// THE TRACKER'S OWN GRAMMAR, parsed by the tracker. `archived=` and
+	// `sort=` are closed sets it owns, and a copy of either here is a
+	// second answer to a question the engine already has one of.
+	q, err := tracker.ParseProjectQuery(p)
+	if err != nil {
+		// A REFUSAL ABOUT THE REQUEST — the value names itself and the
+		// accepted ones, so a 400 tells the caller what to send instead.
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	}
+	q.Units = s.chartUnits()
+	// THE CALLER'S OWN — see [freshness].
+	q.Level, q.MaxLag, q.MaxLagSeq = fresh.Level, fresh.MaxLag, fresh.MaxLagSeq
+	q.MinPosition = fresh.MinPosition
+	listing, err := s.Work.Projects(ctx, q)
 	if err != nil {
 		return nil, err
 	}

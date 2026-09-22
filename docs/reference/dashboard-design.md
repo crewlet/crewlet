@@ -445,7 +445,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
 | `#/me` | **My work** — the seven claims on one person's attention | `tab=assigned\|priorities\|asks\|unblocked\|collaborating\|watching\|checklist` · `handle=` (an operator reading somebody else's day) |
 | `#/work` | **All work** | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` (the active shape's column set) + the filter grammar |
-| `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page | `shown=active\|archived\|all` · `sort=` |
+| `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page. The segment and the sort are both the ENGINE's question: `shown=` becomes `archived=false\|only\|true` and `sort=` travels as it is written, because the answer stops at the engine's own 200 and anything applied after that orders — or narrows — a page rather than the company | `shown=active\|archived\|all` · `sort=key\|name\|unit\|open\|done\|closed\|last_change`, with a leading `-` for descending |
 | `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
@@ -2752,6 +2752,23 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   projects directory's is about PROJECTS, so a company with no projects is told
   what a project is and that a unit's `project` key in the company
   configuration is what mints one.
+- **An empty SEGMENT is not an empty company — so the answer carries the
+  census.** The projects directory's three segments each ask the engine for
+  their own set, which is what makes the listing honest and is also what makes
+  an empty answer ambiguous: an empty **Active** answer is either a company
+  with no projects or one that has archived every one of them, and a reader
+  acts on those oppositely. The screen cannot derive the difference, because on
+  the Active segment the archived projects have no row on screen to be derived
+  from. So `work_projects` answers with a `census` of BOTH sets under the same
+  narrowing, and the page never guesses: `active + archived === 0` is the
+  company having nothing and draws "No project has been created yet" on
+  **whichever segment the reader is on** — which matters, because they land on
+  Active; an empty Active answer with archived projects behind it says how many
+  and links to them; and Archived says nothing is archived. The counts also sit
+  on the segment control itself, so the switch says what is behind each option
+  before it is pressed. A screen that hedges — one sentence naming both ways a
+  state happens — is a screen missing a number, and the fix is to send the
+  number rather than to word around it.
 
 Every empty state names what would fill it.
 

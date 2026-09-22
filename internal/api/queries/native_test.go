@@ -564,6 +564,88 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 	}
 }
 
+// THE PROJECTS LISTING'S TWO CLOSED SETS REACH THE READER AS THEMSELVES.
+//
+// `archived=` SELECTS a set and `sort=` orders the WHOLE of it before the
+// engine's own cap takes a page. Both were the screen's own work once — the
+// route sent a widening boolean and the directory narrowed and re-sorted what
+// came back — so past the cap the Archived segment reported a company with
+// dozens of retired projects as having none, and `sort=-open` ranked the most
+// open work among the projects whose keys sort first.
+func TestTheProjectsListingCarriesItsArchivalSetAndOrdering(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		archived   string
+		sort       string
+		wantSet    tracker.ArchivedMode
+		wantSort   tracker.ProjectSort
+		descending bool
+	}{
+		{"", "", tracker.ArchivedExclude, "", false},
+		{"false", "key", tracker.ArchivedExclude, tracker.ProjectSortKey, false},
+		{"only", "-open", tracker.ArchivedOnly, tracker.ProjectSortOpen, true},
+		{"true", "last_change", tracker.ArchivedInclude, tracker.ProjectSortLastChange, false},
+	} {
+		w := &stubWork{}
+		args := map[string]any{}
+		if tc.archived != "" {
+			args["archived"] = tc.archived
+		}
+		if tc.sort != "" {
+			args["sort"] = tc.sort
+		}
+		if _, err := askNative(t, queries.Sources{Work: w}, "work_projects",
+			args); err != nil {
+			t.Fatalf("work_projects%+v: %v", args, err)
+		}
+		if w.projectQuery.Archived != tc.wantSet {
+			t.Errorf("archived=%q reached the reader as %q, want %q",
+				tc.archived, w.projectQuery.Archived, tc.wantSet)
+		}
+		if w.projectQuery.Sort != tc.wantSort ||
+			w.projectQuery.Descending != tc.descending {
+			t.Errorf("sort=%q reached the reader as %q/%v, want %q/%v",
+				tc.sort, w.projectQuery.Sort, w.projectQuery.Descending,
+				tc.wantSort, tc.descending)
+		}
+	}
+
+	// AND A VALUE THAT IS NEITHER SET'S IS A 400 NAMING THE PARAMETER, not
+	// a silent fall back: a screen handed the default for a filter it
+	// asked for draws a set nobody chose, and the reader has no way to
+	// tell. `bad_params` is also the one code the dashboard renders as the
+	// SCREEN's fault, so retrying is not offered.
+	for _, tc := range []struct{ key, value, want string }{
+		{"archived", "yes", "archived"},
+		// `active` READS LIKE A VALUE and is not one — the live set is
+		// `false`. Accepting it as the default would be exactly the
+		// silent narrowing this refusal exists to stop.
+		{"archived", "active", "archived"},
+		{"sort", "lead", "sort"},
+		{"sort", "-progress", "sort"},
+	} {
+		w := &stubWork{}
+		_, err := askNative(t, queries.Sources{Work: w}, "work_projects",
+			map[string]any{tc.key: tc.value})
+		if !errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("%s=%s answered %v, want a bad-parameter refusal",
+				tc.key, tc.value, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.want) ||
+			!strings.Contains(err.Error(), tc.value) {
+			t.Errorf("%s=%s is refused with %q, want the parameter and the "+
+				"value named", tc.key, tc.value, err)
+		}
+		// AND THE READ IS NEVER MADE. A refusal that had already asked
+		// the store would be a 400 over an answer somebody paid for.
+		if w.projectQuery.Level != "" {
+			t.Errorf("%s=%s reached the reader as %+v, want no read at all",
+				tc.key, tc.value, w.projectQuery)
+		}
+	}
+}
+
 // A STRIP IS ONLY PERSONALISED BY A VIEWER THE CALLER MAY NAME.
 //
 // `viewer=` selects WHOSE pins and personal views order the strip, and nothing
