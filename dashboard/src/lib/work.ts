@@ -1032,8 +1032,54 @@ export function buildItemsParams(args: {
   filters: TrackerFilters;
   /** The calendar's own bounds, as `YYYY-MM-DD` — see [gridRange]. */
   range?: { from: string; to: string };
+  /**
+   * THE HOST SCREEN'S OWN NARROWING, and it is the last word on the key it
+   * names.
+   *
+   * `#/me`'s Assigned tab IS one person's work, so the assignee is not a
+   * filter the reader set and can take off — it is what the screen is. Applied
+   * after everything else and on every branch, so no saved default, no `f.`
+   * key and no hand-edited address can widen the list past the person it is
+   * about. It is deliberately NOT routed through [TrackerFilters]: counted
+   * there it would make [anyFilter] true on an unfiltered day, and the empty
+   * panel would blame a narrowing with no chip to take off.
+   */
+  lock?: { assignee?: string };
+}): Record<string, unknown> {
+  const params = itemsParams(args);
+  // LAST, ON EVERY BRANCH. Three of them return early — the calendar, the
+  // timeline and the grid pair — so a lock written inside would have to be
+  // written three times, and the one that was forgotten is the one nobody
+  // would see: a list drawing somebody else's work under this person's name.
+  if (args.lock?.assignee) params.assignee = args.lock.assignee;
+  return params;
+}
+
+/** [buildItemsParams] before its lock, which is every other rule it has. */
+function itemsParams(args: {
+  container: string;
+  shape: Shape;
+  view: Record<string, string>;
+  filters: TrackerFilters;
+  range?: { from: string; to: string };
 }): Record<string, unknown> {
   const { container, shape, view, filters, range } = args;
+  // A VIEW'S PARAMS GO STRAIGHT ONTO THE WIRE, and they can only ever be
+  // QUERY keys. `cols`, `cols.list` and `cols.table` are DISPLAY keys this
+  // screen keeps in the address, and the engine would refuse a read carrying
+  // one — but no view can carry one to begin with, so there is nothing to
+  // strip here: `internal/tracker/views.go:274` runs every saved view's params
+  // through `ParseQuery` at the SAVE, whose `checkKeys`
+  // (`internal/tracker/query.go:449`) refuses any key outside `QueryKeys`
+  // (`query.go:429`) that is not an `f.<ref>` custom field, and `cols` is in
+  // neither. `WriteView` (`views.go:66`) is the only write path and
+  // `save_work_view` reaches it (`internal/agent/builtin/workviews.go:216`).
+  // The builtin views are this package's own two params, held parseable by
+  // `TestEveryImplicitViewsQueryParses`, and both spellings of the display key
+  // are held refused by `TestAViewThatCouldNotBeRunIsRefusedAtTheSave`. A
+  // client-side filter here would be a second, weaker copy of that refusal —
+  // and the weaker one, since it would run after the engine had already
+  // decided.
   const params: Record<string, unknown> = { ...view, container };
 
   const set = (key: string, value: string) => {
@@ -1421,96 +1467,6 @@ function fieldFilterValue(value: string): string {
   if (value === "null") return "not set";
   if (value === "not_null") return "set";
   return value;
-}
-
-// ---------------------------------------------------------------------------
-// When work is due, as bands
-// ---------------------------------------------------------------------------
-
-/**
- * Which band of a person's day a task falls in.
- *
- * ONE PERSON'S LIST IS READ BY WHEN, not by status: "what have I missed, what
- * is today, what is this week" is the question somebody opens their own work
- * to ask, and an assignee's list grouped by status answers a different one —
- * every task they hold is in progress or about to be.
- *
- * OVERDUE IS THE ROW'S OWN FLAG, never a comparison of ours. The engine derives
- * it against the COMPANY's day start, and a browser re-deriving it from its own
- * midnight is how one screen shows a task as overdue and another does not — the
- * rule `DueMark` already keeps.
- *
- * WHICH IS WHY THERE IS A SIXTH BAND. `overdue` means open AND past its date,
- * so a task that was finished late is past its date and not overdue — and
- * calling it Overdue would be a false claim about work somebody delivered,
- * while calling it Today would invent a date nobody set. `earlier` is where it
- * belongs, and it is absent on the Open scope every one of these lists opens
- * on, because nothing there can be in it.
- */
-export type DueBucket = "overdue" | "earlier" | "today" | "week" | "later" | "none";
-
-/** The bands, in the order a day is read, each with the word it is drawn under. */
-export const DUE_BUCKETS: { key: DueBucket; label: string; tone: Tone }[] = [
-  { key: "overdue", label: "Overdue", tone: "critical" },
-  { key: "earlier", label: "Earlier", tone: "neutral" },
-  { key: "today", label: "Today", tone: "info" },
-  { key: "week", label: "This week", tone: "neutral" },
-  { key: "later", label: "Later", tone: "neutral" },
-  { key: "none", label: "No date", tone: "neutral" },
-];
-
-/**
- * The last day of the week `now` falls in, MONDAY FIRST.
- *
- * The engine's relative week tokens start on Monday (`internal/tracker/dates.go`,
- * and `WEEKDAYS` below draws the calendar the same way), so "this week" here is
- * the same week a saved view's `eow` means. On a Sunday the band holds only
- * today, which is the honest answer rather than a rolling seven days that would
- * disagree with every other week in the product.
- */
-function endOfWeekDay(now: number): string {
-  const at = new Date(now);
-  const sinceMonday = (at.getDay() + 6) % 7;
-  at.setDate(at.getDate() + (6 - sinceMonday));
-  return browserDay(at);
-}
-
-export function dueBucket(row: WorkSummary, now: number): DueBucket {
-  if (row.overdue) return "overdue";
-  const day = dayKey(row.due);
-  if (!day) return "none";
-  // A LOCAL `YYYY-MM-DD` COMPARES AS A STRING, because that spelling is
-  // lexicographic and chronological at once — which is why the calendar keys
-  // its cells with it too.
-  const today = browserDay(new Date(now));
-  if (day < today) return "earlier";
-  if (day === today) return "today";
-  return day <= endOfWeekDay(now) ? "week" : "later";
-}
-
-/**
- * Rows as the bands a day is read in, EMPTY BANDS DROPPED.
- *
- * A band per bucket whether or not anything is in it would put five headings
- * over a person holding one task, which is the page of seven "nothing here"
- * panels this screen was rebuilt to stop.
- */
-export function bandsByDue(
-  rows: WorkSummary[],
-  now: number,
-): { key: DueBucket; label: string; rows: WorkSummary[] }[] {
-  const held = new Map<DueBucket, WorkSummary[]>();
-  for (const row of rows) {
-    const key = dueBucket(row, now);
-    const band = held.get(key);
-    if (band) band.push(row);
-    else held.set(key, [row]);
-  }
-  return DUE_BUCKETS.filter((b) => held.has(b.key)).map((b) => ({
-    key: b.key,
-    label: b.label,
-    rows: held.get(b.key) ?? [],
-  }));
 }
 
 // ---------------------------------------------------------------------------

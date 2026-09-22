@@ -1160,12 +1160,42 @@ decided by the API token — it is matched against every seat's
 `contact.crewlet_operator_id`, so the queue is theirs rather than the
 alphabetically first seat's — and `#/me` is that same person's own work: seven
 tabs, one per claim on their attention, each carrying its count on the strip so
-an unanswered question is visible without opening it. The **Assigned** tab is
-the tracker's own question rather than a bounded block, so it pages and counts
-like any other list, and it is banded by WHEN the work is due — overdue,
-today, this week, later, no date — because that is what somebody opens their
-own day to ask. See [Humans in the org](../concepts/humans-in-the-org.md) for
-the binding.
+an unanswered question is visible without opening it. Above the strip a band
+says whose day is on screen, links to that person's seat, and carries the one
+thing here that asks to be answered — a queue somebody *else* put in order,
+with a mark on the tab it is about. See
+[Humans in the org](../concepts/humans-in-the-org.md) for the binding.
+
+**The Assigned tab is the work list, narrowed to one person.** It is the same
+screen `#/work` is — the Filter menu, the Display menu, the Open/Closed/All
+switch, the five shapes, the columns, the count line — with the assignee fixed
+and every other choice yours and in the address. What is fixed is not a filter:
+there is no chip to take off and no `assignee=` on the URL, because that is
+what the tab *is* rather than something you narrowed it to. Whose day it is
+stays `handle=`.
+
+It **opens** grouped by [`due:bucket`](#what-a-board-groups-on), soonest first,
+over unfinished work — "what have I missed, what is today, what is this week"
+is the question somebody opens their own day to ask, and every task they hold
+is in progress or about to be. All three are defaults: group it by status, sort
+it by priority or look at the week as a board and the address keeps what you
+chose.
+
+Those bands are the **engine's**, cut on the company's own midnight rather than
+your browser's, so the band a task sits under and the overdue mark beside it
+can never disagree. Six of them, and the two worth a word are **Earlier** —
+work that was finished late, which is past its date and not overdue, empty
+until you ask for finished work — and **No due date**, which is exactly what it
+says: nobody set one. It is a band rather than an omission, because a task
+nobody has scheduled is the one most likely to be forgotten; and it is the one
+band no `due=` filter can reach, since every date comparison in this grammar is
+written over a date that exists.
+
+The **Priorities** tab is numbered, in the order it was stored. That order is
+the content — it is what somebody decided — so nothing re-sorts it, and the
+place is drawn rather than left for a reader to count. There is no drag: a rank
+is a value on the task, and the dashboard writes nothing, so `set_priorities`
+is the gesture and it is somebody's own.
 
 **Your own writes count as yours, under either name.** A write you make
 through your token is attributed to the **token**, with author kind
@@ -1173,7 +1203,7 @@ through your token is attributed to the **token**, with author kind
 is chosen by the writer is not an audit trail. So the item you file through
 your assistant records `founder` as its reporter and its watcher, while your
 colleagues assign work to `jane-founder`. Every personal question matches
-**both**: My work's seven blocks, the inbox, and your own record. You are one
+**both**: My work's seven tabs, the inbox, and your own record. You are one
 party with two names, and the answer always comes back under your seat's.
 
 Two consequences worth knowing:

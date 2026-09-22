@@ -16,7 +16,7 @@
 
 import { cx } from "@crewlethq/ui";
 import { TypeIcon, type RowChrome } from "~/components/work.tsx";
-import { groupLabel, STATUS_TONE, type LabelContext } from "~/lib/work.ts";
+import { groupLabel, STATUS_TONE, type Tone, type LabelContext } from "~/lib/work.ts";
 import type { WorkGroup } from "~/protocol/index.ts";
 
 /**
@@ -34,6 +34,25 @@ export function statusDot(status: string): string {
   return cx("dot", tone !== undefined && tone !== "neutral" && tone);
 }
 
+/**
+ * The two due bands that are a STATE rather than a place on a calendar.
+ *
+ * A BAND'S OWN COLOUR IS ITS STATE where the band IS one, and that is true of
+ * exactly these two: work somebody has already missed, and work they have
+ * today. "This week", "Later" and "No due date" are positions on a calendar,
+ * which is identity, and identity is neutral here like everywhere else.
+ *
+ * TWO KEYS RATHER THAN SIX, deliberately. This is a DRAWING decision about two
+ * bands, not a second declaration of the axis: the set, its order and its words
+ * are `internal/tracker/grouping.go`'s `dueBands` and reach the screen on the
+ * answer, so a band added there draws no mark rather than a wrong one, and no
+ * table here can drift from the engine's.
+ */
+const DUE_BAND_TONE: Record<string, Tone> = {
+  overdue: "critical",
+  today: "info",
+};
+
 /** The mark an axis's value wears, or nothing for an axis that has none. */
 export function GroupMark({
   axis,
@@ -46,6 +65,10 @@ export function GroupMark({
 }) {
   if (axis === "status") return <i className={statusDot(groupKey)} aria-hidden="true" />;
   if (axis === "type") return <TypeIcon type={groupKey} types={chrome.types} />;
+  if (axis === "due:bucket") {
+    const tone = DUE_BAND_TONE[groupKey];
+    return tone ? <i className={cx("dot", tone)} aria-hidden="true" /> : null;
+  }
   return null;
 }
 

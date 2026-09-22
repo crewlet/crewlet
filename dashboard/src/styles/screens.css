@@ -2497,6 +2497,34 @@ details > summary.int-summary::-webkit-details-marker {
      key beside it. */
   column-gap: var(--space-3);
 }
+/* A LIST WHOSE ORDER IS ITS CONTENT OPENS WITH THE PLACE, and the track is
+   declared on the LIST because that is where every track here lives — a row
+   is a subgrid of whatever its list has, so a row cannot grow a column on its
+   own. Both sets gain it, for the reason the narrow set is declared beside the
+   wide one at all: a track list is POSITIONAL, and a set that drifts from the
+   other hands every cell the wrong column and says nothing about it.
+
+   AND THE OPENING TRACK CARRIES THE ROW'S INSET, which is now this one rather
+   than the priority mark's — a subgrid item's padding comes out of the first
+   track it spans, so a bare width there resolves to nothing and the value
+   overflows onto the cell beside it. 20px is two tabular digits at `--fs-3xs`,
+   which is the whole range a stored queue has (`tracker.MaxPriorities` is 32).
+   The priority mark keeps the bare 16px it needs, one column along. */
+.work-rows[data-ordinals="true"] {
+  grid-template-columns:
+    calc(var(--row-inline) + 20px) 16px 74px auto minmax(0, 1fr)
+    auto auto auto auto;
+  --work-rows-narrow: calc(var(--row-inline) + 20px) 16px 70px auto minmax(0, 1fr);
+}
+/* THE PLACE READS FROM THE ROW'S OWN LEFT EDGE, like the mark beside it, and
+   it is TABULAR: a 9 that becomes a 10 in a proportional face moves the key
+   column under the pointer on the one list a reader is scanning down. */
+.work-cell-ord {
+  justify-content: flex-start;
+  font-size: var(--fs-3xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
 .work-row {
   display: grid;
   grid-template-columns: subgrid;
@@ -2559,50 +2587,11 @@ details > summary.int-summary::-webkit-details-marker {
   font-variant-numeric: tabular-nums;
 }
 
-/* A BAND IS A HEADING ON THE LIST, not a card around each group. Every group
-   used to be a `Card` with its own border, radius, shadow and padding, so a
-   list cut six ways was six panels down the page and the rows inside them
-   started 24px in from the rows of the group above. One continuous run of rows,
-   one left edge, and the group's name STICKY above its own rows is what makes a
-   grouped list scannable as one list rather than as six.
-
-   IT STICKS UNDER THE TOOLBAR, at `--sticky-top` — the height the toolbar
-   publishes — which is the same offset the grid's own column heads take. */
-.work-band {
-  position: sticky;
-  top: var(--sticky-top);
-  z-index: var(--z-sticky);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--row-inline);
-  background: var(--surface-raised);
-  border-block: 1px solid var(--border-subtle);
-  font-size: var(--fs-2xs);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--track-wide);
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  min-width: 0;
-}
-.work-band .count-chip {
-  margin-left: auto;
-}
-/* A BAND'S OWN COLOUR IS ITS STATE where the band IS a state — which is only
-   true of the due bands on somebody's day, where "overdue" is the one thing a
-   person has to see before anything else. Every other axis is identity and
-   stays neutral. */
-.work-band[data-band="overdue"] {
-  color: var(--critical-ink);
-}
-.work-band[data-band="today"] {
-  color: var(--info-ink);
-}
 /* THE PANEL A RUN OF `.work-row`s SITS IN. The work screen's own list is a
-   `DataGrid` now — one renderer, two column sets, see `shapes/Grid.tsx` — so
-   what draws this is the EMBEDDED lists: My work's day, stacked under its due
-   bands. The rule below outlives that move because it is a rule about a panel
-   and the bands inside it, and My work has both. */
+   `DataGrid` now — one renderer, two column sets, see `shapes/Grid.tsx` — and
+   so is My work's Assigned tab, which is that same grid narrowed to one
+   person. What draws this is the EMBEDDED lists that are not a grid at all:
+   My work's six bounded claims, an item's subtasks, a seat's queue. */
 .work-list {
   display: flex;
   flex-direction: column;
@@ -2614,19 +2603,15 @@ details > summary.int-summary::-webkit-details-marker {
      rounded off at its own radius, which `clip` does exactly as `hidden` did;
      what `hidden` ADDS is a scroll container, and a sticky box is confined to
      its nearest one. This panel has no height constraint — it grows to its
-     rows — so its scroll offset is permanently 0, and every `.work-band` above
+     rows — so its scroll offset is permanently 0, and every band heading above
      was positioned `--sticky-top` (48px) DOWN from the top of the list rather
      than held under the toolbar: the band left its own slot blank and painted
      over the first row of its own group, which was in the DOM, drawn, and
      covered. Measured on a grouped list at 1400px — the "To do" band at y=137
      over a first row at y=126, with the 89-126 strip empty. The scroller is
-     `.screen`, which is what the band sticks against now. */
+     `.screen`, which is what a sticky band holds against. The grid's own head
+     `frame.css` sticks the same way and for the same reason. */
   overflow: clip;
-  min-width: 0;
-}
-.work-band-group {
-  display: flex;
-  flex-direction: column;
   min-width: 0;
 }
 

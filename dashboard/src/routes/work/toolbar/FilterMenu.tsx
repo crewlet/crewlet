@@ -79,6 +79,16 @@ export interface FilterMenuProps {
   tags?: WorkProjectTag[];
   fields?: WorkFieldDef[];
   seats: { handle: string; name: string }[];
+  /**
+   * The handle the HOST screen fixed, where one did.
+   *
+   * A locked narrowing is not a filter: it is what the screen IS, so it is not
+   * offered here, not drawn as a chip and not on the address. Offering the row
+   * anyway would put a second answer to one question in front of the reader —
+   * and choosing it would write a key the lock overwrites on the way to the
+   * wire, which reads as a control that does nothing.
+   */
+  lockedAssignee?: string;
 }
 
 export function FilterMenu(props: FilterMenuProps) {
@@ -123,6 +133,7 @@ function useFilterFields({
   tags,
   fields,
   seats,
+  lockedAssignee,
 }: FilterMenuProps): FilterField[] {
   return useMemo(() => {
     const out: FilterField[] = [
@@ -145,16 +156,19 @@ function useFilterFields({
       label: "Priority",
       options: PRIORITIES.map((p) => ({ value: p, label: humanize(p) })),
     });
-    out.push({
-      param: "assignee",
-      label: "Assignee",
-      // UNASSIGNED IS A VALUE, not a missing filter — it is the one question a
-      // lead actually opens a board to ask.
-      options: [
-        { value: "none", label: "Unassigned" },
-        ...seats.map((s) => ({ value: s.handle, label: s.name })),
-      ],
-    });
+    // NOT WHERE THE HOST ALREADY FIXED IT — see [FilterMenuProps.lockedAssignee].
+    if (!lockedAssignee) {
+      out.push({
+        param: "assignee",
+        label: "Assignee",
+        // UNASSIGNED IS A VALUE, not a missing filter — it is the one question
+        // a lead actually opens a board to ask.
+        options: [
+          { value: "none", label: "Unassigned" },
+          ...seats.map((s) => ({ value: s.handle, label: s.name })),
+        ],
+      });
+    }
     // A TAG SET BELONGS TO A PROJECT, so this row exists only where the
     // project's own tags are known. On the company-wide list there is no set
     // to offer, and a free-text tag box would offer every misspelling.
@@ -182,7 +196,7 @@ function useFilterFields({
       out.push(customField(def, seats));
     }
     return out;
-  }, [shape, types, statuses, tags, fields, seats]);
+  }, [shape, types, statuses, tags, fields, seats, lockedAssignee]);
 }
 
 /**

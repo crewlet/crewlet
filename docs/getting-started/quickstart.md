@@ -387,8 +387,11 @@ human seat `contact.crewlet_operator_id` matching one of your
 `api.auth.tokens[].id`, and **My work** and the **Inbox** answer for that
 person. My work is one tab per claim on somebody's attention — what they hold,
 the order somebody put it in, the questions waiting on them — with every count
-on the strip. Until then the dashboard says so rather than guessing: an unbound
-token is an ordinary state, not a fault.
+on the strip, and a band above it naming whose day is on screen. **Assigned**
+is the work list narrowed to that person: the same Filter, Display and scope
+controls, opening grouped by when each task is due. Until then the dashboard
+says so rather than guessing: an unbound token is an ordinary state, not a
+fault.
 
 Once bound, **what you file through your own assistant counts as yours** on
 both screens. The record still names the token — a write through
