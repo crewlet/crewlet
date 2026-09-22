@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -24,19 +25,20 @@ import (
 //
 // # Why this lives in internal/store rather than beside each domain
 //
-// Two of the three domains reach it through [statelogtest.Run], which runs the
-// same check as one of its four suites. The CHART cannot: that suite also runs
-// the apply cases, and this domain has no applier yet — the engine's boot check
-// refuses a register entry with a nil applier, so a registration cannot land
-// before its applier. The check itself needs only a migrated estate and a
-// declaration, and the migrated estate is this package's. Running all three
-// here also makes the walk two-sided: a domain whose tables stopped being
-// created at all would fail here rather than quietly stop being certified.
+// Two of the four domains reach it through [statelogtest.Run], which runs the
+// same check as one of its four suites. The CHART and the IAM domain cannot:
+// that suite also runs the apply cases, and a domain has no applier on the
+// change that declares it — the engine's boot check refuses a register entry
+// with a nil applier, so a registration cannot land before its applier. The
+// check itself needs only a migrated estate and a declaration, and the migrated
+// estate is this package's. Running all four here also makes the walk
+// two-sided: a domain whose tables stopped being created at all would fail here
+// rather than quietly stop being certified.
 func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 	t.Parallel()
 
 	for _, domain := range []statelog.Domain{
-		tracker.Domain{}, pages.Domain{}, chart.Domain{},
+		tracker.Domain{}, pages.Domain{}, chart.Domain{}, iamdomain.Domain{},
 	} {
 		t.Run(domain.Name(), func(t *testing.T) {
 			t.Parallel()
@@ -131,36 +133,152 @@ func TestTheChartTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 	}
 }
 
-// EVERY TABLE THE CHART DOMAIN DECLARES IS ONE THE ESTATE ACTUALLY SHIPS.
+// EVERY TABLE A DOMAIN DECLARES IS ONE THE ESTATE ACTUALLY SHIPS, AND BACK.
 //
 // The declaration is what the scrub list, the identity claim and the local
 // sweep are all derived from, so a name in it that no migration creates is
 // three lists that are silently short — and a table the migration creates that
 // the domain does not classify joins whichever behaviour its absence resembled.
 // Both directions, for internal/skipgate's reason.
-func TestTheChartDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
+//
+// The reverse walk is keyed on the table PREFIX each domain names its tables
+// with, which is a convention rather than a rule the framework enforces — so
+// the case also asserts that every declared table actually carries it, or a
+// domain that renamed one out of its own prefix would silently stop being
+// walked in the direction that catches an unclassified table.
+func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 	t.Parallel()
 
 	shipped := tablesIn(t, store.EstateReplicated)
-	declared := chart.Domain{}.Tables()
-	if len(declared) == 0 {
-		t.Fatal("the chart domain declares no tables, so this guard checks nothing")
+	for _, tc := range []struct {
+		prefix string
+		domain statelog.Domain
+	}{
+		{"chart_", chart.Domain{}},
+		{"iam_", iamdomain.Domain{}},
+	} {
+		t.Run(tc.domain.Name(), func(t *testing.T) {
+			t.Parallel()
+			declared := tc.domain.Tables()
+			if len(declared) == 0 {
+				t.Fatalf("the %s domain declares no tables, so this guard "+
+					"checks nothing", tc.domain.Name())
+			}
+			for name := range declared {
+				if !shipped[name] {
+					t.Errorf("the %s domain declares %s and no replicated "+
+						"migration creates it", tc.domain.Name(), name)
+				}
+				if !strings.HasPrefix(name, tc.prefix) {
+					t.Errorf("the %s domain declares %s, which is outside the "+
+						"%q prefix this walk reads the estate by — a table "+
+						"renamed out of its domain's prefix stops being "+
+						"checked in the direction that catches an "+
+						"unclassified one", tc.domain.Name(), name, tc.prefix)
+				}
+			}
+			for name := range shipped {
+				if !strings.HasPrefix(name, tc.prefix) {
+					continue
+				}
+				if _, ok := declared[name]; !ok {
+					t.Errorf("%s is shipped and the %s domain does not classify "+
+						"it — the scrub list, the identity claim and the sweep "+
+						"are all derived from that map, so a table missing from "+
+						"it joins whichever behaviour its absence resembled",
+						name, tc.domain.Name())
+				}
+			}
+		})
 	}
-	for name := range declared {
-		if !shipped[name] {
-			t.Errorf("the chart domain declares %s and no replicated migration "+
-				"creates it", name)
+}
+
+// THE IAM OPS LEDGER TAKES THE FRAMEWORK'S FOUR COLUMNS TOO, and the fifth
+// column that would be tempting here is the same one the chart's case refuses
+// for the same reason: a `kind`, so a session's op id could be swept on a
+// different schedule from an enrolment's. This domain declares ONE ops horizon
+// and its authentication TRAIL declares two, which is not a contradiction —
+// they answer different questions and are measured against different things,
+// an audit obligation and the longest a client will retry.
+func TestTheIamOpsLedgerCarriesTheFrameworksFourColumns(t *testing.T) {
+	t.Parallel()
+
+	db := openReplicated(t)
+	got := columnsOf(t, db, iamdomain.Domain{}.OpsTable())
+	want := []string{"applied_at", "op_id", "position", "subject"}
+	if !slices.Equal(got, want) {
+		t.Errorf("%s has columns %v, want exactly %v — the framework writes the "+
+			"statements that fill this table, so a column it does not know is "+
+			"one nothing ever populates",
+			iamdomain.Domain{}.OpsTable(), got, want)
+	}
+
+	ddl := replicatedDDL(t)
+	if !strings.Contains(ddl, "ON iam_ops (applied_at)") {
+		t.Error("no index over iam_ops (applied_at) is shipped — the ops sweep " +
+			"is a range delete over the age, and a range delete ships its index")
+	}
+	if strings.Contains(ddl, "iam_ops (kind") || strings.Contains(ddl, "iam_ops(kind") {
+		t.Error("an index over iam_ops keyed on a kind is shipped — this domain " +
+			"declares ONE ops horizon, and an index implying a second is how the " +
+			"second gets written")
+	}
+}
+
+// THE IAM TABLES SHIP THE COLUMNS A LATER MIGRATION CANNOT ADD.
+//
+// schema_migrations keys on the FILENAME, so editing a migration that has
+// already run silently never re-runs it. Every column here is one the applier
+// fills from the FIRST record it ever writes — the three claims it denormalises
+// onto a person's row so the duplicate report can scan them, and the bucket
+// every table's sweep seeks on — so they have to ship in the migration that
+// creates the table rather than in the one that starts using them.
+func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
+	t.Parallel()
+
+	db := openReplicated(t)
+	for table, columns := range map[string][]string{
+		"iam_people":             {"login", "email_blind", "seat_id", "bucket"},
+		"iam_credentials":        {"bucket"},
+		"iam_invites":            {"bucket"},
+		"iam_bootstrap_codes":    {"bucket"},
+		"iam_sessions":           {"bucket"},
+		"iam_session_generation": {"bucket"},
+		"iam_history":            {"class", "bucket"},
+	} {
+		got := columnsOf(t, db, table)
+		for _, column := range columns {
+			if !slices.Contains(got, column) {
+				t.Errorf("%s does not carry %s — an applied migration is "+
+					"history, not source, so no later file can add it to a "+
+					"database that has already run this one", table, column)
+			}
 		}
 	}
-	for name := range shipped {
-		if !strings.HasPrefix(name, "chart_") {
-			continue
-		}
-		if _, ok := declared[name]; !ok {
-			t.Errorf("%s is shipped and the chart domain does not classify it — "+
-				"the scrub list, the identity claim and the sweep are all derived "+
-				"from that map, so a table missing from it joins whichever "+
-				"behaviour its absence resembled", name)
+}
+
+// AND THE THREE DUPLICATE-CLAIM INDEXES ARE SHIPPED, PARTIAL AND NON-UNIQUE.
+//
+// The uniqueness half is already covered by the estate-wide scan in
+// schemarules_test.go, which refuses UNIQUE in any replicated migration. What
+// THAT cannot say is the positive claim: that these three indexes exist at all.
+// A duplicate claim is a state ordinary traffic cannot produce — the broker
+// refuses the second claim on a subject — and can arise from a restore or a
+// reanchor, so the duty that REPORTS one is the whole remedy, and a duty whose
+// index nobody shipped is a full scan of the directory on every tick.
+func TestTheDuplicateClaimIndexesArePartialAndNotUnique(t *testing.T) {
+	t.Parallel()
+
+	ddl := replicatedDDL(t)
+	for _, want := range []string{
+		"ON iam_people (email_blind, id) WHERE email_blind != ''",
+		"ON iam_people (login, id) WHERE login != ''",
+		"ON iam_people (seat_id, id) WHERE seat_id != ''",
+	} {
+		if !strings.Contains(ddl, want) {
+			t.Errorf("no index matching %q is shipped — the duplicate-claim "+
+				"duty reads these three, and without them its scan is the whole "+
+				"directory on every tick", want)
 		}
 	}
 }

@@ -329,10 +329,13 @@ from the work tracker, are the first retired kind.
    measured once. **Divide it when more than one engine shares a filesystem**:
    free space bounds their sum, not each of them.
 2. **Each log's byte ceiling**: `stream.tracker_log_max_bytes`,
-   `stream.tracker_vectors_max_bytes` and `stream.pages_log_max_bytes`, sized
-   together as [below](#how-the-byte-ceilings-are-sized). A full log
-   **refuses** appends rather than shedding old records; see
-   [Retention](retention.md).
+   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
+   `stream.chart_log_max_bytes` and `stream.iam_log_max_bytes`, sized
+   together as [below](#how-the-byte-ceilings-are-sized). The last two are
+   **not derived from the disk** — an org chart grows with hirings and the
+   identity estate with sign-ins, and a volume has an opinion about neither —
+   so each takes a flat default and its own floor. A full log **refuses**
+   appends rather than shedding old records; see [Retention](retention.md).
 3. **The trim floor** — how far back the log can be replayed from, which is
    what bounds how long a node may be away.
 4. **The store's own size** — every node is a full replica, so the corpus is

@@ -132,6 +132,59 @@ const (
 	ChartLogMaxBytesFloor   int64 = 64 << 20
 	ChartLogMaxBytesCeiling int64 = 16 << 30
 
+	// IamLogMaxBytesFloor and IamLogMaxBytesCeiling bound the identity
+	// estate's log, and DefaultIamLogMaxBytes is what an unset value takes.
+	//
+	// THE DEFAULT IS NOT THE FLOOR HERE, which is the difference from the
+	// org chart's and the whole of the arithmetic below. Like the chart's,
+	// this ceiling is NOT derived from the disk: what it grows with is the
+	// company's headcount and how often people sign in, and a volume has
+	// nothing to say about either. Unlike the chart's, it genuinely grows.
+	//
+	// # Half a gibibyte, and where the number comes from
+	//
+	// SESSIONS DOMINATE. People, credentials and invitations are hundreds
+	// of records a year at any company that fits on one broker — the
+	// chart's order of magnitude. A session writes one record when it opens
+	// and one when it closes and nothing in between, because a rotation id
+	// is DERIVED from the lineage and the session's age rather than
+	// recorded; so the rate is about (people × sign-ins a day × 2).
+	//
+	// At the reference company docs/guides/retention.md forecasts — whose
+	// 3 000 turns a day and 50 projects put it in the low hundreds of
+	// people — a pessimistic three new sessions per person per day is
+	// roughly 220 000 session records a year, and at the ~700 bytes a
+	// SIGNED record costs on the wire that is about 285 MB a year with
+	// everything else folded in. So this default is around eighteen months
+	// of a COMPLETELY BLOCKED trim at the pessimistic rate and about five
+	// years at a realistic one — and a blocked trim raises an alarm and
+	// holds the backup age against the operator from its first tick, so the
+	// question is how long somebody has to act on a firing alarm, not how
+	// long until anyone notices.
+	//
+	// IT IS NOT 64 MiB. The chart's number is four years because a chart
+	// changes when somebody is hired, moved or promoted; this log moves
+	// every morning, and at 64 MiB the pessimistic rate fills it in under
+	// three months — a window that could refuse an append before somebody
+	// got back from leave.
+	//
+	// IT IS NOT THE GIBIBYTE [engine.MinDomainCeiling] names either, and
+	// the chart's own history is why: the broker grants a stream its whole
+	// ceiling at create time, so this number is free space a node must have
+	// BEFORE IT CAN BOOT AT ALL, and a fifth domain at the framework floor
+	// raises that by a gibibyte for a log that will not fill one. Half is
+	// the smallest power of two that clears a year at the pessimistic rate
+	// with margin.
+	//
+	// THE FLOOR IS THE CHART'S so a small company can pay the small price:
+	// ten people write a fiftieth of the reference rate, for which 64 MiB
+	// is decades. THE CEILING IS A TYPO GUARD rather than a policy, like
+	// the store limit's — 16 GiB is orders of magnitude past any modelled
+	// volume, so anything beyond it is a unit mistake and not a deployment.
+	DefaultIamLogMaxBytes int64 = 512 << 20
+	IamLogMaxBytesFloor   int64 = 64 << 20
+	IamLogMaxBytesCeiling int64 = 16 << 30
+
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
 	// is than the mutation log's derived ceiling.
 	//
@@ -360,6 +413,24 @@ func (s Stream) ChartMaxBytes() (int64, bool) {
 		return s.ChartLogMaxBytes, false
 	}
 	return DefaultChartLogMaxBytes, true
+}
+
+// IamMaxBytes is the identity estate's log ceiling, and whether it was derived.
+//
+// IT TAKES NO FREE-SPACE ARGUMENT, like the org chart's and unlike every other
+// ceiling here, and the absence is the statement: this default is a property of
+// the company's HEADCOUNT and its sign-in rate, not of the disk — see
+// [DefaultIamLogMaxBytes] — so a parameter it ignored would be a signature
+// claiming a relationship that does not exist.
+//
+// The second return is still what the engine logs when it sizes the stream, and
+// it still reports `true` for the default: a value nobody wrote is one the
+// shared-budget scaling may lower, and one an operator wrote is not.
+func (s Stream) IamMaxBytes() (int64, bool) {
+	if s.IamLogMaxBytes > 0 {
+		return s.IamLogMaxBytes, false
+	}
+	return DefaultIamLogMaxBytes, true
 }
 
 // VectorsMaxBytes is the vector changelog's ceiling, and whether it was

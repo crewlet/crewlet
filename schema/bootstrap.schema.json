@@ -304,6 +304,12 @@
           "minimum": 0,
           "type": "number"
         },
+        "iam_log_max_bytes": {
+          "description": "Byte ceiling on the identity estate's log; unset takes a flat 512 MiB, 64 MiB..16 GiB.",
+          "maximum": 17179869184,
+          "minimum": 67108864,
+          "type": "integer"
+        },
         "pages_log_max_bytes": {
           "description": "Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's derived value, 1 GiB..16 GiB.",
           "maximum": 274877906944,

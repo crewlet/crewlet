@@ -134,15 +134,25 @@ config import`. Every read still answers, because that revision is exactly the
 one you have to look at in order to repair it.
 
 **Nothing to configure, and one thing you may want to.** The chart's log has a
-byte ceiling, `stream.chart_log_max_bytes`, and it is the only state log whose
-default is *not* derived from your disk: unset, it takes a flat **1 GiB**. The
-other three logs grow with a corpus your volume has something to say about, and
-a chart does not — it is hundreds of objects, and it changes when somebody is
-hired, moved or promoted rather than on every comment or every save. At the
-modelled rate, a completely blocked trim reaches a gibibyte in well over a
-century. Raise it only if you are reorganising continuously *and* your trim is
-stopped, and read [Retention](../guides/retention.md) first, because a stopped
-trim is the actual problem in that sentence.
+byte ceiling, `stream.chart_log_max_bytes`, and it is one of two state logs
+whose default is *not* derived from your disk: unset, it takes a flat **64
+MiB**. The corpus-sized logs grow with something your volume has an opinion
+about, and a chart does not — it is hundreds of objects, and it changes when
+somebody is hired, moved or promoted rather than on every comment or every
+save. At the modelled rate that is **four years** of a completely blocked trim.
+
+It is deliberately *below* every corpus-sized log's 1 GiB floor, because a
+floor is a property of the log it was written for: the broker grants a stream
+its whole ceiling when it creates it, so this number is free space a node needs
+before it can boot at all, and a chart at the corpus floor would reserve a
+gibibyte for a log that will not fill one this century. (The
+[identity estate](identity-and-access.md#sizing-streamiam_log_max_bytes) is the
+other undisked one, and it takes a larger flat default because sessions make it
+grow every morning.)
+
+Raise it only if you are reorganising continuously *and* your trim is stopped,
+and read [Retention](../guides/retention.md) first, because a stopped trim is
+the actual problem in that sentence.
 
 Crossing the ceiling **refuses the append** rather than dropping the oldest
 record. Nothing on this stream is derivable from anything else, so shedding

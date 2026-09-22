@@ -568,20 +568,37 @@ stream:
                                     #   and a blocked trim fills either one in
                                     #   the same time. Crossing it refuses the
                                     #   append, like the mutation log's
-  # chart_log_max_bytes: 1073741824 #   the org chart's log, the ordered stream
+  # chart_log_max_bytes: 67108864   #   the org chart's log, the ordered stream
                                     #   every change to the company's own
-                                    #   structure goes through (1..16 GiB).
-                                    #   THE ONE CEILING THAT IS NOT DERIVED FROM
-                                    #   THE DISK: unset takes a flat 1 GiB. The
-                                    #   other three grow with a corpus your
-                                    #   volume has something to say about, and a
-                                    #   chart does not — it is hundreds of
-                                    #   objects and it changes when somebody is
-                                    #   hired, moved or promoted, so a blocked
-                                    #   trim reaches a gibibyte in well over a
-                                    #   century. Raise it only if you are
-                                    #   reorganising continuously and the trim
-                                    #   is stopped
+                                    #   structure goes through (64 MiB..16 GiB).
+                                    #   NOT DERIVED FROM THE DISK: unset takes a
+                                    #   flat 64 MiB. The corpus-sized logs grow
+                                    #   with something your volume has an opinion
+                                    #   about, and a chart does not — it is
+                                    #   hundreds of objects and it changes when
+                                    #   somebody is hired, moved or promoted, so
+                                    #   this is FOUR YEARS of a completely
+                                    #   blocked trim. It is deliberately below
+                                    #   every other log's floor: the broker
+                                    #   grants a ceiling in full when it creates
+                                    #   the stream, so the number is free space a
+                                    #   node needs before it can boot at all
+  # iam_log_max_bytes: 536870912    #   the identity estate's log, the ordered
+                                    #   stream every person, credential,
+                                    #   invitation and session goes through
+                                    #   (64 MiB..16 GiB). NOT DERIVED FROM THE
+                                    #   DISK either: what it grows with is your
+                                    #   HEADCOUNT and how often people sign in.
+                                    #   Unset takes a flat 512 MiB. SESSIONS SIZE
+                                    #   IT — a session writes one record when it
+                                    #   opens and one when it closes and nothing
+                                    #   in between, because a rotation id is
+                                    #   derived rather than recorded — so this is
+                                    #   about eighteen months of a completely
+                                    #   blocked trim for a few hundred people at
+                                    #   a pessimistic sign-in rate. Set it toward
+                                    #   the 64 MiB floor for a small company and
+                                    #   up for a large one
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,

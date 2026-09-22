@@ -1004,6 +1004,41 @@ type Stream struct {
 	// append rather than shedding history.
 	ChartLogMaxBytes int64 `yaml:"chart_log_max_bytes,omitempty" json:"chart_log_max_bytes,omitempty" js:"min=67108864;max=17179869184" desc:"Byte ceiling on the org chart's log; unset takes a flat 64 MiB, 64 MiB..16 GiB."`
 
+	// IamLogMaxBytes is the byte ceiling on the identity estate's log —
+	// the ordered stream every person, credential, invitation and session
+	// goes through.
+	//
+	// UNSET TAKES A FLAT 512 MiB, and like the org chart's it is NOT
+	// derived from the disk: what this log grows with is the company's
+	// HEADCOUNT and how often people sign in, neither of which the
+	// operator's volume has anything to say about.
+	//
+	// SESSIONS ARE WHAT SIZE IT. People, credentials and invitations are
+	// hundreds of records a year at any company that fits on one broker. A
+	// session is one record when it opens and one when it closes and
+	// nothing in between — a rotation id is DERIVED rather than recorded —
+	// so the rate is roughly (people × sign-ins a day × 2). At the
+	// reference company a pessimistic three sign-ins per person per day is
+	// about 285 MB a year with everything else folded in, so this default
+	// is around eighteen months of a COMPLETELY BLOCKED trim at that rate
+	// and about five years at a realistic one.
+	//
+	// THE FLOOR IS THE ORG CHART'S 64 MiB rather than the gibibyte every
+	// other log takes, because the broker grants a stream its whole ceiling
+	// when it creates it: this number is free space a node must have before
+	// it can boot at all, and a ten-person company writing a fiftieth of
+	// the reference rate should not have to reserve half a gibibyte to
+	// start. The ceiling is a TYPO GUARD rather than a policy, like the
+	// store limit's.
+	//
+	// It shares the state logs' one budget, and what the mutation log's
+	// field says about it holds here unchanged: the value is the one the
+	// stream is CREATED with, a derived value is scaled with the others to
+	// fit the broker and a set one is not, and crossing it refuses the
+	// append rather than shedding history — which here would be shedding
+	// the authentication trail.
+	IamLogMaxBytes int64 `yaml:"iam_log_max_bytes,omitempty" json:"iam_log_max_bytes,omitempty" js:"min=67108864;max=17179869184" desc:"Byte ceiling on the identity estate's log; unset takes a flat 512 MiB, 64 MiB..16 GiB."`
+
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
 	// trimming at all, deliberately, when a term it depends on is unknown.
@@ -1277,6 +1312,8 @@ func (s *Stream) validate(path Path) error {
 		PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling)
 	bytesInRange(&p, path, "chart_log_max_bytes", s.ChartLogMaxBytes,
 		ChartLogMaxBytesFloor, ChartLogMaxBytesCeiling)
+	bytesInRange(&p, path, "iam_log_max_bytes", s.IamLogMaxBytes,
+		IamLogMaxBytesFloor, IamLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -1301,19 +1338,20 @@ func (s *Stream) validate(path Path) error {
 	// the refusal itself, which names this limit, what was already spoken
 	// for, and the field the ceiling came from.
 	declared := s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes +
-		s.PagesLogMaxBytes + s.ChartLogMaxBytes
+		s.PagesLogMaxBytes + s.ChartLogMaxBytes + s.IamLogMaxBytes
 	if s.StoreMaxBytes > 0 && declared > s.StoreMaxBytes {
 		p.add(at(path, "store_max_bytes"), ErrConflict,
 			"%d bytes is smaller than the stream ceilings declared inside it "+
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
-				"pages_log_max_bytes %d + chart_log_max_bytes %d = %d): the broker "+
+				"pages_log_max_bytes %d + chart_log_max_bytes %d + "+
+				"iam_log_max_bytes %d = %d): the broker "+
 				"refuses a stream whose ceiling it cannot back, so this node would "+
 				"fail to provision one of them. Raise store_max_bytes, or lower the "+
 				"ceilings — and leave headroom, because the state logs reserve only "+
 				"a share of this limit and every other stream on the broker grows "+
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
-			s.PagesLogMaxBytes, s.ChartLogMaxBytes, declared)
+			s.PagesLogMaxBytes, s.ChartLogMaxBytes, s.IamLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an

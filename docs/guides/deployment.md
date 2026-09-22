@@ -57,30 +57,40 @@ webhooks and the dashboard, and there is nothing else to operate.
 
 ### The room the stream's volume needs
 
-The engine's own tracker, knowledge base and vector index each keep an ordered
-log on the stream, and each log's byte ceiling is **reserved** on the volume
-holding `stream.store_dir` when its stream is created: the embedded broker
-grants a ceiling in full, up front, or refuses to create the stream at all.
-Its limit is three quarters of that volume's free space.
+The engine's own tracker, knowledge base, vector index and org chart each keep
+an ordered log on the stream, and each log's byte ceiling is **reserved** on the
+volume holding `stream.store_dir` when its stream is created: the embedded
+broker grants a ceiling in full, up front, or refuses to create the stream at
+all. Its limit is three quarters of that volume's free space.
 
-The node sizes the three ceilings together to fit half of that limit, and
-never below 1 GiB each, so:
+The node sizes the ceilings together to fit half of that limit. A log that
+would be scaled below its own floor is **held at the floor** instead, and the
+floors are not all the same number — so:
 
-- **A first boot needs at least 4 GiB free on that volume.** Three quarters of
-  4 GiB is the three 1 GiB floors. Below it the node refuses to boot with an
-  error naming the log it could not reserve, the bytes it needed, the bytes
-  the broker had left, and the Tier A field that sets the ceiling.
+- **A first boot needs at least 4.1 GiB free on that volume** (measured).
+  Three quarters of it is the sum of the floors: 1 GiB each for the mutation
+  log, the vector changelog and the knowledge base's log, and 64 MiB for the
+  org chart's. Below that the node refuses to boot with an error naming the log
+  it could not reserve, the bytes it needed, the bytes the broker had left, and
+  the Tier A field that sets the ceiling.
+- **A floor is per log, not universal.** The org chart's is far below the
+  others because a chart is a few hundred records a year, and a ceiling is
+  granted in full at create time — so a log at the corpus-sized floor costs
+  free space a node needs before it can start, for a log that will not fill it
+  this century.
 - **More room buys longer logs, up to a point.** Unset, the mutation log asks
   for a quarter of the free space (4..64 GiB), the knowledge base's log for a
   quarter of that, and the vector changelog for 16 GiB capped by the same
   quarter. They are scaled down together whenever they ask for more than that
   half, which on a first boot is every volume with less than 256 GiB free;
-  from there up each log gets what it asked for.
+  from there up each log gets what it asked for. The org chart's default is a
+  flat 64 MiB and is not derived from the disk at all.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
-  `stream.tracker_vectors_max_bytes` or `stream.pages_log_max_bytes` later,
-  changes nothing about streams that already exist; `crewlet retention
-  set-capacity` is what changes a running log's ceiling.
+  `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
+  `stream.chart_log_max_bytes` or `stream.iam_log_max_bytes` later, changes
+  nothing about streams that already exist; `crewlet retention set-capacity` is
+  what changes a running log's ceiling.
 
 [Replication](replication.md#how-the-byte-ceilings-are-sized) has the whole
 arithmetic and the refusal's text.

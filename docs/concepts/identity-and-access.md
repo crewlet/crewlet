@@ -296,6 +296,163 @@ the path and redirects before it matches at all.
 
 ---
 
+## Where identity is kept: the fifth state-log domain
+
+The vocabulary above is what the engine *names*. Where it is **stored** is a
+replicated state machine of its own — the state log's fifth domain, beside the
+work tracker, the vectors, the knowledge base and the [org
+chart](chart-domain.md). Every change is one record on one ordered stream
+(`CREWLET_IAM_LOG`), applied by a deterministic applier into an identical set
+of SQL tables on every node, with the checkpoint committed in the same
+transaction as the rows.
+
+> **What is in place today** is the estate itself: the tables, the subject
+> grammar, the scope and the Tier A ceiling below. The applier, the sign-in
+> routes and the directory arrive with it; until they do, what an operator
+> configures is still the token list under [§ What is configured
+> today](#what-is-configured-today).
+
+### Uniqueness is arbitrated, not indexed
+
+This is the one decision the whole schema is built around, and it is the
+opposite of what an identity database normally does.
+
+The replicated estate **forbids a `UNIQUE` index outside a primary key**. A
+constraint violation inside an apply transaction aborts it *deterministically
+on every node at once* — so a rare, cosmetic anomaly becomes a fleet-wide
+stalled log, and in this domain a stalled log is every login in the company.
+
+So nothing here is unique, and the uniqueness an identity estate obviously
+needs is enforced somewhere else entirely: **at the broker, by the subject a
+claim arbitrates on.**
+
+| What is claimed | Subject | How it is taken |
+|---|---|---|
+| An email address | `crewlet.iam.log.email.<blind>` | create-only, expectation zero |
+| A login | `crewlet.iam.log.login.<login>` | create-only, expectation zero |
+| A seat binding | `crewlet.iam.log.seat.<seat id>` | create-only, expectation zero |
+| A session | `crewlet.iam.log.session.<lineage>` | create-only, expectation zero |
+| A person's own content | `crewlet.iam.log.person.<id>` | conditional on the row's version |
+| The first-person bootstrap | `crewlet.iam.log.bootstrap` | one object for the whole company |
+
+Two administrators enrolling one address publish to the same subject at the
+same expectation, the broker accepts exactly one, and the loser is told which
+person holds it. Two administrators enrolling *different* addresses never
+contend at all.
+
+Because a record has exactly one subject, **an enrolment is a sequence**: take
+the address, take the login, then write the person. A sequence that stops
+halfway leaves a claimed address with no person — a legal, named state that a
+duty reports and a sweep collects, rather than a person holding an address
+somebody else also holds.
+
+> **If you are reading the schema and reaching for a unique index as a
+> backstop: don't.** A duplicate cannot arise from ordinary traffic, and it
+> *can* arise from a restore or a reanchor. Three **non-unique, partial**
+> indexes over the address blind, the login and the seat id are what a duty
+> reads to *report* one. A unique index would convert an anomaly an operator
+> can repair into an outage nobody can.
+
+### What is in the clear, and what is not
+
+A person's **name** and **email address** are sealed under that person's own
+data encryption key, with their id as additional authenticated data, *before*
+the record is published. They are ciphertext on the broker, in every node's
+database, in every snapshot and in every backup — and destroying the key is
+what removing a person actually does. The row and the id outlive it, because
+the audit trail names them.
+
+Sealing happens at the **writer** rather than on each node, which is what keeps
+the fleet's byte-for-byte identity claim meaningful: every node writes the same
+ciphertext.
+
+A **login** is in the clear, and the asymmetry is deliberate — a login is a
+name the company chose, printed beside every change an operator reads. Blinding
+a value the dashboard renders on every row would cost you the ability to read
+your own audit trail for nothing.
+
+An address is looked up by its **blind**: a keyed hash, so a node holding the
+key can compute it from an address and nobody else can go the other way.
+Signing in opens nothing.
+
+### The seven tables
+
+| Table | What it holds |
+|---|---|
+| `iam_people` | One person or machine, and the three claims denormalised onto their row so a duplicate can be *reported* |
+| `iam_credentials` | The **verifier** for each way somebody proves themselves — a password digest, an identity-provider subject, a machine token's hash. Never a secret that could be presented to anything |
+| `iam_invites` | An address spoken for by somebody who has no person yet, and the grants redeeming it confers |
+| `iam_bootstrap_codes` | How a company with nobody in it acquires its first administrator |
+| `iam_sessions` | One row per session **lineage**. Rotations are not rows — a rotation id is derived — so this grows with sign-ins, not with requests |
+| `iam_session_generation` | One person's **revocation epoch**, in its own table because every request compares against it |
+| `iam_history` | The authentication trail: who did what to whom, and why |
+
+Beside them sit the log's own three machinery tables — the operation ledger,
+the deferred records and their scope index — which are local to each node,
+excluded from the identity claim, and scrubbed out of any snapshot a node
+donates to a joining peer.
+
+### Two retention horizons, and one
+
+`iam_history` is the only table here with **two** horizons, separated by a
+`class` column the engine derives from the operation rather than taking from
+the record:
+
+- a **change** — who suspended this person, who granted this access — is an
+  audit somebody asks a year later, and in several jurisdictions one they must
+  be able to ask;
+- a **session** — who signed in on Tuesday — answers an investigation that is
+  days old, and is a record of a person's working hours for as long as it is
+  kept.
+
+Keeping the second as long as the first would be storing more about people than
+there is a reason to. The operation ledger has **one** horizon, which is not a
+contradiction: it answers "did my write land", and is measured against the
+longest a client will retry.
+
+The sweep that enforces them is a **record on the log**, not a local delete,
+and it names a *position range* the publisher resolves once — so two nodes with
+skewed clocks delete identical rows. It runs per **bucket**: the estate is
+divided into 64 partitions by a hash of the person's id, so one horizon's worth
+of deletions is 64 bounded transactions rather than one unbounded one.
+
+### A stalled identity log does not stop your agents
+
+This is the first strictly-ordered domain whose health does **not** gate seat
+admission, and the reason is worth knowing before you see the alarm.
+
+An agent seat never reads this domain. A seat's principal is its own handle,
+its authority is decided from the [org chart](chart-domain.md), and its work
+arrives on its mailbox. So a node whose identity applier has stalled runs every
+seat it holds exactly as correctly as a node that is current — and shedding a
+company's seats because a human cannot sign in would be an outage caused by the
+wrong subsystem, at the moment you most need the company still working while
+you fix it.
+
+What a stall gates instead is the request path, one request at a time: a node
+that has not yet applied a revocation is designed to answer a session with
+**503**, never 401. A 401 tells a browser to sign in again, and one stalled
+applier would stampede your identity provider.
+
+### Sizing `stream.iam_log_max_bytes`
+
+Like the org chart's, this ceiling is **not derived from your disk** — what it
+grows with is your headcount and how often people sign in, and your volume has
+nothing to say about either. Unlike the org chart's, it genuinely grows.
+
+Sessions are what size it. People, credentials and invitations are hundreds of
+records a year; a session writes one record when it opens and one when it
+closes and nothing in between. Unset, it takes a flat **512 MiB**, which is
+roughly eighteen months of a *completely blocked* trim at a pessimistic rate
+for a company of a few hundred people, and about five years at a realistic one.
+
+Set it down toward its **64 MiB** floor for a small company — the broker
+reserves a stream's whole ceiling when it creates it, so this number is free
+space a node needs before it can boot at all — and up for a large one. See
+[Configuration](configuration.md) and [Retention](../guides/retention.md).
+
+---
+
 ## What is configured today
 
 The identity vocabulary above is what the engine *names*. What an operator sets

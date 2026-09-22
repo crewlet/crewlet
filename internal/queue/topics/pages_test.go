@@ -71,7 +71,7 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 	}
 }
 
-// THE FOUR DOMAINS' SUBJECT SPACES ARE DISJOINT.
+// THE FIVE DOMAINS' SUBJECT SPACES ARE DISJOINT.
 //
 // They share one broker, and a stream created over a wildcard that overlapped
 // another's would take deliveries meant for it — silently, because both
@@ -83,6 +83,7 @@ func TestNoDomainsSubjectSpaceOverlapsAnothers(t *testing.T) {
 		"vectors": topics.TrackerVectorsPrefix + ".",
 		"pages":   topics.PagesLogPrefix + ".",
 		"chart":   topics.ChartLogPrefix + ".",
+		"iam":     topics.IamLogPrefix + ".",
 	}
 	for a, pa := range prefixes {
 		for b, pb := range prefixes {

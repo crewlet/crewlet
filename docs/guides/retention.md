@@ -299,7 +299,8 @@ make.
 ## Changing a log's ceiling
 
 A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
-`stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`) is not a live
+`stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
+`stream.chart_log_max_bytes`, `stream.iam_log_max_bytes`) is not a live
 setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
@@ -644,6 +645,29 @@ for ever against a subject that does. Below the floor there is no record left
 to replay, so there is nothing left for the anchor to be the anchor of. Two
 nodes reading their own wall clocks would delete different rows, which is why
 this one term is a position and not a duration.
+
+The **authentication trail** — `iam_history`, the identity domain's record of
+who did what to whom — is the one table in any domain with **two** horizons,
+and a `class` column the engine derives from the operation is what separates
+them. A **change** (somebody suspended, an access granted, a person removed) is
+an audit asked a year later, and in several jurisdictions one that must be
+answerable; a **session** (who signed in on Tuesday) answers an investigation
+that is days old, and is a record of a person's working hours for as long as it
+is kept. Keeping the second as long as the first would be storing more about
+people than there is a reason to.
+
+The identity domain's **operation ledger** keeps the single 30-day horizon
+every other domain's does, which is not a contradiction with the two above: a
+ledger answers "did my write land" and is measured against the longest a client
+will retry, where a trail answers "what happened" and is measured against an
+audit obligation. Its sweep is also the one that is **a record on the log**
+rather than a local delete — the rows are identity-claimed, so a node sweeping
+on its own clock would hold different bytes from its peers, and "N
+byte-identical copies" would quietly become a claim about how synchronised
+their clocks were. The record names a *position range* the publisher resolved
+once, and it runs **per bucket**: the estate is divided into 64 partitions by a
+hash of the person's id, so one horizon's worth of deletions is 64 bounded
+transactions rather than one unbounded one.
 
 A person's **inbox** — one row per routed change per recipient — is swept at
 `tracker.native.inbox_retention_days`, **365 days** by default and settable
