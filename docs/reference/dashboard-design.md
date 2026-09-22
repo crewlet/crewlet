@@ -266,11 +266,77 @@ to `""` is a key the router deletes — so the segment snapped back to its
 fallback on the next render, and the one segment whose whole job is to show
 finished work could not be selected.
 
+**A key that is there and empty is not a key that is missing.** The scope's
+third value has a NAME for one half of this; the column narrowing has the other
+half, and it cannot borrow the trick. Narrowing a board to one of its columns
+writes `group=<value>`, and the column holding the rows with no value on the
+axis — Unassigned, Untagged, No parent — has the empty string as its key, on
+every axis, which is what the engine reads with `Params.Has`. So no word could
+be spelled that some axis will not one day hold as a value, and the honest
+spelling is PRESENCE: the address carries `group=` with nothing after it,
+`URLSearchParams` round-trips it, and every reader asks whether the key is there
+rather than what it says. Written as a plain string it was unreachable end to
+end — the query builder dropped an empty value, `useParam` could not tell it
+from an absent key, and the address writer deleted it — so the Unassigned
+column's own "N more →" loaded the whole board.
+
 A **saved view** is neither: it is a query somebody arranged and put somewhere,
 so it is a tab in the strip. The five shapes are not tabs beside it — a shape
 is a way of drawing any query, and mixed into one strip the two read as the
 same kind of thing. That is also why `view=` and `shape=` are two keys:
 switching a saved board to a list must not throw the saved filters away.
+
+### The sparse state
+
+Every screen above is drawn, argued about and reviewed on a company with work
+in it. A company's first week is the state every company passes through, and it
+is the one where each of these bands is conditional on data that does not exist
+yet — so the page a new operator meets is the one nobody designed. Five rules,
+each the answer to one thing that went missing at one item:
+
+- **The landing shape is the list.** A board's information is the comparison
+  ACROSS its lanes, which makes it the worst shape at low N and the best at
+  high N: four lanes holding one card between them say nothing one lane could
+  not, and that card is a 292 px object in a 1500 px field. A list degrades to
+  one full-width row and is still a list. So a container with no default view
+  opens as a list and the board is one press away in **Display** — and the
+  landing shape is never conditional on how much work exists, because a screen
+  that redraws itself as a company fills up is a screen nobody can learn.
+- **A closed-set axis draws every declared value; an open one draws what
+  exists.** The engine's grouping is a plain `GROUP BY`, so a status nobody has
+  used is not a group and a one-item company got a one-lane board. A board is
+  the WORKFLOW rather than the occupied part of it, so `status`, `status_group`
+  and `priority` — the three axes the engine gives a declared ORDER — are drawn
+  whole, narrowed to what the scope segment admits (Open draws no Done lane),
+  and an empty lane says "Nothing here". `assignee`, `tag`, `type`, `project`
+  and a custom field's options are not: a lane per possible assignee is not a
+  board.
+- **The view strip is always drawn.** Its first tab is the container's own
+  list — a real destination, and the only thing that names the page inside its
+  own content column — so gating the strip on somebody having saved a query
+  left the toolbar as the top edge of the screen. It ends in a link to the
+  inventory, because saved views are undiscoverable until somebody has used
+  one. The container tab carries no count: the engine's total is over the
+  FILTER and not over the container, and a number an answer does not give is
+  not drawn.
+- **An empty list is a function of what was ASKED.** One sentence answered
+  three questions that send a reader to three different places, and it blamed
+  filters on a screen with no chip row at all. So: a narrowing is on and
+  nothing matched → "Nothing matches", with the control that clears it rather
+  than a description of one; nothing is narrowing and this container has
+  nothing in this SCOPE → "Nothing open here", naming the switch, with a number
+  only where the container's own counts give one; nothing at all → how work
+  arrives. The last one is drawn by whoever holds the wider fact — the page for
+  a company with no projects, the project screen for an empty project — and the
+  list stays quiet rather than stacking a second panel under it.
+- **The end of a complete list is said.** A list that reached its end and one
+  that was cut off both ended in rows and then page ground: the count in the
+  bar is silent once everything matching is on screen, and a cursor is
+  invisible. A complete answer with rows on it closes with "That is all of it ·
+  N items". It never says how many a filter hides — `total_hint` counts what
+  MATCHED, over the same predicate as the rows, so the unfiltered total is not
+  in the answer at all and synthesising it would take a second query at a
+  second instant.
 
 **Reserved segments cannot collide with keys.** Project and container keys are
 uppercase (`ENG`), item keys are `KEY-n`, everything else the engine mints is a

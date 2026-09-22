@@ -1919,6 +1919,32 @@ details > summary.int-summary::-webkit-details-marker {
   min-width: 0;
 }
 
+/* ---- The view strip ----------------------------------------------------- */
+
+/* THE ROW THAT NAMES THE PAGE INSIDE ITS OWN CONTENT COLUMN, and it is drawn
+   whether or not anybody has saved a view — so it is the top edge of this
+   screen on a company that is one day old, which is the only state every
+   company starts in.
+
+   THE LINK IS BESIDE THE TABS, NOT PUSHED TO THE FAR EDGE. A trailing element
+   at `margin-left: auto` in a 1500px column is chrome stranded a screen's width
+   from the thing it belongs to; flowed after the last tab it reads as the end
+   of the strip, which is what it is. It wraps rather than scrolls, because a
+   company's saved views are a handful and a row that scrolls hides the one
+   element that is always there. */
+.work-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.work-strip-more {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
 /* ---- The bar, the chips and the two menus ------------------------------- */
 
 /* EVERYTHING THIS BAR IS, IT IS BECAUSE IT CARRIES `.toolbar` — sticky, at
@@ -2593,6 +2619,28 @@ details > summary.int-summary::-webkit-details-marker {
 }
 .work-band-foot a:hover {
   color: var(--text);
+}
+/* A BAND WITH NOTHING IN IT SAYS SO, in the same words and the same register a
+   board's lane does — a closed-set axis is padded to its whole declared set, so
+   an empty band is a real state of this shape and a heading over nothing at all
+   reads as rows that failed to arrive. Centred like the lane's, because it is
+   the absence of a row rather than a row. */
+.work-band-empty {
+  padding: var(--space-3) var(--row-inline);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+/* THE END OF A COMPLETE LIST. It is the LAST thing inside the list's own panel,
+   which is what makes it read as the end of the rows rather than as a caption
+   under a box — so the rule it carries is on top, where the band feet carry
+   theirs underneath. Quiet: it is an answer to a question nobody asked out
+   loud, and it must not compete with the rows it closes. */
+.work-foot {
+  padding: var(--space-2) var(--row-inline);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- The census, and a meter in a cell ---------------------------------- */

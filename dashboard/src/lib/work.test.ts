@@ -13,6 +13,8 @@ import { expect, test } from "vitest";
 // carrying its own copy of the glyph goes green on whatever is written.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  SCOPES,
+  STATUSES,
   TYPE_ICON,
   totalHint,
   anyFilter,
@@ -30,6 +32,11 @@ import {
   dayKey,
   defaultView,
   describeChange,
+  endNote,
+  LANDING_SHAPE,
+  padGroups,
+  SCOPE_GROUPS,
+  STATUS_GROUPS,
   effectiveArrangement,
   EXPLICIT_NONE,
   describeHistory,
@@ -50,6 +57,7 @@ import {
   typeIcon,
   typeName,
   type LabelContext,
+  type Scope,
   countedLabel,
   dayLabel,
   monthOrNow,
@@ -393,7 +401,7 @@ test("a people field resolves each handle to a name", () => {
 // Views and the query
 // ---------------------------------------------------------------------------
 
-test("a builtin view's shape is its own, and an unknown key draws the board", () => {
+test("a builtin view's shape is its own, and an unknown key draws the landing shape", () => {
   const views = [
     view({ key: "list", type: "list" }),
     view({ key: "calendar", type: "calendar" }),
@@ -404,12 +412,17 @@ test("a builtin view's shape is its own, and an unknown key draws the board", ()
   expect(shapeOf("saved", views)).toBe("calendar");
   // A STRIP THAT HAS NOT ARRIVED is the ordinary state of the first paint,
   // and a body that waited for it would flash empty on every navigation.
-  expect(shapeOf("board", [])).toBe("board");
+  expect(shapeOf("board", [])).toBe(LANDING_SHAPE);
 });
 
-test("the landing tab is the one the container marks, else the board", () => {
+// A CONTAINER NOBODY HAS SAVED A DEFAULT FOR OPENS ON THE LIST. A board's
+// information is the comparison across its lanes, so it is the worst shape at
+// low N — one card 292px wide in a 1500px field — where a list degrades to one
+// full-width row and keeps being a list. The board stays one press away.
+test("the landing tab is the one the container marks, else the list", () => {
   expect(defaultView([view({ key: "list" }), view({ key: "mine", default: true })])).toBe("mine");
-  expect(defaultView([view({ key: "list" })])).toBe("board");
+  expect(defaultView([view({ key: "board" })])).toBe("list");
+  expect(LANDING_SHAPE).toBe("list");
 });
 
 const build = (over: Partial<Parameters<typeof buildItemsParams>[0]> = {}) =>
@@ -658,6 +671,36 @@ test("a column's overflow lands on the list, narrowed to that column", () => {
     group_by: "assignee",
     group: "ada",
   });
+  // AND THE UNSET COLUMN'S KEY IS THE EMPTY STRING, which the patch carries as
+  // a VALUE. Dropped, the "Unassigned" column's own "N more →" narrowed to
+  // nothing and loaded the whole board — the one column whose overflow a lead
+  // actually follows.
+  expect(filterPatchForGroup("assignee", "").group).toBe("");
+});
+
+// THE NARROWING IS THREE-VALUED, and the middle value is the one the engine
+// distinguishes with `Params.Has`: absent is the whole board, `""` is the
+// column holding the rows with NO value on this axis, and anything else is that
+// value. Spelled as one string, the empty column could not be asked for at all.
+test("an absent column narrowing and an empty one are different questions", () => {
+  const narrowed = (group: string | undefined) =>
+    build({ shape: "list", view: {}, filters: { ...NO_FILTERS, groupBy: "assignee", group } });
+  // ABSENT: no key on the wire, so the answer is every column.
+  expect("group" in narrowed(undefined)).toBe(false);
+  // PRESENT AND EMPTY: the key is sent, holding nothing, which is the
+  // unassigned column.
+  expect(narrowed("")).toMatchObject({ group: "" });
+  expect("group" in narrowed("")).toBe(true);
+  expect(narrowed("ada")).toMatchObject({ group: "ada" });
+  // AND A VIEW'S OWN `group` STANDS where the reader asked for nothing — a
+  // view is a set of defaults, and absence is what inherits them.
+  expect(
+    build({
+      shape: "list",
+      view: { group_by: "assignee", group: "ada" },
+      filters: { ...NO_FILTERS, group: undefined },
+    }),
+  ).toMatchObject({ group: "ada" });
 });
 
 test("a clear control appears only once something is narrowing the rows", () => {
@@ -675,8 +718,12 @@ test("a clear control appears only once something is narrowing the rows", () => 
   expect(anyFilter({ ...NO_FILTERS, groupBy2: "type" })).toBe(false);
   expect(anyFilter({ ...NO_FILTERS, sort: "due" })).toBe(false);
   // Narrowing a board to ONE of its columns narrows the whole query, totals
-  // included, so that one stays.
+  // included, so that one stays — READ ON ITS PRESENCE, because the unset
+  // column's own key is the empty string and a truth test called that no
+  // narrowing at all.
   expect(anyFilter({ ...NO_FILTERS, group: "ada" })).toBe(true);
+  expect(anyFilter({ ...NO_FILTERS, group: "" })).toBe(true);
+  expect(anyFilter({ ...NO_FILTERS, group: undefined })).toBe(false);
 });
 
 test("a view's status groups map back onto the three segments", () => {
@@ -981,6 +1028,40 @@ test("a count over a windowed question says which window it counted", () => {
   expect(countedLabel(6, windowed)).toBe("6 items due in this window");
 });
 
+// A LIST THAT ENDED AND A LIST THAT WAS CUT OFF END THE SAME WAY without this:
+// rows, then page ground. `totalHint` is silent once everything matching is on
+// screen and a cursor is invisible, so the reader of a hundred rows cannot tell
+// whether the hundred-and-first exists.
+test("a complete list says it is complete and an incomplete one says nothing", () => {
+  const cases: { note: string; want: string }[] = [
+    // Complete: the hint counted the same set the rows came from.
+    { note: endNote({ shown: 2, hint: 2, narrowed: false }), want: "That is all of it · 2 items" },
+    { note: endNote({ shown: 1, hint: 1, narrowed: false }), want: "That is all of it · 1 item" },
+    // A NARROWING CHANGES THE NOUN AND NOTHING ELSE. It never says how many the
+    // filter hides: `total_hint` counts what MATCHED, over the same predicate
+    // as the rows, so the unfiltered total is not in this answer at all.
+    {
+      note: endNote({ shown: 2, hint: 2, narrowed: true }),
+      want: "That is all of it · 2 items match",
+    },
+    {
+      note: endNote({ shown: 1, hint: 1, narrowed: true }),
+      want: "That is all of it · 1 item matches",
+    },
+    // A page with a cursor is not the end of anything.
+    { note: endNote({ shown: 100, hint: 100, cursor: "c1", narrowed: false }), want: "" },
+    // More matches than rows: the count in the bar already says there is more.
+    { note: endNote({ shown: 100, hint: 240, narrowed: false }), want: "" },
+    // A COUNT THAT STOPPED AT THE CEILING is not a count that finished.
+    { note: endNote({ shown: 100, hint: 100, capped: true, narrowed: false }), want: "" },
+    // AND AN EMPTY LIST GETS THE EMPTY STATE, never "that is all of it" over
+    // nothing at all.
+    { note: endNote({ shown: 0, hint: 0, narrowed: false }), want: "" },
+    { note: endNote({ shown: 0, hint: 0, narrowed: true }), want: "" },
+  ];
+  for (const c of cases) expect(c.note).toBe(c.want);
+});
+
 // THE GRAMMAR HAS ONE `due` KEY, and the calendar's own axis is already spending
 // it — so a due filter set on another shape could survive into this one and
 // narrow nothing at all, which is how a reader concludes their filter matched
@@ -1161,6 +1242,12 @@ test("a board narrowed to one column is chipped by that column's axis", () => {
   )[0];
   expect(chip?.label).toBe("Assignee");
   expect(chip?.value).toBe("Ada Okonkwo");
+  // AND THE UNSET COLUMN IS NAMED BY ITS AXIS, not left unchipped: a board
+  // narrowed to Unassigned is a narrowed board, and a chip is the only thing
+  // that says so and the only way off it.
+  const unset = filterChips({ ...NO_FILTERS, groupBy: "assignee", group: "" })[0];
+  expect(unset?.label).toBe("Assignee");
+  expect(unset?.value).toBe("Unassigned");
 });
 
 // ONE VALUE OF ONE AXIS, split out of `groupLabel` because two surfaces ask it
@@ -1170,6 +1257,147 @@ test("an axis names its own empty key", () => {
   expect(axisLabel("assignee", "")).toBe("Unassigned");
   expect(axisLabel("tag", "")).toBe("Untagged");
   expect(axisLabel("status", "")).toBe("No status");
+});
+
+// ---------------------------------------------------------------------------
+// The declared lanes
+// ---------------------------------------------------------------------------
+
+/** What a padded answer looks like from the outside: the keys and the counts. */
+const lanes = (groups: WorkGroup[]) => groups.map((g) => `${g.key}:${g.count}`);
+
+// A BOARD IS THE WORKFLOW, NOT THE OCCUPIED PART OF IT. The engine's grouping
+// is a plain GROUP BY — one entry per distinct value PRESENT — so a one-item
+// company drew one lane in a 1500px field, and the comparison a board exists
+// for had no denominator.
+test("a closed-set axis draws every declared value the scope admits, in order", () => {
+  const cases: {
+    axis: string;
+    scope: Scope;
+    groups: WorkGroup[];
+    want: string[];
+  }[] = [
+    // OPEN DRAWS NO DEAD DONE LANE: the query it describes cannot return one.
+    {
+      axis: "status",
+      scope: "open",
+      groups: [group("todo", { count: 1, rows: [row("1")] })],
+      want: ["todo:1", "in_progress:0", "in_review:0"],
+    },
+    // AND CLOSED DRAWS THE THREE FINISHED ONES, which is the other half of the
+    // same mapping — `done` and `cancelled` are both the `done` group.
+    {
+      axis: "status",
+      scope: "closed",
+      groups: [],
+      want: ["done:0", "cancelled:0", "closed:0"],
+    },
+    { axis: "status", scope: "all", groups: [], want: STATUSES.map((s) => `${s.value}:0`) },
+    // THE GROUP AXIS IS NARROWED BY THE SAME KEY it is drawn from.
+    { axis: "status_group", scope: "open", groups: [], want: ["not_started:0", "active:0"] },
+    { axis: "status_group", scope: "closed", groups: [], want: ["done:0", "closed:0"] },
+    { axis: "status_group", scope: "all", groups: [], want: STATUS_GROUPS.map((g) => `${g}:0`) },
+    // A PRIORITY IS ORTHOGONAL TO A STATUS, so no scope narrows it.
+    {
+      axis: "priority",
+      scope: "open",
+      groups: [group("urgent", { count: 3 })],
+      want: ["none:0", "low:0", "normal:0", "high:0", "urgent:3"],
+    },
+  ];
+  for (const c of cases) {
+    expect(lanes(padGroups({ axis: c.axis, groups: c.groups, scope: c.scope })), c.axis).toEqual(
+      c.want,
+    );
+  }
+});
+
+// THE ENGINE'S OWN ANSWER SURVIVES THE MERGE. A pad that rebuilt a lane would
+// draw a heading over rows it had thrown away — the one thing this must never
+// do — so a declared value the answer carries is the answer's own object.
+test("padding keeps the engine's counts, rows and subgroups on the lanes it has", () => {
+  const answered = group("in_progress", {
+    count: 400,
+    rows: [row("1"), row("2")],
+    subgroups: [group("ada", { count: 2 })],
+  });
+  const padded = padGroups({ axis: "status", groups: [answered], scope: "open" });
+  const found = padded.find((g) => g.key === "in_progress");
+  expect(found).toBe(answered);
+  expect(found?.count).toBe(400);
+  expect(found?.rows.map((r) => r.key)).toEqual(["ENG-1", "ENG-2"]);
+  expect(found?.subgroups?.length).toBe(1);
+});
+
+// A KEY THE DECLARATION DOES NOT NAME IS KEPT, at the end. The empty key is a
+// real column ("No status"), and a newer peer may write a status this build has
+// never heard of — dropping either would hide rows.
+test("a lane the declaration does not name survives, after the declared ones", () => {
+  const padded = padGroups({
+    axis: "status",
+    scope: "open",
+    groups: [group("", { count: 2 }), group("triaging", { count: 5 })],
+  });
+  expect(lanes(padded)).toEqual(["todo:0", "in_progress:0", "in_review:0", ":2", "triaging:5"]);
+});
+
+// AN OPEN SET IS NOT A BOARD. A lane per possible assignee, tag, type or
+// project is a column of every value the company could ever hold.
+test("an open-set axis passes through untouched", () => {
+  const answered = [group("ada", { count: 2 })];
+  for (const axis of ["assignee", "tag", "type", "project", "unit", "parent", "f.severity"]) {
+    expect(padGroups({ axis, groups: answered, scope: "open" }), axis).toBe(answered);
+  }
+});
+
+// A `group=` NARROWING ASKED FOR ONE LANE AND GOT ONE. Padding it back to the
+// declared set would redraw the columns the reader just narrowed away.
+test("a board narrowed to one column stays one column", () => {
+  const answered = [group("in_review", { count: 2 })];
+  expect(padGroups({ axis: "status", groups: answered, scope: "open", group: "in_review" })).toBe(
+    answered,
+  );
+  // INCLUDING THE UNSET ONE, which is read on the key's presence: `""` is a
+  // column here and a truth test padded it back to the whole declared set,
+  // redrawing exactly the columns the reader had narrowed away.
+  const unset = [group("", { count: 2 })];
+  expect(padGroups({ axis: "status", groups: unset, scope: "open", group: "" })).toBe(unset);
+  expect(padGroups({ axis: "status", groups: unset, scope: "open" })).not.toBe(unset);
+});
+
+// THE CONTAINER'S OWN DECLARATION DECIDES THE SET where it has one, so the
+// status→group mapping the scope narrowing turns on is the ENGINE's rather than
+// this build's shipped copy.
+test("a project's own status declaration is what the scope narrows", () => {
+  const statuses = [
+    { status: "todo" as const, label: "Backlog", group: "not_started", description: "" },
+    { status: "in_progress" as const, label: "Doing", group: "active", description: "" },
+    { status: "done" as const, label: "Shipped", group: "done", description: "" },
+  ];
+  expect(lanes(padGroups({ axis: "status", groups: [], scope: "open", statuses }))).toEqual([
+    "todo:0",
+    "in_progress:0",
+  ]);
+  expect(lanes(padGroups({ axis: "status", groups: [], scope: "closed", statuses }))).toEqual([
+    "done:0",
+  ]);
+});
+
+// ONE SPELLING OF THE SCOPE MAPPING, because three readers turn on it: the
+// query builder writes the key, `scopeOf` reads it back off a saved view, and
+// the padding narrows the lanes with it. Written twice it drifts silently — a
+// segment whose group nothing reads back snaps the control to the wrong value.
+test("the scope segment, the query and the lanes read one mapping", () => {
+  for (const scope of SCOPES) {
+    const params = buildItemsParams({
+      container: "workspace",
+      shape: "board",
+      view: {},
+      filters: { ...NO_FILTERS, scope },
+    });
+    expect(scopeOf(params.status_group as string | undefined), scope).toBe(scope);
+    expect(params.status_group ?? "", scope).toBe(SCOPE_GROUPS[scope]);
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -43,6 +43,7 @@ export function List({
   onOpen,
   onOverflow,
   overflowHref,
+  foot,
 }: {
   rows: WorkSummary[];
   groups: WorkGroup[];
@@ -58,6 +59,18 @@ export function List({
   onOverflow: (axis: string, key: string) => void;
   /** As [Board]'s — the screen owns the address. */
   overflowHref: (axis: string, key: string) => string;
+  /**
+   * THE END OF THE LIST, said — `lib/work.ts`'s `endNote`, and "" where the
+   * answer is not complete.
+   *
+   * THE WORDS ARE THE SCREEN'S because they are a fact about the ANSWER — how
+   * many matched, whether a cursor is outstanding, whether the count stopped at
+   * its ceiling — and this shape holds none of that. What the shape owns is
+   * WHERE it goes: the last thing inside the list's own panel, under the rows
+   * and under every band foot, so a list that reached its end and one that was
+   * cut off stop looking identical.
+   */
+  foot?: string;
 }) {
   const ctx = {
     statuses: detail?.statuses,
@@ -120,6 +133,15 @@ export function List({
                 selected={selected}
               />
             )}
+            {/* AN EMPTY BAND IS STILL A BAND, and it says it is empty. On a
+                closed-set axis the answer is padded to every declared value
+                (`lib/work.ts`'s `padGroups`), so a band with no rows is a real
+                state of this shape rather than an impossible one — and a
+                heading over nothing at all reads as rows that failed to
+                arrive. The same sentence the board's own lanes carry. */}
+            {group.rows.length === 0 && !group.subgroups?.length && (
+              <div className="work-band-empty">Nothing here</div>
+            )}
             {group.count > group.rows.length && !group.subgroups?.length && (
               <div className="work-band-foot">
                 <a
@@ -135,6 +157,7 @@ export function List({
             )}
           </section>
         ))}
+        {foot ? <div className="work-foot">{foot}</div> : null}
       </div>
     );
   }
@@ -149,6 +172,7 @@ export function List({
         onOpen={onOpen}
         selected={selected}
       />
+      {foot ? <div className="work-foot">{foot}</div> : null}
     </div>
   );
 }

@@ -728,13 +728,24 @@ work sits in projects that unit owns.
 node's own copy, and every answer says how far behind that copy is. It is four
 screens rather than one:
 
-- **All work** (`#/work`) is the list. Two menus decide what is on it and how
-  it is drawn — **Filter** adds a narrowing, and each one is a removable chip
-  under the bar; **Display** holds the shape (list, board, table, calendar,
-  timeline), the grouping, the order and, on a table, the columns. The trash is
-  a filter here rather than a tab, which is what the engine says it is: a
-  listing carrying `removed=true`. The strip above the bar holds the views
-  somebody SAVED, never the five shapes.
+- **All work** (`#/work`) is the list, and it opens as one: a container nobody
+  has saved a default view for lands on the list shape, because a board's
+  information is the comparison across its lanes — the best shape once work is
+  moving and the worst on a company with three items in one status. The board
+  is one press away. Two menus decide what is on the list and how it is drawn —
+  **Filter** adds a narrowing, and each one is a removable chip under the bar;
+  **Display** holds the shape (list, board, table, calendar, timeline), the
+  grouping, the order and, on a table, the columns. Grouped on a status, a
+  status group or a priority, the board and the list draw every value the
+  company declares and say which of them are empty, because those three are
+  closed sets whose order means something; grouped on an assignee, a tag or a
+  label they draw only the values work is actually in. The trash is a filter
+  here rather than a tab, which is what the engine says it is: a listing
+  carrying `removed=true`. The strip above the bar holds the views somebody
+  SAVED, never the five shapes, and it ends in a link to the whole inventory.
+  A list with nothing on it says which of three things emptied it — a narrowing
+  that matched nothing, a scope with nothing in it, or a tracker nothing has
+  been filed into — and a complete one closes by saying so.
 - **Projects** (`#/work/projects`) is the directory: every project with its
   lead, the unit that owns it, its three maintained counts, how far along its
   filed work is and when that work last changed. A row opens the project

@@ -68,6 +68,18 @@ export const STATUSES: { value: WorkStatus; label: string; group: string }[] = [
   { value: "closed", label: "Closed", group: "closed" },
 ];
 
+/**
+ * The four status groups, in the order the statuses that carry them run.
+ *
+ * DERIVED FROM [STATUSES] RATHER THAN DECLARED AGAIN. `tracker.StatusGroups`
+ * is `not_started, active, done, closed` and `tracker.Statuses` is the six in
+ * the order a board renders them — so reading the groups off the six in order
+ * reproduces the engine's own sequence with no second list to fall out of step
+ * with it. A literal array here would be a third copy of one closed set, in a
+ * language that cannot import the first.
+ */
+export const STATUS_GROUPS: string[] = [...new Set(STATUSES.map((s) => s.group))];
+
 /** A status is a STATE, which is the one thing colour is spent on here. */
 export const STATUS_TONE: Record<string, Tone> = {
   todo: "neutral",
@@ -439,6 +451,110 @@ export function axisName(axis: string): string {
   return GROUP_AXES.find((a) => a.value === axis)?.label ?? "";
 }
 
+/**
+ * EVERY DECLARED VALUE OF A CLOSED-SET AXIS, whether or not work is in it.
+ *
+ * # Why the engine cannot answer this
+ *
+ * `internal/tracker/grouping.go`'s `groupCounts` is a plain `GROUP BY`, so a
+ * group exists exactly where a row exists ("[Answer.Groups] carries one entry
+ * per distinct value"). A status nobody has used is not a group, which is why
+ * a one-item company drew a board of ONE lane in a 1500px field, and why
+ * [Board]'s own "Nothing here" body had no producer at all — it was written,
+ * tested against a hand-built fixture, and unreachable from any real answer.
+ *
+ * # Why a board is the workflow rather than the occupied part of it
+ *
+ * A board's information IS the comparison across its lanes: To do beside In
+ * progress beside In review is what says where work piles up. Drawn from the
+ * occupied subset that comparison has no denominator — three cards in one lane
+ * read as a company doing one thing, where three cards in the first of four
+ * read as a company that has not started. An empty lane is a fact.
+ *
+ * # Only where the set is closed, and only what the scope admits
+ *
+ * The three axes here are exactly the three `compileGroup` gives an `Order` to
+ * — `declaredOrder(Statuses)`, `declaredOrder(StatusGroups)`,
+ * `declaredOrder(Priorities)` — because a declared ORDER is the same property
+ * this needs: a set whose sequence means something is a set that can be drawn
+ * whole. Every other axis is open (an assignee, a tag, a type, a project, a
+ * custom field's options) and passes through untouched, because a lane per
+ * possible assignee is not a board.
+ *
+ * And the set is narrowed by the SCOPE the query was sent with, through the
+ * same [SCOPE_GROUPS] mapping that wrote it: the Open segment draws To do, In
+ * progress and In review and never a dead Done lane, because the query it
+ * describes cannot return one.
+ *
+ * # What it does not touch
+ *
+ * A `group=` narrowing asked for ONE lane and got one, so padding it back to
+ * the whole set would redraw the columns a reader just narrowed away — and it
+ * is read on its PRESENCE, because the narrowing to the UNSET column carries
+ * the empty string as its key (see [TrackerFilters.group]). And a key the
+ * declaration does not name — an empty one, or a status a newer peer wrote —
+ * is KEPT, at the end: dropping it would hide rows, which is the one thing a
+ * padding function must never do.
+ */
+export function padGroups(args: {
+  axis: string;
+  groups: WorkGroup[];
+  scope: Scope;
+  /**
+   * `group=`: the one lane the whole query was narrowed to, three-valued as
+   * [TrackerFilters.group] is — `undefined` is the whole board and `""` is the
+   * lane holding the rows with no value on this axis.
+   */
+  group?: string;
+  /**
+   * The container's own status declaration, where it has one — a project's
+   * `statuses`. The six are fixed globally
+   * (`internal/tracker/projectsread.go`: "StatusDef is one of the fixed six"),
+   * so this changes no set today; what it buys is that the status→group
+   * mapping the scope narrowing turns on is the ENGINE's wherever the engine
+   * gave one, rather than this build's shipped copy of it. The LABELS are not
+   * read here: a lane is headed through [groupLabel], which already prefers
+   * the project's own word, and a second labelling path would be a second
+   * answer to "what is this column called".
+   */
+  statuses?: WorkStatusDef[];
+}): WorkGroup[] {
+  const declared = declaredValues(args.axis, args.scope, args.statuses);
+  if (!declared || args.group !== undefined) return args.groups;
+  const answered = new Map(args.groups.map((group) => [group.key, group]));
+  const named = new Set(declared);
+  return [
+    ...declared.map((key) => answered.get(key) ?? { key, count: 0, rows: [] }),
+    ...args.groups.filter((group) => !named.has(group.key)),
+  ];
+}
+
+/** One closed-set axis's values in declared order, or null for an open one. */
+function declaredValues(
+  axis: string,
+  scope: Scope,
+  statuses: WorkStatusDef[] | undefined,
+): string[] | null {
+  // THE EMPTY STRING ADMITS EVERYTHING, which is what the All segment is.
+  const admitted = SCOPE_GROUPS[scope] ? new Set(SCOPE_GROUPS[scope].split(",")) : null;
+  switch (axis) {
+    case "status": {
+      const declared = statuses?.length
+        ? statuses.map((s) => ({ key: String(s.status), group: s.group }))
+        : STATUSES.map((s) => ({ key: String(s.value), group: s.group }));
+      return declared.filter((s) => !admitted || admitted.has(s.group)).map((s) => s.key);
+    }
+    case "status_group":
+      return STATUS_GROUPS.filter((group) => !admitted || admitted.has(group));
+    // A PRIORITY IS ORTHOGONAL TO A STATUS, so the scope narrows nothing here:
+    // every one of the five can hold open work and finished work alike.
+    case "priority":
+      return [...PRIORITIES];
+    default:
+      return null;
+  }
+}
+
 /** The orderings a list may ask for. */
 export const SORTS: { value: string; label: string }[] = [
   { value: "rank", label: "Manual order" },
@@ -688,14 +804,36 @@ export function fieldValueState(field: WorkFieldValue): string {
  */
 export type Shape = WorkViewShape;
 
+/**
+ * WHAT A CONTAINER OPENS ON when nothing else decides it.
+ *
+ * THE LIST, BECAUSE A BOARD'S INFORMATION IS THE COMPARISON ACROSS ITS LANES.
+ * That makes it the worst shape at low N and the best at high N: four lanes
+ * holding one card between them say nothing a lane could not say alone, and
+ * the one card is a 292px object in a 1500px field. A list degrades to one
+ * full-width row, which is still a list — the same drawing at one item and at
+ * four hundred. So the landing shape is the one that never stops working, and
+ * the board is one press away in the Display menu, named by what it is for.
+ *
+ * NOT CONDITIONAL ON HOW MUCH WORK EXISTS. A landing screen whose shape
+ * changes as a company fills up is a screen nobody can learn, and the first
+ * item somebody files would silently redraw the page.
+ *
+ * AND IT IS THE CLIENT'S FALLBACK, not a builtin marked `default` in the
+ * engine: one view row may carry `default` and the applier settles that in the
+ * same transaction as the write, so a builtin claiming it would collide with
+ * whatever a company saved. This is what holds when nothing claims it.
+ */
+export const LANDING_SHAPE: Shape = "list";
+
 /** The shape a view is drawn in. */
 export function shapeOf(viewKey: string, views: WorkView[]): Shape {
   const view = views.find((v) => v.key === viewKey);
   if (view) return view.type;
-  // A KEY NOTHING RESOLVES DRAWS THE BOARD rather than nothing: a strip that
-  // has not arrived yet is the ordinary state of the first paint, and a body
-  // that waited for it would flash empty on every navigation.
-  return "board";
+  // A KEY NOTHING RESOLVES DRAWS [LANDING_SHAPE] rather than nothing: a strip
+  // that has not arrived yet is the ordinary state of the first paint, and a
+  // body that waited for it would flash empty on every navigation.
+  return LANDING_SHAPE;
 }
 
 /**
@@ -703,11 +841,11 @@ export function shapeOf(viewKey: string, views: WorkView[]): Shape {
  *
  * ONE ROW MAY CARRY `default` and the applier settles that in the same
  * transaction as the write, so there is never a second claim to fall back
- * from. Absent, the board: it is the shape that answers "what is moving",
- * which is the question somebody opening a tracker has.
+ * from. Absent, the key of the shape every container has without anybody
+ * saving one — see [LANDING_SHAPE] for why that is the list.
  */
 export function defaultView(views: WorkView[]): string {
-  return views.find((v) => v.default)?.key ?? "board";
+  return views.find((v) => v.default)?.key ?? LANDING_SHAPE;
 }
 
 /** A view's saved query, or an empty set of defaults. */
@@ -733,7 +871,29 @@ export interface TrackerFilters {
   groupBy: string;
   /** The SECOND axis, drawn as bands inside the first — see [buildItemsParams]. */
   groupBy2: string;
-  group: string;
+  /**
+   * WHICH COLUMN THE WHOLE QUERY IS NARROWED TO, and it is THREE-VALUED.
+   *
+   * `undefined` is the whole board. `""` is the column holding the rows with
+   * NO value on this axis — "Unassigned", "Untagged", "No parent" — and
+   * anything else is that value. The engine reads the key's PRESENCE
+   * (`Params.Has`) for exactly this reason: ITS key for the unset column IS
+   * the empty string, on every axis, so "" cannot also mean "no narrowing".
+   *
+   * This is the same defect `EXPLICIT_NONE` records one field above, with the
+   * opposite resolution. An ARRANGEMENT needed a NAME for "off", because its
+   * empty string already meant "inherit the view's" and a word is the only way
+   * to tell a choice from an absence. A column narrowing needs PRESENCE,
+   * because its empty string already means a real column and no word could be
+   * spelled that some axis will not one day hold as a value. So the URL carries
+   * `group=` with nothing after it, which `URLSearchParams` round-trips, and
+   * every reader asks whether the key is there rather than what it says.
+   *
+   * Spelled as a plain string it was unreachable end to end: the query builder
+   * dropped an empty one on the way to the wire, the address writer deleted the
+   * key, and the unset column's own "N more →" link loaded the whole board.
+   */
+  group: string | undefined;
   sort: string;
   blocked: boolean;
   /**
@@ -782,7 +942,9 @@ export const NO_FILTERS: TrackerFilters = {
   scope: "open",
   groupBy: "",
   groupBy2: "",
-  group: "",
+  // ABSENT, which is the whole board — see [TrackerFilters.group] for why the
+  // empty string is a column rather than the lack of one.
+  group: undefined,
   sort: "",
   blocked: false,
   due: "",
@@ -808,7 +970,9 @@ export function anyFilter(f: TrackerFilters): boolean {
     f.priority ||
     f.assignee ||
     f.tag ||
-    f.group ||
+    // PRESENCE, NEVER TRUTH: `group=` with nothing after it is the unset
+    // column, which narrows the query exactly as a named one does.
+    f.group !== undefined ||
     f.blocked ||
     f.due ||
     f.removed ||
@@ -851,6 +1015,14 @@ export function buildItemsParams(args: {
   const set = (key: string, value: string) => {
     if (value) params[key] = value;
   };
+  // THE COLUMN NARROWING IS SENT ON ITS PRESENCE, never on its truth: `""` is
+  // the unset column and the engine reads the key with `Params.Has`, so an
+  // empty value has to reach the wire as `group: ""` rather than be dropped by
+  // the writer above. Absent, the key is left exactly as it was — which is how
+  // a saved view's own `group` keeps supplying the default nobody overrode.
+  const setGroup = () => {
+    if (filters.group !== undefined) params.group = filters.group;
+  };
   set("q", filters.q);
   set("status", filters.status);
   set("type", filters.type);
@@ -885,9 +1057,9 @@ export function buildItemsParams(args: {
   // that switch either adds nothing or adds a predicate the group already
   // implies. Measured, all three answer identically.
   if (filters.scope === "open") {
-    params.status_group = "not_started,active";
+    params.status_group = SCOPE_GROUPS.open;
   } else if (filters.scope === "closed") {
-    params.status_group = "done,closed";
+    params.status_group = SCOPE_GROUPS.closed;
     if (!params.show_closed) params.show_closed = "true";
   } else {
     delete params.status_group;
@@ -991,7 +1163,7 @@ export function buildItemsParams(args: {
     if (axis) {
       params.group_by = axis;
       params.group_limit = 100;
-      set("group", filters.group);
+      setGroup();
     } else {
       delete params.group_by;
       delete params.group;
@@ -1019,7 +1191,7 @@ export function buildItemsParams(args: {
     if (axis) {
       params.group_by = axis;
       params.group_limit = 100;
-      set("group", filters.group);
+      setGroup();
     } else {
       delete params.group_by;
       delete params.group;
@@ -1051,6 +1223,10 @@ export function buildItemsParams(args: {
  * narrowing applied to the wrong set.
  */
 export function filterPatchForGroup(axis: string, key: string): Record<string, string> {
+  // AND THE UNSET COLUMN'S KEY IS `""`, which the patch carries as a value
+  // rather than as a deletion — see [TrackerFilters.group]. `patchedHref`
+  // deletes on `null` for exactly this: written as "clears the key", the
+  // "Unassigned" column's own overflow link loaded the whole board.
   return { shape: "list", group_by: axis, group: key };
 }
 
@@ -1134,10 +1310,12 @@ export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterCh
     });
   }
   if (f.due) out.push({ param: "due", label: "Due", verb: "is", value: dueFilterLabel(f.due) });
-  if (f.group) {
+  if (f.group !== undefined) {
     // THE COLUMN A BOARD WAS NARROWED TO, named by its own axis — the same
     // resolver the column head uses, so the chip and the heading it came from
-    // say the same word.
+    // say the same word. Including the UNSET one: `axisLabel` names an empty
+    // key per axis ("Unassigned", "Untagged"), which is the whole reason it
+    // takes the key rather than the group.
     out.push({
       param: "group",
       label: axisName(f.groupBy) || "Column",
@@ -1392,6 +1570,57 @@ export function countedLabel(shown: number, params: Record<string, unknown>): st
 }
 
 /**
+ * THE END OF A LIST, SAID — and "" where it would be a reassurance.
+ *
+ * # What it separates
+ *
+ * A list that has reached its end and a list that was cut off end the same
+ * way: rows, then page ground. [totalHint] is deliberately silent once
+ * everything matching is on screen, and a page's own cursor is invisible — so
+ * the reader of a hundred rows cannot tell whether the hundred-and-first
+ * exists. This is the sentence that says it does not.
+ *
+ * # Why it is not the reassurance [pageNote] refuses
+ *
+ * `pageNote`'s rule — "a note that always drew would put 'and that is all of
+ * them' under every healthy card in the product" — is about a CARD in a
+ * column of cards, where the note is one of twenty and nobody reads the
+ * twentieth. This is the foot of the page's own subject, drawn once, where the
+ * question "is that everything?" is the reason somebody scrolled. It is silent
+ * on an empty list (the empty state is the answer there) and on an incomplete
+ * one (the count in the bar already says there is more).
+ *
+ * # It never says what a filter hides
+ *
+ * The design's own sentence was "Two items match. Widen the filters, or clear
+ * them, to see the other six" — and "the other six" is a count over the
+ * UNFILTERED set, which no answer carries: `total_hint` is `countHint` over
+ * the SAME predicate as the rows (`internal/tracker/read.go`), so it counts
+ * what matched and never what was excluded. Stating it would mean a second
+ * query at a second instant, printing a difference nobody wrote. So the
+ * narrowed form says only that these are the ones that match.
+ */
+export function endNote(args: {
+  shown: number;
+  /** The answer's `total_hint`. */
+  hint: number;
+  /** The answer's `total_capped` — a count that stopped rather than finished. */
+  capped?: boolean;
+  /** The answer's `next_cursor`: a page with one is not the end of anything. */
+  cursor?: string;
+  /** Whether a narrowing is on, which is the only thing that changes the noun. */
+  narrowed: boolean;
+}): string {
+  if (args.shown <= 0 || args.cursor || args.capped || args.hint > args.shown) return "";
+  const count = plural(args.shown, "item");
+  // "1 item matches" / "2 items match": the verb agrees with the count, which
+  // a single spelling gets wrong at exactly the number a sparse company has.
+  return args.narrowed
+    ? `That is all of it · ${count} match${args.shown === 1 ? "es" : ""}`
+    : `That is all of it · ${count}`;
+}
+
+/**
  * The month the calendar draws, and a fallback for anything that is not one.
  *
  * `month=` is a URL parameter, so it is whatever the address bar holds — and
@@ -1458,10 +1687,46 @@ export function pageNote(shown: number, more: boolean, one: string, many?: strin
 export const SCOPES = ["open", "closed", "all"] as const;
 export type Scope = (typeof SCOPES)[number];
 
+/**
+ * WHICH STATUS GROUPS EACH SEGMENT ADMITS, as the wire spells it.
+ *
+ * ONE SPELLING FOR THE THREE READERS OF IT. [buildItemsParams] writes this key,
+ * [scopeOf] reads it back off a saved view, and [padGroups] narrows a board's
+ * declared lanes with it — three places that must agree about exactly the same
+ * fact, and the first two already held two copies of the two strings. A
+ * mismatch is silent in both directions: a segment that writes a group nothing
+ * reads back snaps the control to the wrong value, and a lane set narrowed by a
+ * different rule draws a Done column over a query that excludes it.
+ *
+ * `all` IS THE EMPTY STRING here and only here: it is the absence of the key
+ * rather than a fourth value, which is what [buildItemsParams] deletes and what
+ * makes every group admitted.
+ */
+export const SCOPE_GROUPS: Record<Scope, string> = {
+  open: "not_started,active",
+  closed: "done,closed",
+  all: "",
+};
+
+/**
+ * WHICH SEGMENT A `scope=` OFF THE ADDRESS ACTUALLY IS.
+ *
+ * A URL key is whatever the address bar holds, and [buildItemsParams] already
+ * reads anything the three do not name as `all` — it is the else-branch of one
+ * switch. Every other reader of the segment needs the same answer: the control
+ * that draws it, the padding that narrows a board's lanes with it, and the
+ * empty state that names it. Spelled per reader, a hand-edited `?scope=opne`
+ * drew an unset switch over a query showing every closed task, which is the one
+ * combination this segment exists to make impossible.
+ */
+export function asScope(value: string): Scope {
+  return SCOPES.includes(value as Scope) ? (value as Scope) : "all";
+}
+
 /** A view's `status_group` mapped back onto the three segments. */
 export function scopeOf(group: string | undefined): Scope {
-  if (group === "not_started,active") return "open";
-  if (group === "done,closed") return "closed";
+  if (group === SCOPE_GROUPS.open) return "open";
+  if (group === SCOPE_GROUPS.closed) return "closed";
   return "all";
 }
 
