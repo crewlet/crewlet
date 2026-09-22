@@ -183,7 +183,7 @@ func loadCLIAgents(ctx context.Context, companyPath, bootstrapPath string, notes
 	if err != nil {
 		return nil, nil, err
 	}
-	resolver, closeResolver, err := companyResolver(ctx, bootstrapPath, notes)
+	resolver, _, closeResolver, err := companyResolver(ctx, bootstrapPath, notes)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -1475,14 +1475,13 @@ units:
 
 // A SURFACE'S REGISTRATION IS COMPARED WITH THE ADDRESS IN FORCE.
 //
-// A company's public base moves, and a registration made against the old one
-// keeps pointing somewhere that no longer answers. Where a pass registers the
+// A deployment's external address moves, and a registration made against the
+// old one keeps pointing somewhere that no longer answers. Where a pass registers the
 // hook the next tick moves it; where nothing does, only a person can, and
 // this is the only thing that can tell them.
 func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
-	cfg.Integrations.PublicBaseURL = "https://now.example.com"
 	// SLACK IS THE SURFACE THIS IS FOR: its Request URL is a field a person
 	// typed at the third-party app, so nothing converges it and the
 	// comparison is the only thing that can say the address moved.
@@ -1522,45 +1521,6 @@ func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
 	}
 }
 
-// A ${VAR} PUBLIC BASE IS COMPARED RESOLVED, ON BOTH SIDES.
-//
-// `public_base_url` may be a whole reference, and what a surface registered is
-// the address that reference RESOLVED to. Comparing a registration against the
-// reference itself never matches, so every company writing one would read
-// "the address moved" on every surface, for ever — an action-needed badge
-// nobody can clear, on deployments that are working perfectly.
-func TestAReferencePublicBaseIsComparedResolved(t *testing.T) {
-	t.Parallel()
-	cfg := company(t)
-	cfg.Integrations.PublicBaseURL = "${PUBLIC_URL}"
-	cfg.Integrations.Slack = &config.Slack{}
-	body := asMap(t, answer(t, queries.Sources{
-		Company: companySource(t, cfg),
-		// What the node's own chain reads the reference as, which is what
-		// the passes registered with.
-		PublicBase: func() string { return "https://now.example.com" },
-		Reconciles: func(context.Context) []integration.State {
-			return []integration.State{
-				{Kind: integration.KindSlack, Endpoint: "https://now.example.com"},
-			}
-		},
-	}, "integrations", nil))
-
-	rows, _ := body["integrations"].([]any)
-	for _, row := range rows {
-		entry, _ := row.(map[string]any)
-		if entry["key"] != "slack" {
-			continue
-		}
-		if got := entry["endpoint_current"]; got != true {
-			t.Errorf("endpoint_current = %v, want true: the registration holds "+
-				"exactly what this node reads the reference as", got)
-		}
-		return
-	}
-	t.Fatal("no slack row")
-}
-
 // AND A PROCESS THAT CANNOT READ THE ADDRESS SAYS NOTHING, rather than false.
 //
 // A node that cannot read the address cannot know what the current one is.
@@ -1570,7 +1530,6 @@ func TestAReferencePublicBaseIsComparedResolved(t *testing.T) {
 func TestAnUnknowablePublicBaseLeavesTheAnswerNull(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
-	cfg.Integrations.PublicBaseURL = "https://now.example.com"
 	cfg.Integrations.Slack = &config.Slack{}
 	body := asMap(t, answer(t, queries.Sources{
 		Company: companySource(t, cfg),
@@ -1608,7 +1567,6 @@ func TestAnUnknowablePublicBaseLeavesTheAnswerNull(t *testing.T) {
 func TestAnUnrecordedEndpointIsNullRatherThanMoved(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
-	cfg.Integrations.PublicBaseURL = "https://now.example.com"
 	body := asMap(t, answer(t, queries.Sources{
 		Company: companySource(t, cfg),
 		Reconciles: func(context.Context) []integration.State {
@@ -2262,6 +2220,51 @@ func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
 	if _, present := byID["node-b"]["projections_total"]; present {
 		t.Error("a node that published no projection counts carries a total " +
 			"anyway, so a screen draws 0 of 0 — which reads as ready")
+	}
+}
+
+// A MIXED GRANT CEILING IS VISIBLE, which is the only reason the hash exists.
+//
+// `api.auth.max_grants` is intersected at decision time, per node, per
+// request, and nothing is written when it changes — that is what makes
+// lowering it immediate, and what makes a fleet whose nodes disagree a LEGAL
+// state a rolling restart passes through. Invisible, the symptom is a person
+// whose authority depends on which node a load balancer sent them to. Two
+// different digests on this view is that being said out loud.
+func TestTheFleetShowsANodeWhoseGrantCeilingDiffers(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	claim := func(node string, status coord.NodeStatus) {
+		t.Helper()
+		if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
+			coord.AcquireOptions{
+				Owner: node + ":1", TTL: time.Minute,
+				Meta: map[string]any{coord.StatusKey: status.Meta()},
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claim("node-a", coord.NodeStatus{GrantCeilingHash: "aaaa1111"})
+	claim("node-b", coord.NodeStatus{GrantCeilingHash: "bbbb2222"})
+	// A node that serves no API declares none, and must not read as a
+	// third opinion.
+	claim("node-c", coord.NodeStatus{})
+
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, NodeID: "node-a",
+	}, "fleet", nil))
+	byID := map[string]map[string]any{}
+	for _, row := range rows(t, body["nodes"]) {
+		byID[fmt.Sprint(row["id"])] = row
+	}
+	if byID["node-a"]["grant_ceiling"] == byID["node-b"]["grant_ceiling"] {
+		t.Errorf("two nodes with different ceilings read the same: %v vs %v",
+			byID["node-a"]["grant_ceiling"], byID["node-b"]["grant_ceiling"])
+	}
+	if _, present := byID["node-c"]["grant_ceiling"]; present {
+		t.Error("a node that declares no ceiling carries one anyway, so a " +
+			"worker binding no API reads as a third disagreement")
 	}
 }
 

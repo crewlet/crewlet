@@ -70,13 +70,13 @@ func (r *Result) Findings() []integration.Finding {
 	//
 	// The public base used to be described here as absent from the
 	// integrations block, with ingress left "to the subcommand that has
-	// the URL". It is `integrations.public_base_url`, and the reconcile
+	// the URL". It is `api.external_url`, and the reconcile
 	// loop feeds it into every pass — so the silence meant a Data Center
 	// company that never set it saw Jira reported Ready.
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
-			Subject: "integrations.public_base_url",
+			Subject: "api.external_url",
 			Detail:  r.NoIngress,
 		})
 	}

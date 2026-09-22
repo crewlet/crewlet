@@ -93,12 +93,26 @@ type surface struct {
 	// seats is the org chart's half: a seat's own document, which the
 	// settings revision beside it does not carry.
 	seats *seatStore
+	// externalBase is this fixture's `api.external_url`, kept so that
+	// [surface.withPass], which rebuilds the service, hands over the same
+	// address the surface was built with rather than none.
+	externalBase string
 	// setup is the service itself, kept so a test can reach the app flow
 	// the webhook callback is served.
 	setup *setupapi.Service
 }
 
-func newSurface(t *testing.T) *surface { return newSurfaceWithApps(t, nil) }
+func newSurface(t *testing.T) *surface {
+	return newSurfaceWithApps(t, nil, fixtureExternalBase)
+}
+
+// newSurfaceWithNoExternalURL is a deployment that has no address a vendor can
+// reach — the state `api.external_url` being unset produces, which config
+// refuses once a port is set but an embedder building the service directly can
+// still reach.
+func newSurfaceWithNoExternalURL(t *testing.T) *surface {
+	return newSurfaceWithApps(t, nil, "")
+}
 
 // newConfigSurface is the config write path over a store of the test's own.
 func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB) {
@@ -121,6 +135,15 @@ func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB) {
 // newService builds the service over whatever a case names, filling each
 // required dependency it leaves unset with an inert one, so a case names only
 // what it is about.
+// fixtureExternalBase is the `api.external_url` a fixture's service carries.
+//
+// IT IS PASSED EXPLICITLY AT EVERY SITE rather than defaulted inside
+// [newService], because "" is a real posture a case has to be able to ask for:
+// a deployment with no address a vendor can reach offers no manifest and
+// refuses every writing pass, and a helper that filled the field in would make
+// that case unreachable.
+const fixtureExternalBase = "https://engine.example.com"
+
 func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	t.Helper()
 	v := &vault{}
@@ -219,13 +242,13 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 // newSurfaceWithApps is the same surface with the engine's answer to which
 // Slack app each seat authenticates as. Nil is a node whose Slack transport is
 // not running, or seats that have not come up.
-func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
+func newSurfaceWithApps(t *testing.T, apps map[string]string, externalBase string) *surface {
 	t.Helper()
 	cfg, db := newConfigSurface(t)
 	v := &vault{}
 	s := &surface{
 		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(),
-		status: &statusStore{}, seats: &seatStore{},
+		status: &statusStore{}, seats: &seatStore{}, externalBase: externalBase,
 	}
 	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
 	// engine hands it over: a screen bound to the company this process
@@ -247,9 +270,10 @@ func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
 	s.setup = newService(t, setupapi.Options{
 		Company: s.company, Config: cfg, Seats: s.seats, Secrets: v,
 		// The resolution chain: what the vault holds is what resolved.
-		Resolve:   v.get,
-		Status:    s.status,
-		SlackApps: func() map[string]string { return apps },
+		Resolve:      v.get,
+		Status:       s.status,
+		SlackApps:    func() map[string]string { return apps },
+		ExternalBase: externalBase,
 		// The keyring a GitHub App state is signed from.
 		StateKeys: runtoken.OneKey("k1", "test-material"),
 		Now:       func() time.Time { return pinned },
@@ -390,23 +414,29 @@ func TestAnUnconfiguredVendorSaysWhatItNeeds(t *testing.T) {
 	}
 }
 
-// The base every inbound third-party app is built on is answered ONCE, not repeated in
-// each tool: it is one setting, and asking for it seven times would ask the
-// operator to keep seven copies consistent.
-func TestThePublicBaseIsAnsweredOnce(t *testing.T) {
+// The base every inbound third-party app is built on is answered ONCE, not
+// repeated in each tool: it is one setting, and asking for it seven times
+// would ask the operator to keep seven copies consistent.
+//
+// ONE FIELD WHERE THERE WERE FOUR. This used to be a Tier B pointer, so the
+// answer also carried `present`, `resolved` and the variable's `reference` —
+// three fields describing a state a `${VAR}` nobody exported produced.
+// `api.external_url` is Tier A and required once the API is served, so a node
+// serving this listing has an address and those three describe nothing.
+func TestTheExternalURLIsAnsweredOnce(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	s.seed(t)
 
 	body := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))
-	base, _ := body["public_base_url"].(map[string]any)
+	base, _ := body["external_url"].(map[string]any)
 	if base == nil {
-		t.Fatal("the listing carries no public base")
+		t.Fatal("the listing carries no external url")
 	}
-	if base["present"] != false {
-		t.Errorf("present = %v on a company that names none", base["present"])
+	if base["value"] != fixtureExternalBase {
+		t.Errorf("value = %v, want the deployment's own address", base["value"])
 	}
-	if base["config_path"] != "integrations.public_base_url" {
+	if base["config_path"] != "api.external_url" {
 		t.Errorf("config_path = %v", base["config_path"])
 	}
 	tools, _ := body["tools"].([]any)
@@ -414,66 +444,9 @@ func TestThePublicBaseIsAnsweredOnce(t *testing.T) {
 		t.Fatal("the listing serves no tools")
 	}
 	for _, tool := range tools {
-		if _, repeated := tool.(map[string]any)["public_base_url"]; repeated {
-			t.Error("a tool repeats the public base")
+		if _, repeated := tool.(map[string]any)["external_url"]; repeated {
+			t.Error("a tool repeats the external url")
 		}
-	}
-}
-
-// SET AND SET TO SOMETHING ARE DIFFERENT FACTS, and the answer says which.
-//
-// `present` alone is what a screen read, so a `${VAR}` pointing at a variable
-// nobody exported rendered as "third-party apps reach this engine at" followed
-// by nothing — the one banner that exists to say where deliveries land, saying
-// nothing, on exactly the misconfiguration it should have named.
-//
-// The VARIABLE is what makes it actionable: "set it" is advice, "export
-// PUBLIC_BASE_URL" is an instruction. It is a name rather than a value, and
-// this surface is guarded in full.
-func TestAnUnresolvedPublicBaseNamesItsVariable(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t)
-	s.seedDocument(t, `{
-  "name": "Acme",
-  "integrations": {"public_base_url": "${PUBLIC_BASE_URL}"},
-  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
-  "roles": [{"name": "CTO", "handle": "cto", "llm": "zulu"}]
-}`)
-
-	body := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))
-	base, _ := body["public_base_url"].(map[string]any)
-	if base["present"] != true {
-		t.Errorf("present = %v on a company that names one", base["present"])
-	}
-	if base["resolved"] != false {
-		t.Errorf("resolved = %v, want a positive no — the variable is unset",
-			base["resolved"])
-	}
-	if base["reference"] != "PUBLIC_BASE_URL" {
-		t.Errorf("reference = %v, want the variable to export", base["reference"])
-	}
-	if base["value"] != "" {
-		t.Errorf("value = %v, want nothing — it resolves to nothing", base["value"])
-	}
-}
-
-// AND A LITERAL NAMES NO VARIABLE, because there is none to export.
-func TestALiteralPublicBaseNamesNoVariable(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t)
-	s.seedDocument(t, `{
-  "name": "Acme",
-  "integrations": {"public_base_url": "https://engine.example.com"},
-  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
-  "roles": [{"name": "CTO", "handle": "cto", "llm": "zulu"}]
-}`)
-
-	base, _ := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))["public_base_url"].(map[string]any)
-	if base["resolved"] != true || base["value"] != "https://engine.example.com" {
-		t.Errorf("base = %v, want a literal that resolves to itself", base)
-	}
-	if base["reference"] != "" {
-		t.Errorf("reference = %v on a literal", base["reference"])
 	}
 }
 
@@ -947,9 +920,10 @@ func (s *surface) withPass(
 		Sink: func(operator string) (provision.TokenSink, error) {
 			return provision.NewSecretStoreSink(sinkStore{s.vault}, operator), nil
 		},
-		Status:    status,
-		StateKeys: runtoken.OneKey("k1", "test-material"),
-		Now:       func() time.Time { return pinned },
+		Status:       status,
+		StateKeys:    runtoken.OneKey("k1", "test-material"),
+		Now:          func() time.Time { return pinned },
+		ExternalBase: s.externalBase,
 	})
 	s.setup.Routes(s.mux)
 	s.config.Routes(s.mux)
@@ -983,7 +957,6 @@ func (s sinkStore) Unset(_ context.Context, name string) (bool, error) {
 func (s *surface) seedGitHub(t *testing.T) {
 	t.Helper()
 	res := s.do(t, http.MethodPatch, "/config", `{"integrations":{
-		"public_base_url":"https://engine.example.com",
 		"github":{"enabled":true,"webhook_secret":"${GH_SECRET}",
 		"provisioning":{"org":"acme"}}}}`,
 		map[string]string{
@@ -1037,7 +1010,7 @@ func TestAProvisionPassGetsASinkAndABase(t *testing.T) {
 // been: every vendor gates its registration on having one. The address is a
 // FACT, and withholding it made a check report the wrong one. A vendor reads
 // an empty base as "this deployment has no public base URL" and emits
-// ingress_blocked against integrations.public_base_url owed by an admin, and
+// ingress_blocked against api.external_url owed by an admin, and
 // a check persists its findings through the same fold the loop uses — so
 // pressing Check on a healthy company wrote "every monitor that fires reaches
 // nobody" into the live status row and flipped the card to Action required
@@ -1075,9 +1048,9 @@ func TestACheckRunsTheSamePassReadOnly(t *testing.T) {
 // while reporting success is the failure it exists to stop. A check has
 // nothing to register, so it runs and reports the absence — which is a true
 // finding, and the one an operator needs.
-func TestACheckWithNoPublicBaseRunsAndReportsIt(t *testing.T) {
+func TestACheckWithNoExternalURLRunsAndReportsIt(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t)
+	s := newSurfaceWithNoExternalURL(t)
 	s.seed(t)
 	pass := &recordingPass{}
 	s.withPass(t, pass)
@@ -1117,7 +1090,7 @@ func TestAPassIsRefusedWhileSomethingIsOutstanding(t *testing.T) {
 	s.withPass(t, pass)
 	// enabled, and with a secret that resolves to nothing.
 	res := s.do(t, http.MethodPatch, "/config",
-		`{"integrations":{"public_base_url":"https://engine.example.com",
+		`{"integrations":{
 		  "github":{"enabled":true,"webhook_secret":"${GH_MISSING}"}}}`,
 		map[string]string{
 			"Content-Type": "application/merge-patch+json",
@@ -1144,11 +1117,11 @@ func TestAPassIsRefusedWhileSomethingIsOutstanding(t *testing.T) {
 	}
 }
 
-// WITHOUT A PUBLIC BASE A PASS REGISTERS NOTHING, so it is refused by name
+// WITHOUT AN EXTERNAL URL A PASS REGISTERS NOTHING, so it is refused by name
 // rather than run to report success having done nothing.
-func TestAProvisionPassNeedsAPublicBase(t *testing.T) {
+func TestAProvisionPassNeedsAnExternalURL(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t)
+	s := newSurfaceWithNoExternalURL(t)
 	s.seed(t)
 	pass := &recordingPass{}
 	s.withPass(t, pass)
@@ -1168,7 +1141,7 @@ func TestAProvisionPassNeedsAPublicBase(t *testing.T) {
 	if got.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409: %s", got.Code, got.Body)
 	}
-	if decode(t, got)["error"] != "no_public_base_url" {
+	if decode(t, got)["error"] != "no_external_url" {
 		t.Errorf("error = %v", decode(t, got)["error"])
 	}
 	if _, calls := pass.last(); calls != 0 {

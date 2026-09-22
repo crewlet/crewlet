@@ -211,7 +211,7 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 	base := s.publicBase()
 	if base == "" {
 		httpjson.FailWith(w, http.StatusConflict, codeNoPublicURL, map[string]string{
-			"hint": "set integrations.public_base_url first: the app is created " +
+			"hint": "set api.external_url first: the app is created " +
 				"with its delivery address baked in, and only the operator can " +
 				"change that afterwards, so creating one now would need doing again",
 		})
@@ -484,14 +484,10 @@ func (s *Service) apiBaseOf(company *config.Company) string {
 
 // publicBase is the address a third-party app reaches this engine on.
 //
-// RESOLVED, because every address built from it here is baked into an app at
-// GitHub — the delivery URL, the redirect and the setup URL — and only a
-// person can change those afterwards. A `${PUBLIC_URL}` copied in literally
-// creates an app nothing can ever deliver to.
-func (s *Service) publicBase() string {
-	company, _ := s.company()
-	if company == nil {
-		return ""
-	}
-	return company.Integrations.WebhookBase(s.resolve)
-}
+// EVERY ADDRESS BUILT FROM IT HERE IS BAKED INTO AN APP AT GITHUB — the
+// delivery URL, the redirect and the setup URL — and only a person can change
+// those afterwards, so a `${PUBLIC_URL}` copied in literally creates an app
+// nothing can ever deliver to. That was reachable while the address was a
+// Tier B pointer; `api.external_url` is resolved before Tier A is decoded, so
+// the literal has nowhere to come from.
+func (s *Service) publicBase() string { return s.externalBase }

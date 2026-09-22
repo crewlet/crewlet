@@ -6,6 +6,10 @@
         "auth": {
           "$ref": "#/$defs/APIAuth"
         },
+        "external_url": {
+          "description": "Where a browser and a vendor reach this deployment, e.g. https://crewlet.example.com. Required once port is set.",
+          "type": "string"
+        },
         "host": {
           "description": "Bind address for the HTTP surface.",
           "type": "string"
@@ -15,6 +19,27 @@
           "maximum": 65535,
           "minimum": 0,
           "type": "integer"
+        },
+        "trusted_proxies": {
+          "description": "CIDR blocks whose X-Forwarded-For is honoured. Empty trusts no forwarded header.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "APIAudit": {
+      "additionalProperties": false,
+      "properties": {
+        "changes": {
+          "description": "How long a grant, status or credential change is kept (default 9600h = 400d, 2160h..24000h).",
+          "type": "string"
+        },
+        "sessions": {
+          "description": "How long a sign-in, step-up and sign-out is kept (default 2160h = 90d, 168h..9600h).",
+          "type": "string"
         }
       },
       "type": "object"
@@ -22,23 +47,51 @@
     "APIAuth": {
       "additionalProperties": false,
       "properties": {
-        "allow_anonymous_read": {
-          "description": "Serve reads without a token (default true).",
-          "type": "boolean"
-        },
         "allowed_origins": {
-          "description": "CORS origins. Empty = same-origin only.",
+          "description": "Additional browser origins this deployment is reached on. Empty = same-origin only.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
-        "disabled": {
-          "description": "Local-dev only: serve every route unauthenticated.",
-          "type": "boolean"
+        "audit": {
+          "$ref": "#/$defs/APIAudit"
+        },
+        "backend": {
+          "description": "How people sign in. Empty derives from which of local/oidc is present.",
+          "enum": [
+            "local",
+            "oidc",
+            "none"
+          ],
+          "type": "string"
+        },
+        "bootstrap": {
+          "description": "Whether the first person may be created with a one-time code (default open).",
+          "enum": [
+            "open",
+            "closed"
+          ],
+          "type": "string"
+        },
+        "local": {
+          "$ref": "#/$defs/APILocal"
+        },
+        "max_grants": {
+          "description": "The most authority the directory may confer. Required once the API is served.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "oidc": {
+          "$ref": "#/$defs/APIOIDC"
+        },
+        "session": {
+          "$ref": "#/$defs/APISession"
         },
         "tokens": {
-          "description": "Accepted bearer tokens. Empty refuses every write.",
+          "description": "The deployment's machine credentials. At least one is required once the API is served.",
           "items": {
             "$ref": "#/$defs/APIToken"
           },
@@ -47,9 +100,122 @@
       },
       "type": "object"
     },
+    "APILocal": {
+      "additionalProperties": false,
+      "properties": {
+        "accept_insecure": {
+          "description": "Acknowledge an insecure posture on a routable address. Logged at WARN on every start.",
+          "type": "boolean"
+        },
+        "min_password_length": {
+          "description": "Minimum password length. 0 takes the engine's floor of 12.",
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "totp": {
+          "description": "Whether a second factor is required. No default: state one.",
+          "enum": [
+            "required",
+            "optional"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "APIOIDC": {
+      "additionalProperties": false,
+      "properties": {
+        "client_id": {
+          "description": "This deployment's registered client id.",
+          "type": "string"
+        },
+        "client_secret": {
+          "description": "Client secret, or a ${VAR} reference. Never a store secret: Tier A cannot read the store.",
+          "type": "string"
+        },
+        "deactivation_probe": {
+          "description": "How often a live session is revalidated at the provider (default 1h, 5m..24h).",
+          "type": "string"
+        },
+        "group_grants": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "Grants conferred by membership of a directory group.",
+          "type": "object"
+        },
+        "groups_claim": {
+          "description": "The id-token claim carrying groups. Empty maps no groups.",
+          "type": "string"
+        },
+        "issuer": {
+          "description": "The provider's issuer URL. HTTPS only.",
+          "type": "string"
+        },
+        "require_acr": {
+          "description": "An acr value the id token must carry. Empty requires none.",
+          "type": "string"
+        },
+        "scopes": {
+          "description": "Requested scopes. openid is always included.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "APISession": {
+      "additionalProperties": false,
+      "properties": {
+        "absolute": {
+          "description": "Longest a session may live from sign-in (default 168h, 1h..720h).",
+          "type": "string"
+        },
+        "rotate_after": {
+          "description": "How often a session's bearer is re-issued (default 1h, 5m..24h).",
+          "type": "string"
+        },
+        "step_up": {
+          "description": "How long a proof of identity authorises administrative action (default 1h, 5m..24h).",
+          "type": "string"
+        },
+        "step_up_sensitive": {
+          "description": "The same for irreversible gestures (default 15m, 1m..StepUp).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "APIToken": {
       "additionalProperties": false,
       "properties": {
+        "audit_every_use": {
+          "description": "Write a use row per request rather than one per hour.",
+          "type": "boolean"
+        },
+        "colleague": {
+          "description": "How far into the company's own work this credential reaches (default none).",
+          "enum": [
+            "none",
+            "read",
+            "write"
+          ],
+          "type": "string"
+        },
+        "grants": {
+          "description": "What this credential may do. Required and non-empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "id": {
           "description": "Short label recorded as the author of writes made with this token.",
           "type": "string"

@@ -27,9 +27,12 @@ func tree() fstest.MapFS {
 }
 
 // fetch runs one request and returns the whole response.
+// fetch runs one GET as the fixture's credential, with any extra headers a
+// case names. A header the case supplies wins, which is how a case asks for a
+// different credential — or, by naming an empty Authorization, for none.
 func fetch(t *testing.T, a *api.App, path string, headers map[string]string) *http.Response {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req := authed(httptest.NewRequest(http.MethodGet, path, nil))
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}

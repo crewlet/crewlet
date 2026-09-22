@@ -356,7 +356,7 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) (prov
 	}
 	if err := github.Teardown(ctx, github.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
-		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
+		WebhookBase: p.engine.externalBase,
 	}); err != nil {
 		return provision.Removed{}, err
 	}
@@ -553,7 +553,7 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (pro
 		// webhook is addressed by name, and the teardown refuses to
 		// delete one pointing anywhere but here — the same expression
 		// gitlabPass.Teardown passes for the same reason.
-		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
+		WebhookBase: p.engine.externalBase,
 	})
 }
 
@@ -833,7 +833,7 @@ func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) (provis
 	}
 	return provision.Removed{}, jira.Teardown(ctx, jira.Options{
 		Client: client, Config: cfg,
-		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
+		WebhookBase: p.engine.externalBase,
 	})
 }
 

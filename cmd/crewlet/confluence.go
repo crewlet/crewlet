@@ -68,7 +68,7 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
+	env, _, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
 	if err != nil {
 		return err
 	}
@@ -186,7 +186,7 @@ func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
+	env, _, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
 	if err != nil {
 		return err
 	}
@@ -251,7 +251,7 @@ func runConfluenceProvision(args []string, stdout, stderr io.Writer) error {
 	sinks := addSinkFlags(fs)
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the hooks; "+
-			"defaults to integrations.public_base_url")
+			"defaults to api.external_url")
 	recreate := fs.Bool("recreate-webhooks", false,
 		"delete and remake every hook to mint a fresh token or secret; this "+
 			"invalidates the value every other deployment of this company holds")
@@ -281,7 +281,7 @@ func runConfluenceProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
 	if err != nil {
 		return err
 	}
@@ -319,7 +319,7 @@ func runConfluenceProvision(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout,
 			"-dry-run: reading the instance; no hook will be registered.")
 	} else {
-		opts.WebhookBase = webhookBase(*publicURL, &company.Integrations, env.LookupOK)
+		opts.WebhookBase = webhookBase(*publicURL, boot)
 		sink, closeSink, openErr := sinks.open(ctx, stdout)
 		if openErr != nil {
 			return openErr

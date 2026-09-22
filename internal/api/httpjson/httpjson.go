@@ -166,10 +166,16 @@ const (
 	// whatever is done at the app itself.
 	CodeNotProvisionable Code = "not_provisionable"
 
-	// CodeNoPublicBaseURL is a WRITING pass with no address to register a
+	// CodeNoExternalURL is a WRITING pass with no address to register a
 	// webhook against. Refused by name rather than run to register nothing
 	// and report success.
-	CodeNoPublicBaseURL Code = "no_public_base_url"
+	//
+	// It names the Tier A setting rather than the retired Tier B one, and
+	// the two differ in what an operator has to do: the old field was
+	// edited live through the dashboard, this one is a file on the node
+	// and a restart. A code that still said `public_base_url` would send
+	// somebody to a key the loader now refuses by name.
+	CodeNoExternalURL Code = "no_external_url"
 
 	// CodeRequirementsOutstanding is a pass asked for against a
 	// half-configured integration: a pass writes at the app, so it is
@@ -226,8 +232,9 @@ var codes = map[Code]string{
 		"Wait for it to finish rather than starting a second one.",
 	CodeNotProvisionable: "This integration is not set up from here. Connect " +
 		"it at the third-party app itself, or with the crewlet command line.",
-	CodeNoPublicBaseURL: "This deployment has no public address, so no webhook " +
-		"can be registered for it. Set the public base URL and run the pass again.",
+	CodeNoExternalURL: "This deployment has no external address, so no webhook " +
+		"can be registered for it. Set the external URL in this node's own " +
+		"configuration file, restart it, and run the pass again.",
 	CodeRequirementsOutstanding: "This integration is still missing values it " +
 		"needs. Fill them in before running a pass.",
 	CodeRunNotFound: "That setup run is not held here. A run is remembered by " +

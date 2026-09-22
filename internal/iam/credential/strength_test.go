@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 )
 
@@ -52,7 +53,7 @@ func TestTheFloorCountsCharactersAndNotBytes(t *testing.T) {
 	t.Parallel()
 	// Four characters, sixteen bytes.
 	short := strings.Repeat("😀", 4)
-	if len(short) < credential.MinPasswordChars {
+	if len(short) < iam.MinPasswordChars {
 		t.Fatalf("this case is not testing anything: %q is %d bytes", short, len(short))
 	}
 	if err := credential.CheckStrength(short); !errors.Is(err, credential.ErrWeak) {
@@ -138,7 +139,7 @@ func TestEveryBlocklistEntryCanActuallyBeReached(t *testing.T) {
 	}
 	seen := map[string]string{}
 	for _, entry := range entries {
-		if n := len([]rune(entry)); n < credential.MinPasswordChars {
+		if n := len([]rune(entry)); n < iam.MinPasswordChars {
 			t.Errorf("%q is %d characters, below the floor — the length rule "+
 				"refuses it first, so this line can never match", entry, n)
 		}

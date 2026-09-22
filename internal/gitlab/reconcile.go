@@ -80,7 +80,7 @@ type Result struct {
 	// reason [jira.Result.NoIngress] is one: an empty Hooked is also what a
 	// perfectly healthy run looks like from the outside, and
 	// [integration.Classify] over no findings is READY. So a company that
-	// never set integrations.public_base_url — which the reconcile loop
+	// never set api.external_url — which the reconcile loop
 	// feeds into every pass — had GitLab reported ready while the instance
 	// had nowhere to deliver to and not one merge request, pipeline or
 	// comment ever reached a seat. The note below said so to whoever ran
@@ -565,7 +565,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// [Result.NoIngress].
 		res.NoIngress = "no webhook is registered on this GitLab, so merge " +
 			"requests, pipelines, issues and comments reach no seat: set " +
-			"integrations.public_base_url to this deployment's public address " +
+			"api.external_url to this deployment's public address " +
 			"and the next pass registers one, or register it by hand"
 		res.Notes = append(res.Notes, res.NoIngress)
 	}
@@ -1194,7 +1194,7 @@ func PlanSigningSecret(secret, varName string, rotate, registeringHooks bool) Si
 			"signing_secret resolved to nothing and is not a whole ${VAR} " +
 			"reference, so there is nowhere to record a minted one. Point it at " +
 			"a variable, export a whsec_ value yourself, or clear both -public-url " +
-			"and integrations.public_base_url and " +
+			"and api.external_url and " +
 			"register the hook by hand"}
 	}
 	action, what := SigningMint, "minted"

@@ -275,12 +275,14 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// address moved". A row that has never been set up says null, and
 		// a screen must not report that as a fault.
 		//
-		// COMPARED AGAINST THE RESOLVED BASE, which is why it reads
-		// [Sources.PublicBase] rather than the document: the address a
-		// surface registered is what a `${VAR}` public base resolved to,
-		// and comparing that against the reference itself would report
-		// every such company as moved for ever. A process that cannot
-		// resolve says null rather than false, for the reason above.
+		// COMPARED AGAINST [Sources.PublicBase] RATHER THAN ANYTHING IN
+		// THE COMPANY DOCUMENT, which is where the address used to live
+		// and where a `${VAR}` could sit unresolved — comparing a
+		// registration against the reference itself reported every such
+		// company as moved for ever. It is `api.external_url` now, a
+		// Tier A literal this node resolved before it decoded its own
+		// config; a nil accessor still says null rather than false, for
+		// the reason above.
 		row["endpoint"], row["endpoint_current"] = nil, nil
 		if state, checked := reconciled[kind]; checked && state.Endpoint != "" {
 			row["endpoint"] = state.Endpoint

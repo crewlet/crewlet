@@ -35,16 +35,25 @@ providers:
 // the document is decoded.
 func TestTierAResolvesAtLoad(t *testing.T) {
 	t.Setenv("ACME_DB", "/srv/acme.db")
-	t.Setenv("ACME_TOKEN", "tok-123")
+	t.Setenv("ACME_TOKEN", "tok-123-long-enough-to-be-one")
+	t.Setenv("ACME_KEY_MATERIAL", "bWF0ZXJpYWw=")
 	cfg, err := ParseBootstrap([]byte(`
 store:
   path: "${ACME_DB}"
 api:
   port: 8000
+  external_url: "https://acme.example.com"
   auth:
+    max_grants: [state:read, config:write]
     tokens:
       - id: founder
         token: "${ACME_TOKEN}"
+        grants: [state:read, config:write]
+secrets:
+  active_key_id: k1
+  keys:
+    - id: k1
+      material: "${ACME_KEY_MATERIAL}"
 `), EnvOnly())
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +61,7 @@ api:
 	if cfg.Store.Path != "/srv/acme.db" {
 		t.Fatalf("store path = %q", cfg.Store.Path)
 	}
-	if cfg.API.Auth.Tokens[0].Token != "tok-123" {
+	if cfg.API.Auth.Tokens[0].Token != "tok-123-long-enough-to-be-one" {
 		t.Fatalf("token = %q", cfg.API.Auth.Tokens[0].Token)
 	}
 }

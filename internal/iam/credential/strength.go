@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // WHAT THIS ENGINE ASKS OF A PASSWORD, AND WHAT IT DELIBERATELY DOES NOT.
@@ -81,12 +83,12 @@ func buildCommon(raw string) map[string]bool {
 // new secret. A generic refusal there is somebody typing variations until one
 // sticks.
 func CheckStrength(password string) error {
-	if n := utf8.RuneCountInString(password); n < MinPasswordChars {
+	if n := utf8.RuneCountInString(password); n < iam.MinPasswordChars {
 		return fmt.Errorf("%w: it is %d characters and the minimum is %d. "+
 			"There are no other rules — no required digit, no required symbol "+
 			"— because length is the only one that makes a password harder to "+
 			"guess without making it harder to remember", ErrWeak, n,
-			MinPasswordChars)
+			iam.MinPasswordChars)
 	}
 	if common[fold(password)] {
 		return fmt.Errorf("%w: it is one of the patterns people reach for when "+

@@ -12,7 +12,6 @@ const identityDoc = `{
   "name": "Acme",
   "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
   "integrations": {
-    "public_base_url": "https://engine.example.com",
     "atlassian": {"org_id": "${ORG_ID}", "api_key": "${ORG_KEY}"},
     "jira": {"cloud_id": "c1", "site_url": "https://acme.atlassian.net",
              "email": "${OPS_EMAIL}", "token": "${OPS_TOKEN}"},

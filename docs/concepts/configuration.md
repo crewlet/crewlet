@@ -679,50 +679,45 @@ A written document is refused for breaking one. A stored revision that breaks on
 
 ## Auth
 
-**Writes and the whole `/config` surface require `Authorization: Bearer
-<token>`. Reads serve without one by default.** Tokens are listed in Tier A
-under `api.auth.tokens` and resolved from env vars at API startup. The matched
-token's `id` is recorded as `created_by` on each revision the request produces,
-so revision history carries meaningful attribution (`alice`, `ci-pipeline`,
-`ops`) rather than generic strings.
+**Every route requires a credential, reads included.** The only exceptions are
+the handful that authenticate by other means or must be reachable to obtain a
+credential at all, listed below. Tokens are listed in Tier A under
+`api.auth.tokens` and resolved from environment variables at API startup. The
+matched token's `id` is recorded as `created_by` on each revision the request
+produces, so revision history carries meaningful attribution (`alice`,
+`ci-pipeline`, `ops`) rather than generic strings.
 
-Reading is what a dashboard does, and the page that would prompt for a token is
-itself served unauthenticated — the page that asks for a credential cannot
-require one — so a guarded-by-default read surface puts a modal in front of
-every first load. Be clear-eyed about what open reads expose, though: `/events`,
+### What `allow_anonymous_read` was, and why deleting it was the only fix
+
+Reads used to serve without a credential **by default**, on the argument that
+reading is what a dashboard does and the page that prompts for a token cannot
+itself require one. What that opened is worth naming: `/events`,
 `/agents/{id}/memory` and `/ws/stream` carry full LLM transcripts — prompts,
-tool arguments, diary entries — to anyone who can reach the port. One line
-closes them:
+tool arguments, diary entries — and the roster names everybody who works here,
+to anyone who could reach the port.
 
-```yaml
-api:
-  auth:
-    allow_anonymous_read: false   # every route needs a token
-    tokens:
-      - {id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}"}
-```
+It could not be repaired by changing its default, because of its *shape*: it
+was a bool whose safe value was its zero, declared `omitempty`, so `false` did
+not survive an export round trip. A deployment that had closed it re-opened
+itself the first time its configuration went through `PUT /config`.
 
-With reads closed the dashboard authenticates its own socket and prompts for a
-token when the engine refuses it — including a banner that says *refused*
-rather than *disconnected*, since a rejected credential is not an outage that
-resolves itself.
+A deliberately public read surface is now a **named token entry holding read
+grants and nothing else** — listable, revocable without a restart, and present
+in the audit log, none of which a posture flag could be. The key is refused by
+name if it appears, rather than ignored, because ignoring it would silently run
+the opposite posture from the one the file asks for.
 
-The API states which posture it took at startup: `api_listening` carries
-`anonymous_read` and the token count, and an open read posture on an `api.host`
-that is not loopback adds an `api_anonymous_read_on_a_reachable_bind` warning.
-A laptop and an internet-facing bind are not the same decision, and a warning
-that fires identically for both is one nobody reads by the third deployment.
+`api.auth.disabled` went with it. It authenticated the **empty** credential
+into full operator authority with no check on the bind address anywhere, which
+made one unset environment variable a total bypass. Local development uses
+`crewlet run -dev-principal <login>` instead: a flag rather than a field,
+because a field gets copied into an image, and refused unless
+`api.external_url` is a loopback address.
 
-**The guard is mounted whether or not `api.auth` is configured.** It applies one
-rule (`auth.Guard.Requires`), and what Tier A supplies is the *posture*, not the
-existence of a check. An API built with no Tier A at all therefore has no token
-that can match, which means reads serve and every write plus the whole `/config`,
-`/secrets` and `/setup` surfaces answer `401`. That is the only safe reading of "an app was built
-without being told who may write to it", and it removes the possibility of a
-process that serves `/config` writes with nothing in front of them.
+### What is served without a credential
 
-Served **without** a token in either posture, because they authenticate by other
-means or must be reachable to obtain one:
+Because these authenticate by other means, or must be reachable to obtain a
+credential:
 
 | Path | Why |
 |------|-----|
@@ -730,31 +725,41 @@ means or must be reachable to obtain one:
 | `/webhooks/*` | Each verifies its provider's HMAC before doing anything — a stronger check than a shared bearer token. Includes the Slack OAuth landing page, which a browser reaches mid-install |
 | | **A route whose secret is unset has nothing to verify with, so it fails closed**: `503` + `Retry-After`, never an accepted delivery. The sender retries and the delivery flows once the secret is configured — a deployment that has not set one is stalled, not damaged, and nothing unsigned is ever recorded, published, or shown on the dashboard |
 | `/otlp/*`, `/mcp/*` | The signed per-run token in the path *is* the credential. Both are reached from inside a sandbox, where the API's own token must never go |
-| `/`, `/dashboard`, `/favicon.ico`, `/static/*` | The page that prompts for a token cannot itself require one. It ships no data: every byte it renders comes from an authenticated fetch |
+| `/`, `/dashboard`, `/favicon.ico`, `/static/*` | The page that prompts for a credential cannot itself require one. It ships no data: every byte it renders comes from an authenticated fetch |
 
-`/ws/stream` follows the same rule as every other read. When reads are closed it
-needs a credential like anything else — and browsers can't set headers on a
-`WebSocket`, so it accepts `?token=…` as well as the `Authorization` header.
-Prefer the header where a client can send one, since query strings tend to land
-in proxy access logs.
+`/ws/stream` follows the same rule as every other route, and browsers cannot
+set headers on a `WebSocket` — so it accepts `?token=…` as well as the
+`Authorization` header. Prefer the header where a client can send one, since
+query strings tend to land in proxy access logs. A handshake presenting nothing
+is refused before the upgrade, which the dashboard learns by re-asking over
+plain HTTP: `401` means the credential is the problem, `426` means the engine
+is fine and the protocol was wrong.
 
-| Setting | Effect |
-|---------|--------|
-| `api.auth.tokens` | The accepted bearer tokens. Needed for writes and `/config`, whatever the read posture is |
-| `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside `/config`, `/secrets` and `/setup` serve without a token; writes and those three surfaces still require one, and so do the individual reads that describe the deployment rather than the company's work (`/fleet`, `/integrations`) or somebody else's personal record (`/work/my-work`, `/work/people/{handle}`, `/work/inbox`, `/conversations`, and `?viewer=` on `/work/views`, each naming a seat other than the caller's own) |
-| `api.auth.allow_anonymous_read: false` | Every route needs a token, `/ws/stream` included. The lockdown posture for a deployment that terminates traffic somewhere reachable |
-| `api.auth.disabled: true` | Local development only. Everything serves unauthenticated **including writes**, attribution becomes `"anonymous"`, loud `WARNING` at startup |
+**The guard is mounted whether or not `api.auth` is configured.** It applies one
+rule (`auth.Guard.Requires`), and what Tier A supplies is the *posture*, not the
+existence of a check. An API built with no Tier A at all therefore has no token
+that can match, and every guarded route answers `401`. That is the only safe
+reading of "an app was built without being told who may act", and it removes the
+possibility of a process serving `/config` writes with nothing in front of them.
 
-Two combinations are worth calling out:
+### What Tier A must state once the API is served
 
-- **No tokens at all** is a legitimate posture, not a misconfiguration: reads
-  serve and writes are refused outright, because no token can ever match an
-  empty list. A deployment that never writes config through the API therefore
-  has no credential to manage — strictly safer than minting one it will not use.
-- **`allow_anonymous_read: false` with no tokens** is refused at boot. It guards
-  every route behind a credential that does not exist, which is not a strict
-  posture but an outage whose only symptom is a uniform `401` that reads exactly
-  like a wrong token.
+Four settings stop being optional the moment `api.port` is non-zero, and each is
+refused by `crewlet validate` on a laptop rather than by a process at bind time:
+
+| Setting | Why it cannot be defaulted |
+|---------|----------------------------|
+| `api.external_url` | The session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its host is the origin every write is checked against, it is the OIDC redirect base, and it is what every webhook URL is built on. The engine sits behind a TLS-terminating proxy and can read none of that off the request |
+| `api.auth.max_grants` | The ceiling on what a directory record or an identity provider's group mapping may confer. One granting everything is a ceiling that does nothing; one granting a subset silently locks out whatever it left out |
+| `api.auth.tokens` | A fresh deployment's identity estate is empty, so a Tier A token is what creates the first person — and on a running one it is the way back in when the identity provider is down. Required on **every** backend, `none` included |
+| `secrets.keys` | The keyring signs every session cookie and derives the key that verifies each per-run token. An API served without one accepts nobody |
+
+`api.trusted_proxies` is a **CIDR list, never a bool**, because the question a
+forwarded header poses is not "does this deployment sit behind a proxy" but "is
+*this* peer the proxy". A bool set true trusts a header anybody can send, which
+hands an attacker their own rate-limit bucket and their own audit row; set false
+behind a real proxy it buckets the entire internet under one address. `0.0.0.0/0`
+is refused for the first reason.
 
 **CORS** defaults to same-origin. The dashboard is served by this process so it
 needs no entry; list any other browser origin explicitly in

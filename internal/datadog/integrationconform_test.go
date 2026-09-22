@@ -730,7 +730,7 @@ func TestTheOutstandingWorldReportsEveryFaultItHolds(t *testing.T) {
 	// row offers somebody to act on: a finding naming the wrong thing is a
 	// person sent to the wrong field.
 	want := map[integration.FindingKind]string{
-		integration.FindingIngressBlocked: "integrations.public_base_url",
+		integration.FindingIngressBlocked: "api.external_url",
 		integration.FindingIdentityFailed: seatOne,
 	}
 	for _, f := range findings {

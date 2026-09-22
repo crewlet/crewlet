@@ -316,7 +316,7 @@ func TestNoPublicBaseIsReportedRatherThanNoted(t *testing.T) {
 	if findings[0].Kind != integration.FindingIngressBlocked {
 		t.Errorf("kind = %q, want ingress_blocked", findings[0].Kind)
 	}
-	if findings[0].Subject != "integrations.public_base_url" {
+	if findings[0].Subject != "api.external_url" {
 		t.Errorf("subject = %q, want the field an operator has to set",
 			findings[0].Subject)
 	}

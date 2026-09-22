@@ -63,6 +63,26 @@ type Engine struct {
 	backends   *Backends
 	node       *node.Node
 
+	// externalBase is where a browser and a vendor reach this
+	// DEPLOYMENT: `api.external_url`, without its trailing slash.
+	//
+	// ON THE ENGINE AND NOT ON AN EPOCH, which is the whole of what
+	// moving it to Tier A bought. It used to be a Tier B pointer resolved
+	// per epoch through the secret resolver, so every consumer had to
+	// carry a resolver, handle the state where the reference read back as
+	// its own seven characters, and re-derive the answer on each apply.
+	// It is now a fact about the process: fixed at boot, restart to
+	// change, and the same on every path that composes a link.
+	externalBase string
+
+	// grantCeilingHash is a digest of this node's own resolved
+	// `api.auth.max_grants`, published on every heartbeat. Tier A, so it
+	// is read once at boot: the whole reason a fleet compares these is
+	// that a rolling restart is how the values come to differ, and a
+	// value that could change inside a process would make the comparison
+	// meaningless. See [coord.NodeStatus.GrantCeilingHash].
+	grantCeilingHash string
+
 	// configWriter is how a disconnect removes a block, installed by the
 	// wiring that builds the config surface. Atomic because the loop
 	// reads it from its own goroutine while the API installs it.
@@ -824,6 +844,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// the same thing: it parses the roles with the validator that already
 	// refused an unknown one at load, and it is what the fleet view reads
 	// a peer's presence row back through.
+	e.externalBase = opts.Bootstrap.API.ExternalBase()
+	e.grantCeilingHash = opts.Bootstrap.API.Auth.CeilingHash()
 	e.profile = opts.Bootstrap.Node.Profile(nodeID)
 	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
 	// BEFORE the node, which registers every seat's mailbox through it on
@@ -1706,7 +1728,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 // carrying this fleet-wide is that an operator can see where the work
 // actually is right now.
 func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
-	status := coord.NodeStatus{StartedAt: e.startedAt}
+	status := coord.NodeStatus{
+		StartedAt: e.startedAt, GrantCeilingHash: e.grantCeilingHash,
+	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()
 	}

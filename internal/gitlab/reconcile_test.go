@@ -2048,7 +2048,7 @@ func TestDecommissionRemovesManagedAccountsWithNoSeat(t *testing.T) {
 
 // A COMPANY WITH NO PUBLIC BASE URL IS DEGRADED, NOT READY.
 //
-// integrations.public_base_url is optional, the reconcile loop feeds it into
+// api.external_url is optional, the reconcile loop feeds it into
 // every pass verbatim, and with nothing in it this pass registers no webhook
 // at all: no merge request, pipeline, issue or comment ever reaches a seat.
 // The pass said so in a NOTE — which only whoever runs the CLI ever sees —
@@ -2075,7 +2075,7 @@ func TestNoPublicBaseURLIsReportedRatherThanNoted(t *testing.T) {
 	if len(findings) != 1 || findings[0].Kind != integration.FindingIngressBlocked {
 		t.Fatalf("findings = %+v, want the delivery path reported as blocked", findings)
 	}
-	if findings[0].Subject != "integrations.public_base_url" {
+	if findings[0].Subject != "api.external_url" {
 		t.Errorf("the finding names %q rather than the setting to fill in",
 			findings[0].Subject)
 	}

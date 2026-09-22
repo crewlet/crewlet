@@ -152,13 +152,8 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 		// applied revision and an apply can change it.
 		Endpoint: func() string {
 			// EMPTY WHERE THIS NODE CANNOT SAY, which is what the worker
-			// reads a missing endpoint as. A node with no active revision
-			// has no public base to have registered anything against.
-			company := e.Company()
-			if company == nil {
-				return ""
-			}
-			return company.Config.Integrations.WebhookBase(e.resolver().LookupOK)
+			// reads a missing endpoint as.
+			return e.externalBase
 		},
 		// AND THE NAME A REGISTRATION IS HELD UNDER, for the one surface
 		// where the address cannot find it again. Read fresh on every
@@ -424,7 +419,7 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	// inside the lease the worker is holding.
 	findings, err := c.pass.Run(ctx, setup.PassInput{
 		Sink:        sink,
-		WebhookBase: company.Config.Integrations.WebhookBase(c.engine.resolver().LookupOK),
+		WebhookBase: c.engine.externalBase,
 	})
 	if err != nil {
 		return nil, err

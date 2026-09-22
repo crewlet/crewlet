@@ -93,8 +93,9 @@ func TestTwoNodesWithTheSameKeyringAgreeOnAState(t *testing.T) {
 func TestTheServiceAlwaysHasAClock(t *testing.T) {
 	t.Parallel()
 	s := newService(t, setupapi.Options{
-		Company:   companySource(t, &config.Company{}),
-		StateKeys: runtoken.OneKey("k1", "material"),
+		ExternalBase: fixtureExternalBase,
+		Company:      companySource(t, &config.Company{}),
+		StateKeys:    runtoken.OneKey("k1", "material"),
 	})
 	// The flow mints a state, which reads the clock. A nil one panics
 	// here rather than in a request nobody can retry.
@@ -121,7 +122,8 @@ func TestTheServiceAlwaysHasAClock(t *testing.T) {
 // first call gets past the spend, the second does not.
 func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 	t.Parallel()
-	flow := newService(t, setupapi.Options{StateKeys: runtoken.OneKey("k1", "material")}).AppFlow()
+	flow := newService(t, setupapi.Options{StateKeys: runtoken.OneKey("k1", "material"),
+		ExternalBase: fixtureExternalBase}).AppFlow()
 	state := runtoken.New(runtoken.Options{
 		Domain: "github-app-manifest", Material: runtoken.OneKey("k1", "material"),
 	}).Mint("sre-lead", 15*time.Minute)
@@ -146,7 +148,8 @@ func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 func TestAnUnreadableClaimRegistryRefusesTheCallback(t *testing.T) {
 	t.Parallel()
 	flow := newService(t, setupapi.Options{
-		StateKeys: runtoken.OneKey("k1", "material"), StateClaims: blindClaims{},
+		ExternalBase: fixtureExternalBase,
+		StateKeys:    runtoken.OneKey("k1", "material"), StateClaims: blindClaims{},
 	}).AppFlow()
 	state := runtoken.New(runtoken.Options{
 		Domain: "github-app-manifest", Material: runtoken.OneKey("k1", "material"),

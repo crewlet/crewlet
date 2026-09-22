@@ -91,14 +91,14 @@ func nodeTokenOrEmpty(boot *config.Bootstrap) string {
 // `/secrets` and `/config` authenticate every request including reads, so
 // having no token is not "send none and see" — it is a 401 the operator will
 // have to diagnose from the far end. Saying so here names the fix instead.
-// The lenient form stays for the routes a node may legitimately serve with
-// `api.auth.disabled`.
+//
+// THERE IS NO LONGER AN ESCAPE ARM. `api.auth.disabled` used to make an empty
+// token legitimate here, and it is gone: every guarded route now needs a
+// credential on every posture, so an empty token is always the 401 this
+// message describes.
 func nodeAPIToken(boot *config.Bootstrap, surface string) (string, error) {
 	if token := nodeTokenOrEmpty(boot); token != "" {
 		return token, nil
-	}
-	if boot.API.Auth.Disabled {
-		return "", nil
 	}
 	return "", fmt.Errorf(
 		"this node lists no api.auth.tokens, so nothing can authenticate to "+

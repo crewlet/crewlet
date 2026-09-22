@@ -148,100 +148,50 @@ func TestAConfiguredHandleTagIsUsedAndFolded(t *testing.T) {
 }
 
 // THE ADDRESS A VENDOR REACHES THIS DEPLOYMENT ON is refused here rather than
-// discovered by the third-party app. Every webhook URL is built on it, so a value
-// missing its scheme registers a hook the third-party app reports as healthy and
+// discovered by the third-party app. Every webhook URL is built on it, so a
+// value missing its scheme registers a hook the vendor reports as healthy and
 // delivers nowhere, which is the exact failure this field exists to close.
-func TestAPublicBaseURLWithoutASchemeIsRefused(t *testing.T) {
+//
+// IT IS TIER A NOW. This used to be `integrations.public_base_url`, with the
+// same shape rule and three more the tier forced: a whole `${VAR}` was legal
+// there, the document stored it verbatim, and every caller had to read it
+// through a resolver and decide what to do when nothing answered. Tier A
+// expands before it decodes, so there is no such state and no such rule.
+func TestAnExternalURLWithoutASchemeIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, base := range []string{"crewlet.example.com", "//crewlet.example.com"} {
 		t.Run(base, func(t *testing.T) {
 			t.Parallel()
-			err := validateCompanyDoc(t, "integrations:\n  public_base_url: \""+base+"\"")
+			b := config.DefaultBootstrap()
+			b.API.Port = 8000
+			b.API.ExternalURL = base
+			err := b.Validate()
 			if err == nil {
-				t.Fatalf("public_base_url %q was accepted", base)
+				t.Fatalf("external_url %q was accepted", base)
 			}
-			if !strings.Contains(err.Error(), "public_base_url") {
+			if !strings.Contains(err.Error(), "external_url") {
 				t.Errorf("error %q does not name the field", err)
 			}
 		})
 	}
 }
 
-// And a real one is accepted, so the rule is a check rather than a refusal of
-// everything.
-func TestAPublicBaseURLWithASchemeIsAccepted(t *testing.T) {
+// A TRAILING SLASH IS TRIMMED ONCE, here, rather than by each of the callers
+// that build a URL on it. A base ending in "/" yields "…//webhooks/jira",
+// which some vendors normalise, some reject, and some accept while signing the
+// unnormalised form.
+func TestTheExternalBaseIsTrimmed(t *testing.T) {
 	t.Parallel()
-	err := validateCompanyDoc(t, "integrations:\n  public_base_url: \"https://crewlet.example.com\"")
-	if err != nil {
-		t.Fatalf("a valid public_base_url was refused: %v", err)
-	}
-}
-
-// A TRAILING SLASH IS TRIMMED ONCE, here, rather than by each of the five
-// callers that build a URL on it. A base ending in "/" yields
-// "…//webhooks/jira", which some third-party apps normalise, some reject, and some
-// accept while signing the unnormalised form.
-func TestTheWebhookBaseIsTrimmed(t *testing.T) {
-	t.Parallel()
-	cases := map[string]string{
+	for in, want := range map[string]string{
 		"https://crewlet.example.com/":   "https://crewlet.example.com",
 		"https://crewlet.example.com///": "https://crewlet.example.com",
 		"  https://crewlet.example.com ": "https://crewlet.example.com",
 		"":                               "",
-	}
-	for in, want := range cases {
-		in := config.Integrations{PublicBaseURL: in}
-		if got := in.WebhookBase(nil); got != want {
-			t.Errorf("WebhookBase() = %q, want %q", got, want)
-		}
-	}
-}
-
-// A REFERENCE IS READ, NOT PASSED ON. `public_base_url` is a Tier B field, so
-// a whole ${VAR} is a legal way to write it and the document stores it
-// verbatim — but every caller of this method is building an address a
-// third-party app will HOLD: a registered webhook, an app manifest an
-// operator pastes, a redirect baked into an app at creation. Handed the
-// reference itself, a hook is registered at "${PUBLIC_URL}/webhooks/gitlab",
-// which the third-party app accepts, reports healthy, and delivers nowhere.
-func TestTheWebhookBaseReadsAReference(t *testing.T) {
-	t.Parallel()
-	held := func(name string) (string, bool) {
-		if name == "PUBLIC_URL" {
-			return "https://crewlet.example.com/", true
-		}
-		return "", false
-	}
-	in := config.Integrations{PublicBaseURL: "${PUBLIC_URL}"}
-	// Resolved, and trimmed afterwards: the trailing slash may come from the
-	// stored value rather than from the document.
-	if got := in.WebhookBase(held); got != "https://crewlet.example.com" {
-		t.Errorf("WebhookBase() = %q, want the resolved address", got)
-	}
-}
-
-// AND AN UNREADABLE ONE IS EMPTY, NEVER THE LITERAL.
-//
-// Empty is what every caller already reads as "this deployment has no inbound
-// address", and it makes them refuse: no hook, no manifest, and a message
-// naming the setting. The literal makes them all succeed — at building
-// something nothing can reach. That failure was measured on the Atlassian
-// pass, which sent `${ATLASSIAN_ORG_ID}` to Atlassian as an organization id.
-func TestAnUnreadableWebhookBaseIsEmptyRatherThanTheReference(t *testing.T) {
-	t.Parallel()
-	none := func(string) (string, bool) { return "", false }
-	for name, resolve := range map[string]func(string) (string, bool){
-		"nothing holds it": none,
-		"nothing to ask":   nil,
 	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			in := config.Integrations{PublicBaseURL: "${PUBLIC_URL}"}
-			if got := in.WebhookBase(resolve); got != "" {
-				t.Errorf("WebhookBase() = %q, want \"\": a reference nothing "+
-					"resolves must not reach a third-party app", got)
-			}
-		})
+		api := config.API{ExternalURL: in}
+		if got := api.ExternalBase(); got != want {
+			t.Errorf("ExternalBase() = %q, want %q", got, want)
+		}
 	}
 }
 

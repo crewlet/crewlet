@@ -175,7 +175,7 @@ func converge(ctx context.Context, opts Options, res *Result) error {
 	base := strings.TrimRight(strings.TrimSpace(opts.WebhookBase), "/")
 	if base == "" {
 		res.Notes = append(res.Notes,
-			"no webhook was registered: set integrations.public_base_url or pass "+
+			"no webhook was registered: set api.external_url or pass "+
 				"-public-url to register one. Without it the instance delivers "+
 				"nothing and the integration looks idle rather than unconfigured")
 		return nil

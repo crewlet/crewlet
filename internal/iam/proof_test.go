@@ -1,10 +1,6 @@
-package credential_test
+package iam
 
-import (
-	"testing"
-
-	"github.com/crewlet/crewlet/internal/iam/credential"
-)
+import "testing"
 
 // THE ZERO VALUE IS INVALID, AND IT IS THE DANGEROUS ONE.
 //
@@ -13,17 +9,17 @@ import (
 // and nothing about the configuration would look wrong.
 func TestTheZeroSecondFactorIsRefusedRatherThanRead(t *testing.T) {
 	t.Parallel()
-	var zero credential.SecondFactor
+	var zero SecondFactor
 	if zero.Valid() {
 		t.Error("the zero value validated, so a company that declared " +
 			"nothing has silently chosen one of the two")
 	}
-	for _, mode := range credential.SecondFactors {
+	for _, mode := range SecondFactors {
 		if !mode.Valid() {
 			t.Errorf("%q is in the list and does not validate", mode)
 		}
 	}
-	if credential.SecondFactor("somethingnewer").Valid() {
+	if SecondFactor("somethingnewer").Valid() {
 		t.Error("a value this build has never heard of validated")
 	}
 }
@@ -35,11 +31,11 @@ func TestTheZeroSecondFactorIsRefusedRatherThanRead(t *testing.T) {
 // length of a rolling upgrade.
 func TestAnUnknownSecondFactorStillRequiresOne(t *testing.T) {
 	t.Parallel()
-	for mode, want := range map[credential.SecondFactor]bool{
-		credential.SecondFactorRequired: true,
-		credential.SecondFactorOptional: false,
-		"":                              true,
-		"somethingnewer":                true,
+	for mode, want := range map[SecondFactor]bool{
+		SecondFactorRequired: true,
+		SecondFactorOptional: false,
+		"":                   true,
+		"somethingnewer":     true,
 	} {
 		if got := mode.Requires(); got != want {
 			t.Errorf("%q requires a second factor %v, want %v", mode, got, want)

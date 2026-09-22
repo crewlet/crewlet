@@ -1834,7 +1834,7 @@ test("an agent with no manifest is told why not", () => {
     seats: [
       {
         ...perSeatTool.seats![0]!,
-        manifest_note: "no manifest yet: set integrations.public_base_url",
+        manifest_note: "no manifest yet: set api.external_url",
       },
     ],
   };
@@ -1847,7 +1847,7 @@ test("an agent with no manifest is told why not", () => {
     />,
   );
   expect(screen.getByText(/No app manifest for SRE Lead yet/)).toBeDefined();
-  expect(screen.getByText(/integrations.public_base_url/)).toBeDefined();
+  expect(screen.getByText(/api.external_url/)).toBeDefined();
   // AND NO EMPTY BOX to copy nothing out of.
   expect(baseElement.querySelector(".int-manifest")).toBeNull();
 });

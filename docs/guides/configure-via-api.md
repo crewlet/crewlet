@@ -63,7 +63,7 @@ A revision summary is required on every write. It travels in the `X-Summary`
 header, or as a top-level `_summary` key in the body:
 
 ```bash
-curl -X PUT http://localhost:8080/config \
+curl -X PUT http://localhost:8000/config \
   -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   -H "Content-Type: application/yaml" \
   --data-binary $'_summary: bootstrap Nimbus\n'"$(cat nimbus.company.yaml)"

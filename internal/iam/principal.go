@@ -124,12 +124,15 @@ type Principal struct {
 	// IT MAY HOLD STRINGS THIS BUILD DOES NOT KNOW. See [Principal.Can].
 	Grants []Grant
 
-	// Colleague is the DISPLAY name other seats see — what a roster
-	// renders and what a prompt calls this principal. Separate from Login
-	// because a login is a credential-shaped string, and a prompt that
-	// rendered one would teach every agent in the company how a person
-	// signs in.
-	Colleague string
+	// Colleague is how far into the company's own WORK this principal
+	// reaches — the other hat, orthogonal to Grants. [Colleague] argues
+	// why one ladder could not have carried both.
+	//
+	// Its zero is [ColleagueNone], which is the closed end and a real
+	// setting: most credentials are nobody's colleague. That is the one
+	// place this struct's zero value is meaningful rather than refused,
+	// and it is meaningful only because the zero is the closed end.
+	Colleague Colleague
 
 	// Position is where this principal sits in the chart: the unit path
 	// its seat belongs to ("engineering/backend"), or "" for one that

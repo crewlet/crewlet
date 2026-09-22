@@ -151,13 +151,19 @@ type request struct {
 	// Seat is which seat a `watch` frame asks to be a recipient for, and
 	// empty clears the subscription. See [Hub.Watch].
 	Seat string `json:"seat"`
-
-	// Token rides the FRAME rather than the handshake for the
-	// operator-only queries. A browser cannot set a header on a WebSocket
-	// constructor, and a socket opened for anonymous reads still has to be
-	// able to carry one credentialled question.
-	Token string `json:"token"`
 }
+
+// THE PER-FRAME CREDENTIAL IS GONE, and it went with `allow_anonymous_read`.
+//
+// A `token` used to ride the FRAME rather than the handshake, so that a socket
+// opened for anonymous reads could ask one operator-only question without
+// reconnecting. Every socket now authenticates at the handshake — [authenticate]
+// refuses one that presents nothing — so there is no socket for a frame
+// credential to upgrade, and the machinery around it (a refused token closing
+// an anonymous socket, a good one upgrading exactly one query, an authenticated
+// socket ignoring both) was three rules about a state that can no longer occur.
+// The dashboard sends no such field, and an unknown field on a frame is ignored
+// by both ends, which is what makes this removal additive on the wire.
 
 // Handler serves the dashboard's live socket.
 //
@@ -205,32 +211,48 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			log.Debug("stream_accept_failed", "error", err)
 			return
 		}
-		serveSocket(r.Context(), conn, guard, svc, query, operatorID)
+		serveSocket(r.Context(), conn, svc, query, operatorID)
 	})
 }
 
 // authenticate resolves the socket's operator, or refuses it.
 //
-// The socket is guarded exactly as the equivalent HTTP read is: under anonymous
-// reads it opens without a credential, and under a closed posture it does not.
-// A token that is PRESENT and wrong is refused either way — a client that sent
-// one meant to be somebody. The credential is read by the guard's own rule,
-// the same one the middleware applied a moment earlier, so the two can never
-// disagree about where a socket's token may ride.
+// The socket is guarded exactly as the equivalent HTTP read is, which now
+// means: always. A credential that is absent and one that is present and wrong
+// are refused alike — the first used to open an anonymous socket, and what
+// that socket could read is every LLM transcript this company has produced.
+// The credential is read by the guard's own rule, the same one the middleware
+// applied a moment earlier, so the two can never disagree about where a
+// socket's token may ride.
+//
+// IT STILL ASKS [auth.Guard.Requires] rather than assuming the answer. The
+// exemption list is that package's to state, and a socket path that somebody
+// later declares unguarded must open here rather than being refused by a
+// second, private copy of the rule.
 func authenticate(guard *auth.Guard, r *http.Request) (string, bool) {
 	operatorID, authenticated := guard.Presented(r)
 	if authenticated {
 		return operatorID, true
 	}
+	// A CREDENTIAL THAT IS PRESENT AND WRONG IS REFUSED EVEN IF THIS PATH
+	// WERE EXEMPT, which is where this parts company with the HTTP
+	// middleware: there an unguarded route serves a bad token as nobody,
+	// and here it must not. A socket is a long-lived subscription rather
+	// than one answer, and a reader whose token is stale would sit on it
+	// for hours getting whatever an exempt socket serves, never told that
+	// the credential they typed is wrong.
+	//
+	// Both arms answer false today, because the socket path is guarded —
+	// they are kept apart because only one of them may change if it ever
+	// stops being.
 	if guard.Credential(r) != "" {
 		return "", false
 	}
-	// No credential offered. The read posture decides.
 	return "", !guard.Requires(auth.SocketPath, http.MethodGet)
 }
 
 // serveSocket runs one connection until it closes.
-func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
+func serveSocket(ctx context.Context, conn *websocket.Conn,
 	svc *Service, query Query, operatorID string,
 ) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -254,7 +276,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 	})
 
 	client.Reply(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
-	code, reason := readLoop(ctx, conn, guard, svc.Hub(), client, query, operatorID)
+	code, reason := readLoop(ctx, conn, svc.Hub(), client, query, operatorID)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -316,7 +338,7 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // that end a socket at all; everything else this loop can go wrong about is
 // answered ON the socket and the socket stays open. See [CloseUnauthenticated]
 // and [FrameDegraded].
-func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
+func readLoop(ctx context.Context, conn *websocket.Conn,
 	hub *Hub, client *Client, query Query, operatorID string,
 ) (websocket.StatusCode, string) {
 	// The concurrency bound, as a token pool. Queries run on their own
@@ -347,7 +369,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 			// learns why its pushes stopped.
 			client.Reply(Envelope{Kind: KindPong})
 		case "watch":
-			if code, reason := watch(ctx, guard, hub, client, req, operatorID); code != 0 {
+			if code, reason := watch(ctx, hub, client, req, operatorID); code != 0 {
 				return code, reason
 			}
 		case "query":
@@ -364,9 +386,6 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 				client.Reply(queryError(req, CodeUnknownQuery))
 				continue
 			}
-			if code, reason := frameCredential(guard, req, operatorID); code != 0 {
-				return code, reason
-			}
 			// NOT running.Go: the semaphore acquire has to happen on
 			// THIS goroutine, the reader. Moving it inside the spawned
 			// one would let the reader keep spawning past the cap and
@@ -377,7 +396,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 			go func() {
 				defer running.Done()
 				defer func() { <-slots }()
-				runQuery(ctx, guard, client, query, req, operatorID)
+				runQuery(ctx, client, query, req, operatorID)
 			}()
 		default:
 			// Unknown kinds are ignored, which is what makes new ones
@@ -386,91 +405,40 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 	}
 }
 
-// frameCredential checks a credential offered on a frame, and reports the
-// close code the socket must end with when this node refuses it.
-//
-// # Why a refused frame token closes the socket, and only sometimes
-//
-// The handshake's rule is that a credential which is PRESENT and wrong is
-// refused, because a client that sent one meant to be somebody. The frame
-// channel is the same credential arriving where the handshake cannot see it,
-// so it gets the same rule — with one exception, which is the whole of the
-// asymmetry:
-//
-//   - A socket that has NO operator of its own has nothing to fall back to.
-//     The refused token is the only identity it offered, so the socket is
-//     closed with [CloseUnauthorized] and the client is told. Left running
-//     anonymously — which it was — a reader holding a stale token gets
-//     ordinary answers to every anonymous-readable question and never learns
-//     the credential it typed is wrong.
-//   - A socket that IS authenticated keeps its own operator and the bad frame
-//     token is ignored. It must NEVER be demoted, let alone dropped: a
-//     garbled token on one frame silently answered an operator's question as
-//     anonymous, and an operator-only query came back unauthorized on a
-//     socket with every right to ask it.
-//
-// A zero status means "carry on"; there is no valid close code of 0.
-func frameCredential(guard *auth.Guard, req request, operatorID string) (websocket.StatusCode, string) {
-	if req.Token == "" || operatorID != "" {
-		return 0, ""
-	}
-	if _, ok := guard.Operator(req.Token); ok {
-		return 0, ""
-	}
-	return CloseUnauthorized, "the credential on that frame is not one this node accepts"
-}
-
 // watch makes this client a recipient for one seat, or reports the close code
 // that refuses it.
 //
 // # A subscription is a WRITE, so it needs a credential
 //
-// `allow_anonymous_read` opens reads and only reads — the rule the auth
-// package states and the whole of what the anonymous posture means. A watch is
-// not a read: it installs a row in the hub's routing index, on this node, on
-// behalf of a caller, and it stays there until the socket goes away. An
-// unauthenticated client that could install one would be writing server state
-// through a surface documented as read-only.
+// A watch is not a read: it installs a row in the hub's routing index, on this
+// node, on behalf of a caller, and it stays there until the socket goes away.
 //
-// So a watch from a socket with no operator, and with no usable credential on
-// the frame, is [CloseUnauthenticated] — and a close rather than an error
-// frame because a watch carries no correlation id, so the socket itself is the
-// only channel the refusal has.
-func watch(ctx context.Context, guard *auth.Guard, hub *Hub, client *Client,
+// THE CHECK IS KEPT THOUGH EVERY SOCKET IS NOW AUTHENTICATED, and it is not
+// belt-and-braces: [authenticate] is what decides a socket's operator, it asks
+// the auth package's exemption list, and that list is somebody else's to
+// change. A watch reaching this function with no operator would mean the
+// socket path had become exempt — and installing routing state for a caller
+// nobody can name is the one outcome that must not follow silently from that.
+//
+// A close rather than an error frame, because a watch carries no correlation
+// id: the socket itself is the only channel the refusal has.
+func watch(ctx context.Context, hub *Hub, client *Client,
 	req request, operatorID string,
 ) (websocket.StatusCode, string) {
-	if code, reason := frameCredential(guard, req, operatorID); code != 0 {
-		return code, reason
-	}
-	id := operatorID
-	if req.Token != "" {
-		if resolved, ok := guard.Operator(req.Token); ok {
-			id = resolved
-		}
-	}
-	if id == "" {
+	if operatorID == "" {
 		return CloseUnauthenticated,
 			"watching a seat needs an operator credential"
 	}
 	hub.Watch(client, req.Seat)
-	log.DebugContext(ctx, "stream_watch", "operator", id, "seat", req.Seat)
+	log.DebugContext(ctx, "stream_watch", "operator", operatorID, "seat", req.Seat)
 	return 0, ""
 }
 
 // runQuery answers one question onto the client's own queue.
-func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Query,
+func runQuery(ctx context.Context, client *Client, query Query,
 	req request, operatorID string,
 ) {
-	// A frame-carried token upgrades THIS query only. It is how a socket
-	// opened for anonymous reads asks one operator-only question without
-	// reconnecting.
-	id := operatorID
-	if req.Token != "" {
-		if resolved, ok := guard.Operator(req.Token); ok {
-			id = resolved
-		}
-	}
-	data, err := query(ctx, req.What, req.Params, id)
+	data, err := query(ctx, req.What, req.Params, operatorID)
 	switch {
 	case err == nil:
 		client.Reply(Envelope{Kind: KindResult, ID: req.ID, What: req.What, Data: data})

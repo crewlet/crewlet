@@ -1729,7 +1729,7 @@ function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: Recon
  */
 export function useSetup(): {
   byKey: Map<string, SetupToolState>;
-  base: SetupListing["public_base_url"] | null;
+  base: SetupListing["external_url"] | null;
   guarded: boolean;
   /**
    * True until this read has answered ONCE, however it answered.
@@ -1826,7 +1826,7 @@ export function useSetup(): {
 
   return {
     byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
-    base: listing?.public_base_url ?? null,
+    base: listing?.external_url ?? null,
     guarded,
     loading,
     reload,
@@ -3039,49 +3039,19 @@ export function Integrations({ kind }: { kind?: string }) {
 
       {/* THE ADDRESS EVERY INBOUND INTEGRATION IS BUILT ON, rendered once. It
           is one setting, and a screen that asked for it per integration would
-          ask the operator to keep seven copies consistent. */}
-      {setup.base && !setup.base.present && (
-        <Callout variant="warning">
-          <span className="col" style={{ gap: 4 }}>
-            <span>No public address is set, so no third-party app can deliver to this engine.</span>
-            <span className="t-caption">
-              Set <InlineCode>{setup.base.config_path}</InlineCode> to the HTTPS address third-party
-              apps reach this deployment on. Chat over an outbound socket, Mattermost, is
-              unaffected.
-            </span>
-          </span>
-        </Callout>
-      )}
-      {/* SET AND SET TO SOMETHING ARE DIFFERENT FACTS, which is why the
-          engine answers `resolved` beside `present` as a three-valued field.
-          The banner read `present` alone, so a `${VAR}` pointing at an
-          environment variable nobody exported rendered as "Third-party apps
-          reach this engine at" followed by an empty code span — the one
-          screen that exists to say where deliveries land, saying nothing, on
-          exactly the misconfiguration it should name. */}
-      {setup.base?.present && setup.base.resolved !== false && (
+          ask the operator to keep seven copies consistent.
+
+          ONE BANNER WHERE THERE WERE THREE. The address used to be a Tier B
+          pointer, so this had to say three different things: nothing is set,
+          it is set and resolves, and — the one a `${VAR}` nobody exported
+          produced — it is set and resolves to nothing. `api.external_url` is
+          Tier A and required once the API is served, so a node rendering this
+          screen has an address and the other two branches described states
+          that can no longer occur. */}
+      {setup.base && (
         <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
           <span>
             Third-party apps reach this engine at <InlineCode>{setup.base.value}</InlineCode>
-          </span>
-        </Callout>
-      )}
-      {setup.base?.present && setup.base.resolved === false && (
-        <Callout variant="warning">
-          <span className="col" style={{ gap: 4 }}>
-            <span>
-              The public address is configured as a reference that resolves to nothing, so no
-              third-party app can deliver to this engine.
-            </span>
-            <span className="t-caption">
-              <InlineCode>{setup.base.config_path}</InlineCode> is set to{" "}
-              <InlineCode>
-                {setup.base.reference ? `\${${setup.base.reference}}` : "a reference"}
-              </InlineCode>
-              , which resolves to nothing. Export it, or seal it as a secret, and re-activate the
-              revision — a reference is resolved from the snapshot taken when the revision is
-              applied.
-            </span>
           </span>
         </Callout>
       )}

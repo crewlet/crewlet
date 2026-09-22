@@ -113,10 +113,23 @@ func newApp(t *testing.T, opts api.Options) *api.App {
 	return a
 }
 
+// fixtureToken is the credential every fixture carries and [get] presents.
+//
+// EVERY FIXTURE IS CREDENTIALLED, because every guarded route now needs one:
+// `allow_anonymous_read` is gone, so a case that issued a bare GET would be
+// asserting the 401 rather than its own subject. Cases about the guard itself
+// build their own bootstrap and say what they present.
+const fixtureToken = "fixture-token-long-enough-to-pass"
+
 func withRequired(t *testing.T, opts api.Options) api.Options {
 	t.Helper()
 	if opts.Bootstrap == nil {
+		// ONLY THE BOOTSTRAP THIS HELPER CREATED gets the fixture
+		// credential. A case that supplies its own is saying what its
+		// posture is — including a Tier A carrying no token at all,
+		// which is the shape the guard-is-always-mounted case needs.
 		b := config.DefaultBootstrap()
+		b.API.Auth.Tokens = []config.APIToken{{ID: "fixture", Token: fixtureToken}}
 		opts.Bootstrap = &b
 	}
 	if opts.Now == nil {
@@ -205,11 +218,25 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	a.Stop()
 }
 
-// get runs one request and returns the status and decoded body.
+// authed presents the fixture's credential on a request built inline.
+//
+// A HELPER RATHER THAN A HEADER AT EACH SITE, because there are two dozen of
+// them and the point of every one is the ROUTE rather than the credential:
+// spelled out each time, the next person to read the suite would think the
+// header was part of what each case asserts.
+func authed(r *http.Request) *http.Request {
+	r.Header.Set("Authorization", "Bearer "+fixtureToken)
+	return r
+}
+
+// get runs one request as the fixture's credential and returns the status and
+// decoded body.
 func get(t *testing.T, a *api.App, path string) (int, map[string]any) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Authorization", "Bearer "+fixtureToken)
+	a.ServeHTTP(rec, req)
 	res := rec.Result()
 	var body map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
@@ -595,14 +622,12 @@ func TestTheProbesAreReachableWithoutAToken(t *testing.T) {
 	t.Parallel()
 	// An orchestrator has no token, and a liveness check that 401s is a
 	// liveness check that fails.
-	b := config.DefaultBootstrap()
-	b.API.Auth.AllowAnonymousRead = false
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	b := closedPosture()
 	a := newApp(t, api.Options{Bootstrap: &b, Sources: queries.Sources{Company: active(t)}})
 
 	for _, path := range []string{"/health", "/ready"} {
 		rec := httptest.NewRecorder()
-		a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, path, nil)))
 		if rec.Code == http.StatusUnauthorized {
 			t.Errorf("%s was guarded", path)
 		}
@@ -612,9 +637,14 @@ func TestTheProbesAreReachableWithoutAToken(t *testing.T) {
 func TestTheGuardIsMountedEvenWithNoTierA(t *testing.T) {
 	t.Parallel()
 	// Tier A supplies the posture, never the existence of a check.
-	a := newApp(t, api.Options{Bootstrap: nil})
+	// A TIER A THAT NAMES NO CREDENTIAL, which is what config refuses once
+	// the API is served and what an embedder building this struct directly
+	// can still produce. Tier A supplies the posture, never the existence
+	// of a check.
+	b := config.DefaultBootstrap()
+	a := newApp(t, api.Options{Bootstrap: &b})
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/config/revisions", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/config/revisions", nil)))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d with no Tier A, want 401", rec.Code)
 	}
@@ -627,9 +657,11 @@ func TestAnUnknownRouteIsNotFound(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{})
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
-	// 404 rather than 401: an anonymous read posture lets the request
-	// through the guard, and the mux then has nothing for it.
+	req := httptest.NewRequest(http.MethodGet, "/nope", nil)
+	req.Header.Set("Authorization", "Bearer "+fixtureToken)
+	a.ServeHTTP(rec, req)
+	// 404 rather than 401: the credential is accepted, so the request
+	// reaches the mux, which then has nothing for it.
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}
@@ -658,11 +690,15 @@ func TestTheNodeIDNamesTheProcessThatAnswered(t *testing.T) {
 	}
 }
 
-// closedPosture is Tier A with reads guarded, for the cases that check what
-// stays reachable anyway.
+// closedPosture is Tier A carrying one credential, for the cases that check
+// what stays reachable anyway.
+//
+// It used to also turn `allow_anonymous_read` off, which is what made it
+// "closed". Every posture is that posture now: a guarded route needs a
+// credential whatever the method, so the only thing this still has to say is
+// which credential exists.
 func closedPosture() config.Bootstrap {
 	b := config.DefaultBootstrap()
-	b.API.Auth.AllowAnonymousRead = false
 	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
 	return b
 }
@@ -683,9 +719,8 @@ func TestAPreflightToAGuardedRouteIsAnswered(t *testing.T) {
 	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "s3cret"}}
 	a := newApp(t, api.Options{Bootstrap: &b})
 
-	// `/config` is one of the two prefixes never eligible for
-	// allow_anonymous_read, so it is exactly the route whose preflight the
-	// guard would answer 401.
+	// `/config` is guarded on every method, so it is exactly the route
+	// whose preflight the guard would answer 401.
 	r := httptest.NewRequest(http.MethodOptions, "/config", nil)
 	r.Header.Set("Origin", "https://ops.example.com")
 	r.Header.Set("Access-Control-Request-Method", "PATCH")

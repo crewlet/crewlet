@@ -24,25 +24,24 @@ import (
 // handler ran, so the dashboard could not connect with a valid token on the
 // one posture whose point is that the token is required. This test goes
 // through api.App the way a browser does.
-func TestAClosedPostureOpensTheSocketOnItsQueryToken(t *testing.T) {
+func TestTheSocketOpensOnItsQueryToken(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
-	b.API.Auth.AllowAnonymousRead = false
 	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
 	a := newApp(t, api.Options{Bootstrap: &b, QueueBackend: "jetstream"})
 	srv := httptest.NewServer(a)
 	t.Cleanup(srv.Close)
 	base := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream"
 
-	// Without a credential the closed posture refuses the handshake.
+	// Without a credential the handshake is refused.
 	if conn, _, err := websocket.Dial(t.Context(), base, nil); err == nil {
 		_ = conn.Close(websocket.StatusNormalClosure, "")
-		t.Fatal("a closed posture opened an unauthenticated socket")
+		t.Fatal("a socket opened with no credential at all")
 	}
 	// A wrong token in the query is refused too.
 	if conn, _, err := websocket.Dial(t.Context(), base+"?token=wrong", nil); err == nil {
 		_ = conn.Close(websocket.StatusNormalClosure, "")
-		t.Fatal("a closed posture opened a socket on a wrong token")
+		t.Fatal("a socket opened on a wrong token")
 	}
 
 	conn, _, err := websocket.Dial(t.Context(), base+"?token=secret", nil)

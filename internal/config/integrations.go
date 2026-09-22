@@ -40,35 +40,6 @@ type Integrations struct {
 	// the endpoint rejects every request without it.
 	ForgeAppID string `yaml:"forge_app_id,omitempty" json:"forge_app_id,omitempty" desc:"Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud."`
 
-	// PublicBaseURL is where a third-party app reaches THIS deployment: the HTTPS
-	// base every webhook path is built on.
-	//
-	// # Why it belongs in the company document
-	//
-	// It was a flag on five subcommands (`-public-url`) and nowhere else,
-	// which made it a fact only the person running a command knew. Two
-	// things need it that are not a person running a command:
-	//
-	//   - The reconcile loop, to say anything at all about ingress. Every
-	//     integration Result reports the hook a RUN registered, which is empty
-	//     for a read-only pass by construction, so without this the loop
-	//     cannot tell a company whose webhook is missing from one it was
-	//     never asked to register. It therefore says nothing, which is
-	//     honest and useless.
-	//   - Anything that has to build a URL for a third-party app to call back on,
-	//     which is what a self-service app deployment needs.
-	//
-	// It is NOT a secret and should be a literal rather than a ${VAR}: a
-	// reference that resolves to nothing yields a hook pointing at "",
-	// which a third-party app accepts and then delivers nowhere.
-	//
-	// Empty is meaningful and is the default: it means this deployment has
-	// no address a third-party app can reach, which is the honest state of an
-	// engine on a laptop. Nothing is guessed from it, because a hook
-	// pointing at the wrong host is worse than no hook, and a subcommand's
-	// `-public-url` still overrides it for a one-off run.
-	PublicBaseURL string `yaml:"public_base_url,omitempty" json:"public_base_url,omitempty" desc:"HTTPS base a vendor reaches this deployment on, e.g. https://crewlet.example.com. Empty means no inbound address."`
-
 	// CheckIntervalSeconds is how long a CONVERGED integration is trusted
 	// before the loop reads it back, and therefore how long access somebody
 	// revoked by hand at the third-party app goes unnoticed.
@@ -126,62 +97,8 @@ func (i *Integrations) CheckInterval() time.Duration {
 	return time.Duration(i.CheckIntervalSeconds) * time.Second
 }
 
-// WebhookBase is the base every inbound path is built on, without a trailing
-// slash, or empty when this deployment has no inbound address THIS PROCESS
-// CAN READ.
-//
-// Trimmed here rather than at each caller, because five of them would each
-// have to remember: a base ending in "/" yields "…//webhooks/jira", which
-// some third-party apps normalise, some reject, and some accept while signing the
-// unnormalised form.
-//
-// # It takes a resolver, and that is the whole point of the signature
-//
-// `public_base_url` is a Tier B field, so a whole `${VAR}` is a legal way to
-// write it and the document stores it VERBATIM like every other pointer. Read
-// raw, that value is not an address: it is the seven characters `${VAR}`, and
-// every caller here is building something a third-party app will HOLD — a
-// registered webhook, a manifest an operator pastes, an app's baked-in
-// redirect. Slack refuses such a manifest and names nothing; a webhook
-// registered at `${VAR}/webhooks/gitlab` is accepted, reported healthy, and
-// delivers nowhere. The same mistake was measured on the Atlassian pass,
-// which sent the literal `${ATLASSIAN_ORG_ID}` to Atlassian.
-//
-// So there is no raw accessor to reach for by accident. A caller that cannot
-// resolve has to pass nil and be handed "", which every reader here already
-// treats as "no inbound address" — the honest answer for a node that cannot
-// read the value, and the one that stops a literal reaching a third-party app.
-//
-// EMPTY RATHER THAN THE REFERENCE when it will not resolve, for the same
-// reason: no manifest beats a manifest built from a value nothing can read.
-func (i *Integrations) WebhookBase(resolve func(string) (string, bool)) string {
-	base := strings.TrimSpace(i.PublicBaseURL)
-	if name, isRef := envref.Whole(base); isRef {
-		if resolve == nil {
-			return ""
-		}
-		got, ok := resolve(name)
-		if !ok {
-			return ""
-		}
-		base = strings.TrimSpace(got)
-	}
-	return strings.TrimRight(base, "/")
-}
-
 func (i *Integrations) validate(path Path) error {
 	var p problems
-
-	// A URL that is not one is refused HERE rather than discovered by a
-	// third-party app. Every webhook path is built on this, so a value missing its
-	// scheme registers a hook the third-party app reports as healthy and delivers
-	// nowhere, which is the failure mode this whole field exists to close.
-	if base := strings.TrimSpace(i.PublicBaseURL); base != "" && !hasHTTPScheme(base) {
-		p.add(at(path, "public_base_url"), ErrUnknownValue,
-			"%q must start with http:// or https://: it is the base every "+
-				"webhook URL is built on, so a value without a scheme yields "+
-				"an address the third-party app accepts and never reaches", i.PublicBaseURL)
-	}
 
 	// A CHECK INTERVAL BELOW THE FLOOR IS REFUSED RATHER THAN CLAMPED.
 	// Silently raising it would leave a document saying one thing and a loop
@@ -1133,7 +1050,7 @@ type GitLabProvisioning struct {
 	//
 	// Empty is [GitLabModeGroup], which is the only shape GitLab.com has.
 	// The flag is still there and still overrides, for one invocation, the
-	// way `-public-url` overrides `integrations.public_base_url`.
+	// way `-public-url` overrides `api.external_url`.
 	Mode GitLabMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=group|instance" desc:"Where service accounts are owned: group (default, and all GitLab.com offers) or instance (self-managed only; needs an instance-administrator token)."`
 
 	// TokenScopes are minted on each service-account token.

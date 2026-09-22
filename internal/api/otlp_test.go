@@ -148,7 +148,7 @@ func TestTheExportRouteNeedsNoAPIToken(t *testing.T) {
 	}
 	// AND THE GUARD IS REALLY ON, or the assertion above proves nothing.
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/agents", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/agents", nil)))
 	if rec.Result().StatusCode != http.StatusUnauthorized {
 		t.Fatalf("the API is not guarded in this fixture (/agents = %d), so the "+
 			"exemption above was never exercised", rec.Result().StatusCode)
@@ -181,12 +181,16 @@ func TestWithNoReceiverTheRouteIsAbsent(t *testing.T) {
 	}
 }
 
-// closedToReads is a bootstrap that requires a token for EVERYTHING the
-// exemptions do not cover — unlike [guarded], whose anonymous reads would
-// make the assertion above pass for the wrong reason.
+// closedToReads is a bootstrap that requires a credential for EVERYTHING the
+// exemptions do not cover.
+//
+// IT IS NOW THE SAME THING AS [guarded], and it is kept because the assertion
+// above is about the exemption list rather than about a posture: what it pins
+// is that /otlp stays reachable while everything around it is guarded, and a
+// case that named the ordinary fixture would stop saying so the day somebody
+// reintroduced a read posture.
 func closedToReads() *config.Bootstrap {
 	b := config.DefaultBootstrap()
-	b.API.Auth.AllowAnonymousRead = false
 	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
 	return &b
 }

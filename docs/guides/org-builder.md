@@ -20,8 +20,10 @@ under [Editing a node](#editing-a-node), field by field.
 ## Opening the builder
 
 The configuration is guarded, reads included, so the builder needs what any
-other configuration client needs: an operator token the engine accepts
-(unless the node runs with `api.auth.disabled`). What the lens shows is
+other configuration client needs: an operator token the engine accepts. There
+is no posture in which it does not — `api.auth.disabled` is retired, and
+`crewlet run -dev-principal` is a flag on a node reached over loopback rather
+than a configuration a browser can meet. What the lens shows is
 decided from what the engine answers, never from whether the browser holds a
 token:
 

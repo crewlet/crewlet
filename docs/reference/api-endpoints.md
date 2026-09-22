@@ -33,9 +33,9 @@ one JSON object, and it always has the same three parts in the same places:
 
 ```json
 {
-  "error": "no_public_base_url",
+  "error": "no_external_url",
   "message": "This deployment has no public address, so no webhook can be registered for it. Set the public base URL and run the pass again.",
-  "config_path": "integrations.public_base_url",
+  "config_path": "api.external_url",
   "hint": "set the HTTPS address third-party apps reach this deployment on; without it the pass can register no webhook"
 }
 ```
@@ -126,7 +126,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch. **Always needs a token** — it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
-| `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
+| `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Needs a credential**, like every other guarded route (see [below](#post-budgetsreset)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
@@ -185,15 +185,13 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
 | `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Absent where the company runs neither native backend |
 
-> **Auth.** Writes and every `/config`, `/secrets`, `/setup`, `/chart` and
-> `/company` route require
-> `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside those five)
-> serve without one unless `api.auth.allow_anonymous_read: false` is set, at
-> which point they need the same token — `/ws/stream` included, and it accepts
-> `?token=…` too since browsers cannot set headers on a WebSocket. Only there:
-> a token in the query string of any other route authenticates nobody, because
-> a URL lands in proxy logs and browser history. Never guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, `/mcp/*`, and the
-> dashboard shell (`/`, `/dashboard`, `/static/*`). See
+> **Auth.** Every route requires `Authorization: Bearer <token>`, reads
+> included — `/ws/stream` too, and it accepts `?token=…` since browsers cannot
+> set headers on a WebSocket. Only there: a token in the query string of any
+> other route authenticates nobody, because a URL lands in proxy logs and
+> browser history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
+> `/otlp/*`, `/mcp/*`, and the dashboard shell (`/`, `/dashboard`,
+> `/static/*`). See
 > [Configuration § Auth](../concepts/configuration.md#auth).
 >
 > **A token that is present and wrong is refused even where reads are open.**
@@ -332,7 +330,7 @@ batch is the unit that is ordered, and three requests are three chances to land
 half a reorganisation.
 
 ```bash
-curl -X POST localhost:8080/chart/batch \
+curl -X POST localhost:8000/chart/batch \
   -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   -d '{"operations":[
         {"kind":"create_unit","object":{"kind":"unit","id":"platform"}},
@@ -654,7 +652,7 @@ them, because every node opens the fleet's
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address third-party apps reach this deployment on. `public_base_url` answers `present` and `resolved` separately — set and set to something are different facts, and a `${VAR}` nobody exported is `present: true, resolved: false` with the variable named in `reference` |
+| `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address third-party apps reach this deployment on. `external_url` carries a single `value`: it is `api.external_url` in Tier A, required once the API is served and resolved before that file is decoded, so the `present`/`resolved`/`reference` triple the Tier B pointer needed describes a state that can no longer occur |
 | `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state |
 | `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
 | `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block |
@@ -1138,7 +1136,7 @@ accounts.
 
 Refusals worth knowing: `409 requirements_outstanding` names the fields still
 missing (a pass writes at the third-party app and must not run against a
-half-configured integration), `409 no_public_base_url` when nothing has told
+half-configured integration), `409 no_external_url` when nothing has told
 the engine what address third-party apps reach it on, and `409 pass_in_flight`
 when another pass for the same third-party app is already running. That last
 one is a refusal rather than a queue on purpose: minting twice is not something
@@ -1150,8 +1148,8 @@ minting on having somewhere to seal a credential, so a run without one reads
 and reports and writes nothing at the third-party app. It answers "did what I
 just fixed at the third-party app take".
 
-A check **does** get `integrations.public_base_url`, and the `409
-no_public_base_url` refusal above is the writing route's alone. Withholding
+A check **does** get `api.external_url`, and the `409
+no_external_url` refusal above is the writing route's alone. Withholding
 the address from a check made it report the wrong fact: a vendor handed no
 base reads that as *this deployment has no inbound address* and reports
 `ingress_blocked` owed by an admin — and a check records its findings through
@@ -1310,7 +1308,7 @@ repositories.
 
 Refusals: `400 bad_body`, `400 seat_required`, `409 no_active_revision`,
 `404 no_such_seat`, and `409 no_public_url` when
-`integrations.public_base_url` is unset. The last one matters more than it
+`api.external_url` is unset. The last one matters more than it
 looks: an app is created with its delivery, redirect and setup addresses baked
 in, and only a person at GitHub can change them afterwards, so creating one
 now would mean creating it again later.
@@ -1862,7 +1860,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `kind` | Purpose |
 |--------|---------|
 | `ping` | Keepalive; server replies with `pong`. |
-| `watch` | Become a recipient for one seat's seat-routed frames: `{ kind: "watch", seat }`. An empty `seat` clears it, and one socket watches one seat at a time — a tab is looking at one screen. **It needs an operator credential**, on the handshake or on the frame's own `token`: `allow_anonymous_read` opens reads and only reads, and a watch writes a row into this node's routing index. A watch with no operator behind it closes the socket with **4401**. |
+| `watch` | Become a recipient for one seat's seat-routed frames: `{ kind: "watch", seat }`. An empty `seat` clears it, and one socket watches one seat at a time — a tab is looking at one screen. **It needs an operator credential**, which the handshake already carries: every socket authenticates before the upgrade, and a watch writes a row into this node's routing index. A watch with no operator behind it closes the socket with **4401**. The per-frame `token` this route used to accept is gone — it existed so a socket opened for anonymous reads could ask one credentialled question, and there is no such socket. |
 | `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params, token? }` — `id` is any client-chosen value echoed back on the reply, and `token` carries the operator bearer token that the `config`-family queries require (validated with the same constant-time comparison the `/config` middleware performs). Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows. |
 
 **Queries** (`what`), each answered by the *same* function the matching
@@ -2120,7 +2118,7 @@ a change has to keep — is documented in
 
 ### `GET /org`
 
-The company's charter and its organization tree, as an anonymous reader may see
+The company's charter and its organization tree, as a reader with no grant beyond state:read may see
 it. The same object is the `org` section of the [handshake
 snapshot](#what-the-handshake-snapshot-carries) and the body of every `org`
 push, so all three surfaces carry exactly one shape.
@@ -2214,7 +2212,7 @@ The fields above it stay as WRITTEN, so a reader can still tell a declared lead
 from an inherited one. Every list here may arrive as `null` (Go marshals a nil
 slice that way); a reader treats `null` as empty. The authored `path`,
 `unit_path` and `placed_by_ref` of each entry are omitted, because they say
-where a seat was WRITTEN — a fact about a document an anonymous reader is given
+where a seat was WRITTEN — a fact about a document an ordinary reader is given
 no way to point into, and one a company composed from chart rows cannot answer
 at all, since each row states its unit directly and nothing was moved by a
 reference. Membership is each unit's `seats`; the same block with paths comes
@@ -2245,7 +2243,7 @@ task and next run, and [`GET /budgets`](#get-budgets) answers each seat's token
 cap beside the counter it is enforced against.
 
 **Why an explicit shape.** `/org` is readable without a token under the
-default `api.auth.allow_anonymous_read: true`. Serialising the config's own
+default read posture. Serialising the config's own
 seat and unit types would make every field added to a seat public the day it
 landed, whatever it held. The shape is declared field by field in
 `internal/api` instead, and a test fails when the config gains a seat or unit
@@ -2454,7 +2452,7 @@ that were never missing.
 **Operator-only, reads included**, on the same rule `/config` and `/secrets`
 follow: the answer names every node in the fleet, its position, its disk and
 its snapshot repository, which is a map of which machine to take out to lose
-the company's history. It is never eligible for `allow_anonymous_read`.
+the company's history, and it takes its own grant on top of authentication.
 
 The document is assembled by the node you ask, and says so: half its fields are
 facts only that node can state — its own applier's lag, its snapshot, its disk
@@ -2675,7 +2673,7 @@ dashboard's Admin workspace draws. What it describes is the DEPLOYMENT
 rather than the company's work — the node ids, which node holds which
 seat, the lease epochs, how far a rollout has reached — so it is scoped
 the way `/integrations` beside it always has been, and
-`api.allow_anonymous_read` does not open it.
+Authentication alone does not open it: it takes its own grant.
 
 Presence also carries what each node is **doing** — `in_flight`,
 `draining`, `posture` and `started_at` — because only the node running a
@@ -2851,7 +2849,7 @@ its absence clears every one.
 
 ```bash
 curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
-  "http://localhost:8080/budgets/reset?scope=agent:<uuid>"
+  "http://localhost:8000/budgets/reset?scope=agent:<uuid>"
 ```
 
 ```json
@@ -2869,7 +2867,7 @@ embedded broker, so a running node is the only thing that can reach it —
 which is why `crewlet budgets reset` is a client of this route rather than a
 command that opens a file.
 
-One refusal, deliberate: **401 without a token.** `allow_anonymous_read` is on
+One refusal, deliberate: **401 without a token.** Every guarded route is on
 by default and opens the whole read surface; a reset is a write, so it is never
 eligible. There is no "no counter here" refusal beside it, because every node
 opens the fleet's coordination store that holds the counter.
@@ -2881,7 +2879,7 @@ and coordination bucket — into `?dir=`, a directory **on the engine's host**.
 
 ```bash
 curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
-  "http://localhost:8080/backup?dir=/var/backups/crewlet/2026-08-30T18-00"
+  "http://localhost:8000/backup?dir=/var/backups/crewlet/2026-08-30T18-00"
 ```
 
 ```json
@@ -2921,7 +2919,7 @@ client that gives up leaves an unfinished directory rather than a false one.
 
 Three refusals, each pointing somewhere different:
 
-- **401 without a token.** `allow_anonymous_read` is on by default and opens
+- **401 without a token.** Every guarded route needs one, and this opens
   the read surface; this writes every credential the company holds to a path
   the caller chooses, so it is never eligible.
 - **400 for a destination this node cannot use** — relative, already occupied,

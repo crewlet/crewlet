@@ -81,13 +81,28 @@ api:
                     # is worth the privileged bind only once an external
                     # service registers a webhook URL against this engine —
                     # see guides/deployment.md.)
+  external_url: "http://localhost:8000"
+                    # REQUIRED once a port is set. Where a BROWSER reaches
+                    # this deployment, which is not what the two lines above
+                    # bind: its scheme decides the session cookie's flags and
+                    # its host is the origin every write is checked against.
+                    # Behind a proxy, the public address.
   auth:
-    # Needed for WRITES and for /config. Reads — the dashboard, /events,
-    # /agents — serve without one by default; add
-    # `allow_anonymous_read: false` here to guard those too.
-    tokens:
+    backend: none   # nobody signs in on a laptop — the token below is the
+                    #   only credential. `local` adds passwords and a second
+                    #   factor; `oidc` hands sign-in to a provider.
+    max_grants:     # THE CEILING on what this deployment will ever let a
+                    #   directory record confer. Required once a port is set.
+      [state:read, transcripts:read, config:read, secrets:read, work:write,
+       knowledge:write, config:write, secrets:write, fleet:operate, sandbox:run]
+    tokens:         # at least one is REQUIRED once a port is set: every route
+                    #   needs a credential, and this is also what creates the
+                    #   first person on a fresh deployment.
       - id: founder
-        token: "${CREWLET_API_TOKEN_FOUNDER}"
+        token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
+        grants:     # what this credential may do — required and non-empty.
+          [state:read, transcripts:read, config:read, secrets:read, work:write,
+           knowledge:write, config:write, secrets:write, fleet:operate, sandbox:run]
 
 secrets:                  # REQUIRED. Every record on every state log — the
                           #   tracker's, the knowledge base's — is signed
@@ -441,18 +456,18 @@ from an agent's. See
 The same picture is available over the API:
 
 ```bash
-curl -s http://localhost:8000/agents | python3 -m json.tool
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER" \
+  http://localhost:8000/agents | python3 -m json.tool
 curl -s http://localhost:8000/health
 ```
 
-No token on those: reads serve without one by default, which is why the
-dashboard opened without asking you for anything. That also means anyone who can
-reach port 8000 can read the LLM transcripts on `/events` — fine on a laptop,
-a decision to make deliberately anywhere else. Set
-`api.auth.allow_anonymous_read: false` to guard reads, at which point every call
-above needs `-H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER"` and the
-dashboard prompts for the token on first load. See
-[Configuration § Auth](../concepts/configuration.md#auth) for the full rule.
+**Every route needs that credential, reads included** — `/health` and `/ready`
+are probes and are the exception, which is why the second call carries nothing.
+That is also why the dashboard asked you for the token on first load. Reads used
+to serve without one, which meant anyone who could reach port 8000 could read
+the LLM transcripts on `/events`; see
+[Configuration § Auth](../concepts/configuration.md#auth) for what replaced
+that posture and why it could not simply be defaulted the other way.
 
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
 with the API still serving — you can then bootstrap live without restarting:

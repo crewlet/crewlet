@@ -129,6 +129,20 @@ type Options struct {
 	// resolved, through the engine's own chain.
 	Resolve func(string) (string, bool)
 
+	// ExternalBase is where a browser and a vendor reach this deployment:
+	// `api.external_url`, without its trailing slash.
+	//
+	// A PLAIN STRING AND NOT A FUNCTION, unlike Company above, because it
+	// is Tier A: it cannot change under a running process, so a surface
+	// reading it twice in one request cannot get two answers. It used to
+	// be a Tier B field read through Resolve, which is why every caller
+	// below carried the resolver and had to decide what to do with a
+	// reference that resolved to nothing.
+	//
+	// Empty is a deployment serving no HTTP at all, which this service is
+	// not mounted on.
+	ExternalBase string
+
 	// Passes are the third-party apps this build can provision over the
 	// API.
 	Passes *setup.Runner
@@ -182,6 +196,9 @@ type Service struct {
 	config  *configapi.Service
 	writer  setup.Writer
 	resolve func(string) (string, bool)
+	// externalBase is `api.external_url`, from Tier A. See
+	// [Options.ExternalBase].
+	externalBase string
 	// slackApps is which Slack app each seat authenticates as, from the
 	// engine. See [Options.SlackApps].
 	slackApps func() map[string]string
@@ -231,15 +248,16 @@ func New(opts Options) (*Service, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	s := &Service{
-		company:   opts.Company,
-		config:    opts.Config,
-		resolve:   opts.Resolve,
-		secrets:   opts.Secrets,
-		passes:    opts.Passes,
-		sink:      opts.Sink,
-		status:    opts.Status,
-		slackApps: opts.SlackApps,
-		clock:     now,
+		company:      opts.Company,
+		config:       opts.Config,
+		resolve:      opts.Resolve,
+		externalBase: opts.ExternalBase,
+		secrets:      opts.Secrets,
+		passes:       opts.Passes,
+		sink:         opts.Sink,
+		status:       opts.Status,
+		slackApps:    opts.SlackApps,
+		clock:        now,
 		writer: setup.Writer{
 			Secrets: opts.Secrets,
 			Config:  configWriter{svc: opts.Config, seats: opts.Seats},
@@ -577,8 +595,6 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		}
 		tools = append(tools, withLoopFindings(state, s.loopFindings(r.Context(), kind)))
 	}
-	base := company.Integrations.WebhookBase(s.resolve)
-	present, resolved := setup.Resolution(company.Integrations.PublicBaseURL, s.resolve)
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"tools": tools,
 		// THE REVISION THIS ANSWER DESCRIBES, so a caller can send it back
@@ -595,18 +611,17 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		// rather than repeated in each tool: it is one setting, and a
 		// screen that asked for it seven times would be asking the
 		// operator to keep seven copies consistent.
-		"public_base_url": map[string]any{
-			"value": base, "present": present, "resolved": resolved,
-			"config_path": "integrations.public_base_url",
-			// WHICH VARIABLE, when the setting is a whole reference.
-			//
-			// `resolved: false` says the address is configured and
-			// resolves to nothing, which is a misconfiguration the screen
-			// has to NAME to be actionable: "set it" is advice, "export
-			// PUBLIC_BASE_URL" is an instruction. The variable's name is
-			// not the value, and this surface is guarded in full anyway.
-			// Empty for a literal, which by definition resolves.
-			"reference": wholeRef(company.Integrations.PublicBaseURL),
+		//
+		// ONE FIELD WHERE THERE WERE FOUR. While this was a Tier B
+		// pointer the screen also needed `present`, `resolved` and the
+		// variable's `reference`, because "configured and resolving to
+		// nothing" was a state a banner had to name. `api.external_url`
+		// is Tier A and REQUIRED once the API is served, resolved before
+		// the document is decoded — so a node serving this screen at all
+		// has an address, and the three fields that described its
+		// absence described a state that can no longer occur.
+		"external_url": map[string]any{
+			"value": s.externalBase, "config_path": "api.external_url",
 		},
 	})
 }
@@ -798,7 +813,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.Slack
 		summary = slack.Summary()
 		reqs = slack.CompanyRequirements(block)
-		seats = slackSeats(company, roster, s.resolve, s.apps())
+		seats = slackSeats(company, roster, s.resolve, s.apps(), s.externalBase)
 		managePath = slack.ManagePath()
 		// CONFIGURED WHEN ANY SEAT IS, not when the company block exists:
 		// the block is optional settings, and a company with seven working
@@ -907,7 +922,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		ManagePath:    managePath,
 		NeedsOperator: s.passes.Needs(kind),
 	}
-	if base := company.Integrations.WebhookBase(s.resolve); base != "" && state.InboundPath != "" {
+	if base := s.externalBase; base != "" && state.InboundPath != "" {
 		state.PublicURL = base + state.InboundPath
 	}
 	return state, true
@@ -1587,16 +1602,18 @@ func (s *Service) apps() map[string]string { return s.slackApps() }
 
 func slackSeats(company *config.Company, roster *org.Organization,
 	resolve func(string) (string, bool),
-	apps map[string]string,
+	apps map[string]string, externalBase string,
 ) []SeatState {
-	// THROUGH THE RESOLVER, because what is built from this is COPIED INTO
-	// SLACK. `public_base_url` is a Tier B field, so it may be a whole
-	// `${VAR}` and the document stores it verbatim; read raw, the manifest
-	// an operator pastes carries `${PUBLIC_URL}/webhooks/slack/sre-lead`
-	// where an address belongs, and Slack refuses the app with nothing
-	// naming the cause. The same mistake was measured on the Atlassian
-	// pass, which sent the literal `${ATLASSIAN_ORG_ID}` to Atlassian.
-	base := company.Integrations.WebhookBase(resolve)
+	// WHAT IS BUILT FROM THIS IS COPIED INTO SLACK, which is why it was
+	// the sharpest case for moving the address into Tier A. As a Tier B
+	// field it could be a whole `${VAR}` the document stored verbatim, so
+	// a manifest an operator pasted carried
+	// `${PUBLIC_URL}/webhooks/slack/sre-lead` where an address belongs and
+	// Slack refused the app with nothing naming the cause — the same
+	// mistake measured on the Atlassian pass, which sent the literal
+	// `${ATLASSIAN_ORG_ID}` to Atlassian. Tier A resolves before it
+	// decodes, so there is no state in which this is a reference.
+	base := externalBase
 	out := []SeatState{}
 	for role := range roster.AllRoles() {
 		// THROUGH THE SEAT, which is where the derivation lives: a handle
@@ -1649,9 +1666,9 @@ func slackSeats(company *config.Company, roster *org.Organization,
 		// instruction pointing at what is not there.
 		switch manifest, err := slack.ManifestJSON(role.Name, handle, base); {
 		case base == "":
-			state.ManifestNote = "no manifest yet: set integrations.public_base_url " +
-				"to the address this agent's app delivers to, as a value this " +
-				"node can read"
+			state.ManifestNote = "no manifest yet: set `api.external_url` " +
+				"in this node's Tier A file to the address this agent's app " +
+				"delivers to, and restart the node"
 		case err != nil:
 			state.ManifestNote = err.Error()
 		default:
@@ -2036,7 +2053,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	// already carries, so no person holds that address. See
 	// [integration.Kind.Ingress].
 	if after != nil && kind.Ingress() == integration.IngressOperator {
-		s.recordEndpoint(r.Context(), kind, after.Integrations.WebhookBase(s.resolve))
+		s.recordEndpoint(r.Context(), kind, s.externalBase)
 	}
 	fresh := state
 	if after != nil {

@@ -315,7 +315,7 @@ type Result struct {
 	// SEPARATE FROM NoIngress although both end as one ingress finding,
 	// because they name DIFFERENT FIELDS to change and the subject is the
 	// whole value of the report: NoIngress is answered by setting
-	// integrations.public_base_url, and this is answered by setting
+	// api.external_url, and this is answered by setting
 	// secrets.keys or by supplying the secret yourself.
 	//
 	// REPORTED, NOT RAISED. Record answers [provision.ErrNoSink] on a sink
@@ -588,7 +588,7 @@ func noIngressReason(opts Options) string {
 	if webhookTarget(opts.WebhookBase) != "" {
 		return ""
 	}
-	return "integrations.public_base_url is unset, so nothing at GitHub has " +
+	return "api.external_url is unset, so nothing at GitHub has " +
 		"an address to deliver to and no event reaches this deployment"
 }
 
@@ -1034,7 +1034,7 @@ func webhookSecret(
 			"github: integrations.github.webhook_secret holds neither a value "+
 				"this run could resolve nor a whole ${VAR} reference to mint "+
 				"one into — point it at a variable, set that variable, or "+
-				"clear both -public-url and integrations.public_base_url and "+
+				"clear both -public-url and api.external_url and "+
 				"register %s by hand", target)
 	}
 	// rand.Text is 26 base32 characters over a 128-bit draw. GitHub

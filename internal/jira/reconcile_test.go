@@ -1094,7 +1094,7 @@ func TestFindingsReportAProjectTheInstanceDoesNotHave(t *testing.T) {
 		// defines it as an access tier the company names and the vendor
 		// does not have, and whose fallback sentence says exactly that —
 		// on a finding about a project key.
-		if f.Kind == integration.FindingIngressBlocked && f.Subject != "integrations.public_base_url" {
+		if f.Kind == integration.FindingIngressBlocked && f.Subject != "api.external_url" {
 			found = true
 			if f.Subject == "" {
 				t.Errorf("a missing project finding names no project: %+v", f)
@@ -1171,7 +1171,7 @@ func TestAProjectReadThatBrokeIsNotACredentialRefusal(t *testing.T) {
 // The pass registers no hook, which used to be silence — on the reasoning
 // that the public base "is not on the integrations block" and ingress belonged
 // to the subcommand that had it. It IS on the block, as
-// integrations.public_base_url, and the reconcile loop feeds it into every
+// api.external_url, and the reconcile loop feeds it into every
 // pass, so the silence meant a company that never set it saw Jira reported
 // Ready while the instance had no address to send anything to.
 func TestADataCenterInstanceWithNoPublicBaseReportsIngressBlocked(t *testing.T) {
@@ -1195,7 +1195,7 @@ func TestADataCenterInstanceWithNoPublicBaseReportsIngressBlocked(t *testing.T) 
 	for _, f := range res.Findings() {
 		if f.Kind == integration.FindingIngressBlocked {
 			found = true
-			if f.Subject != "integrations.public_base_url" {
+			if f.Subject != "api.external_url" {
 				t.Errorf("the finding names %q rather than the field to set",
 					f.Subject)
 			}

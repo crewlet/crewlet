@@ -478,6 +478,24 @@ var retiredBootstrapFields = map[string]string{
 		"Set `store.snapshot_dir`, and give that directory the space — the " +
 		"snapshot loop refuses rather than filling the volume the database " +
 		"is committing to",
+	"APIAuth.allow_anonymous_read": "`api.auth.allow_anonymous_read` is retired " +
+		"with no replacement setting, and it is refused rather than ignored " +
+		"because ignoring it would silently run the OPPOSITE posture from the " +
+		"one the file asks for. It served every GET without a credential — the " +
+		"event stream, LLM transcripts, diary entries and the roster — and it " +
+		"defaulted to true; it was also a bool whose safe value was its zero " +
+		"and which was declared `omitempty`, so a `false` did not survive an " +
+		"export round trip and a deployment that had closed it re-opened " +
+		"itself. A deliberately public reader is now a named entry under " +
+		"`api.auth.tokens` holding read grants and nothing else, which is " +
+		"listable, revocable without a restart, and present in the audit log",
+	"APIAuth.disabled": "`api.auth.disabled` is retired. It authenticated the " +
+		"EMPTY credential into full operator authority, with no check on the " +
+		"bind address anywhere, which made one unset environment variable a " +
+		"total bypass. For local development run `crewlet run -dev-principal " +
+		"<login>`: a flag rather than a config field, because a field gets " +
+		"copied into an image, and refused unless `api.external_url` is a " +
+		"loopback address",
 	"Store.driver": "`store.driver` is no longer a setting: it chose between " +
 		"two store implementations and there is one. Turso is the database; " +
 		"the mainline-SQLite fallback and the CREWLET_STORE_DRIVER variable " +
@@ -497,6 +515,14 @@ var retiredBootstrapFields = map[string]string{
 // in the same move, because a unit's project is the company's fact and not a
 // product's.
 var retiredCompanyFields = map[string]string{
+	"Integrations.public_base_url": "`integrations.public_base_url` is retired " +
+		"and REPLACED by `api.external_url` in Tier A — one address for the " +
+		"session cookie, the origin every write is checked against, the OIDC " +
+		"redirect URI and every vendor webhook. It moved tiers rather than " +
+		"names: the cookie and the redirect are decided before a company " +
+		"document is loaded, and they are part of what authenticates the " +
+		"request that would load one. Write the same value under `api:` in " +
+		"your Tier A file, as a literal rather than a ${VAR}",
 	// The four horizons the native tracker was going to carry, and does
 	// not. Each names what replaced it, and two of them say plainly that
 	// the replacement is not the same thing — which is the whole reason

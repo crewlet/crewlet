@@ -213,14 +213,18 @@ type Sources struct {
 	// and the one the memory answer never carried.
 	Counterparties Counterparties
 
-	// PublicBase is where third-party apps reach this deployment, RESOLVED,
-	// or nil when this process cannot say.
+	// PublicBase is where a browser and a third-party app reach this
+	// deployment — `api.external_url` — or nil when this process cannot
+	// say.
 	//
-	// Resolved, and that is why it is a seam rather than a read of
-	// [Sources.Company]: `public_base_url` may be a whole `${VAR}`, and what
-	// a surface REGISTERED is the address that reference resolved to. A
-	// comparison against the raw document would answer "the address moved"
-	// for every company that writes one, for ever.
+	// A SEAM RATHER THAN A READ OF [Sources.Company], which is where the
+	// address used to live. As a Tier B field it could be a whole `${VAR}`
+	// the document stored verbatim, while what a surface REGISTERED was the
+	// address that reference resolved to — so a comparison against the raw
+	// document answered "the address moved" for every company that wrote
+	// one, for ever. It is Tier A now and cannot be a reference, and the
+	// seam stays because this package must not import the operator's own
+	// config to answer a question about a company.
 	//
 	// Nil is "cannot say", exactly as with Routed, Verifiable and Reconciles
 	// above: a node that cannot read the value must not be the reason a

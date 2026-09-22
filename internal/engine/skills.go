@@ -30,18 +30,15 @@ import (
 //
 // It is the fact a skill most reliably needs and an operator most reliably
 // cannot supply. Where this deployment answers is already written once, as
-// `integrations.public_base_url` — the same address every webhook URL is
-// built on — and it is READ THROUGH THE RESOLVER for the reason that field
-// carries its own resolver argument: a whole `${VAR}` there is how staging
-// and production answer at their own addresses off one company revision, and
-// a raw read would inject the seven characters of the reference into prose a
-// person is meant to click.
+// `api.external_url` — the same address the session cookie, the CSRF origin
+// check and every webhook URL are built on — so injecting it is the one way
+// a company's own prose and its wiring can never name different deployments.
 //
 // The name is RESERVED, and the loader refuses a company that declares it.
 // Two sources for one address is how a skill comes to link at the deployment
 // this company used to run on: an operator who moves behind a new domain
-// updates the integrations block, the stale declaration keeps winning, and
-// every link a person clicks lands nowhere with nothing anywhere saying why.
+// updates their Tier A file, the stale declaration keeps winning, and every
+// link a person clicks lands nowhere with nothing anywhere saying why.
 //
 // UNSET WHEN THERE IS NO PUBLIC URL, rather than empty. A skill referencing
 // it then renders the literal ${crewlet_base_url} and warns, which is the
@@ -67,22 +64,17 @@ func skillVariables(env *config.Resolver, c *Company, publicBase string) map[str
 // person clicks is composed on, and the one every webhook registration points
 // at.
 //
-// PER EPOCH rather than held on the engine, and READ THROUGH THE RESOLVER,
-// because `integrations.public_base_url` is a Tier B pointer stored verbatim.
-// A whole `${VAR}` there is how staging and production answer at their own
-// addresses off one company revision, and a raw read would put the seven
-// characters of the reference into every link — and into every webhook URL a
-// provisioner registers, which the third-party app then reports as healthy
-// and delivers nowhere.
+// IT TAKES THE COMPANY AND DOES NOT READ IT, and the unused parameter is the
+// point rather than an oversight: this used to be a Tier B pointer resolved
+// per epoch, so a caller holding one epoch could get a different answer from a
+// caller holding another. Keeping the parameter keeps every call site honest
+// about the epoch it is composing a link FOR while the answer itself is now a
+// property of the process — which is what `api.external_url` being Tier A
+// means.
 //
-// EMPTY when nothing resolves, which every consumer here reads as "compose no
-// link" rather than as a relative one.
-func (e *Engine) publicBase(c *Company) string {
-	if c == nil {
-		return ""
-	}
-	return c.Config.Integrations.WebhookBase(e.resolver().LookupOK)
-}
+// EMPTY when the deployment has no external address, which every consumer here
+// reads as "compose no link" rather than as a relative one.
+func (e *Engine) publicBase(*Company) string { return e.externalBase }
 
 // refreshSkillVariables installs an epoch's substitution map.
 //

@@ -36,7 +36,7 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 	sinks := addSinkFlags(fs)
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhooks; "+
-			"defaults to integrations.public_base_url")
+			"defaults to api.external_url")
 	recreate := fs.Bool("recreate-webhooks", false,
 		"delete and remake every webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")
@@ -70,7 +70,7 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
 	if err != nil {
 		return err
 	}
@@ -112,7 +112,7 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout,
 			"-dry-run: reading GitHub; no webhook will be registered.")
 	} else {
-		opts.WebhookBase = webhookBase(*publicURL, &company.Integrations, env.LookupOK)
+		opts.WebhookBase = webhookBase(*publicURL, boot)
 		sink, closeSink, openErr := sinks.open(ctx, stdout)
 		if openErr != nil {
 			return openErr

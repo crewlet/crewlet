@@ -32,6 +32,7 @@ func TestAPublishedStatusRoundTrips(t *testing.T) {
 	started := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	want := coord.NodeStatus{
 		InFlight: 3, Draining: true, Posture: "shed", StartedAt: started,
+		GrantCeilingHash: "2f1a8c0d3b4e5f60",
 	}
 	got, ok := coord.StatusFromMeta(map[string]any{coord.StatusKey: want.Meta()})
 	if !ok {
@@ -86,5 +87,41 @@ func TestAnUnsetPostureIsNotPublished(t *testing.T) {
 	}
 	if _, present := meta["draining"]; !present {
 		t.Error("draining was omitted, so a node that is not draining says nothing")
+	}
+}
+
+// THE GRANT CEILING IS ABSENT RATHER THAN EMPTY on a node that declares none.
+//
+// It is the same rule as the posture above and it matters more here, because
+// what an empty cell would mean is the opposite of the truth: a worker node
+// binds no API and therefore has no ceiling to state, while an empty string on
+// the wire reads as a peer whose ceiling differs from every other node's — a
+// disagreement drawn across a fleet that has none, on exactly the signal an
+// operator is meant to trust.
+func TestANodeWithNoGrantCeilingPublishesNone(t *testing.T) {
+	t.Parallel()
+	meta := coord.NodeStatus{InFlight: 1}.Meta()
+	if _, present := meta["grant_ceiling"]; present {
+		t.Errorf("a node with no ceiling published one: %+v", meta)
+	}
+	// The counterfactual: a node that HAS one publishes it, and it
+	// survives the JSON round trip the lease store does.
+	raw, err := json.Marshal(map[string]any{
+		coord.StatusKey: coord.NodeStatus{GrantCeilingHash: "abc123"}.Meta(),
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var round map[string]any
+	if err := json.Unmarshal(raw, &round); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, ok := coord.StatusFromMeta(round)
+	if !ok {
+		t.Fatal("a published status read as absent")
+	}
+	if got.GrantCeilingHash != "abc123" {
+		t.Errorf("grant ceiling = %q, want it carried across the round trip",
+			got.GrantCeilingHash)
 	}
 }

@@ -73,9 +73,15 @@ COPY ${TARGETPLATFORM}/crewlet /usr/local/bin/crewlet
 COPY LICENSE build/notices/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/
 COPY static/dashboard/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/dashboard/
 
-# The API's port. The engine serves nothing on it unless a company config
-# turns the dashboard on, so publishing it is a convenience, not a promise.
-EXPOSE 8080
+# The API's port. The engine serves nothing on it unless Tier A sets
+# `api.port`, so publishing it is a convenience, not a promise.
+#
+# 8000 RATHER THAN 8080, because there were two numbers. The examples, the
+# quickstart and the configuration guide all bind 8000; this line and four
+# reference pages said 8080 — so a founder who followed the quickstart and
+# then ran the image published a port nothing was listening on. `internal/config`
+# names it once, as DefaultAPIPort, and everything quotes that.
+EXPOSE 8000
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/crewlet"]
 CMD ["run"]

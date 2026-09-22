@@ -1532,6 +1532,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// wrote one down. That gap is the silent outage the whole
 		// secret_usable family exists to surface.
 		Resolve: e.LookupSecret,
+		// WHERE A BROWSER AND A VENDOR REACH THIS DEPLOYMENT, from Tier A
+		// rather than through the resolver above: it cannot change under
+		// a running process, so this surface can never answer two
+		// different addresses inside one request.
+		ExternalBase: boot.API.ExternalBase(),
 		// The third-party apps this build can provision over the API, the recorder
 		// their minted credentials go through, and the fleet row a pass
 		// writes its findings to. That last one is the SAME row the
@@ -1666,19 +1671,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Knowledge: e.Knowledge,
 			Config:    configSurface,
 			Budget:    e.Backends().Fleet,
-			// WHERE THIRD-PARTY APPS REACH THIS DEPLOYMENT, resolved
-			// through this node's own chain. `public_base_url` may be a
-			// whole ${VAR}, and what a surface registered is the address
-			// that reference RESOLVED to -- so the screen has to compare
-			// like with like or report every such company as moved.
-			PublicBase: func() string {
-				//nolint:govet // shadow: scoped to this block; see .golangci.yml
-				company, _ := companyConfig(e)
-				if company == nil {
-					return ""
-				}
-				return company.Integrations.WebhookBase(e.LookupSecret)
-			},
+			// WHERE A BROWSER AND A THIRD-PARTY APP REACH THIS
+			// DEPLOYMENT. A function still, because this whole value is
+			// built once and read for the life of the process, and Tier A
+			// is what it reads: `api.external_url` cannot change under a
+			// running node, so unlike the company reads around it this
+			// one can never answer twice.
+			PublicBase: func() string { return boot.API.ExternalBase() },
 			// What the reconcile loop last found for each surface. The
 			// FLEET's record, not this node's: the loop is a worker duty,
 			// so on a split-role deployment the node answering the
@@ -1887,21 +1886,26 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	}
 
 	log.InfoContext(ctx, "api_listening", "addr", addr,
-		"anonymous_read", app.Guard().AnonymousRead(),
+		"external_url", boot.API.ExternalBase(),
+		"auth_backend", boot.API.Auth.Resolved(),
 		"tokens", app.Guard().Tokens(),
 		// THE BROWSER POSTURE BESIDE THE CREDENTIAL ONE. Zero is
 		// same-origin only, which is what the dashboard this process
 		// serves needs and what every other site gets.
 		"cross_origin_sites", app.CORS().Origins())
-	if app.Guard().AnonymousRead() && !auth.BindIsLoopback(boot.API.Host) {
-		// Stated rather than assumed. The read surface carries LLM
-		// transcripts, diary entries and the whole event stream, and on a
-		// bind anything else can reach that is a decision somebody may
-		// not have made deliberately.
-		log.WarnContext(ctx, "api_anonymous_read_on_a_reachable_bind",
-			"host", boot.API.Host,
-			"hint", "reads serve without a token on an address other machines "+
-				"can reach; set api.auth.allow_anonymous_read to false to close them")
+	// THE ACKNOWLEDGED INSECURE POSTURE IS RESTATED ON EVERY START, for
+	// the life of the deployment. `accept_insecure` is what lets a second
+	// factor stay optional, or an `http://` external URL stand, on an
+	// address a browser reaches over the network — which is a decision
+	// somebody made once and everybody after them inherits. A warning that
+	// only fired the first time would be a decision nobody can see.
+	if local := boot.API.Auth.Local; local != nil && local.AcceptInsecure {
+		log.WarnContext(ctx, "api_insecure_posture_accepted",
+			"external_url", boot.API.ExternalBase(),
+			"totp", local.TOTP,
+			"hint", "api.auth.local.accept_insecure is true: a posture that "+
+				"would otherwise be refused off loopback is in force. Remove it "+
+				"once this deployment is reached over TLS with a second factor")
 	}
 	// THE COMPANY-DERIVED SURFACES, re-sent whenever a published company
 	// changes them.

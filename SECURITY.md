@@ -67,13 +67,29 @@ A few things worth knowing when deploying Crewlet:
   link them to is whoever is most worth becoming. There is deliberately no
   `auto_provision` setting: it is the same decision written as a field, and a
   field is how it ends up on by accident.
-- **The API's read surface is open by default.** Writes and every `/config`
-  route require a token from `api.auth.tokens`; reads do not, so `/events`,
-  `/agents/{id}/memory` and `/ws/stream` serve full LLM transcripts to anyone
-  who can reach the port. That is a reasonable default for a laptop and a
-  decision to make deliberately anywhere else — set
-  `api.auth.allow_anonymous_read: false` to require a token for reads too, and
-  never expose the API publicly with a dev-literal token.
+- **Every API route requires a credential, reads included.** `allow_anonymous_read`
+  is gone: it served `/events`, `/agents/{id}/memory` and `/ws/stream` — full
+  LLM transcripts, diary entries and the roster — without one, by default, and
+  it could not be closed durably because it was an `omitempty` bool whose safe
+  value was its zero, so `false` did not survive an export round trip. A
+  deliberately public reader is a named `api.auth.tokens` entry holding read
+  grants and nothing else. `api.auth.disabled`, which authenticated the *empty*
+  credential into full operator authority with no bind check anywhere, is gone
+  with it.
+- **`api.auth.max_grants` is the ceiling, and it is required.** A person's
+  grants live in the replicated store and an identity provider's group mapping
+  is written at the provider — neither is in a tier this deployment's operator
+  controls. This is the bound on what either may confer, stated in the tier
+  that holds the keyring. It is intersected per node, per request, so lowering
+  it needs no write and no restart of the fleet; each node publishes a hash of
+  its own so a mixed fleet mid-rollout is visible rather than silent.
+- **A Tier A token is a real credential and is checked as one.** Each entry
+  states its own `grants` — required and non-empty — and its value must clear
+  a 26-character floor on what the `${VAR}` *resolves to*, so a reference
+  cannot be the way around the rule. At least one is required on every
+  backend: a fresh deployment's identity estate is empty, so it is what creates
+  the first person, and on a running one it is the way back in when the
+  identity provider is down.
 - **Config encryption at rest** is available and recommended when your
   company config carries secrets — see
   `docs/concepts/configuration.md#secrets`.

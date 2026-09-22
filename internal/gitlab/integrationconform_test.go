@@ -35,7 +35,7 @@ import (
 // findings — that is what converged means — so every one of them walked an
 // empty list and passed whatever this package did. The suite now requires an
 // OUTSTANDING world as well, and [outstandingGitLab] is GitLab's: a company
-// that never set integrations.public_base_url, so the pass provisions every
+// that never set api.external_url, so the pass provisions every
 // seat and registers no webhook, and the instance has nowhere to deliver to.
 //
 // # Both hook paths, because the pass has two
@@ -255,7 +255,7 @@ func (w *gitlabWorld) vacuous() string {
 }
 
 // outstandingGitLab is a GitLab where something is genuinely wrong AND A
-// PERSON HAS TO ACT: the company never set integrations.public_base_url, so
+// PERSON HAS TO ACT: the company never set api.external_url, so
 // there is no address to point a webhook at and the instance delivers
 // nothing to anybody.
 //
@@ -286,7 +286,7 @@ func (w *gitlabWorld) vacuous() string {
 func outstandingGitLab(t *testing.T, tb integrationtest.TB) *gitlabWorld {
 	t.Helper()
 	// NOWHERE TO DELIVER TO, which is what the loop passes whenever
-	// integrations.public_base_url is unset: setup.PassInput.WebhookBase is
+	// api.external_url is unset: setup.PassInput.WebhookBase is
 	// that value verbatim.
 	return newWorld(t, tb, nil, func(o *gitlab.Options) { o.WebhookBase = "" })
 }
@@ -351,7 +351,7 @@ func TestTheOutstandingWorldIsBlockedOnAPerson(t *testing.T) {
 	if got.Kind != integration.FindingIngressBlocked {
 		t.Errorf("kind = %q, want %q", got.Kind, integration.FindingIngressBlocked)
 	}
-	if got.Subject != "integrations.public_base_url" {
+	if got.Subject != "api.external_url" {
 		t.Errorf("subject = %q, want the setting a person has to fill in", got.Subject)
 	}
 	if _, actor := got.Kind.Verdict(); !actor.WaitsOnAPerson() {

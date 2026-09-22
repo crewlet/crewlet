@@ -324,7 +324,7 @@ func (s *surface) convertOneApp(t *testing.T, handle string, app map[string]any)
 	// THE CONVERSION GOES WHERE THE COMPANY SAYS GITHUB IS, which is what
 	// makes an Enterprise Server work and what lets this test answer.
 	res := s.do(t, http.MethodPatch, "/config",
-		`{"integrations":{"public_base_url":"https://engine.example.com",
+		`{"integrations":{
 		  "github":{"enabled":true,"url":"`+server.URL+`","webhook_secret":"org",
 		  "provisioning":{"org":"acme"}}}}`,
 		map[string]string{
@@ -452,7 +452,7 @@ func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
 	s.seedDocument(t, `{
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
-	  "integrations": {"public_base_url": "https://engine.example.com",
+	  "integrations": {
 	    "github": {"enabled": true, "webhook_secret": "org", "provisioning": {"org": "acme"}}},
 	  "roles": [
 	    {"name": "Coder", "handle": "coder", "llm": "zulu",
@@ -525,7 +525,6 @@ func TestAGitHubCardMissingACompanyAnswerStillHasABoxToFill(t *testing.T) {
 	s.seedGitHubApps(t)
 	// Enabled, with the webhook secret left as a reference nothing resolves.
 	res := s.do(t, http.MethodPatch, "/config", `{"integrations":{
-		"public_base_url":"https://engine.example.com",
 		"github":{"enabled":true,"webhook_secret":"${GH_NOT_SET}",
 		"provisioning":{"org":"acme"}}}}`,
 		map[string]string{
@@ -665,8 +664,7 @@ func TestAGitHubToolWithNoWorkingAgentIsNotSatisfied(t *testing.T) {
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {
-	    "public_base_url": "https://engine.example.com",
-	    "github": {"enabled": true, "webhook_secret": "${GH_SIGN}",
+		    "github": {"enabled": true, "webhook_secret": "${GH_SIGN}",
 	               "provisioning": {"org": "crewbed"}}
 	  },
 	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
@@ -695,7 +693,7 @@ func TestAGitHubToolWithOneWorkingAgentIsSatisfied(t *testing.T) {
 	s := newSurface(t)
 	s.seedGitHubApps(t)
 	res := s.do(t, http.MethodPatch, "/config",
-		`{"integrations":{"public_base_url":"https://engine.example.com",
+		`{"integrations":{
 		  "github":{"enabled":true,"webhook_secret":"${GH_SIGN}"}}}`,
 		map[string]string{"X-Summary": "connect github"})
 	if res.Code != http.StatusCreated {

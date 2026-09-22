@@ -534,43 +534,44 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 	}
 }
 
-// A REFUSAL NAMES WHAT TO CHANGE, and there are three different answers.
+// A REFUSAL NAMES WHAT TO CHANGE, and there are two different answers.
 //
 // The message said "no -public-url" and named nothing else, which was already
-// only one of the ways to reach it: the value comes from the flag OR from
-// integrations.public_base_url, and that field can be SET and still resolve to
-// nothing — a whole ${VAR} this process cannot see becomes "" rather than the
-// text of the variable. An operator who had set the field went looking for a
-// flag they did not need.
+// only one of the ways to reach it: the value comes from the flag OR from the
+// deployment's own `api.external_url`. There used to be a THIRD — the address
+// was a Tier B field, so it could be SET and still resolve to nothing, a whole
+// ${VAR} this process could not see becoming "" rather than the text of the
+// variable — and moving it to Tier A, which resolves before it decodes,
+// removed that state rather than the message for it.
 func TestTheMissingPublicBaseRefusalNamesTheRightThing(t *testing.T) {
 	t.Parallel()
-	t.Run("nothing is set", func(t *testing.T) {
-		got := noPublicBase(&config.Integrations{})
-		if !strings.Contains(got, "-public-url") ||
-			!strings.Contains(got, "integrations.public_base_url") {
+	t.Run("no Tier A was read at all", func(t *testing.T) {
+		got := noPublicBase(nil)
+		if !strings.Contains(got, "-public-url") || !strings.Contains(got, "-config") {
 			t.Errorf("the refusal names only one of the two sources: %q", got)
 		}
 	})
-	t.Run("a reference that resolved to nothing", func(t *testing.T) {
-		got := noPublicBase(&config.Integrations{PublicBaseURL: "${CREWLET_PUBLIC_URL}"})
-		if !strings.Contains(got, "CREWLET_PUBLIC_URL") {
-			t.Errorf("the refusal does not name the variable to set: %q", got)
-		}
-		if !strings.Contains(got, "integrations.public_base_url") {
+	t.Run("a Tier A that sets no address", func(t *testing.T) {
+		boot := config.DefaultBootstrap()
+		got := noPublicBase(&boot)
+		if !strings.Contains(got, "api.external_url") {
 			t.Errorf("the refusal does not name the field it came from: %q", got)
 		}
-	})
-	t.Run("a literal that resolved to nothing", func(t *testing.T) {
-		got := noPublicBase(&config.Integrations{PublicBaseURL: "  "})
-		// A blank literal is indistinguishable from unset once trimmed,
-		// so it takes the unset message rather than inventing a third.
 		if !strings.Contains(got, "-public-url") {
-			t.Errorf("a blank field produced %q", got)
+			t.Errorf("the refusal does not name the one-off override: %q", got)
 		}
 	})
-	t.Run("a nil block", func(t *testing.T) {
-		if got := noPublicBase(nil); got == "" {
-			t.Error("a nil integrations block produced no refusal at all")
+	t.Run("the flag wins only when it was typed", func(t *testing.T) {
+		boot := config.DefaultBootstrap()
+		boot.API.ExternalURL = "https://from-the-file.example.com/"
+		if got := webhookBase("", &boot); got != "https://from-the-file.example.com" {
+			t.Errorf("an untyped flag took the deployment's address as %q", got)
+		}
+		if got := webhookBase("https://typed.example.com/", &boot); got != "https://typed.example.com" {
+			t.Errorf("a typed flag did not win: %q", got)
+		}
+		if got := webhookBase("", nil); got != "" {
+			t.Errorf("no flag and no Tier A produced %q, want empty", got)
 		}
 	})
 }

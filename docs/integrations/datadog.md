@@ -221,7 +221,7 @@ Because the token is the entire check, its length is the entire strength, so **C
 ## What you do in Datadog
 
 The webhook itself is not on this list. The reconcile pass creates it under
-`webhook_name`, points it at `<public_base_url>/webhooks/datadog`, attaches the
+`webhook_name`, points it at `<external_url>/webhooks/datadog`, attaches the
 `X-Crewlet-Token` header and writes the payload template below, and it rewrites
 that definition whenever the address or the token changes. A disconnect
 withdraws it.
@@ -244,7 +244,7 @@ each one leaving the surface reporting `ready` while alerts went nowhere:
 
 | What it found | What it reports | What clears it |
 |---|---|---|
-| No webhook was registered because this deployment has no inbound address | `ingress_blocked` | set `integrations.public_base_url` |
+| No webhook was registered because this deployment has no inbound address | `ingress_blocked` | set `api.external_url` |
 | No webhook was registered because `webhook_token` resolved to nothing, or because this node has no keyring to seal one with | `credential_missing` | set `integrations.datadog.webhook_token`, or install `secrets.keys` |
 | A seat's service account exists but is **disabled**, with no Crewlet marker | `identity_failed` | re-enable it in Datadog — it was not disabled by this engine |
 | A seat's service account is disabled **by a Crewlet disconnect** | — | the next pass re-enables it |

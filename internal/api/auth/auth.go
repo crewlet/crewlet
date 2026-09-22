@@ -90,15 +90,6 @@ func AlwaysGuarded(path string) bool {
 	return false
 }
 
-// AnonymousOperator is the attribution recorded when auth is disabled.
-//
-// Config refuses it as a token id, so a real operator's writes can never be
-// confused in an audit row with the ones made while the guard was off. Taken
-// from there rather than restated: two copies would disagree silently, each
-// side staying self-consistent while the reservation stopped covering what the
-// API actually stamps.
-const AnonymousOperator = config.ReservedOperatorID
-
 // unguardedExact and unguardedPrefixes are the routes served without a bearer
 // token, because they authenticate by other means or because a client must
 // reach them to obtain a token:
@@ -200,13 +191,21 @@ func Unguarded(path string) bool {
 }
 
 // Guard holds the loaded posture and answers every auth question about it.
+//
+// EVERY GUARDED ROUTE NEEDS A CREDENTIAL, reads included. There is no longer a
+// posture in which a GET serves without one: `allow_anonymous_read` defaulted
+// to open over a read surface carrying LLM transcripts, diary entries and the
+// whole event stream, and it was a bool whose safe value was its zero and
+// which was `omitempty`, so closing it did not survive an export round trip. A
+// deliberately public reader is a named token entry holding read grants and
+// nothing else. What is still served without a credential is [Unguarded], and
+// only that.
 type Guard struct {
 	// tokens maps operator id to token. Empty is a real posture: no
-	// candidate can match, so writes and /config are refused outright.
+	// candidate can match, so every guarded route is refused outright.
+	// Config refuses it once the API is served, which is where a
+	// `crewlet validate` on a laptop catches it.
 	tokens map[string]string
-
-	disabled      bool
-	anonymousRead bool
 }
 
 // New builds the guard from Tier A.
@@ -217,21 +216,13 @@ type Guard struct {
 // them rather than a process discovering them at bind time.
 func New(b *config.Bootstrap) *Guard {
 	if b == nil {
-		// No Tier A at all: the posture is unset, so nothing can
-		// authenticate. Reads serve, writes are refused — the same
-		// answer as a config that lists no tokens, which is the honest
-		// reading of "nobody has said who may write".
-		return &Guard{anonymousRead: true}
+		// No Tier A at all: nobody has said who may act, so nothing
+		// authenticates and every guarded route is refused. That is
+		// the honest reading, and it is the same answer as a config
+		// listing no tokens.
+		return &Guard{}
 	}
 	auth := b.API.Auth
-	if auth.Disabled {
-		log.Warn("api_auth_disabled",
-			"hint", "api.auth.disabled is true — every route, including LLM "+
-				"transcripts on /events and /agents/{id}/memory, serves without "+
-				"authentication. Never use in production.")
-		return &Guard{disabled: true, anonymousRead: auth.AllowAnonymousRead}
-	}
-
 	tokens := make(map[string]string, len(auth.Tokens))
 	for _, entry := range auth.Tokens {
 		tokens[entry.ID] = entry.Token
@@ -239,14 +230,8 @@ func New(b *config.Bootstrap) *Guard {
 	if len(tokens) > 0 {
 		log.Info("api_auth_tokens_loaded", "count", len(tokens))
 	}
-	return &Guard{tokens: tokens, anonymousRead: auth.AllowAnonymousRead}
+	return &Guard{tokens: tokens}
 }
-
-// AnonymousRead reports the read posture, for the startup line that states it.
-func (g *Guard) AnonymousRead() bool { return g.anonymousRead }
-
-// Disabled reports whether the guard is off entirely.
-func (g *Guard) Disabled() bool { return g.disabled }
 
 // Tokens reports how many credentials are loaded, for the same startup line.
 func (g *Guard) Tokens() int { return len(g.tokens) }
@@ -260,11 +245,6 @@ func (g *Guard) Tokens() int { return len(g.tokens) }
 // frame rather than as a header. All three therefore accept exactly the same
 // tokens, honour disabled identically, and compare in constant time.
 func (g *Guard) Operator(candidate string) (string, bool) {
-	if g.disabled {
-		// Every caller is accepted. The explicit label is what keeps a
-		// disabled-mode write distinguishable in an audit row.
-		return AnonymousOperator, true
-	}
 	// An empty candidate never authenticates, and the check is not
 	// redundant with the compare below: config refuses an empty token
 	// value, but Bootstrap is an exported struct an embedder can build
@@ -318,33 +298,29 @@ func (g *Guard) Credential(r *http.Request) string {
 }
 
 // Presented returns the operator id for the credential a request presented.
-//
-// Asked even when the request carries none, because a disabled guard accepts
-// a request with no credential at all.
 func (g *Guard) Presented(r *http.Request) (string, bool) {
 	return g.Operator(g.Credential(r))
 }
 
-// Requires reports whether this request must carry a valid bearer token.
+// Requires reports whether this request must carry a credential.
 //
-// The whole rule, in one function.
+// The whole rule, in one function, and the rule is now: everything but
+// [Unguarded]. The method no longer enters into it.
 //
-// allow_anonymous_read, on by default, opens READS only. What that opens is
-// worth naming rather than leaving to the reader's imagination: /events,
+// WHAT THAT CLOSED is worth naming rather than leaving to the reader: /events,
 // /agents/{id}/memory and /ws/stream carry full LLM transcripts — prompts, tool
-// arguments, diary entries. Turning it off closes them, and the dashboard then
-// authenticates its socket like any other client.
-func (g *Guard) Requires(path, method string) bool {
-	if Unguarded(path) {
-		return false
-	}
-	if AlwaysGuarded(path) {
-		return true
-	}
-	if g.anonymousRead {
-		return !IsRead(method)
-	}
-	return true
+// arguments, diary entries — and the roster names everybody who works here.
+// `allow_anonymous_read` served all of it to anyone who could reach the port,
+// by default, and could not be closed durably because it was an `omitempty`
+// bool whose safe value was its zero. A deliberately public read surface is a
+// named token entry holding read grants and nothing else.
+//
+// The method and the path are still both taken, because the SIGNATURE is what
+// the socket handshake and the middleware share and a narrower one would make
+// them two rules. [AlwaysGuarded] and [IsRead] remain for the authorization
+// layer above, which does still classify by verb.
+func (g *Guard) Requires(path, _ string) bool {
+	return !Unguarded(path)
 }
 
 // operatorKey carries the authenticated operator id down the handler chain.

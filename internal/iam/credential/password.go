@@ -56,21 +56,6 @@ const (
 	SaltLen        = 16
 )
 
-// MinPasswordChars is the shortest password this engine accepts.
-//
-// TWELVE, AND NO COMPOSITION RULES — no required digit, no required symbol,
-// no forbidden repeat. That is the current guidance and it is guidance
-// because composition rules are measurably counter-productive: they shrink the
-// space people actually choose from (everybody appends `1!`), they are
-// enumerable by an attacker who knows the rule, and they push people to write
-// the result down. LENGTH is the only property that buys entropy from a human
-// without costing them anything.
-//
-// Measured in CHARACTERS rather than bytes, for the reason
-// [secrets.MinSharedTokenChars] gives: a byte count quietly passes a 12-byte
-// value that is four characters of UTF-8.
-const MinPasswordChars = 12
-
 // VerifyCap is how many argon2id verifications this process runs at once.
 //
 // DERIVED, NOT CONFIGURED: max(1, NumCPU / Threads). Each verification holds

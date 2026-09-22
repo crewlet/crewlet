@@ -160,16 +160,81 @@ api:
   # docs/guides/deployment.md).
   port: 80
 
+  # REQUIRED once a port is set.  Where a BROWSER and a third-party app
+  # reach this deployment — not where the process binds.  Its scheme
+  # decides the session cookie's Secure flag and its __Host- prefix, its
+  # host is the origin every write is checked against, and it is the base
+  # every webhook URL and every pasted app manifest is built on.  The
+  # engine usually sits behind a TLS-terminating proxy and therefore
+  # cannot read any of that off the request itself.
+  #
+  # Behind a proxy this is the PUBLIC address (https://nimbus.example.com),
+  # not http://localhost.
+  external_url: "http://localhost"
+
+  # Peers whose X-Forwarded-For and X-Forwarded-Proto are believed, as CIDR
+  # blocks.  Empty (the default) takes the peer address as the client
+  # address, which is right for a node reached directly.  Behind a proxy,
+  # name the proxy's own block — without it every caller shares one rate
+  # limit bucket, and with 0.0.0.0/0 (refused) every caller would choose
+  # their own.
+  # trusted_proxies: ["10.0.0.0/8"]
+
   auth:
+    # How PEOPLE sign in: local (passwords held here), oidc (an identity
+    # provider), or none.  Left unset it derives from which block is
+    # present, and with neither it is `none` — this example's posture: the
+    # token below is the only credential, which is what a walkthrough on
+    # one machine wants.
+    backend: none
+
+    # THE CEILING: the most authority this deployment will ever let a
+    # directory record or an identity provider's group mapping confer.
+    # Required once a port is set, with no default — one granting
+    # everything is a ceiling that does nothing, and one granting a subset
+    # silently locks out whatever it left out.  These are the ten.
+    max_grants:
+      - state:read
+      - transcripts:read
+      - config:read
+      - secrets:read
+      - work:write
+      - knowledge:write
+      - config:write
+      - secrets:write
+      - fleet:operate
+      - sandbox:run
+
     tokens:
-      # The id is what a write's audit row records, and what a human seat
-      # binds to with ``contact.crewlet_operator_id`` — so a person acting
-      # through the dashboard acts as themselves rather than as a token.
-      # An UNBOUND token is ordinary: an operator outside the org chart, a
-      # pipeline, an automation.  It acts as ``operator:<id>`` under this
-      # label and is never refused for it.
+      # This DEPLOYMENT's machine credentials — break-glass, the operator
+      # CLI, a pipeline.  At least one is required once a port is set: the
+      # identity estate of a fresh deployment is empty, so this is what
+      # creates the first person, and on a running one it is the way back
+      # in when nobody can sign in.
+      #
+      # The id is what a write's audit row records.
       - id: founder
+        # 26 characters at minimum, checked on what the ${VAR} resolves to.
+        # Generate one with `crewlet secrets keygen`.
         token: "${CREWLET_API_TOKEN_FOUNDER}"
+        # What this credential may do.  Required and non-empty: a
+        # credential's blast radius is stated where it is pinned, never
+        # inferred.  This one is the founder's, so it is all ten.
+        grants:
+          - state:read
+          - transcripts:read
+          - config:read
+          - secrets:read
+          - work:write
+          - knowledge:write
+          - config:write
+          - secrets:write
+          - fleet:operate
+          - sandbox:run
+        # How far into the company's own WORK it reaches: none (the
+        # default) is invisible to the roster, to a mention and to a
+        # delegation, which is what a machine credential should be.
+        colleague: none
 
 # ── The keyring (REQUIRED) ────────────────────────────────────────────
 #

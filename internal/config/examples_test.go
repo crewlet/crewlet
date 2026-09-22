@@ -238,7 +238,13 @@ func bootstrapExampleLoads(t *testing.T, name string) {
 	// example.
 	answers := MapSource{}
 	for _, name := range envref.Names(string(data)) {
-		answers[name] = "set-for-this-test"
+		// LONG ENOUGH TO BE A CREDENTIAL, because one of these
+		// variables is one: `api.auth.tokens[].token` is checked on
+		// the RESOLVED value against the 26-character floor, which is
+		// the whole point of checking it there. A placeholder shorter
+		// than that would make every shipped example fail on the
+		// stand-in rather than on its own shape.
+		answers[name] = "set-for-this-test-and-long-enough"
 	}
 	cfg, err := ParseBootstrap(data, NewResolver(answers))
 	if err != nil {
@@ -287,10 +293,18 @@ coordination:
 api:
   host: "0.0.0.0"
   port: 8000
+  external_url: "https://crewlet.example.com"
   auth:
+    backend: none
+    max_grants: [state:read, config:read, config:write, secrets:read,
+                 secrets:write, work:write, knowledge:write, transcripts:read,
+                 fleet:operate, sandbox:run]
     tokens:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
+        grants: [state:read, config:read, config:write, secrets:read,
+                 secrets:write, work:write, knowledge:write, transcripts:read,
+                 fleet:operate, sandbox:run]
 
 secrets:
   active_key_id: "2026-01"
@@ -299,7 +313,7 @@ secrets:
       material: "${CREWLET_SECRET_KEY_2026_01}"
 `), NewResolver(MapSource{
 		"CREWLET_NODE_ID":             "node-eu-1",
-		"CREWLET_API_TOKEN_FOUNDER":   "tok",
+		"CREWLET_API_TOKEN_FOUNDER":   "a-token-long-enough-to-pass",
 		"CREWLET_SECRET_KEY_2026_01":  "bWF0ZXJpYWw=",
 		"CREWLET_STORE_UNUSED_MARKER": "",
 	}))

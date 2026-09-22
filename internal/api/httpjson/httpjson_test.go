@@ -266,7 +266,7 @@ var declared = []httpjson.Code{
 	httpjson.CodeBadParams, httpjson.CodeUnavailable,
 
 	httpjson.CodePassInFlight, httpjson.CodeNotProvisionable,
-	httpjson.CodeNoPublicBaseURL, httpjson.CodeRequirementsOutstanding,
+	httpjson.CodeNoExternalURL, httpjson.CodeRequirementsOutstanding,
 	httpjson.CodeRunNotFound, httpjson.CodeVendorRefused,
 }
 

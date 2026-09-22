@@ -116,6 +116,26 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 				row["projections_ready"] = live.ProjectionsReady
 				row["projections_total"] = live.ProjectionsTotal
 			}
+			// AND WHAT THIS NODE WILL LET THE DIRECTORY CONFER, as a
+			// digest of its own `api.auth.max_grants`.
+			//
+			// The ceiling is intersected at decision time and nothing
+			// is written when it changes, which is what makes
+			// lowering it immediate — and what makes a fleet whose
+			// nodes disagree a LEGAL state a rolling restart passes
+			// through. Legal and invisible is the problem: a
+			// person's authority would depend on which node a load
+			// balancer sent them to, with nothing anywhere saying
+			// so. Two different digests on this view is that being
+			// said.
+			//
+			// ABSENT RATHER THAN EMPTY on a node that declares none,
+			// for the reason above it: a worker binding no API has
+			// no opinion, and a blank cell must not read as a
+			// ceiling of nothing.
+			if live.GrantCeilingHash != "" {
+				row["grant_ceiling"] = live.GrantCeilingHash
+			}
 		}
 		nodeRows = append(nodeRows, row)
 	}

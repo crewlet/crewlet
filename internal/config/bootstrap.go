@@ -368,7 +368,7 @@ func DefaultBootstrap() Bootstrap {
 		Store:        Store{Path: DefaultStorePath},
 		Stream:       Stream{Type: StreamEmbedded, Replicas: 1},
 		Coordination: Coordination{Type: CoordinationLocal},
-		API:          API{Host: DefaultAPIHost, Auth: APIAuth{AllowAnonymousRead: true}},
+		API:          API{Host: DefaultAPIHost},
 	}
 }
 
@@ -404,6 +404,27 @@ func (b *Bootstrap) Validate() error {
 // quorum wedges the moment either node restarts.
 func (b *Bootstrap) validateTopology() error {
 	var p problems
+
+	// THE KEYRING IS REQUIRED ONCE THE API IS SERVED, and this is the
+	// cross-block rule that says so: the keyring is `secrets:` and the
+	// surface is `api:`, so neither block's own validator can see both.
+	//
+	// It is no longer only about sealing the company's credentials, which
+	// is what made it optional — a deployment with no integrations
+	// genuinely had nothing to seal. It is now what SIGNS every session
+	// cookie this deployment issues and what derives the key each per-run
+	// token is verified with. Without it the API serves and nobody can
+	// sign in, which is a deployment that boots cleanly, binds its port
+	// and answers 401 to its own dashboard.
+	if b.API.Serving() && len(b.Secrets.Keys) == 0 {
+		p.add(field("secrets.keys"), ErrMissing,
+			"required once `api.port` is set: the keyring signs every session "+
+				"cookie and derives the key that verifies each per-run token, "+
+				"so an API served without one accepts nobody. It is also what "+
+				"seals the company's own credentials at rest. Generate a key "+
+				"with `crewlet secrets keygen` and point `material:` at a "+
+				"${VAR} holding it")
+	}
 
 	// COUNTED ONLY FOR AN EMBEDDED STREAM, because those are the members
 	// this file names. An external cluster's membership is not here and
@@ -1507,193 +1528,6 @@ func (c *Coordination) validate(path Path) error {
 func (c *Coordination) LeaseTTL() time.Duration {
 	return time.Duration(c.LeaseTTLSeconds * float64(time.Second))
 }
-
-// ---- api ------------------------------------------------------------- //
-
-// DefaultAPIHost binds every interface, which is what a container needs.
-const DefaultAPIHost = "0.0.0.0"
-
-// API is the Tier A HTTP surface: host, port, auth posture.
-type API struct {
-	// Host is the bind address.
-	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Bind address for the HTTP surface."`
-
-	// Port is the bind port. 0 serves no HTTP at all — no dashboard, no
-	// REST API, and no webhook endpoint, so every integration goes deaf.
-	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port; 0 disables the HTTP surface entirely."`
-
-	Auth APIAuth `yaml:"auth,omitempty" json:"auth"`
-}
-
-func (a *API) validate(path Path) error {
-	var p problems
-	// Unbounded, a port of 70000 passes validation and fails at bind,
-	// long after `crewlet validate` said the config was good.
-	if a.Port < 0 || a.Port > 65535 {
-		p.add(at(path, "port"), ErrOutOfRange,
-			"must be 0 (no HTTP surface) or a port 1..65535, got %d", a.Port)
-	}
-	p.wrap(a.Auth.validate(at(path, "auth")))
-	return p.err()
-}
-
-// APIAuth is the bearer-token policy for the HTTP surface.
-//
-// Writes and the whole /config surface always require a token. Reads are
-// governed by AllowAnonymousRead, which defaults OPEN — reading is what a
-// dashboard does, and the page that would prompt for a token is itself
-// served unauthenticated, so requiring one by default puts a modal in front
-// of every first load.
-//
-// Exempt from auth entirely, because they authenticate by other means or
-// must be reachable to obtain a token at all: /health, /ready, the
-// dashboard shell and its assets, /webhooks/* (HMAC-verified per source)
-// and /otlp/* (signed per-run token).
-type APIAuth struct {
-	// Tokens are the accepted bearer tokens. An empty list is a real
-	// posture, not an oversight: no token can match, so reads serve and
-	// every write and all of /config is refused.
-	Tokens []APIToken `yaml:"tokens,omitempty" json:"tokens,omitempty" desc:"Accepted bearer tokens. Empty refuses every write."`
-
-	// Disabled serves every route without auth and logs a loud startup
-	// warning. A local-development escape hatch, never a production one.
-	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty" desc:"Local-dev only: serve every route unauthenticated."`
-
-	// AllowAnonymousRead governs GET/HEAD outside /config. Default true.
-	// It is a real exposure — the read surface carries LLM transcripts,
-	// diary entries and the whole event stream — so the API states which
-	// posture it took at startup, at WARNING when the bind host is not
-	// loopback.
-	AllowAnonymousRead bool `yaml:"allow_anonymous_read,omitempty" json:"allow_anonymous_read" desc:"Serve reads without a token (default true)."`
-
-	// AllowedOrigins are the browser origins CORS permits. Empty means
-	// SAME-ORIGIN ONLY: the dashboard is served by this process, so it
-	// needs no entry. The previous default was "*", which let any site a
-	// logged-in operator visited read every unauthenticated endpoint.
-	AllowedOrigins []string `yaml:"allowed_origins,omitempty" json:"allowed_origins,omitempty" desc:"CORS origins. Empty = same-origin only."`
-}
-
-// APIToken is one bearer token gating writes and /config.
-type APIToken struct {
-	// ID is a short label stamped into revision audit rows (created_by):
-	// "founder", "ops", "ci-pipeline".
-	ID string `yaml:"id" json:"id" js:"required" desc:"Short label recorded as the author of writes made with this token."`
-
-	// Token is the value, or a ${VAR} reference to it. Resolved once at
-	// startup and never stored.
-	Token string `yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
-}
-
-func (a *APIAuth) validate(path Path) error {
-	var p problems
-	seen := make(map[string]struct{}, len(a.Tokens))
-	for i, t := range a.Tokens {
-		tp := idx(at(path, "tokens"), i)
-		if t.ID == "" {
-			p.add(at(tp, "id"), ErrMissing,
-				"every token needs a label: it is what a revision's audit row records")
-		}
-		if t.Token == "" {
-			p.add(at(tp, "token"), ErrMissing, "token must not be empty")
-		}
-		if _, dup := seen[t.ID]; dup && t.ID != "" {
-			// Two tokens sharing a label make the audit trail unreadable:
-			// every write says "founder" and no one can tell which
-			// credential made it, which is the whole reason the label
-			// exists.
-			p.add(at(tp, "id"), ErrConflict, "duplicate token id %q", t.ID)
-		}
-		seen[t.ID] = struct{}{}
-	}
-
-	// "anonymous" is the attribution recorded when auth.disabled is true.
-	// A real token carrying it would collide in an audit row with the
-	// writes made while the guard was off — the one distinction those
-	// rows exist to keep.
-	if _, reserved := seen[ReservedOperatorID]; reserved {
-		p.add(at(path, "tokens"), ErrConflict,
-			"token id %q is reserved: it is the attribution recorded when "+
-				"api.auth.disabled is true. Pick a different id",
-			ReservedOperatorID)
-	}
-
-	// The pairing that leaves nothing reachable. No tokens means no
-	// candidate can ever match, and with reads closed too every route is
-	// guarded by a credential that does not exist — a process that starts
-	// cleanly, binds its port, and answers 401 to everything including
-	// its own dashboard.
-	//
-	// Checked HERE rather than at API startup, so `crewlet validate`
-	// catches it on a laptop rather than a deployment catching it at
-	// bind time.
-	for i, origin := range a.AllowedOrigins {
-		p.wrap(checkOrigin(idx(at(path, "allowed_origins"), i), origin))
-	}
-
-	if len(a.Tokens) == 0 && !a.AllowAnonymousRead {
-		p.add(at(path, "tokens"), ErrMissing,
-			"allow_anonymous_read is false and no tokens are configured, so "+
-				"every route is guarded by a token that does not exist and "+
-				"nothing is reachable. Configure at least one token, or leave "+
-				"allow_anonymous_read at its default to serve reads without one")
-	}
-	return p.err()
-}
-
-// checkOrigin refuses an origin a browser will never match.
-//
-// # Why each of these is refused rather than accepted and ignored
-//
-// A CORS allow-list is compared against the browser's `Origin` header
-// EXACTLY, and the header is always `scheme://host[:port]` with no path and
-// no trailing slash. Every shape below is a value an operator plausibly
-// writes and no browser can ever equal — so accepting it produces an
-// allow-list that looks configured, a fetch that fails in a console the
-// engine never sees, and nothing anywhere saying why.
-//
-// `*` is the sharpest of them, and it is refused rather than honoured: it was
-// this field's own previous default, and what it does is let any site a
-// logged-in operator visits read every unauthenticated endpoint — which on
-// this API means LLM transcripts, diary entries and the whole event stream.
-func checkOrigin(path Path, origin string) error {
-	var p problems
-	switch {
-	case origin == "":
-		p.add(path, ErrMissing, "an empty origin matches nothing: remove the "+
-			"entry, or name a site as scheme://host[:port]")
-	case origin == "*":
-		p.add(path, ErrShape, "%q is not an origin and is refused rather "+
-			"than honoured: it would let any site a logged-in operator "+
-			"visits read this API — which carries LLM transcripts, diary "+
-			"entries and the whole event stream. Name each site, as "+
-			"https://ops.example.com", origin)
-	case !strings.HasPrefix(origin, "http://") && !strings.HasPrefix(origin, "https://"):
-		p.add(path, ErrShape, "%q has no scheme: a browser's Origin header "+
-			"is always scheme://host[:port], so this matches nothing. Write "+
-			"https://%s", origin, origin)
-	case strings.HasSuffix(origin, "/"):
-		p.add(path, ErrShape, "%q ends in a slash: a browser's Origin "+
-			"header carries no path, so this matches nothing. Write %q",
-			origin, strings.TrimRight(origin, "/"))
-	default:
-		if rest := strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://"); strings.Contains(rest, "/") {
-			p.add(path, ErrShape, "%q carries a path: a browser's Origin "+
-				"header is the scheme, host and port alone, so this matches "+
-				"nothing", origin)
-		}
-	}
-	return p.err()
-}
-
-// ReservedOperatorID is the attribution stamped on writes made while the auth
-// guard is disabled.
-//
-// Exported because two packages need the same answer: config refuses it as a
-// token id, and the API stamps it on a disabled-mode request. A second copy of
-// the string is how those two would come to disagree about which id is
-// reserved — and the disagreement would be silent, because each side would
-// still be self-consistent.
-const ReservedOperatorID = "anonymous"
 
 // ---- secrets --------------------------------------------------------- //
 

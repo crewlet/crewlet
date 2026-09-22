@@ -38,6 +38,11 @@ func newSocketWith(t *testing.T, authOpts func(*config.APIAuth), query stream.Qu
 ) *socketFixture {
 	t.Helper()
 	b := config.DefaultBootstrap()
+	// EVERY FIXTURE IS CREDENTIALLED, because every socket is: there is no
+	// anonymous-read posture any more, so a dial with nothing to present
+	// is refused before the handshake and every case below would be
+	// asserting the refusal rather than its own subject.
+	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: fixtureToken}}
 	if authOpts != nil {
 		authOpts(&b.API.Auth)
 	}
@@ -52,8 +57,28 @@ func newSocketWith(t *testing.T, authOpts func(*config.APIAuth), query stream.Qu
 	}
 }
 
-// dial opens a socket, optionally with a token on the query string.
+// fixtureToken is what every fixture's default credential is, and what an
+// empty argument to [socketFixture.dial] presents.
+const fixtureToken = "fixture-token-long-enough-to-pass"
+
+// dial opens a socket. An empty token presents the fixture's own credential,
+// which is what an ordinary case wants; [socketFixture.dialAnonymous] is how a
+// case asks for the unauthenticated arm on purpose.
 func (f *socketFixture) dial(t *testing.T, token string) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	if token == "" {
+		token = fixtureToken
+	}
+	return f.dialWith(t, token)
+}
+
+// dialAnonymous opens a socket presenting NOTHING.
+func (f *socketFixture) dialAnonymous(t *testing.T) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	return f.dialWith(t, "")
+}
+
+func (f *socketFixture) dialWith(t *testing.T, token string) (*websocket.Conn, *http.Response, error) {
 	t.Helper()
 	target := f.url
 	if token != "" {
@@ -196,9 +221,7 @@ func TestABadTokenFailsTheHandshakeRatherThanOpeningAndDying(t *testing.T) {
 // dashboard/src/protocol/socket.ts.
 func TestAPlainGETSeparatesARefusedCredentialFromAnAcceptedOne(t *testing.T) {
 	t.Parallel()
-	f := newSocket(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, nil)
+	f := newSocket(t, nil, nil)
 
 	get := func(t *testing.T, token string) int {
 		t.Helper()
@@ -218,54 +241,44 @@ func TestAPlainGETSeparatesARefusedCredentialFromAnAcceptedOne(t *testing.T) {
 		return res.StatusCode
 	}
 
-	// The reported failure: anonymous reads are open, so this browser
-	// would have connected with no credential at all — but it holds a
-	// stale one, and a credential that is PRESENT and wrong is refused.
+	// The reported failure: a browser holding a stale credential, which is
+	// PRESENT and wrong and therefore refused.
 	if got := get(t, "stale-from-last-deployment"); got != http.StatusUnauthorized {
 		t.Errorf("a refused credential = %d, want 401 — the dashboard "+
 			"cannot tell the reader their token is wrong", got)
 	}
-	// And the two that must NOT read as a refusal, or every reader gets a
+	// NO CREDENTIAL IS NOW THE SAME ANSWER, which it was not: it used to
+	// be 426, because an anonymous socket would have opened. The pairing
+	// the dashboard reads is unchanged — 401 means "your credential is the
+	// problem" and 426 means "the engine is fine, you used the wrong
+	// protocol" — and what moved is which side of it an empty credential
+	// falls on.
+	if got := get(t, ""); got != http.StatusUnauthorized {
+		t.Errorf("no credential = %d, want 401", got)
+	}
+	// And the one that must NOT read as a refusal, or every reader gets a
 	// token dialog for an engine that is merely restarting.
-	if got := get(t, "secret"); got != http.StatusUpgradeRequired {
+	if got := get(t, fixtureToken); got != http.StatusUpgradeRequired {
 		t.Errorf("an accepted credential = %d, want 426", got)
 	}
-	if got := get(t, ""); got != http.StatusUpgradeRequired {
-		t.Errorf("no credential under anonymous reads = %d, want 426", got)
-	}
 }
 
-func TestAClosedPostureRefusesAnUnauthenticatedSocket(t *testing.T) {
+func TestAnUnauthenticatedSocketIsRefused(t *testing.T) {
 	t.Parallel()
 	// The socket carries full LLM transcripts, so it is guarded exactly as
-	// the equivalent HTTP read is.
-	f := newSocket(t, func(a *config.APIAuth) {
-		a.AllowAnonymousRead = false
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, nil)
+	// the equivalent HTTP read is — which used to mean "unless
+	// allow_anonymous_read is on", and now means always.
+	f := newSocket(t, nil, nil)
 
-	if conn, _, err := f.dial(t, ""); err == nil {
+	if conn, _, err := f.dialAnonymous(t); err == nil {
 		_ = conn.Close(websocket.StatusNormalClosure, "")
-		t.Error("a closed posture opened an unauthenticated socket")
+		t.Error("a socket opened with no credential at all")
 	}
-	// And the counterfactual: the right token still gets in.
-	conn, _, err := f.dial(t, "secret")
+	// And the counterfactual: the right token still gets in, or the
+	// assertion above would pass on a fixture that refuses everything.
+	conn, _, err := f.dial(t, fixtureToken)
 	if err != nil {
 		t.Fatalf("a valid token was refused: %v", err)
-	}
-	if got := next(t, conn); got["kind"] != stream.KindSnapshot {
-		t.Errorf("first frame = %v", got["kind"])
-	}
-}
-
-func TestAnAnonymousReadPostureOpensWithoutACredential(t *testing.T) {
-	t.Parallel()
-	f := newSocket(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, nil)
-	conn, _, err := f.dial(t, "")
-	if err != nil {
-		t.Fatalf("dial: %v", err)
 	}
 	if got := next(t, conn); got["kind"] != stream.KindSnapshot {
 		t.Errorf("first frame = %v", got["kind"])
@@ -460,94 +473,24 @@ func TestTheSocketsOperatorReachesTheQuery(t *testing.T) {
 	}
 }
 
-func TestAFrameTokenUpgradesOneQueryOnly(t *testing.T) {
-	t.Parallel()
-	// How a socket opened for anonymous reads asks one operator-only
-	// question without reconnecting. A browser cannot set a header on a
-	// WebSocket constructor.
-	seen := make(chan string, 2)
-	f := newSocket(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, func(_ context.Context, _ string, _ map[string]any, operatorID string) (any, error) {
-		seen <- operatorID
-		return nil, nil
-	})
-	conn, _, err := f.dial(t, "")
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	next(t, conn)
-
-	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "config", "token": "secret"})
-	if got := <-seen; got != "founder" {
-		t.Errorf("credentialled query ran as %q, want founder", got)
-	}
-	// And the NEXT query, with no token, is anonymous again.
-	write(t, conn, map[string]any{"kind": "query", "id": 2, "what": "events"})
-	if got := <-seen; got != "" {
-		t.Errorf("the upgrade outlived its own query: %q", got)
-	}
-}
-
-// TestAWrongFrameTokenClosesAnAnonymousSocket pins the handshake's own rule on
-// the one credential channel the handshake cannot see.
-//
-// A credential that is PRESENT and wrong is refused, because a client that
-// sent one meant to be somebody. On an anonymous socket the frame token is the
-// only identity offered, so running the query anonymously — which is what
-// happened — hands a reader holding a stale token an ordinary answer to every
-// anonymous-readable question and never tells them their credential is wrong.
-// There is no correlation id on a socket-level refusal, so the close IS the
-// refusal.
-func TestAWrongFrameTokenClosesAnAnonymousSocket(t *testing.T) {
-	t.Parallel()
-	ran := make(chan string, 1)
-	f := newSocket(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, func(_ context.Context, _ string, _ map[string]any, operatorID string) (any, error) {
-		ran <- operatorID
-		return nil, nil
-	})
-	conn, _, err := f.dial(t, "")
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	next(t, conn)
-
-	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "config", "token": "wrong"})
-	if got := closeCode(t, conn); got != stream.CloseUnauthorized {
-		t.Errorf("close = %d, want %d: a refused frame credential on a socket "+
-			"with no identity of its own has to reach the client",
-			got, stream.CloseUnauthorized)
-	}
-	select {
-	case id := <-ran:
-		t.Errorf("the query ran as %q; a refused credential must not be "+
-			"silently demoted to anonymous", id)
-	default:
-	}
-}
-
 // TestAWatchNeedsAnOperator pins that a subscription is a WRITE.
 //
-// `allow_anonymous_read` opens reads and only reads. A watch installs a row in
-// this node's routing index on behalf of a caller and leaves it there for the
-// life of the socket, so an unauthenticated client that could install one
-// would be writing server state through a surface documented as read-only.
+// A watch installs a row in this node's routing index on behalf of a caller
+// and leaves it there for the life of the socket, so a client nobody can name
+// that could install one would be writing server state anonymously.
+//
+// THE UNAUTHENTICATED ARM IS NOW THE HANDSHAKE'S, which is what this asserts:
+// there is no anonymous socket to send a watch from any more, so the refusal
+// happens before a frame is ever read. The guard inside `watch` stays for the
+// one case that would resurrect it — the socket path being declared exempt —
+// and that case cannot be reached from here.
 func TestAWatchNeedsAnOperator(t *testing.T) {
 	t.Parallel()
-	f := newSocket(t, func(a *config.APIAuth) {
-		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, nil)
+	f := newSocket(t, nil, nil)
 
-	anon, _, err := f.dial(t, "")
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	next(t, anon)
-	write(t, anon, map[string]any{"kind": "watch", "seat": "lead"})
-	if got := closeCode(t, anon); got != stream.CloseUnauthenticated {
-		t.Errorf("close = %d, want %d", got, stream.CloseUnauthenticated)
+	if conn, _, err := f.dialAnonymous(t); err == nil {
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+		t.Error("a socket with no credential opened, so a watch could reach the index")
 	}
 	if got := f.svc.Hub().Watchers("lead"); got != 0 {
 		t.Errorf("watchers = %d: an unauthenticated client wrote the index", got)
@@ -555,7 +498,7 @@ func TestAWatchNeedsAnOperator(t *testing.T) {
 
 	// The counterfactual: an operator's watch takes, and clearing it
 	// releases the bucket.
-	held, _, err := f.dial(t, "secret")
+	held, _, err := f.dial(t, fixtureToken)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

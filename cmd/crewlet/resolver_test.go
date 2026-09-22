@@ -24,7 +24,7 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	env, closeEnv, err := companyResolver(t.Context(), cfg, &notes)
+	env, _, closeEnv, err := companyResolver(t.Context(), cfg, &notes)
 	if err != nil {
 		t.Fatalf("companyResolver: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 	}
 	t.Setenv("CONFLUENCE_TOKEN", "the-stale-export")
 
-	env, closeEnv, err := companyResolver(t.Context(), cfg, &bytes.Buffer{})
+	env, _, closeEnv, err := companyResolver(t.Context(), cfg, &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("companyResolver: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestWithoutAStoreTheRunSaysWhichChainItUsed(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-here.yaml")
 
 	var notes bytes.Buffer
-	env, closeEnv, err := companyResolver(t.Context(), missing, &notes)
+	env, _, closeEnv, err := companyResolver(t.Context(), missing, &notes)
 	if err != nil {
 		t.Fatalf("a missing bootstrap is a supported deployment: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestABootstrapWithNoKeyringResolvesFromTheEnvironment(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	if _, closeEnv, err := companyResolver(t.Context(), path, &notes); err != nil {
+	if _, _, closeEnv, err := companyResolver(t.Context(), path, &notes); err != nil {
 		t.Fatalf("a keyringless bootstrap is a supported deployment: %v", err)
 	} else {
 		defer closeEnv()
@@ -151,7 +151,7 @@ func TestABrokenBootstrapRefusesRatherThanResolvingFromTheEnvironment(t *testing
 	}
 
 	var notes bytes.Buffer
-	if _, _, err := companyResolver(t.Context(), path, &notes); err == nil {
+	if _, _, _, err := companyResolver(t.Context(), path, &notes); err == nil {
 		t.Fatal("a bootstrap that cannot be read was treated as no bootstrap, " +
 			"so a configured store silently became a stale environment")
 	}

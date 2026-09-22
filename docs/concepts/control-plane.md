@@ -293,7 +293,7 @@ Each node's status carries the `error` it failed with, so the first question —
 
 ```bash
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
-  http://localhost:8080/query/fleet | jq '.nodes[] |
+  http://localhost:8000/query/fleet | jq '.nodes[] |
     {id, config_epoch, config_status, config_error, config_reported_at}'
 ```
 
@@ -309,7 +309,7 @@ The durable answer is the event log. Every apply publishes `config_revision_appl
 
 ```bash
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
-  "http://localhost:8080/query/events?type=config_revision_applied&limit=50" |
+  "http://localhost:8000/query/events?type=config_revision_applied&limit=50" |
   jq '.events[] | {id, source, timestamp, failed, summary}'
 ```
 
@@ -319,7 +319,7 @@ A listing never carries payloads (see [API § An event on the wire](../reference
 
 ```bash
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
-  http://localhost:8080/events/$EVENT_ID | jq '.payload'
+  http://localhost:8000/events/$EVENT_ID | jq '.payload'
 ```
 
 ```json

@@ -149,6 +149,11 @@ func bootstrapForNode(t *testing.T, node *fakeNode) string {
 // bootstrapForURL is the same, for any test server. Split out because more
 // than one kind of fake node needs it and a second copy of this would be one
 // that drifts.
+// cliFixtureToken is the credential every CLI fixture's Tier A carries. It
+// clears the 26-character floor by construction: a shorter one is refused by
+// `crewlet validate`, so a fixture using one would fail on its stand-in.
+const cliFixtureToken = "cli-fixture-token-long-enough"
+
 func bootstrapForURL(t *testing.T, serverURL string) string {
 	t.Helper()
 	host, port, err := net.SplitHostPort(strings.TrimPrefix(serverURL, "http://"))
@@ -156,10 +161,26 @@ func bootstrapForURL(t *testing.T, serverURL string) string {
 		t.Fatalf("split %q: %v", serverURL, err)
 	}
 	dir := t.TempDir()
+	// A COMPLETE SERVING POSTURE, because a served API now requires one:
+	// an external URL, a ceiling, a credential of its own that clears the
+	// entropy floor, and a keyring. A fixture short of any of them is
+	// refused by `Validate` and the case fails on its own Tier A rather
+	// than on its subject.
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
-		"api:\n  host: %s\n  port: %s\n  auth:\n    tokens:\n"+
-		"      - id: ops\n        token: t0ken\n",
-		filepath.Join(dir, "index.db"), host, port)
+		"api:\n  host: %s\n  port: %s\n"+
+		"  external_url: \"http://%s:%s\"\n"+
+		"  auth:\n"+
+		"    max_grants: [state:read, config:read, config:write, secrets:read,\n"+
+		"                 secrets:write, work:write, knowledge:write,\n"+
+		"                 transcripts:read, fleet:operate, sandbox:run]\n"+
+		"    tokens:\n"+
+		"      - id: ops\n        token: %s\n"+
+		"        grants: [state:read, config:read, config:write, secrets:read,\n"+
+		"                 secrets:write, work:write, knowledge:write,\n"+
+		"                 transcripts:read, fleet:operate, sandbox:run]\n"+
+		"secrets:\n  active_key_id: k1\n  keys:\n"+
+		"    - id: k1\n      material: \"bWF0ZXJpYWw=\"\n",
+		filepath.Join(dir, "index.db"), host, port, host, port, cliFixtureToken)
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write bootstrap: %v", err)
@@ -304,7 +325,7 @@ func TestABudgetCommandSendsTheConfiguredToken(t *testing.T) {
 	if _, _, err := cli(t, "budgets", "reset", "-config", cfg); err != nil {
 		t.Fatalf("budgets reset: %v", err)
 	}
-	if len(node.tokens) == 0 || node.tokens[len(node.tokens)-1] != "Bearer t0ken" {
+	if len(node.tokens) == 0 || node.tokens[len(node.tokens)-1] != "Bearer "+cliFixtureToken {
 		t.Errorf("Authorization = %v, want the config's token", node.tokens)
 	}
 }
@@ -331,7 +352,14 @@ func TestAnExportedTokenBeatsTheConfigs(t *testing.T) {
 func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
-		"api:\n  host: 127.0.0.1\n  port: 1\n", filepath.Join(dir, "index.db"))
+		"api:\n  host: 127.0.0.1\n  port: 1\n"+
+		"  external_url: \"http://127.0.0.1:1\"\n"+
+		"  auth:\n    max_grants: [state:read]\n"+
+		"    tokens:\n      - id: ops\n        token: %s\n"+
+		"        grants: [state:read]\n"+
+		"secrets:\n  active_key_id: k1\n  keys:\n"+
+		"    - id: k1\n      material: \"bWF0ZXJpYWw=\"\n",
+		filepath.Join(dir, "index.db"), cliFixtureToken)
 	cfg := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)

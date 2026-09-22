@@ -2803,7 +2803,8 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   a node that has not caught up, a request for a token, a process that does
   not serve the configuration, or an unreachable engine
   ([the guide](../guides/org-builder.md#opening-the-builder) has the table).
-  A stored token is never the test: an engine with auth disabled needs none.
+  A stored token is never the test: holding one says nothing about whether
+  this engine accepts it, and the only thing that can answer is the engine.
   A token change mid-edit keeps the draft and checks it again.
 - **Every draft is a dry run of the write a save would send.** The same
   `PATCH` with `If-Match` (or `PUT` with `If-None-Match: *` in create mode),

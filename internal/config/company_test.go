@@ -839,7 +839,7 @@ func TestAConfluenceBlockWithNoOrganizationStillNeedsASite(t *testing.T) {
 
 // THE RESERVATION IS WHAT KEEPS ONE ADDRESS IN ONE PLACE. An operator who
 // declares the variable and later moves behind a new domain updates
-// integrations.public_base_url, the stale declaration keeps winning, and
+// api.external_url, the stale declaration keeps winning, and
 // every link a person clicks lands nowhere with nothing saying why.
 func TestTheBaseURLVariableIsReserved(t *testing.T) {
 	t.Parallel()
@@ -849,7 +849,7 @@ func TestTheBaseURLVariableIsReserved(t *testing.T) {
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "integrations.public_base_url") {
+	if !strings.Contains(err.Error(), "api.external_url") {
 		t.Errorf("the refusal must name where the value belongs; got:\n%v", err)
 	}
 

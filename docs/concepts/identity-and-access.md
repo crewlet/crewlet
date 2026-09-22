@@ -72,9 +72,36 @@ colon, is refused when it is written rather than discovered later.
 ## Grants: the ten things there are to allow
 
 A grant is one capability. There are ten, each covering a surface the engine
-actually serves, and each is either a **read** or a **write** — the classes
-`api.auth.allow_anonymous_read` distinguishes, because that setting opens reads
-and only reads.
+actually serves, and each is either a **read** or a **write**. The class is
+declared rather than derived from the HTTP method, and it is what lets a
+narrow service account be cut down to reading: the public read posture
+`allow_anonymous_read` used to open is now a credential holding read grants and
+nothing else.
+
+**`api.auth.max_grants` bounds all ten.** A person's grants live in the
+replicated store and an identity provider's group mapping is written at the
+provider; the ceiling is the operator's statement, in the tier that holds the
+keyring, of what either may ever confer. It is required once the API is served.
+
+It is intersected at **decision time, per node, per request**, and nothing is
+written when it changes. That is what makes lowering it immediate — no config
+apply, no migration, no restart of the fleet — and it is also what makes a
+fleet whose nodes disagree a *legal* state rather than a broken one: a rolling
+restart **is** that state, for as long as it runs.
+
+Legal and invisible is the problem. Without a signal, a person's authority
+depends on which node a load balancer sent them to, and the symptom is an
+operator who can revoke a credential on one request and cannot on the next,
+with nothing anywhere saying why. So each node publishes a **digest of its own
+resolved ceiling** on its presence lease, and `GET /query/fleet` renders it as
+`grant_ceiling` per node — two different values on that view is the
+disagreement being said out loud. It is a hash rather than the list because
+every node reads every other node's lease on every heartbeat, and ten strings
+per node is a payload that grows with the fleet to answer one question. It is
+derived from the **sorted, deduplicated** set, so a fleet whose config is
+assembled by a template does not report a disagreement it does not have, and it
+is **absent** rather than empty on a node that binds no API — a worker has no
+opinion, and a blank must not read as a ceiling of nothing.
 
 ### Reads
 
@@ -160,13 +187,14 @@ flowchart LR
     R -->|"yes"| RES["<b>resolved</b><br/>a principal, with grants"]
     R -->|"no, definitively:<br/>nothing was presented"| ANON["<b>anonymous</b><br/>a fact about the request"]
     R -->|"could not tell:<br/>the store was unreachable,<br/>nothing resolved it"| UNK["<b>unknown</b><br/>not an answer at all"]
-    ANON --> A2["served if the posture<br/>allows anonymous reads;<br/>otherwise refused as<br/><i>you presented nothing</i>"]
+    ANON --> A2["refused as<br/><i>you presented nothing</i>,<br/>except on the handful of<br/>exempt routes"]
     UNK --> U2["refused as <i>ask again</i>,<br/>never as <i>you are not<br/>who you say</i>"]
 ```
 
 **Anonymous** is a finding: the resolver ran, and nobody presented a
-credential. On an open read posture that is a perfectly good answer and the
-read is served.
+credential. It is a refusal on every guarded route — the probes, the webhook
+edge, the per-run token paths and the dashboard shell are the whole of what is
+served without one.
 
 **Unknown** is the absence of a finding: the identity store could not be
 reached, a session lookup failed, or nothing resolved the request at all.
@@ -797,12 +825,13 @@ space a node needs before it can boot at all — and up for a large one. See
 The identity vocabulary above is what the engine *names*. What an operator sets
 today is smaller, and lives in two places:
 
-- **Tier A, `api.auth.tokens`** — the credentials that may act at all, each
-  with an id recorded as the author of anything written with it. Plus
-  `api.auth.allow_anonymous_read`, which opens reads (and only reads) to
-  callers with no credential, and `api.auth.disabled`, which turns the guard
-  off entirely and stamps every write `anonymous`. See
-  [Configuration](configuration.md).
+- **Tier A, `api.auth`** — `tokens`, the deployment's own machine credentials,
+  each carrying an id recorded as the author of anything written with it, the
+  `grants` it may use and the `colleague` level it reaches the company's work
+  at; `max_grants`, the ceiling above; `backend`, how people sign in; and the
+  `session`, `audit`, `local` and `oidc` blocks under it. `allow_anonymous_read`
+  and `disabled` are both retired and refused by name — see
+  [Configuration § Auth](configuration.md#auth) for what replaced each.
 - **The company document, `contact.crewlet_operator_id`** — which of those
   token ids is a *person*, and which seat they hold. The binding is written
   here rather than on the token because Tier A is the root of trust and may

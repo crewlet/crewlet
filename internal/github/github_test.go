@@ -1869,7 +1869,7 @@ func TestAPassWithNoOrgTokenStillReportsAMissingPublicBase(t *testing.T) {
 	}
 	// NAMING THE FIELD, because that is the whole of what an operator does
 	// about it.
-	if findings[0].Subject != "integrations.public_base_url" {
+	if findings[0].Subject != "api.external_url" {
 		t.Errorf("the finding's subject is %q, which is not the field to set",
 			findings[0].Subject)
 	}
@@ -1922,11 +1922,11 @@ func TestARefusedWebhookIsStillAFinding(t *testing.T) {
 // the pass registers no hooks at all — which was silence, so Classify saw no
 // findings and reported the integration Ready. The comment justifying that
 // silence said the URL "is not on the integrations block today"; it is
-// integrations.public_base_url, and the reconcile loop feeds it into every
+// api.external_url, and the reconcile loop feeds it into every
 // pass.
 func TestARunWithNoPublicBaseReportsIngressBlocked(t *testing.T) {
 	t.Parallel()
-	res := &github.Result{NoIngress: "integrations.public_base_url is unset"}
+	res := &github.Result{NoIngress: "api.external_url is unset"}
 	got := res.Findings()
 	if len(got) != 1 {
 		t.Fatalf("got %d finding(s), want exactly one: %+v", len(got), got)
@@ -1934,7 +1934,7 @@ func TestARunWithNoPublicBaseReportsIngressBlocked(t *testing.T) {
 	if got[0].Kind != integration.FindingIngressBlocked {
 		t.Errorf("kind = %q, want %q", got[0].Kind, integration.FindingIngressBlocked)
 	}
-	if got[0].Subject != "integrations.public_base_url" {
+	if got[0].Subject != "api.external_url" {
 		t.Errorf("subject = %q; the finding must name the field to set", got[0].Subject)
 	}
 	if integration.Classify(got).Phase == integration.PhaseReady {

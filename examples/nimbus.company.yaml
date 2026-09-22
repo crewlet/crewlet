@@ -43,8 +43,8 @@ token_budget: 10000000                          # 10M tokens, org-wide (all agen
 # text wherever a skill writes ${name}.  NIMBUS DECLARES NONE, and that is
 # what running the engine's own tracker and wiki buys here: the one address
 # its skills need is where this deployment answers, and the engine injects
-# that itself as ${crewlet_base_url} from ``integrations.public_base_url``
-# below.  The bundled platform-mentions skill builds every shareable link
+# that itself from ``api.external_url`` in the OPERATOR's own Tier A file,
+# as ${crewlet_base_url}.  The bundled platform-mentions skill builds every shareable link
 # on it — ${crewlet_base_url}/#/work/ENG-42, ${crewlet_base_url}/#/pages/…
 # — so there is nothing for an operator to keep in step.
 #
@@ -366,19 +366,6 @@ integrations:
   # per project at every vendor, so a small company can afford a minute and a
   # large one should lengthen it.
   # check_interval_seconds: 600
-
-  # Where this deployment answers FROM OUTSIDE — the base every webhook URL
-  # a provisioner registers is built on, and what tool-skill prose reaches
-  # as ${crewlet_base_url}.  A bare origin: consumers append their own
-  # rooted paths, so a path, query or fragment here would land in the
-  # middle of every link.
-  #
-  # WRITTEN AS A WHOLE ${VAR} so staging and production answer at their own
-  # addresses off this one revision.  It is stored verbatim like every
-  # other pointer and resolved where a link or a registration is built, so
-  # a process that cannot read it registers nothing rather than a webhook
-  # at the literal text of a variable.
-  public_base_url: "${CREWLET_PUBLIC_URL}"
 
   # NO TRACKER OR WIKI INTEGRATION, and that is the point of this example:
   # Nimbus runs the engine's OWN work tracker and knowledge base, so there

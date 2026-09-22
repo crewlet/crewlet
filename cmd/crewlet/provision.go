@@ -134,31 +134,43 @@ func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenS
 // A bootstrap that exists and cannot be read fails the run instead. Someone
 // who configured a store and did not get it must not have their secrets
 // quietly resolved from a stale export.
-func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer) (*config.Resolver, func(), error) {
-	envOnly := func(why string) (*config.Resolver, func(), error) {
+// IT ALSO HANDS BACK THE TIER A IT LOADED, which every caller now needs and
+// none of them should load a second time. `api.external_url` is where a vendor
+// reaches this deployment, and it is the OPERATOR's fact rather than the
+// company's — so a command building a webhook URL or an app manifest reads it
+// from here, and a second `LoadBootstrap` in each command would be six places
+// to disagree about which file was consulted. Nil when there is no Tier A file
+// at all, which is a real way to run these commands: the caller then has only
+// the `-public-url` flag, which is exactly what it is for.
+func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer) (
+	*config.Resolver, *config.Bootstrap, func(), error) {
+
+	envOnly := func(why string, boot *config.Bootstrap) (
+		*config.Resolver, *config.Bootstrap, func(), error) {
+
 		fmt.Fprintf(notes, "%s: resolving ${VAR} from the environment only.\n", why)
-		return config.EnvOnly(), func() {}, nil
+		return config.EnvOnly(), boot, func() {}, nil
 	}
 	if _, err := os.Stat(bootstrapPath); errors.Is(err, os.ErrNotExist) {
-		return envOnly("no " + bootstrapPath)
+		return envOnly("no "+bootstrapPath, nil)
 	}
 	boot, err := loadBootstrapForStore(bootstrapPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if len(boot.Secrets.Keys) == 0 {
-		return envOnly(bootstrapPath + " declares no secrets.keys")
+		return envOnly(bootstrapPath+" declares no secrets.keys", boot)
 	}
 	sv, closeStore, err := openSecretValues(ctx, boot)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	values, err := sv.All(ctx)
 	if err != nil {
 		closeStore()
-		return nil, nil, fmt.Errorf("read the secret store: %w", err)
+		return nil, nil, nil, fmt.Errorf("read the secret store: %w", err)
 	}
-	return config.WithStore(config.MapSource(values)), closeStore, nil
+	return config.WithStore(config.MapSource(values)), boot, closeStore, nil
 }
 
 // operatorCredential reads the human operator's own credential, from the
@@ -194,7 +206,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 			"GITLAB_ADMIN_TOKEN, then GITLAB_PROVISION_TOKEN")
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhook; "+
-			"defaults to integrations.public_base_url")
+			"defaults to api.external_url")
 	rotate := fs.Bool("rotate", false,
 		"mint a fresh token for every seat, including seats whose current "+
 			"one still works (the engine has to be restarted after)")
@@ -272,7 +284,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	// so a -dry-run does it too — a dry run that could not say this would
 	// be silent about the one outcome an operator most needs warning of.
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
 	if err != nil {
 		return err
 	}
@@ -285,7 +297,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	// RESOLVED ONCE, for the reason the Slack command states: the value is
 	// read in three places here and three separate reads of the flag is
 	// how one of them disagrees with the others.
-	base := webhookBase(*publicURL, &company.Integrations, env.LookupOK)
+	base := webhookBase(*publicURL, boot)
 
 	signingVar := soleVarOf(cfg.SigningSecret)
 	signing := gitlab.PlanSigningSecret(
@@ -594,7 +606,7 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 	}
 	defer closeSink()
 
-	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, _, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
 	if err != nil {
 		return err
 	}
@@ -697,7 +709,7 @@ func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *bootstrap, stdout)
+	env, _, closeEnv, err := companyResolver(ctx, *bootstrap, stdout)
 	if err != nil {
 		return err
 	}
@@ -803,51 +815,44 @@ func skillsContainer(flagValue, envVar, fromConfig string) string {
 // [config.Integrations.WebhookBase].
 // noPublicBase says what to change when a run needs an address and has none.
 //
-// THREE WAYS TO BE EMPTY, and they are not the same work. The flag was not
-// given AND the company names no public base; or it names one that this
-// process cannot resolve, because [config.Integrations.WebhookBase] turns a
-// ${VAR} it cannot see into "" rather than into the text of the variable. A
-// message naming only the flag sent an operator who had already set the field
-// looking for something they did not need.
-func noPublicBase(in *config.Integrations) string {
+// TWO WAYS TO BE EMPTY NOW, WHERE THERE WERE THREE. While the address was a
+// Tier B pointer, a company could also name one that this process could not
+// resolve — a `${VAR}` nothing exported, which read back as "" rather than as
+// the text of the variable — so the message had to tell an operator who had
+// already set the field that their variable was the problem. `api.external_url`
+// is Tier A and resolved before the document is decoded, so what is left is
+// the honest pair: no Tier A file was read, or it names no address.
+func noPublicBase(boot *config.Bootstrap) string {
 	const why = "every app's Events API request URL and OAuth redirect URL " +
 		"are built from it, so an app created without one delivers nowhere " +
 		"and cannot be installed"
-	raw := ""
-	if in != nil {
-		raw = strings.TrimSpace(in.PublicBaseURL)
+	if boot == nil {
+		return "no address for this deployment: pass -public-url, or point " +
+			"-config at the Tier A file that sets `api.external_url`. " + why
 	}
-	if raw == "" {
-		return "no public base URL: pass -public-url, or set " +
-			"integrations.public_base_url in the company document. " + why
-	}
-	if name, ok := provision.SoleVar(raw); ok {
-		return fmt.Sprintf(
-			"integrations.public_base_url points at ${%s} and this process "+
-				"resolved nothing for it — set %s in the environment, in the "+
-				"file named by -env-file, or in the secret store, or pass "+
-				"-public-url to override it for this run. %s", name, name, why)
-	}
-	return fmt.Sprintf(
-		"integrations.public_base_url is %q, which resolved to nothing — "+
-			"correct it in the company document, or pass -public-url to "+
-			"override it for this run. %s", raw, why)
+	return "`api.external_url` is unset in this deployment's Tier A file: " +
+		"set it there, or pass -public-url to override it for this run. " + why
 }
 
-func webhookBase(flagValue string, in *config.Integrations, resolve func(string) (string, bool)) string {
+// webhookBase is the address this run builds vendor URLs on: the flag when it
+// was given, and otherwise the deployment's own.
+//
+// THE FLAG WINS ONLY WHEN IT WAS TYPED. One that won even when unset would let
+// an operator who simply forgot it silently re-point a working hook at "".
+func webhookBase(flagValue string, boot *config.Bootstrap) string {
 	if v := strings.TrimSpace(flagValue); v != "" {
 		return strings.TrimRight(v, "/")
 	}
-	if in == nil {
+	if boot == nil {
 		return ""
 	}
-	return in.WebhookBase(resolve)
+	return boot.API.ExternalBase()
 }
 
 // accountMode is where this run owns the accounts it creates.
 //
 // THE DOCUMENT IS THE DEFAULT and the flag is a one-invocation override, the
-// way `-public-url` overrides `integrations.public_base_url`. The flag used to
+// way `-public-url` overrides `api.external_url`. The flag used to
 // be the only source, which made this a fact only the person who typed it
 // knew — and the engine provisions the same company from the same document
 // with no flag to read, so the two disagreed on the one input that decides

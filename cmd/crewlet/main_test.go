@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -266,6 +267,18 @@ func bootstrapFor(t *testing.T, port int) *config.Bootstrap {
 	b.Stream.StoreDir = filepath.Join(dir, "stream")
 	b.API.Host = "127.0.0.1"
 	b.API.Port = port
+	// A COMPLETE SERVING POSTURE. Once a port is set, Tier A must carry an
+	// external URL, a grant ceiling and a credential of its own, and every
+	// guarded route needs that credential presented — so a fixture short
+	// of any of them fails on its own configuration rather than on its
+	// subject. [getJSON] is what presents it.
+	if port != 0 {
+		b.API.ExternalURL = "http://127.0.0.1:" + strconv.Itoa(port)
+	}
+	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Tokens = []config.APIToken{
+		{ID: "fixture", Token: cliFixtureToken, Grants: iam.AllGrants},
+	}
 	b.Secrets.ActiveKeyID = "test"
 	b.Secrets.Keys = []config.SecretKey{{ID: "test", Material: testKeyMaterial(t)}}
 	return &b
@@ -414,10 +427,19 @@ func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
 	if got := status(http.MethodPost, mcpbridge.PathPrefix+"not-a-token"); got != http.StatusUnauthorized {
 		t.Errorf("POST %snot-a-token = %d, want the bridge's own 401", mcpbridge.PathPrefix, got)
 	}
-	for _, path := range []string{"/health", "/dashboard", "/agents"} {
+	// THE EXEMPT PATHS 404, because this listener mounts none of them and
+	// the guard lets them through to a mux that has nothing.
+	for _, path := range []string{"/health", "/dashboard"} {
 		if got := status(http.MethodGet, path); got != http.StatusNotFound {
 			t.Errorf("GET %s = %d on a bridge-only listener, want 404", path, got)
 		}
+	}
+	// AND A GUARDED ONE IS REFUSED RATHER THAN 404, which is exactly what
+	// the full surface answers now that every guarded route needs a
+	// credential: the guard runs before routing, so it cannot know the
+	// route is absent, and a 404 here would have disclosed that.
+	if got := status(http.MethodGet, "/agents"); got != http.StatusUnauthorized {
+		t.Errorf("GET /agents = %d on a bridge-only listener, want the guard's 401", got)
 	}
 }
 
@@ -694,7 +716,16 @@ func getJSON(t *testing.T, url string) map[string]any {
 	probe := httpxtest.Pool(t)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		res, err := probe.Get(url) //nolint:noctx // a test against its own listener
+		// THE FIXTURE'S CREDENTIAL ON EVERY CALL, exempt paths
+		// included: presenting one where none is needed changes
+		// nothing, and leaving it off a guarded one answers 401 with
+		// an empty body, which decodes as a snapshot with no rows.
+		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+		if reqErr != nil {
+			t.Fatalf("request %s: %v", url, reqErr)
+		}
+		req.Header.Set("Authorization", "Bearer "+cliFixtureToken)
+		res, err := probe.Do(req)
 		if err != nil {
 			time.Sleep(20 * time.Millisecond)
 			continue

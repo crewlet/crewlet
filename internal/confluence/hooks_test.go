@@ -527,7 +527,7 @@ func TestNoBaseRegistersNothingAndSaysSo(t *testing.T) {
 	if len(res.Hooks) != 0 || site.mutations() != 0 {
 		t.Fatalf("a run with no base registered %d hooks and wrote %d times", len(res.Hooks), site.mutations())
 	}
-	if len(res.Notes) == 0 || !strings.Contains(res.Notes[0], "public_base_url") {
+	if len(res.Notes) == 0 || !strings.Contains(res.Notes[0], "api.external_url") {
 		t.Fatalf("the operator is not told how to get a hook registered: %v", res.Notes)
 	}
 	// And the findings say nothing about ingress: a run that was never

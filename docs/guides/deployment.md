@@ -582,7 +582,32 @@ Any `api.port > 0` in the Tier A YAML makes `crewlet run` start an **embedded AP
 ```yaml
 api:
   port: 80       # 0 (the default) disables the embedded API
+  external_url: "https://crewlet.example.com"   # REQUIRED once port is set
+  auth:
+    max_grants: [...]        # THE CEILING, required once port is set
+    tokens: [{id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}",
+              grants: [...]}]   # at least one, on every backend
+secrets:
+  active_key_id: k1          # REQUIRED once port is set: the keyring signs
+  keys: [{id: k1, material: "${CREWLET_SECRET_KEY_K1}"}]   # every session
 ```
+
+**Four settings stop being optional the moment `api.port` is non-zero** —
+`api.external_url`, `api.auth.max_grants`, at least one `api.auth.tokens` entry
+and `secrets.keys`. `crewlet validate` refuses each by name, so a deployment
+finds out on a laptop rather than at bind time. See
+[the Tier A example](../getting-started/configuration.md#tier-a) and
+[Configuration § Auth](../concepts/configuration.md#auth) for what each one
+decides.
+
+**`api.external_url` is where a BROWSER reaches this deployment**, which behind
+a load balancer or a TLS-terminating proxy is not what `api.host` and
+`api.port` bind. The engine cannot read the scheme off the request it receives —
+the proxy has already terminated TLS — so the session cookie's `Secure` flag,
+its `__Host-` prefix, the origin every write is checked against and the base
+every webhook URL is built on all come from this one value. Behind a proxy,
+name the proxy's own block in `api.trusted_proxies` too, or every caller shares
+one rate-limit bucket.
 
 ```bash
 crewlet run -config crewlet.yaml    # engine + embedded API on :80

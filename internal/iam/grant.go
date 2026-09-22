@@ -16,8 +16,11 @@ import "slices"
 type Access string
 
 const (
-	// AccessRead changes nothing and starts nothing. This is the class
-	// api.auth's allow_anonymous_read may open — and only ever this one.
+	// AccessRead changes nothing and starts nothing. It is the class a
+	// narrow service account is cut down to: a deliberately public read
+	// surface is a credential holding read grants and nothing else, which
+	// is listable, revocable and present in the audit log — none of which
+	// the `allow_anonymous_read` posture this replaced could be.
 	AccessRead Access = "read"
 
 	// AccessWrite changes something, starts something, or hands out a

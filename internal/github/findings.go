@@ -38,7 +38,7 @@ func (r *Result) Findings() []integration.Finding {
 	// An empty hook list used to be silence, on the reasoning that a
 	// read-only pass produces one by construction and that the public base
 	// "is not on the integrations block today". It IS — it is
-	// `integrations.public_base_url`, and the reconcile loop feeds exactly
+	// `api.external_url`, and the reconcile loop feeds exactly
 	// that value into every pass — so the silence meant a company that
 	// never set it saw GitHub reported Ready while nothing at GitHub
 	// pointed anywhere. That is the state this whole subsystem exists to
@@ -50,7 +50,7 @@ func (r *Result) Findings() []integration.Finding {
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
-			Subject: "integrations.public_base_url",
+			Subject: "api.external_url",
 			Detail:  r.NoIngress,
 		})
 	}

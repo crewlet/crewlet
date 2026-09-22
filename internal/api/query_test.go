@@ -70,7 +70,7 @@ func overREST(t *testing.T, a *api.App, what string, params url.Values) (int, an
 		target += "?" + params.Encode()
 	}
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, target, nil)))
 	res := rec.Result()
 	var body any
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
@@ -86,7 +86,7 @@ func overSocket(t *testing.T, a *api.App, what string, params map[string]any) ma
 	t.Cleanup(srv.Close)
 
 	conn, _, err := websocket.Dial(t.Context(),
-		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream", nil)
+		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream?token="+fixtureToken, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/query/blip", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/query/blip", nil)))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("REST status = %d, want 503", rec.Code)
 	}
@@ -301,22 +301,46 @@ func TestAnOperatorQuestionIsGuardedOnBothTransports(t *testing.T) {
 	// The REST route and the socket make the same decision, so a route
 	// that read its own params and forgot the operator check is not a
 	// shape this can take.
-	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	a := seededApp(t, func(o *api.Options) { o.Bootstrap = &b })
+	a := seededApp(t, nil)
+	ran := make(chan struct{}, 1)
 	a.Queries().RegisterOperator("secrets", func(context.Context, queries.Params) (any, error) {
+		ran <- struct{}{}
 		return map[string]any{"ok": true}, nil
 	})
 
-	status, body := overREST(t, a, "secrets", nil)
-	if status != http.StatusUnauthorized {
-		t.Errorf("REST status = %d, want 401", status)
+	// WITH NO CREDENTIAL, BOTH TRANSPORTS REFUSE BEFORE THE QUESTION IS
+	// REACHED — which is where the refusal moved when the anonymous read
+	// posture went. It used to arrive from the query layer as
+	// `unauthorized`, because an anonymous caller got as far as asking;
+	// now the guard answers `invalid_token` on the REST route and closes
+	// the handshake on the socket. What this pins is that they still make
+	// the SAME decision, which is the whole point of the case: a route
+	// that read its own params and forgot the check is not a shape this
+	// can take.
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/query/secrets", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("REST status = %d, want 401", rec.Code)
 	}
-	if got := body.(map[string]any)["error"]; got != "unauthorized" {
-		t.Errorf("REST error = %v", got)
+	srv := httptest.NewServer(a)
+	t.Cleanup(srv.Close)
+	if conn, _, err := websocket.Dial(t.Context(),
+		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream", nil); err == nil {
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+		t.Error("the socket opened with no credential, so the question was reachable")
 	}
-	if got := overSocket(t, a, "secrets", nil); got["error"] != "unauthorized" {
-		t.Errorf("socket answer = %v", got)
+	select {
+	case <-ran:
+		t.Error("the operator-only question ran for a caller with no credential")
+	default:
+	}
+
+	// AND THE REGISTRY'S OWN CHECK STILL REFUSES, asked directly with no
+	// operator. It is what the guard's exemption list is checked against:
+	// a question registered as operator-only must not answer merely
+	// because the route it arrived on was not guarded.
+	if _, err := a.Queries().Answer(t.Context(), "secrets", nil, ""); err == nil {
+		t.Error("the registry answered an operator-only question to nobody")
 	}
 }
 

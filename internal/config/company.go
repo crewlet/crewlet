@@ -443,11 +443,11 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		if key == ReservedBaseURLVariable {
 			p.add(entry(field("skill_variables"), key), ErrConflict,
 				"%s is reserved: the engine sets it from "+
-					"integrations.public_base_url, which is where this "+
-					"deployment's address belongs — write a whole ${VAR} "+
-					"there and staging and production answer at their own "+
-					"addresses off one revision. Set it there and delete "+
-					"this line",
+					"`api.external_url` in the OPERATOR's own Tier A file, "+
+					"which is where this deployment's address belongs — one "+
+					"company document then runs at staging's address and at "+
+					"production's without carrying either. Set it there and "+
+					"delete this line",
 				ReservedBaseURLVariable)
 		}
 	}
@@ -542,11 +542,11 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 }
 
 // ReservedBaseURLVariable is the skill variable carrying this deployment's
-// public base URL, so a skill can compose a link a person can click.
+// external address, so a skill can compose a link a person can click.
 //
-// The engine sets it from integrations.public_base_url and this package
-// refuses a company that declares it: two sources for one address is how a
-// skill comes to link at the deployment the company used to run on.
+// The engine sets it from `api.external_url` and this package refuses a
+// company that declares it: two sources for one address is how a skill comes
+// to link at the deployment the company used to run on.
 const ReservedBaseURLVariable = "crewlet_base_url"
 
 // validateKnowledgeBackend holds the rule that a read scope needs the

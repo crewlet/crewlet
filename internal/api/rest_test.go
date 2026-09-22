@@ -34,7 +34,7 @@ import (
 func status(t *testing.T, a *api.App, path string) int {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, path, nil)))
 	return rec.Result().StatusCode
 }
 
@@ -84,7 +84,9 @@ func TestEveryDocumentedReadRouteAnswers(t *testing.T) {
 // reconnaissance for the write nobody can.
 func TestTheIntegrationsMapIsNotServedAnonymously(t *testing.T) {
 	t.Parallel()
-	if got := status(t, restApp(t), "/integrations"); got != http.StatusUnauthorized {
+	rec := httptest.NewRecorder()
+	restApp(t).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/integrations", nil))
+	if got := rec.Result().StatusCode; got != http.StatusUnauthorized {
 		t.Errorf("GET /integrations = %d, want 401: it is the same map /setup guards", got)
 	}
 }
@@ -100,7 +102,7 @@ func TestARouteWithNoSourceAnswersTheQueryLayer(t *testing.T) {
 	// No native knowledge base wired, which is a company on Confluence, so
 	// `pages` is unregistered.
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/pages", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/pages", nil)))
 	res := rec.Result()
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET /pages = %d, want the query layer's 404", res.StatusCode)
@@ -191,7 +193,7 @@ func TestTheTraceRouteBeatsTheEventWildcard(t *testing.T) {
 	// would be too. So this pins the shape rather than the status: the
 	// route must exist at all.
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/events/trace/t-1", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/events/trace/t-1", nil)))
 	if ct := rec.Result().Header.Get("Content-Type"); ct != "application/json" {
 		t.Errorf("GET /events/trace/{id} content-type = %q; a bare mux 404 "+
 			"means the pattern never matched", ct)
@@ -244,7 +246,7 @@ func TestALiteralWorkRouteIsNotShadowedByTheWildcard(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/work/views", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/work/views", nil)))
 	res := rec.Result()
 
 	if res.StatusCode != http.StatusBadRequest {
@@ -273,8 +275,8 @@ func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/work/views?container=project:ENG", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet,
+		"/work/views?container=project:ENG", nil)))
 	if got := rec.Result().StatusCode; got != http.StatusOK {
 		t.Errorf("GET /work/views?container=project:ENG = %d, want 200", got)
 	}
@@ -364,7 +366,7 @@ func TestTheInboxIsServedAtThePathTheTableDocuments(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/work/inbox", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/work/inbox", nil)))
 	res := rec.Result()
 
 	if res.StatusCode != http.StatusBadRequest {

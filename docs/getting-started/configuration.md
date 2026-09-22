@@ -378,6 +378,8 @@ turn" and carries on with recency. Nothing here retries — the caller's
 degradation costs less than a retry spent inside a turn-start prefetch
 somebody is waiting on.
 
+## Tier A
+
 Tier A (`crewlet.yaml`, restart-only) says where this node's stream, store and
 API are.  Example:
 
@@ -741,12 +743,56 @@ coordination:
                                     #   bucket while the fleet is down
 
 api:
-  host: "0.0.0.0"
-  port: 8000
+  host: "0.0.0.0"       # what this node BINDS
+  port: 8000            # 0 serves no HTTP at all
+  external_url: "https://crewlet.example.com"
+                        # REQUIRED once port is set — where a BROWSER and a
+                        #   vendor REACH this deployment, which is rarely
+                        #   what the two lines above bind
+  trusted_proxies: ["10.0.0.0/8"]
+                        # whose X-Forwarded-For is believed. A CIDR list,
+                        #   never a bool; 0.0.0.0/0 is refused
   auth:
-    tokens:
+    backend: local      # local | oidc | none. Unset derives from which of
+                        #   the two blocks below is present
+    bootstrap: open     # open (default) | closed — whether POST
+                        #   /auth/bootstrap may create the first person
+    max_grants:         # THE CEILING. Required once port is set
+      [state:read, transcripts:read, config:read, secrets:read,
+       work:write, knowledge:write, config:write, secrets:write,
+       fleet:operate, sandbox:run]
+    session:
+      absolute: 168h          # 1h..720h (default 168h)
+      rotate_after: 1h        # 5m..24h  (default 1h)
+      step_up: 1h             # 5m..24h  (default 1h)
+      step_up_sensitive: 15m  # 1m..step_up (default 15m)
+    audit:
+      changes: 9600h    # 2160h..24000h (default 9600h = 400 days)
+      sessions: 2160h   # 168h..9600h   (default 2160h = 90 days), and never
+                        #   longer than `changes`
+    local:              # present on the `local` backend
+      totp: required    # required | optional. NO DEFAULT: state one
+      accept_insecure: false   # acknowledge an insecure posture off loopback
+      min_password_length: 12  # 12..256; 0 takes the engine's floor of 12
+    # oidc:             # present on the `oidc` backend instead
+    #   issuer: "https://acme.okta.com/oauth2/default"    # https only
+    #   client_id: "0oa1b2c3d4"
+    #   client_secret: "${CREWLET_OIDC_CLIENT_SECRET}"    # an env var, never
+    #                                                     #   a store secret
+    #   scopes: [openid, email, profile, groups, offline_access]
+    #   groups_claim: groups
+    #   deactivation_probe: 1h    # 5m..24h — the only thing that notices a
+    #                             #   person disabled at the provider
+    #   group_grants:
+    #     crewlet-ops: [fleet:operate, state:read]
+    tokens:             # the DEPLOYMENT's machine credentials. At least one
+                        #   is required once port is set, on every backend
       - id: founder
-        token: "${CREWLET_API_TOKEN_FOUNDER}"
+        token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26+ chars, on the RESOLVED value
+        grants: [state:read, config:read, config:write, secrets:read,
+                 secrets:write, work:write, knowledge:write, fleet:operate]
+        colleague: none        # none (default) | read | write
+        audit_every_use: false # true writes a row per request, not per hour
 
 logging:
   level: info       # debug, info (default), warn, error
@@ -789,9 +835,38 @@ unit keyed on a name somebody will rename.
 
 `api.host` and `api.port` are what this node **binds**, which is rarely where it
 **answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached
-at `https://crewlet.example.com`. That outside address is Tier B's
-[`integrations.public_base_url`](#integrations), written once and read by every
-provisioner and every link the engine composes.
+at `https://crewlet.example.com`. That outside address is **`api.external_url`**,
+and it is **required** once a port is set. It was `integrations.public_base_url`
+in the company document and moved here because it answers four questions at
+once, three of which happen before a company document has been loaded at all:
+the session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its
+host is the origin every write and every socket handshake is checked against, it
+is the OIDC redirect base, and it is what every webhook URL and pasted app
+manifest is built on. The engine sits behind a TLS-terminating proxy and cannot
+read any of that off the request it receives.
+
+**`api.auth.max_grants` is the ceiling**, and it is required once a port is set.
+A person's grants live in the replicated store and are written by whoever holds
+authority over people; an OIDC group mapping is written by whoever administers
+the identity provider. This is the bound on what either may confer, stated in
+the tier that holds the keyring and never read from Tier B. It is intersected
+**per node, per request**, so lowering it takes effect on the next request that
+node serves — no apply, no restart of the fleet — which also makes a fleet whose
+nodes disagree a legal state during a rollout. Each node therefore publishes a
+hash of its own resolved ceiling on its presence lease, and `/health` and the
+fleet view report a mixed one.
+
+**At least one `api.auth.tokens` entry is required**, on every backend. A fresh
+deployment's identity estate is empty, so a Tier A token is what creates the
+first person; on a running one it is the way back in when the identity provider
+is down or an administrator has locked themselves out. Each entry states its own
+`grants` — required and non-empty, because a credential's blast radius belongs
+where it is pinned — and its value must be at least 26 characters, checked on
+what the `${VAR}` resolves to.
+
+**`secrets.keys` is required once a port is set too.** The keyring signs every
+session cookie and derives the key that verifies each per-run token, so an API
+served without one accepts nobody.
 
 Binding a person to a credential crosses the tiers the other way: an
 `api.auth.tokens[].id` is named from the company document's
@@ -1031,7 +1106,6 @@ Inbound / notification integrations live under a single `integrations:` block �
 
 ```yaml
 integrations:
-  public_base_url: "${CREWLET_PUBLIC_URL}"   # where this deployment answers from OUTSIDE
   forge_app_id: "ari:cloud:ecosystem::app/your-forge-app-id"   # Jira Cloud's delivery path
 
   jira:
@@ -1085,7 +1159,7 @@ integrations:
 
 ```
 
-- **`public_base_url`** — where this deployment answers from **outside**, which is rarely what `api.host` and `api.port` bind. A bare origin (`scheme://host[:port]`, no path, query or fragment): every consumer appends its own rooted path to it, so leftovers here land in the middle of every link. It is the base each provisioner's `-public-url` defaults to, the address every registered webhook points at, and what [tool-skill](../concepts/tool-skills.md) prose reaches as the reserved variable `${crewlet_base_url}` — which is why a company may not declare a `skill_variables` entry of that name. Write it as a whole `${VAR}` and staging and production answer at their own addresses off one revision; it is stored verbatim and resolved wherever a link or a registration is built, so a process that cannot read it registers nothing rather than a webhook at the literal text of a variable.
+> **`public_base_url` moved out of this block**, to [`api.external_url`](#tier-a) in the operator's own Tier A file, and the key here is refused by name. One address now answers four questions that used to be answered separately: the session cookie's `Secure` flag and `__Host-` prefix, the origin every write is checked against, the OIDC redirect URI, and the base every webhook URL and pasted app manifest is built on. It had to move tiers rather than only change name — the cookie and the redirect are decided *before* a company document is loaded, and they are part of what authenticates the request that would go on to load one. It is also what [tool-skill](../concepts/tool-skills.md) prose reaches as the reserved variable `${crewlet_base_url}`, which is why a company may not declare a `skill_variables` entry of that name.
 - **`forge_app_id`** — verifies the Forge Invocation Token (FIT) on Cloud webhooks against Atlassian's JWKS; the `aud` claim must match. Required when Jira Cloud delivers through the Forge app.
 - **`jira`** — the Atlassian tracker, served end to end. Give `url` **or** `cloud_id`, never both — they are two ways to name one instance and `crewlet validate` refuses the ambiguity. `token` is the org read account (an issue's watchers are the one routing input a webhook never carries); `email` switches authentication to Cloud's Basic scheme; `site_url` is the human base for links when the instance is named by a cloud id. `webhook_secret` is **required for Data Center** and unused on Cloud, whose events arrive through the Forge app instead. Each seat's own credential lives in `mcp_env.atlassian` (or `mcp_env.jira`) and is what the engine resolves its account id from — see [Jira](../integrations/jira.md).
 - **`confluence`** — the knowledge base, and the **query-time search** behind every turn's "Relevant knowledge" block and the `search_knowledge` tool. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — the engine wires exactly one `knowledge.Searcher`, because two would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.scope`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).

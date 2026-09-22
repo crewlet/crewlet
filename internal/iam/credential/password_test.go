@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 )
 
@@ -40,9 +41,9 @@ func TestTheCostParametersAreTheOnesThatShip(t *testing.T) {
 		t.Errorf("the digest is %d bytes and the salt %d, want 32 and 16",
 			credential.KeyLen, credential.SaltLen)
 	}
-	if credential.MinPasswordChars != 12 {
+	if iam.MinPasswordChars != 12 {
 		t.Errorf("the password floor is %d characters, want 12",
-			credential.MinPasswordChars)
+			iam.MinPasswordChars)
 	}
 }
 

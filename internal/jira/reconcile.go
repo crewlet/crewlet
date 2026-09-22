@@ -569,7 +569,7 @@ func noIngressReason(opts Options, deployment Deployment) string {
 	if deployment == Cloud || webhookTarget(opts.WebhookBase) != "" {
 		return ""
 	}
-	return "integrations.public_base_url is unset, so this Jira instance has " +
+	return "api.external_url is unset, so this Jira instance has " +
 		"no address to deliver to and no issue or comment reaches this " +
 		"deployment"
 }
@@ -737,7 +737,7 @@ func webhookSecret(
 			"jira: integrations.jira.webhook_secret is %s rather than a value "+
 				"this run could resolve or a whole ${VAR} reference to mint "+
 				"one into — point it at a variable, set that variable, or "+
-				"clear both -public-url and integrations.public_base_url and "+
+				"clear both -public-url and api.external_url and "+
 				"register %s by hand",
 			provision.Shape(opts.Config.WebhookSecret), target)
 	}

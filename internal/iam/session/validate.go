@@ -90,7 +90,7 @@ type PersonRow struct {
 
 	// Login, Colleague and Grants are what a principal is composed from.
 	Login     string
-	Colleague string
+	Colleague iam.Colleague
 	Grants    []iam.Grant
 
 	// Seat is the seat handle this person is bound to, and SeatAt the

@@ -266,7 +266,7 @@ func TestACredentialIsStillTheFirstQuestionDuringADrain(t *testing.T) {
 	// route would not.
 	a := drainingApp(t, true)
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/config", strings.NewReader("{}")))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPut, "/config", strings.NewReader("{}"))))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("an unauthenticated write answered %d during a drain, want 401", rec.Code)
 	}

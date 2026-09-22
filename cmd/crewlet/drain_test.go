@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -59,7 +60,7 @@ const (
 	// drainProbeToken is the operator credential the child's Tier A
 	// accepts, so a write is refused for draining rather than for having
 	// no token.
-	drainProbeToken = "drain-probe-token"
+	drainProbeToken = "drain-probe-token-long-enough"
 
 	// drainProbeSecret is a well-formed Standard-Webhooks key, the only
 	// shape the GitLab route verifies with.
@@ -157,12 +158,20 @@ secrets:
 api:
   host: 127.0.0.1
   port: %d
+  external_url: "http://127.0.0.1:%d"
   auth:
+    backend: none
+    max_grants: [state:read, transcripts:read, config:read, secrets:read,
+                 work:write, knowledge:write, config:write, secrets:write,
+                 fleet:operate, sandbox:run]
     tokens:
       - id: founder
         token: %s
+        grants: [state:read, transcripts:read, config:read, secrets:read,
+                 work:write, knowledge:write, config:write, secrets:write,
+                 fleet:operate, sandbox:run]
 `, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"),
-		testKeyMaterial(t), port, drainProbeToken))
+		testKeyMaterial(t), port, port, drainProbeToken))
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
   llm:
@@ -317,8 +326,9 @@ turn_engine:
 	if status, code := write(t, client, base+"/config"); status != http.StatusServiceUnavailable || code != "draining" {
 		t.Errorf("PUT /config answered %d %q mid-drain, want 503 draining", status, code)
 	}
-	// And a read is still a read.
-	if status, _ := probe(client, base+"/agents"); status != http.StatusOK {
+	// And a read is still a read — presenting the credential every
+	// guarded route now needs.
+	if status, _ := probeAs(client, base+"/agents", drainProbeToken); status != http.StatusOK {
 		t.Errorf("GET /agents answered %d mid-drain, want 200", status)
 	}
 	if !alive() {
@@ -493,6 +503,26 @@ const refused = -1
 //
 // The timeout is well past anything a request here takes, because one that
 // timed out on a loaded machine must not read as a listener that went away.
+// probeAs is [probe] presenting a bearer token, for a guarded route.
+func probeAs(client *http.Client, url, token string) (int, map[string]any) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return 0, nil
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := client.Do(req)
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return refused, nil
+	}
+	if err != nil {
+		return 0, nil
+	}
+	defer func() { _ = res.Body.Close() }()
+	var body map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&body)
+	return res.StatusCode, body
+}
+
 func drainProbeClient(t *testing.T) *http.Client {
 	t.Helper()
 	client := httpxtest.Pool(t)
@@ -502,6 +532,9 @@ func drainProbeClient(t *testing.T) *http.Client {
 
 // probe GETs a URL once and returns its status and decoded body. Zero is a
 // request that got no answer, and [refused] one whose connection was refused.
+//
+// NO CREDENTIAL, because every path it is pointed at is an exempt one — the
+// probes and the dashboard shell. A guarded route needs [probeAs].
 func probe(client *http.Client, url string) (int, map[string]any) {
 	res, err := client.Get(url) //nolint:noctx // a probe against the child's own listener
 	if errors.Is(err, syscall.ECONNREFUSED) {

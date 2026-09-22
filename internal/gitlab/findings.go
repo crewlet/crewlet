@@ -68,7 +68,7 @@ func (r *Result) Findings() []integration.Finding {
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
-			Subject: "integrations.public_base_url",
+			Subject: "api.external_url",
 			Detail:  r.NoIngress,
 		})
 	}

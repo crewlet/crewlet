@@ -111,18 +111,26 @@ func TestTheEnvironmentTokenWinsOverTierA(t *testing.T) {
 	}
 }
 
-// AUTH DISABLED NEEDS NO TOKEN. Refusing here would make the local-dev escape
-// hatch the one posture this command cannot talk to.
-func TestADisabledGuardNeedsNoToken(t *testing.T) {
+// A NODE THAT LISTS NO CREDENTIAL IS REFUSED HERE, naming the fix.
+//
+// This used to be the opposite assertion: `api.auth.disabled` made an empty
+// token legitimate, so refusing would have made the local-development escape
+// hatch the one posture this command could not talk to. That field is gone —
+// every guarded route needs a credential on every posture — so an empty token
+// is now always the 401 the operator would otherwise have to diagnose from the
+// far end.
+func TestANodeWithNoTokenIsRefusedNamingTheFix(t *testing.T) {
 	t.Parallel()
 	boot := bootWithAPI(t, "127.0.0.1", 8080, "")
-	boot.API.Auth.Disabled = true
-	client, err := newSecretsClient(boot, "")
-	if err != nil {
-		t.Fatalf("a node with auth disabled was refused: %v", err)
+	_, err := newSecretsClient(boot, "")
+	if err == nil {
+		t.Fatal("a node listing no api.auth.tokens was accepted, so the " +
+			"command will send no credential and read a 401 from the far end")
 	}
-	if client.token != "" {
-		t.Errorf("token = %q, want none", client.token)
+	for _, want := range []string{"api.auth.tokens", apiTokenEnv} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %s: %v", want, err)
+		}
 	}
 }
 

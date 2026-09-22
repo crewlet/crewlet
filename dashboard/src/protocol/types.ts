@@ -2953,24 +2953,21 @@ export interface SetupRun {
 
 export interface SetupListing {
   tools: SetupToolState[];
-  public_base_url: {
-    /** The RESOLVED address, empty when the reference resolves to nothing. */
+  /**
+   * Where a browser and a third-party app reach this deployment.
+   *
+   * ONE FIELD WHERE THERE WERE FOUR. While this was `integrations.public_base_url`
+   * — a Tier B pointer a node resolved per epoch — the screen also needed
+   * `present`, `resolved` and the variable's `reference`, because "configured
+   * and resolving to nothing" was a state a banner had to name. It is
+   * `api.external_url` now: Tier A, required once the API is served, and
+   * resolved before the file is decoded. A node serving this screen at all
+   * has an address, so the three fields that described its absence described
+   * a state that can no longer occur.
+   */
+  external_url: {
     value: string;
-    present: boolean;
-    /**
-     * Whether the configured value resolves to something. THREE-VALUED:
-     * `null` means this node cannot say, which is not the same as `false`.
-     * `present` alone is what a banner read once, so a `${VAR}` nobody
-     * exported rendered as "reach this engine at" and then nothing.
-     */
-    resolved?: boolean | null;
     config_path: string;
-    /**
-     * The variable the setting points at, empty for a literal. What makes
-     * an unresolved address actionable: "set it" is advice, "export
-     * PUBLIC_BASE_URL" is an instruction.
-     */
-    reference?: string;
   };
 }
 

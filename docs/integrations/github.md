@@ -272,7 +272,7 @@ Together the card is normally correct by the time you switch back to it. If it i
 
 ### What has to be in place first
 
-- **`integrations.public_base_url`.** Three addresses are baked into an app at
+- **`api.external_url`.** Three addresses are baked into an app at
   creation: where its deliveries go, where the browser returns after the
   creation, and where it returns after the install. Only a person at GitHub can
   change them afterwards, so the engine refuses to begin without a public base
@@ -296,9 +296,9 @@ Together the card is normally correct by the time you switch back to it. If it i
 | `name` | The company name and the seat's role name, joined and cut to 34 runes |
 | `url` | `https://crewlet.ai` |
 | `public` | `false`. The app is the company's own |
-| `hook_attributes.url` | `<public_base_url>/webhooks/github/<handle>` |
-| `redirect_url` | `<public_base_url>/webhooks/github-app` |
-| `setup_url` | `<public_base_url>/webhooks/github-app?installed=<handle>` |
+| `hook_attributes.url` | `<external_url>/webhooks/github/<handle>` |
+| `redirect_url` | `<external_url>/webhooks/github-app` |
+| `setup_url` | `<external_url>/webhooks/github-app?installed=<handle>` |
 | `default_events` | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment` |
 | `default_permissions` | The seat's tier, below |
 

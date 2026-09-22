@@ -192,10 +192,53 @@ api:
   # covers that shape.  In a SPLIT deployment the ingress node serves this
   # and the others set port 0 so only one process binds it.
   port: 8000
+
+  # REQUIRED once a port is set.  Where a BROWSER and a third-party app
+  # reach this deployment, which is not where the process binds: its
+  # scheme decides the session cookie's Secure flag, its host is the
+  # origin every write is checked against, and it is the base every
+  # webhook URL is built on.  Behind a proxy this is the public address.
+  external_url: "http://localhost:8000"
+
   auth:
+    # No people sign in to this one — the token below is the only
+    # credential.  `local` adds passwords and a second factor; `oidc`
+    # hands sign-in to an identity provider.
+    backend: none
+
+    # THE CEILING on what a directory record or an IdP group mapping may
+    # ever confer.  Required once a port is set, and deliberately without
+    # a default.
+    max_grants:
+      - state:read
+      - transcripts:read
+      - config:read
+      - secrets:read
+      - work:write
+      - knowledge:write
+      - config:write
+      - secrets:write
+      - fleet:operate
+      - sandbox:run
+
     tokens:
+      # At least one is required once a port is set: a fresh deployment's
+      # identity estate is empty, so this is what creates the first
+      # person.  26 characters at minimum, on the RESOLVED value.
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
+        grants:
+          - state:read
+          - transcripts:read
+          - config:read
+          - secrets:read
+          - work:write
+          - knowledge:write
+          - config:write
+          - secrets:write
+          - fleet:operate
+          - sandbox:run
+        colleague: none
 
 # ── The keyring (REQUIRED) ────────────────────────────────────────────
 #

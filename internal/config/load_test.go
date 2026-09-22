@@ -119,7 +119,8 @@ func TestEmptyBootstrapIsTheDefaults(t *testing.T) {
 	}
 	want := DefaultBootstrap()
 	if cfg.Store.Path != want.Store.Path || cfg.Stream.Type != want.Stream.Type ||
-		cfg.Coordination.Type != want.Coordination.Type || !cfg.API.Auth.AllowAnonymousRead {
+		cfg.Coordination.Type != want.Coordination.Type ||
+		cfg.API.Host != want.API.Host || cfg.API.Serving() {
 		t.Fatalf("empty bootstrap did not take the defaults: %+v", cfg)
 	}
 }

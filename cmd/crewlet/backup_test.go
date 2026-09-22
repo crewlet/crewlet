@@ -68,7 +68,7 @@ func TestBackupSendsTheDestinationAndReportsWhatWasCaptured(t *testing.T) {
 	if node.dir != "/var/backups/tonight" {
 		t.Errorf("the node was asked for %q", node.dir)
 	}
-	if node.token != "Bearer t0ken" {
+	if node.token != "Bearer "+cliFixtureToken {
 		t.Errorf("the configured token did not reach the node: %q", node.token)
 	}
 	// Both estates named, so an operator can see what they actually got

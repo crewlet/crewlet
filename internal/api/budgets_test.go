@@ -33,11 +33,9 @@ func post(t *testing.T, a *api.App, path, token string) (int, map[string]any) {
 	return res.StatusCode, body
 }
 
-// guarded is a bootstrap with one token and anonymous reads ON — the default
-// posture, and the one that makes the write/read distinction load-bearing.
+// guarded is a bootstrap carrying one credential.
 func guarded() *config.Bootstrap {
 	b := config.DefaultBootstrap()
-	b.API.Auth.AllowAnonymousRead = true
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "t0ken"}}
 	return &b
 }
