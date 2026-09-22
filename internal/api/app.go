@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
@@ -137,6 +138,18 @@ type routeMounter interface {
 	Routes(mux *http.ServeMux)
 }
 
+// chartMounter is the /chart surface's own mount, and it RETURNS AN ERROR
+// where [routeMounter] does not.
+//
+// The difference is real rather than stylistic: every chart route carries an
+// authority policy stated where it is mounted, and a route mounted with none
+// — or naming a verb the authority table has no rule for — is a hole that
+// ships looking correct. Refusing at mount is what turns it into a boot
+// failure, and the boot is the one moment every mistake can be named at once.
+type chartMounter interface {
+	Routes(mux authz.Mux) error
+}
+
 // Options configure the app.
 //
 // # What is required, and why a nil is refused rather than served around
@@ -201,6 +214,16 @@ type Options struct {
 	// an integration still needs and writing it, half into the sealed store
 	// and half into the company document.
 	Setup routeMounter
+
+	// Chart serves /chart and /company/export, normally a
+	// chartapi.Service: the company's org chart, which is a state-log
+	// domain of its own rather than part of the stored revision /config
+	// writes.
+	//
+	// REQUIRED, like Config: a node that served the settings and not the
+	// chart would answer `chart_not_writable_here` on one surface and 404
+	// on the one that refusal points at, which is worse than either alone.
+	Chart chartMounter
 
 	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
 	// credential store.
@@ -440,6 +463,13 @@ func New(opts Options) (*App, error) {
 	// reads included — the list of which credentials a company has NOT
 	// configured is worth as much to an attacker as the ones it has.
 	opts.Setup.Routes(mux)
+	// THE ORG CHART, and the only mount here that can fail: its routes
+	// carry their authority with their registration, so a policy that is
+	// missing or names a verb the table has no rule for is refused now
+	// rather than serving an ungated route for the life of the process.
+	if err := opts.Chart.Routes(mux); err != nil {
+		return nil, fmt.Errorf("api: mount the chart surface: %w", err)
+	}
 	// THE BROWSER POSTURE WRAPS THE CREDENTIAL ONE, because a preflight
 	// carries no credential: the browser sends it itself, before it will
 	// attach an Authorization header to anything. Inside the guard every
@@ -479,6 +509,7 @@ func (o Options) missing() error {
 		{"Config", o.Config == nil},
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
+		{"Chart", o.Chart == nil},
 		{"Budgets", o.Budgets == nil},
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},

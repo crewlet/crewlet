@@ -216,7 +216,7 @@ var rules = map[Action]rule{
 	// writable by somebody other than whoever holds the deployment: a lead
 	// renaming their own team, restating its purpose or correcting a seat's
 	// goal is not a configuration change.
-	ActionChartContent: {class: ClassContainer},
+	ActionChartContent: {class: ClassChartObject},
 	// STRUCTURE IS THE COMPANY'S. The domain serialises every structural
 	// record on ONE subject for the whole chart, deliberately, because two
 	// reparents through a common ancestor can each be locally valid and

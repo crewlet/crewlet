@@ -142,6 +142,39 @@ func leadsProjectInChart(o *org.Organization, actor, project string) bool {
 	return false
 }
 
+// LeadsUnit reports whether actor leads the unit key names, directly or from
+// anywhere above it.
+//
+// THE WHOLE CHAIN, itself included, which is the same reading [Leads] takes of
+// a seat's unit chain: a division lead leads the teams inside their division,
+// and the inheritance [org.Organization.EffectiveLead] applies within one unit
+// is the same relation one level up. A check that asked the unit alone would
+// refuse a division lead editing a team they are plainly responsible for.
+//
+// A KEY NAMING NO UNIT ANSWERS FALSE rather than erroring: the chart was read
+// and holds no such unit, which is a fact about the company rather than about
+// this node. Only an unreadable chart is unknown.
+func (c ChartAuthority) LeadsUnit(_ context.Context, actor, unitKey string) (bool, error) {
+	o, err := c.org()
+	if err != nil {
+		return false, err
+	}
+	return leadsUnitInChart(o, actor, unitKey), nil
+}
+
+// leadsUnitInChart is the walk, split out for the reason [leadsInChart] is.
+func leadsUnitInChart(o *org.Organization, actor, unitKey string) bool {
+	if actor == "" || unitKey == "" {
+		return false
+	}
+	for _, unit := range o.UnitChainTo(unitKey) {
+		if lead := o.EffectiveLead(unit); lead != nil && lead.Handle() == actor {
+			return true
+		}
+	}
+	return false
+}
+
 // org is the running company's chart, or why this node cannot answer.
 //
 // ONE PLACE, because both methods need it and the whole point of this type is

@@ -543,6 +543,72 @@ func readHistory(ctx context.Context, tx *sql.Tx, kind ObjectKind, id string) (
 	return out, nil
 }
 
+// History is the company-wide reorganisation feed, newest first.
+//
+// # Why it is a read of its own and not a walk of the object histories
+//
+// What somebody asks here is "what has been happening to this company" — who
+// moved, who was hired, which team was dissolved — and that question is about
+// the ORDER changes landed in across every object. Assembling it from N
+// per-object reads would merge N ordered lists in a surface, which is both
+// the wrong place for the merge and a read whose cost grows with the size of
+// the chart rather than with the size of the answer.
+//
+// The index this drives (`chart_history_created_idx`) shipped with the
+// domain's first migration, naming this feed in its own comment, and had no
+// reader at all until this method: a second index on a table is not free, and
+// one nothing drives is a cost with no benefit that reads as coverage.
+//
+// QUIET ENTRIES ARE INCLUDED. A quiet change is one that woke nobody — a
+// config import applying a revision, a duty tidying a tombstone — and that is
+// exactly what somebody reading this feed is trying to account for: a
+// structure that changed with no notification is the change hardest to
+// explain afterwards.
+func (r *Reader) History(ctx context.Context, limit int,
+	fresh statelog.Freshness) ([]Change, Answer, error) {
+
+	if fresh.Level == "" {
+		return nil, Answer{}, errors.New("chart: this read names no level")
+	}
+	if limit <= 0 || limit > HistoryLimit {
+		limit = HistoryLimit
+	}
+	var out []Change
+	// THE WHOLE-CHART SCOPE, for [Reader.Read]'s reason: a feed across every
+	// object is a read every deferred record concerns, so "is this complete"
+	// has one correct answer.
+	served, err := r.log.Read(ctx, fresh.Query(ReadScope("", ""), false),
+		func(tx *sql.Tx) error {
+			rows, err := tx.QueryContext(ctx, `
+				SELECT document FROM chart_history
+				ORDER BY created_at DESC, id DESC LIMIT ?`, limit)
+			if err != nil {
+				return fmt.Errorf("chart: read the company's history: %w", err)
+			}
+			defer func() { _ = rows.Close() }()
+			out = nil
+			for rows.Next() {
+				var document []byte
+				if err := rows.Scan(&document); err != nil {
+					return fmt.Errorf("chart: read a history row: %w", err)
+				}
+				change, err := DecodeChange(document)
+				if err != nil {
+					return err
+				}
+				out = append(out, change)
+			}
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf("chart: read the company's history: %w", err)
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, Answer{}, err
+	}
+	return out, answerFrom(served), nil
+}
+
 // --- the import ledger ---------------------------------------------------------- //
 
 // Import is one config revision's landing on this log.
@@ -597,6 +663,47 @@ func (r *Reader) Imports(ctx context.Context, limit int,
 		return nil, Answer{}, err
 	}
 	return out, answerFrom(served), nil
+}
+
+// Import is one revision's own ledger row, and whether the chart has ever
+// applied it.
+//
+// KEYED RATHER THAN FILTERED OUT OF [Reader.Imports], because the ledger is
+// keyed on the revision and the listing is bounded: a revision older than the
+// listing's limit would come back "never imported", which is the one answer
+// this question must never give wrongly — it is what the control plane's
+// re-activation gesture turns on.
+func (r *Reader) Import(ctx context.Context, revision string,
+	fresh statelog.Freshness) (Import, bool, Answer, error) {
+
+	if fresh.Level == "" {
+		return Import{}, false, Answer{}, errors.New("chart: this read names no level")
+	}
+	var out Import
+	var found bool
+	served, err := r.log.Read(ctx, fresh.Query(ReadScope("", ""), false),
+		func(tx *sql.Tx) error {
+			var packed int64
+			err := tx.QueryRowContext(ctx, `
+				SELECT revision, position, at, by, objects, record_id
+				FROM chart_import_ledger WHERE revision = ?`, revision).
+				Scan(&out.Revision, &packed, &out.At, &out.By, &out.Objects,
+					&out.RecordID)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				found = false
+				return nil
+			case err != nil:
+				return fmt.Errorf("chart: read the import of %s: %w", revision, err)
+			}
+			out.Position = statelog.Unpack(Domain{}.Stream().Name, packed)
+			found = true
+			return nil
+		})
+	if err != nil {
+		return Import{}, false, Answer{}, err
+	}
+	return out, found, answerFrom(served), nil
 }
 
 // Removed reports whether an address the chart no longer names was removed,

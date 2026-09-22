@@ -59,13 +59,26 @@ var log = logging.Get("api.auth")
 //     which is exempt wholesale for the sandbox bridge, so a box holding no
 //     API token can reach its seat's tools: mounting a writable company
 //     surface there would have put it behind no credential at all.
+//   - /chart: the company's org chart. Writing it hires, moves and renames
+//     people, and one half of every object it serves — a seat's model chain,
+//     its credentials, its sandbox cell, its mcp_env — is the company
+//     configuration under another name. The READ is guarded for /config's
+//     own reason: the structure alone is the shape of the company, and the
+//     route that serves the other half is the one an attacker wants most.
+//     Each route is decided a second time against internal/authz, which is
+//     what says whether THIS caller may do THAT; this list is only what says
+//     a caller must be somebody.
+//   - /company: the authored document, whole and unstripped, for a round
+//     trip through a file. It is /chart's other half by a different name.
 //
 // In the order the slice declares, and A LIST rather than one constant,
 // because the alternative was a second const somewhere else and a second
 // `HasPrefix` beside it — and the two would have drifted the day a third
 // surface was added, each staying self-consistent while one of them stopped
 // being consulted.
-var GuardedPrefixes = []string{"/config", "/secrets", "/setup", "/operator"}
+var GuardedPrefixes = []string{
+	"/config", "/secrets", "/setup", "/operator", "/chart", "/company",
+}
 
 // AlwaysGuarded reports whether a path is on one of those surfaces.
 func AlwaysGuarded(path string) bool {

@@ -68,6 +68,23 @@ const (
 	// or the admin path.
 	ClassContainer Class = "container"
 
+	// ClassChartObject — one object in the org chart's own public half: a
+	// unit's name and purpose, a seat's goal and responsibilities.
+	// Whoever leads that object, or the admin path.
+	//
+	// ITS OWN CLASS RATHER THAN [ClassContainer], because the chart holds
+	// THREE lead relations and they are three questions: who leads a seat,
+	// who leads a unit, and who leads the unit that owns a PROJECT. A
+	// project is a tracker key a unit may declare, so asking the project
+	// relation with a unit key matches only a company whose unit files its
+	// work under a project of the same name — and answers false everywhere
+	// else, refusing the lead of that very unit with no error to notice.
+	//
+	// It reads the object's KIND to pick the relation, which is why a
+	// chart route states one: a unit names itself in [Object.Container]
+	// and a seat in [Object.Owner].
+	ClassChartObject Class = "chart_object"
+
 	// ClassDestructive — removing and restoring a task, trashing and
 	// restoring a page. The CONTAINER's lead, or the admin path: a
 	// colleague may file work in a project and may not take it out again.
@@ -94,10 +111,11 @@ const (
 	ClassOperator Class = "operator"
 )
 
-// Classes are the nine, in declaration order.
+// Classes are the eleven, in declaration order.
 var Classes = []Class{
 	ClassRead, ClassSelf, ClassColleagueWrite, ClassOwnRecord, ClassOwnOrLead,
-	ClassContainer, ClassDestructive, ClassPurge, ClassAuthored, ClassOperator,
+	ClassContainer, ClassChartObject, ClassDestructive, ClassPurge,
+	ClassAuthored, ClassOperator,
 }
 
 // Decide answers whether p may do a to o.
@@ -185,6 +203,32 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 		}
 		return leadsProject(ctx, chart, actorOf(p), o.Container)
 
+	case ClassChartObject:
+		if p.Can(adminGrant) {
+			return Decision{Allowed: true, Reason: ReasonGrant}
+		}
+		// THE KIND PICKS THE RELATION. See the class's own doc for why
+		// one relation cannot serve for all three, and what asking the
+		// wrong one costs.
+		switch o.Kind {
+		case KindUnit:
+			if o.Container == "" {
+				return Decision{Reason: ReasonUnnamed}
+			}
+			return leadsUnit(ctx, chart, actorOf(p), o.Container)
+		case KindPerson:
+			if o.Owner == "" {
+				return Decision{Reason: ReasonUnnamed}
+			}
+			// NO SELF PATH, which is what makes this different from
+			// [ClassOwnOrLead]: a seat rewriting its own goal, its
+			// backstory and its responsibilities is a model editing
+			// the prompt it is about to run under, and nobody asked
+			// for that. Its LEAD edits it.
+			return leads(ctx, chart, actorOf(p), o.Owner, ReasonNotLead)
+		}
+		return Decision{Reason: ReasonUnnamed}
+
 	case ClassPurge:
 		// THE CAPABILITY IS NOT ENOUGH ON ITS OWN, and the order says
 		// which refusal a reader gets: an agent holding the grant is
@@ -226,6 +270,29 @@ func granted(p iam.Principal, g iam.Grant) Decision {
 		return Decision{Allowed: true, Reason: ReasonGrant}
 	}
 	return Decision{Reason: ReasonNoGrant}
+}
+
+// leadsUnit asks the chart whether the actor leads one unit.
+//
+// THE SAME THREE-VALUED SHAPE [leadsProject] has, and written beside it
+// rather than folded into it with a flag: the two ask different questions of
+// the chart, and a parameter choosing between them is a call site that can
+// pass the wrong one.
+func leadsUnit(ctx context.Context, chart Chart, actor, unit string) Decision {
+	if actor == "" {
+		return Decision{Reason: ReasonNotLead}
+	}
+	if chart == nil {
+		return Decision{Reason: ReasonNotLead, Err: ErrNoChart}
+	}
+	leads, err := chart.LeadsUnit(ctx, actor, unit)
+	switch {
+	case err != nil:
+		return Decision{Reason: ReasonNotLead, Err: err}
+	case leads:
+		return Decision{Allowed: true, Reason: ReasonLead}
+	}
+	return Decision{Reason: ReasonNotLead}
 }
 
 // leads asks the chart, and turns a chart that could not answer into UNKNOWN.

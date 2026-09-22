@@ -323,6 +323,45 @@ retried pointlessly and then lost.
 
 ---
 
+## The continuous report: what nothing can refuse at a write
+
+A running company is **two things with two lifetimes**: a settings revision,
+and an [org chart](chart-domain.md) that is a state-log domain of its own. Each
+is validated on its own terms — the chart domain refuses a record that breaks
+its rules, `crewlet validate` refuses a document that breaks the settings' —
+and **neither validates the pair**.
+
+That pair is where the expensive failures live, and every one of them is
+reachable through two writes that were each correct when they were made:
+
+| What is wrong | What it costs |
+|---|---|
+| a seat's model chain names a provider the settings no longer declare | the seat resolves to **no model at all**, and learns it the next time it takes a turn |
+| a seat's `workers:` narrowing names a template that is gone | the grant is a filter rather than a definition, so it narrows the seat to fewer workers than the list suggests |
+| a seat's code gate is open on a company with no sandbox backend | a coding run cannot start, and the seat learns it as a tool error inside a turn |
+| a `manages:` entry, a unit's lead or a seat's unit resolves to nothing | the edge manages nobody, or the seat sits at the org root above every team |
+| a human seat carries no contact identity | nothing addressed to it reaches anybody |
+
+Refusing the second write is not an option: a revision that removes a provider
+is a perfectly valid revision, and refusing it would refuse an operator's edit
+over a seat they have never heard of. So the engine **reports** rather than
+refuses, continuously, over what is actually running.
+
+One evaluation feeds every surface that renders it — `GET /chart/check` in
+full, and `/health`'s `consistency` block as counts — so a gauge, a probe and a
+screen can never disagree about whether something is wrong. It deliberately
+does **not** move `/health`'s `status`: a company referencing a provider
+somebody deleted is a company with a problem rather than a node with one, and
+taking a node out of rotation over a configuration typo would turn one broken
+seat into an outage.
+
+`evaluated: false` is the answer from a node that holds no chart view or has
+applied no settings epoch, and it is the field to read first. Zero findings
+from a node that read nothing is the most misleading answer the surface could
+give.
+
+---
+
 ## Live Propagation
 
 When a new revision is activated (via `PUT /config`, `PATCH /config`, a per-entity write, a revert, or `crewlet config import`), the revision is stored and the fleet's **activation pointer** is then moved to it; the pointer's own KV sequence *is* the epoch, so the append and the flip cannot come apart. Every node polls that pointer and converges onto it; a broadcast `crewlet.config.revision_activated` event wakes the poll early but carries no work.

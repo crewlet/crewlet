@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/org"
@@ -76,6 +77,14 @@ func (f *fakeRuntime) ShuttingDown() bool { return f.state.ShuttingDown }
 type noRoutes struct{}
 
 func (noRoutes) Routes(*http.ServeMux) {}
+
+// noChartRoutes is the chart surface mounting nothing. Its Routes RETURNS AN
+// ERROR where noRoutes' does not, because the real one refuses at mount: a
+// chart route carries its authority with its registration, and one mounted
+// with none is a hole that ships looking correct.
+type noChartRoutes struct{}
+
+func (noChartRoutes) Routes(authz.Mux) error { return nil }
 
 // noAppFlow is a GitHub App completer that completes nothing.
 type noAppFlow struct{}
@@ -146,6 +155,9 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	}
 	if opts.Setup == nil {
 		opts.Setup = noRoutes{}
+	}
+	if opts.Chart == nil {
+		opts.Chart = noChartRoutes{}
 	}
 	if opts.Budgets == nil {
 		opts.Budgets = fleet

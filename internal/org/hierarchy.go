@@ -105,6 +105,54 @@ func (o *Organization) UnitChainFor(r *Role) []*Unit {
 	return nil
 }
 
+// UnitChainTo returns the units from the outermost down to the one key names,
+// INCLUSIVE — [division, department, team] for a team's own key — or nothing
+// when no unit answers to it.
+//
+// # Why it exists beside [Organization.UnitChainFor]
+//
+// That one is keyed on a SEAT and this on a unit, and the two answer
+// different questions. "Which scopes does this person sit inside" is what
+// onboarding walks; "which units contain this team, itself included" is what
+// an authority check over a unit asks, and a caller with only a key has no
+// seat to ask the first with.
+//
+// THE KEY RESOLVES THROUGH A RETIRED ADDRESS, like every other unit lookup
+// here: a reference somebody wrote before a rename names the same team, and a
+// chain that answered nothing for it would refuse a lead their own unit
+// because somebody typed the name it had last quarter.
+func (o *Organization) UnitChainTo(key string) []*Unit {
+	target := o.Unit(key)
+	if target == nil {
+		return nil
+	}
+	for _, u := range o.Units {
+		if chain := buildUnitChainTo(u, target); chain != nil {
+			slices.Reverse(chain)
+			return chain
+		}
+	}
+	return nil
+}
+
+// buildUnitChainTo collects the units from target back up to u, innermost
+// first. Reversing once at the end beats prepending at every level.
+//
+// POINTER IDENTITY rather than a key comparison, because the caller has
+// already resolved the key — including through a retired one — and comparing
+// keys again here would undo that resolution at the last step.
+func buildUnitChainTo(u, target *Unit) []*Unit {
+	if u == target {
+		return []*Unit{u}
+	}
+	for _, c := range u.Children {
+		if chain := buildUnitChainTo(c, target); chain != nil {
+			return append(chain, u)
+		}
+	}
+	return nil
+}
+
 // buildUnitChain collects the units from the one holding r back up to u,
 // innermost first. Reversing once at the end beats prepending at every level.
 func buildUnitChain(u *Unit, r *Role) []*Unit {

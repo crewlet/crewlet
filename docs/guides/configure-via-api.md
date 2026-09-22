@@ -1,6 +1,8 @@
-# Configure Nimbus via the `/config/*` API
+# Configure Nimbus over the API
 
-End-to-end recipe for bootstrapping the [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) company against a running engine — first the one-shot `PUT /config` (recommended), then per-entity edits you'd run afterwards to evolve the company live.
+End-to-end recipe for bootstrapping the [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) company against a running engine — first the one-shot `PUT /config` (recommended), then the per-entity settings edits and the [org chart's own routes](#evolving-the-org-chart) you'd run afterwards to evolve the company live.
+
+A running company is **two things**: a settings revision (`/config`) and an org chart (`/chart`). They have different lifetimes, different write paths and different authority, and this guide covers both.
 
 Every request below assumes:
 
@@ -27,8 +29,13 @@ See the [Configuration concept doc](../concepts/configuration.md) for the two-ti
 > with `400 chart_not_writable_here`, and so is a write to
 > `/config/roles/{handle}` or `/config/units/{key}`. Both stay **readable**.
 >
-> A node's first chart is seeded from the company file at boot — `crewlet run
-> -company company.yaml`, which seeds only while the chart is empty.
+> The chart has its own routes: `GET`/`PATCH /chart/units/{key}` and
+> `/chart/seats/{handle}` for content, `POST /chart/batch` for structure, and
+> `POST /chart/import` for a whole revision's authored placement. See
+> [Evolving the org chart](#evolving-the-org-chart) below and the
+> [`/chart/*` reference](../reference/api-endpoints.md#chart--the-org-chart-auth-gated).
+> A node's first chart is also seeded from the company file at boot — `crewlet
+> run -company company.yaml`, which seeds only while the chart is empty.
 >
 > It is refused rather than ignored on purpose. A write that quietly kept half
 > of what you sent would answer `201`, activate, and leave the new seat
@@ -153,7 +160,8 @@ PUT /config/mcp-servers/{name}
 `roles` and `units` are still **readable** at `/config/roles/{handle}` and
 `/config/units/{key}` — a revision written before the chart's split still
 carries both inside it, and you have to be able to see one you are repairing.
-Writing either is `400 chart_not_writable_here`.
+There is no write route for either: the chart's own surface is
+[below](#evolving-the-org-chart).
 
 Each is addressed by the thing the *document* resolves it by, never by its
 display name: a provider by its key under `providers.llm`, a server by its
@@ -247,6 +255,86 @@ hurry. A node with no active revision answers `409 no_active_revision` — there
 is nothing to splice into.
 
 ---
+
+## Evolving the org chart
+
+The chart is a domain of its own, so it has its own verbs. What decides them is
+**which half of an object you are writing**, and the payload picks the
+question: the public half is whoever leads that object, and anything under
+`runtime` — a seat's model chain, its credentials, its sandbox cell, its
+`mcp_env` — is the company's own `config:write` grant, because a stdio MCP
+server is `exec.Command` with the config's command.
+
+### Edit one seat's goal
+
+Read it, edit it, send it back. Reads are **stripped by default**: ask for the
+runtime half with `?runtime=true`, and you get it only if you also hold
+`config:read`.
+
+```bash
+curl -s "$CREWLET_URL/chart/seats/sre" -H "$AUTH" | jq .seat
+
+curl -X PATCH $CREWLET_URL/chart/seats/sre \
+  -H "$AUTH" -H "Content-Type: application/json" \
+  -d '{"kind":"agent","unit":"engineering","name":"SRE",
+       "goal":"keep the platform boring"}'
+```
+
+A content write is **full post-state**, like the record it becomes: a field you
+leave out is a field you set to empty. That is also why omitting `runtime` is
+itself a privileged write — it clears the half you did not send.
+
+### Hire, move, dissolve
+
+Structure goes through one batch, and **one batch is one record**. A caller
+that means to move three seats sends three operations in one request:
+
+```bash
+curl -X POST $CREWLET_URL/chart/batch \
+  -H "$AUTH" -H "Content-Type: application/json" \
+  -d '{"operations":[
+        {"kind":"create_unit","object":{"kind":"unit","id":"platform"},"lead":"sre"},
+        {"kind":"move","object":{"kind":"seat","id":"sre"},"parent":"platform"}
+      ]}'
+```
+
+Removals go in a batch of their own and carry a `reason`, which rides into the
+tombstone so somebody asking where their team went reads "merged into
+infrastructure" rather than an absence.
+
+### Rename
+
+```bash
+curl -X POST $CREWLET_URL/chart/units/engineering/rename \
+  -H "$AUTH" -d '{"to":"platform"}'
+```
+
+The former address goes on resolving: a key is an ADDRESS and the row is the
+identity, so a `manages:` entry somebody wrote last year still finds what it
+named. Reads carry `former_keys` / `former_handles` so a client can say why a
+stale reference still works.
+
+### What a `200` means, and what a `202` does not
+
+`200` means the record is durable **and this node has applied it**, so your next
+read here sees it. `202` means durable but not yet applied here — read at the
+position in the body. `503` with an `op_id` means this node cannot say what
+happened: retry with `Idempotency-Key: <that op_id>`, never a fresh one, or a
+change that did land is written twice.
+
+### Check the two halves agree
+
+Nothing refuses a settings edit that strands a seat, because the two halves are
+written by different people at different times. `GET /chart/check` is the
+report over the pair:
+
+```bash
+curl -s "$CREWLET_URL/chart/check" -H "$AUTH" | jq '.report.findings'
+```
+
+The same evaluation is summarised on `/health` under `consistency`. Check
+`evaluated` before the count — `findings: 0` from a node holding no chart is
+not a clean bill.
 
 ## Read paths
 

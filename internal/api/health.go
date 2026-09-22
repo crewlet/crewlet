@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/store"
@@ -88,6 +89,20 @@ type Health struct {
 	// restart rather than only afterwards in the exit code.
 	StallLagSeconds *float64 `json:"stall_lag_seconds,omitempty"`
 
+	// Consistency is the continuous report over the two halves of a
+	// running company: the chart this node holds and the settings epoch it
+	// has applied. See internal/api/chartapi's report.go for what it
+	// evaluates and why nothing can refuse these at a write.
+	//
+	// IT DOES NOT MOVE Status, and that is a decision rather than an
+	// omission. Status answers "should this process be serving", which a
+	// load balancer reads; a company referencing a provider somebody
+	// deleted is a company with a problem and not a node with one, and
+	// taking a node out of rotation over a configuration typo would turn
+	// one broken seat into an outage. The number is here to be watched,
+	// and /chart/check is where it is read.
+	Consistency Consistency `json:"consistency"`
+
 	// UnprovenSeconds maps each seat stranded by a teardown that could not
 	// be proven to how long it has been stranded, present only when one is.
 	// It is the number an alert reads: see [RuntimeState.Unproven]. It was
@@ -95,6 +110,32 @@ type Health struct {
 	// served it, so the only evidence of a seat out of service for a week
 	// was a log line re-raised every twenty heartbeats.
 	UnprovenSeconds map[string]float64 `json:"unproven_seconds,omitempty"`
+}
+
+// Consistency is the continuous report, summarised for a body that is read
+// every few seconds.
+//
+// THE COUNTS AND NOT THE FINDINGS. A health body is polled by probes, pushed
+// to every connected dashboard on a timer, and kept in logs; the findings
+// carry a sentence and a remedy each and belong on the one surface somebody
+// opened to read them. What a gauge needs is a number that moves and a name
+// for what moved.
+type Consistency struct {
+	// Evaluated is false when this node could not evaluate — it holds no
+	// chart view, or has applied no settings epoch. ABSENT EVIDENCE IS NOT
+	// A CLEAN BILL: `findings: 0` from a node that read nothing is the
+	// most misleading answer this body could carry, so a reader checks
+	// this before the count.
+	Evaluated bool `json:"evaluated"`
+
+	// Findings is how many things are wrong, and Worst the highest
+	// severity among them — absent when nothing is.
+	Findings int    `json:"findings"`
+	Worst    string `json:"worst,omitempty"`
+
+	// Counts is how many of each kind, so a reader watching the number
+	// climb can say WHICH class grew without opening another surface.
+	Counts map[string]int `json:"counts,omitempty"`
 }
 
 // Readiness is what /ready answers.
@@ -168,6 +209,7 @@ func (a *App) health(ctx context.Context) Health {
 		// it is what every read is bounded by.
 		EventHistorySeconds: int(store.EventHistory.Seconds()),
 	}
+	body.Consistency = consistencyOf(a.report())
 	if state.StallLag > 0 {
 		// Only when there is something to say. A field that is always
 		// present and always 0 trains a reader to skip it, which is the
@@ -196,6 +238,37 @@ func (a *App) health(ctx context.Context) Health {
 		body.Status = state.Posture
 	}
 	return body
+}
+
+// consistencyOf summarises one evaluation for the health body.
+func consistencyOf(got chartapi.Report) Consistency {
+	out := Consistency{
+		Evaluated: got.Evaluated,
+		Findings:  len(got.Findings),
+		Worst:     string(got.Worst()),
+	}
+	if len(got.Counts) > 0 {
+		out.Counts = make(map[string]int, len(got.Counts))
+		for kind, n := range got.Counts {
+			out.Counts[string(kind)] = n
+		}
+	}
+	return out
+}
+
+// report is the ONE evaluation every surface here renders.
+//
+// A METHOD ON THE APP rather than a value computed at boot, because both
+// halves change while the process runs: a chart record lands and a settings
+// epoch is applied, independently. A cached report would be a claim about a
+// company that no longer exists, and the evaluation is a walk over rows this
+// node already holds in memory.
+func (a *App) report() chartapi.Report {
+	if a.company == nil {
+		return chartapi.Report{}
+	}
+	settings, view := a.company()
+	return chartapi.Evaluate(view, settings)
 }
 
 // tickReadBudget bounds a read done for a push tick rather than a request.

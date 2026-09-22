@@ -93,6 +93,27 @@ drop because the quiet drop is what actually hurts: a founder sends a whole
 document with a new seat in it, the write succeeds, the revision activates —
 and the seat is nowhere, with their own document saying it exists.
 
+**It has its own routes instead.** `GET`/`PATCH /chart/units/{key}` and
+`/chart/seats/{handle}` for content, `POST /chart/batch` for structure,
+`POST /chart/units/{key}/rename` for an address, `POST /chart/import` for a
+whole revision's authored placement, and `GET /company/export` for the document
+back out. What decides them is **which half of an object you are writing**: the
+public half is whoever leads that object, and anything under `runtime` — a
+seat's model chain, its credentials, its sandbox cell, its `mcp_env` — takes
+the company's own `config:write` grant, because a stdio MCP server is
+`exec.Command` with the config's command. Reads split the same way and default
+to **stripped**. See
+[the `/chart/*` reference](../reference/api-endpoints.md#chart--the-org-chart-auth-gated)
+and [Configure via the API](../guides/configure-via-api.md#evolving-the-org-chart).
+
+**Nothing validates the pair, so the engine reports on it.** A settings
+revision that removes a provider every seat runs on is a valid revision, and
+refusing it would refuse an operator's edit over a seat they have never heard
+of — so `GET /chart/check` and `/health`'s `consistency` block carry one
+continuous evaluation over the chart this node holds and the settings epoch it
+applied. See
+[the continuous report](configuration.md#the-continuous-report-what-nothing-can-refuse-at-a-write).
+
 **A fresh deployment's chart is seeded from the company file**, by `crewlet run
 -company company.yaml`, and only while the chart is empty — see
 [the boot seed](control-plane.md#the-boot-seed).
@@ -297,3 +318,5 @@ you always have; this is what the engine does with it once you have.
   every estate, table, bucket and stream in one place
 - **[Control Plane](control-plane.md)** — how a config revision reaches every
   node in the first place
+- **[API endpoints § `/chart/*`](../reference/api-endpoints.md#chart--the-org-chart-auth-gated)**
+  — every route, what each one takes, and what a write's three outcomes mean

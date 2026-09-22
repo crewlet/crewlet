@@ -15,6 +15,7 @@ import (
 type chart struct {
 	leads    map[[2]string]bool
 	projects map[[2]string]bool
+	units    map[[2]string]bool
 	err      error
 }
 
@@ -32,12 +33,24 @@ func (c chart) LeadsProject(_ context.Context, actor, project string) (bool, err
 	return c.projects[[2]string{actor, project}], nil
 }
 
+// LeadsUnit answers the unit relation, which is DELIBERATELY A THIRD MAP
+// rather than the project one read with a different key: the fixture is what
+// catches a rule asking the wrong relation, and a fake that folded the two
+// would agree with any rule that asked either.
+func (c chart) LeadsUnit(_ context.Context, actor, unit string) (bool, error) {
+	if c.err != nil {
+		return false, c.err
+	}
+	return c.units[[2]string{actor, unit}], nil
+}
+
 // nimbus is the fixture every case below decides against: the CTO leads the
-// SRE, and leads the PLATFORM project.
+// SRE, leads the PLATFORM project, and leads the `sre` unit.
 func nimbus() chart {
 	return chart{
 		leads:    map[[2]string]bool{{"cto", "sre"}: true},
 		projects: map[[2]string]bool{{"cto", "PLATFORM"}: true},
+		units:    map[[2]string]bool{{"cto", "sre"}: true},
 	}
 }
 
@@ -162,6 +175,37 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"an unnamed container is refused", seat("cto"),
 			authz.ActionProjectWrite, authz.Object{Kind: authz.KindProject},
 			false, authz.ReasonUnnamed},
+		// A UNIT IS THE OTHER CONTAINER RELATION, and the fixture holds
+		// the two apart: the CTO leads the `sre` UNIT and the PLATFORM
+		// PROJECT, and neither key answers the other's map. A rule that
+		// asked the project relation with a unit key would refuse the
+		// lead of that very unit on every company whose unit does not
+		// file under a project of the same name.
+		{"a unit's lead edits its content", seat("cto"),
+			authz.ActionChartContent,
+			authz.Object{Kind: authz.KindUnit, Container: "sre"},
+			true, authz.ReasonLead},
+		{"a colleague in it does not", seat("sre"),
+			authz.ActionChartContent,
+			authz.Object{Kind: authz.KindUnit, Container: "sre"},
+			false, authz.ReasonNotLead},
+		{"a unit key is not a project key", seat("cto"),
+			authz.ActionChartContent,
+			authz.Object{Kind: authz.KindUnit, Container: "PLATFORM"},
+			false, authz.ReasonNotLead},
+		// THE RUNTIME HALF IS THE COMPANY'S, whoever leads the team: a
+		// seat's model chain, its credentials and its mcp_env are
+		// exec.Command on every engine host.
+		{"a unit's lead does not write the runtime half", seat("cto"),
+			authz.ActionChartRuntime, authz.Object{Kind: authz.KindCompany},
+			false, authz.ReasonNoGrant},
+		{"the company's own grant does",
+			person("jane.doe", iam.GrantConfigWrite),
+			authz.ActionChartRuntime, authz.Object{Kind: authz.KindCompany},
+			true, authz.ReasonGrant},
+		{"structure is the company's too", seat("cto"),
+			authz.ActionChartStructure, authz.Object{Kind: authz.KindCompany},
+			false, authz.ReasonNoGrant},
 
 		// --- destructive ---------------------------------------------- //
 		{"the container's lead removes an item", seat("cto"),

@@ -154,6 +154,19 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply |
 | `GET` | `/viewer` | **Who is asking.** The presented credential's operator id, whether it is an operator one, and the seat that binds it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no credential at all, a credential no seat claims, and a bound one. An unbound token is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused |
+| `GET` | `/chart` | The company's **org chart** — its units, its seats, every `manages:` edge and every unit's lead — with the position the answer was read at. The **runtime half of every object is stripped** unless the caller asks for it AND may read it; the answer says which it got in `runtime`. **Always needs a token** (see [below](#chart--the-org-chart-auth-gated)) |
+| `GET` | `/chart/units` `/chart/seats` | One half each, for a client that renders people constantly and the tree once |
+| `GET` | `/chart/units/{key}` | One unit, what it directly holds, and its own history |
+| `GET` | `/chart/seats/{handle}` | One seat, what it manages, and its own history |
+| `GET` | `/chart/history` | The company-wide **reorganisation feed**, newest first: who moved, who was hired, which team was dissolved — quiet changes included |
+| `PATCH` | `/chart/units/{key}` | Edit one unit's content. The **public half** is whoever leads that unit; a body carrying `runtime` takes `config:write` (see [below](#the-two-halves-of-every-object)) |
+| `PATCH` | `/chart/seats/{handle}` | Edit one seat's content, on the same split — decided by whoever leads **that seat** |
+| `POST` | `/chart/batch` | One **structural** change: create, move, set a lead, remove. One batch is one record, arbitrated against every other structural write in the company. Takes `config:write` |
+| `POST` | `/chart/units/{key}/rename` `/chart/seats/{handle}/rename` | Change an object's **address**. The former one goes on resolving. Takes `config:write` |
+| `POST` | `/chart/import` | Publish one revision's **complete authored structure**, keyed on the revision so a re-import is a no-op. Takes `config:write` |
+| `GET` | `/chart/imports` `/chart/imports/{revision}` | Which revision this company's structure is running, and when it landed |
+| `GET` | `/chart/check` | The **continuous report**: every way the chart and the applied settings disagree (see [below](#the-continuous-report)) |
+| `GET` | `/company/export` | The chart as an authored **document**, whole and unstripped, for a round trip through a file. Takes `config:read` |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -172,8 +185,9 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
 | `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Absent where the company runs neither native backend |
 
-> **Auth.** Writes and every `/config`, `/secrets` and `/setup` route require
-> `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside those three)
+> **Auth.** Writes and every `/config`, `/secrets`, `/setup`, `/chart` and
+> `/company` route require
+> `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside those five)
 > serve without one unless `api.auth.allow_anonymous_read: false` is set, at
 > which point they need the same token — `/ws/stream` included, and it accepts
 > `?token=…` too since browsers cannot set headers on a WebSocket. Only there:
@@ -200,7 +214,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > **The guard is always mounted**, whether or not Tier A is present. An API
 > built without `api.auth` configuration has no token, and a route that needs
 > one is therefore refused rather than served: reads work, every write and the
-> whole of `/config`, `/secrets` and `/setup` answers `401`. There is no way to start a
+> whole of `/config`, `/secrets`, `/setup`, `/chart` and `/company` answers `401`. There is no way to start a
 > process that serves those writes without a guard in front of them.
 >
 > **Every `/webhooks/*` route fails closed.** They are exempt from the bearer
@@ -210,7 +224,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > the delivery flows once the secret is set; nothing is discarded, and nothing
 > unsigned is ever recorded, published, or shown on the dashboard.
 
-Plus the four always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up) and [`/operator/mcp`](#operatormcp--your-own-assistant). `/setup` is guarded on its READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack.
+Plus the always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up), [`/chart/*` and `/company/export`](#chart--the-org-chart-auth-gated), and [`/operator/mcp`](#operatormcp--your-own-assistant). `/setup` and `/chart` are guarded on their READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack, and so is the shape of the company itself.
 
 ### Security headers on every response
 
@@ -253,6 +267,140 @@ per domain — `agents`, `events`, `tokens`, `org`, `fleet`,
 `webhooks` and `/config/*` keep a stable external contract, while the
 read/stream surface is free to evolve since the dashboard is its only
 consumer.
+
+### `/chart/*` — the org chart (auth-gated)
+
+The org chart is **not part of the stored configuration revision**. It is a
+domain of its own: every change is one record on an ordered log, arbitrated at
+the broker on the subject of the object it changes, with its own history and
+its own author. `PUT`/`PATCH /config` therefore refuses a body carrying
+`units:` or `roles:` by name — `400 chart_not_writable_here` — and points here.
+
+A company file still carries both halves, and always will: an operator authors
+one document describing a company. `crewlet validate` reads it whole and
+`crewlet config import` is what divides it — the settings to a revision, the
+chart to its log.
+
+#### The two halves of every object
+
+A unit and a seat each carry a **public** half — a name, a purpose, a goal, who
+somebody manages — and a **runtime** half: a seat's model chain, its
+credentials, its sandbox cell, its worker grants, its schedules, its `mcp_env`.
+The second is the company's configuration under another name, and writing it is
+equivalent to shell on every engine host, because a stdio MCP server is
+`exec.Command` with the config's command.
+
+So the two are decided differently, and the **payload picks the question**:
+
+| What the body carries | Who may write it |
+|---|---|
+| the public half alone | whoever **leads that object** — the unit's lead for a unit, the seat's lead for a seat |
+| anything under `runtime` | `config:write`, the company's own grant |
+
+Reads split the same way and **default to stripped**. A caller asks for the
+runtime half with `?runtime=true` and gets it only if they also hold
+`config:read`; otherwise the answer is served **stripped rather than refused** —
+the rows they asked for are rows they may read. Every answer says which it got:
+
+```json
+{
+  "units": [ … ],
+  "seats": [ … ],
+  "answer": { "level": "linearizable", "position": "CREWLET_CHART_LOG@1:412", "lag": 0 },
+  "runtime": false
+}
+```
+
+Without that flag a company whose seats declare no runtime at all renders
+exactly like a caller who was silently stripped.
+
+The same rules are enforced a second time **inside the domain**, against the
+grants the authoring party holds — so a surface that skipped its own check
+still cannot write a seat's credentials, and a write that would CLEAR the
+runtime half is a privileged write too (a content record is full post-state, so
+omitting the half sets it to empty).
+
+#### Structure is neither
+
+A create, a move, a lead change and a removal go through `POST /chart/batch`,
+and they take `config:write` whoever leads the team. The domain serialises
+every structural record on **one subject for the whole chart**, deliberately:
+two reparents through a common ancestor can each be locally valid and jointly
+produce a cycle no node could see from the subject it arbitrated on. A caller
+that means to move three seats sends three operations in **one** batch — the
+batch is the unit that is ordered, and three requests are three chances to land
+half a reorganisation.
+
+```bash
+curl -X POST localhost:8080/chart/batch \
+  -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  -d '{"operations":[
+        {"kind":"create_unit","object":{"kind":"unit","id":"platform"}},
+        {"kind":"move","object":{"kind":"seat","id":"sre"},"parent":"platform"}
+      ]}'
+```
+
+A batch whose operations are **all removals** is published as a removal record
+instead; one that mixes the two is refused, because a removal installs a gate
+and a record that installed one for some of its objects and not others would
+make "does this install a gate" a question about a payload.
+
+#### What a write answers
+
+| Outcome | Status | What to do |
+|---|---|---|
+| `applied` | `200` | The record is durable **and this node has applied it**, so the next read here sees it |
+| `pending` | `202` | Durable at the position in the body; every node will apply it, this one has not yet. Read at that position to see it |
+| `unknown` | `503` | Nothing can be established from this node. Retry with the **same** operation id — the body carries it as `op_id`, and the route reads it back from `Idempotency-Key` |
+
+Retrying an `unknown` under a *fresh* id would write the change twice if the
+first had in fact landed, which is the one thing the operation ledger exists to
+prevent.
+
+A refusal by the chart's own rules is `400`, a contention another writer won is
+`409` (re-read and write again), and a node that cannot decide **authority** is
+`503` rather than `403`: a node that is booting or behind the log cannot say who
+leads a unit, and `403` would send somebody to ask for an authority they already
+hold.
+
+#### A rename keeps the old address working
+
+`POST /chart/units/{key}/rename` with `{"to": "..."}` changes an object's
+address. A key is not an identity — the row is — so the former address goes on
+resolving until something else claims it, and a `manages:` entry somebody wrote
+last year still finds the seat it named. Every read carries `former_keys` /
+`former_handles` so a client rendering a stale reference can say **why** it
+still works rather than reporting it broken.
+
+#### The continuous report
+
+`GET /chart/check` answers one evaluation over the two halves of the running
+company: the chart this node holds and the settings epoch it has applied.
+
+Nothing can refuse these at a write, and that is the point rather than a
+limitation — the two halves are written by different people at different times,
+so every finding is reachable through two writes that were each correct when
+they were made:
+
+| Kind | Severity | What it means |
+|---|---|---|
+| `provider_unknown` | error | A seat's model chain names a provider the settings do not declare. The seat resolves to **no model at all** |
+| `sandbox_unconfigured` | error | A seat's code gate is open on a company with no sandbox backend |
+| `worker_unknown` | warning | A seat's `workers:` narrowing names a template that is gone, so it narrows to fewer workers than the list suggests |
+| `reference_dangling` | warning | A `manages:` entry, a unit's lead or a seat's unit resolves to nothing |
+| `seat_unheld` | warning | A human seat with no contact identity, so nothing addressed to it reaches anybody |
+
+The **same** evaluation is summarised on `/health` under `consistency`, so a
+gauge, a probe and this screen can never disagree about whether something is
+wrong. It does **not** move `/health`'s `status`: a company referencing a
+provider somebody deleted is a company with a problem, not a node with one, and
+taking a node out of rotation over a configuration typo would turn one broken
+seat into an outage.
+
+`evaluated: false` means this node could not evaluate at all — it holds no
+chart view, or has applied no settings epoch. Check it before the count:
+`findings: 0` from a node that read nothing is the most misleading answer this
+surface could give.
 
 ### `/config/*` — live config management (auth-gated)
 
