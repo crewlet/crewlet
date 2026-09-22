@@ -252,6 +252,12 @@ func ViewSubject(id string) Subject { return Subject{Kind: KindView, ID: id} }
 // PersonSubject names one person's inbox, priorities and pins — keyed on the
 // HANDLE rather than on a uuid, because the handle is the identity every
 // caller that reaches this record already holds.
+//
+// WHICH HANDLE is the writer's own, so a person acting through their api.auth
+// token writes a record under the TOKEN's name. That follows from the
+// attribution rule and it is why the READ side takes a [Party] rather than a
+// handle — see [readPartyRecord], which is what makes the two records one
+// person's again.
 func PersonSubject(handle string) Subject {
 	return Subject{Kind: KindPerson, ID: handle}
 }

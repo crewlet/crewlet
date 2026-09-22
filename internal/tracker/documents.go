@@ -171,6 +171,54 @@ func readPerson(ctx context.Context, tx *sql.Tx, handle string) (Person, bool, e
 	return person, true, nil
 }
 
+// readPartyRecord reads the OWN-STATE document of a person who answers to more
+// than one identity.
+//
+// # It is the first record that exists, never two merged
+//
+// A person's record is what THEY decided — the order they mean to work in,
+// the views they pinned, which notices they have read. Two such records merged
+// is an arrangement nobody made: two priority lists concatenated is an order
+// no one chose, and two pin sets unioned is a strip whose "first" is a tie.
+// So the identities are tried in order, the seat first, and the first that has
+// a record is the one this person's state IS.
+//
+// # Why there can be a second record at all
+//
+// Because the person tools address the write by the CREDENTIAL: `mark_inbox`
+// and `set_pins` write on behalf of `actor.Handle`, and through the operator
+// MCP that is the token's own id (internal/agent/builtin/workperson.go). A
+// founder whose assistant has been marking their inbox read therefore has one
+// record, under `founder`, and reading only the seat would show them an inbox
+// where nothing has ever been read. Preferring the seat is what makes this
+// answer converge on one record as soon as anything writes theirs.
+//
+// THE WRITE IS WHERE THAT ENDS. This is not attribution — a record's author
+// stays the token, which is the audit trail — it is WHOSE STATE the document
+// holds, and that is the person. A surface that resolved the credential to its
+// bound seat before choosing the subject would leave one record per person and
+// this loop would have nothing to iterate; until then, the loop is what keeps
+// a bound operator's own marks reachable.
+func readPartyRecord(ctx context.Context, tx *sql.Tx, who Party) (
+	Person, bool, error) {
+
+	for _, handle := range who.Handles() {
+		person, held, err := readPerson(ctx, tx, handle)
+		if err != nil {
+			return Person{}, false, err
+		}
+		if held {
+			// THE SEAT'S NAME ON IT, whichever record answered: the
+			// handle is what every surface renders and what a mark
+			// names, and reporting the credential's would put a token
+			// on a person's own screen.
+			person.Handle = who.Handle
+			return person, true, nil
+		}
+	}
+	return Person{V: DocumentVersion, Handle: who.Handle}, false, nil
+}
+
 // readCounter reads a project's key sequence.
 //
 // ITS OWN STATEMENT rather than [readDocument], because the counter is not a

@@ -66,9 +66,15 @@ type ViewRow struct {
 type ViewQuery struct {
 	Container Container
 
-	// Viewer is whose pins order the saved half. Empty asks for the
-	// shared strip: no pins, and no personal views but the shared ones.
-	Viewer string
+	// Viewer is whose pins order the saved half, and whose personal views
+	// join it. An UNNAMED party asks for the shared strip: no pins, and no
+	// personal views but the shared ones.
+	//
+	// A [Party] RATHER THAN A HANDLE for the reason [MyWorkQuery.Who] is
+	// one — a saved view and a pin are both written by the person's own
+	// credential through the operator tool server, so they are OWNED by
+	// the token's name while the strip is asked for under the seat's.
+	Viewer Party
 
 	Level statelog.ReadLevel
 
@@ -249,16 +255,26 @@ func implicitViews(container Container) []ViewRow {
 // answer at all. Filtering in SQL rather than after the fact is what stops a
 // personal view riding a page boundary into somebody else's strip.
 func savedViews(ctx context.Context, tx *sql.Tx, container Container,
-	viewer string, pinned map[string]bool) ([]ViewRow, error) {
+	viewer Party, pinned map[string]bool) ([]ViewRow, error) {
 
+	// THE SHARED HALF IS `owner = ''`, and it answers for a party that
+	// names nobody — which is what an anonymous strip is. The personal
+	// half matches EVERY name this person saves under, because a view
+	// saved through their own credential is owned by the token's id while
+	// the strip is asked for under their seat's.
+	own := ""
+	args := []any{container.Kind, container.ID}
+	if ids := viewer.args(); len(ids) > 0 {
+		own = " OR owner IN (" + placeholders(len(ids)) + ")"
+		args = append(args, ids...)
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, name, type, owner, protected, is_default, rank, icon,
 		       params_json
 		FROM tracker_views
 		WHERE container_kind = ? AND container_id = ?
-		  AND (owner = '' OR owner = ?)
-		ORDER BY rank, name`,
-		container.Kind, container.ID, viewer)
+		  AND (owner = ''`+own+`)
+		ORDER BY rank, name`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: read %s %s's views: %w",
 			container.Kind, container.ID, err)
@@ -302,11 +318,15 @@ func savedViews(ctx context.Context, tx *sql.Tx, container Container,
 }
 
 // pinnedViews is the viewer's own pins, and empty for an anonymous read.
-func pinnedViews(ctx context.Context, tx *sql.Tx, viewer string) (map[string]bool, error) {
-	if viewer == "" {
+//
+// GATED ON THE IDENTITY LIST, which is what [savedViews] matches on: the two
+// halves of one strip must agree about whether there is a viewer at all, or a
+// party naming only a credential would have its views and not its pins.
+func pinnedViews(ctx context.Context, tx *sql.Tx, viewer Party) (map[string]bool, error) {
+	if len(viewer.Handles()) == 0 {
 		return nil, nil
 	}
-	person, held, err := readPerson(ctx, tx, viewer)
+	person, held, err := readPartyRecord(ctx, tx, viewer)
 	if err != nil || !held {
 		return nil, err
 	}

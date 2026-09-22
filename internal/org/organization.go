@@ -5,12 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"os"
 	"strings"
 
 	"github.com/google/uuid"
-
-	"github.com/crewlet/crewlet/internal/envref"
 )
 
 // Organization is the whole company: a flexible hierarchy of units, the
@@ -220,31 +217,19 @@ func (o *Organization) SeatByOperatorID(operatorID string, lookup EnvLookup) *Ro
 	if want == "" {
 		return nil
 	}
-	if lookup == nil {
-		lookup = os.LookupEnv
-	}
+	// THE NIL LOOKUP IS PASSED THROUGH rather than defaulted here:
+	// [HumanContact.ResolvedIdentities] is the one place that decides what
+	// an absent lookup reads, and a second default beside it is a second
+	// thing to keep in step.
 	for r := range o.AllRoles() {
-		// Contact is a POINTER and most seats have none: an agent seat
-		// has no external identities at all, and a human seat that
-		// declares only availability has none either.
-		if r == nil || r.Contact == nil {
-			continue
-		}
-		declared := strings.TrimSpace(r.Contact.CrewletOperatorID)
-		if declared == "" {
-			continue
-		}
-		if name, isRef := envref.Whole(declared); isRef {
-			v, ok := lookup(name)
-			if !ok {
-				continue
-			}
-			declared = strings.TrimSpace(v)
-			if declared == "" {
-				continue
-			}
-		}
-		if strings.ToLower(declared) == want {
+		// THROUGH [Role.ResolvedOperatorID], which is the same walk the
+		// OTHER direction takes. Written out here as well, the two
+		// copies of the `${VAR}` handling were two chances for "whose
+		// seat is this credential" and "which credential is this seat's"
+		// to disagree — and a person whose two answers disagree is bound
+		// for writes and unbound for reads, which is a dashboard that
+		// knows who they are and shows them nothing.
+		if r.ResolvedOperatorID(lookup) == want {
 			return r
 		}
 	}

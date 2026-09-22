@@ -197,8 +197,13 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// which is a colleague's inbox, their priorities and the questions
 	// they owe, handed to an agent nobody asked. The operator surface
 	// supplies its own identity the same way, through the actor seam.
+	//
+	// ONE IDENTITY, because that is all an actor carries: a seat writes
+	// and is written about under its handle alone. Resolving a credential
+	// to the seat it is bound to is the CHART's answer and this package
+	// holds none — see [tracker.Party].
 	out, err := reader.MyWork(ctx, tracker.MyWorkQuery{
-		Handle: actor.Handle, Level: seatReadLevel,
+		Who: tracker.PartyOf(actor.Handle), Level: seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
 		return failed(readFailure(tracker.MyWorkTool, err)), nil

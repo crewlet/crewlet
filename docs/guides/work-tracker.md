@@ -382,6 +382,13 @@ two views can never both claim it. A protected view cannot be edited by anyone
 but its owner, which is what stops a shared board being rearranged under
 everybody.
 
+Saving a view and pinning one are both **operator** gestures, so both are
+recorded under the token that made them. If your token is bound to a seat, the
+strip is still yours: `viewer=` matches your seat handle *or* that token id,
+so your own views and your own pins are on the strip you ask for under your
+seat's name. Naming nobody is the **shared** strip, which is what the sidebar
+and the board ask for before anybody is known.
+
 **Six of them exist without anybody saving one.** Every container has a list,
 a board, a calendar, a timeline, a table and a trash, and none of the six is an
 object: a fresh project needs no setup gesture, a container can never be left
@@ -941,6 +948,30 @@ like any other list, and it is banded by WHEN the work is due — overdue,
 today, this week, later, no date — because that is what somebody opens their
 own day to ask. See [Humans in the org](../concepts/humans-in-the-org.md) for
 the binding.
+
+**Your own writes count as yours, under either name.** A write you make
+through your token is attributed to the **token**, with author kind
+`operator` — never to your seat handle — because a tracker whose author field
+is chosen by the writer is not an audit trail. So the item you file through
+your assistant records `founder` as its reporter and its watcher, while your
+colleagues assign work to `jane-founder`. Every personal question matches
+**both**: My work's seven blocks, the inbox, and your own record. You are one
+party with two names, and the answer always comes back under your seat's.
+
+Two consequences worth knowing:
+
+- A change that concerned you under **both** names — assigned to your seat,
+  reported by your credential — is **one** notice in your inbox, under the
+  stronger of the two reasons. That is the same rule that already gives one
+  handle one reason: being mentioned outranks watching, and you are told the
+  fact you will act on.
+- Your **own record** — your marks, pins and queue — is one document, and it
+  is read from your seat's if you have one and from your credential's
+  otherwise. It is never two merged: two priority lists joined is an order
+  nobody chose.
+
+An operator reading somebody *else's* day gets **that person's** two names,
+resolved from the org chart — never the credential in their own hand.
 
 The marks are the ASSISTANT'S. The dashboard is read-only, because every write
 here is attributed to somebody and a button in a browser would write as "the

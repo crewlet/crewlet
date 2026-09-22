@@ -389,6 +389,15 @@ the order somebody put it in, the questions waiting on them — with every count
 on the strip. Until then the dashboard says so rather than guessing: an unbound
 token is an ordinary state, not a fault.
 
+Once bound, **what you file through your own assistant counts as yours** on
+both screens. The record still names the token — a write through
+`/operator/mcp` is attributed to the credential, with author kind `operator`,
+because a tracker whose author field is chosen by the writer is not an audit
+trail — and the personal reads match your seat handle *or* that token id, so
+the item you reported and the one a colleague assigned you land on the same
+day. An operator reading somebody else's screen gets *their* two names from
+the chart, never the token in your hand.
+
 Your own AI assistant can read and write the same records over MCP. Point any
 client at `/operator/mcp` with your API token:
 

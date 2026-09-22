@@ -31,7 +31,8 @@ func aView(id string, mutate func(*tracker.View)) tracker.View {
 func (r *roundTrip) strip(container tracker.Container, viewer string) tracker.ViewListing {
 	r.t.Helper()
 	listing, err := r.reader.Views(r.t.Context(), tracker.ViewQuery{
-		Container: container, Viewer: viewer, Level: statelog.ReadStale,
+		Container: container, Viewer: tracker.PartyOf(viewer),
+		Level: statelog.ReadStale,
 	})
 	if err != nil {
 		r.t.Fatalf("Views(%s %s, %q): %v", container.Kind, container.ID, viewer, err)
