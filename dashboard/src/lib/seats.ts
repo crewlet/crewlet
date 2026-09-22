@@ -113,6 +113,16 @@ export interface Unit {
   raw: OrgUnit;
 }
 
+/**
+ * Which kind of seat a handle names.
+ *
+ * A NAMED TYPE because it is drawn as well as read: the dashed avatar ring is
+ * the one variant an identity badge has, and the screens that draw it were
+ * each spelling the union inline — so the cell that meant to accept it typed
+ * `"agent" | "human" | string`, which is `string`, and accepted anything.
+ */
+export type SeatKind = "agent" | "human";
+
 export interface Seat {
   /**
    * Stable React key and DOM id suffix: the handle, or `#<position>` where no
@@ -128,7 +138,7 @@ export interface Seat {
    * that keys the seat's memory, so it never makes one up.
    */
   handle: string;
-  kind: "agent" | "human";
+  kind: SeatKind;
   goal: string;
   backstory: string;
   responsibilities: string[];
@@ -810,12 +820,42 @@ function dedupe(keys: string[]): string[] {
  * holds its work. The name it was filed under is what a reader needs to find
  * that work, and a dash would lose it.
  */
-export function seatLookup(
-  index: OrgIndex,
-): (handle: string) => { name: string; kind?: "agent" | "human" } {
+export function seatLookup(index: OrgIndex): (handle: string) => { name: string; kind?: SeatKind } {
   return (handle) => {
     const seat = index.byHandle.get(handle);
     return seat ? { name: seat.name, kind: seat.kind } : { name: handle };
+  };
+}
+
+/**
+ * The same two answers, as the pair a ROW RENDERER takes.
+ *
+ * A grid cell is handed resolvers rather than the chart — see the row chrome
+ * every tracker surface passes down — because a card that could reach an org
+ * context would need one to render, and these draw in tests and in a peek
+ * panel with no provider above them.
+ *
+ * THE PAIR RATHER THAN ONE FUNCTION EACH, because the half that was missing is
+ * exactly the half every screen forgot: seven chrome builders each wrote their
+ * own name resolver inline and not one of them carried the kind, so a human
+ * seat was drawn as an agent on every tracker surface in the product. Spread
+ * into the chrome, a builder cannot thread one and drop the other.
+ *
+ * THE KIND IS UNDEFINED WHERE THE CHART HAS NO SUCH SEAT, and that is a third
+ * answer rather than a missing one: "this is an agent" and "this company has
+ * no such seat" must not collapse, because the second is how a renamed or
+ * removed seat still appears on the work it was filed against. The name falls
+ * back to the handle for the same reason; the badge falls back to the neutral
+ * disc, which is what a seat whose kind nobody knows honestly looks like.
+ */
+export function seatResolvers(index: OrgIndex): {
+  seatName: (handle: string) => string;
+  seatKind: (handle: string) => SeatKind | undefined;
+} {
+  const lookup = seatLookup(index);
+  return {
+    seatName: (handle) => lookup(handle).name,
+    seatKind: (handle) => lookup(handle).kind,
   };
 }
 

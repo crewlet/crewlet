@@ -65,6 +65,8 @@ import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
+import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
@@ -1863,6 +1865,12 @@ function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): st
 function SurfaceDeliveries({ surface, name }: { surface: string; name: string }) {
   const nav = useNavigator();
   const now = useNow();
+  const org = useOrg();
+  // WHO A DELIVERY REACHED. The tag carries a HANDLE, which is an address
+  // rather than a label: passed straight through as the name it put
+  // `agent-ai-systems-engineer` where the seat's name belongs, built the
+  // badge's monogram out of it, and drew every recipient as an agent.
+  const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
   // Not pushed — a webhook row reaches the live stream, but this is a page of
   // history and a delivery arrives on the provider's schedule rather than
   // this screen's. A minute is the cadence "is anything arriving at all" is
@@ -1956,7 +1964,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                     // name, linking to the seat. A delivery is addressed to a
                     // colleague, and a colleague should not be a chip on this
                     // grid and an avatar on the next.
-                    <SeatCell handle={e.tags.recipient} name={e.tags.recipient} />
+                    <SeatCell handle={e.tags.recipient} {...who(e.tags.recipient)} />
                   ) : (
                     // NOT THE CELL'S OWN "nobody" DASH: a company-wide
                     // delivery is routed by the notification spine rather than

@@ -41,10 +41,25 @@ const row = (over: Partial<WorkSummary> = {}): WorkSummary => ({
   ...over,
 });
 
-/** The chart, as the screen hands it down: a handle in, a name out. */
+/**
+ * The chart, as the screen hands it down: a handle in, a name and a kind out.
+ *
+ * `iris` is the HUMAN seat and `ada` the agent, and `departed` is in neither —
+ * a handle the chart no longer holds, which is a third answer rather than a
+ * missing one.
+ */
 const chrome: RowChrome = {
-  seatName: (handle) => (handle === "ada" ? "Ada Okonkwo" : handle),
+  seatName: (handle) =>
+    handle === "ada" ? "Ada Okonkwo" : handle === "iris" ? "Iris Chen" : handle,
+  seatKind: (handle) => (handle === "ada" ? "agent" : handle === "iris" ? "human" : undefined),
 };
+
+/** The one identity badge a single-row grid drew. */
+function badge(container: HTMLElement): HTMLElement {
+  const marks = container.querySelectorAll(".crewlet-avatar");
+  if (marks.length !== 1) throw new Error(`expected one identity badge, drew ${marks.length}`);
+  return marks[0] as HTMLElement;
+}
 
 const removal = (over: Partial<WorkActivityRecord> = {}): WorkActivityRecord => ({
   id: "h-1",
@@ -165,4 +180,47 @@ test("an operator's removal is marked as one, beside the name", () => {
   mount("table", [row({})], removals);
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
   expect(screen.getByText("operator")).toBeTruthy();
+});
+
+// ONE SEAT LOOKS LIKE ONE SEAT ON BOTH COLUMN SETS. The dashed ring is the
+// only variant an identity badge has and it is STRUCTURAL — a human seat, the
+// engine does not run it — so it cannot depend on which set is drawing. It
+// did: `SeatCell` took a kind and the compact `Assignee` had no way to be
+// handed one, so the same person was drawn two ways on one grid.
+test("a human seat wears the dashed ring on both column sets", () => {
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row({ assignee: "iris" })]);
+    expect(badge(container).className).toContain("dashed");
+    cleanup();
+  }
+});
+
+// AND AN AGENT DOES NOT, which is what makes the ring worth drawing: a mark
+// every row wears separates nothing, the same rule `normal` priority keeps.
+test("an agent seat wears no ring on either column set", () => {
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row({ assignee: "ada" })]);
+    expect(badge(container).className).not.toContain("dashed");
+    cleanup();
+  }
+});
+
+// A HANDLE THE CHART DOES NOT HOLD IS NOT AN AGENT. It is a seat that was
+// renamed or removed, and the honest badge is the neutral disc rather than a
+// ring claiming the chart said something it did not.
+test("a handle the chart does not hold falls back to the neutral disc", () => {
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row({ assignee: "departed" })]);
+    expect(badge(container).className).not.toContain("dashed");
+    cleanup();
+  }
+});
+
+// THE TRASH'S `removed_by` IS THE THIRD CELL ON THIS GRID THAT DRAWS A PERSON,
+// and it reads the same resolver: somebody who emptied a subtree is drawn the
+// way they are drawn on the row above.
+test("a human removal wears the ring in the trash column", () => {
+  const removals = new Map([["t-1", removal({ actor: "iris", actor_kind: "human" })]]);
+  const { container } = mount("table", [row({})], removals);
+  expect(badge(container).className).toContain("dashed");
 });

@@ -66,7 +66,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, seatResolvers } from "~/lib/seats.ts";
 import { Mark } from "~/ui/glyph.tsx";
 import { plainText } from "~/lib/markdown.ts";
 import { fmtDate, fmtDateTime, fmtCount, fmtDuration, relTime } from "~/lib/format.ts";
@@ -244,6 +244,10 @@ function itemFacts({
 }): Fact[] {
   const item = detail.task;
   const seatName = chrome.seatName ?? ((handle: string) => handle);
+  // AND THE KIND BESIDE IT, because a chip draws the dashed ring off it. An
+  // absent resolver answers `undefined`, which is the neutral disc — the same
+  // fallback an unresolved handle takes.
+  const seatKind = chrome.seatKind ?? (() => undefined);
   return [
     { label: "Status", value: <StatusBadge status={item.status} defs={chrome.statuses} /> },
     {
@@ -274,7 +278,11 @@ function itemFacts({
       // one way a person appears in a list, avatar and link together, and
       // wrapping it in a second anchor would nest one link inside another.
       value: item.assignee ? (
-        <SeatChip name={seatName(item.assignee)} handle={item.assignee} />
+        <SeatChip
+          name={seatName(item.assignee)}
+          handle={item.assignee}
+          kind={seatKind(item.assignee)}
+        />
       ) : (
         <span className="muted">Unassigned</span>
       ),
@@ -316,7 +324,7 @@ export function WorkItem({ id }: { id: string }) {
   });
 
   const chrome: RowChrome = {
-    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    ...seatResolvers(index),
     types: project.data?.types,
     statuses: project.data?.statuses,
   };
@@ -458,7 +466,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
   // THE PAGE'S OWN CHROME, built from the same two reads: the chart for the
   // names and the project for its vocabulary.
   const inner: RowChrome = {
-    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    ...seatResolvers(index),
     types: project.data?.types,
     statuses: project.data?.statuses,
   };
@@ -719,7 +727,13 @@ export function ItemBody({
                 </a>
               )}
               <span className="spacer" />
-              {entry.assignee && <Assignee handle={entry.assignee} seatName={chrome.seatName} />}
+              {entry.assignee && (
+                <Assignee
+                  handle={entry.assignee}
+                  seatName={chrome.seatName}
+                  seatKind={chrome.seatKind}
+                />
+              )}
             </div>
           ))}
         </Card>
@@ -810,6 +824,7 @@ function Thread({
             <SeatChip
               name={chrome.seatName?.(comment.author) ?? comment.author}
               handle={comment.author}
+              kind={chrome.seatKind?.(comment.author)}
             />
             <span className="muted" title={fmtDateTime(comment.created_at)}>
               {relTime(comment.created_at, now)}
@@ -1028,7 +1043,11 @@ export function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome:
         {answer.recipients.map((r) => (
           <div key={r.handle} className="thread-entry">
             <div className="row gap-1">
-              <SeatChip name={chrome.seatName?.(r.handle) ?? r.handle} handle={r.handle} />
+              <SeatChip
+                name={chrome.seatName?.(r.handle) ?? r.handle}
+                handle={r.handle}
+                kind={chrome.seatKind?.(r.handle)}
+              />
               <span className="spacer" />
               {/* WHETHER IT ASKED IS ITS OWN MARK, never a tint on the reason.
                   Folded into the reason chip's colour it made the chip say two
@@ -1134,6 +1153,7 @@ export function ItemProps({
     return map;
   }, [project]);
   const seatName = chrome.seatName ?? ((h: string) => h);
+  const seatKind = chrome.seatKind ?? (() => undefined);
   const spend = item.spend;
 
   // WHO SET EACH OF THESE, from the change log the page already holds. See
@@ -1241,7 +1261,11 @@ export function ItemProps({
         {
           label: "Assignee",
           value: item.assignee ? (
-            <SeatChip name={seatName(item.assignee)} handle={item.assignee} />
+            <SeatChip
+              name={seatName(item.assignee)}
+              handle={item.assignee}
+              kind={seatKind(item.assignee)}
+            />
           ) : (
             <span className="muted">Unassigned</span>
           ),
@@ -1250,7 +1274,11 @@ export function ItemProps({
         {
           label: "Reporter",
           value: item.reporter ? (
-            <SeatChip name={seatName(item.reporter)} handle={item.reporter} />
+            <SeatChip
+              name={seatName(item.reporter)}
+              handle={item.reporter}
+              kind={seatKind(item.reporter)}
+            />
           ) : undefined,
           setBy: by("reporter"),
         },
@@ -1263,7 +1291,12 @@ export function ItemProps({
                 value: (
                   <span className="row wrap gap-1">
                     {(item.collaborators ?? []).map((handle) => (
-                      <SeatChip key={handle} name={seatName(handle)} handle={handle} />
+                      <SeatChip
+                        key={handle}
+                        name={seatName(handle)}
+                        handle={handle}
+                        kind={seatKind(handle)}
+                      />
                     ))}
                   </span>
                 ),
@@ -1283,7 +1316,7 @@ export function ItemProps({
                   <span className="row wrap gap-1">
                     {(item.watchers ?? []).map((handle) => (
                       <span key={handle} className="row gap-1">
-                        <SeatChip name={seatName(handle)} handle={handle} />
+                        <SeatChip name={seatName(handle)} handle={handle} kind={seatKind(handle)} />
                         {/* MUTED IS NOT THE SAME AS NOT WATCHING, and both
                             travel: a set that carried only the difference
                             would silently re-add everybody on the next

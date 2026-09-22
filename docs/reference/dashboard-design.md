@@ -714,10 +714,24 @@ four clauses that travel together because each one was got wrong separately:
   colour, by [the one rule](#the-one-rule): a seat is identity, and identity is
   carried by the name, the mark and the position. The only variant it has is
   STRUCTURAL — the dashed ring a HUMAN seat wears, which says the engine does
-  not run it — and a cell draws it where it is handed the seat's kind. A badge
-  drawn BESIDE the printed name is decorative, or the row reads "Ada Lovelace
-  avatar, Ada Lovelace"; a badge drawn ALONE keeps its accessible name, or the
-  columns that draw no word announce the assignee as nothing at all.
+  not run it — and **every** cell that draws a person resolves the kind and
+  draws it. That is the same resolution as the name and it arrives with it:
+  `seatLookup` answers both, the row chrome carries both, and the two cells a
+  screen hands them to (`SeatCell`, `SeatChip`) take the same `kind` prop, so a
+  caller cannot thread the name and drop the kind. Half-threaded is what this
+  was: `SeatCell` took the kind and the compact `Assignee` had no way to be
+  handed one, so one human seat was a dashed disc in the table column set and a
+  solid one in the list — on the same grid, over the same row — while eighteen
+  of the nineteen seat chips passed nothing at all. A kind the chart does not
+  hold draws the NEUTRAL disc: a renamed or removed seat is a third answer, not
+  an agent. The two places that pass a literal `agent` are the ones where the
+  chart cannot be wrong — a turn's seat and a coding run's seat, which the
+  engine RUNS, and it never runs a human seat — and they say so at the call
+  rather than leaving a solid disc that reads as a kind nobody threaded. A
+  badge drawn BESIDE the printed name is decorative, or the row reads "Ada
+  Lovelace avatar, Ada Lovelace"; a badge drawn ALONE keeps its accessible
+  name, or the columns that draw no word announce the assignee as nothing at
+  all.
 - **The KIND is marked only where it is not the ordinary one.** Who wrote
   something is a person and a kind — `agent`, `human`, `operator`, `system` —
   and `agent` is what nearly every write in an agent company is. A mark on
@@ -727,11 +741,14 @@ four clauses that travel together because each one was got wrong separately:
   separately is how one of them came to check for a kind the engine does not
   mint and mark every row in its column.
 
-The cells this governs are the frame's `SeatCell`, the tracker's compact
-`Assignee`, the Projects directory's Lead and Last change, the trash's
-`removed_by` and the log's actor — and the rule is written here rather than at
-any one of them because the whole point is that the same person looks the same
-on every screen they appear on.
+The cells this governs are the frame's `SeatCell`, the shared `SeatChip`, the
+tracker's compact `Assignee`, the Projects directory's Lead and Last change,
+the trash's `removed_by`, the log's actor, a schedule's scope and every fire it
+woke, a saved view's owner, a page's watchers and commenters and a delivery's
+recipient — and the rule is written here rather than at any one of them because
+the whole point is that the same person looks the same on every screen they
+appear on. `components/work.test.tsx` and `routes/work/shapes/Grid.test.tsx`
+hold the ring over the pieces and over the grid's two column sets.
 
 ### A dropdown's list sizes to its options
 

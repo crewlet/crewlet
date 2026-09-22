@@ -37,6 +37,8 @@ import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRai
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
+import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { describe as describeCron, nextFires } from "~/lib/cron.ts";
 import { fmtDateTime, fmtDuration, inTime, relTime, tsKey, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -335,6 +337,12 @@ const UNDECLARED_HINT =
 
 export function Schedules({ scope = [] }: { scope?: string[] }) {
   const now = useNow();
+  const org = useOrg();
+  // WHO A HANDLE IS. A schedule's scope and every fire's target are handles,
+  // and a handle is an address rather than a label: drawn bare, this grid put
+  // `agent-ai-systems-engineer` where the seat's name belongs, built the
+  // badge's monogram out of it, and drew a person's seat as an agent's.
+  const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
   const { open: openPeek } = usePeekControls();
   // `#/activity/schedules/{scope_type}/{scope_id}/{name}` names ONE schedule.
   // Three segments because a schedule's identity is all three: two units may
@@ -530,7 +538,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 // with no avatar, no state and no page of people behind it.
                 cell: (s) =>
                   s.scope_type === "role" ? (
-                    <SeatCell handle={s.scope_id} />
+                    <SeatCell handle={s.scope_id} {...who(s.scope_id)} />
                   ) : (
                     <Tag appearance="outline">{s.scope_id}</Tag>
                   ),
@@ -580,7 +588,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                   s.runners?.length ? (
                     <span className="row gap-1">
                       {s.runners.slice(0, 3).map((handle) => (
-                        <SeatChip key={handle} name={handle} handle={handle} />
+                        <SeatChip key={handle} handle={handle} {...who(handle)} />
                       ))}
                       {s.runners.length > 3 && (
                         <span className="t-caption">+{s.runners.length - 3}</span>
@@ -684,7 +692,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 key: "target",
                 header: "Woke",
                 shrink: true,
-                cell: (r) => <SeatCell handle={r.target_handle} />,
+                cell: (r) => <SeatCell handle={r.target_handle} {...who(r.target_handle)} />,
               },
               {
                 key: "outcome",
@@ -783,6 +791,9 @@ function OneSchedule({
   now: number;
 }) {
   usePageLabels({ [[scopeType, scopeId, name].join("/")]: name });
+  const org = useOrg();
+  // WHO A HANDLE IS — see the same lookup on the screen this page came from.
+  const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
   return (
     <>
       <PageActions>
@@ -860,7 +871,7 @@ function OneSchedule({
                 key: "target",
                 header: "Woke",
                 shrink: true,
-                cell: (r) => <SeatCell handle={r.target_handle} />,
+                cell: (r) => <SeatCell handle={r.target_handle} {...who(r.target_handle)} />,
               },
               {
                 key: "outcome",
@@ -921,6 +932,12 @@ function OneSchedule({
  */
 export function SchedulePeek({ scope }: { scope: string }) {
   const now = useNow();
+  const org = useOrg();
+  // WHO A HANDLE IS. A schedule's scope and every fire's target are handles,
+  // and a handle is an address rather than a label: drawn bare, this grid put
+  // `agent-ai-systems-engineer` where the seat's name belongs, built the
+  // badge's monogram out of it, and drew a person's seat as an agent's.
+  const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
   // THE ADDRESS IS ALL THREE SEGMENTS — see [scheduleRef]. A plain split is
   // right because the engine SLUGS a schedule's name, so the only separators
   // in the token are the two this screen put there.
@@ -1008,7 +1025,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
                           </span>
                         </div>
                         <div className="row gap-1">
-                          <SeatCell handle={r.target_handle} />
+                          <SeatCell handle={r.target_handle} {...who(r.target_handle)} />
                           <span className="spacer" />
                           {/* THE TICK BESIDE THE FIRE, which is the only way
                               to see a catchup: this ran now for something

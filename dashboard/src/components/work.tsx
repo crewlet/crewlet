@@ -30,12 +30,30 @@ import { Mark } from "~/ui/glyph.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { rowPeekHandler } from "~/app/frame/DetailRail.tsx";
 import { fmtDateCompact, fmtDateTime, relTime } from "~/lib/format.ts";
+// TYPE ONLY: these pieces render with no provider above them, so the chart
+// reaches them as resolvers on the chrome and never as a module they import.
+import type { SeatKind } from "~/lib/seats.ts";
 import { fmtMinutes, statusLabel, STATUS_TONE, typeIcon, typeName } from "~/lib/work.ts";
 import type { WorkIncomplete, WorkStatusDef, WorkSummary, WorkTypeDef } from "~/protocol/index.ts";
 
 export interface RowChrome {
   /** What a handle is called. The chart's, so a row shows a person's name. */
   seatName?: (handle: string) => string;
+  /**
+   * Which KIND of seat a handle is — the chart's again, and the other half of
+   * drawing a person.
+   *
+   * An identity badge has exactly one variant and it is structural: the dashed
+   * ring a HUMAN seat wears, which says the engine does not run it. Without
+   * this the compact cells could not draw it at all, so one person was a
+   * dashed disc in a column that happened to be handed a kind and a solid one
+   * in the column beside it — on the same grid, over the same row.
+   *
+   * `undefined` is a seat the chart does not hold, and it draws the neutral
+   * disc rather than claiming the seat is an agent. Both resolvers come from
+   * [seatResolvers], so a builder cannot thread the name and drop this.
+   */
+  seatKind?: (handle: string) => SeatKind | undefined;
   types?: WorkTypeDef[];
   statuses?: WorkStatusDef[];
 }
@@ -126,11 +144,13 @@ export function StatusBadge({ status, defs }: { status: string; defs?: WorkStatu
 export function Assignee({
   handle,
   seatName,
+  seatKind,
   size = "sm",
   name: showName,
 }: {
   handle?: string;
   seatName?: (handle: string) => string;
+  seatKind?: (handle: string) => SeatKind | undefined;
   size?: "sm" | "md";
   name?: boolean;
 }) {
@@ -149,8 +169,19 @@ export function Assignee({
       {/* `decorative` ONLY WHERE THE NAME IS PRINTED BESIDE IT. Ours was
           `aria-hidden` either way and leant on a `title` on the wrapper, which
           a screen reader is free to ignore — so the four columns that draw the
-          badge alone announced the assignee as nothing at all. */}
-      <Avatar name={label} size={size} decorative={showName} />
+          badge alone announced the assignee as nothing at all.
+
+          AND THE DASHED RING IS THE ONE VARIANT A BADGE HAS: `SeatCell` drew
+          it from the kind it was handed and this cell could not be handed one,
+          so the same human seat was drawn two ways on the two column sets of
+          ONE grid. A kind the chart does not hold draws the neutral disc,
+          which is the honest badge for a seat nobody can classify. */}
+      <Avatar
+        name={label}
+        size={size}
+        variant={seatKind?.(handle) === "human" ? "dashed" : "solid"}
+        decorative={showName}
+      />
       {showName && <span className="truncate">{label}</span>}
     </span>
   );
@@ -297,7 +328,7 @@ export function BoardCard({
           <DueMark due={row.due} overdue={row.overdue} now={now} />
           <SizeMark points={row.points} minutes={row.estimate_min} />
           <span className="spacer" />
-          <Assignee handle={row.assignee} seatName={chrome.seatName} />
+          <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
         </div>
       )}
     </a>
@@ -384,7 +415,7 @@ export function WorkRow({
         <TypeIcon type={row.type} types={chrome.types} />
       </span>
       <span className="work-cell work-cell-who">
-        <Assignee handle={row.assignee} seatName={chrome.seatName} />
+        <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
       </span>
       <span className="work-row-when" title={fmtDateTime(row.updated)}>
         {relTime(row.updated, now)}
