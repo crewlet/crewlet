@@ -301,6 +301,50 @@ func TestACorruptedArtefactIsRefusedAndTheLiveDatabaseSurvives(t *testing.T) {
 	}
 }
 
+// A JOIN ABANDONED MID-ADOPTION SAYS SO, and is never "nobody could donate".
+//
+// [statelog.ErrNoOffer] is a statement about the fleet, and the engine acts
+// on it: a boot comes up on the history it has and logs that no peer could
+// donate, a rejoin schedules its next attempt. A cancellation filed among the
+// refusals came back as exactly that — every remaining offer ended the same
+// way, each donor was logged as refused, and a node being stopped reported a
+// fleet with nothing to give.
+//
+// The cancellation lands at step 7's re-check, which is the last step before
+// the install: late enough that a transfer really happened, early enough that
+// the live database was never touched.
+func TestAJoinAbandonedMidAdoptionIsNotAnEmptyFleet(t *testing.T) {
+	t.Parallel()
+	h := newJoinHarness(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	h.stillUsable = func(joinCtx context.Context, _ statelog.Manifest) error {
+		// The engine's own re-check reads the broker under the join's
+		// context, and a read under a cancelled one fails with the
+		// cancellation.
+		cancel()
+		return joinCtx.Err()
+	}
+
+	_, err := h.adopter(t).Join(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Join = %v, want the cancellation", err)
+	}
+	if errors.Is(err, statelog.ErrNoOffer) {
+		t.Fatalf("an abandoned join reported ErrNoOffer (%v) — the engine reads "+
+			"that as a fleet with nothing to donate, and brings a boot up or "+
+			"schedules a retry for a node that is being stopped", err)
+	}
+	if h.closes.Load() != 0 {
+		t.Fatal("the live database was closed by a join its caller had abandoned")
+	}
+	if h.held.Load() != h.released.Load() {
+		t.Fatalf("the tail was held %d time(s) and released %d — an abandoned "+
+			"join that keeps its hold stops the whole fleet trimming",
+			h.held.Load(), h.released.Load())
+	}
+}
+
 // AN ARTEFACT WHOSE MANIFEST DOES NOT MATCH THE FILE IS REFUSED.
 //
 // The checkpoint commits in the same transaction as the rows, so the position

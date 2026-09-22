@@ -370,7 +370,24 @@ func (d *Donor) terminate(nc *nats.Conn, deliver string, status int, detail stri
 // It collects for a WINDOW rather than taking the first reply, because the
 // first reply is the fastest peer rather than the best artefact — and newer is
 // strictly better, since the only thing an older one buys is a longer replay.
+//
+// # What the context means
+//
+// The window is the joiner's patience, and ctx is its CALLER'S: whichever ends
+// first ends the collection. The window ending is the ordinary answer — what
+// arrived, possibly nothing. ctx ending is an ERROR wrapping ctx.Err(), never
+// an empty result, because "nobody answered" is acted on — through
+// [Adopter.Join] a boot comes up on the history it has and a runtime rejoin
+// backs off to ask again — and a node whose boot was interrupted or whose
+// state log is stopping must do neither. A connection that stops delivering
+// is an error for the same reason: a joiner that cannot hear has not been told
+// that nobody can donate.
 func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window time.Duration) ([]Offer, error) {
+	// A CALLER THAT HAS ALREADY GIVEN UP ASKS NOBODY: a request published
+	// now is one every donor answers for a joiner that will not read it.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("statelog: ask for offers: %w", err)
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("statelog: encode an offer request: %w", err)
@@ -382,19 +399,47 @@ func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 	}
 	defer func() { _ = sub.Unsubscribe() }()
 
+	// THE WINDOW IS A CHILD OF THE CALLER'S CONTEXT, so one wait observes
+	// both ends. A deadline computed beside ctx — the shape this replaced —
+	// is a timer nothing else can interrupt: a SIGTERM during a boot's
+	// window, or a Stop during a runtime rejoin, sat out the rest of it.
+	collect, cancel := context.WithTimeout(ctx, window)
+	defer cancel()
 	if err := nc.PublishRequest(SubjectOffer, inbox, body); err != nil {
 		return nil, fmt.Errorf("statelog: ask for offers: %w", err)
 	}
-	if err := nc.Flush(); err != nil {
+	// Bounded by the window as well: a broker that has not confirmed the
+	// ask by the time the window closes has asked nobody, which is a
+	// failure to ask rather than an answer.
+	if err := nc.FlushWithContext(collect); err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("statelog: flush the offer request: %w", ctx.Err())
+		}
 		return nil, fmt.Errorf("statelog: flush the offer request: %w", err)
 	}
 
-	deadline := time.Now().Add(window)
 	var out []Offer
-	for time.Now().Before(deadline) {
-		msg, err := sub.NextMsg(time.Until(deadline))
+	for {
+		msg, err := sub.NextMsgWithContext(collect)
 		if err != nil {
-			break
+			// THE CALLER'S END FIRST, and tested on the PARENT: the
+			// child is done in both cases, so its own error cannot say
+			// whose end it was.
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("statelog: collect offers: %w", ctx.Err())
+			}
+			// The window closed, or the broker reported that nothing
+			// subscribes to the subject at all — which is the same
+			// answer sooner, and what a lone node hears at boot before
+			// its own donor has started.
+			if collect.Err() != nil || errors.Is(err, nats.ErrNoResponders) {
+				break
+			}
+			// ANYTHING ELSE IS A JOINER THAT CAN NO LONGER HEAR — a
+			// closed connection, a dropped subscription — and ending
+			// the loop there would report a fleet it never heard from
+			// as a fleet with nothing to give.
+			return nil, fmt.Errorf("statelog: collect offers: %w", err)
 		}
 		var o Offer
 		if err := json.Unmarshal(msg.Data, &o); err != nil {
@@ -500,11 +545,20 @@ func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string)
 }
 
 // nextTransferChunk waits for the next message, bounded.
+//
+// THE CALLER'S END IS TOLD APART FROM THE DONOR'S, for [CollectOffers]'s
+// reason. The wait is a child of ctx, so a caller whose own deadline passed
+// sees DeadlineExceeded exactly as a stalled donor does — and reading only the
+// child's error blamed the donor for it, in a message that names a thirty-
+// second wait the caller never gave it.
 func nextTransferChunk(ctx context.Context, sub *nats.Subscription) (*nats.Msg, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, TransferChunkWait)
 	defer cancel()
 	msg, err := sub.NextMsgWithContext(waitCtx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("statelog: receive a chunk: %w", ctx.Err())
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, fmt.Errorf("statelog: the donor stopped sending "+
 				"mid-transfer (no chunk for %s)", TransferChunkWait)

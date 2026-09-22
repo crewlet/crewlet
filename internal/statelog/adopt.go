@@ -139,6 +139,11 @@ func NewAdopter(d AdoptDeps) (*Adopter, error) {
 }
 
 // ErrNoOffer reports a join that found no artefact it could use.
+//
+// It is a statement about the FLEET, so it is never the answer to a join whose
+// context ended: that comes back as an error wrapping ctx.Err() whichever step
+// it interrupted, because a caller acts on this one by carrying on without a
+// snapshot, and a caller that gave up is not carrying on at all.
 var ErrNoOffer = errors.New("statelog: no usable snapshot was offered")
 
 // Join runs the whole sequence and reports the manifest it adopted.
@@ -187,6 +192,18 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 		m, err := a.adopt(ctx, offer)
 		if err == nil {
 			return m, nil
+		}
+		// A CALLER THAT GAVE UP IS NOT A DONOR THAT FAILED. Filed as a
+		// refusal, the cancellation would end every remaining offer the
+		// same way, log each donor as refused, and come back as
+		// [ErrNoOffer] — which the engine reads as "nobody could donate"
+		// and answers by bringing a boot up on the history it has or
+		// scheduling a rejoin's retry, where the node is in fact being
+		// stopped. Returned rather than joined to the refusals, so
+		// [ErrNoOffer] never wraps it.
+		if ctx.Err() != nil {
+			return Manifest{}, fmt.Errorf("statelog: the join was abandoned "+
+				"adopting %s's snapshot: %w: %w", offer.Manifest.NodeID, ctx.Err(), err)
 		}
 		refusals = append(refusals, fmt.Errorf("%s: %w", offer.Manifest.NodeID, err))
 		a.log.WarnContext(ctx, "statelog_adoption_refused",

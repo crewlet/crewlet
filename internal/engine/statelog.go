@@ -427,13 +427,24 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 }
 
 // Stop ends every loop this node started and waits for them.
+//
+// THE APPLIERS ARE JOINED LAST, after everything in [stateLog.done], because a
+// runtime rejoin is in that group and RELAUNCHES them on its way out —
+// [Engine.rejoin] starts them again whatever the join concluded, a cancelled
+// one included. Halted FIRST, which is the obvious order, a Stop that landed
+// mid-rejoin found them already halted by the rejoin, cancelled the run,
+// waited for the rejoin, and returned while the set the rejoin had just
+// relaunched was still running against a store its caller closes next. Once
+// the group has drained nothing is left that could launch another, so a halt
+// after it is the last word. Cancelling the run first ends the appliers too —
+// their context is a child of it — and the halt is what waits for them.
 func (s *stateLog) Stop() {
 	if s == nil {
 		return
 	}
-	s.haltAppliers()
 	s.stop()
 	s.done.Wait()
+	s.haltAppliers()
 }
 
 // launchAppliers starts every domain's apply loop under a fresh context

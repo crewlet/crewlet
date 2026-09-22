@@ -221,7 +221,10 @@ When a node reports `below_floor`:
    which pins the trim for the duration of the transfer — so a join cannot
    race the trim that made it necessary. A running node that finds no donor
    stays as it is, refusing, and asks again on an interval that doubles up to
-   five minutes.
+   five minutes. Stopping a node mid-join — a signal during its boot, or a
+   shutdown while it is asking or fetching — gives the join up at once rather
+   than waiting out the five-second offer window, and is never reported as a
+   fleet with nothing to donate: the next start decides afresh.
 3. If none does, the skip reason says why. Fix that first: a fleet where every
    node is `lagging` has an applier problem, not a snapshot problem.
 4. If the fleet genuinely holds none — a single node, or every peer skipping —

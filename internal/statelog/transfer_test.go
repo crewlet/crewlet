@@ -3,6 +3,7 @@ package statelog_test
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -286,5 +287,243 @@ func TestOffersAreRankedNewestFirst(t *testing.T) {
 	}
 	if at(9_000).Newest() <= at(4_200).Newest() {
 		t.Fatal("a newer artefact does not rank above an older one")
+	}
+}
+
+// openSilentFleet is a broker with ONE listener on the offer subject that
+// never answers — a fleet whose donors hold nothing — and a wait that returns
+// once the joiner is COLLECTING: the listener has heard its ask, and the flush
+// that follows the ask has had time to complete.
+//
+// SILENT RATHER THAN ABSENT, because an absent fleet is answered by the broker:
+// with nothing subscribed it reports "no responders" and a collection ends at
+// once, which is exactly how a case about a collection that ENDS EARLY passes
+// for the wrong reason.
+//
+// AND SETTLED PAST THE FLUSH, for the same reason one step later. The listener
+// hears the ask before the broker's answer to the joiner's flush has arrived,
+// and an interruption landing inside that flush ends it there — correctly, so
+// every assertion here holds on that path too, but a case whose interruption
+// lands in the flush says nothing about the collection loop, and a mutation
+// that broke only the loop went green on it. A broker in this process answers
+// a flush in microseconds, so the settle is two orders of magnitude of room.
+func openSilentFleet(t *testing.T) (*js.Queue, func()) {
+	t.Helper()
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open a broker: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
+			t.Errorf("stop the broker: %v", err)
+		}
+	})
+	listener, err := q.DialOwned()
+	if err != nil {
+		t.Fatalf("dial the listener: %v", err)
+	}
+	t.Cleanup(listener.Close)
+	asked := make(chan struct{}, 1)
+	if _, err := listener.Subscribe(statelog.SubjectOffer, func(*nats.Msg) {
+		select {
+		case asked <- struct{}{}:
+		default:
+		}
+	}); err != nil {
+		t.Fatalf("listen for asks: %v", err)
+	}
+	// The subscription has to reach the broker before the first ask, or
+	// the ask meets "no responders" and the case measures startup order.
+	if err := listener.Flush(); err != nil {
+		t.Fatalf("flush the listener: %v", err)
+	}
+	return q, func() {
+		t.Helper()
+		select {
+		case <-asked:
+		case <-time.After(time.Minute):
+			t.Fatal("the joiner never asked the fleet for offers")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// A JOINER WHOSE CALLER GIVES UP STOPS COLLECTING, and says why.
+//
+// The window is the joiner's patience, not a promise to wait it out: a boot
+// interrupted by a signal and a running node being stopped mid-rejoin both
+// cancel the context they asked under. A collection that ignored it held each
+// for the rest of the window — the rejoin's for the whole of the state log's
+// Stop, which waits for it — and then answered "nobody offered anything",
+// which a boot reads as "come up on what you have" and logs as a fleet with
+// nothing to donate.
+func TestACancelledJoinerStopsCollecting(t *testing.T) {
+	t.Parallel()
+	q, asked := openSilentFleet(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	type result struct {
+		offers []statelog.Offer
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		// AN HOUR, so a collection that ignores the cancellation cannot
+		// end inside the watchdog below by any route but the window.
+		offers, err := statelog.CollectOffers(ctx, q.Conn(),
+			statelog.OfferRequest{NodeID: "joiner"}, time.Hour)
+		done <- result{offers, err}
+	}()
+	asked()
+	cancel()
+
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, context.Canceled) {
+			t.Fatalf("a cancelled collection returned (%d offer(s), %v), want the "+
+				"cancellation — an empty window reads as 'nobody could donate'",
+				len(got.offers), got.err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("a cancelled collection was still waiting a minute into an " +
+			"hour-long window — the caller's context is not being read")
+	}
+}
+
+// A JOINER WHOSE CALLER HAS ALREADY GIVEN UP ASKS NOBODY.
+//
+// An ask is not free to the fleet: every donor answers it, with a manifest
+// and a fetch subject, for a joiner that will never read either.
+//
+// "Nothing was published" is observed with a SENTINEL rather than a wait: the
+// sentinel goes out on the joiner's own connection afterwards, and a broker
+// delivers one connection's messages in order, so the listener's first
+// message is the sentinel exactly when nothing preceded it.
+func TestAJoinerWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
+	t.Parallel()
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open a broker: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
+			t.Errorf("stop the broker: %v", err)
+		}
+	})
+	listener, err := q.DialOwned()
+	if err != nil {
+		t.Fatalf("dial the listener: %v", err)
+	}
+	t.Cleanup(listener.Close)
+	heard, err := listener.SubscribeSync(statelog.SubjectOffer)
+	if err != nil {
+		t.Fatalf("listen for asks: %v", err)
+	}
+	if err := listener.Flush(); err != nil {
+		t.Fatalf("flush the listener: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	// A SHORT WINDOW, so a joiner that asks anyway and then waits the
+	// window out comes back inside this case rather than an hour later.
+	if _, err := statelog.CollectOffers(ctx, q.Conn(),
+		statelog.OfferRequest{NodeID: "joiner"}, 100*time.Millisecond); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CollectOffers under a cancelled context = %v, want the cancellation", err)
+	}
+
+	if err := q.Conn().Publish(statelog.SubjectOffer, []byte("sentinel")); err != nil {
+		t.Fatalf("publish the sentinel: %v", err)
+	}
+	first, err := heard.NextMsg(time.Minute)
+	if err != nil {
+		t.Fatalf("the listener heard nothing, not even the sentinel: %v", err)
+	}
+	if string(first.Data) != "sentinel" {
+		t.Fatalf("the fleet was asked (%q) by a joiner whose caller had already "+
+			"given up", first.Data)
+	}
+}
+
+// A JOINER THAT CAN NO LONGER HEAR IS NOT TOLD THAT NOBODY ANSWERED.
+//
+// "Nobody offered anything" is a statement about the FLEET, and the callers
+// act on it — a boot comes up on the history it has, a rejoin backs off. A
+// connection that closed mid-window has heard nothing from a fleet that may
+// be offering, so reporting its silence as the fleet's is the same lie a
+// cancelled caller must not be told, from the other side.
+func TestAJoinerThatCannotHearIsNotToldNobodyAnswered(t *testing.T) {
+	t.Parallel()
+	q, asked := openSilentFleet(t)
+	// ITS OWN CONNECTION, because this case closes it.
+	joiner, err := q.DialOwned()
+	if err != nil {
+		t.Fatalf("dial the joiner: %v", err)
+	}
+	t.Cleanup(joiner.Close)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := statelog.CollectOffers(t.Context(), joiner,
+			statelog.OfferRequest{NodeID: "joiner"}, time.Hour)
+		done <- err
+	}()
+	asked()
+	joiner.Close()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a joiner whose connection closed mid-window reported an " +
+				"empty fleet — a boot comes up on that answer as if nobody " +
+				"could donate")
+		}
+		if errors.Is(err, context.Canceled) {
+			t.Fatalf("a closed connection was reported as a cancelled caller: %v", err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("a joiner whose connection closed was still collecting a " +
+			"minute into an hour-long window")
+	}
+}
+
+// A CALLER'S OWN DEADLINE IS NOT BLAMED ON THE DONOR.
+//
+// The wait for each chunk is a child of the caller's context, so a caller
+// whose deadline passes sees the same DeadlineExceeded a stalled donor
+// produces. Reading only that, the transfer reported a donor that "stopped
+// sending (no chunk for 30s)" a fraction of a second in, and wrapped nothing a
+// caller could test — so the caller's own end was indistinguishable from a
+// peer's fault.
+func TestACallersDeadlineIsNotBlamedOnTheDonor(t *testing.T) {
+	t.Parallel()
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open a broker: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
+			t.Errorf("stop the broker: %v", err)
+		}
+	})
+	// A donor that accepted the fetch and went quiet.
+	fetch := statelog.SubjectFetchPrefix + "quiet"
+	quiet, err := q.Conn().SubscribeSync(fetch)
+	if err != nil {
+		t.Fatalf("listen for the fetch: %v", err)
+	}
+	t.Cleanup(func() { _ = quiet.Unsubscribe() })
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	dest := filepath.Join(t.TempDir(), "adopt.part")
+	_, err = statelog.FetchArtefact(ctx, q.Conn(), statelog.Offer{Fetch: fetch}, dest)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a fetch whose caller's deadline passed returned %v, want that "+
+			"deadline — anything else blames the donor for the caller's own end", err)
+	}
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("an abandoned fetch left its partial file behind")
 	}
 }
