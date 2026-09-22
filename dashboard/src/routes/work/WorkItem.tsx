@@ -101,6 +101,7 @@ import type {
   WorkRoutingAnswer,
   WorkSummary,
   WorkTombstone,
+  WorkUnitRef,
 } from "~/protocol/index.ts";
 
 /**
@@ -1409,7 +1410,7 @@ export function ItemProps({
           {
             label: "Filed into",
             value: item.filed_unit ? (
-              <span className="truncate">{item.filed_unit}</span>
+              <UnitValue unit={detail.units?.filed} stored={item.filed_unit} />
             ) : (
               <span className="muted">no unit</span>
             ),
@@ -1418,7 +1419,12 @@ export function ItemProps({
           // and it is shown only where it has MOVED, because the pair being
           // equal is the ordinary case and repeating it is noise.
           ...(item.routing_unit && item.routing_unit !== item.filed_unit
-            ? [{ label: "Routes to", value: item.routing_unit }]
+            ? [
+                {
+                  label: "Routes to",
+                  value: <UnitValue unit={detail.units?.routing} stored={item.routing_unit} />,
+                },
+              ]
             : []),
           ...((item.former_keys ?? []).length > 0
             ? [
@@ -1434,6 +1440,40 @@ export function ItemProps({
   }
 
   return <PropertiesRail groups={groups} />;
+}
+
+/**
+ * A team this item names, as a person reads it and as a link to its work.
+ *
+ * THE NAME IS WHAT IS DRAWN AND THE KEY IS WHAT IS FOLLOWED. What the row
+ * holds is the unit's KEY — its `id` on a company that gave its units one,
+ * a word chosen so that a rename moves nothing and therefore a word nobody
+ * reads — so the panel said `eng` while the same company's board column, which
+ * resolves its heading through the chart, said Engineering. The answer carries
+ * the chart's reading beside the record (`WorkItemDetail.units`) and this
+ * draws that; the address keeps the stored key, which the engine matches
+ * against the whole SET of that team's spellings, so one link reaches the
+ * team's work however each item was filed.
+ *
+ * A REFERENCE THE CHART NO LONGER HAS IS A FINDING, drawn the way the project
+ * directory draws the same one: the stored key in a warning tag, unlinked,
+ * because a team that has left the chart is something to correct rather than
+ * somewhere to go.
+ */
+function UnitValue({ unit, stored }: { unit?: WorkUnitRef; stored: string }) {
+  if (unit && unit.resolved === false) {
+    return (
+      <Tag variant="warning" appearance="outline" title="The current org chart has no such unit">
+        {unit.key || stored}
+      </Tag>
+    );
+  }
+  const key = unit?.key || stored;
+  return (
+    <a className="t-link truncate" href={href(["work"], { unit: key })}>
+      {unit?.name || key}
+    </a>
+  );
 }
 
 /**

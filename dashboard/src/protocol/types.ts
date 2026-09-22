@@ -1975,6 +1975,17 @@ export interface WorkUnitRef {
   resolved: boolean;
 }
 
+/** A task's two unit references as a reader renders them — see
+ *  [WorkItemDetail.units].
+ *
+ *  BOTH HALVES, ALWAYS, because they answer different questions and a screen
+ *  draws them side by side: `filed` is the team the work belongs to and never
+ *  moves, `routing` is whose lead hears about it now. */
+export interface WorkItemUnits {
+  filed: WorkUnitRef;
+  routing: WorkUnitRef;
+}
+
 export interface WorkLeadRef {
   handle?: string;
   kind?: "agent" | "human" | "operator" | "system";
@@ -2404,6 +2415,21 @@ export interface WorkItemDetail {
   /** The task's custom-field values, ANNOTATED — see [WorkFieldValue]. The
    *  raw map stays on the task; this is the reader's view of it. */
   fields?: WorkFieldValue[];
+  /** The task's two unit references RESOLVED against the org chart, on exactly
+   *  the terms `fields` is the custom-field map's reader view: the strings
+   *  stay on the task because they are the record, and this is what a person
+   *  reads.
+   *
+   *  It exists because what those strings hold is the unit's KEY — its `id` on
+   *  a company that gave its units one, which is a word chosen so that a
+   *  rename moves nothing and therefore a word nobody reads. `key` repeats
+   *  exactly what the row holds, so a filter built from it reaches the same
+   *  rows, and `resolved: false` is the finding "this names a team the chart
+   *  no longer has".
+   *
+   *  ABSENT for a task filed into no team at all, because that is what its two
+   *  empty strings already say. */
+  units?: WorkItemUnits;
   /** Pages the thread backwards, and is empty when this page is all of it. */
   comments_cursor?: string;
   /** The SAME predicate WorkSummary.blocked carries — an open dependency edge

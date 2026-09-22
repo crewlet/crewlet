@@ -102,7 +102,11 @@ called `Engineering`.
 What the engine **stores** is always the unit's id where it has one, so that
 renaming a team does not move the work filed into it. What a screen **shows**
 is always the team's current name, resolved back through the chart when the
-answer is built.
+answer is built: an item's **Filed into** and **Routes to** read as the team's
+name and link to that team's work, a board's unit column is headed with it,
+and a project's row in the directory carries it. A reference the chart no
+longer has is **marked** on each of those rather than printed as a name — it
+is a team that has left the chart, which is something to correct.
 
 **Adding an id to a team that already has work does not rewrite that work,
 and does not need to.** A task's filed unit is a record of what was true and

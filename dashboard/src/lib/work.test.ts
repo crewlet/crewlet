@@ -1369,6 +1369,32 @@ test("an axis names its own empty key", () => {
   expect(axisLabel("status", "")).toBe("No status");
 });
 
+// A UNIT KEY IS THE ONE AXIS THIS CLIENT CANNOT NAME FOR ITSELF. What a row
+// holds is the unit's `id` on a company that set one — a word chosen so that a
+// rename moves nothing — and the anonymous org projection carries no ids, so
+// the engine's own column label is the only name for it. Given one, a chip and
+// the heading it was cut from say the same word; without one the key stands,
+// which is what the address holds and what the filter takes.
+test("a unit reads by the name its answer gave, and by its key otherwise", () => {
+  expect(axisLabel("unit", "eng")).toBe("eng");
+  expect(axisLabel("unit", "eng", { unitName: () => "Engineering" })).toBe("Engineering");
+  expect(axisLabel("routing_unit", "eng", { unitName: () => "" })).toBe("eng");
+  expect(axisLabel("unit", "")).toBe("No unit");
+});
+
+// AND A TEAM IS AN ORDINARY FILTER KEY, arriving from an item's own "Filed
+// into" line rather than from a control: it narrows the query, it carries a
+// chip, and the chip clears it like any other.
+test("a unit filter is one chip that clears its own key", () => {
+  const chips = filterChips(
+    { ...NO_FILTERS, unit: "eng" },
+    { unitName: (key) => (key === "eng" ? "Engineering" : "") },
+  );
+  expect(chips.map((c) => c.param)).toEqual(["unit"]);
+  expect(chips[0]?.value).toBe("Engineering");
+  expect(anyFilter({ ...NO_FILTERS, unit: "eng" })).toBe(true);
+});
+
 // ---------------------------------------------------------------------------
 // The scope segment
 // ---------------------------------------------------------------------------

@@ -224,6 +224,16 @@ export interface LabelContext {
   /** The company's own fields, so a chip over one can say what it is called. */
   fields?: WorkFieldDef[];
   /**
+   * What a UNIT key is called, where the caller can say.
+   *
+   * The one axis a client cannot name for itself: a row holds the unit's KEY,
+   * which is its `id` on a company that set one, and the anonymous org
+   * projection carries no ids — so the engine's own column `label` is the only
+   * name for it, and a caller holding the answer passes it down here. Absent,
+   * the key stands, which is what the address holds and what a filter takes.
+   */
+  unitName?: (key: string) => string;
+  /**
    * WHO IS READING, as the seat handle a wake would have been delivered to.
    *
    * A change record is written ONCE and read by everybody, so a sentence the
@@ -294,7 +304,17 @@ export function axisLabel(axis: string, key: string, ctx: LabelContext = {}): st
       return key || "No project";
     case "unit":
     case "routing_unit":
-      return key || "No unit";
+      // THE NAME WHERE THE CALLER HAS ONE, and the key where it does not.
+      //
+      // A unit key is its `id` on a company that set one — a word chosen so
+      // that a rename moves nothing, and therefore a word nobody reads. Only
+      // the ENGINE can turn one into a team's name: a unit's `id:` is guarded,
+      // so the anonymous org projection this client reads carries names alone
+      // and a key out of a URL resolves against nothing here. What the engine
+      // does give is a column's own `label`, which [groupLabel] takes before
+      // this is reached and which a caller holding the answer can pass down —
+      // so a chip and the heading it was cut from say one word.
+      return key ? ctx.unitName?.(key) || key : "No unit";
     case "due:bucket":
       // THE ENGINE NAMES THESE and a column head takes that name — the answer
       // carries a `label` per band, so [groupLabel] returns before it reaches
@@ -831,6 +851,21 @@ export interface TrackerFilters {
   /** One of the PROJECT's own labels — the set is a project's, never the
    *  company's, so this narrows only where that set is known. */
   tag: string;
+  /**
+   * The TEAM the work is filed into, by the unit's id or by its name.
+   *
+   * URL-ONLY, and deliberately: it arrives from an item's own "Filed into"
+   * line rather than from a control, because naming a team from a picker
+   * would need a list of unit KEYS, and the anonymous org projection this
+   * client reads carries names alone (a unit's `id:` is guarded). It still
+   * carries a chip, which is how a reader sees it and takes it off.
+   *
+   * The engine matches the SET of the unit's spellings, so the one key an
+   * item holds reaches every task of that team however it was filed — which
+   * a `group=` narrowing on the unit axis cannot do, since a column IS one
+   * stored spelling.
+   */
+  unit: string;
   /** One of [SCOPES]: `open` (the default), `closed` or `all`. */
   scope: string;
   groupBy: string;
@@ -904,6 +939,7 @@ export const NO_FILTERS: TrackerFilters = {
   priority: "",
   assignee: "",
   tag: "",
+  unit: "",
   scope: "open",
   groupBy: "",
   groupBy2: "",
@@ -935,6 +971,7 @@ export function anyFilter(f: TrackerFilters): boolean {
     f.priority ||
     f.assignee ||
     f.tag ||
+    f.unit ||
     // PRESENCE, NEVER TRUTH: `group=` with nothing after it is the unset
     // column, which narrows the query exactly as a named one does.
     f.group !== undefined ||
@@ -994,6 +1031,7 @@ export function buildItemsParams(args: {
   set("priority", filters.priority);
   set("assignee", filters.assignee);
   set("tag", filters.tag);
+  set("unit", filters.unit);
 
   // OPEN AND CLOSED ARE STATUS GROUPS, not a boolean: the four groups are
   // what every rule in the tracker is written at, and `done` and `closed` are
@@ -1272,6 +1310,18 @@ export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterCh
       label: "Tag",
       verb: "is",
       value: ctx.tags?.find((t) => t.slug === f.tag)?.label ?? f.tag,
+    });
+  }
+  if (f.unit) {
+    out.push({
+      param: "unit",
+      label: "Unit",
+      verb: "is",
+      // WHATEVER THE ADDRESS HOLDS, which on a company that gave its units
+      // ids is a key rather than a word — see [axisLabel]'s unit arm for why
+      // this client cannot turn one into a name on its own, and why the chip
+      // says the key rather than inventing one.
+      value: axisLabel("unit", f.unit, ctx),
     });
   }
   if (f.due) out.push({ param: "due", label: "Due", verb: "is", value: dueFilterLabel(f.due) });

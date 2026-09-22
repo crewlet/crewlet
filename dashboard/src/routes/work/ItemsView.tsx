@@ -134,6 +134,11 @@ export function ItemsView({ project = "" }: { project?: string }) {
   const [priority, setPriority] = useParam("priority", "");
   const [assignee, setAssignee] = useParam("assignee", "");
   const [tag, setTag] = useParam("tag", "");
+  // THE TEAM, which arrives from an item's own "Filed into" line rather than
+  // from a control — see [TrackerFilters.unit]. An ordinary filter key from
+  // here on: it narrows the query, it carries a chip, and the chip takes it
+  // off.
+  const [unit] = useParam("unit", "");
   const [groupBy, setGroupBy] = useParam("group_by", "");
   const [groupBy2, setGroupBy2] = useParam("group_by2", "");
   // THE COLUMN NARROWING IS THREE-VALUED and `useParam` cannot say so: its
@@ -226,6 +231,7 @@ export function ItemsView({ project = "" }: { project?: string }) {
     priority,
     assignee,
     tag,
+    unit,
     scope,
     groupBy,
     groupBy2,
@@ -311,6 +317,11 @@ export function ItemsView({ project = "" }: { project?: string }) {
     tags: detail?.tags,
     fields: catalogue.data?.fields,
     seatName: chrome.seatName,
+    // WHAT THE ANSWER HEADED THIS TEAM'S COLUMN, which is the only name a unit
+    // key has on this side of the wire — see [LabelContext.unitName]. Where
+    // the board is not grouped by unit there is no column to ask, and the chip
+    // then says the key the address holds.
+    unitName: (key: string) => groups.find((group) => group.key === key)?.label ?? "",
   };
 
   // ONE WRITER FOR EVERY FILTER KEY, and it is the router's own: `nav.filter`
