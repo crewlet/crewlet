@@ -119,6 +119,28 @@ type TaskDetail struct {
 	Comments []Comment      `json:"comments,omitempty"`
 	History  []HistoryEntry `json:"history,omitempty"`
 
+	// Keys names the tasks this answer's HISTORY points at, id to item key
+	// — the same map [ActivityAnswer.Keys] carries, asked of one task's own
+	// rows, and resolved by the same walk so the two reads cannot name one
+	// delta differently.
+	//
+	// It is here for exactly the reason it is there: a delta names the
+	// other end of a relation by its ID, because a key is a fact about
+	// ANOTHER task's row and `tracker_history` is inside this domain's
+	// identity claim, written once and repaired by nothing — so a node
+	// that had not applied that task would store a different string there
+	// for ever. Neither side could fix "Parent: 1d573f85… → 50a01576…"
+	// alone: the engine may not put a key on the record, and a surface
+	// holds no map to resolve one with. Without it the company-wide log
+	// resolved a re-parent to two keys while the item's own History tab —
+	// the screen a reader opens to see what happened to THIS task —
+	// printed two uuids for the same commit.
+	//
+	// ONLY WITH [DetailWants.History], since the history rows are what it
+	// labels, and AN ID THIS NODE HOLDS NO ROW FOR IS SIMPLY ABSENT: a
+	// renderer falls back to the id, which is the honest degradation.
+	Keys map[string]string `json:"keys,omitempty"`
+
 	// CommentsCursor pages the thread, and is empty when this page is the
 	// whole of it.
 	//
@@ -306,6 +328,15 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 				limit = DetailHistoryDefault
 			}
 			if out.History, err = readHistory(ctx, tx, id, limit); err != nil {
+				return err
+			}
+			// IN THE SAME TRANSACTION as the rows it labels, for
+			// the reason the feed's own read gives: a map read
+			// separately could name a key from a later instant
+			// than the history it is about.
+			if out.Keys, err = counterpartyKeys(ctx, tx,
+				historyDeltaSides(out.History),
+				r.db.Caps().MaxVariables); err != nil {
 				return err
 			}
 		}
