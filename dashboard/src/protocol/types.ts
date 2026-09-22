@@ -2429,6 +2429,21 @@ export interface WorkItemDetail {
   task: WorkItem;
   comments?: WorkComment[];
   history?: WorkChange[];
+  /** What the tasks this answer's `history` POINTS AT are called, id to item
+   *  key — the same map `WorkActivityAnswer.keys` carries, asked of one task's
+   *  own rows.
+   *
+   *  A relation, parent or cascade delta names the other end by its ID,
+   *  because a key belongs to that task's own row and a history row is written
+   *  once by every node and repaired by nothing. Neither side can fix
+   *  "Parent: — → 1d573f85-…" alone: the engine may not put a key on the
+   *  record, and this build holds no map to resolve one with. It is what
+   *  `LabelContext.taskKey` is threaded from.
+   *
+   *  PRESENT ONLY WHERE THE HISTORY IS, since those are the rows it labels,
+   *  and an id the answering node holds no row for is simply ABSENT — a
+   *  renderer falls back to the id, which is a value somebody set. */
+  keys?: Record<string, string>;
   links?: WorkLink[];
   /** The task's custom-field values, ANNOTATED — see [WorkFieldValue]. The
    *  raw map stays on the task; this is the reader's view of it. */

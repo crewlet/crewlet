@@ -78,6 +78,7 @@ import {
   fieldValueState,
   fieldValueText,
   fmtMinutes,
+  type LabelContext,
   typeIcon,
   typeName,
 } from "~/lib/work.ts";
@@ -687,6 +688,29 @@ export function ItemBody({
   const comments = detail.comments ?? [];
   const history = detail.history ?? [];
 
+  // WHAT A RELATION'S OTHER END IS CALLED, on the chrome the two history
+  // surfaces hand `describeHistory`.
+  //
+  // A re-parent, a cascade removal and every relation delta name the other
+  // task by its ID — a key belongs to that task's own row, and a history row
+  // is written once by every node and repaired by nothing — so the answer
+  // resolves what this node holds and the sentence reads it from here. Without
+  // it these two tabs printed `Parent: 1d573f85-… → 50a01576-…` while
+  // `#/work/history`, which builds the same context from `work_activity`'s own
+  // map, printed `Parent: — → ENG-1` for the same commit.
+  //
+  // BUILT ONCE, HERE, because both tabs ask the same question of the same
+  // answer: built per tab they are two places for one resolver to be dropped,
+  // and each renders perfectly on its own while disagreeing with the other.
+  //
+  // AN UNRESOLVED ID FALLS THROUGH TO ITSELF — `deltaValue` reads
+  // `taskKey(id) || id` — which is the honest degradation for an id past the
+  // answer's cap or on a task this node has not applied.
+  const labels: RowChrome & LabelContext = {
+    ...chrome,
+    taskKey: (id) => detail.keys?.[id] ?? "",
+  };
+
   return (
     <>
       <BodySection title="Description" flush={flush}>
@@ -777,9 +801,9 @@ export function ItemBody({
         {tab === "comments" ? (
           <Thread comments={comments} chrome={chrome} now={now} more={detail.comments_cursor} />
         ) : tab === "woke" ? (
-          <Woke history={history} chrome={chrome} now={now} record={record} onPick={setRecord} />
+          <Woke history={history} chrome={labels} now={now} record={record} onPick={setRecord} />
         ) : (
-          <History detail={detail} chrome={chrome} now={now} />
+          <History detail={detail} chrome={labels} now={now} />
         )}
       </Card>
       {/* THE READ-ONLY PRODUCT'S ANSWER TO AN EDIT BUTTON. Closed by default:
@@ -865,7 +889,8 @@ function History({
   now,
 }: {
   detail: WorkItemDetail;
-  chrome: RowChrome;
+  /** The chart's resolvers AND the answer's own key map — see [ItemBody]. */
+  chrome: RowChrome & LabelContext;
   now: number;
 }) {
   const history = detail.history ?? [];
@@ -948,7 +973,8 @@ function Woke({
   onPick,
 }: {
   history: WorkChange[];
-  chrome: RowChrome;
+  /** The chart's resolvers AND the answer's own key map — see [ItemBody]. */
+  chrome: RowChrome & LabelContext;
   now: number;
   record: string;
   onPick: (id: string) => void;
