@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,6 +31,23 @@ func (r *roundTrip) project(q tracker.ProjectDetailQuery) tracker.ProjectDetail 
 		r.t.Fatalf("Project(%+v): %v", q, err)
 	}
 	return detail
+}
+
+// filedInto files one plain task into a NAMED project.
+//
+// `filedTask` beside it files into the harness's own ENG, which is all a case
+// about one project needs. An ordering case needs the count columns to
+// disagree with the key order, and those columns only move when a task
+// actually lands in the project.
+func filedInto(t *testing.T, r *roundTrip, project, id string) {
+	t.Helper()
+	task := newTask(id)
+	task.Project = project
+	task.Key = project + "-" + id
+	if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+		t.Fatalf("CreateTask %s into %s: %v", id, project, err)
+	}
+	r.drain()
 }
 
 // seedProject files a second project beside the harness's own ENG.
@@ -66,7 +84,7 @@ func TestAProjectListingReadsTheMaintainedCounts(t *testing.T) {
 	}
 	r.drain()
 
-	listing := r.projects(tracker.ProjectQuery{})
+	listing := r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude})
 	if len(listing.Projects) != 1 {
 		t.Fatalf("the listing has %d projects, want the one this company has",
 			len(listing.Projects))
@@ -92,8 +110,15 @@ func TestAProjectListingReadsTheMaintainedCounts(t *testing.T) {
 	}
 }
 
-// AN ARCHIVED PROJECT IS OUT OF THE DEFAULT LISTING, and a filter reaches it.
-func TestAProjectListingFiltersAndOrders(t *testing.T) {
+// THE ARCHIVAL MODE SELECTS A SET, it does not widen one.
+//
+// Each of the three answers a DIFFERENT set and each carries the total of the
+// set it answered. The `bool` this replaced could only exclude or include, so
+// "what did we retire" was a screen's own narrowing over the wider answer —
+// and a narrowing applied to a PAGE of that answer finds no archived row at
+// all once the active projects fill it, which is a company with dozens of
+// retired projects being told it has none.
+func TestAProjectListingSelectsOneArchivalSet(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations",
@@ -101,34 +126,259 @@ func TestAProjectListingFiltersAndOrders(t *testing.T) {
 	seedProject(t, r, tracker.Project{Key: "OLD", Name: "Retired",
 		Archived: true})
 
-	live := keys(r.projects(tracker.ProjectQuery{}))
+	for _, c := range []struct {
+		mode tracker.ArchivedMode
+		want []string
+	}{
+		{tracker.ArchivedExclude, []string{"ENG", "OPS"}},
+		{tracker.ArchivedOnly, []string{"OLD"}},
+		{tracker.ArchivedInclude, []string{"ENG", "OLD", "OPS"}},
+	} {
+		listing := r.projects(tracker.ProjectQuery{Archived: c.mode})
+		if got := keys(listing); !slices.Equal(got, c.want) {
+			t.Errorf("archived=%s answers %v, want %v — each mode names one "+
+				"set and the read selects exactly it", c.mode, got, c.want)
+		}
+		// AND `total` IS THE ASKED SET'S OWN COUNT. A total counted over
+		// a wider set than the rows is the number a screen prints beside
+		// them, so "1 of 3 projects" about an archived half is a
+		// sentence comparing two different questions.
+		if listing.Total != len(c.want) {
+			t.Errorf("archived=%s answers total=%d, want %d — the total counts "+
+				"the ASKED set", c.mode, listing.Total, len(c.want))
+		}
+	}
+}
+
+// A LISTING FILTERS ON WHAT A FILTER BOX IS TYPED INTO.
+func TestAProjectListingFilters(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations",
+		Purpose: "keep the lights on", Unit: "platform"})
+	seedProject(t, r, tracker.Project{Key: "OLD", Name: "Retired",
+		Archived: true})
+
+	live := keys(r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude}))
 	if len(live) != 2 || live[0] != "ENG" || live[1] != "OPS" {
 		t.Fatalf("the default listing is %v, want [ENG OPS] — ordered by key, "+
 			"with the archived project excluded", live)
 	}
-	if withArchived := keys(r.projects(tracker.ProjectQuery{Archived: true})); len(withArchived) != 3 {
-		t.Fatalf("archived=true answers %v, want all three", withArchived)
-	}
 	// THE PURPOSE IS SEARCHED TOO, because a filter box is typed into by
 	// somebody who remembers one of the three columns.
-	if got := keys(r.projects(tracker.ProjectQuery{Q: "lights"})); len(got) != 1 ||
+	if got := keys(r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude, Q: "lights"})); len(got) != 1 ||
 		got[0] != "OPS" {
 		t.Fatalf("q=lights answers %v, want [OPS] — the purpose is searched", got)
 	}
-	if got := keys(r.projects(tracker.ProjectQuery{Q: "operations"})); len(got) != 1 ||
+	if got := keys(r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude, Q: "operations"})); len(got) != 1 ||
 		got[0] != "OPS" {
 		t.Fatalf("q=operations answers %v, want [OPS] — the match is "+
 			"case-insensitive", got)
 	}
-	if got := keys(r.projects(tracker.ProjectQuery{Unit: "platform"})); len(got) != 1 ||
+	if got := keys(r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude, Unit: "platform"})); len(got) != 1 ||
 		got[0] != "OPS" {
 		t.Fatalf("unit=platform answers %v, want [OPS]", got)
 	}
 	// A WILDCARD SOMEBODY TYPED IS A LITERAL. Unescaped, `%` matches
 	// everything and a filter box silently stops filtering.
-	if got := keys(r.projects(tracker.ProjectQuery{Q: "%"})); len(got) != 0 {
+	if got := keys(r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude, Q: "%"})); len(got) != 0 {
 		t.Fatalf("q=%%%% answers %v, want nothing — a caller's own wildcard is "+
 			"escaped", got)
+	}
+}
+
+// EVERY ORDERING ORDERS THE WHOLE ASKED SET, and the key breaks every tie.
+//
+// The ordering is the ENGINE's because the listing is a PAGE: an ordering
+// applied after the cap orders the rows that survived the key order, so
+// `-open` answered "the most open work among the projects whose keys sort
+// first". Seeding past the cap is unnecessary to prove that — what the cap
+// takes is a PREFIX of this ordering, so an ordering that is right over the
+// whole set is right over the page, and an ordering that is not is wrong here
+// too.
+func TestAProjectListingOrdersTheWholeSet(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	// ENG is the harness's own and carries no unit and no work.
+	seedProject(t, r, tracker.Project{Key: "OPS", Name: "operations",
+		Unit: "zebra"})
+	seedProject(t, r, tracker.Project{Key: "AAA", Name: "Zulu", Unit: "alpha"})
+	// TWO OPEN ON OPS AND ONE ON AAA, so the count columns and the key
+	// order disagree — an ordering that quietly fell back to the key would
+	// otherwise pass every case here.
+	filedInto(t, r, "OPS", "ops-1")
+	filedInto(t, r, "OPS", "ops-2")
+	filedInto(t, r, "AAA", "aaa-1")
+
+	for _, c := range []struct {
+		name       string
+		sort       tracker.ProjectSort
+		descending bool
+		want       []string
+	}{
+		{"key", tracker.ProjectSortKey, false, []string{"AAA", "ENG", "OPS"}},
+		{"-key", tracker.ProjectSortKey, true, []string{"OPS", "ENG", "AAA"}},
+		// LOWERED, so `Zulu` does not sort before `operations` the way
+		// this store's BINARY collation would have it.
+		{"name", tracker.ProjectSortName, false, []string{"ENG", "OPS", "AAA"}},
+		{"-open", tracker.ProjectSortOpen, true, []string{"OPS", "AAA", "ENG"}},
+		{"open", tracker.ProjectSortOpen, false, []string{"ENG", "AAA", "OPS"}},
+		// ENG NAMES NO UNIT, and an empty string is a value here: it
+		// sorts first ascending rather than being dropped.
+		{"unit", tracker.ProjectSortUnit, false, []string{"ENG", "AAA", "OPS"}},
+	} {
+		got := keys(r.projects(tracker.ProjectQuery{
+			Archived: tracker.ArchivedExclude,
+			Sort:     c.sort, Descending: c.descending,
+		}))
+		if !slices.Equal(got, c.want) {
+			t.Errorf("sort=%s answers %v, want %v", c.name, got, c.want)
+		}
+	}
+
+	// THE TIEBREAK IS THE KEY. `done` is zero on all three, so without it
+	// the planner's walk decides and the directory reshuffles its equal
+	// rows between two identical polls.
+	for _, descending := range []bool{false, true} {
+		got := keys(r.projects(tracker.ProjectQuery{
+			Archived: tracker.ArchivedExclude,
+			Sort:     tracker.ProjectSortDone, Descending: descending,
+		}))
+		if want := []string{"AAA", "ENG", "OPS"}; !slices.Equal(got, want) {
+			t.Errorf("sort with descending=%v over an all-zero column answers "+
+				"%v, want %v — the key breaks every tie, in both directions",
+				descending, got, want)
+		}
+	}
+
+	// AN ABSENT ORDERING IS THE KEY, which is the order this listing has
+	// always had.
+	got := keys(r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude}))
+	if want := []string{"AAA", "ENG", "OPS"}; !slices.Equal(got, want) {
+		t.Fatalf("an unsorted listing answers %v, want %v", got, want)
+	}
+}
+
+// AN ABSENT INSTANT SORTS LAST IN BOTH DIRECTIONS.
+//
+// SQLite orders NULL first ascending and last descending, so a newest-first
+// directory would open with every project nothing has ever been filed into.
+// "Nothing recorded" is not the smallest value — it is not a value — and it is
+// the rule the grid drawing this column already states.
+func TestAProjectListingSortsAnAbsentLastChangeLast(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations"})
+	// ENG and OPS are touched; AAA never is, so it carries no instant.
+	seedProject(t, r, tracker.Project{Key: "AAA", Name: "Anything"})
+	filedTask(t, r, "eng-1")
+	filedInto(t, r, "OPS", "ops-1")
+
+	for _, descending := range []bool{false, true} {
+		got := keys(r.projects(tracker.ProjectQuery{
+			Archived: tracker.ArchivedExclude,
+			Sort:     tracker.ProjectSortLastChange, Descending: descending,
+		}))
+		if len(got) != 3 || got[2] != "AAA" {
+			t.Errorf("sort by last_change descending=%v answers %v, want the "+
+				"project with no instant last", descending, got)
+		}
+	}
+}
+
+// THE READ REFUSES A QUERY THAT NAMES NO ARCHIVAL SET, by name.
+//
+// The membership of the answer turns on it and this struct is built as a
+// literal at every call site, so a default applied inside the read would be
+// one no caller chose and none could see — which is exactly what the `bool`
+// this replaced did.
+func TestAProjectReadRefusesAnUnsetArchivalSet(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	_, err := r.reader.Projects(t.Context(), tracker.ProjectQuery{
+		Level: statelog.ReadStale,
+	})
+	if err == nil {
+		t.Fatal("a project read naming no archival set was answered — the " +
+			"zero value has to be refused or it is a silent default")
+	}
+	if !strings.Contains(err.Error(), "archived") ||
+		!strings.Contains(err.Error(), string(tracker.ArchivedOnly)) {
+		t.Errorf("the refusal is %q, want the parameter and the accepted "+
+			"values named", err)
+	}
+	// AND SO IS A SORT KEY THAT IS NOT ONE, rather than silently falling
+	// back to the key order and answering a different question.
+	_, err = r.reader.Projects(t.Context(), tracker.ProjectQuery{
+		Level: statelog.ReadStale, Archived: tracker.ArchivedExclude,
+		Sort: tracker.ProjectSort("lead"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "lead") {
+		t.Errorf("a read sorted on %q answered %v, want a refusal naming it — "+
+			"a lead is resolved against the chart and has no column to order "+
+			"by", "lead", err)
+	}
+}
+
+// THE `archived=` AND `sort=` GRAMMAR IS PARSED ONCE, for every surface.
+func TestParseProjectQuery(t *testing.T) {
+	t.Parallel()
+
+	// AN ABSENT `archived` IS THE SURFACE'S DEFAULT and it is resolved
+	// HERE, which is what lets the read refuse a query that reaches it
+	// without one.
+	q, err := tracker.ParseProjectQuery(tracker.MapParams{})
+	if err != nil {
+		t.Fatalf("an empty bag: %v", err)
+	}
+	if q.Archived != tracker.ArchivedExclude {
+		t.Errorf("an absent archived parses to %q, want %q",
+			q.Archived, tracker.ArchivedExclude)
+	}
+	if q.Sort != "" || q.Descending {
+		t.Errorf("an absent sort parses to %q/%v, want the default order",
+			q.Sort, q.Descending)
+	}
+
+	q, err = tracker.ParseProjectQuery(tracker.MapParams{
+		"archived": "only", "sort": "-open", "q": " lights ", "unit": " ops ",
+		"limit": 7,
+	})
+	if err != nil {
+		t.Fatalf("a full bag: %v", err)
+	}
+	if q.Archived != tracker.ArchivedOnly {
+		t.Errorf("archived=only parses to %q", q.Archived)
+	}
+	if q.Sort != tracker.ProjectSortOpen || !q.Descending {
+		t.Errorf("sort=-open parses to %q/%v, want open descending — the `-` "+
+			"grammar is the one every grid in the dashboard writes",
+			q.Sort, q.Descending)
+	}
+	if q.Q != "lights" || q.Unit != "ops" || q.Limit != 7 {
+		t.Errorf("the rest parses to %+v", q)
+	}
+
+	// A VALUE THAT IS NOT ONE IS REFUSED BY NAME, never read as the
+	// default: a filter silently ignored is a screen showing a set nobody
+	// asked for.
+	for _, c := range []struct{ key, value string }{
+		{"archived", "yes"},
+		{"archived", "active"},
+		{"sort", "lead"},
+		{"sort", "-progress"},
+		{"sort", "-"},
+	} {
+		_, err := tracker.ParseProjectQuery(tracker.MapParams{c.key: c.value})
+		if err == nil {
+			t.Errorf("%s=%s was accepted, want a refusal", c.key, c.value)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.value) {
+			t.Errorf("%s=%s is refused with %q, want the value quoted back",
+				c.key, c.value, err)
+		}
 	}
 }
 
@@ -141,7 +391,7 @@ func TestAProjectsUnitIsResolvedAgainstTheChart(t *testing.T) {
 		Unit: "platform"})
 	seedProject(t, r, tracker.Project{Key: "GON", Name: "Gone", Unit: "dissolved"})
 
-	rows := byKey(r.projects(tracker.ProjectQuery{Units: chart{
+	rows := byKey(r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude, Units: chart{
 		"platform": {"Platform", tracker.LeadRef{Handle: "ada", Kind: tracker.AuthorAgent}},
 	}}))
 	if got := rows["OPS"].Unit; !got.Resolved || got.Name != "Platform" {
@@ -163,7 +413,7 @@ func TestAProjectsUnitIsResolvedAgainstTheChart(t *testing.T) {
 	}
 	// AND WITH NO CHART AT ALL every row is honestly unresolved rather
 	// than silently blank.
-	none := byKey(r.projects(tracker.ProjectQuery{}))
+	none := byKey(r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude}))
 	if got := none["OPS"].Unit; got.Resolved || got.Key != "platform" {
 		t.Fatalf("with no chart OPS's unit is %+v, want the raw name unresolved",
 			got)

@@ -544,7 +544,7 @@ that container a seat owns, and one about CHANGE rather than about state:
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
-| `list_projects` | every project work is filed into, with how much open work each holds, when its work last changed and who changed it, and who leads it. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
+| `list_projects` | every project work is filed into, with how much open work each holds, when its work last changed and who changed it, and who leads it. `archived` picks the set — `false` (the default) for the live ones, `only` for the retired ones alone, `true` for both — and `sort` orders the whole company before the page is taken (`key`, `name`, `unit`, `open`, `done`, `closed`, `last_change`, each with an optional leading `-`), so `-open` is where the pile actually is rather than the biggest of the fifty keys that sort first. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
 | `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
@@ -640,6 +640,21 @@ else — so nothing writes them here at all; its field declarations and its
 default assignee are the **lead's**, and archiving the project
 itself takes a person's own credential. Every one of those is gated inside the
 verb, and each refusal names who can.
+
+**An archived project stays reachable, and it is SELECTED rather than let
+through.** Archiving stops a project taking new items and keeps every one it
+already holds, so it is not what anybody means by "the projects" — and a
+directory that hid half the company would not be a directory. Every reader of
+the listing therefore names one of three sets: the live projects, the retired
+ones alone, or both (`archived=false|only|true` on the API, `list_projects`'
+`archived` argument for a seat, and the **Active / Archived / All** segment on
+the dashboard's Projects screen, which is what those three spell). The middle
+one is the one a two-valued flag could not express: a reader who wanted the
+retired projects had to ask for both sets and narrow what came back, which is
+a filter over a PAGE — the answer stops at 200 rows — so on a company with
+more live projects than that, the page held no archived row at all and the
+screen reported a company that had retired dozens as having archived nothing.
+The listing's `total` counts whichever set was asked for, never a wider one.
 
 An operator holds the same thirteen and more that no seat does, including the
 two below. `remove_work_item` puts an item
