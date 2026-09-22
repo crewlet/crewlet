@@ -74,16 +74,16 @@ type RefinerOptions struct {
 	// MaxTokens caps one refinement; zero takes DefaultRefinementTokens.
 	MaxTokens int
 
-	// MaxBodyChars is the ceiling on the refined body; zero takes
+	// MaxBodyBytes is the ceiling on the refined body; zero takes
 	// DefaultRefinementBodyMax. A refinement that would breach it is
 	// skipped, not truncated.
 	//
-	// BYTES, despite the name it inherits from the `max_body_chars` config
+	// BYTES, despite the name it inherits from the `max_body_bytes` config
 	// field: the check is len() on the assembled body. A procedure is
 	// prose, so on a company writing CJK the ceiling lands at roughly a
 	// third of the characters — which costs a skipped refinement and never
 	// a clipped procedure, because the answer to breaching it is to skip.
-	MaxBodyChars int
+	MaxBodyBytes int
 
 	// KeepVersions bounds the archived history; zero lets the store apply
 	// its own default.
@@ -123,7 +123,7 @@ func NewRefiner(models Models, s *Skills, opts RefinerOptions) (*Refiner, error)
 		onFailure:    opts.OnFailure == nil || *opts.OnFailure,
 		timeout:      opts.CallTimeout,
 		maxTokens:    opts.MaxTokens,
-		bodyMax:      opts.MaxBodyChars,
+		bodyMax:      opts.MaxBodyBytes,
 		keepVersions: opts.KeepVersions,
 		now:          opts.Now,
 	}

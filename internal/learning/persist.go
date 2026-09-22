@@ -439,7 +439,7 @@ func (d *PersistDecider) write(
 		},
 		CreatedAt: now,
 	}
-	if len(content) > MaxContentChars {
+	if len(content) > MaxContentBytes {
 		// SKIPPED, and said out loud. The tool path refuses an over-long
 		// note so the model can tighten it; there is nobody to ask here, so
 		// the honest move is to drop the row rather than store a note whose
@@ -450,8 +450,8 @@ func (d *PersistDecider) write(
 			// BYTES, named as bytes: the guard is len() on a Go string,
 			// and a field called `chars` beside a CJK note would put a
 			// number in the log that nobody can reproduce by counting
-			// what the model wrote. [MaxContentChars] states the unit.
-			"bytes", len(content), "max", MaxContentChars,
+			// what the model wrote. [MaxContentBytes] states the unit.
+			"bytes", len(content), "max", MaxContentBytes,
 			"detail", "the note was dropped rather than stored half-written")
 		return DiaryEntry{}, nil
 	}

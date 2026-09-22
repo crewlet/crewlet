@@ -36,7 +36,7 @@ type RefinableSkills interface {
 type refineSkill struct {
 	skills RefinableSkills
 
-	// bodyMax is learning.skill_refinement.max_body_chars: the ceiling on
+	// bodyMax is learning.skill_refinement.max_body_bytes: the ceiling on
 	// the whole procedure after the edit. It was documented as a runaway
 	// guard and enforced nowhere — refine.go clipped only the note.
 	bodyMax int
@@ -125,7 +125,7 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		// tighten the text, which is something the model can do.
 		return failed(fmt.Sprintf(
 			"That body is %d bytes and this company caps a skill at %d "+
-				"(learning.skill_refinement.max_body_chars). Tighten it: drop "+
+				"(learning.skill_refinement.max_body_bytes). Tighten it: drop "+
 				"what practice has superseded rather than appending to it.",
 			len(content), t.bodyMax)), nil
 	}

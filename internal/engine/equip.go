@@ -50,7 +50,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		Recall:            e.prefetcher(c),
 		EpisodeLimit:      c.Config.Learning.Episodic.RetrievalLimit,
 		RefreshesPerTurn:  c.Config.Learning.PersonalMemory.MaxRefreshesPerTurn,
-		SkillBodyMax:      refinement.MaxBodyChars,
+		SkillBodyMax:      refinement.MaxBodyBytes,
 		SkillVersionsKept: refinement.MaxVersionsKept,
 	}
 	if db := e.backends.Store; db != nil {
