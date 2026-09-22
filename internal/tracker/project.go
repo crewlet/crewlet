@@ -143,7 +143,7 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 					"so check the key or wait for the config to apply: %w",
 					key, statelog.ErrUnavailable)
 			}
-			next, changed, err := applyProjectEdit(current, edit, at)
+			next, changed, err := applyProjectEdit(current, edit, w.Actor, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -166,8 +166,8 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 // PURE for [applyTagEdit]'s reason: the one refusal a lead actually meets — an
 // un-archive of a field — is a comparison between two lists, and a rule only
 // reachable through a published record is a rule nobody re-measures.
-func applyProjectEdit(current Project, edit ProjectEdit, at time.Time) (
-	Project, bool, error) {
+func applyProjectEdit(current Project, edit ProjectEdit, actor string,
+	at time.Time) (Project, bool, error) {
 
 	next := current
 	changed := false
@@ -181,8 +181,13 @@ func applyProjectEdit(current Project, edit ProjectEdit, at time.Time) (
 		if err := archiveIsOneWay(current.Fields, *edit.Fields); err != nil {
 			return Project{}, false, err
 		}
-		if !sameFields(current.Fields, *edit.Fields) {
-			next.Fields = *edit.Fields
+		// STAMPED BEFORE THE COMPARISON, or a form that resubmits the
+		// declarations unchanged would differ from the stored ones by
+		// exactly the two facts a caller never sends, and write a record
+		// that says nothing.
+		stamped := stampFields(current.Fields, *edit.Fields, actor, at)
+		if !sameFields(current.Fields, stamped) {
+			next.Fields = stamped
 			changed, policy = true, true
 		}
 	}

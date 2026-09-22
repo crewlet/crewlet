@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -321,6 +322,105 @@ func TestACatalogueThatCouldNotValidateIsRefused(t *testing.T) {
 	// AND A READ WITH NO LEVEL IS REFUSED, like every other read here.
 	if _, err := r.reader.Catalogue(t.Context(), tracker.CatalogueQuery{}); err == nil {
 		t.Fatal("a catalogue read with no read level was answered")
+	}
+}
+
+// A FIELD RECORDS WHO DECLARED IT, and the WRITE decides that, not the
+// document.
+//
+// The catalogue served `created_by` and `created_at` on every field and
+// nothing ever wrote them, so both were empty on every field of every company
+// — while a TAG, the one other vocabulary a company declares, has recorded who
+// added it since it existed. And because these writes are WHOLE POST-STATES, a
+// document that could carry its own provenance would let the next edit
+// re-attribute a field somebody else declared, with nothing downstream able to
+// tell.
+func TestAFieldRecordsWhoDeclaredIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	if _, err := r.writer.WriteFields(t.Context(), "op-declare",
+		[]tracker.FieldDef{{ID: "f1", Slug: "impact", Name: "Impact",
+			Type: tracker.FieldText}}); err != nil {
+		t.Fatalf("declare a field: %v", err)
+	}
+	r.drain()
+	declared := r.catalogue(tracker.CatalogueQuery{}).Fields[0]
+	if declared.CreatedBy != "ana" {
+		t.Errorf("created_by = %q, want the writer's own actor — a catalogue "+
+			"that serves the column and never writes it tells every reader "+
+			"nobody declared anything", declared.CreatedBy)
+	}
+	if !declared.CreatedAt.Equal(wednesday) {
+		t.Errorf("created_at = %v, want the write's own clock %v",
+			declared.CreatedAt, wednesday)
+	}
+
+	// A LATER EDIT KEEPS THEM, whatever the document says. The second
+	// write below carries somebody else's name on the SAME field id, which
+	// is exactly the re-attribution a whole-post-state write invites.
+	r.at = wednesday.Add(24 * time.Hour)
+	if _, err := r.writer.WriteFields(t.Context(), "op-edit",
+		[]tracker.FieldDef{
+			{ID: "f1", Slug: "impact", Name: "Blast radius",
+				Type: tracker.FieldText, CreatedBy: "mallory",
+				CreatedAt: r.at},
+			{ID: "f2", Slug: "effort", Name: "Effort", Type: tracker.FieldNumber},
+		}); err != nil {
+		t.Fatalf("edit the catalogue: %v", err)
+	}
+	r.drain()
+	after := map[string]tracker.FieldDef{}
+	for _, field := range r.catalogue(tracker.CatalogueQuery{}).Fields {
+		after[field.ID] = field
+	}
+	if got := after["f1"]; got.CreatedBy != "ana" || !got.CreatedAt.Equal(wednesday) {
+		t.Errorf("the edited field is now %q at %v — a later write "+
+			"re-attributed a declaration somebody else made",
+			got.CreatedBy, got.CreatedAt)
+	}
+	// AND A FIELD THE SNAPSHOT DID NOT HOLD IS NEW, so it takes this
+	// write's own actor and clock rather than the first write's.
+	if got := after["f2"]; got.CreatedBy != "ana" || !got.CreatedAt.Equal(r.at) {
+		t.Errorf("the new field was stamped %q at %v, want the second write's "+
+			"own clock %v", got.CreatedBy, got.CreatedAt, r.at)
+	}
+}
+
+// AND A RESUBMITTED DECLARATION IS STILL A NO-OP.
+//
+// A form submits every control, so a project's field list arrives unchanged
+// far more often than it arrives edited — and a stamp applied AFTER the
+// comparison would make every one of those differ from the stored list by
+// exactly the two facts a caller never sends, and publish a record saying
+// nothing.
+func TestResubmittingAProjectsFieldsWritesNothing(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	fields := []tracker.FieldDef{{ID: "f1", Slug: "impact", Name: "Impact",
+		Type: tracker.FieldText}}
+	authority := tracker.ProjectAuthority{Operator: true}
+
+	if _, err := r.writer.WriteProject(t.Context(), "op-fields", "ENG",
+		tracker.ProjectEdit{Fields: &fields}, authority); err != nil {
+		t.Fatalf("declare the project's fields: %v", err)
+	}
+	r.drain()
+	first := r.project(tracker.ProjectDetailQuery{Project: "ENG"}).Version
+
+	// THE SAME LIST AS THE CALLER FIRST SENT IT, carrying neither of the
+	// facts the write stamped — which is what a second form submission
+	// actually looks like.
+	again := []tracker.FieldDef{{ID: "f1", Slug: "impact", Name: "Impact",
+		Type: tracker.FieldText}}
+	if _, err := r.writer.WriteProject(t.Context(), "op-fields-again", "ENG",
+		tracker.ProjectEdit{Fields: &again}, authority); err != nil {
+		t.Fatalf("resubmit the project's fields: %v", err)
+	}
+	r.drain()
+	if got := r.project(tracker.ProjectDetailQuery{Project: "ENG"}).Version; got != first {
+		t.Errorf("the project moved from version %d to %d on a resubmission "+
+			"that changed nothing", first, got)
 	}
 }
 

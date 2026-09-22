@@ -254,6 +254,13 @@ Beside them on the declaration itself, `applies_to` names the **type slugs**
 that carry the field; empty means every type. A task of a type a field does not
 apply to cannot hold a value for it, and cannot be required to.
 
+**A field records who declared it.** `created_by` and `created_at` are the
+*write's*, never the document's — the same two columns a tag carries — so a
+later edit of a field keeps the name of whoever added it. That matters because
+these writes are whole post-states: a declaration that could carry its own
+provenance would let the next person to touch the list re-attribute somebody
+else's field, and nothing downstream could tell.
+
 **Three settings are refused because nothing fills them.** A `rollup:` block,
 `progress: auto` and a `tracking:` list all say a value keeps itself up to
 date, and this build computes none of it — a rollup is a correlated aggregate
