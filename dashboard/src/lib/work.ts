@@ -777,7 +777,29 @@ export interface TrackerFilters {
   groupBy: string;
   /** The SECOND axis, drawn as bands inside the first — see [buildItemsParams]. */
   groupBy2: string;
-  group: string;
+  /**
+   * WHICH COLUMN THE WHOLE QUERY IS NARROWED TO, and it is THREE-VALUED.
+   *
+   * `undefined` is the whole board. `""` is the column holding the rows with
+   * NO value on this axis — "Unassigned", "Untagged", "No parent" — and
+   * anything else is that value. The engine reads the key's PRESENCE
+   * (`Params.Has`) for exactly this reason: ITS key for the unset column IS
+   * the empty string, on every axis, so "" cannot also mean "no narrowing".
+   *
+   * This is the same defect `EXPLICIT_NONE` records one field above, with the
+   * opposite resolution. An ARRANGEMENT needed a NAME for "off", because its
+   * empty string already meant "inherit the view's" and a word is the only way
+   * to tell a choice from an absence. A column narrowing needs PRESENCE,
+   * because its empty string already means a real column and no word could be
+   * spelled that some axis will not one day hold as a value. So the URL carries
+   * `group=` with nothing after it, which `URLSearchParams` round-trips, and
+   * every reader asks whether the key is there rather than what it says.
+   *
+   * Spelled as a plain string it was unreachable end to end: the query builder
+   * dropped an empty one on the way to the wire, the address writer deleted the
+   * key, and the unset column's own "N more →" link loaded the whole board.
+   */
+  group: string | undefined;
   sort: string;
   blocked: boolean;
   /**
@@ -826,7 +848,9 @@ export const NO_FILTERS: TrackerFilters = {
   scope: "open",
   groupBy: "",
   groupBy2: "",
-  group: "",
+  // ABSENT, which is the whole board — see [TrackerFilters.group] for why the
+  // empty string is a column rather than the lack of one.
+  group: undefined,
   sort: "",
   blocked: false,
   due: "",
@@ -852,7 +876,9 @@ export function anyFilter(f: TrackerFilters): boolean {
     f.priority ||
     f.assignee ||
     f.tag ||
-    f.group ||
+    // PRESENCE, NEVER TRUTH: `group=` with nothing after it is the unset
+    // column, which narrows the query exactly as a named one does.
+    f.group !== undefined ||
     f.blocked ||
     f.due ||
     f.removed ||
@@ -894,6 +920,14 @@ export function buildItemsParams(args: {
 
   const set = (key: string, value: string) => {
     if (value) params[key] = value;
+  };
+  // THE COLUMN NARROWING IS SENT ON ITS PRESENCE, never on its truth: `""` is
+  // the unset column and the engine reads the key with `Params.Has`, so an
+  // empty value has to reach the wire as `group: ""` rather than be dropped by
+  // the writer above. Absent, the key is left exactly as it was — which is how
+  // a saved view's own `group` keeps supplying the default nobody overrode.
+  const setGroup = () => {
+    if (filters.group !== undefined) params.group = filters.group;
   };
   set("q", filters.q);
   set("status", filters.status);
@@ -1035,7 +1069,7 @@ export function buildItemsParams(args: {
     if (axis) {
       params.group_by = axis;
       params.group_limit = 100;
-      set("group", filters.group);
+      setGroup();
     } else {
       delete params.group_by;
       delete params.group;
@@ -1063,7 +1097,7 @@ export function buildItemsParams(args: {
     if (axis) {
       params.group_by = axis;
       params.group_limit = 100;
-      set("group", filters.group);
+      setGroup();
     } else {
       delete params.group_by;
       delete params.group;
@@ -1095,6 +1129,10 @@ export function buildItemsParams(args: {
  * narrowing applied to the wrong set.
  */
 export function filterPatchForGroup(axis: string, key: string): Record<string, string> {
+  // AND THE UNSET COLUMN'S KEY IS `""`, which the patch carries as a value
+  // rather than as a deletion — see [TrackerFilters.group]. `patchedHref`
+  // deletes on `null` for exactly this: written as "clears the key", the
+  // "Unassigned" column's own overflow link loaded the whole board.
   return { shape: "list", group_by: axis, group: key };
 }
 
@@ -1178,10 +1216,12 @@ export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterCh
     });
   }
   if (f.due) out.push({ param: "due", label: "Due", verb: "is", value: dueFilterLabel(f.due) });
-  if (f.group) {
+  if (f.group !== undefined) {
     // THE COLUMN A BOARD WAS NARROWED TO, named by its own axis — the same
     // resolver the column head uses, so the chip and the heading it came from
-    // say the same word.
+    // say the same word. Including the UNSET one: `axisLabel` names an empty
+    // key per axis ("Unassigned", "Untagged"), which is the whole reason it
+    // takes the key rather than the group.
     out.push({
       param: "group",
       label: axisName(f.groupBy) || "Column",
@@ -1433,6 +1473,57 @@ export function countedLabel(shown: number, params: Record<string, unknown>): st
   const label = plural(shown, "item");
   const due = typeof params.due === "string" ? params.due : "";
   return due.startsWith("range:") ? `${label} due in this window` : label;
+}
+
+/**
+ * THE END OF A LIST, SAID — and "" where it would be a reassurance.
+ *
+ * # What it separates
+ *
+ * A list that has reached its end and a list that was cut off end the same
+ * way: rows, then page ground. [totalHint] is deliberately silent once
+ * everything matching is on screen, and a page's own cursor is invisible — so
+ * the reader of a hundred rows cannot tell whether the hundred-and-first
+ * exists. This is the sentence that says it does not.
+ *
+ * # Why it is not the reassurance [pageNote] refuses
+ *
+ * `pageNote`'s rule — "a note that always drew would put 'and that is all of
+ * them' under every healthy card in the product" — is about a CARD in a
+ * column of cards, where the note is one of twenty and nobody reads the
+ * twentieth. This is the foot of the page's own subject, drawn once, where the
+ * question "is that everything?" is the reason somebody scrolled. It is silent
+ * on an empty list (the empty state is the answer there) and on an incomplete
+ * one (the count in the bar already says there is more).
+ *
+ * # It never says what a filter hides
+ *
+ * The design's own sentence was "Two items match. Widen the filters, or clear
+ * them, to see the other six" — and "the other six" is a count over the
+ * UNFILTERED set, which no answer carries: `total_hint` is `countHint` over
+ * the SAME predicate as the rows (`internal/tracker/read.go`), so it counts
+ * what matched and never what was excluded. Stating it would mean a second
+ * query at a second instant, printing a difference nobody wrote. So the
+ * narrowed form says only that these are the ones that match.
+ */
+export function endNote(args: {
+  shown: number;
+  /** The answer's `total_hint`. */
+  hint: number;
+  /** The answer's `total_capped` — a count that stopped rather than finished. */
+  capped?: boolean;
+  /** The answer's `next_cursor`: a page with one is not the end of anything. */
+  cursor?: string;
+  /** Whether a narrowing is on, which is the only thing that changes the noun. */
+  narrowed: boolean;
+}): string {
+  if (args.shown <= 0 || args.cursor || args.capped || args.hint > args.shown) return "";
+  const count = plural(args.shown, "item");
+  // "1 item matches" / "2 items match": the verb agrees with the count, which
+  // a single spelling gets wrong at exactly the number a sparse company has.
+  return args.narrowed
+    ? `That is all of it · ${count} match${args.shown === 1 ? "es" : ""}`
+    : `That is all of it · ${count}`;
 }
 
 /**

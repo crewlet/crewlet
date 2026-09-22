@@ -207,10 +207,18 @@ test("a patched address keeps the path it is on and the filters it is under", ()
       filterPatchForGroup("status", "todo"),
     ),
   ).toBe("#/work/ENG?assignee=ada&scope=open&shape=list&group_by=status&group=todo");
-  // AN EMPTY VALUE IS THE KEY'S ABSENCE, matching `useParam`: a control that
-  // clears the grouping must drop the key rather than write `group_by=`.
-  expect(patchedHref(["work"], new URLSearchParams("group_by=status"), { group_by: "" })).toBe(
+  // `null` IS THE KEY'S ABSENCE: a control that clears the grouping drops the
+  // key rather than writing `group_by=`.
+  expect(patchedHref(["work"], new URLSearchParams("group_by=status"), { group_by: null })).toBe(
     "#/work",
+  );
+  // AND `""` IS A VALUE, because one narrowing's value IS the empty string —
+  // the column holding the rows with no value on the axis. Written as a
+  // deletion, the "Unassigned" column's own overflow link loaded the whole
+  // board; the engine tells the two apart with `Params.Has`, and
+  // `URLSearchParams` round-trips `group=`.
+  expect(patchedHref(["work"], new URLSearchParams(), filterPatchForGroup("assignee", ""))).toBe(
+    "#/work?shape=list&group_by=assignee&group=",
   );
 });
 
@@ -1033,6 +1041,16 @@ test("the shape is a key beside the view rather than the same one", async () => 
 // The sparse state
 // ---------------------------------------------------------------------------
 
+/** A project row, for the one fact these cases need from the directory. */
+const listedProject = (counts = { open: 0, done: 0, closed: 0 }): WorkProjectRow => ({
+  key: "ENG",
+  name: "Engineering",
+  unit: { resolved: true },
+  lead: {},
+  task_counts: counts,
+  version: 1,
+});
+
 // THE LANDING SHAPE IS THE LIST, and nothing in the engine decides it: no
 // builtin view is marked `default`, so this fallback is what every company that
 // has saved nothing lands on. A board's information is the comparison ACROSS
@@ -1101,3 +1119,150 @@ test("an assignee board draws only the columns the answer carried", async () => 
   expect(container.querySelectorAll(".work-col-head").length).toBe(1);
 });
 
+// THE STRIP IS DRAWN WHETHER OR NOT ANYBODY HAS SAVED ANYTHING. Its first tab
+// is the container's own list — a real destination, and the one thing that
+// names this page inside its own content column — so gating the whole strip on
+// somebody else's saved query left the toolbar as the top edge of the screen.
+test("the strip and its way into the inventory survive a company that saved nothing", async () => {
+  serving({ work_items: { items: [], groups: [], complete: true } });
+  mountWork();
+  await waitFor(() => expect(screen.getByRole("tab", { name: "All work" })).toBeTruthy());
+  // A REAL ANCHOR, middle-clickable like every other way out of a screen.
+  const more = screen.getByText("All views →");
+  expect(more.tagName).toBe("A");
+  expect(more.getAttribute("href")).toBe("#/work/views");
+  // AND NO COUNT ON THE CONTAINER TAB. The engine's total is over the FILTER
+  // rather than over the container, so a number here would read as the
+  // container's size and be the size of whatever is narrowed.
+  expect(screen.getByRole("tab", { name: "All work" }).textContent).toBe("All work");
+});
+
+// (a) A NARROWING THAT MATCHED NOTHING CARRIES THE CONTROL THAT REMOVES IT,
+// rather than a sentence describing one.
+test("a filtered list that matched nothing offers to clear the filters", async () => {
+  location.hash = "#/work?assignee=ada";
+  serving({
+    work_items: { items: [], groups: [], total_hint: 0, complete: true },
+    work_projects: { projects: [listedProject()], total: 1, complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Nothing matches")).toBeTruthy());
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  await waitFor(() => expect(location.hash).not.toContain("assignee=ada"));
+});
+
+// (b) NOTHING IN THIS SCOPE IS NOT A FILTER THAT MATCHED NOTHING. "Widen them"
+// named a control that is not on the screen: a chip row exists only when a
+// filter does, so an unfiltered list had nothing to widen and nothing to clear.
+test("an unfiltered list with nothing open names the scope switch, not the filters", async () => {
+  serving({
+    work_items: { items: [], groups: [], total_hint: 0, complete: true },
+    work_projects: { projects: [listedProject()], total: 1, complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Nothing open here")).toBeTruthy());
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+  // AND IT CLAIMS NO NUMBER AT WORKSPACE SCOPE: `work_items` counts what
+  // MATCHED, so how much finished work sits behind the other segment is not in
+  // this answer at all. It names the switch and says nothing about what is
+  // behind it, where a project's own counted sentence can say exactly.
+  expect(screen.queryByText(/\d+ items? under Closed/)).toBeNull();
+  expect(screen.getByText(/Finished work is under Closed/)).toBeTruthy();
+});
+
+// (c) AND A COMPANY THAT HAS FILED NOTHING GETS ONE PANEL, not two stacked.
+// The page holds the wider fact — the project list — and the list holds the
+// rows, so neither can gate the other's sentence without being told.
+test("a first-run company gets the page's own panel and no second one from the list", async () => {
+  serving({
+    work_items: { items: [], groups: [], total_hint: 0, complete: true },
+    work_projects: { projects: [], total: 0, complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
+  expect(screen.queryByText("Nothing open here")).toBeNull();
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+});
+
+// A LIST THAT REACHED ITS END AND ONE THAT WAS CUT OFF ended the same way:
+// rows, then page ground. The count in the bar is silent once everything
+// matching is on screen (`totalHint`) and a cursor is invisible, so the reader
+// of a page could not tell whether there was another one.
+test("a complete list closes with the end of it and an incomplete one does not", async () => {
+  serving({
+    work_items: { items: [row("1"), row("2")], groups: [], total_hint: 2, complete: true },
+  });
+  const whole = mountWork();
+  await waitFor(() => expect(whole.container.querySelector(".work-foot")).toBeTruthy());
+  expect(whole.container.querySelector(".work-foot")?.textContent).toBe(
+    "That is all of it · 2 items",
+  );
+  cleanup();
+
+  serving({
+    work_items: {
+      items: [row("1"), row("2")],
+      groups: [],
+      total_hint: 240,
+      next_cursor: "c1",
+      complete: true,
+    },
+  });
+  const paged = mountWork();
+  await waitFor(() => expect(paged.container.querySelector(".work-list")).toBeTruthy());
+  expect(paged.container.querySelector(".work-foot")).toBeNull();
+});
+
+// AND A NARROWING CHANGES THE NOUN AND NOTHING ELSE. It never says how many the
+// filter hides: the engine's `total_hint` is counted over the same predicate as
+// the rows, so the unfiltered total is not in this answer and synthesising it
+// would take a second query at a second instant.
+test("a narrowed list says its rows are the ones that match, and counts nothing else", async () => {
+  location.hash = "#/work?assignee=ada";
+  serving({
+    work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-foot")).toBeTruthy());
+  expect(container.querySelector(".work-foot")?.textContent).toBe(
+    "That is all of it · 1 item matches",
+  );
+});
+
+// THE UNSET COLUMN IS A COLUMN, and its overflow has to reach it. `group=` with
+// nothing after it is the engine's own key for the rows with no value on the
+// axis (`Params.Has` is what tells it from an absent key) — and every writer on
+// this screen read an empty value as "no key": the query builder dropped it,
+// `useParam` could not say it, and the address writer deleted it. So following
+// "2 more →" out of Unassigned loaded the whole board, which is the one column
+// overflow a lead actually follows.
+test("the unset column's overflow narrows to that column rather than the whole board", async () => {
+  location.hash = "#/work?shape=board&group_by=assignee";
+  const query = serving({
+    work_items: {
+      items: [],
+      groups: [{ key: "", count: 3, rows: [row("1")] }],
+      total_hint: 3,
+      complete: true,
+    },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-col-foot a")).toBeTruthy());
+  const more = container.querySelector(".work-col-foot a") as HTMLAnchorElement;
+  // THE LINK CARRIES THE KEY WITH NOTHING AFTER IT, which is what a middle
+  // click follows.
+  expect(more.getAttribute("href")).toContain("group_by=assignee");
+  expect(more.getAttribute("href")).toMatch(/[?&]group=(&|$)/);
+  // AND THE CLICK NAMES THE SAME PLACE, down to the key being present.
+  fireEvent.click(more);
+  await waitFor(() => expect(location.hash).toContain("shape=list"));
+  expect(new URLSearchParams(location.hash.split("?")[1]).has("group")).toBe(true);
+  // Which reaches the wire as a narrowing rather than as nothing.
+  await waitFor(() => expect(asked(query).group).toBe(""));
+  expect(asked(query).group_by).toBe("assignee");
+  // And the chip says which column it is, in the axis's own word — the same
+  // resolver the column head it came from uses, so the two cannot disagree.
+  const chips = container.querySelector(".work-chips") as HTMLElement;
+  expect(within(chips).getByText("Unassigned")).toBeTruthy();
+  expect(within(chips).getByText("Assignee")).toBeTruthy();
+});

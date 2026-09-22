@@ -659,6 +659,36 @@ test("a column's overflow lands on the list, narrowed to that column", () => {
     group_by: "assignee",
     group: "ada",
   });
+  // AND THE UNSET COLUMN'S KEY IS THE EMPTY STRING, which the patch carries as
+  // a VALUE. Dropped, the "Unassigned" column's own "N more →" narrowed to
+  // nothing and loaded the whole board — the one column whose overflow a lead
+  // actually follows.
+  expect(filterPatchForGroup("assignee", "").group).toBe("");
+});
+
+// THE NARROWING IS THREE-VALUED, and the middle value is the one the engine
+// distinguishes with `Params.Has`: absent is the whole board, `""` is the
+// column holding the rows with NO value on this axis, and anything else is that
+// value. Spelled as one string, the empty column could not be asked for at all.
+test("an absent column narrowing and an empty one are different questions", () => {
+  const narrowed = (group: string | undefined) =>
+    build({ shape: "list", view: {}, filters: { ...NO_FILTERS, groupBy: "assignee", group } });
+  // ABSENT: no key on the wire, so the answer is every column.
+  expect("group" in narrowed(undefined)).toBe(false);
+  // PRESENT AND EMPTY: the key is sent, holding nothing, which is the
+  // unassigned column.
+  expect(narrowed("")).toMatchObject({ group: "" });
+  expect("group" in narrowed("")).toBe(true);
+  expect(narrowed("ada")).toMatchObject({ group: "ada" });
+  // AND A VIEW'S OWN `group` STANDS where the reader asked for nothing — a
+  // view is a set of defaults, and absence is what inherits them.
+  expect(
+    build({
+      shape: "list",
+      view: { group_by: "assignee", group: "ada" },
+      filters: { ...NO_FILTERS, group: undefined },
+    }),
+  ).toMatchObject({ group: "ada" });
 });
 
 test("a clear control appears only once something is narrowing the rows", () => {
@@ -676,8 +706,12 @@ test("a clear control appears only once something is narrowing the rows", () => 
   expect(anyFilter({ ...NO_FILTERS, groupBy2: "type" })).toBe(false);
   expect(anyFilter({ ...NO_FILTERS, sort: "due" })).toBe(false);
   // Narrowing a board to ONE of its columns narrows the whole query, totals
-  // included, so that one stays.
+  // included, so that one stays — READ ON ITS PRESENCE, because the unset
+  // column's own key is the empty string and a truth test called that no
+  // narrowing at all.
   expect(anyFilter({ ...NO_FILTERS, group: "ada" })).toBe(true);
+  expect(anyFilter({ ...NO_FILTERS, group: "" })).toBe(true);
+  expect(anyFilter({ ...NO_FILTERS, group: undefined })).toBe(false);
 });
 
 test("a view's status groups map back onto the three segments", () => {
@@ -982,6 +1016,40 @@ test("a count over a windowed question says which window it counted", () => {
   expect(countedLabel(6, windowed)).toBe("6 items due in this window");
 });
 
+// A LIST THAT ENDED AND A LIST THAT WAS CUT OFF END THE SAME WAY without this:
+// rows, then page ground. `totalHint` is silent once everything matching is on
+// screen and a cursor is invisible, so the reader of a hundred rows cannot tell
+// whether the hundred-and-first exists.
+test("a complete list says it is complete and an incomplete one says nothing", () => {
+  const cases: { note: string; want: string }[] = [
+    // Complete: the hint counted the same set the rows came from.
+    { note: endNote({ shown: 2, hint: 2, narrowed: false }), want: "That is all of it · 2 items" },
+    { note: endNote({ shown: 1, hint: 1, narrowed: false }), want: "That is all of it · 1 item" },
+    // A NARROWING CHANGES THE NOUN AND NOTHING ELSE. It never says how many the
+    // filter hides: `total_hint` counts what MATCHED, over the same predicate
+    // as the rows, so the unfiltered total is not in this answer at all.
+    {
+      note: endNote({ shown: 2, hint: 2, narrowed: true }),
+      want: "That is all of it · 2 items match",
+    },
+    {
+      note: endNote({ shown: 1, hint: 1, narrowed: true }),
+      want: "That is all of it · 1 item matches",
+    },
+    // A page with a cursor is not the end of anything.
+    { note: endNote({ shown: 100, hint: 100, cursor: "c1", narrowed: false }), want: "" },
+    // More matches than rows: the count in the bar already says there is more.
+    { note: endNote({ shown: 100, hint: 240, narrowed: false }), want: "" },
+    // A COUNT THAT STOPPED AT THE CEILING is not a count that finished.
+    { note: endNote({ shown: 100, hint: 100, capped: true, narrowed: false }), want: "" },
+    // AND AN EMPTY LIST GETS THE EMPTY STATE, never "that is all of it" over
+    // nothing at all.
+    { note: endNote({ shown: 0, hint: 0, narrowed: false }), want: "" },
+    { note: endNote({ shown: 0, hint: 0, narrowed: true }), want: "" },
+  ];
+  for (const c of cases) expect(c.note).toBe(c.want);
+});
+
 // THE GRAMMAR HAS ONE `due` KEY, and the calendar's own axis is already spending
 // it — so a due filter set on another shape could survive into this one and
 // narrow nothing at all, which is how a reader concludes their filter matched
@@ -1162,6 +1230,12 @@ test("a board narrowed to one column is chipped by that column's axis", () => {
   )[0];
   expect(chip?.label).toBe("Assignee");
   expect(chip?.value).toBe("Ada Okonkwo");
+  // AND THE UNSET COLUMN IS NAMED BY ITS AXIS, not left unchipped: a board
+  // narrowed to Unassigned is a narrowed board, and a chip is the only thing
+  // that says so and the only way off it.
+  const unset = filterChips({ ...NO_FILTERS, groupBy: "assignee", group: "" })[0];
+  expect(unset?.label).toBe("Assignee");
+  expect(unset?.value).toBe("Unassigned");
 });
 
 // ONE VALUE OF ONE AXIS, split out of `groupLabel` because two surfaces ask it

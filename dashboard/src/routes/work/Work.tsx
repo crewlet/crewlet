@@ -43,6 +43,13 @@ export function Work() {
   // duplicate.
   const projects = useQuery("work_projects", { limit: 1 }, { pollMs: 120_000 });
   const none = (projects.data?.projects ?? []).length === 0;
+  // AND THE LIST HAS TO BE TOLD, because it draws an empty state of its own —
+  // three of them, one per reason a list can come back with nothing on it. This
+  // one outranks all three: a company with no projects cannot have work in
+  // another scope and has no filter worth clearing, so the list stays quiet and
+  // this panel is the page's whole answer. Only once the read has ANSWERED: a
+  // refusal is not an empty company, which is the same gate the panel takes.
+  const firstRun = none && Boolean(projects.data);
 
   return (
     <>
@@ -64,12 +71,12 @@ export function Work() {
       </PageNote>
 
       <div className="work-main">
-        <ItemsView />
+        <ItemsView firstRun={firstRun} />
         {/* ONLY ONCE THE LIST HAS ANSWERED. `QueryState` puts a refusal ahead
             of the empty state, and this draws nothing at all while the read is
             in flight or once a project exists. */}
         <QueryState error={projects.error} loading={projects.loading}>
-          {none && projects.data ? <NoWorkYet /> : null}
+          {firstRun ? <NoWorkYet /> : null}
         </QueryState>
       </div>
     </>

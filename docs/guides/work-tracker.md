@@ -688,7 +688,10 @@ screens rather than one:
   label they draw only the values work is actually in. The trash is a filter
   here rather than a tab, which is what the engine says it is: a listing
   carrying `removed=true`. The strip above the bar holds the views somebody
-  SAVED, never the five shapes.
+  SAVED, never the five shapes, and it ends in a link to the whole inventory.
+  A list with nothing on it says which of three things emptied it — a narrowing
+  that matched nothing, a scope with nothing in it, or a tracker nothing has
+  been filed into — and a complete one closes by saying so.
 - **Projects** (`#/work/projects`) is the directory: every project with its
   lead, the unit that owns it, its three maintained counts, how far along it is
   and when its work last changed.

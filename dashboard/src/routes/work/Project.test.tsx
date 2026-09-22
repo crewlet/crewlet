@@ -10,7 +10,7 @@
  * to shape, and that each lens answers its own question.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Project, ProjectPeek } from "./Project.tsx";
@@ -118,8 +118,18 @@ test("the work is the lens a project opens on, scoped to this project", async ()
   });
   mount();
   await waitFor(() => expect(asked(query).container).toBe("project:ENG"));
-  const tabs = screen.getAllByRole("tab").map((el) => el.textContent);
-  expect(tabs).toEqual(["Items", "Overview", "History"]);
+  // THE LENS ROW BY NAME, because the Items lens brings a tab row of its own:
+  // the list's view strip is drawn whether or not anybody has saved a view, and
+  // its first tab is this container's own list. Read as "every tab on the
+  // screen" this case would fail the day either row gains a member, which is
+  // not what it is about.
+  const lenses = screen.getByRole("tablist", { name: "Lens" });
+  expect(
+    within(lenses)
+      .getAllByRole("tab")
+      .map((el) => el.textContent),
+  ).toEqual(["Items", "Overview", "History"]);
+  expect(screen.getByRole("tab", { name: "All in this project" })).toBeTruthy();
 });
 
 // A LENS IS A SECTION, so it is in the URL: a reader who walked to the
