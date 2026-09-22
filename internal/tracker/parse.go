@@ -119,7 +119,10 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// that nothing ever assigned, so the two surfaces agreed only by the
 	// accident that no writer sets a batch id yet.
 	candidates := Candidates(record.Notify, record.Batched())
-	routed := Route(candidates, registryHas(reg), record.Actor)
+	// BOTH OF THE WRITER'S NAMES, because a bound operator writes as a
+	// token and their own gestures land on their seat — see
+	// [MutationRecord.ActorParty].
+	routed := Route(candidates, registryHas(reg), record.ActorParty())
 	if len(routed) == 0 {
 		p.logger.DebugContext(ctx, "tracker_change_reaches_nobody",
 			"task", record.Notify.Snapshot.Key, "kind", string(record.Notify.Kind))

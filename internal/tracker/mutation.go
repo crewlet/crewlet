@@ -572,9 +572,34 @@ type MutationRecord struct {
 	Actor      string     `json:"actor,omitempty"`
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
-	TurnID     string     `json:"turn_id,omitempty"`
-	Chain      []string   `json:"chain,omitempty"`
-	BatchID    *string    `json:"batch_id,omitempty"`
+
+	// ActorSeat is the chart seat the writing credential is BOUND to
+	// with `contact.crewlet_operator_id`, and it has exactly one reader:
+	// the wake's own actor exclusion. Empty for a token nobody bound and
+	// for every writer that already IS a seat.
+	//
+	// IT IS NOT AN AUTHOR AND NOTHING RENDERS IT. [MutationRecord.Actor]
+	// stays the token and [MutationRecord.ActorKind] stays `operator`,
+	// because a tracker whose author field is chosen by the writer is not
+	// an audit trail — the history row, the activity feed and every
+	// screen read those two and never this.
+	//
+	// WITHOUT IT THE EXCLUSION CANNOT SEE THE PERSON. [Route] drops a
+	// candidate that is the actor, and a bound operator's own gestures
+	// land on their SEAT: the watch a create leaves, the watch a comment
+	// leaves. So the record said `founder`, the candidate said
+	// `jane-founder`, and a founder was woken by every item their own
+	// assistant filed and every comment it left.
+	//
+	// ADDITIVE, like every field beside it: a build with no field for it
+	// keeps it in [MutationRecord.Extra], re-encodes it unchanged and
+	// routes exactly as it did before — which is what a rolling upgrade
+	// rests on.
+	ActorSeat string `json:"actor_seat,omitempty"`
+
+	TurnID  string   `json:"turn_id,omitempty"`
+	Chain   []string `json:"chain,omitempty"`
+	BatchID *string  `json:"batch_id,omitempty"`
 
 	// Kind is WHAT THIS RECORD DID, stated by the writer, and it is a
 	// different fact from whether anybody was told about it.
@@ -638,6 +663,24 @@ type MutationRecord struct {
 // reaches the applier as an argument rather than as a key in the format.
 // Stated here so nobody "completes" the envelope by adding it.
 
+// ActorParty is every name the writer of this record answers to — the person
+// first, the credential behind them.
+//
+// FOR AN EXCLUSION AND NEVER FOR A RENDERING, which is [Party]'s own rule:
+// the alias is matched against and nothing is ever handed a credential where
+// a colleague's handle goes. [Route] is its one caller, and what it answers
+// there is "is this candidate the person who just wrote".
+//
+// A PARTY OF ONE IS THE ORDINARY ANSWER — every seat, every human, and every
+// token nobody bound — and it is exactly the handle the exclusion compared
+// against before this field existed.
+func (r MutationRecord) ActorParty() Party {
+	if seat := strings.TrimSpace(r.ActorSeat); seat != "" {
+		return Party{Handle: seat, OperatorID: r.Actor}
+	}
+	return PartyOf(r.Actor)
+}
+
 // DecodeEnvelope is the FIRST pass, and it never fails on version.
 //
 // Every branch that makes an un-decodable record survivable turns on something
@@ -699,10 +742,16 @@ func Decode(payload []byte) (MutationRecord, error) {
 // LISTED RATHER THAN REFLECTED, because the list is the format's own reserved
 // set: a key added to the struct and not here would be carried in Extra as
 // well as in its field, and re-encoded twice.
+//
+// AND ASSERTED IN BOTH DIRECTIONS, which is what the list needed and did not
+// have. `kind` was added to the record and not here, so every record carrying
+// one decoded with it in Extra as well as in its own field and took the
+// merge path on every relay — a drift with no symptom, which is the shape a
+// hand-maintained list fails in.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"expect", "mutation", "actor", "actor_kind", "operator_id", "turn_id",
-	"chain", "batch_id", "notify",
+	"expect", "mutation", "actor", "actor_kind", "operator_id", "actor_seat",
+	"turn_id", "chain", "batch_id", "kind", "notify",
 }
 
 // ErrFutureVersion reports a record a newer build wrote.

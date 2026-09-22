@@ -98,15 +98,26 @@ A work item you file through your assistant is attributed to the **credential**
 you filed it with, with author kind `operator`, never to your seat handle.
 That is deliberate and it stays: a tracker whose author field is chosen by the
 writer is not an audit trail, and there is no way to ask the operator tool
-server to act as a seat. So the item records `sarah` as its reporter and its
-watcher, while her colleagues assign work to `sarah-chen`.
+server to act as a seat. So the item records `sarah` as its reporter, while her
+colleagues assign work to `sarah-chen`.
 
 Both of those are **her**. Every question that answers "mine" — My work's
 seven tabs, the inbox, her own record — matches the seat handle *or* the
-operator id bound to it, and reports the answer under the seat. Bind the token
-and your own work is on your own screen; leave it unbound and you are an
-operator outside the chart, acting as `operator:<id>`, which is an ordinary
-state and not an error.
+operator id bound to it, and reports the answer under the seat.
+
+Everything that asks who the caller *is* rather than who wrote it resolves to
+the **seat** for the same reason: the watch her create leaves on the item, the
+project it is filed into when she names none, and the lead relation that
+decides which work she may point at another team. An address is not an
+attribution — nothing routes to a credential, so a token left in a watcher set
+is a colleague nobody can reach. It is also how the wake for a change knows not
+to come back to her: the record carries her seat beside the token that authored
+it, so work she files through her assistant wakes her colleagues and not
+her.
+
+Bind the token and your own work is on your own screen; leave it unbound and
+you are an operator outside the chart, acting as `operator:<id>`, which is an
+ordinary state and not an error.
 
 **Your own marks and pins are the person's, and the record still names the
 token.** *Whose* state a document holds and *who wrote it* are two different

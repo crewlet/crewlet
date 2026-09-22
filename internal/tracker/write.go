@@ -348,10 +348,16 @@ type Provenance struct {
 	// package holds no org. Empty for a token nobody bound, and for every
 	// writer that is already a seat.
 	//
-	// IT NAMES NOTHING ON A RECORD, which is why it sits here with the
-	// rest of the provenance: the author stays the token and the kind
-	// stays `operator`, because that is the audit trail. What it decides
-	// is WHOSE STATE a person write lands on — see [Writer.Record].
+	// IT NAMES NO AUTHOR, on a record or anywhere else, which is why it
+	// sits here with the rest of the provenance: the author stays the
+	// token and the kind stays `operator`, because that is the audit
+	// trail. What it decides is WHOSE STATE a person write lands on (see
+	// [Writer.Record]) — and, on the record itself, WHO NOT TO WAKE.
+	//
+	// It travels as [MutationRecord.ActorSeat] for that second reader
+	// alone: a bound operator's own gestures land on their seat, so
+	// without it the wake's actor exclusion compared a candidate's handle
+	// against a credential and woke the person for their own write.
 	Seat string
 
 	// TurnID is the turn that produced this write, and Chain the
@@ -936,9 +942,13 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 		Actor:      w.Actor,
 		ActorKind:  w.ActorKind,
 		OperatorID: w.OperatorID,
-		TurnID:     w.TurnID,
-		Chain:      w.Chain,
-		Notify:     notify,
+		// THE SEAT BESIDE THE AUTHOR, never instead of it — see
+		// [Provenance.Seat]. Empty for every writer that is already a
+		// seat, which is every in-engine caller.
+		ActorSeat: w.Seat,
+		TurnID:    w.TurnID,
+		Chain:     w.Chain,
+		Notify:    notify,
 	}
 	encoded, err := record.Encode()
 	if err != nil {

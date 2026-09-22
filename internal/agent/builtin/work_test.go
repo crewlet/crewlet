@@ -93,6 +93,12 @@ type fakeTracker struct {
 	myWorkQuery   tracker.MyWorkQuery
 	myWork        tracker.MyWork
 
+	// viewer is who the last list was expanded FOR, which is the half of a
+	// personal filter — `preset=my_queue`, `assignee=me` — that decides
+	// whether a founder's assistant is answered about them or about the
+	// credential in their hand.
+	viewer tracker.Viewer
+
 	// personQuery and inboxQuery are the last personal reads this fake was
 	// asked, so a case can assert WHO a tool resolved the question to —
 	// which is the half of these two verbs that decides whether a founder
@@ -171,7 +177,9 @@ func (f *fakeTracker) Views(_ context.Context, q tracker.ViewQuery) (tracker.Vie
 }
 
 func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
-	_ tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+	viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+
+	f.viewer = viewer
 
 	// THE KEYS THE TOOL COMPOSED, kept as strings: what a case here is
 	// about is the TRANSLATION from a model's arguments to the grammar's

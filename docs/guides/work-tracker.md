@@ -76,6 +76,20 @@ Every item carries two units, and they answer different questions.
   the filed unit and moves when somebody re-routes the item
   (`update_work_item` with `routing_unit`).
 
+**Re-routing is the project lead's, or a person's own.** Pointing somebody
+else's work at another team is a decision about who owns it, so a **seat** may
+re-route only the work in a project it leads, or one an ancestor of it leads —
+every other seat is refused, and the refusal names the project whose lead to
+ask. A **person** acting through their own credential may re-route it: a human
+seat writing as themselves, or an API token on
+[the operator surface](#what-a-person-can-do). That is the same authority that
+declares a project's fields and orders somebody's queue, and an unbound token
+holds it too — an operator outside the org chart is still the person running
+the company. Where a token IS bound to a human seat with
+`contact.crewlet_operator_id`, the lead relation is resolved for **that
+person**, so a founder's own assistant re-routes as the founder rather than
+falling back on the credential's own authority.
+
 **You rarely state either.** An item filed with no `unit` is filed into the
 team that owns its project — the one the org chart gave the project — so a
 task in `ENG` belongs to whichever unit declared `project: ENG`, whoever filed
@@ -613,7 +627,7 @@ that container a seat owns, and one about CHANGE rather than about state:
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
 | `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below |
-| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it |
+| `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the project **lead's or a person's own** — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
@@ -931,6 +945,13 @@ author kind `operator`. There is deliberately no way for the caller to name a se
 as — a tracker whose author field is chosen by the writer is not an audit
 trail.
 
+A token the chart **binds** to a human seat acts as that person wherever a
+tool asks who the caller *is* rather than who wrote: which project a create
+with no `project` files into, whose day `my_work` and `list_work_items`
+answer for, whose watch a `watch: true` records, and which projects it may
+re-route work out of. See
+[A person's own state](#a-persons-own-state).
+
 **The REST API** serves the read side at `/work`, `/work/{id}` and
 `/work/views`. Writes go through a seat's tools or the operator MCP, both of
 which are attributed to somebody.
@@ -1059,6 +1080,20 @@ and it exists because the thing that moved is not a row on a board:
 **One wake per person per change**, whatever number of reasons name them: the
 first reason in the precedence order wins and the rest are dropped. Somebody
 mentioned on a task they are watching hears that they were mentioned.
+
+**And nothing wakes you for your own write — under either of your names.** The
+person who made a change is dropped from its own wake: being told what you just
+did is a turn spent on nothing. The comparison is against **both** identities a
+person can write under, which matters for exactly one of them — a write you
+make through your own token is authored by the **token**, while the watch it
+leaves on the item is your **seat's**, so a founder filing work through their
+assistant would otherwise be woken by every item they filed and every comment
+they left. The record carries the seat beside the author for that one reader;
+nothing renders it, and the author field is untouched.
+
+The single exception is **`unblocked`**, and it is the exception because it is
+about a *different* task: closing a blocker is exactly the moment to be told
+that your own other work became workable.
 
 The order puts **what this change did to you** ahead of **the role you hold**.
 Being @-mentioned, being asked a question, having your question answered, and
@@ -1210,10 +1245,12 @@ is the gesture and it is somebody's own.
 through your token is attributed to the **token**, with author kind
 `operator` — never to your seat handle — because a tracker whose author field
 is chosen by the writer is not an audit trail. So the item you file through
-your assistant records `founder` as its reporter and its watcher, while your
-colleagues assign work to `jane-founder`. Every personal question matches
-**both**: My work's seven tabs, the inbox, and your own record. You are one
-party with two names, and the answer always comes back under your seat's.
+your assistant records `founder` as its reporter, while the watch that create
+puts on it is your **seat's** — a reporter is attribution and a watcher is an
+address. Your colleagues assign work to `jane-founder`, and every personal
+question matches **both**: My work's seven tabs, the inbox, and your own
+record. You are one party with two names, and the answer always comes back
+under your seat's.
 
 Two consequences worth knowing:
 
@@ -1247,6 +1284,15 @@ entirely about it. Leaving a token **unbound** is unchanged and ordinary — an
 operator outside the org chart, a pipeline — and it writes its own record under
 its own id. Records written before a company bound the token are still read,
 because the seat's record is preferred and the credential's is the fallback.
+
+**Every other gesture about a person follows that same rule.** The watch a
+`watch: true`, a comment or a create leaves is your seat's — a watcher is an
+address, and the roster it is resolved against holds seats and not credentials,
+so a token in the set is a colleague nobody can reach. The ask your comment
+answers is the one addressed to your seat. The project your work is filed into
+when you name none is your team's. And the questions `list_work_items` asks
+about you — `preset=my_queue`, `preset=priorities` — are asked under both of
+your names, exactly as `my_work` is.
 
 The marks are the ASSISTANT'S. The dashboard is read-only, because every write
 here is attributed to somebody and a button in a browser would write as "the

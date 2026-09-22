@@ -341,10 +341,27 @@ func (k ChangeKind) mayFallBack() bool {
 //
 //  1. Drop the inbox-only candidates — they are a record, not a wake.
 //  2. Drop handles the company no longer employs.
-//  3. Drop the actor, except under the one reason that wakes them.
+//  3. Drop the actor — under EITHER of their names — except under the one
+//     reason that wakes them.
 //  4. If no ordinary candidate survived, keep the LOWEST-RANKED surviving
 //     fallback and only that one.
-func Route(candidates []Candidate, registry func(string) bool, actor string) []Candidate {
+//
+// # Why the actor is a PARTY and not a handle
+//
+// Because one person can write under two names. A bound operator's record is
+// authored by the TOKEN — deliberately and permanently, since a tracker whose
+// author field is chosen by the writer is not an audit trail — while their own
+// gestures land on their SEAT: the watch a create leaves, the watch a comment
+// leaves, the queue somebody ordered. Compared against the author alone the
+// exclusion matched neither, so a founder was woken by every item their own
+// assistant filed. The record carries both ([MutationRecord.ActorParty]), and
+// the alias is matched against and never rendered.
+func Route(candidates []Candidate, registry func(string) bool, actor Party) []Candidate {
+	// THE NAMES ONCE, outside the loop: [Party.Handles] trims and drops
+	// the empties, and an empty member here would drop every candidate
+	// whose handle is empty — which [Candidates] never adds, so it is a
+	// hazard rather than a bug today and cheaper to close than to watch.
+	own := actor.Handles()
 	var ordinary, fallback []Candidate
 	for _, c := range candidates {
 		if c.InboxOnly {
@@ -353,7 +370,7 @@ func Route(candidates []Candidate, registry func(string) bool, actor string) []C
 		if registry != nil && !registry(c.Handle) {
 			continue
 		}
-		if c.Handle == actor && !c.Reason.WakesActor() {
+		if slices.Contains(own, c.Handle) && !c.Reason.WakesActor() {
 			continue
 		}
 		if c.FallbackOnly {
