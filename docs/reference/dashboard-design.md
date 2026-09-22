@@ -303,14 +303,14 @@ each the answer to one thing that went missing at one item:
   landing shape is never conditional on how much work exists, because a screen
   that redraws itself as a company fills up is a screen nobody can learn.
 - **A closed-set axis draws every declared value; an open one draws what
-  exists.** The engine's grouping is a plain `GROUP BY`, so a status nobody has
-  used is not a group and a one-item company got a one-lane board. A board is
-  the WORKFLOW rather than the occupied part of it, so `status`, `status_group`
-  and `priority` — the three axes the engine gives a declared ORDER — are drawn
-  whole, narrowed to what the scope segment admits (Open draws no Done lane),
-  and an empty lane says "Nothing here". `assignee`, `tag`, `type`, `project`
-  and a custom field's options are not: a lane per possible assignee is not a
-  board.
+  exists.** The ENGINE decides which lanes there are — `work_items` carries
+  every column the query's own predicate admits, so a one-item company gets the
+  denominator a board's comparison needs and Open draws no dead Done lane. What
+  is the screen's is the DRAWING: an empty lane says "Nothing here" rather than
+  standing as a heading over nothing. The rule and the axes it covers are in
+  [the work tracker guide](../guides/work-tracker.md#views); a list, a table
+  and a timeline draw only the bands that hold rows, which is the bullet under
+  "A board draws every lane the scope admits" below.
 - **The view strip is always drawn.** Its first tab is the container's own
   list — a real destination, and the only thing that names the page inside its
   own content column — so gating the strip on somebody having saved a query

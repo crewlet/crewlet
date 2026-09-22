@@ -2620,16 +2620,6 @@ details > summary.int-summary::-webkit-details-marker {
 .work-band-foot a:hover {
   color: var(--text);
 }
-/* A BAND WITH NOTHING IN IT SAYS SO, in the same words and the same register a
-   board's lane does — a closed-set axis is padded to its whole declared set, so
-   an empty band is a real state of this shape and a heading over nothing at all
-   reads as rows that failed to arrive. Centred like the lane's, because it is
-   the absence of a row rather than a row. */
-.work-band-empty {
-  padding: var(--space-3) var(--row-inline);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-}
 /* THE END OF A COMPLETE LIST. It is the LAST thing inside the list's own panel,
    which is what makes it read as the end of the rows rather than as a caption
    under a box — so the rule it carries is on top, where the band feet carry

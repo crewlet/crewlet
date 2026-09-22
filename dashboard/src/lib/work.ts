@@ -68,18 +68,6 @@ export const STATUSES: { value: WorkStatus; label: string; group: string }[] = [
   { value: "closed", label: "Closed", group: "closed" },
 ];
 
-/**
- * The four status groups, in the order the statuses that carry them run.
- *
- * DERIVED FROM [STATUSES] RATHER THAN DECLARED AGAIN. `tracker.StatusGroups`
- * is `not_started, active, done, closed` and `tracker.Statuses` is the six in
- * the order a board renders them — so reading the groups off the six in order
- * reproduces the engine's own sequence with no second list to fall out of step
- * with it. A literal array here would be a third copy of one closed set, in a
- * language that cannot import the first.
- */
-export const STATUS_GROUPS: string[] = [...new Set(STATUSES.map((s) => s.group))];
-
 /** A status is a STATE, which is the one thing colour is spent on here. */
 export const STATUS_TONE: Record<string, Tone> = {
   todo: "neutral",
@@ -314,39 +302,6 @@ export function bandsOf(groups: WorkGroup[]): WorkGroup[] {
 }
 
 /**
- * Why a list has nothing on it, and what would put something there.
- *
- * "NOTHING MATCHES" IS THE FILTER-MISS SENTENCE, and it was drawn over an
- * unfiltered board — blaming a narrowing that did not exist, with no chip on
- * screen to take off. An empty scope is a different fact with a different
- * remedy: nothing is open yet, nothing has been finished yet, or nothing has
- * been filed at all, each naming what fills it. The scope segment is not a
- * filter here, because it is always set to something: it decides WHICH of the
- * three sentences, never whether the filter one is due.
- */
-export function emptyReason(f: TrackerFilters, project: string): { title: string; hint: string } {
-  const where = project ? ` in ${project}` : "";
-  if (anyFilter({ ...f, scope: "open" })) {
-    return {
-      title: "Nothing matches",
-      hint: `No item${where} matches these filters. Take one off, or widen the scope.`,
-    };
-  }
-  const filing =
-    "Seats file work with create_work_item — an inbound webhook or a schedule is usually what starts them.";
-  if (f.scope === "closed") {
-    return {
-      title: `Nothing has been finished${where} yet`,
-      hint: "A task lands here when a seat moves it to done, cancelled or closed. What is still open is under Open.",
-    };
-  }
-  if (f.scope === "all") {
-    return { title: `Nothing has been filed${where} yet`, hint: filing };
-  }
-  return { title: `Nothing is open${where}`, hint: `${filing} Finished work is under Closed.` };
-}
-
-/**
  * What an ARRANGEMENT control writes when the reader chooses none of it.
  *
  * THE EMPTY STRING MEANS "INHERIT", not "off", and the two are different
@@ -449,110 +404,6 @@ export function secondAxisOptions(
 /** What an axis is CALLED, or "" for one this build does not offer. */
 export function axisName(axis: string): string {
   return GROUP_AXES.find((a) => a.value === axis)?.label ?? "";
-}
-
-/**
- * EVERY DECLARED VALUE OF A CLOSED-SET AXIS, whether or not work is in it.
- *
- * # Why the engine cannot answer this
- *
- * `internal/tracker/grouping.go`'s `groupCounts` is a plain `GROUP BY`, so a
- * group exists exactly where a row exists ("[Answer.Groups] carries one entry
- * per distinct value"). A status nobody has used is not a group, which is why
- * a one-item company drew a board of ONE lane in a 1500px field, and why
- * [Board]'s own "Nothing here" body had no producer at all — it was written,
- * tested against a hand-built fixture, and unreachable from any real answer.
- *
- * # Why a board is the workflow rather than the occupied part of it
- *
- * A board's information IS the comparison across its lanes: To do beside In
- * progress beside In review is what says where work piles up. Drawn from the
- * occupied subset that comparison has no denominator — three cards in one lane
- * read as a company doing one thing, where three cards in the first of four
- * read as a company that has not started. An empty lane is a fact.
- *
- * # Only where the set is closed, and only what the scope admits
- *
- * The three axes here are exactly the three `compileGroup` gives an `Order` to
- * — `declaredOrder(Statuses)`, `declaredOrder(StatusGroups)`,
- * `declaredOrder(Priorities)` — because a declared ORDER is the same property
- * this needs: a set whose sequence means something is a set that can be drawn
- * whole. Every other axis is open (an assignee, a tag, a type, a project, a
- * custom field's options) and passes through untouched, because a lane per
- * possible assignee is not a board.
- *
- * And the set is narrowed by the SCOPE the query was sent with, through the
- * same [SCOPE_GROUPS] mapping that wrote it: the Open segment draws To do, In
- * progress and In review and never a dead Done lane, because the query it
- * describes cannot return one.
- *
- * # What it does not touch
- *
- * A `group=` narrowing asked for ONE lane and got one, so padding it back to
- * the whole set would redraw the columns a reader just narrowed away — and it
- * is read on its PRESENCE, because the narrowing to the UNSET column carries
- * the empty string as its key (see [TrackerFilters.group]). And a key the
- * declaration does not name — an empty one, or a status a newer peer wrote —
- * is KEPT, at the end: dropping it would hide rows, which is the one thing a
- * padding function must never do.
- */
-export function padGroups(args: {
-  axis: string;
-  groups: WorkGroup[];
-  scope: Scope;
-  /**
-   * `group=`: the one lane the whole query was narrowed to, three-valued as
-   * [TrackerFilters.group] is — `undefined` is the whole board and `""` is the
-   * lane holding the rows with no value on this axis.
-   */
-  group?: string;
-  /**
-   * The container's own status declaration, where it has one — a project's
-   * `statuses`. The six are fixed globally
-   * (`internal/tracker/projectsread.go`: "StatusDef is one of the fixed six"),
-   * so this changes no set today; what it buys is that the status→group
-   * mapping the scope narrowing turns on is the ENGINE's wherever the engine
-   * gave one, rather than this build's shipped copy of it. The LABELS are not
-   * read here: a lane is headed through [groupLabel], which already prefers
-   * the project's own word, and a second labelling path would be a second
-   * answer to "what is this column called".
-   */
-  statuses?: WorkStatusDef[];
-}): WorkGroup[] {
-  const declared = declaredValues(args.axis, args.scope, args.statuses);
-  if (!declared || args.group !== undefined) return args.groups;
-  const answered = new Map(args.groups.map((group) => [group.key, group]));
-  const named = new Set(declared);
-  return [
-    ...declared.map((key) => answered.get(key) ?? { key, count: 0, rows: [] }),
-    ...args.groups.filter((group) => !named.has(group.key)),
-  ];
-}
-
-/** One closed-set axis's values in declared order, or null for an open one. */
-function declaredValues(
-  axis: string,
-  scope: Scope,
-  statuses: WorkStatusDef[] | undefined,
-): string[] | null {
-  // THE EMPTY STRING ADMITS EVERYTHING, which is what the All segment is.
-  const admitted = SCOPE_GROUPS[scope] ? new Set(SCOPE_GROUPS[scope].split(",")) : null;
-  switch (axis) {
-    case "status": {
-      const declared = statuses?.length
-        ? statuses.map((s) => ({ key: String(s.status), group: s.group }))
-        : STATUSES.map((s) => ({ key: String(s.value), group: s.group }));
-      return declared.filter((s) => !admitted || admitted.has(s.group)).map((s) => s.key);
-    }
-    case "status_group":
-      return STATUS_GROUPS.filter((group) => !admitted || admitted.has(group));
-    // A PRIORITY IS ORTHOGONAL TO A STATUS, so the scope narrows nothing here:
-    // every one of the five can hold open work and finished work alike.
-    case "priority":
-      return [...PRIORITIES];
-    default:
-      return null;
-  }
 }
 
 /** The orderings a list may ask for. */
@@ -1690,13 +1541,15 @@ export type Scope = (typeof SCOPES)[number];
 /**
  * WHICH STATUS GROUPS EACH SEGMENT ADMITS, as the wire spells it.
  *
- * ONE SPELLING FOR THE THREE READERS OF IT. [buildItemsParams] writes this key,
- * [scopeOf] reads it back off a saved view, and [padGroups] narrows a board's
- * declared lanes with it — three places that must agree about exactly the same
- * fact, and the first two already held two copies of the two strings. A
- * mismatch is silent in both directions: a segment that writes a group nothing
- * reads back snaps the control to the wrong value, and a lane set narrowed by a
- * different rule draws a Done column over a query that excludes it.
+ * ONE SPELLING FOR BOTH READERS OF IT. [buildItemsParams] writes this key and
+ * [scopeOf] reads it back off a saved view — two places that must agree about
+ * exactly the same fact, and they already held two copies of the two strings.
+ * A mismatch is silent: a segment that writes a group nothing reads back snaps
+ * the control to the wrong value over a query that is narrowing correctly.
+ *
+ * The lanes a board draws were a third reader until the ENGINE started padding
+ * a closed axis to what its own predicate admits — the same narrowing, derived
+ * from the predicate itself rather than from a copy of it.
  *
  * `all` IS THE EMPTY STRING here and only here: it is the absence of the key
  * rather than a fourth value, which is what [buildItemsParams] deletes and what

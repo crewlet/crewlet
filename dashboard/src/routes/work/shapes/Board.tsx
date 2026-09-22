@@ -69,11 +69,12 @@ export function Board({
                 onOpen={() => onOpen(row)}
               />
             ))}
-            {/* A DECLARED LANE WITH NOTHING IN IT. The engine's grouping is a
-                plain GROUP BY, so this was unreachable from any real answer
-                until the screen started padding a closed-set axis to its whole
-                declared set (`lib/work.ts`'s `padGroups`) — which is what makes
-                a board the WORKFLOW rather than the occupied part of it. A
+            {/* A DECLARED LANE WITH NOTHING IN IT. The engine pads a closed
+                axis to every column its own predicate admits, which is what
+                makes a board the WORKFLOW rather than the occupied part of it
+                — and what makes this body reachable from a real answer, where
+                for as long as a group existed exactly where a row did it was
+                written, tested against a hand-built fixture and drawn never. A
                 heading over nothing at all reads as rows that failed to
                 arrive. */}
             {group.rows.length === 0 && <div className="work-col-empty">Nothing here</div>}
