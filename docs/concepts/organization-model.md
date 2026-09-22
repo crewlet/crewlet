@@ -22,8 +22,10 @@ Organization
     ├── KnowledgeRefs []string
     ├── Channel string                     (team channel on the company's chat
     │                                       surface, inherited by children)
-    ├── Project string                     (tracker identity: lead-fallback routing
-    │                                       and the project the team files under.
+    ├── Project string                     (tracker identity: lead-fallback routing,
+    │                                       the project the team files under, and the
+    │                                       unit an item filed into that project with
+    │                                       no unit of its own belongs to.
     │                                       VENDOR-NEUTRAL: it names a native project
     │                                       or a Jira one, whichever tracker.backend
     │                                       the company runs)

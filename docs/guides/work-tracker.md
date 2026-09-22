@@ -24,6 +24,30 @@ A numbering **gap** is normal and permanent. `ENG-7` exists, `ENG-8` never did,
 the two costs a number rather than risking two tasks sharing a key. A key is
 what people paste into chat, so it can never be ambiguous.
 
+### Which team an item belongs to
+
+Every item carries two units, and they answer different questions.
+
+- **Filed into** — the team the work belongs to. It is set once, at the
+  create, and nothing rewrites it: it is a record of what was true, so it may
+  name a team the chart has since renamed or dropped. It is what `unit=`
+  filters on and what a board's `unit` axis groups by.
+- **Routes to** — whose lead hears about the item *now*. It starts equal to
+  the filed unit and moves when somebody re-routes the item
+  (`update_work_item` with `routing_unit`).
+
+**You rarely state either.** An item filed with no `unit` is filed into the
+team that owns its project — the one the org chart gave the project — so a
+task in `ENG` belongs to whichever unit declared `project: ENG`, whoever filed
+it: an agent in that team, an agent in another, a person on the board, or
+[your own AI assistant](#what-a-person-can-do), which holds no seat and
+therefore no team of its own. Name `unit` only when the work belongs to a
+different team than the project it sits in.
+
+A project the chart gave no unit files work into no unit, which is honest
+rather than a default: the project's lead is then the only lead fallback the
+item has.
+
 ## Tasks
 
 | Field | What it is |
@@ -35,6 +59,7 @@ what people paste into chat, so it can never be ambiguous.
 | **priority** | `none`, `low`, `normal`, `high`, `urgent`. |
 | **assignee** | one seat or person. |
 | **reporter** | who filed it. |
+| **unit** | the team the work belongs to, and the team it routes to — see [Which team an item belongs to](#which-team-an-item-belongs-to). |
 | **collaborators**, **watchers** | who is on the thread and who is listening. |
 | **parent**, **subtasks** | a tree, with a depth cap. A query filters ROOTS by default and lets their subtrees ride along; `subtasks=separate` filters every task on its own. |
 | **start / due**, **estimate**, **points** | scheduling and sizing. |

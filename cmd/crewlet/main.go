@@ -2455,6 +2455,13 @@ func nativePages(e *engine.Engine) queries.PageReader {
 // when it names none, because a seat HAS a unit; an operator does not, so the
 // argument is required and the tool refuses naming it rather than guessing a
 // project on a person's behalf.
+//
+// Which UNIT the work is filed into is not a default of this surface and no
+// longer needs one: the tracker reads it off the project's own row at the
+// write, so an operator's item belongs to the team that owns the project it
+// named. It used to be stamped from the caller's own team, which an operator
+// has not got — so every item filed here read "Filed into: no unit" beside a
+// project page naming its unit.
 func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	var opts opsmcp.Options
 	if c := e.Company(); c != nil && c.Config != nil {
