@@ -2229,6 +2229,13 @@ is one of the rules on this page applied to a tracker.
   a value it does not have: an undated, unassigned, unestimated task lines
   its status up with the task above it rather than pulling every later
   column one place left.
+- **A board lane is a range, not a ceiling.** A lane stretches to whatever
+  height the tallest lane on the board sets, which answers a short column
+  beside a long one and nothing else: a board whose lanes are ALL short — one
+  status, one card — has no tall lane to take a height from, and the lane
+  closed directly under its single card at 138px, reading as a stray panel
+  somebody left on the screen rather than as a place work belongs. So the lane
+  carries a floor of two cards' worth of room as well as its scroll ceiling.
 - **Nothing is drawn for the default.** `normal` priority is what a task gets
   when nobody said, so it is most of a board — a mark on every card is a mark
   that says nothing, and it buries the four that ARE urgent. A due date drops

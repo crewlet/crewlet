@@ -2221,9 +2221,22 @@ details > summary.int-summary::-webkit-details-marker {
   padding: 0 var(--space-2) var(--space-2);
   /* THE COLUMN SCROLLS, NOT THE PAGE — see the section head. */
   overflow-y: auto;
+  /* A LANE IS A RANGE, NOT A CEILING. `flex: 1 1 auto` below fills whatever
+     height the TALLEST lane sets, which answers a short column next to a long
+     one and nothing else: a board whose lanes are all short — one status, one
+     card — had no tall lane to take a height from, so the body closed
+     directly under its single card (measured at 105px, in a column 138px tall
+     head and all) and read as a stray panel somebody left on the screen
+     rather than as a place work belongs.
+     260px is two cards' worth of lane: a card with a title, a foot and the
+     gap under it measures ~97px, so two plus the column's own bottom inset is
+     ~210px, and the rest is the empty run that says this lane takes more.
+     The ceiling stays, and the two are a real range rather than one bound:
+     under a viewport shorter than ~420px the `62dvh` term falls below the
+     floor and the floor wins, which is the right way round — a lane that can
+     hold one card and scroll beats a lane too short to hold one. */
+  min-height: 260px;
   max-height: min(62dvh, 620px);
-  /* Fills whatever height the tallest lane sets, so a short column is a
-     lane with space rather than a panel that ended. */
   flex: 1 1 auto;
 }
 .work-col-foot {
