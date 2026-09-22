@@ -263,14 +263,6 @@ export const DESTINATIONS: Destination[] = [
     hint: "Every project, who leads it, and how far along it is",
   },
   {
-    key: "goals",
-    workspace: "work",
-    label: "Goals",
-    icon: "target",
-    path: ["goals"],
-    hint: "The tier above projects, and what its targets say right now",
-  },
-  {
     // THE LOG, FOR THE REASON THE OVERVIEW GOT A PAGE. The tracker's change
     // feed has a time axis, facets and a pace of its own, and it was drawn as
     // twenty rows under a board — where it could be neither filtered nor
