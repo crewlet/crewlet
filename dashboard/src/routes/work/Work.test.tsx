@@ -924,7 +924,7 @@ test("the Display menu offers the active set's columns on the list too", async (
   await waitFor(() => expect(screen.getByText("Columns")).toBeTruthy());
   // THROUGH THE DOCUMENT, not the mount's own container: the menu is a
   // `Popover`, so its panel is portalled out of the tree the screen rendered.
-  const boxes = [...document.querySelectorAll(".work-display-col")].map(
+  const boxes = [...document.querySelectorAll(".grid-cols-choice")].map(
     (el) => el.textContent ?? "",
   );
   // THE WHOLE VOCABULARY, not only what is drawn: the four the compact set
@@ -944,7 +944,7 @@ test("the Display menu offers the active set's columns on the list too", async (
     "Assignee",
     "Updated",
   ]);
-  const ticked = [...document.querySelectorAll<HTMLInputElement>(".work-display-col input")]
+  const ticked = [...document.querySelectorAll<HTMLInputElement>(".grid-cols-choice input")]
     .map((box, at) => (box.checked ? boxes[at] : null))
     .filter(Boolean);
   // AND THE TICKS ARE THE DEFAULT SET until somebody moves one.

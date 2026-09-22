@@ -89,7 +89,13 @@ import { useMemo } from "react";
 import { Button, EmptyValue, Tag, useClipboard } from "@crewlethq/ui";
 import { ContentCopyGlyph } from "@crewlethq/icons/glyphs";
 
-import { DataGrid, type GridBand, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import {
+  columnChoicesOf,
+  DataGrid,
+  type ColumnChoice,
+  type GridBand,
+  type GridColumn,
+} from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, SeatCell } from "~/app/frame/cells.tsx";
 import { peekRow } from "~/app/frame/DetailRail.tsx";
 import {
@@ -525,42 +531,25 @@ function buildColumns(shape: GridShape, ctx: ColumnContext): GridColumn<WorkSumm
   return out.concat(trashColumns(ctx.removals, ctx.chrome, ctx.now));
 }
 
-/** One column a reader may turn on or off, as the Display menu offers it. */
-export interface ColumnChoice {
-  key: string;
-  label: string;
-  /** Off until `cols.<shape>=` names it. */
-  optional?: boolean;
-}
-
 /**
- * The columns a reader can choose between, DERIVED from the ones drawn.
+ * This shape's columns as CHOICES, for the Display menu's chooser.
  *
- * A menu that held its own list would be a second declaration of the grid's
- * columns — wrong the first time one is added, and indistinguishable from a
- * correct one. This calls the builder and takes the three facts a chooser
- * needs, so a column added above appears in the menu with no second edit.
+ * The derivation is [columnChoicesOf]'s and the checkbox list is
+ * [ColumnChooser]'s — both in `DataGrid.tsx`, because the projects directory
+ * draws the same control over its own columns and two checkbox lists over one
+ * rule is how the two start disagreeing about what an empty `cols=` means.
+ * What is the TRACKER's own, and therefore still here, is which columns exist
+ * for a given shape.
  *
- * THE CELL RENDERERS ARE NEVER CALLED, which is what makes the stub context
- * honest rather than a fake: a name and a flag are properties of the COLUMN,
- * and nothing here touches a row.
+ * THE STUB CONTEXT IS HONEST rather than a fake: [columnChoicesOf] never calls
+ * a cell renderer, because a name and a flag are properties of the COLUMN.
  *
  * `workspace` decides whether the Project column exists at all, because it
  * does not inside a project — offering it there would be a checkbox for a
  * column the grid never draws.
  */
 export function columnChoices(shape: GridShape, workspace: boolean): ColumnChoice[] {
-  return buildColumns(shape, { chrome: {}, detail: null, now: 0, workspace }).map((column) => ({
-    key: column.key,
-    // THE HEAD, OR THE NAME IT CARRIES FOR WHERE THE HEAD IS A GLYPH — which
-    // is exactly what `GridColumn.label` is for on the card layout a narrow
-    // grid takes.
-    label:
-      typeof column.header === "string" && column.header
-        ? column.header
-        : (column.label ?? column.key),
-    optional: column.optional,
-  }));
+  return columnChoicesOf(buildColumns(shape, { chrome: {}, detail: null, now: 0, workspace }));
 }
 
 export function WorkGrid({

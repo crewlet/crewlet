@@ -15,7 +15,7 @@
  * meant to open a panel beside the list rather than leave it.
  */
 
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Projects } from "./Projects.tsx";
@@ -234,6 +234,56 @@ test("the unit column is off until cols asks for it", async () => {
     "Progress",
     "Last change",
   ]);
+  expect(screen.getByText("Platform")).toBeTruthy();
+});
+
+// AND THE READER CAN TURN IT ON, which is what makes `optional` a choice
+// rather than a deletion.
+//
+// The column shipped `optional` with no chooser anywhere on this screen — no
+// popover, no reset — so it could be turned off in the source and never on by
+// anybody, and `sort=unit`, one of the engine's seven orderings, was an
+// ordering no head here could reach. "Expose or collapse, deliberately": the
+// column earns exposure because a seat-owned project's unit genuinely differs
+// from its name.
+test("the columns control turns Unit on and writes the key", async () => {
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+
+  fireEvent.click(screen.getByRole("button", { name: "Columns" }));
+  // THE BOXES ARE THE GRID'S OWN COLUMNS, derived rather than listed beside
+  // them — a chooser with its own list is a second declaration of the grid.
+  const boxes = [...document.querySelectorAll<HTMLElement>(".grid-cols-choice")];
+  expect(boxes.map((el) => el.textContent)).toEqual([
+    "Key",
+    "Project",
+    "Lead",
+    "Unit",
+    "Open",
+    "Done",
+    "Closed",
+    "Progress",
+    "Last change",
+  ]);
+  // AN EMPTY `cols=` IS THE DEFAULT SET, so every box but the optional one is
+  // ticked before anybody touches it.
+  const tick = (label: string) =>
+    boxes.find((el) => el.textContent === label)!.querySelector("input")!;
+  expect(tick("Unit").checked).toBe(false);
+  expect(tick("Key").checked).toBe(true);
+
+  fireEvent.click(tick("Unit"));
+
+  // IT WRITES THE KEY, so the arrangement survives a reload and a link.
+  await waitFor(() => expect(location.hash).toContain("cols="));
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("cols")).toBe(
+    "key,name,lead,unit,open,done,closed,progress,last_change",
+  );
+  // AND THE GRID DRAWS IT — the control and the grid read one key.
+  expect(
+    [...container.querySelectorAll(".grid-head .grid-th")].map((h) => h.textContent),
+  ).toContain("Unit");
   expect(screen.getByText("Platform")).toBeTruthy();
 });
 

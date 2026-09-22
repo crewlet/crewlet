@@ -48,13 +48,18 @@ import { useMemo } from "react";
 import { buildHash, useParam, useRoute } from "~/app/router.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import {
+  ColumnChooser,
+  DataGrid,
+  columnChoicesOf,
+  type GridColumn,
+} from "~/app/frame/DataGrid.tsx";
 import { DateCell, NumberCell, SeatCell } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
-import { DashboardGlyph } from "@crewlethq/icons/glyphs";
+import { Button, EmptyState, EmptyValue, Popover, Tag } from "@crewlethq/ui";
+import { DashboardGlyph, ViewColumnGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
@@ -210,6 +215,18 @@ export function Projects() {
   )
     ? sortRaw
     : DEFAULT_SORT;
+
+  // THE COLUMN ARRANGEMENT, READ HERE TOO — the same shape `sort=` above takes,
+  // and for the same reason: the chooser beside the segment writes this key and
+  // [DataGrid] reads it, so both go through `useParam` on ONE name and neither
+  // can be looking at a key the other is not writing.
+  //
+  // THE BARE `cols=`, because this is the screen's PRIMARY and only grid — see
+  // [DataGrid]'s own `name`, which says the primary grid takes `sort=` and
+  // `cols=` and a SECOND grid on a screen is what earns a suffix. Naming this
+  // one would also move `sort=` to `sort.projects=`, and the page reads `sort`
+  // itself to send to the engine.
+  const [cols, setCols] = useParam("cols", "");
 
   // EVERY PROJECT IN THE ASKED SET, which is what a directory is. The engine's
   // own limit is what bounds it, and the answer says when it stopped short.
@@ -427,6 +444,12 @@ export function Projects() {
     [who, now],
   );
 
+  // WHAT THE CHOOSER OFFERS, DERIVED FROM THE COLUMNS ABOVE rather than listed
+  // beside them — see [columnChoicesOf]. A chooser holding its own list would
+  // be a second declaration of this grid's columns, wrong the first time one is
+  // added and indistinguishable from a correct one.
+  const choices = useMemo(() => columnChoicesOf(columns), [columns]);
+
   return (
     <>
       {/* WHAT THIS PAGE IS, once. Where a project COMES FROM is the sentence
@@ -469,6 +492,45 @@ export function Projects() {
             { value: "all", label: "All" },
           ]}
         />
+        {/* AN ARRANGEMENT IS A MENU, beside the one control that changes the
+            SET. The directory's Unit column is `optional` and this screen had
+            no chooser at all, so the column could be turned off in the source
+            and never on by anybody — and `sort=unit`, one of the engine's seven
+            orderings, was an ordering no head on the screen could reach. Expose
+            or collapse: the column earns exposure, because a seat-owned
+            project's unit genuinely differs from its name.
+
+            THE SAME COMPONENT THE WORK LIST'S DISPLAY MENU DRAWS, over this
+            grid's own columns — see [ColumnChooser], which is where the two
+            rules that are easy to get wrong now live once. */}
+        <Popover
+          role="dialog"
+          label="Columns"
+          align="end"
+          trigger={(open, toggle) => (
+            <Button
+              size="small"
+              variant="tertiary"
+              leadingIcon={<ViewColumnGlyph size="sm" />}
+              aria-expanded={open}
+              aria-haspopup="dialog"
+              onClick={toggle}
+            >
+              Columns
+            </Button>
+          )}
+        >
+          {/* THE DISPLAY PANEL'S OWN GEOMETRY, which is what `.work-display`
+              is: a padded menu column with a gap between its blocks. The work
+              list's Display menu is the other panel wearing it, and this is
+              the same kind of thing — the controls that decide how an answer
+              is DRAWN — so a second class with the same three declarations
+              would be a copy waiting to drift. `.work-menu` is the bare panel
+              underneath, which every work menu takes. */}
+          <div className="work-menu work-display">
+            <ColumnChooser choices={choices} value={cols} onChange={setCols} />
+          </div>
+        </Popover>
       </div>
 
       <QueryState error={state.error} loading={state.loading}>

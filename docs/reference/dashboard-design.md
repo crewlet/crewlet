@@ -257,6 +257,21 @@ Two kinds, and nothing is both:
   menu, whose button says what is on, so the arrangement is readable without
   opening anything.
 
+  **A screen whose grid has an optional column has a menu to reach it.** The
+  columns half is one component, `ColumnChooser` in `DataGrid.tsx`, drawn by
+  the work list's Display menu and by the projects directory's own **Columns**
+  button beside its segment — because `optional` with no chooser is a column
+  that can be turned off in the source and never on by anybody, which is what
+  the directory's Unit column shipped as for one commit, taking `sort=unit`
+  with it. It is one implementation rather than two checkbox lists for the two
+  rules that are easy to get wrong separately: an empty `cols=` is the DEFAULT
+  set rather than an empty grid, and the value written back is in the columns'
+  DECLARATION order rather than the reader's click order, because `cols=`
+  carries an order as well as a selection. What each screen keeps is which
+  columns exist — per shape on the work list, per grid everywhere else — and
+  the choices are DERIVED from the columns the grid draws, so a column added
+  appears in its menu with no second edit.
+
 `URL_HOMES` in `lib/work.ts` is where that is declared per key rather than per
 paragraph: every URL key the work list carries names the control that owns it —
 chip, menu, or one of the three that are deliberately neither and carry their
@@ -482,7 +497,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
 | `#/me` | **My work** — the seven claims on one person's attention | `tab=assigned\|priorities\|asks\|unblocked\|collaborating\|watching\|checklist` · `handle=` (an operator reading somebody else's day) · on the Assigned tab, `shape=`, `cols.list=` / `cols.table=` and the filter grammar, with the assignee LOCKED and `view=` absent — the screen's own tabs are its strip |
 | `#/work` | **All work** | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` (the active shape's column set) + the filter grammar |
-| `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page. The segment and the sort are both the ENGINE's question: `shown=` becomes `archived=false\|only\|true` and `sort=` travels as it is written, because the answer stops at the engine's own 200 and anything applied after that orders — or narrows — a page rather than the company. **Unit is the one OPTIONAL column**: the engine mints a project the moment a unit declares its `project` key and names it after the unit, so on a chart-owned company Unit and Project are the same word on every row — two of nine columns spending their width on one fact. It is a column rather than a deletion because the two genuinely differ where a project is a root-level SEAT's, and `sort=unit` stays an ordering the engine takes whether or not the column is drawn | `shown=active\|archived\|all` · `sort=key\|name\|unit\|open\|done\|closed\|last_change`, with a leading `-` for descending · `cols=` to draw Unit (it carries the order as well as the selection, so it names the whole set) |
+| `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page. The segment and the sort are both the ENGINE's question: `shown=` becomes `archived=false\|only\|true` and `sort=` travels as it is written, because the answer stops at the engine's own 200 and anything applied after that orders — or narrows — a page rather than the company. **Unit is the one OPTIONAL column**: the engine mints a project the moment a unit declares its `project` key and names it after the unit, so on a chart-owned company Unit and Project are the same word on every row — two of nine columns spending their width on one fact. It is a column rather than a deletion because the two genuinely differ where a project is a root-level SEAT's, and `sort=unit` stays an ordering the engine takes whether or not the column is drawn — so the directory carries a **Columns** menu beside its segment, which is the same `ColumnChooser` the work list's Display menu draws over its own columns. Optional with no chooser is a column nobody can reach and an ordering no head on the screen offers, which is what this shipped as for one commit | `shown=active\|archived\|all` · `sort=key\|name\|unit\|open\|done\|closed\|last_change`, with a leading `-` for descending · `cols=` (the bare key: this is the screen's only grid), which carries the order as well as the selection, so it names the whole set |
 | `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |

@@ -89,7 +89,7 @@ function optionsOf(name: string): string[] {
 
 /** The column checkboxes, in the order the menu draws them. */
 const columnBoxes = (): string[] =>
-  [...document.querySelectorAll(".work-display-col")].map((el) => el.textContent ?? "");
+  [...document.querySelectorAll(".grid-cols-choice")].map((el) => el.textContent ?? "");
 
 // ---------------------------------------------------------------------------
 // The button, and the shapes
@@ -295,7 +295,7 @@ test("both grid shapes offer their own column set, and no other shape offers one
 // reads it that way, so the ticks show the default until somebody moves one.
 test("with nothing chosen the ticks are the set's own default", () => {
   openDisplay({ shape: "list", workspace: true });
-  const ticked = [...document.querySelectorAll<HTMLInputElement>(".work-display-col input")]
+  const ticked = [...document.querySelectorAll<HTMLInputElement>(".grid-cols-choice input")]
     .map((box, at) => (box.checked ? columnBoxes()[at] : null))
     .filter(Boolean);
   expect(ticked).toEqual(
