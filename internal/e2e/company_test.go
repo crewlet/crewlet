@@ -122,7 +122,7 @@ func startWith(t *testing.T, amend func(doc string) string) *node {
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-	withKeyring(t, &boot)
+	withServingTierA(t, &boot)
 
 	e, err := engine.New(t.Context(), engine.Options{Bootstrap: &boot, Company: cfg})
 	if err != nil {

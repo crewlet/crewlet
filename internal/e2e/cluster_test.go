@@ -348,6 +348,7 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	boot.Secrets.ActiveKeyID, boot.Secrets.Keys = ringID, []config.SecretKey{
 		{ID: ringID, Material: ringMaterial},
 	}
+	withCredential(t, &boot)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	boot.Stream.Cluster.Name = jetstreamtest.RelayClusterName

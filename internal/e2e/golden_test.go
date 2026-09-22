@@ -45,7 +45,8 @@ import (
 // dial opens a socket the way the dashboard's LiveSocket does.
 func (n *node) dial(t *testing.T) *websocket.Conn {
 	t.Helper()
-	target := "ws" + strings.TrimPrefix(n.server.URL, "http") + "/ws/stream"
+	target := "ws" + strings.TrimPrefix(n.server.URL, "http") + "/ws/stream" +
+		socketCredential()
 	conn, _, err := websocket.Dial(t.Context(), target, nil)
 	if err != nil {
 		t.Fatalf("dial %s: %v", target, err)

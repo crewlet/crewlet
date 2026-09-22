@@ -238,7 +238,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		t.Fatalf("company config: %v", err)
 	}
 	boot := config.DefaultBootstrap()
-	withKeyring(t, &boot)
+	withServingTierA(t, &boot)
 	boot.Store.Path = dbPath
 	boot.Stream.StoreDir = streamDir
 
@@ -671,7 +671,12 @@ func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
 // dashboard does.
 func (n *codingNode) board(t *testing.T) []map[string]any {
 	t.Helper()
-	res, err := n.server.Client().Get(n.server.URL + "/query/sandbox_runs")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		n.server.URL+"/query/sandbox_runs", nil)
+	if err != nil {
+		t.Fatalf("build the request: %v", err)
+	}
+	res, err := n.server.Client().Do(present(req))
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
