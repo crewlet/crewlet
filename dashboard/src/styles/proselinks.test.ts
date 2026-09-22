@@ -56,11 +56,11 @@ const ALLOWED: Allowed[] = [
       "to separate it from.",
   },
   {
-    where: "routes/work/shapes/List.tsx",
+    where: "routes/work/shapes/Grid.tsx",
     why:
       "The same `N more →` link at the foot of a band, drawn by " +
-      "`.work-band-foot a` for the reason the board's entry above gives. The two " +
-      "shapes draw one answer and the link means the same thing in both.",
+      "`.grid-band-foot a` for the reason the board's entry above gives. The " +
+      "shapes draw one answer and the link means the same thing in all of them.",
   },
   {
     where: "routes/knowledge/Pages.tsx",

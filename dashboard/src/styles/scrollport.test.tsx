@@ -2,7 +2,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { List } from "~/routes/work/shapes/List.tsx";
+import { Router } from "~/app/router.tsx";
+import { WorkGrid } from "~/routes/work/shapes/Grid.tsx";
 import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 
 /**
@@ -28,30 +29,33 @@ import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
  *
  * # Why it is asserted over a rendered tree rather than over the sheets
  *
- * Neither half is a fact about one rule. The band's `top` is in `screens.css`,
- * the `overflow` that captured it was eleven lines away in the same file, and
- * what binds them is that one element is inside the other — which is in
- * `List.tsx`. A case asserting `overflow: clip` on `.work-list` would restate
- * the fix rather than the rule it follows from, and would say nothing at all
- * the day a new panel is wrapped around the list. So the two sets come from the
- * sheets, the ANCESTRY comes from the component, and what is checked is that no
- * element carrying one set's class sits under an element carrying the other's.
+ * Neither half is a fact about one rule. The band's `top` is in one sheet, the
+ * `overflow` that captured it was eleven lines away in the same file, and what
+ * binds them is that one element is inside the other — which is in a component.
+ * A case asserting `overflow: clip` on the panel would restate the fix rather
+ * than the rule it follows from, and would say nothing at all the day a new
+ * panel is wrapped around the rows. So the two sets come from the sheets, the
+ * ANCESTRY comes from the component, and what is checked is that no element
+ * carrying one set's class sits under an element carrying the other's.
  *
  * jsdom computes no layout, so this can never be a test of what covers what.
  * It does not need to be: containment is structural, and it is the structure
  * that went wrong.
  *
- * # What it does not cover
+ * # What it walks, and what it does not
  *
- * The work list is the one surface walked here, because it is the one whose
- * bands render from plain props. Five other rules take `--sticky-top` —
- * `.grid-head` and `.grid-band-head` in the data grid, `.work-item-side` on an
- * item page, `.list-day` on Activity and `.inbox-detail` on Inbox — and every
- * one of them draws inside a screen that needs the store, so standing all five
- * up would buy less than it would cost to keep honest. The roster is derived
- * from every sheet regardless, so a band added to THIS tree is covered the
- * moment it appears, and the day one of those five is rendered here by
- * something else it is covered with no change to this file.
+ * The work screen's own grid is the one surface walked here, because it is the
+ * one whose bands render from plain props. That is now a `DataGrid` — the list
+ * and the table collapsed into one renderer with two column sets — so the walk
+ * covers `.grid-head` and `.grid-band-head`, the two rules this file used to
+ * name as uncovered. Three others take `--sticky-top` and are not walked:
+ * `.work-band` on My work's day, `.work-item-side` on an item page,
+ * `.list-day` on Activity and `.inbox-detail` on Inbox each draw inside a
+ * screen that needs the store, so standing them up would buy less than it
+ * would cost to keep honest. The roster is derived from every sheet
+ * regardless, so a band added to THIS tree is covered the moment it appears,
+ * and the day one of those is rendered here by something else it is covered
+ * with no change to this file.
  */
 
 /**
@@ -182,20 +186,30 @@ const group = (key: string, ids: string[]): WorkGroup => ({
   rows: ids.map((id) => row(id, { status: key })),
 });
 
-/** The grouped list as the work screen draws it: bands, and rows under them. */
+/**
+ * The grouped list as the work screen draws it: bands, and rows under them.
+ *
+ * THE ROUTER IS REAL, because the grid underneath reads `sort=` and
+ * `cols.<shape>=` off the URL and a grid without one throws before it renders
+ * a row.
+ */
 function grouped() {
   return render(
-    <List
-      rows={[]}
-      groups={[group("todo", ["1", "2"]), group("in_progress", ["3"])]}
-      axis="status"
-      chrome={{}}
-      now={Date.parse("2031-04-16T00:00:00Z")}
-      hrefOf={(r) => `#/work/${r.key}`}
-      onOpen={() => {}}
-      onOverflow={() => {}}
-      overflowHref={() => "#/work"}
-    />,
+    <Router>
+      <WorkGrid
+        shape="list"
+        rows={[]}
+        groups={[group("todo", ["1", "2"]), group("in_progress", ["3"])]}
+        axis="status"
+        chrome={{}}
+        now={Date.parse("2031-04-16T00:00:00Z")}
+        workspace
+        hrefOf={(r) => `#/work/${r.key}`}
+        onOpen={() => {}}
+        onOverflow={() => {}}
+        overflowHref={() => "#/work"}
+      />
+    </Router>,
   );
 }
 
@@ -205,30 +219,35 @@ test("the two rosters are read from the sheets at all", () => {
   // A GATE OVER AN EMPTY SET CERTIFIES NOTHING, and both sets come from a scan
   // that a change of idiom in the sheets could silently empty.
   expect(stickyClasses().has("work-band")).toBe(true);
+  expect(stickyClasses().has("grid-head")).toBe(true);
+  expect(stickyClasses().has("grid-band-head")).toBe(true);
   expect(scrollportClasses().has("screen")).toBe(true);
   expect(scrollportClasses().has("work-col-body")).toBe(true);
-  // And the one value that is NOT a scroll container is not counted as one, or
-  // the fix below would read as the bug.
+  // And the two values that are NOT scroll containers are not counted as one,
+  // or the fix below would read as the bug.
   expect(scrollportClasses().has("work-list")).toBe(false);
+  expect(scrollportClasses().has("grid-wrap")).toBe(false);
 });
 
 test("a grouped list's bands are held by the screen, not by the list", () => {
   const { container } = grouped();
-  const bands = container.querySelectorAll(".work-band");
+  const bands = container.querySelectorAll(".grid-band-head");
   // The rendering has to carry the thing being asserted about.
   expect(bands.length).toBe(2);
+  expect(container.querySelectorAll(".grid-head").length).toBe(1);
   expect(captured(container)).toEqual([]);
 });
 
 test("and the walk can tell — a scrolling ancestor is reported", () => {
-  // THE MUTATION, run rather than described: the list is given back the class
-  // of a box that really does scroll, and every band under it comes back named.
+  // THE MUTATION, run rather than described: the panel is given the class of a
+  // box that really does scroll, and every band under it comes back named.
   // Without this the two cases above would pass just as happily over a walk
   // that never looked at an ancestor.
   const { container } = grouped();
-  container.querySelector(".work-list")!.classList.add("work-col-body");
+  container.querySelector(".grid-wrap")!.classList.add("work-col-body");
   expect(captured(container)).toEqual([
-    ".work-band inside .work-col-body",
-    ".work-band inside .work-col-body",
+    ".grid-head inside .work-col-body",
+    ".grid-band-head inside .work-col-body",
+    ".grid-band-head inside .work-col-body",
   ]);
 });

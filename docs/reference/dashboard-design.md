@@ -253,7 +253,7 @@ Two kinds, and nothing is both:
   filter that is off — so an unfiltered list has no chip row at all. Taking a
   chip off clears the one URL key it names.
 - An **arrangement** decides how the same answer is DRAWN — the shape, the
-  grouping, the order, a table's columns. All of it lives in one **Display**
+  grouping, the order, the grid's columns. All of it lives in one **Display**
   menu, whose button says what is on, so the arrangement is readable without
   opening anything.
 
@@ -444,7 +444,7 @@ because every single-modifier combination worth having is already the browser's.
 |---|---|---|
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
 | `#/me` | **My work** — the seven claims on one person's attention | `tab=assigned\|priorities\|asks\|unblocked\|collaborating\|watching\|checklist` · `handle=` (an operator reading somebody else's day) |
-| `#/work` | **All work** | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` + the filter grammar |
+| `#/work` | **All work** | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` (the active shape's column set) + the filter grammar |
 | `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page | `shown=active\|archived\|all` · `sort=` |
 | `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
@@ -534,9 +534,42 @@ the retention screen's per-domain terms — a block that already titled itself,
 with no header row and nothing to sort, which is a table in the sense the
 element means rather than a list of objects.
 
+**Including the tracker's own list and table, which are one grid with two
+column sets.** They were two components over one answer, and the cost was
+exactly what two renderers of one row always costs: the list had none of the
+rules this section states — one track list for the whole grid, the cap on a
+shrink column, the card a row becomes below 860px, the cursor `j` and `k`
+walk — and the table had none of the list's, so it drew an EMPTY band per
+group the moment a second axis was asked for, because sub-groups replace a
+group's rows and it read only `rows`. The shape now picks a **column set** and
+nothing else: same fetch, same bands, same head, same phone layout. A set is a
+default (which columns are on with nothing chosen), an order, and how a value
+is drawn — the list's priority is the bare mark that opens its row and the
+table's is the word in a column you can sort.
+
+**`cols=` therefore selects WITHIN the active set, and is keyed per shape** —
+`cols.list=` and `cols.table=`. Not because a name might be one the other set
+lacks; a grid already drops a name its columns do not hold, and falls back to
+its default when nothing survives. It is because `cols=` carries an **order**
+as well as a selection, and the order is the set's own: one key read against
+both sets draws the list's columns in the table's arrangement, which is a row
+nobody asked for and which no validation catches, since every name in it is
+legal in both. Per shape, each arrangement survives the other, and an address
+says which set its columns belong to. The **sort** is deliberately not keyed
+that way: it is a fact about the QUESTION — the engine orders the whole set
+the same way whatever draws it — so both shapes share one `sort=`.
+
 **The sort is in the URL**, which is the rule the component exists for: a
 sorted ops table that cannot be sent to anybody, does not survive a reload and
 comes back unsorted from Back is sorted for one person for one minute.
+
+**A band may hold bands.** A second grouping is a heading under a heading,
+which is what a second axis means where every row is a line, and a band
+carries rows OR sub-bands rather than both — sub-groups replace a group's rows
+exactly as groups replace the ungrouped ones. A band counts what is under it,
+its sub-bands included, and a band whose page of rows is empty still draws its
+heading: "Ada Okonkwo · 0 of 3" is an answer, where the empty state drawn over
+it is a second and false one.
 
 **A screen's primary grid takes `sort=` and every other one takes
 `sort.<name>=`.** Several screens carry two or three — the spend by seat and
@@ -841,7 +874,7 @@ selected one reads zero and the rail is a dead end.
 | `view=` | section | a list container's view |
 | `lens=` | section | which whole reading of a screen is drawn — the Company screen's chart, charter and builder, the Configuration screen's active, history and diff |
 | `sort=` `cols=` | filter | the grid's order and its visible columns |
-| `sort.<name>=` `cols.<name>=` | filter | the same, for a second grid on the page |
+| `sort.<name>=` `cols.<name>=` | filter | the same, for a second grid on the page — and `cols.<shape>=` alone on the work screen, whose one grid has a column set per shape while both share its `sort=` |
 
 **`peek` is one key, one component, one rule.** A plain click peeks; ⌘-click,
 middle-click and the rail's `Open ↗` go to the page. Inside a peek `[` and `]`
@@ -2536,11 +2569,19 @@ is one of the rules on this page applied to a tracker.
   **Trash** is the other tab, and it is a saved QUERY rather than a shape —
   which is the distinction the strip is built on. A
   tab whose meaning is a parameter is a view; a tab whose meaning is a drawing
-  is a type. The trash is a Table carrying `removed=true`, so every view saved
+  is a type. The trash is the grid carrying `removed=true`, so every view saved
   with that parameter is read as one: the removal's actor and instant come from
   `work_activity` rather than from the row, and PURGED work has no row at all —
   its history entry is the only evidence it existed, so it gets a band of its
-  own saying it cannot be restored.
+  own saying it cannot be restored. Its three extra columns append to whichever
+  set is active, so the trash is readable as a list too.
+- **The list and the table are ONE grid with two column sets**, which is
+  [Every list is one grid](#every-list-is-one-grid) applied to the two shapes
+  that are rows in columns. They were two components; what the collapse cost
+  is one `cols=` key per shape and what it bought is every grid rule on both.
+  The Display menu offers Columns on either, listing the active set's own
+  choices — the compact set draws eight of twelve and offers the other four
+  rather than making a reader change shape to see a points column.
 - **The table sorts at the ENGINE.** A header writes the query's own `sort=`
   key, so the whole set is ordered rather than the hundred rows that happen to
   be loaded — and a column the grammar has no key for is therefore NOT
@@ -2564,11 +2605,15 @@ is one of the rules on this page applied to a tracker.
   back over exactly the half the view asked for: "and whatever finished this
   week" answered as open work alone, and the Trash tab answered as the removed
   tasks that were still open, hiding every removal of anything already done.
-- **A row is a table, and its columns belong to the LIST.** Every row was its
-  own grid container once, so `auto` tracks sized against that row's content
-  alone and a status badge landed at a different x on every line. The tracks
-  are declared on the list and each row takes them with `subgrid`, so a
-  column is as wide as the widest value in it. The row also keeps a CELL for
+- **A row is a table, and its columns belong to the LIST.** This is the
+  EMBEDDED list — a seat's queue, a person's day, an item's subtasks, which
+  draw the same compact row inside somebody else's panel; the work screen's
+  own list is the grid above, which states the identical rule on its own
+  tracks. Every row was its own grid container once, so `auto` tracks sized
+  against that row's content alone and a status badge landed at a different x
+  on every line. The tracks are declared on the list and each row takes them
+  with `subgrid`, so a column is as wide as the widest value in it. The row
+  also keeps a CELL for
   a value it does not have: an undated, unassigned, unestimated task lines
   its status up with the task above it rather than pulling every later
   column one place left. **And how wide the list is has never been a fact

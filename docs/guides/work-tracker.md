@@ -326,11 +326,20 @@ A **view** is a saved query with a shape. Five shapes:
 - **`table`** — one field per column, which is what you want when the question
   is about a *field* rather than about a task: "which of these is the biggest",
   "who holds the overdue ones", "what is unestimated". A list draws each task
-  as a block you read one at a time, so comparing one field down it means
+  as a compact row you read one at a time, so comparing one field down it means
   finding the same badge at a different place on every row; a table puts every
   value of a column at one place and sorts at its head. The sort it writes is
   the query's own `sort=`, so it orders the **whole set** rather than the page
   that happens to be loaded.
+
+  The list and the table are **the same grid drawn with two column sets**.
+  Both sort at their heads, both draw the bands a grouping puts them in, both
+  become one labelled card per row on a phone — the difference is which
+  columns are on, the order they are in, and how a value is drawn (the list's
+  priority is the mark that opens its row, the table's is the word in a
+  sortable column). **Display → Columns** offers the active set's own choices
+  on either, and the choice is remembered per shape, so arranging the table
+  does not rearrange the list.
 
 ### What a board groups on
 
@@ -781,7 +790,8 @@ screens rather than one:
   is one press away. Two menus decide what is on the list and how it is drawn —
   **Filter** adds a narrowing, and each one is a removable chip under the bar;
   **Display** holds the shape (list, board, table, calendar, timeline), the
-  grouping, the order and, on a table, the columns. Grouped on a status, a
+  grouping, the order and — on the list and the table, which are one grid with
+  a column set each — the columns. Grouped on a status, a
   status group or a priority, the board and the list draw every value the
   company declares and say which of them are empty, because those three are
   closed sets whose order means something; grouped on an assignee, a tag or a
