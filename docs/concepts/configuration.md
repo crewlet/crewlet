@@ -754,6 +754,19 @@ refused by `crewlet validate` on a laptop rather than by a process at bind time:
 | `api.auth.tokens` | A fresh deployment's identity estate is empty, so a Tier A token is what creates the first person — and on a running one it is the way back in when the identity provider is down. Required on **every** backend, `none` included |
 | `secrets.keys` | The keyring signs every session cookie and derives the key that verifies each per-run token. An API served without one accepts nobody |
 
+### What `crewlet validate` warns about
+
+Four API postures are **valid** and worth reading before a deployment runs on
+them. None can be a refusal, because each is a configuration that works exactly
+as written with its consequence somewhere else:
+
+| Warning | Why it is not a refusal |
+|---------|-------------------------|
+| `api.auth.local.accept_insecure` is set | It is what makes an otherwise-refused posture legal. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and the engine logs it on every start |
+| `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, a password backend with an optional second factor, already is one |
+| An OIDC backend not requesting `offline_access` | Nothing notices a deactivation. An identity provider tells this engine nothing when somebody is disabled, so the session it already minted works until its absolute deadline — and the deactivation probe, which is what would end it early, is a refresh-token exchange with nothing to exchange |
+| A group mapping conferring `secrets:read` or `secrets:write` | Adding somebody to a directory group is an ordinary act performed by whoever administers the identity provider, and those two grants read and write this company's credentials. Declaring them on the person's own record puts the decision where it is reviewed |
+
 `api.trusted_proxies` is a **CIDR list, never a bool**, because the question a
 forwarded header poses is not "does this deployment sit behind a proxy" but "is
 *this* peer the proxy". A bool set true trusts a header anybody can send, which

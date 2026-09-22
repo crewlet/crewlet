@@ -653,6 +653,8 @@ func (b *Bootstrap) Warnings() []Warning {
 				" and no `logging.file.level` is `debug`. Set one of them, or pass "+
 				"`-debug` to `crewlet run`"))
 	}
+
+	out = append(out, b.API.warnings()...)
 	return out
 }
 

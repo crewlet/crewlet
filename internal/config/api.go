@@ -1251,3 +1251,88 @@ func checkOrigin(path Path, origin string) error {
 	}
 	return p.err()
 }
+
+// warnings are the API postures that are VALID and worth reading before this
+// deployment runs on them.
+//
+// NONE OF THESE CAN BE A REFUSAL, and each says why in its own sentence. What
+// they share is that the configuration works exactly as written and the
+// consequence is somewhere else: at an identity provider somebody else
+// administers, or in a horizon nothing reaches until it has already been
+// crossed.
+func (a API) warnings() []Warning {
+	var out []Warning
+	if !a.Serving() {
+		return out
+	}
+	auth := a.Auth
+
+	// AN INSECURE POSTURE SOMEBODY ACKNOWLEDGED IS STILL INSECURE. The
+	// acknowledgement is what makes it legal, and it is a decision made
+	// once that everybody after inherits — so `crewlet validate` says it
+	// out loud every time, exactly as the engine logs it on every start.
+	if local := auth.Local; local != nil && local.AcceptInsecure {
+		out = append(out, advisory(field("api.auth.local.accept_insecure"),
+			"a posture that would otherwise be refused off loopback is in "+
+				"force: this deployment is reached at "+a.ExternalBase()+
+				" and `accept_insecure` is what lets it stand. Remove it once "+
+				"it is reached over TLS with a second factor required"))
+	}
+
+	// AN `http://` EXTERNAL URL ON A ROUTABLE HOST means the session
+	// cookie cannot carry `Secure`, so every credential this deployment
+	// issues travels in the clear and no `__Host-` prefix protects it.
+	//
+	// A WARNING RATHER THAN A REFUSAL because it is what a tunnel, a
+	// staging box and an internal network genuinely look like, and because
+	// the one posture it would be a refusal for — a password backend with
+	// an optional second factor — IS refused, by the rule beside it.
+	if strings.HasPrefix(a.ExternalBase(), "http://") && !a.externalLoopback() {
+		out = append(out, advisory(field("api.external_url"),
+			"a browser reaches this deployment over plain http, so the session "+
+				"cookie cannot be marked Secure and every credential it "+
+				"carries travels in the clear. Terminate TLS in front of this "+
+				"node and name the https address here"))
+	}
+
+	if oidc := auth.OIDC; oidc != nil && auth.Resolved() == AuthBackendOIDC {
+		// WITHOUT A REFRESH TOKEN NOTHING NOTICES A DEACTIVATION. An
+		// identity provider tells this engine nothing when somebody is
+		// disabled: the session it already minted goes on working until
+		// its own absolute deadline, which is up to a month. The
+		// deactivation probe is the only thing that ends it early, and
+		// the probe is a refresh-token exchange — so a scopes list
+		// without `offline_access` silently has no offboarding horizon
+		// at all.
+		if !slices.Contains(oidc.Scopes, ScopeOfflineAccess) {
+			out = append(out, advisory(field("api.auth.oidc.scopes"),
+				"`"+ScopeOfflineAccess+"` is not requested, so this deployment "+
+					"holds no refresh token and the deactivation probe has "+
+					"nothing to exchange. A person disabled at the provider "+
+					"keeps their session until its absolute deadline — up to "+
+					a.Auth.Session.Absolute().String()+" — and only a "+
+					"revocation here ends it sooner"))
+		}
+		// A GROUP MAPPING IS AUTHORITY WRITTEN SOMEWHERE ELSE. Adding
+		// somebody to a directory group is an ordinary act performed by
+		// whoever administers the identity provider, and these two
+		// grants read and write the company's own credentials — so a
+		// mapping that confers them hands the secret store to a
+		// membership change nobody here reviews.
+		for group, grants := range oidc.GroupGrants {
+			for _, g := range grants {
+				if g != iam.GrantSecretRead && g != iam.GrantSecretWrite {
+					continue
+				}
+				out = append(out, advisory(
+					at(at(field("api.auth.oidc.group_grants"), group), string(g)),
+					"membership of `"+group+"` confers "+string(g)+
+						", so adding somebody to that group at the identity "+
+						"provider hands them this company's credentials — an "+
+						"act nobody here reviews. Declare it on the person's "+
+						"own record instead"))
+			}
+		}
+	}
+	return out
+}

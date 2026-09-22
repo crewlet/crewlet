@@ -663,3 +663,100 @@ func TestTheDefaultPortIsTheOneEverythingQuotes(t *testing.T) {
 		t.Error("the default binds a port, so a worker node cannot say it serves nothing")
 	}
 }
+
+// --- the warnings -------------------------------------------------------- //
+
+// A WARNING IS WHAT IS VALID AND WORTH READING, and every one of these is a
+// configuration that works exactly as written with its consequence somewhere
+// else: at an identity provider somebody else administers, or in a horizon
+// nothing reaches until it has already been crossed.
+//
+// NONE OF THEM MAY FAIL `crewlet validate`, which is asserted here as well as
+// named: a warning that can fail a build is one somebody suppresses.
+func TestTheApiWarningsAreAdvisoryAndSayWhereTheConsequenceIs(t *testing.T) {
+	t.Parallel()
+	named := func(t *testing.T, b Bootstrap, want string) {
+		t.Helper()
+		if err := b.Validate(); err != nil {
+			t.Fatalf("a warned configuration was REFUSED, which is the one "+
+				"thing a warning may not do: %v", err)
+		}
+		for _, w := range b.Warnings() {
+			if strings.Contains(w.Path, want) {
+				return
+			}
+		}
+		t.Errorf("nothing warned about %s: %v", want, b.Warnings())
+	}
+
+	t.Run("an acknowledged insecure posture", func(t *testing.T) {
+		t.Parallel()
+		b := serving()
+		b.API.Auth.Backend = AuthBackendLocal
+		b.API.Auth.Local = &APILocal{
+			TOTP: iam.SecondFactorOptional, AcceptInsecure: true,
+		}
+		named(t, b, "accept_insecure")
+	})
+	t.Run("plain http off loopback", func(t *testing.T) {
+		t.Parallel()
+		b := serving()
+		b.API.ExternalURL = "http://crewlet.example.com"
+		named(t, b, "api.external_url")
+	})
+	t.Run("an oidc backend with no refresh token", func(t *testing.T) {
+		t.Parallel()
+		b := serving()
+		b.API.Auth.Backend = AuthBackendOIDC
+		b.API.Auth.OIDC = &APIOIDC{
+			Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
+			Scopes: []string{ScopeOpenID, "email"},
+		}
+		named(t, b, "oidc.scopes")
+	})
+	t.Run("a group that confers the secret store", func(t *testing.T) {
+		t.Parallel()
+		b := serving()
+		b.API.Auth.Backend = AuthBackendOIDC
+		b.API.Auth.OIDC = &APIOIDC{
+			Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
+			Scopes:      []string{ScopeOpenID, ScopeOfflineAccess},
+			GroupGrants: map[string][]iam.Grant{"ops": {iam.GrantSecretRead}},
+		}
+		named(t, b, "group_grants")
+	})
+}
+
+// AND THE COUNTERFACTUAL: a deployment doing none of those warns about none
+// of them. Without this the table above would pass on a build that warned
+// unconditionally, which is the same as a build that warns about nothing.
+func TestASoundApiPostureWarnsAboutNothing(t *testing.T) {
+	t.Parallel()
+	b := serving()
+	b.API.Auth.Backend = AuthBackendOIDC
+	b.API.Auth.OIDC = &APIOIDC{
+		Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
+		Scopes:      []string{ScopeOpenID, ScopeOfflineAccess},
+		GroupGrants: map[string][]iam.Grant{"ops": {iam.GrantStateRead}},
+	}
+	for _, w := range b.Warnings() {
+		if strings.HasPrefix(w.Path, "api.") {
+			t.Errorf("a sound API posture warned: %s — %s", w.Path, w.Message)
+		}
+	}
+}
+
+// A NODE THAT SERVES NO API WARNS ABOUT NONE OF IT EITHER, whatever its auth
+// block happens to say: every one of these is about a surface it does not
+// bind.
+func TestANodeServingNoApiWarnsAboutNoneOfIt(t *testing.T) {
+	t.Parallel()
+	b := DefaultBootstrap()
+	b.API.ExternalURL = "http://crewlet.example.com"
+	b.API.Auth.Local = &APILocal{TOTP: iam.SecondFactorOptional, AcceptInsecure: true}
+	for _, w := range b.Warnings() {
+		if strings.HasPrefix(w.Path, "api.") {
+			t.Errorf("a node binding no port warned about its API: %s", w.Path)
+		}
+	}
+}
