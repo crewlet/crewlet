@@ -1033,13 +1033,16 @@ function itemsParams(args: {
   // one — but no view can carry one to begin with, so there is nothing to
   // strip here: `internal/tracker/views.go:274` runs every saved view's params
   // through `ParseQuery` at the SAVE, whose `checkKeys`
-  // (`internal/tracker/query.go:448`) refuses any key outside `QueryKeys`
+  // (`internal/tracker/query.go:449`) refuses any key outside `QueryKeys`
   // (`query.go:429`) that is not an `f.<ref>` custom field, and `cols` is in
   // neither. `WriteView` (`views.go:66`) is the only write path and
   // `save_work_view` reaches it (`internal/agent/builtin/workviews.go:216`).
   // The builtin views are this package's own two params, held parseable by
-  // `TestEveryImplicitViewsQueryParses`. A client-side filter here would be a
-  // second, weaker copy of that refusal.
+  // `TestEveryImplicitViewsQueryParses`, and both spellings of the display key
+  // are held refused by `TestAViewThatCouldNotBeRunIsRefusedAtTheSave`. A
+  // client-side filter here would be a second, weaker copy of that refusal —
+  // and the weaker one, since it would run after the engine had already
+  // decided.
   const params: Record<string, unknown> = { ...view, container };
 
   const set = (key: string, value: string) => {
