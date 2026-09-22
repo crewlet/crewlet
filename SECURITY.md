@@ -59,6 +59,14 @@ A few things worth knowing when deploying Crewlet:
   from `crypto/rand`, so there is no dictionary to grind and the memory cost
   would buy nothing while adding a hundred milliseconds to every request a CI
   job makes.
+- **An identity provider's assertion is never a link by address.** A person is
+  bound to a provider subject by an invitation somebody issued or by an
+  administrator — never because the provider asserted an address that matches
+  an existing person's. At most providers a user can set their own address, so
+  an email match is a claim the attacker controls, and the person it would
+  link them to is whoever is most worth becoming. There is deliberately no
+  `auto_provision` setting: it is the same decision written as a field, and a
+  field is how it ends up on by accident.
 - **The API's read surface is open by default.** Writes and every `/config`
   route require a token from `api.auth.tokens`; reads do not, so `/events`,
   `/agents/{id}/memory` and `/ws/stream` serve full LLM transcripts to anyone

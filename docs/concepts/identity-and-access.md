@@ -283,6 +283,83 @@ are and must say what is wrong, or they will type variations until one sticks.
 
 ---
 
+## Signing in through an identity provider
+
+A login through OpenID Connect is **two requests** — the browser goes to the
+provider, and the provider sends it back with a code — and between them the
+engine has to remember three values: the `state` it will compare, the `nonce`
+it will find in the ID token, and the **PKCE verifier** it will present at the
+exchange.
+
+The obvious place to keep them is a map on the node that started the login.
+That map is why a fleet cannot serve logins: a load balancer puts the two
+requests on whichever nodes it likes, so a login begun on one and finished on
+another finds nothing — intermittently, in proportion to how many nodes are
+running, and never on the single-node deployment anybody tests on. So the three
+values are **sealed into a cookie the browser carries**, under the fleet
+keyring every node holds, and no node remembers anything.
+
+Sealed, not merely signed. One of the three is a secret: the PKCE verifier is
+what proves the party redeeming the code is the party that asked for it, so an
+attacker who can *read* it has defeated exactly the protection PKCE is.
+
+The flight cookie lives ten minutes — long enough for a person to fetch their
+phone for a second factor at the provider, short enough that a cookie carrying
+a verifier is not sitting in a browser for the length of a meeting.
+
+### What is checked in an ID token, and what each check is for
+
+An ID token is a bearer assertion by a third party. Every check is invisible
+while it works — removing any one changes no successful sign-in — and each one,
+removed, is a different way to sign in as somebody else.
+
+| Check | Removed, it means |
+|---|---|
+| The signature, under a key the **issuer** publishes | Anybody who can reach the callback signs in as anybody |
+| The **algorithm**, pinned to the asymmetric families | A key source handing back bytes turns a published symmetric key into a signing secret. (The classic confusion attack is refused by the key *type* first; the pin is what still stands when the key source changes) |
+| The **issuer**, compared exactly | Any provider's token is accepted — including a free tenant the attacker registered |
+| The **audience**, which must contain this client | Every other application at that provider becomes a way in here |
+| The **nonce**, from the flight cookie | An ID token captured from any other login replays into this one |
+| The **expiry**, required rather than honoured-when-present | A token with no `exp` is valid for ever, so one captured off the wire replays until the provider rotates its key |
+
+Beyond those, a token naming more than one audience must name this client as
+its `azp`, and when the company sets `oidc.require_acr` the asserted
+authentication context must match — requesting `acr_values` is a request the
+provider is free to ignore, so the check on the way back is what enforces it.
+
+### Linking is explicit, and an email match is never a link
+
+The engine does not create a person because a provider asserted an address, and
+it does not attach a provider subject to an existing person because the
+addresses agree. Both are the same hazard: at most providers a user can set
+their own address, so "the addresses match" is a claim the attacker controls —
+and the person it would link them to is whoever is most worth becoming. A
+subject is bound to a person by an invitation somebody issued, or by an
+administrator, once.
+
+There is no `auto_provision`. It is the same decision written as a config
+field, and a field is how it ends up on by accident.
+
+### The deactivation probe
+
+A provider that suspends or deletes an account tells nobody. Every other
+revocation in this engine is a write somebody makes here and is felt within an
+applier's lag; a central deactivation would be felt only when the session's
+absolute lifetime ran out.
+
+So the engine asks, hourly by default, using the only thing it has: the refresh
+token the login obtained. A provider whose account is gone answers
+`invalid_grant`, and the session ends as `idp_revoked`. **Every other error is
+`unknown`, and ends nothing** — treating an unreachable provider as a
+deactivation would sign the whole company out the first time somebody else's
+service had an outage.
+
+Without `offline_access` there is no refresh token and therefore no probe, and
+validation says so rather than leaving you believing an off-boarding is felt
+sooner than it is.
+
+---
+
 ## The session cookie
 
 A signed-in browser holds one cookie, and it is **signature-stateless and
