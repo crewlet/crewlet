@@ -54,6 +54,36 @@ var ErrUnknownEntityKind = errors.New("configapi: unknown entity kind")
 // ErrNoSuchEntity reports an id nothing in the active revision carries.
 var ErrNoSuchEntity = errors.New("configapi: no such entity")
 
+// ErrEntityReadOnly reports a collection this surface serves and does not
+// write.
+//
+// It is the org chart, and the refusal is by NAME rather than a 404 for the
+// same reason the whole-document door refuses a body carrying `roles:`: a
+// write that silently kept half of what you sent answers success, activates,
+// and leaves the new seat nowhere with your own document saying it exists.
+var ErrEntityReadOnly = errors.New("configapi: this collection is read-only here")
+
+// WritableEntityKinds names the collections a write may address, sorted.
+//
+// DERIVED FROM THE TABLE rather than listed beside it, so the route table, the
+// HTTP door and [Service.ApplyEntity] cannot come to disagree about which half
+// of a company this surface writes.
+func WritableEntityKinds() []string {
+	var out []string
+	for kind, access := range entityKinds {
+		if access.replace != nil {
+			out = append(out, kind)
+		}
+	}
+	return sorted(out)
+}
+
+// writableEntity reports whether a collection may be written here.
+func writableEntity(kind string) bool {
+	access, known := entityKinds[kind]
+	return known && access.replace != nil
+}
+
 // ErrIdentityMismatch reports a body whose own identity disagrees with the id
 // in the path — a rename, arriving dressed as a replacement.
 //
@@ -96,6 +126,19 @@ type entityAccess struct {
 	// often a typo than an intent to add one. It never RENAMES either: a
 	// body whose own identity disagrees with the id is ErrIdentityMismatch,
 	// for the reasons on that sentinel.
+	//
+	// NIL IS A READ-ONLY COLLECTION, and it is the table's own statement of
+	// which half of a company this surface still writes. `roles` and
+	// `units` are the org chart, which is a domain of its own now: it has
+	// its own records, its own per-object arbitration and its own history,
+	// and a revision cannot hold one. They stay READABLE here because a
+	// revision written before the split still carries both inside it, and
+	// somebody repairing one has to be able to see it.
+	//
+	// STATED IN THE TABLE rather than checked at each door, because there
+	// are three doors — the HTTP route, [Service.ApplyEntity] and the route
+	// table that decides which patterns to mount — and a rule written three
+	// times is a rule two of them eventually stop obeying.
 	replace func(*config.Company, string, submitted) error
 	// stored finds the entity under an id in a STORED document, decoded as
 	// a tree: the same entity find returns, found the same way, so a write
@@ -124,43 +167,6 @@ var entityKinds = map[string]entityAccess{
 			}
 			return found, true
 		},
-		replace: func(c *config.Company, id string, raw submitted) error {
-			// FOUND FIRST, judged second. Both orders refuse the same
-			// requests, but they answer a PUT to an id nothing carries
-			// differently: identity-first calls that a rename and blames
-			// the body, when the entity the caller addressed is simply not
-			// there and the URL is what they got wrong. And the place it
-			// was found is where a body that cannot be read is refused.
-			var target *config.Role
-			var at config.Path
-			eachRoleAt(c, func(p config.Path, r *config.Role) {
-				if target == nil && roleID(r) == id {
-					target, at = r, p
-				}
-			})
-			if target == nil {
-				return ErrNoSuchEntity
-			}
-			incoming, err := decodeEntity[config.Role](raw, at)
-			if err != nil {
-				return err
-			}
-			// THE IDENTITY IS THE ADDRESS, so a body that renames the
-			// seat is refused rather than silently moved: the caller asked
-			// to replace the entity at this id, and honouring a rename here
-			// would leave the URL naming something that no longer exists.
-			//
-			// Compared on the DERIVED handle rather than the declared one,
-			// because a body that leaves `handle` out derives it from
-			// `name` — so editing a seat's display name alone is the shape
-			// this rename arrives in most often, and the one an operator is
-			// least expecting to be a rename at all.
-			if got := roleID(&incoming); got != id {
-				return identityMismatch("handle", id, got)
-			}
-			*target = incoming
-			return nil
-		},
 		stored: func(root map[string]any, id string) (map[string]any, bool) {
 			return firstElement(root, false, id)
 		},
@@ -182,36 +188,6 @@ var entityKinds = map[string]entityAccess{
 				return nil, false
 			}
 			return found, true
-		},
-		replace: func(c *config.Company, id string, raw submitted) error {
-			var target *config.Unit
-			var at config.Path
-			eachUnitAt(c, func(p config.Path, u *config.Unit) {
-				if target == nil && unitID(u) == id {
-					target, at = u, p
-				}
-			})
-			if target == nil {
-				return ErrNoSuchEntity
-			}
-			incoming, err := decodeEntity[config.Unit](raw, at)
-			if err != nil {
-				return err
-			}
-			// The same rule as a seat, and a unit's key is referenced
-			// from further away: every `manages:` entry that expands to
-			// it and every root-level seat whose `unit:` names it.
-			//
-			// Compared on the KEY rather than the display name, for
-			// [roleID]'s reason one field along: a body that changes
-			// the name alone is not a rename here — nothing resolves a
-			// unit by its name — while one that changes the id is, and
-			// it is the one an operator is least expecting to be one.
-			if got := unitID(&incoming); got != id {
-				return identityMismatch("id", id, got)
-			}
-			*target = incoming
-			return nil
 		},
 		stored: func(root map[string]any, id string) (map[string]any, bool) {
 			return firstElement(root, true, id)
@@ -292,6 +268,19 @@ var entityKinds = map[string]entityAccess{
 			return nil, false
 		},
 	},
+}
+
+// refuseChartWrite answers a write to a collection the org chart owns.
+//
+// MOUNTED AS ITS OWN HANDLER rather than checked inside [Service.putEntity],
+// which is what makes it unreachable to confuse: that handler is now mounted
+// only for collections it can write, so the check inside it had no caller at
+// all. A path is answered by NAME here, before the body is read — see
+// chartdoor.go for why the refusal is per-noun and why it exists at all.
+func (s *Service) refuseChartWrite(kind string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		refuseChartEntity(w, kind, r.PathValue("id"))
+	}
 }
 
 // EntityKinds names every addressable collection, sorted — so a caller can
@@ -395,12 +384,6 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 func (s *Service) putEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		// BEFORE THE BODY IS EVEN READ. A seat and a unit left the
-		// settings document, and splicing one back in would store a
-		// revision every node then refuses to read. See chartdoor.go.
-		if refuseChartEntity(w, kind, id) {
-			return
-		}
 		body, err := readBody(w, r)
 		if err != nil {
 			refuseBody(w, err)
@@ -563,40 +546,34 @@ func objects(value any) []map[string]any {
 // eachRole visits every seat in the company, root-level and unit-nested
 // alike, because an operator editing "the CEO" does not think about which
 // list it happens to live in.
+//
+// NO DOCUMENT PATH ANY MORE. These walkers used to carry the place each
+// object is written at, for the decoder that reported a bad field by its
+// line — and the only callers that needed it were the seat and unit WRITES,
+// which this surface no longer performs. What is left is a lookup, so what
+// is left is the object.
 func eachRole(c *config.Company, visit func(*config.Role)) {
-	eachRoleAt(c, func(_ config.Path, r *config.Role) { visit(r) })
-}
-
-// eachRoleAt is [eachRole] with the place each seat is written at, in the
-// same order, so a seat found through either is the same seat.
-func eachRoleAt(c *config.Company, visit func(config.Path, *config.Role)) {
 	for i := range c.Roles {
-		visit(config.Path{"roles", i}, &c.Roles[i])
+		visit(&c.Roles[i])
 	}
-	eachUnitAt(c, func(at config.Path, u *config.Unit) {
+	eachUnit(c, func(u *config.Unit) {
 		for i := range u.Roles {
-			visit(append(slices.Clone(at), "roles", i), &u.Roles[i])
+			visit(&u.Roles[i])
 		}
 	})
 }
 
-// eachUnit visits every unit, nesting to any depth.
+// eachUnit visits every unit, parents before their children, depth first.
 func eachUnit(c *config.Company, visit func(*config.Unit)) {
-	eachUnitAt(c, func(_ config.Path, u *config.Unit) { visit(u) })
-}
-
-// eachUnitAt is [eachUnit] with the place each unit is written at: parents
-// before their children, depth first.
-func eachUnitAt(c *config.Company, visit func(config.Path, *config.Unit)) {
 	for i := range c.Units {
-		visitUnitAt(config.Path{"units", i}, &c.Units[i], visit)
+		visitUnit(&c.Units[i], visit)
 	}
 }
 
-func visitUnitAt(at config.Path, u *config.Unit, visit func(config.Path, *config.Unit)) {
-	visit(at, u)
+func visitUnit(u *config.Unit, visit func(*config.Unit)) {
+	visit(u)
 	for i := range u.Children {
-		visitUnitAt(append(slices.Clone(at), "children", i), &u.Children[i], visit)
+		visitUnit(&u.Children[i], visit)
 	}
 }
 

@@ -390,13 +390,12 @@ func TestASeatOrAUnitIsNotWrittenAtThisDoor(t *testing.T) {
 			// only says no leaves an operator with a company they cannot
 			// edit — and one naming a route this build does not serve is
 			// worse, because it sends them to a 404 with the engine's own
-			// words behind it. What is true today is the boot seed.
+			// words behind it. The chart's own routes are what is true
+			// now, and the walk below holds this hint against the routes
+			// the chart surface actually mounts.
 			hint, _ := body["hint"].(string)
-			if !strings.Contains(hint, "crewlet run -company") {
+			if !strings.Contains(hint, "/chart/") {
 				t.Errorf("the refusal does not name anything that works: %v", body)
-			}
-			if strings.Contains(hint, "/chart") {
-				t.Errorf("the refusal names a route this build does not serve: %v", body)
 			}
 			// AND NOTHING WAS WRITTEN, which is the whole point: a
 			// refused write that stored a revision would be the same

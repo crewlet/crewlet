@@ -169,7 +169,22 @@ func (s *Service) Routes(mux *http.ServeMux) {
 		// not accept. GET here answers the entity itself, so `GET | PUT`
 		// round-trips with nothing in between.
 		routes.HandleFunc("GET /config/"+kind+"/{id}", s.getEntity(kind))
+	}
+	// AND THE WRITE ONLY WHERE THERE IS ONE. `roles` and `units` are the
+	// org chart, which is a domain of its own with its own routes — so the
+	// pattern is ABSENT here rather than mounted and refusing. A route that
+	// exists and answers 400 to everything reads as a surface that is
+	// broken; one that is not there matches what the product says, and the
+	// per-entity refusal in chartdoor.go still covers the PATH, because a
+	// caller who reaches it deserves the sentence rather than a 405.
+	for _, kind := range WritableEntityKinds() {
 		routes.HandleFunc("PUT /config/"+kind+"/{id}", s.putEntity(kind))
+	}
+	// THE CHART'S OWN COLLECTIONS, answered by NAME rather than by the
+	// method fallthrough: a 405 on `PUT /config/roles/ceo` tells an
+	// operator that the verb is wrong, when what is wrong is the surface.
+	for _, kind := range []string{EntityRoles, EntityUnits} {
+		routes.HandleFunc("PUT /config/"+kind+"/{id}", s.refuseChartWrite(kind))
 	}
 	surface := noStore(routes)
 	mux.Handle("/config", surface)

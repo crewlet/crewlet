@@ -453,7 +453,7 @@ does.
 
 A [JSON Merge Patch (RFC 7396)](https://www.rfc-editor.org/rfc/rfc7396): send only the sections you are changing, in the shape the document already has.
 
-The registered media type is `application/merge-patch+json`; plain `application/json` and an absent `Content-Type` are accepted too, since every example here sends one of those. **Any other patch format is `415`** with an `Accept-Patch` header naming what would have worked — notably `application/json-patch+json`, an [RFC 6902](https://www.rfc-editor.org/rfc/rfc6902) list of operations, which is a different format this surface does not serve. Editing one list member is what the [per-entity routes](#per-entity-read-and-write) are for. A patch format that *can* address a list member does not replace them: a patch addresses by structure, and a seat's position in a unit's list is not its identity — so an index-addressed edit rewrites a different seat the moment anything above it moves.
+The registered media type is `application/merge-patch+json`; plain `application/json` and an absent `Content-Type` are accepted too, since every example here sends one of those. **Any other patch format is `415`** with an `Accept-Patch` header naming what would have worked — notably `application/json-patch+json`, an [RFC 6902](https://www.rfc-editor.org/rfc/rfc6902) list of operations, which is a different format this surface does not serve. Editing one list member is what the [per-entity routes](#per-entity-read-and-write) are for — and, for a seat or a unit, the [chart's own routes](#chart--the-org-chart-auth-gated). A patch format that *can* address a list member does not replace them: a patch addresses by structure, and a seat's position in a unit's list is not its identity — so an index-addressed edit rewrites a different seat the moment anything above it moves.
 
 ```bash
 curl -X PATCH https://engine.example.com/config \
@@ -463,7 +463,7 @@ curl -X PATCH https://engine.example.com/config \
 
 - **Deep merge.** `{"providers": {"llm": {"main": {"model": "claude-opus-5"}}}}` changes that model and leaves the provider's type, its keys and every other provider alone.
 - **`null` deletes.** `{"integrations": {"gitlab": null}}` removes the section — without it a config surface can only add.
-- **Arrays replace.** RFC 7396 cannot address a list element, so `roles: [...]` in a patch replaces the whole roster. Editing one seat is what [`PUT /config/roles/{handle}`](#per-entity-read-and-write) is for; inventing a list syntax here would give two answers to one question. What a replacement does not remove is a field this build cannot represent: see [Fields a newer build wrote survive every write](#fields-a-newer-build-wrote-survive-every-write).
+- **Arrays replace.** RFC 7396 cannot address a list element, so `roles: [...]` in a patch replaces the whole roster. Editing one seat is what [`PATCH /chart/seats/{handle}`](#chart--the-org-chart-auth-gated) is for, on a surface this one refuses a chart body outright; inventing a list syntax here would give two answers to one question. What a replacement does not remove is a field this build cannot represent: see [Fields a newer build wrote survive every write](#fields-a-newer-build-wrote-survive-every-write).
 - **Unknown keys are refused**, not ignored. A patch is the edit least visible in a diff, so a typo that silently changes nothing is the worst outcome available, because the caller believes they changed something. That holds whatever the key is set to, `null` included: deleting a key this build does not know is refused rather than ignored, because the write [carries it back](#fields-a-newer-build-wrote-survive-every-write) and the caller would be told a deletion landed that did not.
 - **Validated as the whole document it produces.** A section that is fine alone is still refused when it leaves the company invalid.
 - Same summary rule and same `If-Match` as `PUT /config`, and a **409** when nothing is active: a patch is defined against a document, and building a company out of one section is not what this route is for.
@@ -589,10 +589,10 @@ Four collections readable, **two writable**:
 | `GET` | `/config/{kind}/{id}` | One entity, redacted, with an `ETag`. **The body is the entity itself**, so it goes straight back into the `PUT` |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry |
-| `PUT` | `/config/roles/{handle}` | **`400 chart_not_writable_here`** — a seat is the [org chart](../concepts/chart-domain.md)'s, not the settings' |
-| `PUT` | `/config/units/{key}` | **`400 chart_not_writable_here`** — likewise for a unit |
+| `PUT` | `/config/roles/{handle}` | **`400 chart_not_writable_here`** — a seat is the [org chart](../concepts/chart-domain.md)'s, not the settings'. The refusal names the routes that do the job: `PATCH /chart/seats/{handle}`, `POST /chart/batch`, `POST /chart/seats/{handle}/rename` |
+| `PUT` | `/config/units/{key}` | **`400 chart_not_writable_here`** — likewise for a unit, naming `PATCH /chart/units/{key}`, `POST /chart/batch` and `POST /chart/units/{key}/rename` |
 
-A fresh deployment's chart is seeded from its company file at boot; see [the boot seed](../concepts/control-plane.md#the-boot-seed).
+Writing a seat or a unit goes through [`/chart/*`](#chart--the-org-chart-auth-gated). A fresh deployment's chart is also seeded from its company file at boot; see [the boot seed](../concepts/control-plane.md#the-boot-seed).
 
 Any other method is `405` with an `Allow` header naming `GET, PUT`. There is no `DELETE` — removal is a full-document edit, for the reasons below.
 

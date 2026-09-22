@@ -29,7 +29,8 @@ import (
 // and the seat is nowhere, because the half that would have created it was
 // dropped on the way in. Nothing failed, nothing logged, and the operator's
 // own document says the seat exists. The same write refused by name takes ten
-// seconds to understand and points at the route that does the job.
+// seconds to understand, and it NAMES THE ROUTES THAT DO THE JOB — which is
+// what makes the refusal a redirection rather than a dead end.
 //
 // # Why it is NOT in the parser
 //
@@ -49,6 +50,41 @@ import (
 // and a revision written before the split still carries a chart inside it — so
 // judging the merge would refuse an operator patching a mission for a chart
 // they did not send and cannot see.
+
+// ChartRoutes are the chart-surface routes this package's refusals point at,
+// and the ONE place they are written down.
+//
+// EXPORTED FOR A WALK, because nothing inside this package can tell whether
+// `POST /chart/batch` exists: the chart surface is a sibling, mounted by the
+// same app and importable from neither direction. A hint naming a route this
+// build does not serve sends an operator to a 404 with the engine's own words
+// behind it, which is strictly worse than a refusal that says only no — so
+// internal/api's own suite, which mounts both surfaces, holds this list
+// against what the chart surface actually mounted.
+//
+// EVERY HINT BELOW IS BUILT FROM IT rather than spelling a pattern again in
+// prose: the second copy is the one that goes stale, silently, and reads as
+// authoritative for as long as nobody follows it.
+var ChartRoutes = struct {
+	UnitContent, SeatContent string
+	Batch, Import            string
+	RenameUnit, RenameSeat   string
+}{
+	UnitContent: "PATCH /chart/units/{key}",
+	SeatContent: "PATCH /chart/seats/{handle}",
+	Batch:       "POST /chart/batch",
+	Import:      "POST /chart/import",
+	RenameUnit:  "POST /chart/units/{key}/rename",
+	RenameSeat:  "POST /chart/seats/{handle}/rename",
+}
+
+// ChartRoutePatterns is [ChartRoutes] as a list, for the walk.
+func ChartRoutePatterns() []string {
+	return []string{
+		ChartRoutes.UnitContent, ChartRoutes.SeatContent, ChartRoutes.Batch,
+		ChartRoutes.Import, ChartRoutes.RenameUnit, ChartRoutes.RenameSeat,
+	}
+}
 
 // chartKeysInBody are the top-level keys this surface no longer writes,
 // derived from the two types rather than listed.
@@ -86,10 +122,13 @@ func refuseChart(w http.ResponseWriter, doc *yaml.Node, method string) bool {
 		// route this build does not serve sends an operator to a 404 with
 		// the engine's own words behind it, which is worse than saying
 		// only that the write is refused.
-		"hint": "send the settings alone. A node's FIRST chart is seeded from " +
-			"the company file at boot (`crewlet run -company <file>`, which " +
-			"seeds only while the chart is empty); after that the chart is " +
-			"written through its own log and not through this document",
+		"hint": "send the settings alone, and write the chart through its own " +
+			"routes: " + ChartRoutes.UnitContent + " and " +
+			ChartRoutes.SeatContent + " for content, " + ChartRoutes.Batch +
+			" for structure, " + ChartRoutes.Import + " for a whole revision's " +
+			"authored placement. A node's FIRST chart is also seeded from the " +
+			"company file at boot (`crewlet run -company <file>`), which seeds " +
+			"only while the chart is empty",
 	})
 	return true
 }
@@ -181,7 +220,10 @@ func refuseChartIn(w http.ResponseWriter, sent submitted, method string) bool {
 // to a founder whose company plainly has a CEO, reads as the engine having
 // lost their org chart.
 func refuseChartEntity(w http.ResponseWriter, kind, id string) bool {
-	if kind != EntityRoles && kind != EntityUnits {
+	// THE TABLE DECIDES, not a second list of kinds. entities.go states
+	// which collections this surface still writes, and a copy of that
+	// judgement here is the one that eventually stops matching it.
+	if writableEntity(kind) {
 		return false
 	}
 	// A SEAT AND A UNIT ARE SAID SEPARATELY, because the two arrive in
@@ -189,8 +231,12 @@ func refuseChartEntity(w http.ResponseWriter, kind, id string) bool {
 	// reparented, and one sentence covering both tells somebody holding
 	// either of them nothing they can act on.
 	noun, gesture := "seat", "hire, move or edit a seat"
+	route := ChartRoutes.SeatContent + " for its content, " + ChartRoutes.Batch +
+		" to hire or move one, " + ChartRoutes.RenameSeat + " for its handle"
 	if kind == EntityUnits {
 		noun, gesture = "unit", "open, move or edit a unit"
+		route = ChartRoutes.UnitContent + " for its content, " + ChartRoutes.Batch +
+			" to open or move one, " + ChartRoutes.RenameUnit + " for its key"
 	}
 	writeJSON(w, http.StatusBadRequest, map[string]any{
 		"error":  "chart_not_writable_here",
@@ -201,10 +247,9 @@ func refuseChartEntity(w http.ResponseWriter, kind, id string) bool {
 				"revision carrying a chart, which every node refuses to read "+
 				"as settings — so the failure would arrive at the next "+
 				"restart rather than here.", noun, kind, id),
-		"hint": "to " + gesture + ", write the org chart's own log; this " +
-			"route writes the company's settings. A node's first chart is " +
-			"seeded from the company file at boot (`crewlet run -company " +
-			"<file>`), and reading " + kind + "/" + id + " here still works",
+		"hint": "to " + gesture + ", use the org chart's own routes: " + route +
+			". This route writes the company's settings, and reading " +
+			kind + "/" + id + " here still works",
 	})
 	return true
 }

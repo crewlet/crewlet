@@ -75,6 +75,17 @@ func entityDraft(kind, id string, body submitted, expect string) (draft, error) 
 		return draft{}, &EntityError{Err: fmt.Errorf("%w: %q (want one of %v)",
 			ErrUnknownEntityKind, kind, EntityKinds())}
 	}
+	// A COLLECTION THIS SURFACE READS AND DOES NOT WRITE. It is the org
+	// chart, which is a domain of its own — see [ErrEntityReadOnly] and
+	// chartdoor.go, where the same refusal is given its per-noun wording
+	// at the HTTP door.
+	if access.replace == nil {
+		return draft{}, &EntityError{Err: fmt.Errorf(
+			"%w: %s/%s is part of the org chart, which is written through "+
+				"its own log rather than through a configuration revision "+
+				"(want one of %v)",
+			ErrEntityReadOnly, kind, id, WritableEntityKinds())}
+	}
 	return draft{
 		expect: expect, requireActive: true,
 		// VALIDATED WHOLE, not just the entity. A seat naming a provider
