@@ -86,6 +86,68 @@ func (f Floor) Age(now time.Time) time.Duration {
 	return now.Sub(f.ReadAt)
 }
 
+// Replayable reports whether a node whose checkpoint is `checkpoint` can still
+// replay forward on a log whose lowest record is `first` — whether the next
+// record it needs, checkpoint+1, is still there. False is the state
+// [FloorBelow] names.
+//
+// ONE PREDICATE, because the question is asked in more places than any one of
+// them can see: [Health.Established], the health read that stamps FloorBelow,
+// the boot's join, the re-check after a transfer, a running node's heartbeat,
+// a backup refusing a copy the log can no longer reach, and both write fences
+// that clear an expectation of zero. Written out per site it was one
+// inequality in two spellings, `seq+1 < floor` and `first > seq+1`, at eight
+// sites that could each drift alone — and the tracker's fence records what one
+// step of drift costs: compared against the checkpoint itself, it refused a
+// node ONE BELOW `first`, which has already applied everything that may be
+// gone.
+//
+// # Why the boundary is checkpoint+1
+//
+// A checkpoint is the last sequence APPLIED, so what a node needs next is
+// checkpoint+1. A checkpoint ONE BELOW `first` has applied everything that was
+// ever removed: every record under `first` is gone and it holds all of them.
+// So (first-1, first) is replayable, and first-2 is the highest checkpoint
+// that is short a record.
+//
+// # What `first` is
+//
+// The lowest sequence the caller trusts the log to hold, and choosing it is
+// the caller's decision rather than this function's. The stream's own first
+// sequence says what IS there; the published trim floor says what the trim has
+// not licensed removing; a caller that must survive the next trim asks of the
+// higher of the two. [OfferRequest.Need] is this same boundary shipped to a
+// donor as a number — first-1, the lowest checkpoint this accepts — because a
+// donor holds no view of the joiner's stream.
+//
+// # The zero cases, as measured on JetStream
+//
+//   - A stream nobody has written reports first = 0, NOT 1, and every
+//     checkpoint is replayable against it: there is nothing to have missed.
+//   - A written stream reports first >= 1. A node that has applied nothing
+//     has checkpoint 0, so (0, 1) is replayable — the whole log is ahead of
+//     it — and (0, 2) is not: record 1 is gone and it never saw it.
+//   - A stream EMPTIED by a purge reports first = last+1, one past a record
+//     it no longer holds. A node that applied through `last` is exactly one
+//     below that and replayable; one that stopped short of `last` is not,
+//     because what it never applied went with the purge.
+//   - A published floor of 0 is a trim that has licensed removing nothing,
+//     and it reads exactly as the never-written stream does.
+//
+// # And why it is not written `first > checkpoint+1`
+//
+// Because that form overflows: at a checkpoint of the top of uint64 the sum
+// wraps to 0, and every log with a record in it reads as having left behind a
+// node that has applied every sequence there is. `first-1 <= checkpoint`
+// behind a guard on zero forms no sum, so it is exact over the whole range.
+// The two forms differ only at a checkpoint of exactly that top value, which
+// no valid position reaches — [Position.Valid] stops at [MaxSeq] — so no
+// reachable answer changed; but a boundary stated once for every caller
+// should be exact for every value a caller can pass.
+func Replayable(checkpoint, first uint64) bool {
+	return first == 0 || first-1 <= checkpoint
+}
+
 // ApplyRetryBudget is how long a transient apply error is retried in place
 // before the applier reports itself faulted — which its readers treat as
 // stalled: reads refuse naming the error, and the seats move.
@@ -389,7 +451,7 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 	if h.FirstSeq != nil && *h.FirstSeq > floor {
 		floor = *h.FirstSeq
 	}
-	if h.Position.Seq+1 < floor {
+	if !Replayable(h.Position.Seq, floor) {
 		return false, RefuseBelowFloor
 	}
 	if h.Lag == nil || h.LastSeq == nil {

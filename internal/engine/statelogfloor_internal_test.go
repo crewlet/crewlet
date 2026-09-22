@@ -3,11 +3,14 @@ package engine
 import (
 	"context"
 	"path/filepath"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -137,5 +140,217 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	if health.Floor.State != statelog.FloorOK {
 		t.Fatalf("health reads the floor as %s with a published floor at the next "+
 			"record, want ok", health.Floor.State)
+	}
+}
+
+// THE RECOVERY PATH DRAWS ITS LINE AT THE NEXT RECORD, on a real stream: the
+// join's behind test, the running node's heartbeat that requests a rejoin, and
+// the re-check after a transfer.
+//
+// Both sides of the boundary cost something nothing else reports. A node
+// wrongly judged behind asks a fleet for a snapshot of a log it could simply
+// read — halting its appliers to do it, when the heartbeat is the one asking —
+// and on a lone node that ask finds no responders and returns in milliseconds,
+// so the boot's wall clock cannot see it. A node wrongly judged able to replay
+// replays over a hole and reports itself caught up. So each question is put
+// directly, against what JetStream itself reports rather than against numbers
+// typed here: a stream a purge emptied says first = last+1, the zero case the
+// join's own comment once confused with a never-written stream's.
+func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	back, err := OpenBackends(t.Context(), &b, cfg)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	// The trim is the other thing that purges this log; stopped, every
+	// purge below is this test's own.
+	e.stopRetention()
+
+	s := e.native.log
+	name := tracker.Domain{}.Name()
+	spec := tracker.Domain{}.Stream()
+	running := s.Domain(name)
+	if running == nil {
+		t.Fatal("the tracker domain is not running")
+	}
+	logs := map[string]*jetstream.DomainLog{}
+	for _, domain := range registeredDomains() {
+		r := s.Domain(domain.Name())
+		if r == nil {
+			t.Fatalf("%s is not running", domain.Name())
+		}
+		logs[domain.Name()] = r.log
+	}
+	behindNow := func() []string {
+		t.Helper()
+		behind, _, err := s.replayable(t.Context(), logs)
+		if err != nil {
+			t.Fatalf("replayable: %v", err)
+		}
+		return behind
+	}
+	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a rejoin it requests is
+	// counted and does nothing, so what is read below is the heartbeat's
+	// own conclusion rather than an adoption racing the next assertion.
+	// Installed while the node is healthy, so no rejoin is in flight to be
+	// holding the old one.
+	var rejoins atomic.Int64
+	s.rejoinMu.Lock()
+	s.rejoin = func(context.Context) error { rejoins.Add(1); return nil }
+	s.rejoinMu.Unlock()
+	rejoinRequested := func() bool {
+		s.rejoinMu.Lock()
+		defer s.rejoinMu.Unlock()
+		return s.rejoining || rejoins.Load() > 0
+	}
+	body, err := tracker.EncodeBarrier(statelog.Envelope{
+		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
+		Subject: statelog.Subject{Kind: statelog.BarrierKind},
+		Gen:     running.runner.Committed().Generation,
+		Scope:   statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+	})
+	if err != nil {
+		t.Fatalf("encode a barrier: %v", err)
+	}
+	appendBarrier := func() uint64 {
+		t.Helper()
+		seq, _, err := running.log.Append(t.Context(),
+			spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil, body)
+		if err != nil {
+			t.Fatalf("append a barrier: %v", err)
+		}
+		return seq
+	}
+	purgeTo := func(upTo, wantLast uint64) {
+		t.Helper()
+		if err := running.log.Purge(t.Context(), upTo); err != nil {
+			t.Fatalf("purge: %v", err)
+		}
+		first, last, err := running.log.Bounds(t.Context())
+		if err != nil {
+			t.Fatalf("bounds: %v", err)
+		}
+		if first != last+1 || last != wantLast {
+			t.Fatalf("the purged log reports first %d and last %d, want %d and %d "+
+				"— the case under test is a stream a purge emptied",
+				first, last, wantLast+1, wantLast)
+		}
+	}
+
+	// THE HEALTH READ asks of the higher of the published floor and the
+	// stream's first sequence, and it is the one that decides whether the
+	// node keeps its seats. With the trim stopped the published floor
+	// cannot move, so the case checks it sits at or below the next record
+	// — and whatever the health read concludes past that is the stream's
+	// `first` alone, the half of the comparison a published floor never
+	// exercises.
+	floorOf := func(checkpoint uint64) statelog.FloorState {
+		t.Helper()
+		h, err := s.health(t.Context(), running)
+		if err != nil {
+			t.Fatalf("health: %v", err)
+		}
+		if h.TrimFloor == nil {
+			t.Fatal("the health read carries no published floor")
+		}
+		if *h.TrimFloor > checkpoint+1 {
+			t.Fatalf("the published floor is %d with the trim stopped, want at "+
+				"most %d — a floor past the next record would decide the case "+
+				"on its own, and the stream's first sequence would go untested",
+				*h.TrimFloor, checkpoint+1)
+		}
+		return h.Floor.State
+	}
+
+	// A FRESH NODE IS NOT BEHIND, whatever the stream's zero case is.
+	if behind := behindNow(); len(behind) != 0 {
+		t.Fatalf("a freshly booted node judged itself behind on %v — it has the "+
+			"whole log ahead of it", behind)
+	}
+
+	// ONE RECORD, APPLIED, AND THEN PURGED: the log holds nothing and says
+	// first = last+1, exactly the next record this node needs.
+	applied := appendBarrier()
+	waitUntil(t, 20*time.Second, "the node to apply the barrier", func() bool {
+		return running.runner.Committed().Seq == applied
+	})
+	purgeTo(applied+1, applied)
+	if behind := behindNow(); len(behind) != 0 {
+		t.Fatalf("a node at %d against a log purged empty after it (first %d) "+
+			"judged itself behind on %v — it applied every record that was removed",
+			applied, applied+1, behind)
+	}
+	s.publishPositions(t.Context())
+	if rejoinRequested() {
+		t.Fatalf("the heartbeat requested a rejoin for a node at %d against a log "+
+			"whose first record is %d — it applied every record that was removed, "+
+			"and a rejoin halts its appliers to ask for nothing", applied, applied+1)
+	}
+	if state := floorOf(applied); state != statelog.FloorOK {
+		t.Fatalf("the health read judged a node at %d against a log whose first "+
+			"record is %d %s, want ok — it applied every record that was "+
+			"removed, and a node read as below gives up its seats", applied,
+			applied+1, state)
+	}
+
+	// AND ONE THIS NODE NEVER APPLIED, PURGED TOO: the next record it needs
+	// is gone, and only a snapshot can bring it back.
+	s.haltAppliers()
+	missed := appendBarrier()
+	if missed != applied+1 {
+		t.Fatalf("the unapplied barrier landed at %d, want %d", missed, applied+1)
+	}
+	purgeTo(missed+1, missed)
+	if behind := behindNow(); !slices.Equal(behind, []string{name}) {
+		t.Fatalf("a node at %d against a log whose first record is %d judged "+
+			"itself behind on %v, want exactly [%s] — record %d is gone and it "+
+			"never applied it", applied, missed+1, behind, name, missed)
+	}
+	s.publishPositions(t.Context())
+	if !rejoinRequested() {
+		t.Fatalf("the heartbeat did not request a rejoin for a node at %d against "+
+			"a log whose first record is %d — record %d is gone, and a running "+
+			"node that does not notice serves over the hole", applied, missed+1, missed)
+	}
+	if state := floorOf(applied); state != statelog.FloorBelow {
+		t.Fatalf("the health read judged a node at %d against a log whose first "+
+			"record is %d %s, want below — record %d is gone, and a node read "+
+			"as serving keeps seats it cannot answer for", applied, missed+1,
+			state, missed)
+	}
+
+	// AND THE RE-CHECK AFTER A TRANSFER DRAWS THE SAME LINE: an artefact
+	// through the last record removed leaves nothing missing, and one a
+	// record short of it would be installed over a hole.
+	artefactAt := func(seq uint64) statelog.Manifest {
+		m := statelog.Manifest{Domains: map[string]statelog.DomainPosition{}}
+		for _, domain := range registeredDomains() {
+			m.Domains[domain.Name()] = statelog.DomainPosition{Stream: domain.Stream().Name}
+		}
+		m.Domains[name] = statelog.DomainPosition{Stream: spec.Name, Seq: seq}
+		return m
+	}
+	if err := s.stillUsable(t.Context(), logs, artefactAt(missed)); err != nil {
+		t.Fatalf("an artefact at %d against a log whose first record is %d was "+
+			"refused: %v", missed, missed+1, err)
+	}
+	if err := s.stillUsable(t.Context(), logs, artefactAt(applied)); err == nil {
+		t.Fatalf("an artefact at %d against a log whose first record is %d was "+
+			"accepted — record %d is gone and it does not hold it",
+			applied, missed+1, missed)
 	}
 }

@@ -136,9 +136,12 @@
 // record produces no rows on any node by its own determinism, so the
 // conclusion holds vacuously for it.
 //
-// (ii) F <= C is VERIFIED WITHIN THE CALL by every writer that reaches an
+// (ii) F <= C+1 is VERIFIED WITHIN THE CALL by every writer that reaches an
 // expectation of zero, rather than being true on average because a heartbeat
-// checked it. No detection cadence closes a window, and the window a
+// checked it. That is [Replayable](C, F) — the next record this node needs is
+// one the trim has not licensed removing — and C+1 rather than C because it is
+// all the proof below uses: a node one below the floor holds everything that
+// may be gone. No detection cadence closes a window, and the window a
 // fifteen-second cadence leaves admits a genuine LOST UPDATE rather than a
 // stale read or a refused write. The heartbeat check stays, demoted to what
 // it actually is: the mechanism that stops a below-floor node SERVING, which
@@ -153,8 +156,8 @@
 // that makes the fence complete rather than merely deep.
 //
 // Given all three: suppose a commit at sequence S on this object's subject
-// has been trimmed. Then S < F <= C, and by (i) it has been APPLIED here;
-// therefore this node's row already reflects S. Contradiction.
+// has been trimmed. Then S < F <= C+1, so S <= C, and by (i) it has been
+// APPLIED here; therefore this node's row already reflects S. Contradiction.
 //
 // So a writer's expectation can only ever be stale ABOVE the floor, where the
 // anchor still exists and the broker arbitrates with a genuine sequence;

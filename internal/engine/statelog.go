@@ -802,7 +802,7 @@ func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainL
 // was made: the fence that verifies an expectation of zero is safe never
 // refused, the health arm that refuses a node below the floor never fired, and
 // the join's own "what must an artefact cover" was one heartbeat of this
-// node's own position. The floor theorem's second clause — F <= C verified
+// node's own position. The floor theorem's second clause — F <= C+1 verified
 // within the call — was verified against a number that could not fail it.
 //
 // The trim publishes what it concluded on every tick, blocked or not, and
@@ -1062,14 +1062,18 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	health.Floor = statelog.Floor{State: statelog.FloorOK, ReadAt: now}
 	// BELOW MEANS THE NEXT RECORD THIS NODE NEEDS IS GONE: the one at
 	// checkpoint+1. A checkpoint one below the first surviving sequence
-	// has applied everything that was ever removed — the same test
-	// [statelog.Health.Established] and the join make, so the three
-	// cannot disagree at the boundary.
-	below := at.Seq+1 < floor
-	if health.FirstSeq != nil && at.Seq+1 < *health.FirstSeq {
-		below = true
-	}
-	if below {
+	// has applied everything that was ever removed.
+	//
+	// THE BOUNDARY CANNOT DISAGREE WITH ANY OTHER READER'S, by
+	// construction rather than by agreement: [statelog.Replayable] is the
+	// one predicate [statelog.Health.Established], the join, the
+	// heartbeat, a backup and the write fences all call. What each site
+	// still chooses is the BOUND it asks of — here, like Established and
+	// the re-check after a transfer, the higher of the floor and the
+	// stream's first sequence; the join and the heartbeat ask of `first`
+	// alone, for the reason [stateLog.replayable] gives, and the write
+	// fences of the published floor alone.
+	if !statelog.Replayable(at.Seq, max(floor, first)) {
 		health.Floor.State = statelog.FloorBelow
 	}
 	return health, nil
@@ -1133,25 +1137,31 @@ func (c *Company) Epoch() map[string]any {
 // # The question, and why it is asked here
 //
 // A node's checkpoint is a sequence on each domain's log. It can replay from
-// there as long as the log still HOLDS that sequence — and it may not: the
-// trim deletes records every node has applied, and a node that was down long
-// enough, or that has never run at all, wakes up below the floor. There is
-// nothing on the log for it to read, and no amount of waiting produces one.
+// there as long as the log still HOLDS the record after it — and it may not:
+// the trim deletes records every node has applied, and a node that was down
+// long enough, or that has never run at all, wakes up below the floor. There
+// is nothing on the log for it to read, and no amount of waiting produces one.
 //
-// So the check is per domain: is this node's checkpoint at or above the first
-// sequence the stream still holds? A node below it on ANY domain joins, and
-// the join is wholesale — a snapshot names every registered domain or a
-// recipient refuses it, because a domain the artefact does not name is one
-// this node would believe it was caught up on.
+// So the check is per domain: is the record after this node's checkpoint at or
+// above the first sequence the stream still holds? That is
+// [statelog.Replayable], the one spelling every reader of the floor shares. A
+// node that cannot replay on ANY domain joins, and the join is wholesale — a
+// snapshot names every registered domain or a recipient refuses it, because a
+// domain the artefact does not name is one this node would believe it was
+// caught up on.
 //
 // # Why a fresh node does not join
 //
 // A stream nobody has written to reports a first sequence of 0 and a node that
 // has applied nothing has a checkpoint of 0, so a brand-new company's first
-// node is at the floor rather than below it. That is the common case and it
-// must not pay a fleet round trip: [statelog.OfferWindow] is five seconds, and
-// a company that boots in five seconds of silence on every start is one whose
-// operator learns to distrust the boot.
+// node has missed nothing at all. A node added to a company whose log has been
+// written and never trimmed is one below the first record rather than behind
+// it: the first sequence is 1, and its next record is exactly that. Those are
+// the common cases and they must not pay a fleet round trip. Where peers are
+// listening it costs the whole [statelog.OfferWindow], five seconds refusing
+// every read and write while donors with nothing usable stay silent; a node
+// alone is answered "no responders" at once, which is why a single-node boot
+// cannot show the mistake and the boot tests observe the ask itself.
 //
 // # And why no offer is not a failure
 //
@@ -1429,7 +1439,10 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		// already, and the published floor is what the trim has been
 		// told it may delete and has not necessarily reached. A node
 		// that accepted an artefact chosen from `first` alone would
-		// install one the trim was about to pass.
+		// install one the trim was about to pass. ONE BELOW because
+		// that is the lowest checkpoint [statelog.Replayable] accepts
+		// against it, sent as a number since the donor comparing it
+		// holds no view of this node's stream.
 		if usable := max(first, floor); usable > 0 {
 			want.Need[name] = usable - 1
 		}
@@ -1444,11 +1457,16 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		// node below the floor, and the boot would spend the offer
 		// window asking a fleet of one for a snapshot of itself.
 		//
-		// `first` is the first sequence the stream still HOLDS, and an
-		// empty stream reports one past its last — so a fresh node at
-		// checkpoint 0 against `first == 1` is a node with the whole
-		// log ahead of it rather than one that has missed anything.
-		if first > at.Seq+1 {
+		// `first` is the first sequence the stream still HOLDS, and it
+		// has two zero cases that are easy to confuse: a stream nobody
+		// has written reports 0, NOT 1, and one a purge emptied reports
+		// one past its last. A fresh node at checkpoint 0 is behind
+		// neither a never-written stream nor one that still starts at
+		// 1 — the whole log is ahead of it — and IS behind a stream a
+		// purge emptied, because what it never saw went with the purge.
+		// [statelog.Replayable] states each case and is the only
+		// spelling of the boundary.
+		if !statelog.Replayable(at.Seq, first) {
 			behind = append(behind, name)
 		}
 	}
@@ -1540,7 +1558,7 @@ func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.D
 		// still safe to install, and a position the trim has been told
 		// it may delete is one that will be gone by the time this node
 		// replays from it.
-		if usable := max(first, floor); usable > 0 && at.Seq+1 < usable {
+		if usable := max(first, floor); !statelog.Replayable(at.Seq, usable) {
 			return fmt.Errorf("%s's log now starts at %d and the artefact is "+
 				"at %d, so adopting it would leave a hole", name, usable, at.Seq)
 		}
@@ -2268,8 +2286,11 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			// AND BELOW: the next record this node needs is gone from
 			// the log. It cannot replay its way back, so it adopts —
 			// the same repair the boot makes, made by a node that is
-			// running.
-			if stats.FirstSeq > at.Seq+1 {
+			// running. Asked of `first` ALONE, as the join asks it: a
+			// rejoin requested on a bound the join does not test halts
+			// this node's appliers to ask, adopts nothing, and is asked
+			// again on the next retry.
+			if !statelog.Replayable(at.Seq, stats.FirstSeq) {
 				below = true
 			}
 			// AND WHETHER IT IS EVEN THE SAME LOG.

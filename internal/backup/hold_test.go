@@ -162,6 +162,13 @@ func TestABackupThatCannotPinTheLogIsRefused(t *testing.T) {
 // the log still holds `position + 1`; below that the records are gone, and
 // applying what remains writes state derived from a prefix with a hole in it —
 // silently, because every remaining record applies cleanly.
+//
+// THE BOUNDARY IS PINNED ON BOTH SIDES, against a log whose first record is
+// 40: a copy at 39 has missed nothing and is accepted, and a copy at 38 is
+// short exactly record 39 and is refused. A copy far below the log proves
+// only that the check exists; one record either way is where a call site that
+// passes the wrong operand to the shared predicate goes wrong, and it goes
+// wrong in the direction that writes a manifest over a hole.
 func TestATrimmedLogRefusesTheManifest(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -194,6 +201,25 @@ func TestATrimmedLogRefusesTheManifest(t *testing.T) {
 	seedCursor(t, db2, "CREWLET_TRACKER_LOG", 1, 39)
 	if _, err := service(t, db2, nc).Take(t.Context(), filepath.Join(t.TempDir(), "b2")); err != nil {
 		t.Fatalf("a log starting exactly one past the copy was refused: %v", err)
+	}
+
+	// AND ONE RECORD SHORT OF IT IS REFUSED: a copy at 38 against a log
+	// whose first record is 40 never applied 39, and the log no longer
+	// holds it.
+	db3 := openStore(t)
+	seedCursor(t, db3, "CREWLET_TRACKER_LOG", 1, 38)
+	short := filepath.Join(t.TempDir(), "b3")
+	_, err = service(t, db3, nc).Take(t.Context(), short)
+	if err == nil {
+		t.Fatal("a copy one record short of a log starting at 40 was accepted — " +
+			"a restore from it applies 40 onward over the missing 39 and reports " +
+			"nothing")
+	}
+	if !strings.Contains(err.Error(), "backup_hold_not_renewed") {
+		t.Errorf("the refusal one record short does not say where to look: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(short, backup.ManifestName)); statErr == nil {
+		t.Fatal("a manifest was written for a copy one record short of the log")
 	}
 }
 

@@ -1,6 +1,7 @@
 package statelog_test
 
 import (
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -46,6 +47,54 @@ func TestAnUnreadableFloorDoesNotServe(t *testing.T) {
 	never := statelog.Floor{State: statelog.FloorOK}
 	if never.Effective(now) != statelog.FloorUnknown {
 		t.Fatal("a floor this node has never read reports itself satisfied")
+	}
+}
+
+// A CHECKPOINT ONE BELOW THE LOG'S FIRST RECORD HAS MISSED NOTHING, and one
+// further down has missed exactly one record.
+//
+// This is the boundary every reader of the floor shares — the readiness gate,
+// the health read, the join, the heartbeat, a backup and both write fences —
+// so a step either way is a node refused while holding everything it needs,
+// or a node serving over a hole. The zero cases are the ones JetStream
+// actually reports: a never-written stream says first = 0 rather than 1, and
+// a stream a purge emptied says first = last+1.
+func TestACheckpointOneBelowTheFirstRecordHasMissedNothing(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		checkpoint, first uint64
+		replayable        bool
+	}{
+		"a never-written stream and a node that applied nothing":  {0, 0, true},
+		"a published floor of 0, which licensed removing nothing": {7, 0, true},
+		"nothing applied and the whole log still ahead":           {0, 1, true},
+		"nothing applied and record 1 already gone":               {0, 2, false},
+		"one applied and the next record is the first":            {1, 2, true},
+		"one applied and record 2 already gone":                   {1, 3, false},
+		"exactly one below the first record":                      {5, 6, true},
+		"well above the first record":                             {100, 50, true},
+		"exactly at the first record":                             {6, 6, true},
+		// A PURGE THAT EMPTIED THE STREAM leaves first = last+1: a node
+		// that applied through last has nothing missing, and one that
+		// stopped a record short lost it to the purge.
+		"purged empty after 5, applied through 5": {5, 5 + 1, true},
+		"purged empty after 5, applied through 4": {4, 5 + 1, false},
+		// THE TOP OF THE RANGE, where `first > checkpoint+1` wraps the
+		// sum to 0 and reports every non-empty log as having left behind
+		// a node that has applied every sequence there is.
+		"a checkpoint at the top of the range":           {math.MaxUint64, 1, true},
+		"the top of the range against itself":            {math.MaxUint64, math.MaxUint64, true},
+		"one below the top of the range":                 {math.MaxUint64 - 1, math.MaxUint64, true},
+		"two below the top of the range":                 {math.MaxUint64 - 2, math.MaxUint64, false},
+		"nothing applied against a first at the top":     {0, math.MaxUint64, false},
+		"the last valid sequence, purged empty after it": {statelog.MaxSeq, statelog.MaxSeq + 1, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := statelog.Replayable(tc.checkpoint, tc.first); got != tc.replayable {
+				t.Fatalf("Replayable(checkpoint %d, first %d) = %v, want %v",
+					tc.checkpoint, tc.first, got, tc.replayable)
+			}
+		})
 	}
 }
 
@@ -119,6 +168,23 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 			health: statelog.Health{
 				Position: at(10), TrimFloor: ptr(500), FirstSeq: ptr(500), Lag: ptr(0),
 				LastSeq: ptr(900),
+			},
+			want: statelog.RefuseBelowFloor,
+		},
+		// THE BOUNDARY ITSELF, in the state a purge leaves: the log
+		// holds nothing below 50 and its last record was 49, so a node
+		// at 49 has applied everything that was ever removed.
+		"one below the floor has missed nothing": {
+			health: statelog.Health{
+				Position: at(49), TrimFloor: ptr(50), FirstSeq: ptr(50),
+				Lag: ptr(0), LastSeq: ptr(49), Drained: true,
+			},
+			strict: true, ok: true,
+		},
+		"two below the floor has missed a record": {
+			health: statelog.Health{
+				Position: at(48), TrimFloor: ptr(50), FirstSeq: ptr(50),
+				Lag: ptr(1), LastSeq: ptr(49),
 			},
 			want: statelog.RefuseBelowFloor,
 		},

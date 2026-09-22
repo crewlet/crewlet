@@ -167,8 +167,9 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 	// so a node that has consumed through the one before it has consumed
 	// everything that may be gone. Compared against the cursor itself the
 	// check refused a node exactly at the floor, which is the ordinary
-	// state of every node the instant the trim advances to it.
-	if floor > cursor.Seq+1 {
+	// state of every node the instant the trim advances to it — and
+	// [statelog.Replayable] is now the one place that boundary is written.
+	if !statelog.Replayable(cursor.Seq, floor) {
 		return fmt.Errorf("tracker: the trim may have removed everything below %d "+
 			"and this node has consumed through %d, so an absent anchor may be a "+
 			"record trimmed beneath it rather than a subject that was never "+
