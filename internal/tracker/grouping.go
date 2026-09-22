@@ -51,9 +51,13 @@ import (
 // A `GROUP BY` emits one row per value PRESENT. On a company with one task
 // that answered one column, and a board with one lane reads as a board that
 // did not load: nothing on it says whether "In review" is empty or missing.
-// So the FIRST axis, where it is a closed set — status, status group and
-// priority, the three with a declared [groupAxis.Order] — carries every value
-// the query's own predicate admits, the absent ones at count 0 with no rows.
+// So the FIRST axis, where it is a closed set — status, status group,
+// priority and the relative due bands, the four with a declared
+// [groupAxis.Order] — carries every value the query's own predicate admits,
+// the absent ones at count 0 with no rows. The due bands are the one of the
+// four whose values are not a stored column ([dueBucketAxis] computes them
+// against the query's own day), which changes what ADMITS a band and nothing
+// about the padding itself.
 // The rule is the histogram's (every bucket is drawn, empty ones included,
 // because a quiet hour is a fact about the company rather than a gap in the
 // chart), and the admission is the predicate's own: an open-work board draws
