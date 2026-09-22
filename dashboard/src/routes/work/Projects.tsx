@@ -10,13 +10,21 @@
  * rather than four tiles, because they are context for the rows rather than
  * the point of the screen.
  *
- * # A row is a project and a meter is its shape
+ * # A row is a project, and a meter is how far along it is
  *
  * The bar chart ranked projects by open work alone, which answers "where is
  * the pile" and nothing else: a project with four open and two hundred done is
  * a different situation from one with four open and nothing else, and the
  * chart drew them identically. Every row carries the three maintained counts
- * AND the proportion, so both readings are on the same line.
+ * AND how much of the whole is done, so both readings are on the same line —
+ * the meter is `census.tsx`'s, which is the same one the project's own header
+ * wears.
+ *
+ * # A row peeks, because a directory is read to RECOGNISE something
+ *
+ * "Is this the one I meant" is answered beside the list; the project's page is
+ * one click further, from the panel's own `Open ↗` or from any click the
+ * browser treats as "open elsewhere".
  *
  * # The sort is the reader's and it is in the URL
  *
@@ -25,22 +33,23 @@
  */
 
 import { useMemo } from "react";
-import { href, useParam } from "~/app/router.tsx";
+import { useParam } from "~/app/router.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { DateCell, NumberCell, SeatCell } from "~/app/frame/cells.tsx";
-import { usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Coverage } from "~/components/work.tsx";
-import { EmptyValue, Legend, StackedBar, Tag, DATA_COLOR_OTHER } from "@crewlethq/ui";
+import { EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
+import { DashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { Segmented } from "~/ui/primitives.tsx";
-import { NoWorkYet } from "./ItemsView.tsx";
+import { filed, ProjectProgress, ProjectProgressLegend } from "./census.tsx";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 
 /** Which projects the grid lists, as the one switch this page has. */
@@ -103,6 +112,30 @@ export function Projects() {
       ),
     [rows],
   );
+
+  // HOW MANY PROJECTS THE COMPANY HAS, which is the answer's own number and
+  // not this page's. `work_projects` carries `total` beside a `truncated` that
+  // is `total > len(rows)` (`internal/tracker/projectsread.go`), and the
+  // sentence read neither: past the engine's own 200 it said "200 projects"
+  // about a company with three hundred, with nothing on screen to say so.
+  //
+  // THE ARCHIVED SEGMENT IS THE ONE THAT CANNOT USE IT. The engine's flag
+  // INCLUDES the archived rows rather than selecting them, so the total it
+  // counted covers the active ones too while this page shows only the archived
+  // half — printing it there would be a number about a set the grid is not
+  // drawing. What is honest on that segment is the count on screen, and the
+  // note below carries the rest.
+  const listed = rows.length;
+  const answered = all.length;
+  const answerTotal = state.data?.total ?? answered;
+  const short = !!state.data?.truncated;
+  // THE "N of M" FORM ONLY WHERE M IS THIS PAGE'S OWN QUESTION: on the Archived
+  // segment the sentence says what is on screen and the note carries the total,
+  // because "12 of 340 projects" there would compare an archived set against a
+  // count of the whole company.
+  const counted = short && shown !== "archived" ? `${listed} of ${answerTotal}` : `${listed}`;
+  const noun =
+    (short && shown !== "archived" ? answerTotal : listed) === 1 ? "project" : "projects";
 
   const columns = useMemo<GridColumn<WorkProjectRow>[]>(
     () => [
@@ -177,7 +210,13 @@ export function Projects() {
         header: "Closed",
         align: "right",
         shrink: true,
-        optional: true,
+        // NOT OPTIONAL. It was, and this screen has no Display menu — the
+        // design gave the directory the segment and nothing else — so `cols=`
+        // was reachable only by hand-editing the URL and the grid's one column
+        // control is a RESET. The column could be turned off and never on,
+        // while the sentence directly above the grid quoted its number. A
+        // right-aligned integer is also nowhere near the width `optional`
+        // exists to ration (`SHRINK_CAP` in `DataGrid`).
         sortValue: (row) => row.task_counts.closed,
         cell: (row) => <NumberCell value={row.task_counts.closed} />,
       },
@@ -188,7 +227,16 @@ export function Projects() {
         // are the same number and not the same fact, so ordering by it would
         // rank a project nobody has started below one with a single task
         // closed. The counts beside it are what the ordering is for.
-        cell: (row) => <ProjectMeter row={row} />,
+        cell: (row) => (
+          // IN A CELL IT IS THE BAR ALONE — the legend is drawn once under the
+          // grid, because forty legends is not forty facts.
+          <span
+            className="work-meter"
+            title={`${row.task_counts.done} done of ${filed(row.task_counts)} filed`}
+          >
+            <ProjectProgress counts={row.task_counts} />
+          </span>
+        ),
       },
       {
         key: "last_change",
@@ -211,21 +259,26 @@ export function Projects() {
 
   return (
     <>
-      <PageNote>
-        Every project in the company, who leads it and how far along it is. A project appears the
-        moment a unit in the company configuration declares its{" "}
-        <span className="mono">project</span> key.
-      </PageNote>
+      {/* WHAT THIS PAGE IS, once. Where a project COMES FROM is the sentence
+          somebody needs when there are none, so it lives in the empty state
+          below rather than being printed twice on the one screen that shows
+          both. */}
+      <PageNote>Every project in the company, who leads it and how far along its work is.</PageNote>
 
       <div className="toolbar">
         {/* THE TOTALS AS ONE SENTENCE, not four tiles. They are context for the
-            rows under them rather than the point of the page — and they are
-            over WHAT IS SHOWN, which is why the switch beside them changes
-            them. */}
+            rows under them rather than the point of the page — and the counts
+            are over WHAT IS SHOWN, which is why the switch beside them changes
+            them and why a short page says so. */}
         <span className="work-summary" style={{ marginLeft: 0 }}>
-          {rows.length} project{rows.length === 1 ? "" : "s"} · {totals.open} open · {totals.done}{" "}
-          done · {totals.closed} closed
+          {counted} {noun} · {totals.open} open · {totals.done} done · {totals.closed} closed
         </span>
+        {short && (
+          <span className="t-caption">
+            The engine answered {answered} of the company&rsquo;s {answerTotal}, ordered by key, so
+            these counts cover only the projects listed.
+          </span>
+        )}
         <span className="spacer" />
         <Coverage answer={state.data} />
         <Segmented
@@ -242,7 +295,7 @@ export function Projects() {
 
       <QueryState error={state.error} loading={state.loading}>
         {state.data && all.length === 0 ? (
-          <NoWorkYet />
+          <NoProjectsYet />
         ) : (
           <DataGrid
             rows={rows}
@@ -250,11 +303,24 @@ export function Projects() {
             rowKey={(row) => row.key}
             // A ROW OPENS THE PEEK the directory was written for: the question
             // a reader asks here is "is this the one I meant", which the rail
-            // answers without leaving the list.
-            onRowActivate={(row) => openPeek({ kind: "project", id: row.key })}
-            rowHref={(row) => href(["work", row.key])}
+            // answers without leaving the list — and the peek's own `Open ↗`
+            // is the way to the page.
+            //
+            // THROUGH `peekRow`, which is the one thing that calls
+            // `preventDefault`. A bare handler beside a `rowHref` opened the
+            // peek and then let the browser follow the anchor, so the rail was
+            // pushed and destroyed by one click and the reader landed on the
+            // page every time.
+            //
+            // AND THE HREF IS THE FRAME'S OWN ANSWER to where a project lives
+            // rather than a second copy of the route, so a row and the panel it
+            // opens can never name different pages.
+            rowHref={(row) => peekHref({ kind: "project", id: row.key })}
+            onRowActivate={peekRow<WorkProjectRow>((row) =>
+              openPeek({ kind: "project", id: row.key }),
+            )}
             defaultSort="-open"
-            footer={<ProjectsLegend />}
+            footer={<ProjectProgressLegend />}
             empty={{
               icon: "view_column",
               title: shown === "archived" ? "No project is archived" : "No project matches",
@@ -267,33 +333,6 @@ export function Projects() {
         )}
       </QueryState>
     </>
-  );
-}
-
-/**
- * How far along a project is, as a proportion with its legend.
- *
- * IN THE STATUS TONES the badges use rather than the chart hues, so the same
- * fact is not two colours on one screen. A project with nothing filed draws no
- * bar at all: three zero segments are an empty track that reads as a chart
- * which failed to load.
- */
-function ProjectMeter({ row }: { row: WorkProjectRow }) {
-  const counts = row.task_counts;
-  const whole = counts.open + counts.done + counts.closed;
-  if (whole === 0) return <EmptyValue label="Nothing filed yet" />;
-  const segments = [
-    { id: "done", label: "Done", value: counts.done, color: "var(--positive)" },
-    { id: "open", label: "Open", value: counts.open, color: "var(--info)" },
-    { id: "closed", label: "Closed", value: counts.closed, color: DATA_COLOR_OTHER },
-  ];
-  return (
-    <span className="work-meter" title={`${counts.done} done of ${whole}`}>
-      <StackedBar segments={segments} />
-      {/* THE LEGEND IS DRAWN ONCE FOR THE COLUMN, not once per row — see
-          [ProjectsLegend] below the grid. An unlabelled stack of three colours
-          is three colours, and forty legends is forty. */}
-    </span>
   );
 }
 
@@ -325,13 +364,20 @@ function LastChange({
     );
   }
   return (
-    <span className="col">
+    // ONE LINE, because two made every row in the directory a line and a half
+    // tall — the instant above the actor, on a grid whose other eight columns
+    // are single values, so the rhythm a reader scans down was set by the one
+    // column they scan last.
+    <span className="work-lastchange">
       <DateCell at={change.at} now={now} />
       {/* A COMMIT CAN NAME NOBODY, and the wire says so by leaving the actor
           out — the engine did it. A handle is resolved through the chart like
-          everywhere else, and an operator's is a TOKEN's label rather than a
-          seat, which is why the kind travels beside it. */}
+          everywhere else, so this column says what the Lead column one cell
+          over says; and an operator's is a TOKEN's label rather than a seat,
+          which is why the kind travels beside it — in the same line, because
+          who made a change is one fact. */}
       <span className="t-caption truncate">
+        {"· "}
         {change.actor ? seatName(change.actor) : "the engine"}
         {change.actor_kind && change.actor_kind !== "agent" ? ` (${change.actor_kind})` : ""}
       </span>
@@ -340,19 +386,20 @@ function LastChange({
 }
 
 /**
- * The one legend the Progress column needs, drawn once under the grid.
+ * A COMPANY WITH NO PROJECTS, said on a page about projects.
  *
- * An unlabelled stack of three colours is three colours; a legend per row is
- * forty of them. The grid's own footer is where a fact about a COLUMN belongs.
+ * This drew `NoWorkYet` — "No work has been filed yet" — which is a sentence
+ * about ITEMS on the one screen whose rows are containers. A reader with three
+ * projects and nothing filed in them would have been told the opposite of what
+ * the grid was showing, and a reader with no projects was told to go looking
+ * for work rather than for the configuration that mints one.
  */
-function ProjectsLegend() {
+function NoProjectsYet() {
   return (
-    <Legend
-      items={[
-        { id: "done", label: "Done", color: "var(--positive)" },
-        { id: "open", label: "Open", color: "var(--info)" },
-        { id: "closed", label: "Closed", color: DATA_COLOR_OTHER },
-      ]}
+    <EmptyState
+      icon={<DashboardGlyph size={32} />}
+      title="No project has been created yet"
+      description="A project is where the company files its work: a key, a lead and its own statuses, types and labels. One appears here the moment a unit in the company configuration declares its `project` key — the engine mints it, so there is nothing to create by hand."
     />
   );
 }

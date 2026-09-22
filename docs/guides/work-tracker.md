@@ -682,8 +682,13 @@ screens rather than one:
   listing carrying `removed=true`. The strip above the bar holds the views
   somebody SAVED, never the five shapes.
 - **Projects** (`#/work/projects`) is the directory: every project with its
-  lead, the unit that owns it, its three maintained counts, how far along it is
-  and when its work last changed.
+  lead, the unit that owns it, its three maintained counts, how far along its
+  filed work is and when that work last changed. A row opens the project
+  **beside** the list rather than leaving it, and that panel's `Open ↗` is the
+  way to the project's own page (⌘-click or middle-click goes straight there).
+  The sentence over the grid is the company's own total, and when the engine
+  answered fewer projects than the company has it says so rather than quoting
+  the page as the company.
 - **History** (`#/work/history`) is the change log over a window you choose,
   with the kinds and the authors on this page as facets.
 - **A project** (`#/work/{KEY}`) opens on its work, with an **Overview** lens

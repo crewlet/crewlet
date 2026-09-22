@@ -39,18 +39,7 @@ import { ObjectHeader, type Fact as HeaderFact } from "~/app/frame/ObjectHeader.
 import { NumberCell } from "~/app/frame/cells.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
-import {
-  Callout,
-  Card,
-  EmptyState,
-  EmptyValue,
-  Legend,
-  Skeleton,
-  StackedBar,
-  Tabs,
-  Tag,
-  DATA_COLOR_OTHER,
-} from "@crewlethq/ui";
+import { Callout, Card, EmptyState, EmptyValue, Skeleton, Tabs, Tag } from "@crewlethq/ui";
 import { DashboardGlyph, TimelineGlyph, TuneGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -59,11 +48,12 @@ import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { pageCount, pageNote, statusLabel, STATUSES, typeName } from "~/lib/work.ts";
 import { describeChange } from "~/lib/work.ts";
+import { filed, ProjectCensus } from "./census.tsx";
 import { ItemsView } from "./ItemsView.tsx";
 import { HistoryView } from "./History.tsx";
 import { FEED_PAGE } from "./feed.tsx";
 import { statusDot } from "./shapes/group.tsx";
-import type { WorkGroup, WorkProjectDetail, WorkTaskCounts } from "~/protocol/index.ts";
+import type { WorkGroup, WorkProjectDetail } from "~/protocol/index.ts";
 
 /** The lenses, in the order the strip draws them; the first is the default. */
 const LENSES = ["items", "overview", "history"] as const;
@@ -112,20 +102,18 @@ export function Project({ projectKey }: { projectKey: string }) {
             />
             {/* THE CENSUS AS A SHAPE, under the header rather than in a card of
                 its own above the work. The three numbers in the fact line say
-                how much; the bar says the proportion, which is the fact a
-                reader actually wants — "mostly finished" against "mostly
-                ahead". It is a SIBLING rather than a sixth fact because a bar
+                how much; the bar says how much of it is DONE, which is the fact
+                a reader actually wants — "mostly finished" against "barely
+                started". It is a SIBLING rather than a sixth fact because a bar
                 inside `.fact-value` is a bar in a truncated inline box, which
-                is no bar at all.
+                is no bar at all. What the bar MEANS is argued in `census.tsx`,
+                where the directory's column reads it too.
 
-                A BAR OF NOTHING IS NOT A CENSUS: three zero segments draw an
-                empty track that reads as a chart which failed to load rather
-                than as a project nobody has filed anything in. */}
-            {total(detail.task_counts) > 0 && (
-              <div className="work-census">
-                <ProjectCensus counts={detail.task_counts} />
-              </div>
-            )}
+                A BAR OF NOTHING IS NOT A CENSUS: a project nobody has filed
+                anything in has no proportion to draw, and an empty track there
+                would say "nothing is done yet" about a project with nothing to
+                do. */}
+            {filed(detail.task_counts) > 0 && <ProjectCensus counts={detail.task_counts} />}
             {detail.purpose && <p className="t-body measure">{detail.purpose}</p>}
 
             <Tabs
@@ -147,11 +135,6 @@ export function Project({ projectKey }: { projectKey: string }) {
       </QueryState>
     </>
   );
-}
-
-/** How much work a project holds at all, which decides whether a bar means anything. */
-function total(counts: WorkTaskCounts): number {
-  return counts.open + counts.done + counts.closed;
 }
 
 /**
@@ -400,7 +383,7 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
                   "is this the one I meant" is the question the rail answers,
                   and a purpose is the sentence that answers it. */}
               {detail.purpose && <p className="t-body measure">{detail.purpose}</p>}
-              {total(detail.task_counts) > 0 ? (
+              {filed(detail.task_counts) > 0 ? (
                 <ProjectCensus counts={detail.task_counts} />
               ) : (
                 <span className="muted">No work has been filed in this project yet.</span>
@@ -480,30 +463,6 @@ function ProjectBanners({ detail }: { detail: WorkProjectDetail }) {
           current org chart does not have — work filed here routes to nobody.
         </Callout>
       )}
-    </>
-  );
-}
-
-/**
- * A project's census, drawn once.
- *
- * IN THE STATUS TONES the badges use rather than the chart hues, so the same
- * fact is not two colours on one screen — and NEVER WITHOUT ITS LEGEND, since
- * an unlabelled stack of three colours is three colours.
- */
-export function ProjectCensus({ counts }: { counts: WorkTaskCounts }) {
-  // AN `id` PER SEGMENT, which is what both of their components key on — and it
-  // is the status word rather than the position, so a census that gains a
-  // fourth group later does not renumber the three that were there.
-  const segments = [
-    { id: "open", label: "Open", value: counts.open, color: "var(--info)" },
-    { id: "done", label: "Done", value: counts.done, color: "var(--positive)" },
-    { id: "closed", label: "Closed", value: counts.closed, color: DATA_COLOR_OTHER },
-  ];
-  return (
-    <>
-      <StackedBar segments={segments} />
-      <Legend items={segments.map(({ id, label, color }) => ({ id, label, color }))} />
     </>
   );
 }

@@ -354,7 +354,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
 | `#/me` | **My work** — the seven claims on one person's attention | `tab=assigned\|priorities\|asks\|unblocked\|collaborating\|watching\|checklist` · `handle=` (an operator reading somebody else's day) |
 | `#/work` | **All work** | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` + the filter grammar |
-| `#/work/projects` | **Projects** — the directory: every project, its lead, its counts and how far along it is | `shown=active\|archived\|all` · `sort=` |
+| `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page | `shown=active\|archived\|all` · `sort=` |
 | `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
@@ -2233,11 +2233,21 @@ is one of the rules on this page applied to a tracker.
   1280 — an ordinary laptop — one board column was left beside a detail
   panel, which is not a board.
 - **The charts answer the questions the numbers cannot.** A census bar says
-  the shape of a project where three counts say only their sizes; a load bar
+  how far along a project is where three counts say only their sizes; a load bar
   is drawn against the HEAVIEST QUEUE on screen rather than an absolute
   ceiling, because a queue of thirty is heavy in one company and a quiet week
   in another. All of them wear STATUS tones rather than the categorical hues,
   so one fact is never two colours on one screen.
+- **A progress meter is an AMOUNT, and its whole is stated.** The project
+  census fills with what is DONE against everything ever filed: closed work is
+  a muted segment beside the fill, because it left the question rather than
+  answering it, and open work is the untinted track. Drawn as a SHARE — each of
+  the three sized against their own sum — a project holding one open item drew
+  a full solid bar and read as finished, which is the state every project of a
+  young company is in. The legend names what FILLS the bar and nothing else: a
+  swatch for the remainder would be a colour that is not on it. The one meter is
+  drawn by `dashboard/src/routes/work/census.tsx`, in the project's header and
+  in the directory's Progress column, so the two cannot disagree about one row.
 
 ---
 
