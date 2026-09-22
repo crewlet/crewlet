@@ -24,6 +24,26 @@
  * not do without seven "nothing here" panels burying the one that had
  * something.
  *
+ * # A sparse day is still somebody's day
+ *
+ * THE STRIP DRAWS SEVEN TABS AND SEVEN COUNTS WHATEVER THE DAY HOLDS, zeros
+ * included, and that does not change on a company's first week. A tab that
+ * vanished when it was empty is what this screen was rebuilt to stop, and the
+ * Inbox settles the same question the same way one workspace up: its pulse
+ * strip draws every figure whatever the queue holds, so an empty band below
+ * MEANS something rather than looking like a product that does not have that.
+ * A branch keyed on the seven counts summing to zero would also be wrong about
+ * its own subject — the sum is ONE PERSON's day, so a quiet seat inside a busy
+ * company would be told the company was empty.
+ *
+ * What a sparse day gets instead is a page that says something TRUE before its
+ * first count: the banner above the strip names whose day this is, their seat
+ * and the way to it, and carries the one thing on this screen that asks for an
+ * acknowledgement. Each empty tab names what would fill it, in that person's
+ * voice. And a count is WITHHELD rather than drawn as a zero while its read is
+ * in flight, because "nothing is on you" is a claim and it is false until an
+ * answer arrives.
+ *
  * # The Inbox is not one of them
  *
  * What REACHED somebody is a different question from what is ON them, and it
@@ -70,18 +90,25 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { QueryState, SeatChip } from "~/components/common.tsx";
+import { usePageCoverage } from "~/app/Shell.tsx";
 import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
 import { Callout, EmptyState, InlineCode, Select, Skeleton, Tabs, Tag } from "@crewlethq/ui";
-import { KeyGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
+import { FlagGlyph, KeyGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, type Seat } from "~/lib/seats.ts";
 import { relTime } from "~/lib/format.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useNow } from "~/lib/clock.ts";
 import { pageCount, type Scope } from "~/lib/work.ts";
 import { ItemsView, type ItemsHost } from "~/routes/work/ItemsView.tsx";
-import type { WorkAskRow, WorkChecklistRow, WorkMyWork, WorkSummary } from "~/protocol/index.ts";
+import type {
+  WorkAskRow,
+  WorkChecklistRow,
+  WorkMyWork,
+  WorkPersonState,
+  WorkSummary,
+} from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -193,6 +220,31 @@ export function MyWork() {
     { enabled: whose !== "", pollMs: 30_000 },
   );
 
+  // AND THIS PERSON'S OWN RECORD, read ONCE for the page rather than inside
+  // the tab that draws part of it.
+  //
+  // IT USED TO LIVE IN THE PRIORITIES PANEL, which is the one place it cannot:
+  // the stamp it carries says somebody ELSE ordered this queue, and that is
+  // the one thing on this screen asking to be acknowledged — visible only to a
+  // reader who had already acknowledged it by opening the tab, while their own
+  // next write to the queue cleared it for good. Lifted here it feeds the
+  // banner above the strip, the mark on the tab nobody opened, and the
+  // coverage the frame publishes.
+  const person = useQuery("work_person", whose ? { handle: whose } : undefined, {
+    enabled: whose !== "",
+    pollMs: 60_000,
+  });
+
+  // AND THE FRAME GETS THE COVERAGE OF THE READ THAT IDENTIFIES THIS OBJECT.
+  // Only a SCREEN publishes — the frame holds one slot with one setter, so a
+  // body that published from inside a screen fights that screen's answer
+  // (`routes/work/History.tsx` records what that cost) — and `#/me`'s object
+  // is a PERSON, so the person's own record is the answer whose honesty
+  // belongs in the state bar. The other two reads on this screen state their
+  // own beside the rows they drew: `work_my_work`'s under the strip it fills,
+  // and the list's inside the list.
+  usePageCoverage(person.data);
+
   // WHAT THE ASSIGNED TAB IS, handed to the list that draws it — see
   // [ItemsHost]. Memoised on the two values it reads, because the list asks
   // the engine again whenever the lock moves and a fresh object every render
@@ -208,18 +260,10 @@ export function MyWork() {
 
   return (
     <>
-      {/* WHOSE DAY, said out loud. An operator reading a report's day is a real
-          thing to do, and a screen called "My work" showing somebody else's
-          without saying so is how a reader acts on work that is not theirs.
-
-          ONE PILL, WHATEVER IT SAYS: colour carries STATE here and never
-          identity, and the reader who must not miss this tag is the operator on
-          somebody ELSE'S day — so both branches take the same pill and the
-          WORDS carry whose day it is. */}
+      {/* THE BAR HOLDS WHAT YOU CAN DO. Whose day this is is what the object
+          IS, so it is the band above the strip rather than a pill up here —
+          see [WhoseDay]. */}
       <PageActions>
-        {whose ? (
-          <Tag>{ownDay ? "yours" : `${index.byHandle.get(whose)?.name ?? whose}’s day`}</Tag>
-        ) : undefined}
         <a className="t-link" href={href(["inbox"])}>
           Inbox →
         </a>
@@ -251,8 +295,6 @@ export function MyWork() {
           active={whose !== ""}
           options={[{ value: "", label: "Pick somebody" }, ...handles]}
         />
-        <span className="spacer" />
-        <Coverage answer={mine} />
       </div>
 
       {/* THREE STATES, and they are not one empty state. A reader with no
@@ -280,20 +322,28 @@ export function MyWork() {
           />
         ))}
 
+      {/* WHOSE DAY THIS IS, above the strip, before any count.
+          Drawn from the chart and from this person's own record — see
+          [WhoseDay] for why an identity band belongs here rather than in the
+          page bar. */}
+      {whose && (
+        <WhoseDay
+          handle={whose}
+          seat={index.byHandle.get(whose)}
+          ownDay={ownDay}
+          they={they}
+          stamp={person.data ?? undefined}
+          onPriorities={tab === "priorities" ? undefined : () => setTab("priorities")}
+          now={now}
+          chrome={chrome}
+        />
+      )}
+
       {whose && (
         <QueryState error={state.error} loading={state.loading}>
           {state.loading && !mine && <Skeleton variant="text" rows={6} label="Loading the day" />}
           {mine && (
             <>
-              {/* COVERAGE IS A BANNER, never swallowed: rows may be missing,
-                  and a day rendered as complete when it is not is a person who
-                  thinks they are done. */}
-              {mine.complete === false && (
-                <Callout variant="warning">
-                  This node could not account for every change yet, so a tab may be short.
-                </Callout>
-              )}
-
               <Tabs
                 ariaLabel="Which claim"
                 value={tab}
@@ -301,10 +351,31 @@ export function MyWork() {
                 items={TABS.map((key) => ({
                   value: key,
                   // EVERY COUNT, ALWAYS, which is what replaces the stacking:
-                  // a tab nobody has opened still says how much is on it.
-                  label: `${TAB_LABEL[key]} ${countFor(key, mine, assigned.data?.total_hint)}`,
+                  // a tab nobody has opened still says how much is on it. The
+                  // count rides in the LABEL rather than in the strip's own
+                  // `count` slot because that slot is `number | null` and six
+                  // of these seven are a CEILING — `pageCount` writes `20+`,
+                  // and a bare 20 there would report the engine's page size as
+                  // a fact about somebody's day.
+                  label: countedTab(key, mine, assigned.data?.total_hint),
+                  // AND THE ONE MARK ON THE STRIP is the queue somebody else
+                  // ordered — see [WhoseDay]. It is a FLAG rather than a
+                  // warning glyph: a lead putting an order on your list is not
+                  // a fault, it is a decision somebody made that you have not
+                  // seen yet.
+                  icon:
+                    key === "priorities" && person.data?.priorities_set_by ? (
+                      <FlagGlyph size="sm" />
+                    ) : undefined,
                 }))}
               />
+
+              {/* AND `work_my_work`'S OWN COVERAGE, beside what it drew. The
+                  strip above and six of the seven panels below come off this
+                  one answer, so its honesty belongs here rather than in the
+                  state bar, which carries the person's own record. The list on
+                  the Assigned tab states its own inside itself. */}
+              <Coverage answer={mine} />
 
               {/* THE WORK LIST, NARROWED TO ONE PERSON — not a second
                   renderer. `ItemsView` brings its own Filter and Display
@@ -377,6 +448,94 @@ export function MyWork() {
   );
 }
 
+/**
+ * Whose day this is, above the strip, and what has been decided about it.
+ *
+ * # It is what the object IS, so it is not in the page bar
+ *
+ * A page bar holds what you can DO and an object's own identity goes in the
+ * page — which is the rule the turn screen records after portalling five of
+ * its marks into the bar and finding the reader's eye travelling to the far
+ * corner and back for a fact named forty pixels below. The whose-day pill was
+ * in the bar; it is here, beside the seat it names.
+ *
+ * ONE NEUTRAL BAND, WHATEVER IT SAYS. Colour carries state and never identity,
+ * and whose day this is is identity — so the two readings are told apart by
+ * the WORDS and by the name beside them, not by a hue. The reader who must not
+ * miss this is an operator on somebody ELSE's day.
+ *
+ * # And it carries the stamp, on every tab
+ *
+ * A queue somebody else ordered is the one thing on this screen that asks for
+ * an acknowledgement, and the acknowledgement is the person's own next change
+ * to it — which clears the stamp for good. Drawn inside the Priorities panel
+ * it was visible only to a reader who had already opened that tab, so the one
+ * fact that needed announcing was the one fact a busy person never saw. The
+ * `Priorities →` control is withheld on the Priorities tab itself, because a
+ * link to the page you are on is a lie.
+ *
+ * # A sparse day still has one
+ *
+ * This band is TRUE on a company's first morning, when every count under it is
+ * zero: somebody is who they are, their seat is where it is, and the way to it
+ * is the same link. See this file's head for the rest of that decision.
+ */
+function WhoseDay({
+  handle,
+  seat,
+  ownDay,
+  they,
+  stamp,
+  onPriorities,
+  now,
+  chrome,
+}: {
+  handle: string;
+  /** The chart's own row, absent for a handle it does not name. */
+  seat?: Seat;
+  ownDay: boolean;
+  they: string;
+  /** This person's own record, where it has answered. */
+  stamp?: WorkPersonState;
+  /** Opens the Priorities tab, or absent where that tab is already open. */
+  onPriorities?: () => void;
+  now: number;
+  chrome: RowChrome;
+}) {
+  const setBy = stamp?.priorities_set_by;
+  return (
+    <>
+      <div className="row gap-2 wrap">
+        {/* THE CHIP IS THE WAY TO THE SEAT PAGE, and the product's one way a
+            person appears in a list — a second anchor to the same address
+            beside it would be chrome duplicating chrome. A handle the chart
+            does not name still gets one: the name falls back to the handle,
+            which is what the seat page resolves on too. */}
+        <SeatChip
+          name={seat?.name ?? handle}
+          handle={handle}
+          human={seat?.kind === "human"}
+          size="md"
+        />
+        <span className="mono t-caption">{handle}</span>
+        <Tag>{ownDay ? "yours" : "their day"}</Tag>
+      </div>
+      {setBy && (
+        <Callout variant="info">
+          {chrome.seatName?.(setBy) ?? setBy} put this order in place
+          {stamp?.priorities_set_at ? ` ${relTime(stamp.priorities_set_at, now)}` : ""}. The next
+          change {they === "you" ? "you make" : "they make"} to it clears the stamp.{" "}
+          {onPriorities && (
+            <button type="button" className="t-link" onClick={onPriorities}>
+              Priorities →
+            </button>
+          )}
+        </Callout>
+      )}
+    </>
+  );
+}
+
 /** What each tab is called. */
 const TAB_LABEL: Record<Tab, string> = {
   assigned: "Assigned",
@@ -398,6 +557,16 @@ const TAB_LABEL: Record<Tab, string> = {
  * needs no hedge; while that read is in flight there is no number to draw and
  * the tab carries none rather than a zero, which would read as an empty day.
  */
+function countedTab(tab: Tab, mine: WorkMyWork, assignedTotal: number | undefined): string {
+  const count = countFor(tab, mine, assignedTotal);
+  // NO TRAILING SPACE ON A TAB WITH NO COUNT. The accessible name is the
+  // label, and "Assigned " is a name with a word nobody wrote at the end of
+  // it — which is what a reader of the strip hears while the read is in
+  // flight.
+  return count ? `${TAB_LABEL[tab]} ${count}` : TAB_LABEL[tab];
+}
+
+/** How many things are behind one tab, as the strip spells it. */
 function countFor(tab: Tab, mine: WorkMyWork, assignedTotal: number | undefined): string {
   if (tab === "assigned") return assignedTotal === undefined ? "" : String(assignedTotal);
   const rows =
@@ -469,22 +638,13 @@ function Priorities({
   chrome: RowChrome;
   they: string;
 }) {
-  // WHO SET IT, WHEN IT WAS NOT THEIRS. A person who starts the day on work
-  // they did not choose can see who chose it, and their own next change clears
-  // the stamp — taking your queue back is the gesture that says you have seen
-  // it. It is on the person's own record rather than on this answer, which is
-  // why it is a second read.
-  const person = useQuery("work_person", { handle: mine.handle }, { pollMs: 60_000 });
-  const setBy = person.data?.priorities_set_by;
+  // THE STAMP IS NOT DRAWN HERE. It is the banner above the strip, on every
+  // tab, because it is the one thing on this screen that asks to be
+  // acknowledged and a reader who has already opened this tab has answered it
+  // — and a second copy of it under the banner would be the same sentence
+  // twice on the one tab where both would be on screen at once.
   return (
     <>
-      {setBy && (
-        <Callout variant="info">
-          {chrome.seatName?.(setBy) ?? setBy} put this order in place
-          {person.data?.priorities_set_at ? ` ${relTime(person.data.priorities_set_at, now)}` : ""}.
-          The next change {they === "you" ? "you make" : "they make"} to it clears the stamp.
-        </Callout>
-      )}
       {mine.priorities.length === 0 ? (
         <EmptyState
           size="compact"
@@ -540,10 +700,14 @@ function Block({
  * The questions waiting on this person.
  *
  * THE ONE TAB WHERE SOMEBODY ELSE IS BLOCKED ON THIS PERSON rather than the
- * other way round, which is why its count wears the caution tone in the strip
- * and why each row carries the literal call that answers it: a model handed a
- * comment id still has to compose the call, and every one it composes
- * differently is a round spent being refused.
+ * other way round, which is why each row carries the literal call that answers
+ * it: a model handed a comment id still has to compose the call, and every one
+ * it composes differently is a round spent being refused.
+ *
+ * ITS COUNT IS NOT TONED, and the sentence above used to say it was. A `Count`
+ * is never tinted — the design system states the rule and gives the reason,
+ * that three of something is not a warning — and the word "Asks" already
+ * carries the meaning a tint would repeat.
  */
 export function Asks({
   rows,

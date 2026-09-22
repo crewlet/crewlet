@@ -27,8 +27,15 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { MyWork } from "./MyWork.tsx";
 import { Router } from "~/app/router.tsx";
+import { usePageCoverage } from "~/app/Shell.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkSummary } from "~/protocol/index.ts";
+
+// THE FRAME'S ONE COVERAGE SLOT, stood in for so a case can say WHAT was
+// published rather than only that something was drawn: the state bar renders
+// nothing at all on a healthy answer, by design, so the published fact is the
+// only thing a test can hold.
+vi.mock("~/app/Shell.tsx", () => ({ usePageCoverage: vi.fn() }));
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -38,6 +45,7 @@ vi.mock("~/lib/store-hooks.ts", async () => {
 
 afterEach(() => {
   cleanup();
+  vi.mocked(usePageCoverage).mockClear();
   vi.restoreAllMocks();
   location.hash = "#/";
 });
@@ -134,7 +142,11 @@ test("an explicit handle names whose day it is, in the third person", async () =
   location.hash = "#/me?handle=rui";
   serving({ viewer: ada, work_my_work: { ...emptyDay, handle: "rui" }, work_items: noWork });
   mount();
-  await waitFor(() => expect(screen.getByText("Rui Santos’s day")).toBeTruthy());
+  // NAMED IN THE BANNER, as a link to that person's own seat — the picker
+  // below lists every seat by name too, so the assertion is on the one that is
+  // a way somewhere.
+  await waitFor(() => expect(screen.getByRole("link", { name: /Rui Santos/ })).toBeTruthy());
+  expect(screen.getByText("their day")).toBeTruthy();
   await waitFor(() => expect(screen.getByText("Nothing is assigned to them")).toBeTruthy());
   expect(screen.queryByText("yours")).toBeNull();
 });
@@ -159,7 +171,7 @@ test("no credential at all is a different sentence from an unbound one", async (
   expect(screen.queryByText(/not bound to a person/)).toBeNull();
 });
 
-/** The page bar's whose-day pill, as it is drawn for one reader. */
+/** The banner's whose-day pill, as it is drawn for one reader. */
 async function whoseTagClass(hash: string, day: string, label: string): Promise<string> {
   location.hash = hash;
   serving({ viewer: ada, work_my_work: { ...emptyDay, handle: day }, work_items: noWork });
@@ -182,9 +194,28 @@ async function whoseTagClass(hash: string, day: string, label: string): Promise<
 // would still pass.
 test("the whose-day pill is drawn the same for both, so only the words differ", async () => {
   const own = await whoseTagClass("#/me", "ada", "yours");
-  const theirs = await whoseTagClass("#/me?handle=rui", "rui", "Rui Santos’s day");
+  const theirs = await whoseTagClass("#/me?handle=rui", "rui", "their day");
   expect(own).toContain("crewlet-tag--neutral");
   expect(theirs).toBe(own);
+});
+
+// AND THE BAND NAMES THE PERSON AND THE WAY TO THEIR SEAT. A page called "My
+// work" on a company's first morning is seven zeros over one empty panel
+// unless something on it is true before any count is: who this is, what their
+// seat is, and where that seat's own page is.
+test("the banner names whose day it is and links to their seat", async () => {
+  location.hash = "#/me?handle=rui";
+  serving({
+    viewer: ada,
+    work_my_work: { ...emptyDay, handle: "rui" },
+    work_items: noWork,
+    work_person: { handle: "rui", version: 1, held: true, complete: true },
+  });
+  mount();
+  const chip = await screen.findByRole("link", { name: /Rui Santos/ });
+  expect(chip.getAttribute("href")).toBe("#/company/people/rui");
+  expect(screen.getByText("rui")).toBeTruthy();
+  expect(screen.getByText("their day")).toBeTruthy();
 });
 
 // ---------------------------------------------------------------------------
@@ -281,7 +312,9 @@ test("the assigned tab claims no count until the tracker answers", async () => {
   } as never);
   mount();
   await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
-  expect(tabNamed("Assigned")?.textContent).toBe("Assigned ");
+  // AND NO TRAILING SPACE EITHER: the label IS the accessible name, so
+  // "Assigned " is a name with a word nobody wrote at the end of it.
+  expect(tabNamed("Assigned")?.textContent).toBe("Assigned");
 });
 
 // ---------------------------------------------------------------------------
@@ -417,27 +450,102 @@ test("an ask carries the call that answers it", async () => {
   expect(screen.getByText(/answer_work_question\(task: "ENG-9"/)).toBeTruthy();
 });
 
+/** One day whose queue somebody else put in order. */
+const orderedByRui = {
+  viewer: ada,
+  work_items: noWork,
+  work_my_work: { ...emptyDay, priorities: [task({ key: "ENG-5" })] },
+  work_person: {
+    handle: "ada",
+    priorities_set_by: "rui",
+    priorities_set_at: "2031-04-16T09:00:00Z",
+    version: 1,
+    held: true,
+    complete: true,
+  },
+};
+
 // A QUEUE SOMEBODY ELSE ORDERED IS STAMPED, and the stamp is the one thing on
 // this screen that asks for an acknowledgement: a person who starts the day on
 // work they did not choose can see who chose it.
-test("a queue a lead ordered says who ordered it", async () => {
-  location.hash = "#/me?tab=priorities";
+//
+// ON THE TAB THEY LANDED ON, which is the half that was missing. The stamp
+// lived inside the Priorities panel, so it reached only a reader who had
+// already acknowledged it by opening that tab — while their own next change to
+// the queue cleared it for good, which makes the miss unrecoverable rather
+// than merely late.
+test("a queue a lead ordered is announced on the tab nobody opened", async () => {
+  serving(orderedByRui);
+  mount();
+  await waitFor(() => expect(screen.getByText(/put this order in place/)).toBeTruthy());
+  expect(screen.getByText(/Rui Santos/)).toBeTruthy();
+  // The default tab is Assigned, so the banner is what carried it.
+  expect(tabNamed("Assigned")?.getAttribute("aria-selected")).toBe("true");
+  // And the way to the tab it is about is offered from here.
+  expect(screen.getByRole("button", { name: "Priorities →" })).toBeTruthy();
+});
+
+// AND THE TAB ITSELF IS MARKED, because a banner is read once and a strip is
+// scanned: the mark is what a reader who scrolled past the banner still sees.
+test("the priorities tab carries a mark while somebody else's order stands", async () => {
+  serving(orderedByRui);
+  mount();
+  await waitFor(() => expect(tabNamed("Priorities")).toBeTruthy());
+  expect(tabNamed("Priorities")?.querySelector("svg")).toBeTruthy();
+  expect(tabNamed("Watching")?.querySelector("svg")).toBeNull();
+});
+
+// A QUEUE SOMEBODY ORDERED THEMSELVES IS NOT NEWS. The engine clears the stamp
+// on the person's own write, so an absent one is a settled fact rather than a
+// missing one, and neither the banner nor the mark is drawn for it.
+test("a queue nobody else ordered carries neither banner nor mark", async () => {
   serving({
     viewer: ada,
     work_items: noWork,
     work_my_work: { ...emptyDay, priorities: [task({ key: "ENG-5" })] },
-    work_person: {
-      handle: "ada",
-      priorities_set_by: "rui",
-      priorities_set_at: "2031-04-16T09:00:00Z",
-      version: 1,
-      held: true,
-      complete: true,
-    },
+    work_person: { handle: "ada", version: 1, held: true, complete: true },
   });
   mount();
+  await waitFor(() => expect(tabNamed("Priorities")).toBeTruthy());
+  expect(screen.queryByText(/put this order in place/)).toBeNull();
+  expect(tabNamed("Priorities")?.querySelector("svg")).toBeNull();
+});
+
+// AND A LINK TO THE PAGE YOU ARE ON IS A LIE. Opened, the Priorities tab is
+// where the control would send the reader, so the banner keeps its sentence
+// and drops the control.
+test("the banner offers no way to the tab that is already open", async () => {
+  location.hash = "#/me?tab=priorities";
+  serving(orderedByRui);
+  mount();
   await waitFor(() => expect(screen.getByText(/put this order in place/)).toBeTruthy());
-  expect(screen.getByText(/Rui Santos/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Priorities →" })).toBeNull();
+});
+
+// THE COVERAGE OF THE READ THAT IDENTIFIES THIS OBJECT GOES TO THE FRAME, and
+// this screen publishes exactly one: the frame holds one slot with one setter,
+// so two publishers on one screen is a last-writer-wins race. `#/me`'s object
+// is a person, so the person's own record is what the state bar carries; the
+// other two reads state their own beside the rows they drew.
+test("the page publishes the person's coverage, once", async () => {
+  serving({
+    viewer: ada,
+    work_items: noWork,
+    work_my_work: emptyDay,
+    work_person: { handle: "ada", version: 1, held: true, complete: true, read_level: "stale" },
+  });
+  mount();
+  const published = await waitFor(() => {
+    const answers = vi
+      .mocked(usePageCoverage)
+      .mock.calls.map((c) => c[0])
+      .filter(Boolean);
+    if (answers.length === 0) throw new Error("nothing published yet");
+    return answers;
+  });
+  for (const answer of published) {
+    expect((answer as { handle?: string }).handle).toBe("ada");
+  }
 });
 
 // THE INBOX IS NOT ONE OF THE CLAIMS. What REACHED somebody is a different
