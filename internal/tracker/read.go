@@ -874,7 +874,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		where = append(where, rooted)
 	}
 
-	if q.Group != "" && !branch {
+	if q.Group != nil && !branch {
 		// A COLUMN FILTER IS A PREDICATE OF THE WHOLE QUERY, in its
 		// JOIN-FREE form: the count hint and the totals share this
 		// predicate and carry no join, so an axis expressed only as one
@@ -884,7 +884,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		if err != nil {
 			return "", nil, err
 		}
-		clause, values := axis.filter(q.Group)
+		clause, values := axis.filter(*q.Group)
 		add(clause, values...)
 	}
 

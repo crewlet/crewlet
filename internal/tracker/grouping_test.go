@@ -615,3 +615,77 @@ func TestASwimlaneBoardIsBoundedByItsCells(t *testing.T) {
 			"is about a shape this reader does not produce")
 	}
 }
+
+// THE ABSENT-VALUE COLUMN LOADS LIKE EVERY OTHER ONE.
+//
+// A board draws "nobody is assigned" as a column with its own count, and
+// `group=<value>` is the ONLY way to load a column further — a grouped answer
+// mints no cursor, so there is nothing else to page with. Read as a plain
+// string, `group=` and an absent `group` were one request, so the one column
+// a board could not load was the one holding everything nobody had filled in:
+// the ask answered the whole board instead, which is the widest possible
+// reading of a narrowing somebody typed. [tracker.Params] already draws that
+// line — "a filter set to empty asks for rows with no value" — and this is
+// the grammar keeping it.
+func TestTheAbsentValueColumnLoadsLikeEveryOther(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+
+	for _, spec := range []struct{ id, assignee string }{
+		{"ana-1", "ana"}, {"ana-2", "ana"},
+		{"nobody-1", ""}, {"nobody-2", ""},
+	} {
+		h.seed(spec.id, func(task *tracker.Task) { task.Assignee = spec.assignee })
+	}
+
+	answer := h.ask(map[string]any{
+		"container": "project:ENG", "group_by": "assignee", "group": "",
+	})
+	if len(answer.Groups) != 1 || answer.Groups[0].Key != "" {
+		var keys []string
+		for _, group := range answer.Groups {
+			keys = append(keys, group.Key)
+		}
+		t.Fatalf("group= drew the columns %v, want only the unassigned one — "+
+			"a named-but-empty group is a request for the column with no "+
+			"value, not an absent filter", keys)
+	}
+	if got := answer.Groups[0].Count; got != 2 {
+		t.Errorf("the unassigned column counts %d, want the 2 tasks nobody "+
+			"holds", got)
+	}
+	if answer.TotalHint != 2 {
+		t.Errorf("group= reports a hint of %d over the whole query, want 2 — "+
+			"the hint shares the narrowed predicate or a header adds up the "+
+			"whole board while the rows show one column of it", answer.TotalHint)
+	}
+	// AND AN ABSENT `group` IS STILL THE WHOLE BOARD, which is the other
+	// half of the same distinction.
+	whole := h.ask(map[string]any{
+		"container": "project:ENG", "group_by": "assignee",
+	})
+	if len(whole.Groups) != 2 {
+		t.Errorf("an absent group drew %d columns, want both", len(whole.Groups))
+	}
+}
+
+// AND A BARE `group=` WITH NO AXIS IS STILL REFUSED.
+//
+// A column filter with no board is a narrowing that would silently answer
+// everything, and that is true of the empty spelling exactly as it is of a
+// named one — the pointer is what makes the empty one reachable, not what
+// makes it legal on its own.
+func TestAColumnFilterWithNoAxisIsRefusedEmptyToo(t *testing.T) {
+	t.Parallel()
+	_, err := tracker.ParseQuery(tracker.MapParams(map[string]any{
+		"container": "project:ENG", "group": "",
+	}), wednesday, berlin)
+	if err == nil {
+		t.Fatal("group= with no group_by was accepted, so a request for one " +
+			"column answers the whole set")
+	}
+	if !strings.Contains(err.Error(), "group_by") {
+		t.Errorf("the refusal is %q and does not name the key that is "+
+			"missing", err)
+	}
+}

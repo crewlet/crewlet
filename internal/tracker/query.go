@@ -290,8 +290,22 @@ type Query struct {
 	GroupBy    string
 	GroupBy2   string
 	GroupLimit int
-	Group      string
-	Subgroup   string
+
+	// Group narrows a board to ONE column and Subgroup to one lane of it,
+	// which is how a board loads a column further — a grouped answer mints
+	// no cursor, so there is nothing else to page with.
+	//
+	// POINTERS, because the empty string is a VALUE on every axis in this
+	// grammar: the absent-value column is a column a board DRAWS — "nobody
+	// is assigned", "untagged", "(not set)" — and `group=` is the spelling
+	// that loads it. Held as plain strings, the one column a board could
+	// not page was the one holding everything nobody had filled in, and
+	// the request that asked for it answered the WHOLE board instead,
+	// which is the widest possible reading of a narrowing somebody asked
+	// for. [Params.Has] tells "named and empty" from "absent", which is
+	// the same rule `blocked=` is read by and the one its own doc states.
+	Group    *string
+	Subgroup *string
 
 	Sort []Sort
 
@@ -460,8 +474,6 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 		Dates:      map[string]DateFilter{},
 		View:       p.String("view"),
 		Preset:     p.String("preset"),
-		Group:      p.String("group"),
-		Subgroup:   p.String("subgroup"),
 		Cursor:     p.String("cursor"),
 		LinkedPage: p.String("linked_page"),
 		// UPPERCASED FOR THE SAME REASON `key` IS, and it is the same
@@ -890,6 +902,19 @@ var groupKeys = []string{
 
 func (q *Query) parseGrouping(p Params) error {
 	q.GroupLimit = p.Int("group_limit", 0)
+	// NAMED, NOT NON-EMPTY — see [Query.Group]. `group=` is a request for
+	// the column holding the rows with no value, and it is the only way to
+	// ask for one.
+	for key, target := range map[string]**string{
+		"group":    &q.Group,
+		"subgroup": &q.Subgroup,
+	} {
+		if !p.Has(key) {
+			continue
+		}
+		value := strings.TrimSpace(p.String(key))
+		*target = &value
+	}
 	for key, target := range map[string]*string{
 		"group_by":  &q.GroupBy,
 		"group_by2": &q.GroupBy2,
@@ -921,14 +946,14 @@ func (q *Query) parseGrouping(p Params) error {
 	// "one column of a board grouped by status" and means nothing without
 	// the board — ignoring it would answer the WHOLE set, which is the
 	// widest possible reading of a narrowing the caller asked for.
-	if q.Group != "" && q.GroupBy == "" {
+	if q.Group != nil && q.GroupBy == "" {
 		return fmt.Errorf("tracker: group=%s was passed without group_by — a "+
 			"column with no axis is a narrowing that would silently answer "+
-			"everything", q.Group)
+			"everything", *q.Group)
 	}
-	if q.Subgroup != "" && q.GroupBy2 == "" {
+	if q.Subgroup != nil && q.GroupBy2 == "" {
 		return fmt.Errorf("tracker: subgroup=%s was passed without group_by2, "+
-			"so there is no second axis for it to name", q.Subgroup)
+			"so there is no second axis for it to name", *q.Subgroup)
 	}
 	if q.GroupLimit != 0 && q.GroupBy == "" {
 		return fmt.Errorf("tracker: group_limit bounds the rows one COLUMN " +
@@ -1223,8 +1248,13 @@ func (m MapParams) Bool(key string, def bool) bool {
 // Has reports whether a key was NAMED, however it was spelled.
 //
 // Separate from [MapParams.String] because "set to empty" and "not set" are
-// different requests: `assignee=` asks for the unassigned work and an absent
-// `assignee` asks for all of it.
+// different requests: `group=` asks for the column holding the rows with no
+// value, and an absent `group` asks for the whole board.
+//
+// It is not every key's rule, which is exactly why the two are told apart
+// HERE rather than by whether a value came back empty: an empty `assignee`
+// narrows nothing, because that key is a comma-separated list and the
+// unassigned work is spelled `assignee=none`.
 func (m MapParams) Has(key string) bool {
 	_, held := m[key]
 	return held

@@ -564,8 +564,8 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	// join's binding comes first, then the inner's, then the predicate's.
 	// A NAMED SUBGROUP NARROWS THE INNER AXIS, exactly as `group` narrows
 	// the outer one — which is how a board loads one swimlane further.
-	if q.Subgroup != "" {
-		innerClause, innerArgs := inner.joinedFilter(q.Subgroup)
+	if q.Subgroup != nil {
+		innerClause, innerArgs := inner.joinedFilter(*q.Subgroup)
 		scoped += " AND " + innerClause
 		bound = append(append([]any{}, bound...), innerArgs...)
 	}
