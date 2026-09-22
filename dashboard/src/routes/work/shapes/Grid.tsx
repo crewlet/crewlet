@@ -117,14 +117,20 @@ const COPIED_MS = 1_400;
 /**
  * The two shapes this grid draws, as the screen's `shape=` spells them.
  *
- * A TYPE RATHER THAN A STRING, so the column set, the URL key and the branch
- * in `ItemsView` cannot come to disagree about which shapes are a grid.
+ * A VALUE the type derives from, rather than a union with a predicate spelling
+ * the same two words beside it: the column set, the URL key, the branch in
+ * `ItemsView` and the grammar gate that walks the `cols.<shape>` keys all read
+ * this one declaration, so they cannot come to disagree about which shapes are
+ * a grid. `routes/work/toolbar/grammar.test.tsx` is the one that WALKS it —
+ * a third grid shape brings its own column key with it.
  */
-export type GridShape = "list" | "table";
+export const GRID_SHAPES = ["list", "table"] as const;
+
+export type GridShape = (typeof GRID_SHAPES)[number];
 
 /** Whether a shape is one this grid draws. */
 export function isGridShape(shape: Shape): shape is GridShape {
-  return shape === "list" || shape === "table";
+  return (GRID_SHAPES as readonly string[]).includes(shape);
 }
 
 /**
