@@ -151,6 +151,17 @@ type routeMounter interface {
 	Routes(mux *http.ServeMux)
 }
 
+// authMounter is the /auth surface's own mount, over a mux it can NAME.
+//
+// [http.ServeMux] satisfies it, which is what the one caller passes. The
+// narrower type exists so internal/api/authapi's own gate can walk what the
+// surface registered and hold it against internal/api/auth's exemption list —
+// the standard mux reports nothing about what was mounted on it, and the
+// failure when those two drift is a credential surface behind no credential.
+type authMounter interface {
+	Routes(mux auth.Mux)
+}
+
 // chartMounter is the /chart surface's own mount, and it RETURNS AN ERROR
 // where [routeMounter] does not.
 //
@@ -263,13 +274,18 @@ type Options struct {
 	// internal/api/auth's exemption list, held against the registration
 	// by a gate in authapi.
 	//
+	// ITS OWN MOUNTER TYPE, which takes a mux it can NAME rather than
+	// *http.ServeMux: the standard mux does not report what was
+	// registered on it, so the gate holding the exemption list against
+	// the registration could not read one half of what it is about.
+	//
 	// OPTIONAL, unlike the four above, and its absence is a real posture
 	// rather than a wiring mistake: a deployment whose keyring cannot
 	// sign for the fleet has no way to mint a session, and the honest
 	// shape is a sign-in surface that is ABSENT rather than one that
 	// answers 503 to every attempt. `crewlet validate` refuses that
 	// keyring by name, so an operator learns it on a laptop.
-	Auth routeMounter
+	Auth authMounter
 
 	// Chart serves /chart and /company/export, normally a
 	// chartapi.Service: the company's org chart, which is a state-log

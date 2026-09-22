@@ -337,14 +337,20 @@ func decodeBlindKey(value string) ([]byte, error) {
 // with the rest.
 const ChartBlindIndexKey = "CREWLET_CHART_BLIND_INDEX_KEY"
 
-// personKeys is the per-person key store the identity applier shreds through.
+// personSealer is the per-person key store, which seals a person's own values
+// AND is what the identity applier shreds through.
+//
+// ONE CONSTRUCTION FOR BOTH, deliberately: a sealer IS a shredder, because
+// destroying somebody's key is what a removal does — and two constructions
+// would be two key stores that have to agree about which key belongs to whom,
+// with nothing comparing them.
 //
 // NIL ON A NODE WITH NO KEYRING, and that is a legitimate state rather than a
 // wiring mistake: such a node cannot seal or open anything, so a removal there
 // deletes the rows and the key is a peer's to destroy. Returning a sealer over
 // a nil cipher instead would make every shred report success while destroying
 // nothing, which is the failure a removal exists to prevent.
-func (e *Engine) personKeys() iamdomain.Shredder {
+func (e *Engine) PersonSealer() *iamdomain.Sealer {
 	if e == nil || e.cipher == nil || e.backends.Fleet == nil {
 		return nil
 	}
@@ -353,4 +359,42 @@ func (e *Engine) personKeys() iamdomain.Shredder {
 		return nil
 	}
 	return sealer
+}
+
+// personKeys is [Engine.PersonSealer] as the applier's seam.
+//
+// THE CONVERSION IS EXPLICIT because a typed nil in an interface is not nil:
+// returning the pointer directly would hand the applier a non-nil Shredder
+// wrapping a nil Sealer, and every shred would panic on a node with no
+// keyring — which is exactly the node this is meant to answer nil for.
+func (e *Engine) personKeys() iamdomain.Shredder {
+	sealer := e.PersonSealer()
+	if sealer == nil {
+		return nil
+	}
+	return sealer
+}
+
+// personBlinder derives the company's address blind, or nil.
+//
+// NIL IS A DOCUMENTED POSTURE rather than a failure: a node with no company
+// secret store cannot read the blind key, and the writes that need one are
+// refused BY NAME at the call. A node that refused to boot would take a fleet
+// down over a company setting — and a blinder built over an EMPTY key would be
+// worse than either, because an empty HMAC key produces stable, plausible
+// blinds that look exactly like working ones.
+func (e *Engine) PersonBlinder() *iamdomain.Blinder {
+	if e == nil || e.backends.Fleet == nil || e.cipher == nil {
+		return nil
+	}
+	store := fleetsecrets.New(e.backends.Fleet, e.cipher)
+	value, err := store.Get(context.Background(), iamdomain.BlindKeyName)
+	if err != nil || value == "" {
+		return nil
+	}
+	blinder, err := iamdomain.NewBlinder([]byte(value))
+	if err != nil {
+		return nil
+	}
+	return blinder
 }

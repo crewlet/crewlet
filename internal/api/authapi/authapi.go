@@ -160,7 +160,15 @@ type Opener interface {
 // with what the chart derives its own index from, or one address would reach a
 // seat and a different person.
 type Blinder interface {
-	Blind(email string) (string, error)
+	// Email is the blind an ADDRESS is matched on, and Subject the one a
+	// provider's subject claim is.
+	//
+	// TWO METHODS AND NOT ONE TAKING A CLASS, because the class is what
+	// keeps them apart: an address blinded under the subject class would
+	// match nothing and look exactly like an address nobody holds. The
+	// separation is in the signature so no caller can get it wrong.
+	Email(address string) (string, error)
+	Subject(issuer, subject string) (string, error)
 }
 
 // Options is what the surface is built from.
@@ -230,15 +238,17 @@ type Options struct {
 	// company signing in with passwords.
 	Provider *oidc.Provider
 
-	// Guard is what resolves a caller's own address through this
-	// deployment's trusted proxies. REQUIRED.
+	// Clients resolves a caller's own address through this deployment's
+	// trusted proxies. REQUIRED.
 	//
-	// THE GUARD'S AND NOT A SECOND PARSE, because "is this peer the proxy"
-	// has to have one answer: keyed on a proxy's address the throttle
-	// buckets the whole internet together, and keyed on a header anybody
-	// can send it buckets nothing at all. Two readers of
-	// `api.trusted_proxies` would drift the day one of them was edited.
-	Guard *auth.Guard
+	// ONE PARSER, which is what matters rather than one instance: keyed on
+	// a proxy's address the throttle buckets the whole internet together
+	// and locks the company out the moment one attacker arrives, and keyed
+	// on a header anybody can send it buckets nothing at all. Both this
+	// and the guard hold one, built from the same Tier A by the same pure
+	// function, so they cannot disagree — what would drift is two readings
+	// of `api.trusted_proxies`, and there is one.
+	Clients *auth.Clients
 
 	// Now is the clock.
 	Now func() time.Time
@@ -256,8 +266,8 @@ type Service struct {
 	sessions  session.Directory
 	opener    Opener
 	cipher    secrets.Cipher
+	clients   *auth.Clients
 	provider  *oidc.Provider
-	guard     *auth.Guard
 	now       func() time.Time
 }
 
@@ -287,7 +297,7 @@ func New(opts Options) (*Service, error) {
 		// with passwords seals no flight, so requiring it would refuse
 		// a wiring that is complete.
 		{"Cipher", opts.Provider != nil && opts.Cipher == nil},
-		{"Guard", opts.Guard == nil},
+		{"Clients", opts.Clients == nil},
 	} {
 		if field.absent {
 			missing = append(missing, "Options."+field.name)
@@ -302,9 +312,10 @@ func New(opts Options) (*Service, error) {
 		boot: opts.Bootstrap, directory: opts.Directory, writer: opts.Writer,
 		signer: opts.Signer, hasher: opts.Hasher, throttle: opts.Throttle,
 		blinder: opts.Blinder, sessions: opts.Sessions,
+		opener:   opts.Opener,
 		cipher:   opts.Cipher,
 		provider: opts.Provider,
-		guard:    opts.Guard, now: opts.Now,
+		clients:  opts.Clients, now: opts.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }

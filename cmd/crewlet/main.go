@@ -1538,6 +1538,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
+	// THE WAY IN. Built before the options below so a node that cannot
+	// serve one says so in its own log line rather than by a route that
+	// is quietly absent.
+	authSurface, err := signInSurface(boot, e, cipher)
+	if err != nil {
+		return nil, err
+	}
+
 	// The fleet's integration status, which both the reconcile loop and a
 	// pass run from the dashboard write.
 	integrationStatus, err := e.IntegrationStore()
@@ -1824,6 +1832,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Secrets: secretSurface,
 		Setup:   setupSurface,
 		Chart:   chartSurface,
+		// HOW A PERSON BECOMES A PRINCIPAL, or nil on a node that cannot
+		// serve one — see [signInSurface] for the two postures that
+		// produce a nil and why each is honest rather than a fault.
+		Auth: authSurface,
 		// WHETHER THIS NODE'S REPLICATED COPY IS FIT TO ANSWER FROM, for
 		// /ready. The ENGINE's own verdict rather than a second one built
 		// here: it is the same question that decides whether this node may

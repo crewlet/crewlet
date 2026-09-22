@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -105,6 +106,17 @@ type native struct {
 	// rather than a nil to branch on.
 	chartWriter *chart.Writer
 	chartReader *chart.Reader
+
+	// iamReader and iamWriter are the identity estate's two sides, or nil
+	// on a node that runs no iam domain.
+	//
+	// NIL IS A REAL POSTURE here where the chart's is not, and the
+	// difference is the domain's own: iam is the first that NARROWS —
+	// a seats-only satellite does not apply it — so a node without them
+	// serves no sign-in surface rather than failing to boot. What a seat
+	// needs is the chart, which every node runs.
+	iamReader *iamdomain.Reader
+	iamWriter *iamdomain.Writer
 
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
@@ -318,6 +330,13 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// THE CHART, WHICH EVERY COMPANY HAS. There is no backend setting for
 	// it and no second place to keep one, so its absence is a boot failure
 	// naming the domain rather than a reader that answers nil.
+	// THE IDENTITY ESTATE, before the chart, and the order says which
+	// failure an operator reads first: a node that cannot say who reports
+	// to whom cannot run a seat at all, and one that cannot sign anybody
+	// in merely serves no sign-in surface.
+	if err := n.openIAM(e, sl, nodeID); err != nil {
+		return err
+	}
 	if err := n.openChart(e, sl, nodeID); err != nil {
 		return err
 	}
@@ -603,6 +622,75 @@ func (e *Engine) Domains() []statelog.Domain {
 		return registeredDomains()
 	}
 	return e.native.log.part.Domains()
+}
+
+// openIAM builds the identity estate's two sides over its running domain.
+//
+// # A node that runs no iam domain gets neither, and that is not a failure
+//
+// iam is the first domain in the register that NARROWS: a seats-only
+// satellite does not apply it, because no turn reads it and shedding a
+// company's seats because a human cannot sign in would be an outage caused by
+// the wrong subsystem. So this returns cleanly with both sides nil, and
+// `crewlet run` then serves no sign-in surface on that node — which is the
+// honest shape rather than one that answers 503 to every attempt.
+//
+// # The writer acts as THE NODE, and every surface narrows it
+//
+// Exactly as the chart's does. What is left acting as the node is what the
+// node itself does: minting the bootstrap code on a fresh estate, and the
+// duties that sweep and probe. A person's own sign-in acts as that person.
+func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
+	running := sl.Domain(iamdomain.Domain{}.Name())
+	if running == nil {
+		return nil
+	}
+	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
+		DB: e.backends.Store, Log: running.reader,
+		Committed: running.runner.Committed,
+		Deferred:  running.runner.Deferred,
+	})
+	if err != nil {
+		return fmt.Errorf("engine: iam reader: %w", err)
+	}
+	writer, err := iamdomain.NewWriter(iamdomain.WriterDeps{
+		Publisher: running.publisher, DB: e.backends.Store,
+		// THE BLINDER AND THE SEALER ARE BOTH OPTIONAL, and each
+		// absence is a documented posture rather than a fault: a node
+		// with no company secret store cannot derive a blind or seal a
+		// name, and the writes that need one are refused BY NAME at the
+		// call rather than at boot. A node that refused to start would
+		// take down a fleet over a company setting.
+		Blinder:   e.PersonBlinder(),
+		Sealer:    e.PersonSealer(),
+		Actor:     nodeID,
+		ActorKind: iam.KindMachine,
+		// THE NODE IS THE DEPLOYMENT, so it authors the classes only the
+		// deployment has: the bootstrap mint, the sweeps, the probe.
+		// Every surface replaces these with [iamdomain.Writer.As].
+		Grants: []iam.Grant{iam.GrantFleetOperate},
+	})
+	if err != nil {
+		return fmt.Errorf("engine: iam writer: %w", err)
+	}
+	n.iamReader, n.iamWriter = reader, writer
+	return nil
+}
+
+// IAM is this node's identity read side, or nil where the domain does not run.
+func (e *Engine) IAM() *iamdomain.Reader {
+	if e.native == nil {
+		return nil
+	}
+	return e.native.iamReader
+}
+
+// IAMWriter is this node's identity write side, or nil.
+func (e *Engine) IAMWriter() *iamdomain.Writer {
+	if e.native == nil {
+		return nil
+	}
+	return e.native.iamWriter
 }
 
 // openChart builds the org chart's two sides over its running domain.

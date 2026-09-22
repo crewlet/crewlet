@@ -193,7 +193,7 @@ func (s *Service) resolve(ctx context.Context, typed string) (iamdomain.Sighting
 	// chart derives its own index, or one address would reach a seat and a
 	// different person.
 	if looksLikeAddress(typed) {
-		blind, err := s.blinder.Blind(typed)
+		blind, err := s.blinder.Email(typed)
 		if err != nil {
 			log.WarnContext(ctx, "api_sign_in_blind_failed", "error", err)
 			return iamdomain.Sighting{}, "address"
@@ -349,7 +349,7 @@ func (s *Service) backend() config.AuthBackend {
 // internet together and lock the company out the moment one attacker arrives,
 // and keyed on a header anybody may send it would let that attacker pick their
 // own bucket. See internal/api/auth/client.go.
-func (s *Service) sourceOf(r *http.Request) string { return s.guard.Client(r) }
+func (s *Service) sourceOf(r *http.Request) string { return s.clients.Of(r) }
 
 // lastStep reads the last accepted TOTP step off a credential's carried
 // fields, or zero.

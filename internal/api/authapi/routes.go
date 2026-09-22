@@ -24,13 +24,6 @@ import (
 // can enter.
 const Prefix = "/auth/"
 
-// Mux is what this surface mounts on, defined here and kept to one method.
-//
-// [http.ServeMux] satisfies it, which is what every caller passes.
-type Mux interface {
-	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
-}
-
 // Routes registers the surface.
 //
 // # The auth column, stated here because it is the whole security shape
@@ -44,13 +37,10 @@ type Mux interface {
 // other route is — reading what it resolved rather than validating a second
 // time, because two readings of one request eventually disagree and the one
 // that would be wrong here decides whether somebody is signed in.
-// A MUX IT CAN NAME, rather than *http.ServeMux, and for one reason: the
-// standard mux does not report what was registered on it, so a gate holding
-// the exemption list against the registration could not read one half of what
-// it is about. The exemption and the registration live in different packages,
-// and the failure when they drift is a credential surface behind no
-// credential — which is exactly the shape a test has to be able to see.
-func (s *Service) Routes(mux Mux) {
+// [auth.Mux] RATHER THAN *http.ServeMux, and it is the package that owns the
+// exemption list that defines it — see there for why a mux this surface can
+// name is what makes the gate below possible at all.
+func (s *Service) Routes(mux auth.Mux) {
 	// Unguarded.
 	mux.HandleFunc("GET "+auth.PathAuthConfig, s.Config)
 	mux.HandleFunc("POST "+auth.PathAuthLogin, s.Login)

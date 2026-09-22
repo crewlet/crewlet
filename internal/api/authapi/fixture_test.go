@@ -96,7 +96,7 @@ func build(t *testing.T, b config.Bootstrap, provider *oidc.Provider) *authapi.S
 		Blinder:   stubBlinder{},
 		Opener:    stubOpener{},
 		Sessions:  stubSessions{},
-		Guard:     auth.New(&b),
+		Clients:   auth.NewClients(&b),
 		Provider:  provider,
 		Cipher:    stubCipher{},
 		Now:       func() time.Time { return clock },
@@ -161,7 +161,11 @@ func (stubWriter) SpendInvitation(context.Context, iamdomain.InvitationSpend) (s
 
 type stubBlinder struct{}
 
-func (stubBlinder) Blind(email string) (string, error) { return "blind:" + email, nil }
+func (stubBlinder) Email(address string) (string, error) { return "email:" + address, nil }
+
+func (stubBlinder) Subject(issuer, subject string) (string, error) {
+	return "subject:" + issuer + "|" + subject, nil
+}
 
 type stubOpener struct{}
 

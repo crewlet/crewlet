@@ -36,6 +36,36 @@ import (
 // a deployment behind a proxy has to name it, and this file is what makes that
 // setting do anything at all.
 
+// Clients resolves a caller's own address, holding this deployment's trusted
+// blocks.
+//
+// A VALUE TYPE rather than a free function taking the blocks at each call, for
+// [iamdomain.Blinder]'s reason: the blocks are parsed once from Tier A, and a
+// signature that took them every time would have each caller deciding where to
+// get them from — which is how one of them comes to key on the proxy.
+//
+// IT IS NOT THE GUARD. The guard holds one and so does the sign-in surface,
+// and that is not two answers to one question: both are built from the same
+// Tier A by the same pure function, so they cannot disagree. What would be two
+// answers is two PARSERS, and there is one.
+type Clients struct{ trusted []*net.IPNet }
+
+// NewClients parses Tier A's blocks once.
+func NewClients(b *config.Bootstrap) *Clients {
+	return &Clients{trusted: TrustedProxies(b)}
+}
+
+// Of is the address a per-source rule keys on.
+func (c *Clients) Of(r *http.Request) string {
+	if c == nil {
+		// A RESOLVER NOBODY BUILT trusts no proxy, which is the
+		// pessimistic direction: everybody shares their peer's bucket
+		// rather than choosing their own.
+		return hostOf(r.RemoteAddr)
+	}
+	return Client(r, c.trusted)
+}
+
 // Client is the address a per-source rule keys on.
 //
 // # The walk, and why it goes right to left

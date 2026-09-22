@@ -45,7 +45,6 @@ package auth
 import (
 	"context"
 	"crypto/subtle"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -276,9 +275,9 @@ type Guard struct {
 	// binary — see devprincipal.go.
 	dev *DevPrincipal
 
-	// trusted are the CIDR blocks whose forwarded headers this deployment
-	// believes, parsed once at wiring time. See client.go.
-	trusted []*net.IPNet
+	// clients resolves a caller's own address through the CIDR blocks
+	// whose forwarded headers this deployment believes. See client.go.
+	clients *Clients
 }
 
 // BindSeats installs the chart lookup that lets a bound credential act as its
@@ -323,8 +322,21 @@ func New(b *config.Bootstrap) *Guard {
 	return &Guard{
 		tokens: tokens, ceiling: auth.MaxGrants,
 		stepUp: auth.Session.StepUp(), now: time.Now,
-		trusted: TrustedProxies(b),
+		clients: NewClients(b),
 	}
+}
+
+// Mux is what a surface mounts routes on.
+//
+// DEFINED HERE, in the package that owns the exemption list, because the two
+// packages that need it both already import this one and the alternative is a
+// cycle. It is narrower than [http.ServeMux] — which satisfies it — for one
+// reason: the standard mux reports NOTHING about what was registered on it, so
+// a gate holding the exemption list against the registration could not read
+// one half of what it is about, and the failure when those two drift is a
+// credential surface behind no credential.
+type Mux interface {
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
 }
 
 // Client is the address a per-source rule keys on, resolved through this
@@ -334,7 +346,7 @@ func New(b *config.Bootstrap) *Guard {
 // Tier A's and every caller that needs a client address is already holding a
 // guard — a second parse somewhere else is a second answer to "is this peer
 // the proxy", and the two would drift the day somebody edited one.
-func (g *Guard) Client(r *http.Request) string { return Client(r, g.trusted) }
+func (g *Guard) Client(r *http.Request) string { return g.clients.Of(r) }
 
 // Tokens reports how many credentials are loaded, for the same startup line.
 func (g *Guard) Tokens() int { return len(g.tokens) }
