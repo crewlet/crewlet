@@ -12,8 +12,17 @@ import (
 // NAMED AFTER THE VERB, NOT THE SURFACE. `PATCH /work/items/{key}` and the
 // `update_work_item` tool are one action asked two ways, so they are one
 // constant — which is the whole of what stops the operator MCP and a seat's
-// own tools answering differently about one write. Where a tool exists its
-// name IS the action, so a reader grepping either finds the other.
+// own tools answering differently about one write.
+//
+// WHERE A TOOL EXISTS, ITS NAME IS THE ACTION, and that is load-bearing rather
+// than tidy: it is what lets a walk in internal/agent/builtin hold this table
+// against the tools this build actually registers, in BOTH directions. The
+// walks inside this package can only check the table against itself — they
+// went on passing over `list_work_goals` and `write_work_goal` after the goal
+// verbs left the tracker, two rows deciding nothing, and would have gone on
+// passing for as long as nobody happened to read them. A verb with no tool
+// spells its name with a DOT (`pages.trash`, `config.read`), which is what
+// tells the two apart.
 const (
 	// --- reading what the company is doing -------------------------- //
 	ActionWorkRead      Action = "get_work_item"
@@ -22,7 +31,6 @@ const (
 	ActionWorkActivity  Action = "task_activity"
 	ActionProjectRead   Action = "describe_project"
 	ActionProjectList   Action = "list_projects"
-	ActionGoalList      Action = "list_work_goals"
 	ActionCatalogueRead Action = "get_work_catalogue"
 	ActionViewList      Action = "list_work_views"
 	ActionPageRead      Action = "get_page"
@@ -30,15 +38,24 @@ const (
 	ActionKnowledgeRead Action = "search_knowledge"
 	ActionColleagueRead Action = "lookup_colleague"
 
+	// --- the caller's own working state ----------------------------- //
+	ActionSkillUse      Action = "use_skill"
+	ActionSkillLoad     Action = "load_tool_skill"
+	ActionSkillRefine   Action = "refine_skill"
+	ActionEpisodesQuery Action = "query_episodes"
+	ActionMemoryRefresh Action = "refresh_memory"
+	ActionMemoryPersist Action = "reflect_and_persist"
+	ActionOnboardedMark Action = "mark_onboarded"
+
 	// --- a colleague's ordinary work -------------------------------- //
-	ActionWorkCreate  Action = "create_work_item"
-	ActionWorkUpdate  Action = "update_work_item"
-	ActionWorkComment Action = "comment_on_work_item"
-	ActionWorkMerge   Action = "merge_work_item"
-	ActionGoalWrite   Action = "write_work_goal"
-	ActionPageCreate  Action = "write_page"
-	ActionPageSave    Action = "save_page"
-	ActionPageComment Action = "comment_on_page"
+	ActionColleagueAsk Action = "a2a_ask"
+	ActionWorkCreate   Action = "create_work_item"
+	ActionWorkUpdate   Action = "update_work_item"
+	ActionWorkComment  Action = "comment_on_work_item"
+	ActionWorkMerge    Action = "merge_work_item"
+	ActionPageCreate   Action = "write_page"
+	ActionPageSave     Action = "save_page"
+	ActionPageComment  Action = "comment_on_page"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead    Action = "get_person"
@@ -48,7 +65,6 @@ const (
 	ActionPinsSet       Action = "set_pins"
 	ActionViewSave      Action = "save_work_view"
 	ActionPrioritiesSet Action = "set_priorities"
-	ActionOnboardedMark Action = "mark_onboarded"
 
 	// --- a container's own policy ----------------------------------- //
 	ActionProjectWrite   Action = "write_project"
@@ -112,7 +128,6 @@ var rules = map[Action]rule{
 	ActionWorkActivity:  {class: ClassRead},
 	ActionProjectRead:   {class: ClassRead},
 	ActionProjectList:   {class: ClassRead},
-	ActionGoalList:      {class: ClassRead},
 	ActionCatalogueRead: {class: ClassRead},
 	ActionViewList:      {class: ClassRead},
 	ActionPageRead:      {class: ClassRead},
@@ -120,11 +135,25 @@ var rules = map[Action]rule{
 	ActionKnowledgeRead: {class: ClassRead},
 	ActionColleagueRead: {class: ClassRead},
 
+	ActionSkillUse:      {class: ClassSelf},
+	ActionSkillLoad:     {class: ClassSelf},
+	ActionSkillRefine:   {class: ClassSelf},
+	ActionEpisodesQuery: {class: ClassSelf},
+	ActionMemoryRefresh: {class: ClassSelf},
+	ActionMemoryPersist: {class: ClassSelf},
+	ActionOnboardedMark: {class: ClassSelf},
+
+	// AN ASK IS A COLLEAGUE WRITE, and the object is the colleague. It
+	// writes no row, which is why it looks like it belongs nowhere — but
+	// it spends somebody else's TURN and somebody else's budget, so a
+	// credential with no write capability at all must not be able to make
+	// every seat in the company think.
+	ActionColleagueAsk: {class: ClassColleagueWrite},
+
 	ActionWorkCreate:  {class: ClassColleagueWrite},
 	ActionWorkUpdate:  {class: ClassColleagueWrite},
 	ActionWorkComment: {class: ClassColleagueWrite},
 	ActionWorkMerge:   {class: ClassColleagueWrite},
-	ActionGoalWrite:   {class: ClassColleagueWrite},
 	ActionPageCreate:  {class: ClassColleagueWrite},
 	ActionPageSave:    {class: ClassColleagueWrite},
 	ActionPageComment: {class: ClassColleagueWrite},
@@ -140,7 +169,6 @@ var rules = map[Action]rule{
 	ActionInboxMark:     {class: ClassOwnRecord},
 	ActionPinsSet:       {class: ClassOwnRecord},
 	ActionViewSave:      {class: ClassOwnRecord},
-	ActionOnboardedMark: {class: ClassOwnRecord},
 
 	ActionProjectWrite:   {class: ClassContainer},
 	ActionCatalogueWrite: {class: ClassContainer},

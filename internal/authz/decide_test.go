@@ -82,7 +82,35 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 			authz.ActionWorkList, authz.Object{Kind: authz.KindTask},
 			false, authz.ReasonNoGrant},
 
+		// --- the caller's own working state -------------------------- //
+		{"a seat reads its own episodes", seat("sre"),
+			authz.ActionEpisodesQuery, authz.Object{Kind: authz.KindPerson},
+			true, authz.ReasonSelf},
+		{"a seat writes its own diary with no grant at all", seat("sre"),
+			authz.ActionMemoryPersist, authz.Object{Kind: authz.KindPerson},
+			true, authz.ReasonSelf},
+		{"and never somebody else's", seat("sre"),
+			authz.ActionMemoryPersist,
+			authz.Object{Kind: authz.KindPerson, Owner: "cto"},
+			false, authz.ReasonNotSelf},
+		// NOT EVEN THE ADMIN PATH, which is what makes this its own class:
+		// an operator reading a seat's memory is a different surface with a
+		// grant of its own, and admitting it here too would be a second
+		// answer to one question.
+		{"the admin grant does not reach a seat's diary",
+			person("jane.doe", iam.GrantFleetOperate), authz.ActionMemoryPersist,
+			authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			false, authz.ReasonNotSelf},
+
 		// --- colleague write ----------------------------------------- //
+		{"an ask spends a colleague's turn, so it needs the write",
+			seat("sre", iam.GrantWorkWrite), authz.ActionColleagueAsk,
+			authz.Object{Kind: authz.KindPerson, Owner: "cto"},
+			true, authz.ReasonGrant},
+		{"a read-only credential cannot make every seat think",
+			person("status.board", iam.GrantStateRead), authz.ActionColleagueAsk,
+			authz.Object{Kind: authz.KindPerson, Owner: "cto"},
+			false, authz.ReasonNoGrant},
 		{"work:write files an item", seat("sre", iam.GrantWorkWrite),
 			authz.ActionWorkCreate, authz.Object{Kind: authz.KindTask},
 			true, authz.ReasonGrant},

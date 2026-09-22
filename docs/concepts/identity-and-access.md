@@ -222,12 +222,13 @@ showed up as a support question:
   revision or behind the chart log therefore told every lead in the company
   that they lead nothing — while reporting itself healthy.
 
-### The nine rules
+### The ten rules
 
 | Rule | Covers | Decided by |
 |---|---|---|
 | **Read** | The board, pages, the org chart, the roster, the fleet, spend | `state:read` |
-| **Colleague write** | Filing, commenting, updating, ranking; authoring a page | `work:write` for work, `knowledge:write` for pages |
+| **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even the admin grant |
+| **Colleague write** | Filing, commenting, updating, ranking; authoring a page; asking a colleague | `work:write` for work, `knowledge:write` for pages |
 | **Own record** | Marking an inbox, pinned views | The owner, or `fleet:operate` |
 | **Own or lead** | Priorities, a person's day, reading their queue | The owner, whoever leads them, or `fleet:operate` |
 | **Container** | A project's fields, default assignee, routing unit, tag renames | The project's lead, or `fleet:operate` |
@@ -242,12 +243,32 @@ work in a project and may not take it out again. An agent holding the
 deployment's own grant still cannot purge — an irreversible delete decided
 inside a turn is not something a model reaches for.
 
+**Self has no admin path, and that is why it is its own rule.** A seat's memory
+tools take no handle at all, because an agent recalling another's episodes
+would make the per-seat memory a shared one. An operator *reading* a seat's
+memory is a different surface with a grant of its own (`transcripts:read` over
+`/agents/{id}/memory`), and admitting it here too would be a second answer to
+one question.
+
+**Asking a colleague is a write.** It files no row, which is why it looks like
+it belongs nowhere — but it spends somebody else's turn and somebody else's
+budget, so a credential with no write capability at all must not be able to
+make every seat in the company think.
+
 **A verb with no row is refused.** Not defaulted, not passed through: a default
 is how a new verb ships ungated, and it ships looking correct. A walk over the
 table fails the build if a verb resolves to no rule, if a rule is declared and
 no verb uses it, or if a grant the vocabulary declares opens nothing at all —
 that last one is what caught `state:read` being asked for by nothing, back when
 reads were "any authenticated principal".
+
+Those three walks hold the table against **itself**, which is not enough on its
+own: a verb removed from the engine leaves behind a row that is perfectly
+consistent and decides nothing. So a fourth walk holds it against the tools the
+build actually registers, over both surfaces — a seat's own and the operator's
+assistant — in both directions. It earned its place twice on its first run: two
+rows had outlived the goal verbs being removed from the tracker, and seven
+tools a seat uses every turn had no rule at all.
 
 ### Cannot-tell is not no
 

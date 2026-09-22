@@ -536,7 +536,7 @@ func TestAnAskOpenedOnOneNodeIsAnsweredFromAnother(t *testing.T) {
 // satisfy a Go comparison and write an empty column exactly as before.
 func TestEveryAuditRecordNamesThePublishingTurn(t *testing.T) {
 	t.Parallel()
-	svc, _, rec := service(t, dir{"bob": true})
+	svc, _, rec := service(t, dir{"bob": true, "alice": true})
 	ctx := context.Background()
 	id, err := svc.Open(ctx, a2a.Ask{
 		Requester: "alice", Target: "bob", Brief: "can you review this?",
@@ -605,7 +605,7 @@ func TestEveryAuditRecordNamesThePublishingTurn(t *testing.T) {
 // side of an exchange with no parent to attribute it to.
 func TestTheWakeStillPointsAtTheTurnThatCausedIt(t *testing.T) {
 	t.Parallel()
-	svc, _, rec := service(t, dir{"bob": true})
+	svc, _, rec := service(t, dir{"bob": true, "alice": true})
 	ctx := context.Background()
 	id, err := svc.Open(ctx, a2a.Ask{
 		Requester: "alice", Target: "bob", Brief: "?", TurnID: "run-ask",

@@ -30,6 +30,21 @@ const (
 	// [iam.AllGrants] is what caught that.
 	ClassRead Class = "read"
 
+	// ClassSelf — the acting principal's OWN working state: its diary, its
+	// episodes, its skills, its onboarding marker, a tool skill it loads
+	// into this session.
+	//
+	// NO ADMIN PATH, which is what makes it its own class rather than
+	// [ClassOwnRecord]. internal/agent/builtin states the boundary these
+	// verbs rest on: they take no handle at all, because "an agent
+	// recalling another's episodes or writing into another's diary would
+	// make the per-seat memory a shared one". An operator READING a seat's
+	// memory is a different surface with a grant of its own
+	// ([iam.GrantTranscriptRead] over /agents/{id}/memory), and admitting
+	// it here too would be a second answer to one question — which is the
+	// drift this whole package exists to remove.
+	ClassSelf Class = "self"
+
 	// ClassColleagueWrite — the ordinary work of a colleague: filing,
 	// commenting, updating, ranking, relating; authoring a page. Governed
 	// by the capability rather than by any relation, because a company
@@ -81,7 +96,7 @@ const (
 
 // Classes are the nine, in declaration order.
 var Classes = []Class{
-	ClassRead, ClassColleagueWrite, ClassOwnRecord, ClassOwnOrLead,
+	ClassRead, ClassSelf, ClassColleagueWrite, ClassOwnRecord, ClassOwnOrLead,
 	ClassContainer, ClassDestructive, ClassPurge, ClassAuthored, ClassOperator,
 }
 
@@ -120,6 +135,21 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	switch r.class {
 	case ClassRead:
 		return granted(p, iam.GrantStateRead)
+
+	case ClassSelf:
+		// THE OBJECT IS THE CALLER, OR IT IS NOBODY. These verbs take no
+		// handle, so an absent owner is not a caller who forgot to name
+		// one — it is the shape of the verb, and reading it as
+		// [ReasonUnnamed] would refuse every one of them. An owner that
+		// names somebody else can only come from a caller inventing one.
+		switch {
+		case o.Owner == "":
+			return Decision{Allowed: true, Reason: ReasonSelf}
+		case p.Login != "" && p.Login == o.Owner,
+			p.Seat != "" && p.Seat == o.Owner:
+			return Decision{Allowed: true, Reason: ReasonSelf}
+		}
+		return Decision{Reason: ReasonNotSelf}
 
 	case ClassColleagueWrite:
 		return granted(p, writeGrantFor(o.Kind))
