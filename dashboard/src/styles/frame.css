@@ -1712,7 +1712,20 @@
    heading stays above it — the group exists and is empty, which is not the
    same claim as an object that has no such group — and this is the sentence
    the CALLER wrote for it. See PropertiesRail's own doc for why the rail does
-   not decide this for itself. */
+   not decide this for itself.
+
+   `--text-muted` IS THE READABLE RUNG HERE, and the name is the trap. This
+   sheet's aliases are one step off the token package's: `uilet.css` maps
+   `--text-muted` to `--color-text-tertiary` (6.63:1 light, 7.01:1 dark) and
+   `--text-faint` to `--color-text-muted` (~3:1, the non-text floor). So the
+   palette doc's rule — words a reader has to read take
+   `--color-text-tertiary`, never `--color-text-muted` — is kept by the line
+   BELOW and broken by `--text-faint`, which is what `styles/rungs.test.ts`
+   fails on in both directions. There is no `--text-tertiary` in this tree:
+   reaching for that spelling names a property nothing declares, which
+   `styles/tokens.test.ts` fails on and which the browser drops whole, taking
+   the colour with it rather than falling back. This is a sentence, so it sits
+   at the same rung as every other empty state in the product. */
 .props-empty {
   grid-column: 1 / -1;
   font-size: var(--fs-2xs);
