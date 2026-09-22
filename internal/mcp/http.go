@@ -14,22 +14,35 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // maxLoggedErrorBody bounds how much of a failing HTTP response is logged.
 // REASONED: an MCP error body is a JSON object of a few hundred bytes; 8 KiB
 // covers a verbose one and refuses to put an HTML error page — or a gateway's
 // debug dump — into the log stream.
+//
+// It bounds the CONTENT: [truncationMarker] is appended outside it, so the log
+// field is 8 KiB plus the marker and the cut is taken with [textcut.Bytes],
+// which adds no marker of its own.
+//
+// WHERE THE WHOLE BODY IS: handed to the SDK, unmodified. This is a log
+// EXCERPT, never the only copy — RoundTrip below replays every byte it read in
+// front of the still-open response, so the session decodes exactly the bytes it
+// would have and a server's JSON-RPC error message reaches the caller in full.
+// What is bounded here is only what a log line is worth, which is why the
+// excerpt may be cut where the body may not.
 const maxLoggedErrorBody = 8 << 10
 
 // maxBufferedErrorBody bounds how much of a failing response this process
 // holds in memory to log and replay.
 //
 // The read has to be WHOLE to be useful — handing the SDK a truncated body
-// turns a server's clear 403 into a JSON parse error — but "whole" was
-// unbounded, which let a remote server choose this process's allocation size.
-// It was the only unbounded io.ReadAll left in the tree, eight lines below a
-// constant whose entire purpose is bounding this same body.
+// turns a server's clear 403 into a JSON parse error — but "whole" is not
+// "unbounded": an unbounded read here lets a REMOTE server choose this
+// process's allocation size. [maxLoggedErrorBody] above bounds only the slice
+// that reaches the log, which is no bound at all on what is held to produce
+// it, so the buffering needs a ceiling of its own.
 //
 // A MEBIBYTE, which is 128 times the logged slice above and far past any real
 // MCP error object; what it actually refuses is a gateway streaming an
@@ -227,12 +240,36 @@ type readCloser struct {
 	io.Closer
 }
 
+// boundedBody renders a failing response body as one log field: whole when it
+// fits, and a marked, rune-safe excerpt when it does not.
+//
+// The cut is [textcut.Bytes] rather than body[:maxLoggedErrorBody] because a
+// remote server's error text is prose — a workspace name, a scope, a quoted
+// header — and a byte cut splits whatever rune straddles the ceiling. slog's
+// JSON handler then rewrites the half-rune to U+FFFD, which reads as corruption
+// in the one line an operator has to diagnose a 403 from.
+//
+// Only the head is converted to a string: the buffered body reaches a mebibyte
+// (maxBufferedErrorBody) and the field keeps 8 KiB of it, so string(body) whole
+// would copy 128 times what survives.
+//
+// ONE BYTE PAST THE CEILING is exactly what that head needs, and it is the same
+// size [readBoundedLine]'s probe takes over the same helper. [textcut.Bytes]
+// reads the byte AT its budget to find the rune boundary and then walks BACK
+// from it, never forward — so budget+1 already yields the identical answer to
+// running the cut over the whole body, which the mebibyte case in
+// TestALoggedErrorBodyIsCutOnARuneBoundary pins. Anything beyond that byte is
+// slack with nothing behind it, and two call sites sizing one shared helper's
+// input differently is how copies that agree today stop agreeing (see the
+// package doc of [textcut]). No min() guard: this case runs only when the body
+// is longer than the ceiling, so the byte is there by construction.
 func boundedBody(body []byte) string {
 	switch {
 	case len(body) == 0:
 		return "(empty)"
 	case len(body) > maxLoggedErrorBody:
-		return string(body[:maxLoggedErrorBody]) + truncationMarker
+		head := body[:maxLoggedErrorBody+1]
+		return textcut.Bytes(string(head), maxLoggedErrorBody) + truncationMarker
 	default:
 		return string(body)
 	}

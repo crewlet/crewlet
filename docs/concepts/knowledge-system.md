@@ -54,6 +54,13 @@ when the ranking is right. The bodies are read per query for the ranked hits
 alone, never for the corpus, and a read that cannot be taken falls back to the
 stored opening rather than failing the search.
 
+The window is **200 bytes of content**, and each end that was cut says so with
+an `…` — an end that reached the document's own start or finish claims nothing.
+The marker is not counted against the 200, so a snippet runs up to six bytes
+over it; the budget bounds the content. A snippet is a **pointer**, never the
+only copy: it exists to say which page to open, and the page itself is whole in
+the store, reachable through the same knowledge tools that returned the hit.
+
 One term contributes at most **5 000 documents** to a query. A word in nearly
 every page — the company's own name, or "the" — otherwise makes one query a
 scan of the whole corpus for a term whose weight is near zero, and the
@@ -307,7 +314,9 @@ type Hit struct {
     URL       string   // shareable human link; "" when unbuildable
     Container string   // Confluence space key
     PageID    string
-    Snippet   string   // plain text, <= 200 chars; may be ""
+    Snippet   string   // plain text, <= 200 BYTES of content
+                     //   (+ an "…" at each end that was cut, which the
+                     //   budget does not count); may be ""
     Ancestors []string // ancestor page titles, outermost first
 }
 

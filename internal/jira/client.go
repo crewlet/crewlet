@@ -191,6 +191,12 @@ type APIError struct {
 	Method string
 	Path   string
 	Status int
+	// Detail is what the instance SAID, distilled by [httpx.RefusalOf] — so
+	// an empty Detail means the instance sent an empty body and nothing
+	// else, which matters because [APIError.Error] drops an empty one. A
+	// page with no <title>, a shape this build does not know and a body
+	// that ran past the read ceiling each report themselves; that invariant
+	// is stated in httpx, where it holds for every client.
 	Detail string
 }
 
@@ -232,10 +238,23 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
+		// REFUSED PAST THE CEILING, not read up to it. A CAP IS NOT A CUT:
+		// io.LimitReader stops at its limit and reports io.EOF, so a capped
+		// read hands the distiller a body indistinguishable from one that
+		// genuinely ended there, and whatever it makes of half a document
+		// says nothing about the other half. Both of the shapes a refusal
+		// arrives in fail that way: an oversized error envelope no longer
+		// parses and is quoted as severed text read as Jira's whole answer,
+		// and a page whose `</title>` falls past the cut yields no title at
+		// all — an empty Detail, which [APIError.Error] drops, so the error
+		// reads as "Jira said nothing".
+		// [httpx.ReadBody] reads one byte past and REFUSES, and
+		// [httpx.RefusalOf] turns that refusal — and the read error, which a
+		// `_` would discard — into a line naming the ceiling instead.
+		body, readErr := httpx.ReadBody(resp.Body, httpx.RefusalBytes)
 		return &APIError{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Detail: httpx.Refusal(resp.Header.Get("Content-Type"), detail),
+			Detail: httpx.RefusalOf(resp.Header.Get("Content-Type"), body, readErr),
 		}
 	}
 	if out == nil {

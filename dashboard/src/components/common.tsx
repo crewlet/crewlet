@@ -13,6 +13,7 @@ import {
   Avatar,
   Button,
   Callout,
+  Card,
   EmptyState,
   InlineCode,
   Section as UiSection,
@@ -28,6 +29,11 @@ import { Mark } from "~/ui/glyph.tsx";
 import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
+// THE TRACKER'S OWN SENTENCE FOR A CAPPED PAGE, rendered by [CutNote] here.
+// `lib/work.ts` is pure values with no React in it, which is what lets a
+// component file import it without dragging a screen's worth of the tracker
+// along; the alternative is this product spelling "there are more" twice.
+import { pageNote, type PageSlice } from "~/lib/work.ts";
 import { useNow } from "~/lib/clock.ts";
 import { requestToken } from "~/protocol/index.ts";
 import {
@@ -64,6 +70,72 @@ import type { Attention } from "~/lib/attention.ts";
  * disagree with nothing to say so.
  */
 export const RECORD_MAX_HEIGHT = 460;
+
+/**
+ * THE CUT, SAID — a footer under a panel whose rows are one PAGE of a set.
+ *
+ * ONE COMPONENT, in this file for the reason at the top of it: a seat draws
+ * four such panels (its thread roster, its diary, its episodes, its
+ * counterparties) and the knowledge screens draw three more, and each is a
+ * list the engine bounded and MARKED on the wire. Seven hand-written sentences
+ * is how one of them comes to say something the others do not — which is the
+ * drift every copy in this file already went through once.
+ *
+ * IT PAIRS WITH [pageCount] AND NEVER REPLACES IT. The chip says the number is
+ * a floor (`50+`); this says what is behind it and where the rest lives. A
+ * caller that draws one without the other is half the fact.
+ *
+ * THE FOOTER RATHER THAN THE SUBTITLE. `Card.Header`'s subtitle TRUNCATES by
+ * contract — its own type says so — and a slot that cuts is the one place a
+ * sentence about a cut may not live. `variant="meta"` is the design system's
+ * own "a quiet strip of facts about this card", which is what this is; the
+ * knowledge screen's snippet footer is the same slot.
+ *
+ * IT DRAWS NOTHING WHEN THE READ WAS WHOLE, for [pageNote]'s stated reason: a
+ * note that always rendered would put "and that is all of them" under every
+ * healthy panel in the product, which is how the one case that matters arrives
+ * as a changed word nobody reads.
+ */
+export function CutNote({
+  shown,
+  more,
+  one,
+  many,
+  slice,
+  /** Where the whole set is, for a reader who needs more than this page.
+      REQUIRED, which is the point of the component: "there are more" with no
+      answer to "more where" is a dead end, and a read whose rest is genuinely
+      unreachable from a screen says which table holds it rather than nothing.
+
+      A NODE rather than a string, because the destinations differ in kind: a
+      filter to narrow, a LINK to the screen that pages it, or a sentence
+      naming the store this question cannot page. Taking prose only would have
+      made the one case where the rest is a click away read like the cases
+      where it is not. */
+  whole,
+}: {
+  shown: number;
+  more: boolean;
+  /** The noun `pageNote` counts in: "The newest 50 notes; there are more." */
+  one: string;
+  /** The plural of that noun where `+s` is wrong — "children", "entries". */
+  many?: string;
+  /** WHICH part of the set this page is — see [PageSlice]. Passed through
+      rather than defaulted, because it is a fact about the ENGINE's ordering
+      that only the caller reading that answer knows. */
+  slice: PageSlice;
+  whole: ReactNode;
+}) {
+  const note = pageNote(shown, more, one, slice, many);
+  if (!note) return null;
+  return (
+    <Card.Footer variant="meta">
+      <span className="t-caption">
+        {note} {whole}
+      </span>
+    </Card.Footer>
+  );
+}
 
 /** A seat's name and handle, linked. The one way a person appears in a list. */
 export function SeatChip({

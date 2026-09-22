@@ -79,7 +79,46 @@ const (
 	// tailLines bounds the crash tail kept per server. REASONED.
 	// Enough for a Python traceback plus a startup banner (a few KB), small
 	// enough to hold for every spawned server at once.
+	//
+	// It is a WINDOW over a collection, so it is a cut, and it is MARKED:
+	// [stderrRelay.lines] returns the number of lines it pushed out beside the
+	// ones it kept, and client.reportStartFailure logs that count as
+	// dropped_lines — a tail of exactly fifty lines is otherwise the same
+	// slice whether the server wrote fifty or five thousand.
+	//
+	// WHERE THE DROPPED LINES ARE: in the engine's own log, on one condition
+	// stated below. Unlike the bytes maxStderrLine drops, every line this
+	// window forgets was ALREADY emitted — one server_stderr debug event per
+	// line, in the same shape the window would have held it, by the pump that
+	// fills the window (see stderr.go). So on a node running at debug level
+	// (`-debug`, `logging.level: debug`) the whole sequence is in the log and
+	// this window is a convenience copy of its end, which is why the tail is
+	// windowed rather than made unbounded. The condition is the level: above
+	// debug the log holds none of those events and the dropped_lines count is
+	// all that survives of them. That is the honest limit of the route, and
+	// the reason the count is REPORTED rather than the drop being treated as
+	// recoverable by assumption.
+	//
+	// Each such line is itself bounded by maxStderrLine and marked when it was
+	// cut, there and here alike: what this route recovers is every LINE, never
+	// more of any one of them.
 	tailLines = 50
+
+	// stderrReadBuffer sizes the pump's bufio.Reader over one child's stderr
+	// pipe. REASONED.
+	//
+	// It bounds NOTHING that is kept: [readBoundedLine] assembles a line
+	// across as many chunks as bufio hands back (ReadLine reports isPrefix
+	// when a line does not fit the buffer), so this number decides how many
+	// chunks an over-long line arrives in and never what survives the cut —
+	// maxStderrLine decides that.
+	//
+	// Eight times maxStderrLine, which is the ratio and not the digits: every
+	// line the tail can retain WHOLE therefore arrives in a single chunk, so
+	// the multi-chunk path is walked only by lines already past the cap — the
+	// pathological input, not the ordinary one. The cost is one buffer per
+	// stdio server, allocated once and held for that server's life.
+	stderrReadBuffer = 8 * maxStderrLine
 
 	// maxToolPages bounds a tools/list pagination walk. REASONED.
 	//

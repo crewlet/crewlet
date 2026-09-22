@@ -53,6 +53,53 @@ describe("keeping a shortcut", () => {
     expect(star("one too many", "work", "ENG-999")).toBe("starred");
   });
 
+  /**
+   * THE REFUSAL AND THE READ HAVE TO AGREE, and they did not.
+   *
+   * [MaxStars] says at its own definition that reaching the cap is a refusal
+   * which SAYS SO rather than a silent drop of the oldest, since every entry
+   * is one somebody chose. `toggleStar` honoured that; `stored()` had a
+   * `.slice(0, MaxStars)` on it, which is that silent drop — and because
+   * `write` replaces the WHOLE key, the next unstar of any row PERSISTED the
+   * shortened list, destroying stars nobody had touched while reporting
+   * "unstarred" about the one that was clicked.
+   *
+   * The over-cap value is written directly, which is how it arrives in
+   * practice: another tab on a build with a different cap, or a hand-edited
+   * key. One origin, one key, no coordination.
+   */
+  it("carries an over-cap list whole rather than trimming it on the way in", () => {
+    const many = Array.from({ length: MaxStars + 3 }, (_, i) => ({
+      path: ["work", `ENG-${i}`],
+      label: `item-${i}`,
+      workspace: "work",
+      at: i,
+    }));
+    localStorage.setItem("crewlet_starred", JSON.stringify(many));
+    resetForTest();
+    // THE LAST ONE IS STILL THERE — the row the cut dropped first.
+    expect(isStarred(["work", `ENG-${MaxStars + 2}`])).toBe(true);
+    // AND AN UNSTAR TAKES EXACTLY THE ROW THAT WAS CLICKED WITH IT.
+    expect(star("item-0", "work", "ENG-0")).toBe("unstarred");
+    expect(stored()).toHaveLength(MaxStars + 2);
+    expect(isStarred(["work", `ENG-${MaxStars + 2}`])).toBe(true);
+  });
+
+  it("still refuses to add while the stored list is over the cap", () => {
+    // The bound the cap exists for holds from the only place that can grow the
+    // list. Reading an over-cap value is not permission to write past it.
+    const many = Array.from({ length: MaxStars + 1 }, (_, i) => ({
+      path: ["work", `ENG-${i}`],
+      label: `item-${i}`,
+      workspace: "work",
+      at: i,
+    }));
+    localStorage.setItem("crewlet_starred", JSON.stringify(many));
+    resetForTest();
+    expect(star("one too many", "work", "ENG-999")).toBe("full");
+    expect(stored()).toHaveLength(MaxStars + 1);
+  });
+
   it("stores nothing for a path with no segments", () => {
     expect(star("nowhere")).toBe("full");
     expect(stored()).toEqual([]);

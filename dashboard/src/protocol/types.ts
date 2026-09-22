@@ -1581,6 +1581,25 @@ export interface AgentMemoryAnswer {
   skills_total: number;
   counterparties: CounterpartyProfile[];
   onboarded_at: string;
+  /** The diary listing is the NEWEST `MemoryPageLimit` notes and this says
+   *  the seat has written more. ALWAYS PRESENT — `queries.Sources.agentMemory`
+   *  seeds all three of these in the answer's default map, so `false` means
+   *  "this is all of it" and there is no third state to guard for.
+   *
+   *  ASKED, NOT INFERRED: the engine reads one row past the page as evidence,
+   *  so a seat holding exactly the limit reports itself whole. `diary.length`
+   *  is the PAGE SIZE and saturates at the limit, which is why a count drawn
+   *  from it has to be marked with this.
+   *
+   *  WHERE THE REST IS: `agent_memory` takes no paging parameter, so the whole
+   *  set is only in this node's own store — the `agent_diary` table, keyed by
+   *  the seat's derived agent id. */
+  diary_truncated: boolean;
+  /** As `diary_truncated`, over the `episodes` table, keyed by handle. */
+  episodes_truncated: boolean;
+  /** As `diary_truncated`, over the `counterparty_profiles` table, keyed by
+   *  the observing seat's handle. */
+  counterparties_truncated: boolean;
 }
 
 /** One recorded turn in one conversation, from the conversation ledger. */

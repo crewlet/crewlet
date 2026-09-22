@@ -75,17 +75,46 @@ type Unblock struct {
 // workable, for ever.
 //
 // Skipping costs nothing, because the scan's window is bounded by the log
-// position rather than by the told-stamp: "since" advances on every tick
-// whether or not a row produced a notice, so a skipped dependent is simply
-// never found again rather than found repeatedly. Somebody assigned the task
-// afterwards reads its state when they pick it up.
+// position rather than by the told-stamp: an unassigned dependent is filtered
+// BEFORE the bound, so it never takes a place in [UnblockScan.Pending] and
+// never holds the window open, and the position advances past it on the first
+// tick that drains that window. A skipped dependent is simply never found
+// again rather than found repeatedly. Somebody assigned the task afterwards
+// reads its state when they pick it up.
 type UnblockScan struct {
+	// Pending holds at most the `limit` the caller passed. THE BOUND IS
+	// ON RECORDS, not on a screenful: every entry becomes one durable
+	// commit every node in the company applies, so a tick that carried a
+	// whole backlog would publish an unbounded number of them.
+	//
+	// NOTHING IS LOST TO THAT BOUND. What it leaves behind is still owed,
+	// still inside this window, and found by the next tick from the SAME
+	// position, because [UnblockScan.Through] does not move while
+	// [UnblockScan.Truncated] is set.
 	Pending []Unblock
 
-	// Through is the position this scan covered. IT IS ADVANCED ONLY
-	// AFTER THE COMMITS LAND, so a crash mid-tick re-reads the same
-	// records rather than skipping them — a repeated wake is a duplicate
-	// the inbox collapses, and a skipped one is somebody never told.
+	// Truncated says the window holds more owed dependents than this scan
+	// carried — ASKED, NOT INFERRED: the query reads ONE ROW PAST the
+	// bound and that row is dropped rather than carried, so its presence
+	// is the evidence. `len(Pending) == limit` is a different fact and not
+	// this one: a window holding exactly the limit holds everything it
+	// has, and reading a full page as a cut would pin the repair's
+	// position on a range it has already drained and re-read it for ever.
+	//
+	// It is the idiom `internal/pages`' listings use, for the same reason,
+	// and the flag is the whole of what makes the bound above sound rather
+	// than a silent cut.
+	Truncated bool
+
+	// Through is the position this scan covered, and the rule it obeys is
+	// that IT NEVER OVERTAKES [UnblockScan.Pending]: a truncated scan
+	// reports the position it was GIVEN, so the records it did not account
+	// for stay inside the next tick's window.
+	//
+	// IT IS ADVANCED ONLY AFTER THE COMMITS LAND, so a crash mid-tick
+	// re-reads the same records rather than skipping them — a repeated
+	// wake is a duplicate the inbox collapses, and a skipped one is
+	// somebody never told.
 	Through uint64
 }
 
@@ -122,8 +151,60 @@ type UnblockScan struct {
 // A dependent with any open edge is not ready. A dependent already told about
 // a later clearing is not owed anything. Both are the difference between a
 // repair and a source of duplicate wakes.
+//
+// # THE BOUND AND THE HORIZON ARE ONE DECISION
+//
+// The rows are cut at `limit` because each one becomes a durable commit every
+// node applies, and the horizon is where the NEXT tick starts — so a horizon
+// computed without reference to that cut does not make a wake late, it loses
+// it. ONE record can clear more dependents than a tick may carry: a bulk
+// cancel finishes up to [MaxBulkTasks] tasks and the apply clears every edge
+// naming each of them, so a single row in this window can make hundreds of
+// people workable. A MAX over the window taken with no reference to the bound
+// then advanced the position past that very record, and everybody past the
+// limit stayed owed FOR EVER — below the new horizon, so the join never
+// reaches them again, and nothing outside [Writer.TellUnblocked] ever fills
+// `Snapshot.Unblocked`, so this scan is the only path by which they hear.
+//
+// So the cut is EVIDENCE-BACKED rather than blind, in the idiom
+// `internal/pages` reads its listings with: the query asks for one row past
+// the bound, the extra row is dropped rather than carried, and its presence is
+// [UnblockScan.Truncated]. A truncated scan returns the position it was GIVEN,
+// so the next tick re-reads the same window — where the dependents already
+// told have left the predicate (their `unblocked_told_at` now stands at or
+// past their newest clearing) and the ones left behind come up in their place.
+//
+// WHAT MAKES THAT TERMINATE IS THE TOLD-STAMP, NOT THE POSITION, which is the
+// sentence the duty already writes at its own checkpoint: the position is an
+// optimisation over how much history one tick reads, never the thing that
+// makes the repair sound. The window drains at `limit` a tick — the duty
+// passes [WalkBatch], and what that number means as a fleet-wide throughput,
+// how long it takes to drain a backlog, and what else moves with it are stated
+// ONCE, at its definition, rather than spelled a second time here where the
+// two copies would drift. That is the pacing this design already chose for
+// every other walk, and it is the right way round here: a late notice is what
+// this whole file is, and a lost one is what it exists to prevent.
+//
+// The alternative is PAGING UNTIL DRAINED inside one tick, and it is wrong for
+// the reason the bound exists at all: the number of records the tick published
+// would be set by the size of the backlog rather than by anything this design
+// picked, landing on every node's applier at once, for a repair that is by
+// definition already late.
 func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
 	limit int) (UnblockScan, error) {
+
+	if limit < 1 {
+		// REFUSED, because there is no honest fallback. The query keeps
+		// at most `limit` rows and reads one past it as evidence, so
+		// below one it carries nobody and reports itself truncated on
+		// every tick: a repair that tells nobody, advances nowhere, and
+		// returns success while doing it. A default chosen here would be
+		// this file guessing at its caller's pacing.
+		return UnblockScan{}, fmt.Errorf("tracker: the unblocked repair was "+
+			"given limit %d, and a scan that may carry no dependent tells "+
+			"nobody and never advances its position: pass a positive limit "+
+			"(the duty passes WalkBatch, %d)", limit, WalkBatch)
+	}
 
 	scan := UnblockScan{Through: since}
 	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
@@ -133,11 +214,18 @@ func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
 		// THE HORIZON IS OVER THE SAME PREDICATE AS THE ROWS, which is
 		// what makes advancing it safe: a horizon computed over a WIDER
 		// set steps past records the scan below never looked at.
+		//
+		// INTO A LOCAL, never straight onto the answer. This is the
+		// window's CEILING, which the rows below are read against, and
+		// it becomes the REPORTED position only if they accounted for
+		// all of it. The two were ONE VARIABLE, and that is exactly how
+		// a cut set of rows came to advance a whole window's horizon.
+		var horizon uint64
 		if err := tx.QueryRowContext(ctx, `
 			SELECT COALESCE(MAX(log_seq), ?) FROM tracker_history
 			WHERE log_seq > ?
 			  AND json_extract(fields_json, '$.status.to') IS NOT NULL`,
-			since, since).Scan(&scan.Through); err != nil {
+			since, since).Scan(&horizon); err != nil {
 			return fmt.Errorf("tracker: read the repair's own horizon: %w", err)
 		}
 		// THE TWO PREDICATES ABOUT THE DEPENDENT ARE SUBQUERIES OVER
@@ -168,8 +256,11 @@ func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
 			  AND (SELECT MAX(o.cleared_at) FROM tracker_task_deps o
 			       WHERE o.task_id = t.id AND o.cleared_at IS NOT NULL)
 			      > COALESCE(t.unblocked_told_at, 0)
+			-- ONE ROW PAST THE BOUND: the extra row is evidence
+			-- that the window holds more, never an answer. See
+			-- [UnblockScan.Truncated].
 			ORDER BY t.id LIMIT ?`,
-			since, scan.Through, limit)
+			since, horizon, limit+1)
 		if err != nil {
 			return fmt.Errorf("tracker: read the unblocked dependents since "+
 				"%d: %w", since, err)
@@ -183,7 +274,23 @@ func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
 			}
 			scan.Pending = append(scan.Pending, u)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		// THE PROBE ROW IS EVIDENCE, never an answer: the tick stays at
+		// its bound and the horizon stays where it started, so the
+		// dependents it did not carry are still inside the next tick's
+		// window rather than below it.
+		scan.Truncated = len(scan.Pending) > limit
+		if scan.Truncated {
+			scan.Pending = scan.Pending[:limit]
+			return nil
+		}
+		// AND ONLY A DRAINED WINDOW MOVES THE POSITION: every row the
+		// horizon covers has been accounted for — carried, or filtered
+		// as not owed — so there is nothing left below it to find.
+		scan.Through = horizon
+		return nil
 	})
 	if err != nil {
 		return UnblockScan{Through: since}, err

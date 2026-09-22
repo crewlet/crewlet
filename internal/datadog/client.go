@@ -232,26 +232,59 @@ const maxResponse = 4 << 20
 // detailOf pulls Datadog's own message out of a refusal, so an operator
 // reads what Datadog said rather than a status code.
 //
-// BOUNDED, because the answer to a call that failed is exactly the answer
-// least likely to be the JSON this expects — see [httpx.RefusalBytes]. Cut through
-// [textcut] rather than by slicing, so a multi-byte rune straddling the limit
-// does not become invalid UTF-8 that a JSON encoder silently substitutes.
+// # Datadog's own envelope is the only thing decided here
+//
+// Its `errors` array is prose Datadog wrote about this call, so it is worth
+// preferring over anything a generic distiller could make of the same bytes.
+// That is the vendor half of the split [httpx.Refusal]'s doc draws; the
+// shared half is not repeated here, because a second implementation of it is
+// the drift internal/httpx exists to have ended.
+//
+// # Bounded at [httpx.RefusalDetail], which is a LINE's budget
+//
+// This value becomes [APIError.Detail], which reaches a log line and a
+// reconcile Finding — and a Finding's detail is a status row the fleet writes
+// to ONE coordination key shared with every other integration. The ceiling
+// for that is [httpx.RefusalDetail], the tree's named answer for how long an
+// error LINE may be. [httpx.RefusalBytes] is a READ ceiling — how much of a
+// refused body is worth buffering at all — and it is five times larger, so
+// using it here would let a joined `errors` array reach two kilobytes on one
+// "line".
+//
+// [textcut.Within] rather than [textcut.Ellipsis]: RefusalDetail is a
+// CEILING its callers assert, so the marker has to fit inside it rather than
+// push past it. MARKED at all because a severed message reads as a complete
+// one, and rune-safe because a multi-byte character straddling the limit
+// becomes invalid UTF-8 that a JSON encoder silently substitutes.
+//
+// The whole message is not recoverable from this process: the body is read
+// once and dropped, and nothing here writes it to a store column or an event
+// payload. What holds the rest is the endpoint that sent it, which is what
+// the marker tells a reader to go back to.
 func detailOf(contentType string, payload []byte) string {
 	var body struct {
 		Errors []string `json:"errors"`
 	}
 	if err := json.Unmarshal(payload, &body); err == nil && len(body.Errors) > 0 {
-		return textcut.Ellipsis(strings.Join(body.Errors, "; "), httpx.RefusalBytes)
+		return textcut.Within(strings.Join(body.Errors, "; "), httpx.RefusalDetail)
 	}
-	// ANYTHING ELSE THROUGH [httpx.Refusal], rather than verbatim: a
-	// refusal that is not the JSON this expects is most often an HTML
-	// page from a gateway, and pasting one into an error puts a rendered
-	// document in a log around a sentence nobody can find.
-	detail := httpx.Refusal(contentType, payload)
-	if detail == "" {
-		return "no detail"
+	// EVERY OTHER OUTCOME IS [httpx.RefusalOf]'s. A refusal that is not the
+	// JSON this expects is most often a gateway's HTML page, and that helper
+	// already bounds what it returns to [httpx.RefusalDetail] — so a second
+	// cut around this call would be a bound that can never fire.
+	//
+	// A nil read error is not a shortcut: [Client.do] reads the single body
+	// with [httpx.ReadBody] and returns its failure before reaching here, so
+	// by construction the body arrived whole.
+	//
+	// "" from there means exactly one thing — Datadog sent an empty body —
+	// which is what makes "no detail" honest. A page with no <title> and a
+	// shape with nothing quotable in it report themselves rather than
+	// arriving here as silence.
+	if detail := httpx.RefusalOf(contentType, payload, nil); detail != "" {
+		return detail
 	}
-	return textcut.Ellipsis(detail, httpx.RefusalBytes)
+	return "no detail"
 }
 
 // Org is the organization a credential pair belongs to.

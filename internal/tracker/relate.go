@@ -376,12 +376,63 @@ func (s ScopeSet) withObjects(container, subject string, ids []string) ScopeSet 
 			Kind: TermObject, Container: container, ID: id,
 		})
 	}
+	if len(terms) > MaxScopeTerms {
+		// THE SMALLEST COVERING TERM rather than a refusal, which is
+		// [MaxScopeTerms]'s own rule and what [goalScope] already
+		// does with a goal spanning more projects than a record can
+		// enumerate.
+		//
+		// IT IS REACHED ON THE ORDINARY PATH, by one task: a write
+		// enumerates the SUBJECT as well as its dependents, so a blocker
+		// at [MaxDependents] needs one term more than the cap. Refused
+		// there, every write to it is refused — a close, a rename, and
+		// the removal of a dependent that would bring it back under the
+		// cap — naming a limit the caller has no way to act on.
+		//
+		// A CONTAINER OVER-CLAIMS, which is the safe direction and the
+		// one the dependent terms above already take: it defers more
+		// writes behind this record than its apply touches, where an
+		// under-claim lets a write past a deferral that covers it.
+		return ScopeSet{Terms: coveringContainers(terms)}
+	}
 	return ScopeSet{Terms: terms}
 }
 
+// coveringContainers replaces an enumeration of OBJECT terms with the
+// containers those objects sit in, deduped in first-appearance order.
+//
+// A CONTAINER PATH IS THE PREFIX of every object path beneath it, so the
+// result covers everything the enumeration named and more — which is the only
+// direction a replacement may go. The names come from [ScopeTerm.container]
+// rather than the raw field, because an empty one is [WorkspaceContainer] and
+// a container term has to say which container it means.
+func coveringContainers(terms []ScopeTerm) []ScopeTerm {
+	out := make([]ScopeTerm, 0, 2)
+	for _, t := range terms {
+		name := t.container()
+		if slices.ContainsFunc(out, func(c ScopeTerm) bool { return c.ID == name }) {
+			continue
+		}
+		out = append(out, ScopeTerm{Kind: TermContainer, ID: name})
+	}
+	return out
+}
+
 // covers reports whether this scope already names every one of these objects.
-func (s ScopeSet) covers(ids []string) error {
+func (s ScopeSet) covers(container string, ids []string) error {
 	if len(ids) == 0 {
+		return nil
+	}
+	// THE COVERING CONTAINER COUNTS, because it is the other shape
+	// [ScopeSet.withObjects] produces: past [MaxScopeTerms] the
+	// enumeration collapses to the container it filed every dependent
+	// under, and that path is the prefix of each object path it replaced.
+	// The container is PASSED rather than read off a term, because a
+	// dependent's own project is not on the blocker's row — the
+	// enumeration deliberately files them all under the blocker's.
+	if slices.ContainsFunc(s.Terms, func(t ScopeTerm) bool {
+		return t.Kind == TermContainer && t.ID == container
+	}) {
 		return nil
 	}
 	for _, id := range ids {

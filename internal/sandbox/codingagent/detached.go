@@ -22,6 +22,13 @@ var log = logging.Get("sandbox.coding_agent")
 // least interesting thing to drop. 100k characters is a few hundred lines of
 // a coding agent's streamed events, which is enough to see what it did without
 // putting a megabyte of log through the event store per run.
+//
+// THE WHOLE STREAM IS STILL IN THE BOX, which is what makes a cut here a
+// summary rather than a loss: [tail] runs when the result is read, and what it
+// was read from — [Paths.Result] and [Paths.Err], under the box's own .crewlet
+// directory — is not touched by it. The sandbox coordinator PAUSES the box
+// after collecting rather than tearing it down, so the untruncated transcript
+// is readable for as long as that box lives; it goes when the box does.
 const MaxTranscript = 100_000
 
 // prPattern matches a pull-request URL, on either of the two hosts this engine

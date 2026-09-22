@@ -330,6 +330,35 @@ describe("a round that reached nobody", () => {
   });
 });
 
+/**
+ * A LENGTH STOP IS A 200 WITH A SHORT BODY, which is why the engine states it
+ * on the record: the prose stops mid-word and a structured submission is
+ * missing the field it was called for, and nothing else about the answer says
+ * so. `output_truncated` is set on EVERY `agent_phase_completed` and this side
+ * did not carry it at all, so a phase that was cut off and a phase that
+ * finished were the same value to every frame that reads one.
+ */
+describe("a phase the model's output cap stopped", () => {
+  test("output_truncated survives onto the record", () => {
+    expect(fromPhaseEvent(phaseEvent({ output_truncated: true }))!.outputTruncated).toBe(true);
+  });
+
+  test("an absent flag is a phase that ran to its own end, never unknown", () => {
+    // `omitempty` on the engine's side, so the false case is an ABSENT key —
+    // and a truthy coercion of `undefined` is the one reading that would make
+    // every phase in the product look cut.
+    expect(fromPhaseEvent(phaseEvent())!.outputTruncated).toBe(false);
+    expect(fromPhaseEvent(phaseEvent({ output_truncated: false }))!.outputTruncated).toBe(false);
+  });
+
+  test("a running phase reports no cut, because the stop reason is not settled", () => {
+    // The live overlay carries no stop reason: it is decided when the round
+    // comes back, and a `true` here would be a claim about a call still in
+    // flight.
+    expect(fromLiveCall(liveCall(), "PM").outputTruncated).toBe(false);
+  });
+});
+
 describe("presentation rules", () => {
   test("reasoning is split off the front of the answer", () => {
     // The engine keeps a phase's reasoning as a <think> prefix of Response,

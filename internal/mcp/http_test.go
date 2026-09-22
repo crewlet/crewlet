@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/httpx"
 )
@@ -319,8 +320,8 @@ func TestHTTPServerNeedsNoChildSupervision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	if c.stderrTail() != nil {
-		t.Fatal("an HTTP server has no stderr to tail")
+	if tail, dropped := c.stderrTail(); tail != nil || dropped != 0 {
+		t.Fatalf("an HTTP server has no stderr to tail: %v, %d dropped", tail, dropped)
 	}
 	if err := c.stop(t.Context()); err != nil {
 		t.Fatalf("stop: %v", err)
@@ -340,10 +341,8 @@ func TestHTTPServerNeedsNoChildSupervision(t *testing.T) {
 // The body must be read to be logged and replayed, and handing the SDK a
 // truncated one turns a server's clear 403 into a JSON parse error. But
 // "whole" was unbounded, so a remote server chose this process's allocation
-// size — the only unbounded io.ReadAll left in the tree, eight lines under a
-// constant whose purpose is bounding this same body. Past the cap the prefix
-// is handed back in front of the still-open body, so the SDK reads every byte
-// and nothing further is held.
+// size. Past the cap the prefix is handed back in front of the still-open
+// body, so the SDK reads every byte and nothing further is held.
 func TestAnOversizedErrorBodyIsStreamedRatherThanBuffered(t *testing.T) {
 	t.Parallel()
 	const size = (1 << 20) + 4096 // comfortably over maxBufferedErrorBody
@@ -435,5 +434,72 @@ func TestIdentityWrapsTheSharedTransport(t *testing.T) {
 	}, slog.New(slog.DiscardHandler))
 	if ident.base != httpx.Transport() {
 		t.Errorf("identity base = %T, want the one httpx shares", ident.base)
+	}
+}
+
+// A LOGGED ERROR BODY IS NEVER CUT INSIDE A RUNE.
+//
+// A remote server's error text is prose — a workspace name, a scope, a quoted
+// header — so the byte at maxLoggedErrorBody lands inside a multi-byte rune as
+// soon as the text stops being ASCII. A bare body[:maxLoggedErrorBody] hands
+// slog invalid UTF-8, whose JSON handler writes U+FFFD into the one line an
+// operator has to diagnose a 403 from.
+//
+// The over-cap cases also pin that the field stays MARKED and that the cut is
+// taken from a bounded HEAD of the body rather than the whole of it: the last
+// case is a mebibyte with the straddling rune at the ceiling, and it must yield
+// the identical answer to the short one.
+func TestALoggedErrorBodyIsCutOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+	// The straddling rune starts one byte before the ceiling and runs past it,
+	// so a correct cut keeps exactly the ASCII prefix before it.
+	const straddler = "\u20ac" // 3 bytes
+	prefix := strings.Repeat("x", maxLoggedErrorBody-1)
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"empty", "", "(empty)"},
+		{"short bodies are verbatim", "{\"error\":\"no such scope: r\u00e9pertoire\"}", "{\"error\":\"no such scope: r\u00e9pertoire\"}"},
+		{
+			// Exactly at the ceiling is not over it: nothing was dropped, so
+			// nothing may claim it was.
+			"exactly at the ceiling is unmarked",
+			strings.Repeat("x", maxLoggedErrorBody),
+			strings.Repeat("x", maxLoggedErrorBody),
+		},
+		{
+			"one byte over is marked",
+			strings.Repeat("x", maxLoggedErrorBody+1),
+			strings.Repeat("x", maxLoggedErrorBody) + truncationMarker,
+		},
+		{
+			"a rune straddling the ceiling is walked back over",
+			prefix + straddler + strings.Repeat("y", 32),
+			prefix + truncationMarker,
+		},
+		{
+			// Same straddle, past the bounded head boundedBody converts: the
+			// answer may not depend on how much of the body it looked at.
+			"the same straddle in a mebibyte body",
+			prefix + straddler + strings.Repeat("y", 1<<20),
+			prefix + truncationMarker,
+		},
+	} {
+		got := boundedBody([]byte(tc.body))
+		if !utf8.ValidString(got) {
+			t.Errorf("%s: the logged field is not valid UTF-8 (last bytes %x)",
+				tc.name, got[max(0, len(got)-8):])
+		}
+		if got != tc.want {
+			t.Errorf("%s: boundedBody kept %d bytes, want %d",
+				tc.name, len(got), len(tc.want))
+		}
+		if over := len(got) - len(truncationMarker); over > maxLoggedErrorBody {
+			t.Errorf("%s: kept %d bytes of content, past the %d-byte ceiling",
+				tc.name, over, maxLoggedErrorBody)
+		}
 	}
 }

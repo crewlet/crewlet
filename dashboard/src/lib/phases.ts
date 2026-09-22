@@ -129,6 +129,27 @@ export interface PhaseRecord {
    * only when the phase publishes its record.
    */
   emptyAnswerRounds: number;
+  /**
+   * A round of this phase ended because the model hit its OUTPUT cap rather
+   * than because it had finished — `output_truncated` on the record.
+   *
+   * THE ONE TRUNCATION THE ENGINE CANNOT SEE ANY OTHER WAY, which is why
+   * [types.AgentPhaseCompleted] carries it: a length stop is a 200 with a
+   * short body, so the prose below stops mid-word and a structured submission
+   * is missing the field it was called for. A cut phase and a finished one
+   * were the same record on this side, and the reviewer judged the first as
+   * the seat's considered work.
+   *
+   * WHAT SURVIVES IS STILL WHOLE HERE: `response` is everything the model
+   * sent before the cap stopped it, stored on the phase record, so the chip
+   * marks the record rather than shortening it. What is missing was never
+   * generated — no store column and no retrieval holds it, and the fix is the
+   * entry's own cap.
+   *
+   * False on a live phase, like the two flags beside it: the stop reason is
+   * settled only when the phase publishes its record.
+   */
+  outputTruncated: boolean;
   rescueFired: boolean;
   decision: string;
   notes: string;
@@ -374,6 +395,7 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     roundsUsed: call.rounds,
     exhaustedRounds: false,
     emptyAnswerRounds: 0,
+    outputTruncated: false,
     rescueFired: false,
     decision: "",
     notes: "",
@@ -417,10 +439,6 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // carries. The stored column is backfilled across the split
     // (migration 0029) and the payload is not, so a payload-only read
     // reports no unit of work for every turn older than the split.
-    // THE ROW'S OWN COLUMN FIRST, the payload only as what a live frame
-    // carries. The stored column is backfilled across the split
-    // (migration 0029) and the payload is not, so a payload-only read
-    // reports no unit of work for every turn older than the split.
     workKey: String(ev.work_key ?? p.work_key ?? ""),
     phase,
     iteration,
@@ -445,6 +463,10 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     roundsUsed: num(p.rounds_used),
     exhaustedRounds: p.exhausted_rounds === true,
     emptyAnswerRounds: num(p.empty_answer_rounds),
+    // `=== true` rather than a cast, like every other flag on this record:
+    // the engine omits it when false (`omitempty`), so an absent key is a
+    // phase that ran to its own end.
+    outputTruncated: p.output_truncated === true,
     rescueFired: p.rescue_fired === true,
     decision: String(p.decision ?? ""),
     notes: String(p.notes ?? ""),

@@ -52,10 +52,19 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any) e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
+		// REFUSED PAST THE CEILING, not read up to it. A CAP IS NOT A CUT:
+		// io.LimitReader stops at its limit and reports io.EOF, so a
+		// self-managed instance behind a proxy pasted the first
+		// [httpx.RefusalBytes] of a rendered HTML page into this Detail as
+		// though GitLab had said it — byte-sliced, so a multi-byte rune
+		// straddling the boundary left invalid UTF-8, and unmarked, so
+		// nothing said a page had been cut in half. The read error was
+		// discarded with it, so a body that failed halfway became an empty
+		// Detail that reads as "the instance said nothing".
+		body, readErr := httpx.ReadBody(resp.Body, httpx.RefusalBytes)
 		return &APIError{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Detail: strings.TrimSpace(string(detail)),
+			Detail: httpx.RefusalOf(resp.Header.Get("Content-Type"), body, readErr),
 		}
 	}
 	if out == nil {

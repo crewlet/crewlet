@@ -523,8 +523,13 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			// rather than published under a scope that does not cover
 			// it. The caller re-runs and the second attempt enumerates
 			// the dependent that arrived.
+			//
+			// AGAINST `project`, which is the container the enumeration
+			// filed every dependent under — so the covering container
+			// it collapses to past [MaxScopeTerms] satisfies this check
+			// exactly where it satisfies the apply.
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := scope.covers(current.Dependents); err != nil {
+			if err := scope.covers(project, current.Dependents); err != nil {
 				return statelog.Decision{}, err
 			}
 			decision, err := w.decide(subject, OpPatch, kind, scope, opID,

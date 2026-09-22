@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The REST client.
@@ -83,6 +84,14 @@ type Error struct {
 	// Message is the server's own error text where it sent one. Mattermost
 	// returns a structured error whose `message` is written for a person,
 	// so surfacing it turns "500 on /users/me" into "Invalid session".
+	//
+	// Where it sent something else — a proxy's HTML page titled or not, a
+	// load balancer's sentence, or more than this build will read — it
+	// carries a line saying so instead. EMPTY MEANS THE SERVER SENT AN
+	// EMPTY BODY and nothing else: [serverMessage] answers Mattermost's own
+	// envelope and hands every other outcome to [httpx.RefusalOf], which is
+	// the one place that invariant is enforced, for this vendor and the
+	// three others that share the rule.
 	Message string
 
 	// retryAfter is what the server asked for, when it asked. Honouring it
@@ -238,14 +247,20 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		// The server's own error text, capped: it is written for a
-		// person, and surfacing it turns "500 on /users/me" into
-		// "Invalid session". Capped because a proxy in front of a dead
-		// server answers with an HTML page.
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
+		// REFUSED PAST THE CEILING, not read up to it. A CAP IS NOT A CUT
+		// and this body feeds a DECODER, which is the worst place to put
+		// one: io.LimitReader stopped at [httpx.RefusalBytes] and reported
+		// io.EOF, so a proxy's HTML page or an oversized envelope arrived
+		// as a truncated object, json.Unmarshal failed on it, and the
+		// Error carried an EMPTY Message — indistinguishable from a server
+		// that genuinely said nothing. [httpx.ReadBody] reads one byte
+		// past and refuses, so the overrun becomes something
+		// [serverMessage] can state.
+		payload, readErr := httpx.ReadBody(resp.Body, httpx.RefusalBytes)
 		return resp.Header, &Error{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Message:    serverMessage(payload),
+			Message: serverMessage(
+				resp.Header.Get("Content-Type"), payload, readErr),
 			retryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
 		}
 	}
@@ -344,17 +359,61 @@ func (e *transportError) Error() string {
 }
 func (e *transportError) Unwrap() error { return e.err }
 
-// serverMessage pulls Mattermost's own error text out of a body.
-func serverMessage(payload []byte) string {
-	var body struct {
-		Message string `json:"message"`
-		ID      string `json:"id"`
+// serverMessage pulls Mattermost's own error text out of a refusal — and,
+// where there is none, says WHICH kind of none it was.
+//
+// # An empty Message means the server said nothing, and nothing else
+//
+// It used to mean three different things at once, and only one of them was
+// that. The body was read through an io.LimitReader at [httpx.RefusalBytes],
+// so a proxy's HTML page or an oversized envelope arrived cut mid-object,
+// json.Unmarshal failed on it, and this returned "". A caller holding that
+// Error could not tell a server with nothing to say from one that said too
+// much to read — which is the first thing an operator needs to know, because
+// the two call for opposite next steps.
+//
+// So every outcome is named now. What is Mattermost's OWN is decided here,
+// because its `message` is written for a person and turns "500 on /users/me"
+// into "Invalid session". Everything else is [httpx.RefusalOf]'s — a gateway
+// page's <title>, a titleless page named as the page it is, a plain sentence
+// as itself, and a body that was NOT read reported as exactly that with the
+// ceiling that refused it. Only a genuinely empty body yields "", and that
+// invariant lives in httpx rather than here because four vendor clients
+// depend on it and a rule written four times is a rule that drifts.
+//
+// The vendor SHAPE stays with the vendor and the shared question — "this is
+// not a shape I know; what can I say?" — does not, which is the split
+// [httpx.Refusal]'s own doc draws. This function is what is left of the
+// vendor side of it. [httpx.RefusalOf] is where the rest of the body went
+// and why nothing may quote a prefix of it.
+func serverMessage(contentType string, payload []byte, err error) string {
+	if err == nil {
+		var body struct {
+			Message string `json:"message"`
+			ID      string `json:"id"`
+		}
+		if json.Unmarshal(payload, &body) == nil {
+			// BOUNDED AND MARKED WHERE IT BITES. The read ceiling already
+			// bounds this to [httpx.RefusalBytes], but that is five times
+			// what an error LINE should carry — [httpx.RefusalDetail] is
+			// the tree's named answer for that. [textcut.Within] rather
+			// than Ellipsis, because RefusalDetail is a CEILING the suite
+			// below asserts, so the marker has to fit inside it; and the
+			// marker is what stops a severed sentence reading as a
+			// complete one.
+			if body.Message != "" {
+				return textcut.Within(body.Message, httpx.RefusalDetail)
+			}
+			if body.ID != "" {
+				return textcut.Within(body.ID, httpx.RefusalDetail)
+			}
+		}
 	}
-	if err := json.Unmarshal(payload, &body); err != nil {
-		return ""
-	}
-	if body.Message != "" {
-		return body.Message
-	}
-	return body.ID
+	// EVERY OTHER OUTCOME IS [httpx.RefusalOf]'s, not a fourth copy of it.
+	// A body that was not read is named with the ceiling that refused it; a
+	// proxy's HTML page becomes its <title>, and a titleless one becomes a
+	// line saying a page arrived rather than "" — which is what keeps the
+	// field doc on [Error.Message] true. The only thing left here is the
+	// shape that IS Mattermost's own, above.
+	return httpx.RefusalOf(contentType, payload, err)
 }

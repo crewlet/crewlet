@@ -1457,11 +1457,16 @@ that needs the rest of the envelope asks the `stream` query for it.
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
 
 Per-socket facts, such as how many envelopes *this* connection dropped or
-how deep its queue is, are deliberately **not** here. The tick encodes one
-JSON string and hands the same string to every client, so a per-client field
-would force one encode per client per tick. A connection that lost envelopes
-to backpressure is logged as `stream_client_left_behind`, with the count, when
-it disconnects.
+how deep its queue is, are deliberately **not** here. The tick builds one
+JSON payload and hands the same one to every client, so a per-client field
+*in the payload* would force one payload per client per tick.
+
+The drop count is carried instead on the **envelope**, as
+[`dropped`](#ws-wsstream) — the running total for that connection, on every
+frame it receives. That costs nothing extra: each connection's writer
+serializes its own envelope anyway, so the frame is already per client even
+when the payload inside it is shared. The same count is logged as
+`stream_client_left_behind` when the connection closes.
 
 `GET /health` always returns **200**, including when `status` is
 `unconfigured` or a diverged posture: the status code is liveness, and an
@@ -1484,9 +1489,46 @@ skips or repeats whatever collided with it.
 
 **A page shorter than `limit` is the end of the history.** That rule
 holds for every filter the store pushes into SQL. It does *not* hold for
-the `agent` filter, which over-fetches and post-filters (it also pulls in
-every event sharing a trace with a direct match, so a caller must dedupe
-by id); that surface only knows it is done when a page returns zero rows.
+the `agent` filter, which over-fetches and merges (it also pulls in every
+event sharing a trace with a direct match); that surface only knows it is
+done when a page returns zero rows.
+
+**And under `agent`, a page is cut to `limit` after that merge.** It has
+to be: the cursor is the page's last row, so the page must end where the
+walk resumes — carry rows older than the cursor and the next page starts
+past them, which is a hole rather than a shortening. A direct match cut
+this way is simply on the next page. A trace **sibling** cut this way may
+be on no page at all, because the direct match that pulled its trace in
+can be newer than the cursor and is therefore never re-queried. The
+trace is what recovers it: that direct match *is* on a page you get,
+every row carries its `trace_id`, and
+[`GET /events/trace/{trace_id}`](#routes) returns the trace oldest
+first, **up to 500 rows**, with `truncated` saying when it stopped at
+that cap rather than at the end of the trace. Follow the trace rather
+than expecting the feed to hold every cause it named — and where
+`truncated` is set, the recovery is partial by exactly that cut: the
+trace read is ordered forwards, so it returns the oldest 500 rows of
+that trace and a sibling below them is in neither answer.
+
+**Your cursor and your window bound the trace expansion too.** Both reads
+behind an `agent` page — the direct matches, and the other rows of their
+traces — take the `before_time` / `before_id` cursor you passed and the
+`since` / `until` window you asked for. So no row of a page is newer than
+the cursor it was asked from, and none falls outside the window you
+scrubbed to. That is what makes the walk terminate. A sibling read
+without the cursor returns rows *above* it, the merge sorts them to the
+head of the page, the cut keeps them, and you get the page you already
+had with the cursor unmoved — for ever, because only a zero-row page ends
+this walk. A sibling above your cursor is not lost to the bound: it was a
+candidate on the page that cursor came from, and its trace is reachable
+by `trace_id` like every other. A sibling outside the window is not
+something you asked to see, and because the cut is by recency it would
+displace the rows you did.
+
+**So a row is on exactly one page of a walk.** The merge deduplicates by
+id within a page, and the shared cursor is what stops one coming back on
+a later one — provided you page with the cursor the answer hands you
+(`next`) rather than one you assembled yourself.
 
 The persistent store retains 30 days, and
 [`event_history_seconds`](#the-health-envelope) on the health envelope is
@@ -1631,6 +1673,52 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
 | `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, or a coordination store it could not reach — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
 | `pong`     | Reply to a client `ping`. | `null` |
+
+**`dropped` — every frame, when the tab is behind**
+
+A frame may also carry `dropped`: how many envelopes **this connection** has
+lost to backpressure before it. Absent while it is zero, which is every frame
+of a connection that keeps up, so a client that ignores the field sees exactly
+the bytes it saw before it existed.
+
+A stalled tab loses its oldest queued envelope rather than stalling the publish
+path or any other tab, and rather than being disconnected. What it loses is
+either a state *delta* — so the tab is rendering something other than the truth
+— or the answer to a query it asked, which then simply never arrives. This is
+how it finds out. **A drop is reported, not inferred.**
+
+- **The number is cumulative and never decreases** for the life of the socket.
+  Compare it with the last value you saw; any increase means you missed
+  updates. A per-frame delta would live on exactly one frame, and that frame is
+  as droppable as any other, so one lost delta would under-report for the rest
+  of the connection.
+- **It means "drops before this frame was queued"**, not "drops as of the
+  moment you read it", so frames queued before a burst still report the older
+  total. The newest frame always carries the current one.
+- **Refetch a push; re-ask a query.** The envelopes are gone and none of them
+  is individually recoverable, and which remedy applies depends on what was
+  lost. A dropped **push** is a state delta: everything it carried is in the
+  projection, so [`GET /stream/snapshot`](#routes), or a reconnect, which is
+  sent a `snapshot` at open, rebuilds the whole of it — and the event rows behind the
+  `event` pushes are durable besides, which `GET /events` pages. A dropped
+  **`result` or `error`** is not. Those ride the same queue under the same
+  rule, and a query answer is correlated by the `id` you minted rather than
+  being state any projection holds: no snapshot returns it, and the server does
+  not re-send it. Give every query an answer timeout of your own and ask again
+  — a reply that never lands is the one loss a refetch cannot repair.
+- **Nothing in the bundled dashboard acts on it yet.** The count is wire: an
+  operator can read it, and a client can branch on it. The dashboard this
+  release embeds does not, so a drop there surfaces only as the query timeout
+  above or as a number that is briefly behind until the next push corrects it.
+- **It is a field rather than a frame of its own** because a notice queued as an
+  envelope would displace a real state frame in order to say a state frame was
+  displaced, and under a burst the queue would fill with notices about notices.
+  Riding on the frame that *did* land costs no queue slot and cannot itself be
+  dropped.
+
+The same count reaches an operator as `stream_client_left_behind` when the
+connection closes, which is the only place a tab that dropped envelopes and
+then went away without reading another frame is visible at all.
 
 **Client → server kinds**
 
@@ -1784,7 +1872,8 @@ node, so no two nodes can write one row.  Each event
 updates the live-state projection *and* fans out to connected
 dashboards.  Backpressure is per-WebSocket: a stalled tab drops the
 oldest queued envelope so it cannot stall the publish path or other
-tabs.
+tabs — and is **told**, by the `dropped` count on the next frame that
+reaches it.
 
 The dashboard itself is a React + TypeScript application, built by Vite
 from `crewlet/dashboard/` into `crewlet/static/dashboard/`, which the

@@ -308,3 +308,52 @@ func TestASnippetCentresOnTheMatch(t *testing.T) {
 		t.Errorf("an empty body produced %q", got)
 	}
 }
+
+// THE MATCH IS LOCATED IN THE BODY'S OWN BYTES, NOT IN A LOWERCASED COPY.
+//
+// Lowercasing maps rune by rune and the lowercase rune can be LONGER than the
+// one it came from — U+023A "Ⱥ" is two bytes and lowercases to U+2C65 "ⱥ" at
+// three — so an offset into a folded copy is not an offset into the body
+// [textindex.Snippet] then slices. With enough of them ahead of the match the
+// folded offset ran past the end of the body and the snippet PANICKED with
+// `index out of range`, taking down the search that asked for it; short of
+// that it silently centred the window on the wrong text, which is the very
+// failure the function's doc says a snippet must not have.
+//
+// The knowledge base is a company's own prose, so a page about Ⱥ-bearing text
+// — a linguistics note, a Sámi or Nuu-chah-nulth name, a phonetics runbook —
+// is an ordinary document rather than an adversarial input.
+func TestTheSnippetWindowIsFoundInTheBodysOwnBytes(t *testing.T) {
+	t.Parallel()
+	// Each of these lowercases one byte longer than it is, so the folded
+	// copy runs 100 bytes ahead of the body by the time the term appears.
+	lead := strings.Repeat("Ⱥ ", 100)
+	body := lead + "the rollback procedure is documented here. " +
+		strings.Repeat("trailing filler. ", 20)
+
+	got := textindex.Snippet(body, []string{"rollback"}, 120)
+	if !utf8.ValidString(got) {
+		t.Fatalf("the snippet is not valid UTF-8: %q", got)
+	}
+	if !strings.Contains(got, "rollback") {
+		t.Errorf("the snippet does not contain the term it centres on: %q", got)
+	}
+
+	// THE PANIC ITSELF: with the match near the END of the body, the folded
+	// offset plus the window's lead-in lands past len(body), and the slice
+	// that follows is the one that went out of range.
+	tail := lead + "rollback plan"
+	if got := textindex.Snippet(tail, []string{"rollback"}, 50); !strings.Contains(got, "rollback") {
+		t.Errorf("the snippet of a body whose match is at its end is %q", got)
+	}
+
+	// And the same term found through an UPPERCASE occurrence: the compare
+	// folds both sides, so a term the analyzer lowercased still finds the
+	// sentence it was produced from.
+	upper := lead + "the ROLLBACK PROCEDURE is documented here. " +
+		strings.Repeat("trailing filler. ", 20)
+	if got := textindex.Snippet(upper, []string{"rollback"}, 120); !strings.Contains(
+		strings.ToLower(got), "rollback") {
+		t.Errorf("an uppercase occurrence was not found: %q", got)
+	}
+}

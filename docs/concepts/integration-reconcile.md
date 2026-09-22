@@ -32,6 +32,51 @@ Those findings fold into one **report**, which is what an operator reads:
 - **`actor`** is who has to act for the phase to end: nobody, the `engine`, the `provider`, an `admin` (a person, at the third-party app), or the `operator` (a person, in this deployment's own config).
 - **`detail`** is one sentence naming what is outstanding, and **`action_url`** is where the person named by `actor` goes to do it. Both are filled only when a person owes something.
 
+### What a third-party app said, when it refuses
+
+**A refusal carries what the app *said*, never the body it sent.** Every
+finding, log line and CLI error that quotes a refused call quotes a distilled
+answer: an API's own JSON error envelope as its message, an HTML page as its
+`<title>` — which is where a proxy, a gateway and a login wall all put the
+reason — and plain text as itself. A page with **no** title is reported as
+what it is: a page of that many bytes with nothing quotable in it. The markup
+is still dropped, because the status code is carried separately and says more
+than layout does — but the drop is stated rather than left as silence, since
+HAProxy's default error page and many WAF pages carry no `<title>` at all and
+reporting one as *the app said nothing* sends an operator to the wrong system.
+
+**What is quoted is cut in one place, and a cut is always marked.** A quoted
+line ends at 400 bytes with a `…`, on a rune boundary, and the marker fits
+inside the 400 rather than pushing past it — one rule, one implementation,
+shared by every app the loop asks. Unmarked, a sentence severed mid-clause
+reads as the app's complete answer, and nothing in this engine can prove
+otherwise: the body is read once and dropped, so the rest of it lives only in
+the app's own logs.
+
+**A body past the ceiling is refused, never cut.** Where the refusal body is
+read on its own — every GitHub, GitLab, Jira, Confluence, Mattermost and
+Atlassian call — the ceiling is 2 048 bytes, because past a couple of
+kilobytes a body is not explaining a refusal, it is a document that arrived
+instead of one. That is the ordinary shape of a self-managed GitLab, a GitHub
+Enterprise, a Jira or Confluence Data Center, a Mattermost or an Atlassian
+admin API sitting behind an SSO wall or a WAF. The status decides which
+ceiling applies, so it is read before the body: a refused answer is an
+explanation and gets the small one, and only a call that succeeded gets the
+large one its payload needs. An app that answers more than the ceiling
+produces an error **saying so and naming the ceiling**, rather than the first
+2 048 bytes of a rendered page passed off as what the app said. Where one read
+still has to serve both — Datadog buffers a single body and branches on the
+status afterwards — the ceiling is that call's larger one, and an overrun
+there is reported the same way. **No ceiling here is configurable**, and the
+rest of the answer is where it has always been: in the app's own logs.
+
+**An empty message means the app sent an empty body, and nothing else.** The
+three outcomes that would otherwise collapse into it — a body in a shape the
+engine does not recognise, a page with no title, and a body too large to read
+— each report themselves instead, because they call for opposite next steps: a
+silent app is the app's problem, and an app answering a rendered page is
+usually the proxy in front of it.
+
 ### The advisories are always last
 
 **A finding about many things names three of them, and carries the rest beside the sentence.** A finding's detail is the card's one-line status, and the engine caps it at 500 characters — not for tidiness but because an oversized status row is **refused** by the coordination store rather than truncated, which would stop the surface recording anything at all. A finding that listed its subjects inline therefore arrived as a wall cut off mid-item: measured, 36 Datadog service accounts ending `…@agents.cr…`. So the sentence says the count and up to three examples, and the whole list travels in the finding's own `subjects`, which the screen folds away under the sentence. A finding about one thing names it and carries no list.

@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"database/sql"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -179,14 +180,22 @@ func TestAnUnmirroredEdgeIsFlaggedAndRepaired(t *testing.T) {
 	}
 
 	// THE REPAIR WRITES THE MISSING COMMIT.
-	edges, err := tracker.ScanOneSided(t.Context(), r.db, wednesday.AddDate(1, 0, 0), 16)
+	scan, err := tracker.ScanOneSided(t.Context(), r.db, wednesday.AddDate(1, 0, 0), 16)
 	if err != nil {
 		t.Fatalf("ScanOneSided: %v", err)
 	}
-	if len(edges) != 1 {
-		t.Fatalf("the scan found %d edges, want the one", len(edges))
+	if len(scan.Edges) != 1 {
+		t.Fatalf("the scan found %d edges, want the one", len(scan.Edges))
 	}
-	if _, err := r.writer.RepairOneSided(t.Context(), "op-repair", edges[0],
+	// THROUGH THE PLAN, because that is the only way the duty builds a
+	// commit and a case that assembled one by hand would certify a shape
+	// nothing publishes.
+	plan := tracker.PlanOneSided(scan.Edges)
+	if len(plan) != 1 || len(plan[0].Mirror) != 1 {
+		t.Fatalf("one broken edge planned into %+v, want a single mirror commit",
+			plan)
+	}
+	if _, err := r.writer.RepairOneSided(t.Context(), "op-repair", plan[0],
 		fixedLeads{project: "eng-lead"}); err != nil {
 		t.Fatalf("RepairOneSided: %v", err)
 	}
@@ -234,22 +243,27 @@ func TestAMirrorThatCanNeverLandIsStampedFinal(t *testing.T) {
 	}
 	r.drain()
 
-	edges, err := tracker.ScanOneSided(t.Context(), r.db, wednesday.AddDate(1, 0, 0), 16)
+	scan, err := tracker.ScanOneSided(t.Context(), r.db, wednesday.AddDate(1, 0, 0), 16)
 	if err != nil {
 		t.Fatalf("ScanOneSided: %v", err)
 	}
-	if len(edges) != 1 {
-		t.Fatalf("the scan found %d edges, want the one", len(edges))
+	if len(scan.Edges) != 1 {
+		t.Fatalf("the scan found %d edges, want the one", len(scan.Edges))
 	}
-	reason, final := edges[0].Final()
+	reason, final := scan.Edges[0].Final()
 	if !final {
 		t.Fatalf("an edge whose blocker was removed is not final, so the duty "+
-			"retries it for ever: %+v", edges[0])
+			"retries it for ever: %+v", scan.Edges[0])
 	}
 	if !strings.Contains(reason, "removed") {
 		t.Errorf("the reason is %q and does not say what a person has to fix", reason)
 	}
-	if _, err := r.writer.RepairOneSided(t.Context(), "op-final", edges[0],
+	plan := tracker.PlanOneSided(scan.Edges)
+	if len(plan) != 1 || len(plan[0].Final) != 1 {
+		t.Fatalf("one unmirrorable edge planned into %+v, want a single stamp "+
+			"commit on the dependent", plan)
+	}
+	if _, err := r.writer.RepairOneSided(t.Context(), "op-final", plan[0],
 		fixedLeads{}); err != nil {
 		t.Fatalf("RepairOneSided: %v", err)
 	}
@@ -261,8 +275,9 @@ func TestAMirrorThatCanNeverLandIsStampedFinal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanOneSided: %v", err)
 	}
-	if len(again) != 0 {
-		t.Errorf("the duty still selects a permanently one-sided edge: %+v", again)
+	if len(again.Edges) != 0 {
+		t.Errorf("the duty still selects a permanently one-sided edge: %+v",
+			again.Edges)
 	}
 	found, err := r.reader.Tasks(t.Context(), tracker.Query{
 		Scope: tracker.Scope{Workspace: true}, Flags: []string{"one_sided_final"}, Level: statelog.ReadStale,
@@ -545,13 +560,14 @@ func TestTheRepairAgesOnTheEdgeNotTheTask(t *testing.T) {
 	// THE HORIZON IS BETWEEN THE TWO: older than the edge, newer than the
 	// touch. Aged on the task this finds nothing; aged on the edge it
 	// finds the one that needs repairing.
-	edges, err := tracker.ScanOneSided(t.Context(), r.db, old.AddDate(0, 0, 1), 16)
+	aged, err := tracker.ScanOneSided(t.Context(), r.db, old.AddDate(0, 0, 1), 16)
 	if err != nil {
 		t.Fatalf("ScanOneSided: %v", err)
 	}
-	if len(edges) != 1 {
+	if len(aged.Edges) != 1 {
 		t.Fatalf("the scan found %d edges — an edge authored a week ago on a "+
-			"task edited since is one the duty must still repair", len(edges))
+			"task edited since is one the duty must still repair",
+			len(aged.Edges))
 	}
 	// AND A FRESH EDGE IS NOT YET THE DUTY'S, so it never races a gesture
 	// still running.
@@ -559,8 +575,9 @@ func TestTheRepairAgesOnTheEdgeNotTheTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanOneSided: %v", err)
 	}
-	if len(fresh) != 0 {
-		t.Errorf("the scan took %d edges from before its own horizon", len(fresh))
+	if len(fresh.Edges) != 0 {
+		t.Errorf("the scan took %d edges from before its own horizon",
+			len(fresh.Edges))
 	}
 }
 
@@ -680,5 +697,158 @@ func TestABlockerTakesAnOrdinaryEditWhileSomebodyWaitsOnIt(t *testing.T) {
 	// have cost the dependent its block.
 	if dep := r.task(t, "dep"); !dep.Blocked {
 		t.Error("the dependent is no longer blocked after its blocker was edited")
+	}
+}
+
+// THE MIRROR REPAIR CUTS ITS BATCH WITH EVIDENCE, NOT BLINDLY.
+//
+// The twin of [tracker.ScanUnblocked]'s bound, and it has to be: both are duty
+// repairs that publish one durable commit per row carried, take ONE batch per
+// sweep and leave the rest for the next one. So the same three rules hold —
+// the carried set is bounded because every entry costs every node in the
+// company an apply, the query asks for ONE ROW PAST that bound so a full page
+// and a cut page are different facts, and the cut is REPORTED rather than
+// inferred.
+//
+// `len(Edges) == limit` is the inference this refuses. A window holding
+// exactly the limit holds everything it has, and a repair reading that as a cut
+// would report a backlog to its operator on the very sweep that cleared the
+// last of one.
+func TestTheOneSidedScanReportsItsCutRatherThanInferringIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	blocker := newTask("blk")
+	blocker.Key, blocker.Assignee = "ENG-blk", "bo"
+	if _, err := r.writer.CreateTask(t.Context(), "op-blk", blocker, nil); err != nil {
+		t.Fatalf("CreateTask blk: %v", err)
+	}
+	r.drain()
+
+	const edges = 3
+	for i := range edges {
+		id := fmt.Sprintf("dep-%d", i)
+		filedTask(t, r, id)
+		// THE AUTHORED HALF ALONE, which is exactly the residue a
+		// gesture whose mirror step never ran leaves behind.
+		if _, err := r.writer.UpdateTask(t.Context(), "op-half-"+id, id, "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Relate: &tracker.RelationIntent{
+				Add: []tracker.Relation{{Kind: tracker.RelationWaitingOn, Other: "blk"}},
+			}}, tracker.ChangeRelations, nil); err != nil {
+			t.Fatalf("write the authored half for %s: %v", id, err)
+		}
+		r.drain()
+	}
+
+	// A YEAR PAST THE FIXTURE, so the repair's own age gate takes every
+	// edge and the bound is the only thing deciding what comes back.
+	horizon := wednesday.AddDate(1, 0, 0)
+	cut, err := tracker.ScanOneSided(t.Context(), r.db, horizon, edges-1)
+	if err != nil {
+		t.Fatalf("ScanOneSided under the set: %v", err)
+	}
+	if len(cut.Edges) != edges-1 {
+		t.Fatalf("a scan bounded at %d carried %d edges — the probe row "+
+			"reached the caller and would have become a commit",
+			edges-1, len(cut.Edges))
+	}
+	if !cut.Truncated {
+		t.Error("a scan that left a broken edge behind did not say so, so " +
+			"the duty's line reads the same on a healthy sweep and on a " +
+			"company whose dependency graph has been half-written for hours")
+	}
+
+	full, err := tracker.ScanOneSided(t.Context(), r.db, horizon, edges)
+	if err != nil {
+		t.Fatalf("ScanOneSided at the set: %v", err)
+	}
+	if len(full.Edges) != edges {
+		t.Fatalf("the scan found %d of %d broken edges", len(full.Edges), edges)
+	}
+	if full.Truncated {
+		t.Error("a window holding exactly the limit reported itself cut — " +
+			"inferred from a full page, the flag says `there is a backlog` " +
+			"on the sweep that repaired the last of it")
+	}
+}
+
+// AND A SCAN THAT MAY CARRY NO EDGE IS REFUSED, NAMING THE LIMIT.
+//
+// [tracker.ScanUnblocked]'s rule, and it holds here for the same arithmetic:
+// the query keeps at most `limit` rows and reads one past it as evidence, so
+// below one it carries nothing, reports itself truncated on every sweep,
+// clears no flag, and returns success while repairing nothing at all. No
+// fallback here would be anything but this scan guessing at its caller's
+// pacing.
+func TestTheOneSidedScanWithNoRoomForAnEdgeIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, limit := range []int{0, -1} {
+		_, err := tracker.ScanOneSided(t.Context(), r.db, wednesday, limit)
+		if err == nil {
+			t.Fatalf("a scan with limit %d was accepted, and it can carry no "+
+				"edge and clear no flag", limit)
+		}
+		if !strings.Contains(err.Error(), "limit") {
+			t.Errorf("the refusal for limit %d is %q and does not name the "+
+				"parameter a caller has to change", limit, err)
+		}
+	}
+}
+
+// A BLOCKER AT ITS DEPENDENT CAP IS STILL WRITABLE, END TO END.
+//
+// [tracker.MaxDependents] is reachable through the ordinary gesture: the
+// counterparty read refuses an edge onto a blocker that ALREADY holds that
+// many, so the last one admitted takes it to exactly the cap. A write there
+// enumerates the blocker's own subject as well as its dependents, which is one
+// term more than [tracker.MaxScopeTerms] — and refused on that, the task is
+// finished: it cannot be closed, renamed, reassigned, or edited to drop the
+// dependent that would bring it back under the cap, because every one of those
+// is a write on the same subject.
+//
+// The unit case beside this one ([TestATaskScopeCollapsesOnlyWhenItMust])
+// states the collapse over values. This one is the composition — the decide's
+// own coverage check, the publisher's deferral probe and the applier — because
+// each of those reads the scope for a different purpose and a collapse only
+// one of them accepted would be the same wedge one layer down.
+func TestABlockerAtItsDependentCapIsStillWritable(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	blocker := newTask("blk")
+	for i := range tracker.MaxDependents {
+		blocker.Dependents = append(blocker.Dependents,
+			fmt.Sprintf("waiting-%03d", i))
+	}
+	if _, err := r.writer.CreateTask(t.Context(), "op-blk", blocker, nil); err != nil {
+		t.Fatalf("CreateTask blk: %v", err)
+	}
+	r.drain()
+
+	// BOTH WRITES ARE ON A TASK AT THE CAP, which is the state the
+	// collapse exists for: the close, which is what a blocker is for, and
+	// the edit that drops a dependent — the only way back under the cap,
+	// and therefore the one whose refusal makes the state permanent.
+	done := tracker.StatusDone
+	if _, err := r.writer.UpdateTask(t.Context(), "op-close", "blk", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done},
+		tracker.ChangeStatus, nil); err != nil {
+		t.Fatalf("close a blocker at the cap: %v — every task that reaches "+
+			"MaxDependents would be frozen open for ever", err)
+	}
+	r.drain()
+	shorter := blocker.Dependents[:tracker.MaxDependents-1]
+	if _, err := r.writer.UpdateTask(t.Context(), "op-shrink", "blk", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Dependents: &shorter},
+		tracker.ChangeRelations, nil); err != nil {
+		t.Fatalf("drop one dependent from a blocker at the cap: %v — the task "+
+			"could not be brought back under the cap, so the state is permanent",
+			err)
+	}
+	r.drain()
+	if got := r.task(t, "blk").Task; got.Status != tracker.StatusDone ||
+		len(got.Dependents) != tracker.MaxDependents-1 {
+		t.Errorf("the blocker is at %q with %d dependents, want %q with %d",
+			got.Status, len(got.Dependents), tracker.StatusDone,
+			tracker.MaxDependents-1)
 	}
 }

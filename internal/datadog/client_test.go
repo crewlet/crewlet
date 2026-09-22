@@ -3,6 +3,7 @@ package datadog_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
 
@@ -321,10 +323,19 @@ func TestListingRolesWalksEveryPage(t *testing.T) {
 // with every other integration. A proxy's HTML page or a gateway 502 —
 // exactly what this client's read cap exists for — is the answer least likely
 // to be the JSON the decoder expects.
+//
+// AGAINST [httpx.RefusalDetail] rather than a literal, because a literal is
+// how the bound drifted from the budget it is supposed to be: 4 096 passed a
+// value bounded by the 2 048-byte READ ceiling, which is five times what an
+// error LINE may carry.
 func TestARefusalDetailIsBounded(t *testing.T) {
 	t.Parallel()
 	reg := newRegion(t)
 	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		// text/html, OVERRIDING the region's default: a 502 does not come
+		// from Datadog at all, it comes from whatever sits in front of it,
+		// and that is what announces a page as a page.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte("<html>" + strings.Repeat("padding ", 100_000) + "</html>"))
 	}
@@ -333,8 +344,56 @@ func TestARefusalDetailIsBounded(t *testing.T) {
 	if err == nil {
 		t.Fatal("a 502 was not reported")
 	}
-	if len(err.Error()) > 4096 {
-		t.Errorf("the error is %d bytes; a response body is being pasted into "+
-			"a value the fleet stores", len(err.Error()))
+	var apiErr *datadog.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("a 502 arrived as %T, not a typed refusal", err)
+	}
+	if len(apiErr.Detail) > httpx.RefusalDetail {
+		t.Errorf("Detail is %d bytes, past the %d-byte line bound; a response "+
+			"body is being pasted into a value the fleet stores",
+			len(apiErr.Detail), httpx.RefusalDetail)
+	}
+	// AND THE PAGE IS REPORTED AS A PAGE. An HTML body with no <title>
+	// distils to nothing, and "no detail" is this client's answer for a
+	// Datadog that sent an EMPTY body — so reporting the page with it sends
+	// an operator to Datadog rather than to the gateway that answered.
+	if apiErr.Detail == "" || apiErr.Detail == "no detail" {
+		t.Errorf("an 800 KB HTML page arrived as %q, which is what an empty "+
+			"body reads as", apiErr.Detail)
+	}
+}
+
+// DATADOG'S OWN ENVELOPE IS BOUNDED BY THE SAME LINE BUDGET, AND MARKED.
+//
+// The `errors` array is the arm this client decides itself, so it is the one
+// arm [httpx.RefusalOf] cannot bound on its behalf. Bounded at the READ
+// ceiling instead of the line budget, a joined array reaches two kilobytes on
+// a value the fleet writes to one shared coordination key — and unmarked, a
+// message severed mid-clause reads as Datadog's complete answer.
+func TestTheVendorErrorEnvelopeIsBoundedAndMarked(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"errors": []string{strings.Repeat("not authorized ", 400)},
+		})
+	}
+
+	_, err := reg.client(t).ListServiceAccounts(context.Background(), pair, "crewlet.local")
+	var apiErr *datadog.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("a 403 arrived as %T, not a typed refusal", err)
+	}
+	if len(apiErr.Detail) > httpx.RefusalDetail {
+		t.Errorf("Detail is %d bytes, past the %d-byte line bound",
+			len(apiErr.Detail), httpx.RefusalDetail)
+	}
+	if !strings.HasSuffix(apiErr.Detail, "…") {
+		t.Errorf("Detail = %q, which was cut with nothing saying so", apiErr.Detail)
+	}
+	if !strings.HasPrefix(apiErr.Detail, "not authorized") {
+		t.Errorf("Detail = %q, which is not what Datadog said", apiErr.Detail)
 	}
 }

@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -419,5 +420,199 @@ func TestTheDeadHistoryIndexesAreGone(t *testing.T) {
 		WHERE type = 'index' AND name = 'tracker_history_status_seq_idx'`); len(got) != 1 {
 		t.Error("the repair's own index is absent, so the scan it serves " +
 			"reads the whole table")
+	}
+}
+
+// EVERY DEPENDENT PAST THE SCAN'S LIMIT IS EVENTUALLY TOLD.
+//
+// # The failure this exists to catch
+//
+// The horizon was a MAX over every status-carrying row in the window,
+// computed with no reference to the limit, while the rows below it were cut
+// at `ORDER BY t.id LIMIT ?`. One blocker clearing more dependents than the
+// limit therefore produced a tick that told the first n, advanced the position
+// past the record that made all of them workable, and never looked at the rest
+// again: the notice is the ONLY wake the dependents of a quietly-cleared
+// blocker ever get, so those people were silently never told, for ever.
+//
+// This case is the duty's own loop — scan, tell, carry the position forward —
+// with a limit deliberately smaller than the dependent set. It is written
+// against the OUTCOME rather than against the horizon so that it stays true of
+// any fix: whatever the scan does with its position, everybody workable ends
+// up told.
+func TestEveryDependentPastTheScansLimitIsEventuallyTold(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// SMALLER THAN THE DEPENDENT SET, which is the whole case. The duty
+	// passes [tracker.WalkBatch]; the arithmetic is the same at 2 and 64,
+	// and at 2 the fixture is five tasks rather than sixty-five.
+	const limit, dependents = 2, 5
+
+	blocker := newTask("t-0")
+	if _, err := r.writer.CreateTask(t.Context(), "op-t-0", blocker, nil); err != nil {
+		t.Fatalf("CreateTask t-0: %v", err)
+	}
+	r.drain()
+	owed := map[string]bool{}
+	for i := 1; i <= dependents; i++ {
+		id := fmt.Sprintf("d-%d", i)
+		dependent := newTask(id)
+		// AN ASSIGNEE EACH, because the notice has no other recipient
+		// and the scan skips a dependent with nobody to tell.
+		dependent.Assignee = "alice"
+		dependent.Relations = []tracker.Relation{{
+			Kind: tracker.RelationWaitingOn, Other: "t-0",
+		}}
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, dependent, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		// DRAINED BETWEEN THE CREATES: they mint keys from one project
+		// counter, and a create cannot decide against a number this
+		// node has not applied.
+		r.drain()
+		owed[id] = true
+	}
+
+	// ONE CLOSE MAKES ALL FIVE WORKABLE, which is what puts more
+	// dependents behind a single log record than one tick may carry.
+	done := tracker.StatusDone
+	if _, err := r.writer.UpdateTask(t.Context(), "op-close", "t-0", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus,
+		&tracker.Notify{Kind: tracker.ChangeStatus}); err != nil {
+		t.Fatalf("close the blocker: %v", err)
+	}
+	r.drain()
+
+	// THE DUTY'S OWN LOOP. The bound is what a wedged repair fails
+	// against: five dependents at two a tick drain in three, and the
+	// fourth is the tick that finds nothing left.
+	var since uint64
+	for tick := range dependents + 2 {
+		scan, err := tracker.ScanUnblocked(t.Context(), r.db, since, limit)
+		if err != nil {
+			t.Fatalf("ScanUnblocked at tick %d: %v", tick, err)
+		}
+		if len(scan.Pending) > limit {
+			t.Fatalf("tick %d carried %d dependents over a limit of %d — the "+
+				"probe row reached the caller and became a notice",
+				tick, len(scan.Pending), limit)
+		}
+		// A TRUNCATED TICK MUST NOT MOVE THE POSITION PAST WHAT IT
+		// COVERED. This is the defect itself: the rows the scan did not
+		// carry are below the horizon, so advancing over them is the
+		// moment those dependents stop being reachable.
+		if scan.Truncated && scan.Through != since {
+			t.Fatalf("tick %d carried %d of the dependents behind one record "+
+				"and still advanced the position from %d to %d — everybody it "+
+				"did not carry is below that horizon and is never looked at "+
+				"again", tick, len(scan.Pending), since, scan.Through)
+		}
+		for _, pending := range scan.Pending {
+			if _, err := r.writer.TellUnblocked(t.Context(),
+				fmt.Sprintf("op-tell-%s-%d", pending.Task, tick), pending); err != nil {
+				t.Fatalf("TellUnblocked %s: %v", pending.Task, err)
+			}
+			r.drain()
+			delete(owed, pending.Task)
+		}
+		since = scan.Through
+		if len(scan.Pending) == 0 {
+			break
+		}
+	}
+	if len(owed) != 0 {
+		t.Fatalf("%d dependents were never told they are workable: %v — their "+
+			"blocker is closed, the late notice is the only wake they ever "+
+			"get, and nothing looks at them again", len(owed), owed)
+	}
+}
+
+// A SCAN THAT EXACTLY FILLS ITS LIMIT IS NOT A TRUNCATED SCAN.
+//
+// ASKED, NOT INFERRED. `len(Pending) == limit` is not "there is more": a
+// window holding exactly the limit holds everything it has, and reading the
+// full page as evidence of a cut pins the repair's position on a window it has
+// already drained — so the same range is re-read on every tick for ever, and
+// the log record that would move it on is never crossed.
+//
+// The probe row is what tells the two apart: the query asks for one row past
+// the bound, the extra row is dropped rather than carried, and its PRESENCE is
+// the flag.
+func TestAScanThatExactlyFillsItsLimitStillAdvances(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	const limit = 2
+
+	blocker := newTask("t-0")
+	if _, err := r.writer.CreateTask(t.Context(), "op-t-0", blocker, nil); err != nil {
+		t.Fatalf("CreateTask t-0: %v", err)
+	}
+	r.drain()
+	// EXACTLY THE LIMIT, which is the boundary the probe row buys.
+	for i := 1; i <= limit; i++ {
+		id := fmt.Sprintf("d-%d", i)
+		dependent := newTask(id)
+		dependent.Assignee = "alice"
+		dependent.Relations = []tracker.Relation{{
+			Kind: tracker.RelationWaitingOn, Other: "t-0",
+		}}
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, dependent, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	done := tracker.StatusDone
+	if _, err := r.writer.UpdateTask(t.Context(), "op-close", "t-0", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus,
+		&tracker.Notify{Kind: tracker.ChangeStatus}); err != nil {
+		t.Fatalf("close the blocker: %v", err)
+	}
+	r.drain()
+
+	// THE SCAN'S OWN LIMIT, not the 64 the shared helper passes: what this
+	// case is about is the boundary at the limit, and a scan reading far
+	// under its bound never reaches it.
+	scan, err := tracker.ScanUnblocked(t.Context(), r.db, 0, limit)
+	if err != nil {
+		t.Fatalf("ScanUnblocked: %v", err)
+	}
+	if len(scan.Pending) != limit {
+		t.Fatalf("the scan found %+v, want both dependents", scan.Pending)
+	}
+	if scan.Truncated {
+		t.Error("a window holding exactly the limit reported itself cut — " +
+			"inferring the cut from a full page pins the position on a " +
+			"window that is already drained")
+	}
+	if scan.Through == 0 {
+		t.Fatal("the scan advanced to no position, so the next tick re-reads " +
+			"every record for ever")
+	}
+}
+
+// A SCAN THAT MAY CARRY NOBODY IS REFUSED, NAMING THE LIMIT.
+//
+// The bound is one row past the limit and the extra row is evidence rather
+// than an answer, so at a limit below one the query returns nothing a caller
+// may keep and every scan reports itself cut: nobody is ever told, the
+// position never advances, and the repair reports success on every tick while
+// doing nothing at all. There is no value to fall back to that would not be
+// somebody else's guess at the pacing, so the scan refuses and names the
+// parameter to change.
+func TestAScanWithNoRoomForADependentIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, limit := range []int{0, -1} {
+		_, err := tracker.ScanUnblocked(t.Context(), r.db, 0, limit)
+		if err == nil {
+			t.Fatalf("a scan with limit %d was accepted, and it can carry no "+
+				"dependent and advance no position", limit)
+		}
+		if !strings.Contains(err.Error(), "limit") {
+			t.Errorf("the refusal for limit %d is %q and does not name the "+
+				"parameter a caller has to change", limit, err)
+		}
 	}
 }

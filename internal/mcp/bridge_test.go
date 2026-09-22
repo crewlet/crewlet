@@ -469,12 +469,17 @@ func TestStderrTailIsReachableThroughTheBridge(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if tail := b.StderrTail("chatty"); len(tail) >= 2 {
+		if tail, dropped := b.StderrTail("chatty"); len(tail) >= 2 {
 			if !strings.Contains(strings.Join(tail, "\n"), "ready") {
 				t.Fatalf("tail = %v", tail)
 			}
-			if b.StderrTail("nope") != nil {
-				t.Fatal("StderrTail invented a server")
+			// Two lines are two lines: a window that reports drops it did
+			// not take is as misleading as one that hides the drops it did.
+			if dropped != 0 {
+				t.Errorf("dropped = %d for a server that wrote 2 lines, want 0", dropped)
+			}
+			if tail, dropped := b.StderrTail("nope"); tail != nil || dropped != 0 {
+				t.Fatalf("StderrTail invented a server: %v, %d dropped", tail, dropped)
 			}
 			return
 		}

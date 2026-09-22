@@ -7,6 +7,27 @@
 // loses its oldest envelope rather than stalling every other tab" is a property
 // a test can assert directly, instead of one inferred from a socket that
 // happened not to fall over.
+//
+// # A drop is on the wire
+//
+// The other half of that rule is that the loss is TOLD, to the connection it
+// happened on. A frame carries [Envelope.Dropped] — the running count of what
+// this connection has lost, and omitted entirely while that is zero — so the
+// evidence reaches the tab itself rather than only an operator reading logs
+// after the reader closed it. See that field for why it is a field rather than
+// a frame of its own, why it is cumulative, and what a client can and cannot
+// recover once it knows.
+//
+// WHAT NO CLIENT DOES WITH IT YET, said here rather than left to be
+// discovered: the dashboard this binary embeds does not read the field. Its
+// own wire declaration — `Frame` in dashboard/src/protocol/types.ts, the file
+// vocabulary_test.go already parses to hold that end's query error codes
+// against this one's — carries kind, data, id, what, error and ts, and no
+// screen branches on a drop or refetches because of one. So what ships is a
+// documented wire field (docs/reference/api-endpoints.md) for an operator and
+// for a client that chooses to act on it, and the automatic refetch is not
+// built. A doc promising a reader outcome nothing delivers is the one claim
+// this package's own gate exists to prevent, so it is not made.
 package stream
 
 import (
@@ -38,14 +59,47 @@ const writeTimeout = 30 * time.Second
 // QueueDepth is how many envelopes one client may have waiting.
 //
 // Drop-OLDEST past it, never block. A slow tab must not stall the publish path
-// or any other tab, and it must not be disconnected either: the reconnect flow
-// refetches a snapshot, so dropping is recoverable and a disconnect is a
-// visible failure for a reader who did nothing wrong.
+// or any other tab, and it must not be disconnected either: a disconnect is a
+// visible failure for a reader who did nothing wrong, where falling behind is
+// one the reader is TOLD about on the next frame that lands ([Envelope.Dropped])
+// and can act on.
+//
+// WHAT A DROP COSTS IS PER KIND, and it is stated that way rather than as a
+// blanket "the reconnect refetches a snapshot, so a drop is recoverable" —
+// which is true of the pushes and false of the answers beside them in this
+// same queue. See WHAT IT HOLDS IS NOT ONLY SUPERSEDED STATE below, and
+// [Envelope.Dropped] for what a client can do about each.
 //
 // Oldest rather than newest, because what a dashboard shows is the CURRENT
 // state: the newest envelope is the one that makes the screen right, and
 // dropping it to keep an older one would leave the tab further behind than
 // doing nothing.
+//
+// Whatever the remedy is, it is owed to the READER and not only to the
+// protocol, so the count rides out on [Envelope.Dropped] of the next frame
+// that lands rather than waiting for a reconnect that a still-connected tab
+// never performs.
+//
+// Five hundred and twelve, and it is deliberately NOT re-tuned now that the
+// drop is visible: the depth is what a tab may fall behind by before the
+// screen goes stale, and the answer to a tab that exceeds it is a refetch —
+// the snapshot for the pushes, the question again for the answers below —
+// rather than a deeper buffer. A larger queue only delays that refetch while
+// holding more superseded state per connection, and a smaller
+// one would drop during an ordinary render pause, which is the case the
+// buffer exists for. What would justify moving it is a measured drop rate on
+// a company's real ingest, which is exactly what [Envelope.Dropped] now makes
+// observable and nothing could observe before.
+//
+// WHAT IT HOLDS IS NOT ONLY SUPERSEDED STATE, and that is the part not to
+// forget when moving it. [KindResult] and [KindError] — one query's answer,
+// correlated by an id its client minted — ride this same queue under the same
+// drop-oldest rule, and no snapshot carries them, so dropping one costs a
+// client its answer until it asks again rather than costing it a number that
+// the next push corrects. The depth is therefore a bound on answers in flight
+// as well as on state deltas; five hundred and twelve is far above either,
+// since a screen has a handful of queries outstanding at a time and a
+// projection publishes a few frames a second.
 const QueueDepth = 512
 
 // The push kinds. Frozen — the dashboard ships unchanged and is the
@@ -84,6 +138,61 @@ type Envelope struct {
 	ID    int64  `json:"id,omitempty"`
 	What  string `json:"what,omitempty"`
 	Error string `json:"error,omitempty"`
+
+	// Dropped is how many envelopes THIS CONNECTION has lost to
+	// backpressure before this frame: a running total, monotonic for the
+	// life of the socket, stamped per client by [Client.send] because
+	// [Hub.Broadcast] hands each client its own copy of the value.
+	//
+	// A DROP IS REPORTED, NOT INFERRED. [QueueDepth] decides that a tab
+	// behind by more than its queue loses envelopes rather than stalling
+	// the publish path, and that decision is right — but a dropped envelope
+	// is a state delta, so the tab that lost one is rendering something
+	// other than the truth with nothing on screen saying so. Until this
+	// field existed the count reached a log line at [Hub.Unregister] and
+	// nowhere else: evidence for an operator reading logs, after the reader
+	// who was shown the wrong number had already closed the tab.
+	//
+	// WHAT A CLIENT DOES WITH IT, and it turns on WHICH frame was lost.
+	// The envelopes themselves are gone and none is individually
+	// recoverable, so the remedy is never a replay — but the two kinds of
+	// frame in this queue recover differently, and a blanket "the snapshot
+	// rebuilds it" is false for exactly the half that looks like a fault.
+	//
+	// A lost PUSH is a state delta, and everything it carried is in the
+	// projection: `GET /stream/snapshot` (or a reconnect, which is sent
+	// a [KindSnapshot] at open) rebuilds the whole of it, and the event
+	// rows behind the `event` pushes are durable besides, in
+	// `crewlet_events`, which the `events` query pages.
+	//
+	// A lost ANSWER is not. [KindResult] and [KindError] travel through
+	// this same queue under the same drop-oldest rule, and an answer is
+	// correlated by an id its client minted rather than being state any
+	// projection holds — so no snapshot returns it and the question has to
+	// be ASKED AGAIN. Nothing here re-sends it: the client's own
+	// answer timeout is what notices, which on the dashboard is the
+	// `timeout` code its socket raises itself (see vocabulary_test.go's
+	// client-only codes) — a spurious failure on a screen rather than a
+	// stale number on one.
+	//
+	// A FIELD RATHER THAN A FRAME OF ITS OWN, which was the obvious
+	// alternative and is wrong twice over. A notice queued as an envelope
+	// competes for the very slot it is reporting on — it displaces a real
+	// state frame in order to say a state frame was displaced — and under a
+	// burst the queue fills with notices about notices. Riding on the frame
+	// that DID land costs no slot and cannot itself be dropped.
+	//
+	// CUMULATIVE RATHER THAN A PER-FRAME DELTA, for the same reason: a
+	// delta lives on exactly one frame and that frame is as droppable as
+	// any other, so one lost delta under-reports for the rest of the
+	// connection. A running total is self-healing — whichever frame next
+	// reaches the client carries the whole truth — and a client that only
+	// ever compares it against the last value it saw needs no other state.
+	//
+	// Absent on the wire while it is zero, which is every frame of every
+	// connection that keeps up, so a client that ignores it sees exactly
+	// the bytes it saw before the field existed.
+	Dropped int `json:"dropped,omitempty"`
 }
 
 // Push builds a broadcast envelope stamped now.
@@ -114,7 +223,11 @@ func (c *Client) Out() <-chan Envelope { return c.out }
 //
 // Reported rather than merely counted: a tab that is behind is a tab showing
 // something other than the truth, and the number is the only evidence of it
-// that survives the drop.
+// that survives the drop. It reaches TWO readers, deliberately — the tab
+// itself, on [Envelope.Dropped] of the next frame that lands, so a reader can
+// be told to refetch; and an operator, in the [Hub.Unregister] log line, which
+// is the only place a connection that dropped envelopes and then went away
+// without ever draining another frame is visible at all.
 func (c *Client) Dropped() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -139,6 +252,13 @@ func (c *Client) send(env Envelope) {
 		return
 	}
 	for {
+		// STAMPED INSIDE THE LOOP, so a frame that had to displace one to
+		// get in carries the total INCLUDING that displacement. Stamping
+		// once before the loop would have every drop reported one frame
+		// late, and the last drop of a burst never reported at all if the
+		// connection then goes quiet. env is this call's own copy —
+		// [Hub.Broadcast] passes by value — so this is per client.
+		env.Dropped = c.dropped
 		select {
 		case c.out <- env:
 			return
@@ -201,9 +321,17 @@ func (h *Hub) Unregister(c *Client) {
 	h.mu.Unlock()
 	if present {
 		if dropped := c.Dropped(); dropped > 0 {
+			// THE HINT IS PER KIND, because the operator is the one
+			// reader who cannot check it against the code. A reconnect
+			// rebuilds the pushed state and returns no query answer, so
+			// a blanket "its reconnect refetches a snapshot" would tell
+			// an operator the tab recovered everything it lost. See
+			// [Envelope.Dropped].
 			log.Info("stream_client_left_behind", "dropped", dropped,
-				"hint", "the tab could not keep up and lost envelopes; its "+
-					"reconnect refetches a snapshot")
+				"hint", "the tab could not keep up and lost envelopes; a "+
+					"reconnect refetches the snapshot, which rebuilds pushed "+
+					"state but returns no answer to a query the tab had "+
+					"asked — those are sent once and must be asked again")
 		}
 	}
 	c.Close()

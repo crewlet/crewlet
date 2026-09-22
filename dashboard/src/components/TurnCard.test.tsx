@@ -51,6 +51,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     roundsUsed: 0,
     exhaustedRounds: false,
     emptyAnswerRounds: 0,
+    outputTruncated: false,
     rescueFired: false,
     decision: "",
     notes: "",

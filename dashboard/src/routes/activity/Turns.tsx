@@ -58,7 +58,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { BUCKET_MS, RANGE_MS, spanOf, spanWords, useTimeRange, windowLabel } from "~/lib/range.ts";
-import type { Bucket, Offer, Window } from "~/lib/range.ts";
+import type { Bucket, Offer, Range, Window } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
 import { ModelActivity } from "../company/Model.tsx";
@@ -68,26 +68,51 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import type { TurnRow } from "~/protocol/index.ts";
 
 /**
+ * THE WIDEST WINDOW A TURNS READ HAS, declared once in the URL's own
+ * vocabulary.
+ *
+ * `store.MaxTurnDays` is thirty, and `store.EventLog.Turns` floors every read
+ * at `store.EventHistory` as well — the same thirty days — so this is both the
+ * ceiling the read clamps to and the floor no read reaches past: asking for
+ * more cannot return more.
+ *
+ * FOUR READERS, which is why it is a constant rather than four literals:
+ * [TURN_OFFER] offers it as its widest range and [windowDays] clamps to it
+ * here, and on `routes/company/Seat.tsx` the Turns table sends
+ * [TURN_MAX_DAYS] as its own `days` — so that table is not cut at the read's
+ * seven-day default instead — while the link under it carries this range, so
+ * the screen it opens starts on the same horizon rather than on its own
+ * seven-day fallback.
+ */
+export const TURN_MAX_RANGE: Range = "30d";
+
+/**
+ * [TURN_MAX_RANGE] in the whole days `store.TurnQuery.SinceDays` takes.
+ *
+ * DERIVED rather than written out, because a `30d` in a control and a
+ * `days: 30` on the wire are one window said twice: written separately they
+ * are two numbers to keep in step, and the screen that drew the wrong one
+ * would look exactly like a company that went quiet.
+ */
+export const TURN_MAX_DAYS = RANGE_MS[TURN_MAX_RANGE] / RANGE_MS["1d"];
+
+/**
  * WHICH WINDOWS A TURNS LIST HAS.
  *
  * Seven days is the fallback because it is the window this screen already had
  * without saying so — `store.DefaultTurnDays` is what the read takes from a
- * caller that names none — and thirty is the widest offer because that is both
- * `store.MaxTurnDays` and the event store's own retention, so a `90d` here
- * would offer a window two thirds of which can never hold a row. An hour is
- * the short end, where a minute bucket stops being drawable at sixty bars, and
- * "what has been running this hour" is asked of a turns list exactly as it is
- * asked of the event log.
+ * caller that names none — and [TURN_MAX_RANGE] is the widest offer for the
+ * reason given there, so a `90d` here would offer a window two thirds of which
+ * can never hold a row. An hour is the short end, where a minute bucket stops
+ * being drawable at sixty bars, and "what has been running this hour" is asked
+ * of a turns list exactly as it is asked of the event log.
  */
 const TURN_OFFER: Offer = {
-  ranges: ["1h", "6h", "1d", "7d", "30d"],
+  ranges: ["1h", "6h", "1d", "7d", TURN_MAX_RANGE],
   custom: true,
   fallback: "7d",
   buckets: ["minute", "hour", "day"],
 };
-
-/** `store.MaxTurnDays` — the read refuses to look further back than this. */
-const MAX_DAYS = 30;
 
 /**
  * How many rows one answer carries.
@@ -169,7 +194,7 @@ function TurnLens({
  * fetch a week to draw six hours of it.
  */
 function windowDays(window: Window): number {
-  return Math.min(MAX_DAYS, Math.max(1, Math.ceil(spanOf(window) / RANGE_MS["1d"])));
+  return Math.min(TURN_MAX_DAYS, Math.max(1, Math.ceil(spanOf(window) / RANGE_MS["1d"])));
 }
 
 /**

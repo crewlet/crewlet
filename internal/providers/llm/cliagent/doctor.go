@@ -65,6 +65,84 @@ const webProbePrompt = "Using your web fetch tool, fetch " + webProbeURL + " and
 // noWebReply is what a CLI with no reachable web tool is asked to say.
 const noWebReply = "NO-WEB"
 
+// saidShown is how much of the CLI's own answer a failed probe quotes back.
+//
+// ONE CONSTANT FOR BOTH PROBES, because it is one gesture asked twice: the
+// smoke test and the web probe each failed, and each is showing the operator
+// what the CLI said INSTEAD, so they can tell which failure they have. The two
+// sites carried 120 and 200 as bare literals, in a file that names every other
+// value it turns on — probeTimeout, probeSkew, noWebReply — and neither number
+// said anything the other did not. Two undeclared answers to one question is
+// how the pair drifts apart and how the next reader inherits a mystery instead
+// of a reason.
+//
+// FOUR HUNDRED BYTES, reached on the measured evidence below and then found to
+// be the answer [github.com/crewlet/crewlet/internal/httpx.RefusalDetail]
+// already gives to the same question — what does a reader need from a party
+// that refused?
+//
+// THAT IS RefusalDetail AND NOT
+// [github.com/crewlet/crewlet/internal/httpx.RefusalBytes], which is 2 KiB and
+// answers a different question: how much of a refused body is worth READING at
+// all, before anything is rendered from it. Naming the wrong one of the two
+// would send a reader to a number this constant has no relationship with.
+//
+// The agreement is CORROBORATION, not a dependency: the constant is
+// deliberately not imported, because this is a child process's stdout rather
+// than an HTTP response body, and a provider that spawns a process has no
+// business reaching into the outbound transport for one integer. But a comment
+// asserting two constants match with nothing enforcing it is the precise drift
+// httpx's own package doc was written about, so
+// TestSaidShownAgreesWithTheRefusalDetailItCites holds them together and fails
+// the build if either moves — the same guard [bridgeURLVar] takes for the same
+// reason, and for none of the coupling.
+//
+// The number is anchored to the one finding each quote exists to produce, and
+// both are measured rather than guessed — see
+// TestTheProbeQuoteHoldsTheFindingItExistsToShow, which holds this constant
+// against the first of them:
+//
+//   - The SMOKE finding is a CLI that answered with an envelope of the WRONG
+//     SHAPE — a JSON block naming a tool and its arguments under keys this
+//     build does not look under — which is what sends an operator to
+//     providers.llm.<key>.cli.overrides rather than to a bigger model. The
+//     shape is not hypothetical: [renderPriorCalls] renders exactly it, and
+//     for the smoke tool's own one-argument call the fenced block is 129
+//     bytes. The old 120 could not hold the block AT ALL, and the old 200 cut
+//     it the moment a model put one sentence in front of it — 202 bytes
+//     measured, which is what a model does more often than not. With a
+//     sentence either side it is 260, and that is the figure the budget has
+//     to clear rather than the bare block's.
+//   - The WEB finding is a CLI explaining why it could not fetch, in prose,
+//     instead of answering noWebReply. A realistic one ("I attempted to fetch
+//     the URL but the request failed: the sandbox in this environment blocks
+//     outbound network access, so no web fetch tool is available to me here.")
+//     is 162 bytes — past 120, which is why that site's own budget was the
+//     tighter of the two for the looser finding.
+//
+// 400 carries both whole with room for the sentence that frames them, and
+// still keeps the quote inside the five 80-column lines a fixed-width report
+// can spend on one finding.
+//
+// THE WHOLE ANSWER IS RECOVERABLE FROM THE RUN THAT CUT IT, on the same page
+// the quote is on: [probeQuote] hands the unabridged reply back as a
+// [ProbeAnswer], [Diagnose] carries it, and [Diagnosis.Render] prints it under
+// `probe replies` at the foot of the report. NOT A DEBUG LOG LINE, which is
+// the obvious destination and the wrong one, because its lever is PROSPECTIVE
+// ONLY: `doctor` takes no `-log-level` flag and reads no `logging:` block, and
+// operatorLogLevel in cmd/crewlet leaves every non-`run` command at warn
+// unless $CREWLET_LOG_LEVEL was exported BEFORE the run — which asks an
+// operator to have predicted this failure. A lever that turns up the NEXT run
+// cannot reach the operator already reading this one's `…`, and re-running
+// spends three more real completions off their subscription on a NEW reply a
+// nondeterministic model would not repeat. The rule is that the value cut is
+// reachable, not that an equivalent is re-purchasable.
+//
+// It is carried UNBOUNDED, deliberately: a recovery path that is itself cut
+// recovers nothing. It is bounded upstream anyway, by [maxOutput] and by
+// [Provider.completion] refusing a stdout that reached it.
+const saidShown = 400
+
 // probeSkew is how far a reported clock may sit from the engine's before the
 // probe stops believing a tool ran.
 //
@@ -117,6 +195,37 @@ type Diagnosis struct {
 	AgentRuntime []string
 
 	Problems []string
+
+	// Answers holds, WHOLE, every probe reply a problem line above quoted
+	// only the opening of. Empty when nothing was cut, which is the usual
+	// case: a probe that passed quotes nothing at all.
+	//
+	// It is on the struct rather than in a log line because that is what
+	// makes the cut recoverable from THIS run — see [saidShown] for what
+	// the log route could not deliver — and because a rendered report is
+	// assertable where a process-wide log sink is not (see [probeQuote]).
+	Answers []ProbeAnswer
+}
+
+// ProbeAnswer is one probe's whole reply, kept beside the report line that
+// quoted its opening.
+//
+// A named type rather than a bare string so the report can say WHICH probe it
+// belongs to and how much of it was already shown: a `doctor` run can fail
+// both the smoke test and the web probe, and two unlabelled blocks of prose at
+// the foot of a report would be two things a reader has to match back to the
+// lines above by eye.
+type ProbeAnswer struct {
+	// Probe is "smoke" or "web" — the probe whose problem line carries the
+	// quote this is the whole of.
+	Probe string
+	// Shown is how many bytes of Answer that line quoted, so the report
+	// states the same figure the problem line did rather than a second
+	// one derived somewhere else.
+	Shown int
+	// Answer is the reply, unabridged. Unbounded on purpose: a recovery
+	// path that is itself cut recovers nothing.
+	Answer string
 }
 
 // DiagnoseOptions are the facts a provider cannot see about itself.
@@ -162,8 +271,16 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 				"if it lives somewhere unusual", p.profile.Binary))
 	default:
 		d.BinaryPath = path
-		d.Version = p.probeVersion(ctx)
-		if d.Version == "" {
+		version, problem := p.probeVersion(ctx)
+		d.Version = version
+		switch {
+		case problem != "":
+			// THE PROBE'S OWN REFUSAL WINS over "printed no version",
+			// which would be the wrong sentence for a CLI that printed
+			// 32 MiB of it: the two failures send an operator to
+			// different fields.
+			d.Problems = append(d.Problems, problem)
+		case d.Version == "":
 			d.Problems = append(d.Problems, fmt.Sprintf(
 				"%s %s printed no version — the profile may not match this build; "+
 					"it was written for %s", path, strings.Join(p.profile.VersionArgs, " "),
@@ -225,7 +342,9 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		d.LocalTools = stance + " — probe skipped, no binary to run"
 		d.Web = "probe skipped — no binary to run"
 	default:
-		d.Smoke = p.smokeTest(ctx)
+		var kept *ProbeAnswer
+		d.Smoke, kept = p.smokeTest(ctx)
+		d.Answers = appendAnswer(d.Answers, kept)
 		if strings.HasPrefix(d.Smoke, "failed") {
 			d.Problems = append(d.Problems, d.Smoke)
 		}
@@ -234,12 +353,28 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		if problem != "" {
 			d.Problems = append(d.Problems, problem)
 		}
-		d.Web = p.webProbe(ctx)
+		d.Web, kept = p.webProbe(ctx)
+		d.Answers = appendAnswer(d.Answers, kept)
 		if strings.HasPrefix(d.Web, "failed") {
 			d.Problems = append(d.Problems, d.Web)
 		}
 	}
 	return d
+}
+
+// appendAnswer collects a probe's kept reply, and drops the nil that means
+// nothing was cut.
+//
+// A helper rather than an `if kept != nil` at each of the two call sites,
+// because the pairing is the rule this whole path exists for: a probe hands
+// back its line and whatever that line had to shorten TOGETHER, and the one
+// thing a later edit must not be able to do is keep the first and quietly drop
+// the second.
+func appendAnswer(into []ProbeAnswer, kept *ProbeAnswer) []ProbeAnswer {
+	if kept == nil {
+		return into
+	}
+	return append(into, *kept)
 }
 
 // modeName is how this entry runs, for the report.
@@ -355,15 +490,17 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 // it is a problem: the seat has less reach than the same CLI at a terminal,
 // and the cause is usually a vendor sandbox flag that also cut the network,
 // or an egress proxy the child environment was not told about.
-func (p *Provider) webProbe(ctx context.Context) string {
+// The second return is the CLI's whole reply where the verdict quoted only its
+// opening, and nil where it quoted all of it — see [probeQuote].
+func (p *Provider) webProbe(ctx context.Context) (string, *ProbeAnswer) {
 	comp, err := p.Complete(ctx, llm.Request{
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: webProbePrompt}},
 	})
 	if err != nil {
-		return "failed — " + err.Error()
+		return "failed — " + err.Error(), nil
 	}
 	if reportsCurrentClock(comp.Content, time.Now()) {
-		return "ok — fetched " + webProbeURL
+		return "ok — fetched " + webProbeURL, nil
 	}
 	// Same split as smokeTest, and for the same reason: an empty answer is
 	// a completion now, so "it said: \"\"" would send an operator to the
@@ -373,14 +510,92 @@ func (p *Provider) webProbe(ctx context.Context) string {
 			"failed — the %q CLI exited 0 and answered with nothing (%d output tokens "+
 				"billed), so this probe says nothing about web access either way. "+
 				"Point this entry at a stronger model and run the doctor again",
-			p.agent, comp.OutputTokens)
+			p.agent, comp.OutputTokens), nil
 	}
+	said, rest, kept := probeQuote("web", comp.Content)
 	return fmt.Sprintf(
-		"failed — the %q CLI could not fetch %s with its own web tool (it said: %q). "+
+		"failed — the %q CLI could not fetch %s with its own web tool (it said: %q).%s "+
 			"Web is meant to stay on for every subscription seat: check that no vendor "+
 			"sandbox flag cuts the network and that the egress proxy reaches the child "+
 			"environment (cli.env / passthrough_env)",
-		p.agent, webProbeURL, textcut.Ellipsis(strings.TrimSpace(comp.Content), 120))
+		p.agent, webProbeURL, said, rest), kept
+}
+
+// probeQuote splits a probe's reply into the bounded quote a problem line
+// shows, the clause that says where the rest of it is, and the whole answer
+// the report carries.
+//
+// ONE FUNCTION RETURNING ALL THREE, because the pairing IS the rule: the quote
+// is allowed to be cut only because the whole of it goes somewhere reachable
+// in the same breath, and written as separate steps a later edit can keep the
+// cut and drop the recovery without anything looking wrong. Here it cannot —
+// there is no way to get `shown` without also being handed what it was cut
+// from and the sentence that points at it.
+//
+// THE DESTINATION IS THIS RUN'S OWN REPORT. [Diagnose] puts the returned
+// [ProbeAnswer] on [Diagnosis] and [Diagnosis.Render] prints it under `probe
+// replies`, so the operator reading the `…` has the rest on the same page.
+// A DEBUG LOG LINE IS NOT SUCH A DESTINATION, which is the obvious
+// alternative and the wrong one: `doctor` is not `run` — it takes no
+// `-log-level` flag and reads no `logging:` block, and operatorLogLevel in
+// cmd/crewlet leaves every non-`run` command at warn unless $CREWLET_LOG_LEVEL
+// was exported BEFORE the invocation. That escape hatch turns up the NEXT run,
+// never the one whose output is already on the screen, so it would leave a
+// marker pointing at nothing an operator can reach on the run that took the
+// cut — and getting an answer back would mean re-running and buying three more
+// real completions off their subscription for a reply a nondeterministic model
+// would not repeat. Rule: the value that was cut is reachable, not that an
+// equivalent is re-purchasable.
+//
+// PURE, which that route could not be. The only way to assert on a log line is
+// to point the process-wide sink at a test's own buffer, which
+// [github.com/crewlet/crewlet/internal/logging.Configure]'s own doc records as
+// a measured failure (29 parallel tests racing one global writer) and this
+// package runs its cases in parallel — so the recovery half of this pairing
+// would be the one no test could reach. A rendered report has no such problem.
+//
+// A REPORT LINE RATHER THAN A SECOND MODEL CALL, which is the obvious
+// alternative and the wrong one: summarising a failed probe's reply would
+// spend another completion off the operator's subscription, add a round trip
+// to a command that already spends three, and ask a model to explain a failure
+// at the exact moment the evidence says that model cannot be trusted to
+// answer.
+//
+// The clause is returned SEPARATELY rather than folded into the quote because
+// the quote is rendered with %q at both call sites: a sentence inside it would
+// be escaped and read as part of what the CLI said, which is the one thing
+// this value must not gain.
+//
+// The probes' prompts are the constants above and carry no company content, so
+// what the report carries is a CLI's reply to a fixed question about the clock
+// — there is no seat's work in it to leak into a report an operator pastes
+// into an issue.
+func probeQuote(probe, content string) (shown, rest string, kept *ProbeAnswer) {
+	whole := strings.TrimSpace(content)
+	shown = textcut.Ellipsis(whole, saidShown)
+	if shown == whole {
+		// NOTHING WAS CUT, so there is nothing to recover and nothing to
+		// say about it. A standing sentence about a `probe replies`
+		// block on every quoted failure is noise that trains a reader to
+		// skip the line it is attached to.
+		return shown, "", nil
+	}
+	// THE FIGURE THE READER IS GIVEN IS THE ONE THAT WAS QUOTED, rather
+	// than [saidShown] restated: [textcut.Ellipsis] walks back to a rune
+	// boundary, so a reply whose 400th byte sits inside a character is
+	// quoted at 398, and "the first 400" would be a small lie in the one
+	// place this package is asking to be believed about lengths.
+	//
+	// Asked of [textcut.Bytes], which is the walk Ellipsis itself makes, so
+	// the count comes from the same decision rather than from measuring the
+	// marked string — which would have meant spelling the marker here, and
+	// a second spelling of "…" is the drift that package's own doc exists
+	// to have ended.
+	quoted := len(textcut.Bytes(whole, saidShown))
+	return shown, fmt.Sprintf(
+			" That quote is the first %d of %d bytes; the whole answer is printed "+
+				"under `probe replies` at the foot of this report.", quoted, len(whole)),
+		&ProbeAnswer{Probe: probe, Shown: quoted, Answer: whole}
 }
 
 // reportsCurrentClock reports whether text carries a Unix timestamp within
@@ -424,9 +639,9 @@ func reportsCurrentClock(text string, now time.Time) bool {
 // The error contract differs from Output's and that is the point: run reports
 // a non-zero exit as (res, nil), so an empty version is a probe that produced
 // nothing rather than one that failed to start.
-func (p *Provider) probeVersion(ctx context.Context) string {
+func (p *Provider) probeVersion(ctx context.Context) (version, problem string) {
 	if len(p.profile.VersionArgs) == 0 {
-		return ""
+		return "", ""
 	}
 	res, err := run(ctx, invocation{
 		binary: p.profile.Binary,
@@ -438,9 +653,28 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 		timeout: probeTimeout,
 	})
 	if err != nil || res.exitCode != 0 {
-		return ""
+		return "", ""
 	}
-	return strings.TrimSpace(strings.SplitN(res.stdout, "\n", 2)[0])
+	line, cut := res.stdoutFirstLine()
+	if cut {
+		// REFUSED NAMING THE FIELD, rather than printed as a version.
+		// The engine's output cap fell inside the first line, so `line`
+		// is a PREFIX — and a report showing `2.0` for a CLI that
+		// printed `2.0.31` would be worse than showing nothing, because
+		// `written for` is compared against it by eye. The whole of what
+		// this CLI printed is not kept: the probe's streams are read
+		// once and dropped, and there is nothing here worth keeping
+		// anyway — a version command emitting megabytes without a
+		// newline is the finding.
+		return "", fmt.Sprintf(
+			"%s %s wrote more than %d bytes with no newline in them, so the engine's "+
+				"output cap fell inside the version line itself and what survived is "+
+				"a prefix rather than a version — this CLI is streaming where a "+
+				"version was asked for; set providers.llm.%s.cli.overrides."+
+				"version_args to the flag that prints one",
+			p.profile.Binary, strings.Join(p.profile.VersionArgs, " "), maxOutput, p.key)
+	}
+	return line, ""
 }
 
 // smokeTest runs a REAL completion with a REAL tool.
@@ -450,7 +684,9 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 // — and still not produce a parseable tool call, because the envelope
 // contract is a request to a model rather than a schema the vendor enforces.
 // That failure only shows up on the first turn of a real seat otherwise.
-func (p *Provider) smokeTest(ctx context.Context) string {
+// The second return is the CLI's whole reply where the verdict quoted only its
+// opening, and nil where it quoted all of it — see [probeQuote].
+func (p *Provider) smokeTest(ctx context.Context) (string, *ProbeAnswer) {
 	comp, err := p.Complete(ctx, llm.Request{
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: smokePrompt}},
 		Tools: []llm.ToolDef{{
@@ -465,7 +701,7 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 		ToolChoice: llm.ToolChoiceRequired,
 	})
 	if err != nil {
-		return "failed — " + err.Error()
+		return "failed — " + err.Error(), nil
 	}
 	if len(comp.ToolCalls) == 0 {
 		// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of
@@ -481,14 +717,15 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 					"tokens billed), so it spent its whole answer on hidden reasoning. "+
 					"Seats on this provider will burn a corrective round and then "+
 					"produce nothing: point this entry at a stronger model",
-				comp.OutputTokens)
+				comp.OutputTokens), nil
 		}
+		said, rest, kept := probeQuote("smoke", comp.Content)
 		return fmt.Sprintf(
 			"failed — the CLI answered but produced no parseable tool call, so seats on "+
-				"this provider will burn a corrective round every turn. It said: %q",
-			textcut.Ellipsis(strings.TrimSpace(comp.Content), 200))
+				"this provider will burn a corrective round every turn. It said: %q%s",
+			said, rest), kept
 	}
-	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens)
+	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens), nil
 }
 
 // Healthy reports whether the diagnosis found nothing wrong.
@@ -527,11 +764,44 @@ func (d Diagnosis) Render(w io.Writer) {
 	}
 	if d.Healthy() {
 		line("problems", "none")
+	} else {
+		fmt.Fprintln(w, "problems:")
+		for _, problem := range d.Problems {
+			fmt.Fprintf(w, "  - %s\n", problem)
+		}
+	}
+	d.renderAnswers(w)
+}
+
+// renderAnswers prints, whole, every probe reply a problem line quoted only
+// the opening of.
+//
+// LAST AND ONLY WHEN THERE IS ONE. A `doctor` report is read top to bottom and
+// diffed by scripts, so a block that is usually absent belongs at the foot
+// where it cannot push the fixed-width lines around — and a healthy run, which
+// quotes nothing, renders byte for byte what it always did.
+//
+// AFTER the problems rather than inside them, because a problem line is one
+// sentence an operator acts on and a multi-line transcript spliced into the
+// middle of the list would break the one shape that makes the list scannable.
+// The two are tied by the clause [probeQuote] puts on the line itself, which
+// names this block.
+//
+// INDENTED RATHER THAN WRAPPED OR CUT: this is the recovery route for a value
+// that was already shortened once, and shortening it again here would make the
+// whole pairing pointless. The indent is what keeps a reply that happens to
+// contain a line looking like `problems:` from reading as part of the report.
+func (d Diagnosis) renderAnswers(w io.Writer) {
+	if len(d.Answers) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "problems:")
-	for _, problem := range d.Problems {
-		fmt.Fprintf(w, "  - %s\n", problem)
+	fmt.Fprintln(w, "probe replies:")
+	for _, a := range d.Answers {
+		fmt.Fprintf(w, "  %s — the whole answer, %d bytes, quoted above to the first %d:\n",
+			a.Probe, len(a.Answer), a.Shown)
+		for reply := range strings.SplitSeq(a.Answer, "\n") {
+			fmt.Fprintf(w, "    %s\n", reply)
+		}
 	}
 }
 

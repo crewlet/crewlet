@@ -217,8 +217,12 @@ type ListQuery struct {
 	// every event sharing a trace with one of those — so the inbound
 	// webhook that caused the agent's work shows up beside it.
 	//
-	// It over-fetches and post-filters, so a page shorter than Limit does
-	// NOT mean history is exhausted here; only a zero-row page does.
+	// It over-fetches and merges, so a page shorter than Limit does NOT
+	// mean history is exhausted here; only a zero-row page does. Both
+	// reads behind such a page take the same [ListQuery.window] and the
+	// same [ListQuery.cursor], so a row is still on exactly one page of a
+	// walk and the walk still ends — see [EventLog.traceSiblings] for what
+	// is deliberately NOT shared between them.
 	RelatedAgent string
 
 	// Since and Until bound the window a caller is asking about, as a
@@ -464,8 +468,7 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 		return name
 	}
 
-	where = []string{col("event_time") + " >= ?"}
-	args = []any{EncodeTime(now().Add(-EventHistory))}
+	where, args = q.window(col)
 	addEq := func(name, val string) {
 		if val != "" {
 			where = append(where, col(name)+" = ?")
@@ -479,18 +482,6 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 	addEq("actor", q.Actor)
 	addEq("turn_id", q.TurnID)
 	addEq("work_key", q.WorkKey)
-	// THE WINDOW, half-open, on the same column the keyset walks — so it
-	// narrows the index range the read already scans rather than adding a
-	// term the planner has to filter on.
-	if !q.Since.IsZero() {
-		where = append(where, col("event_time")+" >= ?")
-		args = append(args, EncodeTime(q.Since))
-	}
-	if !q.Until.IsZero() {
-		where = append(where, col("event_time")+" < ?")
-		args = append(args, EncodeTime(q.Until))
-	}
-
 	from = "crewlet_events"
 	if joined {
 		from = `crewlet_events JOIN crewlet_event_parties
@@ -500,6 +491,66 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 		args = append(args, q.RelatedAgent)
 	}
 	return from, where, args, col
+}
+
+// window is the span of time a read covers: the history floor the log keeps,
+// and the caller's own half-open [Since, Until) on top of it.
+//
+// THE WINDOW, half-open, on the same column the keyset walks — so it narrows
+// the index range the read already scans rather than adding a term the planner
+// has to filter on.
+//
+// ITS OWN METHOD BECAUSE TWO READS ANSWER ONE PAGE. The direct read and
+// [EventLog.traceSiblings] are merged and cut into a single answer, so a bound
+// applied to one of them is not a narrower page — it is a page holding rows
+// from outside the span the reader asked for. And because the merge sorts
+// newest-first and then cuts, a sibling from ABOVE `Until` does not merely
+// appear beside the matches: it displaces them.
+func (q ListQuery) window(col func(string) string) (where []string, args []any) {
+	where = []string{col("event_time") + " >= ?"}
+	args = []any{EncodeTime(now().Add(-EventHistory))}
+	if !q.Since.IsZero() {
+		where = append(where, col("event_time")+" >= ?")
+		args = append(args, EncodeTime(q.Since))
+	}
+	if !q.Until.IsZero() {
+		where = append(where, col("event_time")+" < ?")
+		args = append(args, EncodeTime(q.Until))
+	}
+	return where, args
+}
+
+// cursor is where a page resumes: nothing at all when the caller is asking for
+// the newest rows.
+//
+// Keyset, not OFFSET: (event_time, event_id) is the primary key, so it is
+// unique and already in index order — no sort node, and no drift as new rows
+// land at the head while a reader pages backwards.
+//
+// SHARED BY BOTH READS BEHIND ONE PAGE, and that is what makes the walk
+// terminate rather than being a tidiness argument. Without it on the sibling
+// read, every page after the first merged in rows NEWER than the caller's
+// cursor, the sort put them at the head, the cut kept them, and the page came
+// back holding rows the walk had already passed — measured on a real store as
+// the same ten rows on pages one through five with the cursor frozen, the
+// other fifty rows of the trace returned by no page at all, and the
+// dashboard's "load more" looping for ever because [ListQuery.RelatedAgent]
+// says only a zero-row page ends the walk.
+//
+// Separate from [ListQuery.window] because the two are different facts with
+// different lifetimes — the window is what the reader asked for and does not
+// move, the cursor moves with every page — which is the same reason
+// [ListQuery.predicate] does not carry it.
+func (q ListQuery) cursor(col func(string) string) (where []string, args []any) {
+	if q.Before == nil {
+		return nil, nil
+	}
+	if q.Before.ID == "" {
+		return []string{col("event_time") + " < ?"},
+			[]any{EncodeTime(q.Before.Time)}
+	}
+	return []string{"(" + col("event_time") + ", " + col("event_id") + ") < (?, ?)"},
+		[]any{EncodeTime(q.Before.Time), q.Before.ID}
 }
 
 // List returns a page of events, newest first, ordered by (time, id)
@@ -513,20 +564,9 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 	from, where, args, col := q.predicate()
 	joined := q.RelatedAgent != ""
 
-	if q.Before != nil {
-		// Keyset, not OFFSET: (event_time, event_id) is the primary key,
-		// so it is unique and already in index order — no sort node, and
-		// no drift as new rows land at the head while a reader pages
-		// backwards.
-		if q.Before.ID != "" {
-			where = append(where,
-				"("+col("event_time")+", "+col("event_id")+") < (?, ?)")
-			args = append(args, EncodeTime(q.Before.Time), q.Before.ID)
-		} else {
-			where = append(where, col("event_time")+" < ?")
-			args = append(args, EncodeTime(q.Before.Time))
-		}
-	}
+	cursorWhere, cursorArgs := q.cursor(col)
+	where = append(where, cursorWhere...)
+	args = append(args, cursorArgs...)
 	args = append(args, limit)
 
 	// Every fragment joined into `where` is a compile-time constant; each
@@ -540,7 +580,7 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 		return nil, err
 	}
 	if joined {
-		siblings, err := l.traceSiblings(ctx, out, limit)
+		siblings, err := l.traceSiblings(ctx, q, out, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -561,7 +601,52 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 // It reads through the trace index, so it costs one seek per trace on the
 // page. The old shape found siblings only among the rows it happened to have
 // over-fetched, which meant a cause older than that window was simply missing.
-func (l *EventLog) traceSiblings(ctx context.Context, direct []EventRecord, limit int) ([]EventRecord, error) {
+//
+// # It answers the SAME QUESTION as the direct read about time
+//
+// THE CURSOR AND THE WINDOW ARE THE CALLER'S OWN, through
+// [ListQuery.cursor] and [ListQuery.window], because the two reads are merged
+// and cut into one page: a bound that held on one of them and not the other
+// is not a wider answer, it is a broken one. The cursor is the load-bearing
+// half — see its doc for the paging failure that carrying it fixes — and the
+// window is what stops a reader who scrubbed to a time range being shown
+// rows from outside it, which the cut would let displace the matches inside
+// it.
+//
+// WHAT IS DELIBERATELY NOT SHARED is everything else [ListQuery.predicate]
+// compiles: the party join, and the type / source / category / actor / turn /
+// work-key filters. Those describe WHICH EVENTS the reader wants, and the
+// cause is by construction none of them — it involves another party, and it
+// carries another type and another category, which is exactly why it had to
+// be fetched separately. Applying them here would delete the only row this
+// query exists to add. The cursor and the window are not that kind of filter:
+// one is where the page resumes and the other is the span the page covers,
+// and both are on the column the merge ORDERS and CUTS on.
+//
+// # The budget
+//
+// THE LIMIT IS THE PAGE'S OWN, and that is the exactly sufficient budget
+// rather than a number reused for want of a better one. The page [mergeRelated]
+// builds is the newest `limit` rows of (direct matches ∪ their traces' rows),
+// and this query returns the newest `limit` rows of those traces — which is a
+// superset of every sibling that could be in that answer, since the direct
+// matches themselves live in the same traces and satisfy the same window and
+// the same cursor. Reading MORE would only add rows older than the cut and
+// change nothing; reading FEWER could leave a sibling out of a page it
+// belonged on. A per-trace cap would be the wrong shape for the same reason:
+// the page is chosen across all of them at once, not fairly between them.
+//
+// The siblings it does not reach are older than what it did return, and what
+// becomes of them is [cutToPage]'s subject: a sibling below the page's cut
+// may be returned by no page at all, and is reached through [EventLog.Trace]
+// on a trace the caller was given, as far as that read reaches — [cutToPage]
+// states the bound, and is the one place that states it. A sibling NEWER than
+// the cursor is in the same position for the same reason: it was a candidate
+// on the page the cursor came from, so it is on that page or reached the same
+// way under the same bound.
+func (l *EventLog) traceSiblings(ctx context.Context, q ListQuery, direct []EventRecord,
+	limit int,
+) ([]EventRecord, error) {
 	traces := make([]any, 0, len(direct))
 	seen := make(map[string]struct{}, len(direct))
 	for _, rec := range direct {
@@ -577,13 +662,34 @@ func (l *EventLog) traceSiblings(ctx context.Context, direct []EventRecord, limi
 	if len(traces) == 0 {
 		return nil, nil
 	}
-	query := "SELECT " + listColumns + " FROM crewlet_events WHERE trace_id IN (?" +
-		strings.Repeat(",?", len(traces)-1) +
-		") ORDER BY event_time DESC, event_id DESC LIMIT ?"
-	return l.scanRows(ctx, query, append(traces, limit)...)
+	// This read never joins the party table, so no column needs
+	// qualifying — the shared terms are built against the log's own names.
+	plain := func(name string) string { return name }
+	where := []string{"trace_id IN (?" + strings.Repeat(",?", len(traces)-1) + ")"}
+	args := append([]any(nil), traces...)
+	windowWhere, windowArgs := q.window(plain)
+	where = append(where, windowWhere...)
+	args = append(args, windowArgs...)
+	cursorWhere, cursorArgs := q.cursor(plain)
+	where = append(where, cursorWhere...)
+	args = append(args, cursorArgs...)
+	args = append(args, limit)
+
+	// Every fragment joined into `where` is a compile-time constant; each
+	// one's value travels as a bound parameter in args.
+	query := "SELECT " + listColumns + " FROM crewlet_events WHERE " +
+		strings.Join(where, " AND ") +
+		" ORDER BY event_time DESC, event_id DESC LIMIT ?"
+	return l.scanRows(ctx, query, args...)
 }
 
-// mergeRelated folds the siblings into the direct matches, newest first.
+// mergeRelated folds the siblings into the direct matches, newest first, and
+// cuts the result to one page.
+//
+// The cut is [cutToPage], and its doc is where the reason lives: the page has
+// to end at the row the caller's next cursor resumes from, and what that
+// leaves behind is reachable through [EventLog.Trace] on a trace the caller
+// was given.
 func mergeRelated(direct, siblings []EventRecord, limit int) []EventRecord {
 	seen := make(map[string]struct{}, len(direct)+len(siblings))
 	out := make([]EventRecord, 0, len(direct)+len(siblings))
@@ -605,7 +711,7 @@ func mergeRelated(direct, siblings []EventRecord, limit int) []EventRecord {
 		// on every read.
 		return cmp.Or(b.Time.Compare(a.Time), cmp.Compare(b.ID, a.ID))
 	})
-	return truncate(out, limit)
+	return cutToPage(out, limit)
 }
 
 // Trace returns every event in a trace, OLDEST first, because a trace is read
@@ -924,7 +1030,56 @@ func finishRecord(rec *EventRecord, micros int64, tagJSON string) {
 // agentTagKeys are the tag keys that mean "this event involves that agent".
 var agentTagKeys = []string{"agent_role", "target", "recipient", "sender"}
 
-func truncate(recs []EventRecord, limit int) []EventRecord {
+// cutToPage keeps the newest limit records of a merged set, oldest dropped.
+//
+// THE CUT IS WHAT KEEPS THE CURSOR HONEST, which is why it is not optional and
+// why the obvious alternatives are worse. A caller pages this log by keyset:
+// the page's LAST row is the cursor, and the next page asks for rows strictly
+// older than it. So the page must END where the walk resumes. Return the
+// merged set whole — direct matches plus every trace sibling — and its last
+// row is the oldest SIBLING, which can be older than the oldest direct match
+// read; the next page then starts before it and silently SKIPS every direct
+// match in between, which is a hole rather than a shortening. Cutting only the
+// siblings has the same defect for the same reason. Cutting the merged set to
+// the newest limit rows is the one shape where every row this page did not
+// return is strictly older than its cursor, and therefore still ahead of the
+// walk.
+//
+// THAT LAST SENTENCE HAS A PRECONDITION, and it is not this function's to
+// keep: both reads behind the merge must carry the SAME cursor. They do —
+// [ListQuery.cursor] is applied to the direct read and to
+// [EventLog.traceSiblings] alike — and without it the arithmetic here is not
+// merely weaker but inverted: a sibling NEWER than the cursor sorts to the
+// head of the merged set, survives the cut, and the page comes back holding
+// rows the walk has already returned, with its own last row no older than the
+// cursor it was asked from. The walk then never advances. So the proof is
+// stated where it can be read, and the input it rests on is stated here.
+//
+// WHAT IT ACTUALLY DROPS, and where that is reachable. Only
+// [EventLog.List]'s related-agent path merges, so this runs nowhere else. A
+// dropped DIRECT match is not lost at all: it is older than the cursor, so the
+// next page returns it. A dropped SIBLING may never be returned by any page —
+// it is older than the cursor while the direct match that pulled its trace in
+// can be newer, so that trace is not re-queried further down the walk. That
+// row is recovered by TRACE: the direct match IS on a page the caller gets
+// (this one, or a later one if it was cut too), every returned record carries
+// its TraceID, and [EventLog.Trace] returns that trace oldest first, up to
+// MaxTraceEvents rows. A sibling exists only because it shares a trace with a
+// row the caller was given, so there is no dropped sibling whose trace the
+// caller cannot NAME.
+//
+// AND THAT IS WHERE THE RECOVERY STOPS, said here because this is the
+// paragraph a reader takes the guarantee from. The trace read is capped, and
+// ordered forwards, so what it returns is that trace's OLDEST MaxTraceEvents
+// rows within EventHistory: on a longer trace a sibling below them is in
+// neither answer. Which case a caller is in is not left to be guessed:
+// [EventLog.Trace] states the obligation that covers it — a read that comes
+// back holding MaxTraceEvents rows must say the view is truncated.
+//
+// A limit of zero or less returns the set unchanged, matching
+// [EventLog.List], which substitutes defaultListLimit before it gets here —
+// so this is the arithmetic's own identity case and never a page size.
+func cutToPage(recs []EventRecord, limit int) []EventRecord {
 	if limit > 0 && len(recs) > limit {
 		return recs[:limit]
 	}

@@ -47,6 +47,11 @@ const KEY = "crewlet_starred";
  * somebody's unrelated site data. Reaching it is a refusal that SAYS SO
  * rather than a silent drop of the oldest, since every entry here is one
  * somebody chose.
+ *
+ * WHICH MEANS IT IS ENFORCED IN EXACTLY ONE PLACE: [toggleStar]'s add, the
+ * only gesture that can say no to somebody. [stored] deliberately does not
+ * apply it — a read that trimmed would be the silent drop this paragraph
+ * forbids, laundered through the word "parse".
  */
 export const MaxStars = 50;
 
@@ -85,12 +90,37 @@ function valid(row: unknown): row is Star {
   );
 }
 
-/** What is STORED, parsed fresh. The base of every write. */
+/**
+ * What is STORED, parsed fresh. The base of every write.
+ *
+ * IT DOES NOT CUT AT THE CAP, and that is the whole of this function's rule:
+ * [MaxStars] states that reaching it is a refusal that SAYS SO rather than a
+ * silent drop, because every entry here is one somebody chose. This read had a
+ * `.slice(0, MaxStars)` on it, which is that silent drop — and worse than the
+ * eviction the constant forbids, because [write] replaces the WHOLE key: the
+ * next unstar of any row persisted the shortened list, so the fifty-first star
+ * was gone from storage without a gesture that ever asked for it, while
+ * [toggleStar] reported "unstarred" about the row the reader did click.
+ *
+ * THE CAP IS ENFORCED AT THE ADD, where a refusal has somewhere to go: this
+ * module's only writer is [toggleStar], which returns "full" rather than
+ * making room, so nothing here can grow the stored list past the cap. An
+ * over-cap value can therefore only arrive from OUTSIDE — another tab running
+ * a build with a higher cap, or a hand-edited key — and carrying it whole
+ * keeps unstarring working (the list shrinks by exactly the row that was
+ * clicked, and once under the cap adding works again) where cutting it
+ * destroyed the excess on the first write. The quota this cap exists to bound
+ * is bounded either way.
+ *
+ * A MALFORMED ROW IS STILL DROPPED: `valid` is about whether a row can be
+ * rendered and clicked at all, which is a different question from how many of
+ * them there are.
+ */
 function stored(): Star[] {
   try {
     const raw = localStorage.getItem(KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter(valid).slice(0, MaxStars) : [];
+    return Array.isArray(parsed) ? parsed.filter(valid) : [];
   } catch {
     // A private window, blocked site data, or a value somebody's other tab
     // wrote in a shape this build does not have.

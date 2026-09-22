@@ -175,7 +175,7 @@ func (d *duty) clearDuplicates(ctx context.Context, now, _ time.Time) (int64, er
 	}
 	var fixed int64
 	for _, project := range projects {
-		placements, err := d.duplicatesIn(ctx, project)
+		placements, truncated, err := d.duplicatesIn(ctx, project)
 		if err != nil {
 			return fixed, err
 		}
@@ -185,8 +185,17 @@ func (d *duty) clearDuplicates(ctx context.Context, now, _ time.Time) (int64, er
 				return fixed, err
 			}
 			fixed += int64(len(placements))
+			// THE CUT IS MARKED HERE OR IT IS MARKED NOWHERE, which is
+			// the one-sided and unblocked repairs' rule applied to this
+			// read: `tasks=64` is what a project holding exactly 64
+			// duplicates and a project holding five thousand both
+			// print, and one log line is the whole of what an operator
+			// ever sees of this job. WHERE THE REST WENT: still
+			// duplicated, so [duty.clearProbe]'s NOT EXISTS leaves the
+			// project flagged and the next sweep reads them.
 			d.deps.Logger.InfoContext(ctx, "tracker_rank_duplicates_cleared",
-				"project", project, "tasks", len(placements))
+				"project", project, "tasks", len(placements),
+				"truncated", truncated)
 		}
 		if err := d.clearProbe(ctx, project); err != nil {
 			return fixed, err
@@ -196,13 +205,26 @@ func (d *duty) clearDuplicates(ctx context.Context, now, _ time.Time) (int64, er
 }
 
 // duplicatesIn mints a fresh key for every task but the first at each shared
-// rank.
+// rank, and says whether the project held more of them than one batch.
 //
 // THE FIRST BY ID KEEPS ITS KEY, so every node computes the same repair from
 // the same rows — which is what makes running this twice a no-op rather than a
 // second round of moves.
-func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, error) {
+//
+// THE CUT IS ASKED, NOT INFERRED, in [ScanOneSided]'s idiom: the query reads
+// ONE ROW PAST [WalkBatch] and that row is dropped rather than placed, so its
+// presence is the evidence. `len(losers) == WalkBatch` is a different fact — a
+// project holding exactly a batch of duplicates holds all of them — and a full
+// page read as a cut would mark every clean sweep truncated.
+//
+// NOTHING IS LOST TO THE BOUND. [duty.clearProbe] clears the project's flag
+// only when NO duplicate is left, so a project this read cut stays selected
+// and the next sweep reads the rest from the same indexed query.
+func (d *duty) duplicatesIn(ctx context.Context, project string) (
+	[]Placement, bool, error) {
+
 	var losers []Placement
+	var truncated bool
 	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT t.id, t.rank FROM tracker_tasks t
@@ -210,7 +232,10 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 			  AND EXISTS (SELECT 1 FROM tracker_tasks o
 			              WHERE o.project_key = t.project_key
 			                AND o.rank = t.rank AND o.id < t.id)
-			ORDER BY t.rank, t.id LIMIT ?`, project, WalkBatch)
+			-- ONE ROW PAST THE BOUND: the extra row is evidence that
+			-- the project holds more duplicates than this sweep
+			-- re-mints, never an answer.
+			ORDER BY t.rank, t.id LIMIT ?`, project, WalkBatch+1)
 		if err != nil {
 			return fmt.Errorf("tracker: read %s's duplicate ranks: %w", project, err)
 		}
@@ -224,10 +249,17 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 			p.Rank = Rank(rank)
 			losers = append(losers, p)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		truncated = len(losers) > WalkBatch
+		if truncated {
+			losers = losers[:WalkBatch]
+		}
+		return nil
 	})
 	if err != nil || len(losers) == 0 {
-		return nil, err
+		return nil, false, err
 	}
 	// A FRESH KEY JUST ABOVE THE ONE THEY SHARE, which keeps each
 	// duplicate adjacent to where somebody put it rather than moving it
@@ -236,12 +268,12 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 	for _, loser := range losers {
 		next, err := KeyBetween(loser.Rank, "")
 		if err != nil {
-			return nil, fmt.Errorf("tracker: mint a key above %q for %s: %w",
-				loser.Rank, loser.Task, err)
+			return nil, false, fmt.Errorf("tracker: mint a key above %q for "+
+				"%s: %w", loser.Rank, loser.Task, err)
 		}
 		placements = append(placements, Placement{Task: loser.Task, Rank: next})
 	}
-	return placements, nil
+	return placements, truncated, nil
 }
 
 // pendingMerges reads whether any task is mid-merge.
@@ -280,10 +312,15 @@ func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 // guessing at it.
 func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error) {
 	var stuck []string
+	var truncated bool
 	if err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
+			// ONE ROW PAST THE BOUND: the extra row is evidence that
+			// more merges are abandoned than this sweep completes,
+			// never an answer. See the log line at the end of this
+			// function for what reads it.
 			`SELECT id FROM tracker_tasks WHERE merging = 1 ORDER BY id LIMIT ?`,
-			WalkBatch)
+			WalkBatch+1)
 		if err != nil {
 			return fmt.Errorf("tracker: read the abandoned merges: %w", err)
 		}
@@ -295,7 +332,18 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 			}
 			stuck = append(stuck, id)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		// THE PROBE ROW IS DROPPED RATHER THAN COMPLETED, so the number
+		// of merges one tick walks is exactly the bound. `len(stuck) ==
+		// WalkBatch` is a different fact from a cut: a company holding
+		// exactly a batch of abandoned merges holds all of them.
+		truncated = len(stuck) > WalkBatch
+		if truncated {
+			stuck = stuck[:WalkBatch]
+		}
+		return nil
 	}); err != nil {
 		return 0, err
 	}
@@ -349,6 +397,23 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 		finished++
 		d.deps.Logger.InfoContext(ctx, "tracker_merge_completed",
 			"task", id, "into", walk.into, "subtasks_moved", moved)
+	}
+	if finished > 0 {
+		// THE SWEEP'S OWN LINE, and it exists for the mark rather than
+		// for the count: the per-merge lines above already say what was
+		// completed, and nothing in them distinguishes a tick that
+		// finished every abandoned merge in the company from one that
+		// finished the first batch of thousands. WHERE THE REST WENT:
+		// still carrying `merging = 1`, which is the gate this job
+		// selects on, so the next sweep reads them.
+		//
+		// `finished` IS THE WHOLE OF WHAT THIS TICK CARRIED. Every
+		// iteration above either counts or returns, so a shortfall
+		// inside the batch is an error the worker reports rather than a
+		// number that has to be subtracted here — unlike the one-sided
+		// repair, whose per-commit failures are deliberately swallowed.
+		d.deps.Logger.InfoContext(ctx, "tracker_abandoned_merges_finished",
+			"merges", finished, "truncated", truncated)
 	}
 	return finished, nil
 }
@@ -414,8 +479,22 @@ func (d *duty) tellUnblocked(ctx context.Context, now, _ time.Time) (int64, erro
 	// one is somebody never told.
 	d.unblockedThrough = scan.Through
 	if told > 0 {
+		// THE CUT IS MARKED HERE OR IT IS MARKED NOWHERE. A tick that
+		// told 64 people because 64 were owed and a tick that told 64 of
+		// a thousand publish the same `dependents=64`, and the second is
+		// a company hours behind on its late notices — so the scan's own
+		// evidence row ([UnblockScan.Truncated]) is carried onto the
+		// line rather than dropped, and this is its one reader.
+		//
+		// WHERE THE REST WENT: still owed, still inside this window, and
+		// carried by the next sweep, because a truncated scan reports
+		// the position it was GIVEN (see [UnblockScan.Through]) and the
+		// assignment above therefore leaves `unblockedThrough` where it
+		// was. Nothing is lost to the bound; only the delay is, which is
+		// what the flag is for.
 		d.deps.Logger.InfoContext(ctx, "tracker_unblocked_told",
-			"dependents", told, "through", scan.Through)
+			"dependents", told, "through", scan.Through,
+			"truncated", scan.Truncated)
 	}
 	return told, nil
 }
@@ -527,35 +606,55 @@ func (d *duty) pendingOneSided(ctx context.Context) (bool, error) {
 // still running: a mirror published a second before the writer's own would be
 // two records on one subject and two wakes for one blocker's assignee.
 func (d *duty) repairOneSided(ctx context.Context, now, _ time.Time) (int64, error) {
-	edges, err := ScanOneSided(ctx, d.deps.DB, now.Add(-OneSidedRepairAge), WalkBatch)
+	scan, err := ScanOneSided(ctx, d.deps.DB, now.Add(-OneSidedRepairAge), WalkBatch)
 	if err != nil {
 		return 0, err
 	}
 	var repaired int64
-	for _, edge := range edges {
-		reason, final := edge.Final()
+	// ONE COMMIT PER SUBJECT, which is what makes a blocker several broken
+	// edges name repairable at all: two records on one subject in one tick
+	// cannot both be decided here, and the second is refused `behind`.
+	// [PlanOneSided] states the whole of that grouping.
+	for _, commit := range PlanOneSided(scan.Edges) {
 		if _, err := d.deps.Writer.RepairOneSided(ctx,
-			d.opID("onesided", edge.Dependent+"."+edge.Blocker, now),
-			edge, d.leads()); err != nil {
-			// ONE EDGE'S FAILURE IS NOT THE TICK'S. The rest of this
+			d.opID("onesided", commit.Task, now), commit, d.leads()); err != nil {
+			// ONE COMMIT'S FAILURE IS NOT THE TICK'S. The rest of this
 			// batch is independent — different subjects, different
 			// blockers — and stopping here would let one wedged
 			// counterparty hold up every other repair in the company.
+			// The edges it carried are counted as left behind below.
 			d.deps.Logger.WarnContext(ctx, "tracker_one_sided_repair_failed",
-				"dependent", edge.Dependent, "blocker", edge.Blocker,
-				"error", err)
+				"task", commit.Task, "mirrored", len(commit.Mirror),
+				"stamped", len(commit.Final), "error", err)
 			continue
 		}
-		repaired++
-		if final {
+		repaired += int64(len(commit.Mirror) + len(commit.Final))
+		for _, edge := range commit.Final {
+			reason, _ := edge.Final()
 			d.deps.Logger.InfoContext(ctx, "tracker_one_sided_final",
 				"dependent", edge.Dependent, "blocker", edge.Blocker,
 				"reason", reason)
 		}
 	}
-	if repaired > 0 {
+	// TWO DIFFERENT SHORTFALLS, and one of them alone is the same silent
+	// cut as neither.
+	//
+	// `truncated` is the SCAN's: the window held more broken edges than
+	// this tick read at all, evidenced by the probe row. `deferred` is
+	// THIS TICK's, over the edges it did read — a commit that failed, and
+	// the edges past a blocker's remaining room that [PlanOneSided]
+	// deliberately left for the sweep that will stamp them final. Without
+	// it a tick that carried 64 edges and landed one prints the same
+	// `edges` and the same `truncated` as a tick that landed all 64.
+	//
+	// WHERE THEY ALL WENT: still flagged `one_sided` on their own rows, so
+	// the next sweep's indexed read finds them — this repair keeps no
+	// position to lose them behind.
+	deferred := int64(len(scan.Edges)) - repaired
+	if repaired > 0 || deferred > 0 {
 		d.deps.Logger.InfoContext(ctx, "tracker_one_sided_repaired",
-			"edges", repaired)
+			"edges", repaired, "deferred", deferred,
+			"truncated", scan.Truncated)
 	}
 	return repaired, nil
 }

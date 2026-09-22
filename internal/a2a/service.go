@@ -64,10 +64,65 @@ func New(channels Store, pub queue.Publisher, opts Options) (*Service, error) {
 		s.now = func() time.Time { return time.Now().UTC() }
 	}
 	if s.newID == nil {
-		s.newID = func() string { return "a2a-" + uuid.New().String()[:12] }
+		s.newID = newChannelID
 	}
 	return s, nil
 }
+
+// channelIDPrefix labels a channel id wherever it travels beside other ids: a
+// log line, the A2A event payloads, and the event store's `a2a_channel_id`
+// tag. Turn ids, run ids and work keys are all bare hex or bare uuids there,
+// so the prefix is what says which kind of thing this one is.
+const channelIDPrefix = "a2a-"
+
+// newChannelID mints a channel id: the prefix, then a WHOLE uuid.
+//
+// THE ID IS THE CHANNEL'S STORE KEY, not a display string. [Service.Reply]
+// resolves it through [Store.Get] and answers whoever the returned record
+// names, so two live channels sharing an id route one seat's answer onto
+// another seat's ask. The channel is the authorization record — the only
+// thing deciding who may speak on it — and a collision hands it to the wrong
+// pair.
+//
+// Nothing above this would notice. The coordination store's OpenChannel is a
+// Create that IGNORES an id that already exists, deliberately, so that a
+// republished ask is idempotent — which means a genuinely new channel minting
+// a live id is silently the OLD channel, with the old participants and the
+// old message count, and the store reports success. No error, no log line and
+// no counter sits on that path, so nothing in this engine can report that it
+// happened, then or afterwards.
+//
+// This kept `uuid.New().String()[:12]` until the cut was measured, and the
+// measurement is why it is gone: twelve characters of the DASHED form is
+// eight hex digits, the separator, then three more — ELEVEN hex digits, so 44
+// random bits rather than the 48 the length suggests. The cut carried no
+// comment at all, so the 44 was never a decision anybody made: the number
+// somebody would have defended is the 48 the twelve characters look like.
+//
+// WHAT 44 BITS IS MEASURED AGAINST IS THE SET HELD AT ONCE, never the asks a
+// company ever makes. The hazard above is a mint landing on a key the store
+// STILL HOLDS, and that set is bounded by the purge horizon rather than by
+// how long the company has run: an open channel is closed after an hour idle
+// and the closed record is deleted a week after that — internal/maintenance's
+// ChannelIdleTimeout and ChannelRetention. One ask a second sustained for a
+// whole horizon is ~600k coexisting records, where the birthday bound over
+// 2^44 is about one chance in a hundred. That percentage is not the argument
+// and nobody should have to re-derive it to settle this: a SILENT misroute of
+// the record deciding who may speak to whom has a bar of any probability at
+// all, and the alternative costs 24 bytes.
+//
+// A whole uuid is 122 random bits (v4 spends the other 6 on the version and
+// the variant). Those 24 bytes land on a key nothing in this tree abbreviates
+// — the dashboard's channel header renders the id whole — and that nobody has
+// to transcribe: it is minted by the engine and followed as a link. A URL
+// does carry it, and that is a reason the whole uuid is SAFE rather than a
+// cost to wave off: the dashboard's object routes give a channel its own page
+// at `#/activity/a2a/<id>`, where `Open ↗` from the rail lands, and that
+// route takes the segment whole. Every character of `a2a-` plus a dashed uuid
+// is unreserved in RFC 3986, so the id needs no escaping in the path segment,
+// no escaping in the fragment the hash router puts it in, and no shortening
+// to fit either. TestAMintedChannelIDNeedsNoURLEscaping holds that claim.
+func newChannelID() string { return channelIDPrefix + uuid.New().String() }
 
 // Ask is one seat asking another.
 type Ask struct {

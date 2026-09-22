@@ -371,9 +371,29 @@ export function useUnloadGuard(holding: boolean): void {
 export interface Navigator {
   /** A new screen. Pushes. */
   to: (path: string[], query?: URLSearchParams | Record<string, string>) => void;
-  /** A lens or a tab within this screen. Pushes — the reader called it. */
+  /** A lens or a tab within this screen. Pushes — the reader called it.
+   *
+   *  `""` DELETES THE KEY HERE, which is the opposite of [Navigator.filter]
+   *  below and is not drift: a section's default is one of its own values
+   *  (`view=visualization`, `chart=structure`), so "back to the default" is the
+   *  only thing an empty value can mean and an absent key is how the default is
+   *  spelled. A filter's default is "not narrowed", so an empty value there is
+   *  a CHOICE — see the note on `filter`. */
   section: (key: string, value: string) => void;
-  /** A chip, a sort, a search box. Replaces — it is the same screen. */
+  /** A chip, a sort, a search box. Replaces — it is the same screen.
+   *
+   *  `null` DELETES A KEY; `""` SETS AN EMPTY ONE, and the difference is
+   *  load-bearing. [useParam] already maps "back to the fallback" to `null`, so
+   *  an empty string reaching here is a value the reader CHOSE — the third
+   *  segment of a control whose other two are named, such as the knowledge
+   *  browse's kind or the tracker's open/closed/All scope, and `DataGrid`'s
+   *  third sort state.
+   *
+   *  It used to delete on both, and every one of those states was unreachable:
+   *  clicking All wrote nothing to the address, so the next render read the key
+   *  back as absent, resolved it to the non-empty fallback and snapped the
+   *  control to the option beside the one that was pressed. A board that can
+   *  never show a closed item is the shape that ships from it. */
   filter: (patch: Record<string, string | null>) => void;
   /** The same place said differently — a canonical form, a resolved default.
    *  Replaces, so Back does not land on the spelling the reader never chose. */
@@ -446,7 +466,10 @@ export function Router({ children }: { children: ReactNode }) {
         const current = parseHash(location.hash);
         const query = new URLSearchParams(current.query);
         for (const [k, v] of Object.entries(patch)) {
-          if (v == null || v === "") query.delete(k);
+          // `null` IS THE ONLY DELETE. See [Navigator.filter]: `""` is a value
+          // a reader chose, and folding it into the delete made every control
+          // whose third state is "no narrowing at all" unreachable.
+          if (v == null) query.delete(k);
           else query.set(k, v);
         }
         go(buildHash(current.path, query), true);
