@@ -599,6 +599,40 @@ honestly serve — reads of a session it has not yet seen — and it ends at the
 same sixty seconds the alarm table already calls a stall, so a node serving
 stale identity is by definition a node already alarmed.
 
+### The two credential shapes meet at one frame
+
+The guard resolves a request once and attaches an `iam.Principal`, so nothing
+downstream branches on how somebody authenticated. A Tier A bearer becomes one
+from the configuration alone; a cookie becomes one from the two tables above.
+
+**The header wins when both arrive.** A browser sends its cookie on every
+request whether or not the caller meant to present it, and an `Authorization`
+header is only ever there because somebody put it there. So `curl -H
+'Authorization: Bearer $TOKEN'` from a signed-in browser acts as the token —
+and, if the token is wrong, as *nobody*, rather than being quietly upgraded to
+the person whose cookie happened to be in the jar.
+
+**The ceiling applies to a person too.** `api.auth.max_grants` is intersected
+into every principal at the moment the request is resolved, so a node whose
+ceiling was lowered enforces it on its next request rather than on a row
+somebody has to rewrite. A mixed fleet mid-rollout is a legal state, which is
+why each node publishes a hash of its own ceiling.
+
+**A seat refusal does not reach `/auth/*`.** The `403` naming the seat is
+written for every guarded route *except* that surface, because nothing under
+it consults the chart: ending a session, re-proving identity, enrolling a
+second factor and regenerating a recovery set are gestures about a person's own
+credential. Without the exemption an offboarded person would hold a live cookie
+with no way to end it, and every screen they opened would loop through a
+refusal.
+
+**A replayed cookie ends every session that person holds.** A rotation index
+ahead of what the clock can justify, past the overlap, is the one positive
+evidence of theft — and the one thing nobody can establish from it is which of
+the two holders is the person. So the revocation epoch is bumped rather than
+the lineage ended: ending only the lineage would leave whoever captured it
+holding whatever they rotate to next.
+
 ---
 
 ## Every route is guarded, and the exemptions are the list

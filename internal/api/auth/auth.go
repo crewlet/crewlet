@@ -137,6 +137,14 @@ const (
 	// AuthInvitePrefix is the invitation pair, and a PREFIX because the
 	// id is a path segment. Holding the link is the credential.
 	AuthInvitePrefix = "/auth/invite/"
+
+	// PathAuthPrefix is the whole sign-in surface.
+	//
+	// NOT AN EXEMPTION — most of what it covers is guarded, and the list
+	// above is the whole of what is not. It names the surface whose
+	// subject is a person's own CREDENTIAL, which is what
+	// [ActsAsThemselves] is about.
+	PathAuthPrefix = "/auth/"
 )
 
 // WebhookPrefix and OTLPPrefix are the two exempt edges a second rule also
@@ -278,6 +286,10 @@ type Guard struct {
 	// clients resolves a caller's own address through the CIDR blocks
 	// whose forwarded headers this deployment believes. See client.go.
 	clients *Clients
+
+	// sessions turns a browser's cookie into the person holding it, or
+	// nil on a node that mints none. See sessions.go.
+	sessions *Sessions
 }
 
 // BindSeats installs the chart lookup that lets a bound credential act as its
@@ -527,10 +539,42 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		// as [iam.Unknown] — silence is not anonymity, and that
 		// distinction is only worth anything if the resolver actually
 		// runs everywhere.
-		r = g.Resolve(r)
+		r, refusal := g.Resolve(w, r)
 		principal, how := iam.From(r.Context())
 		if Unguarded(path) {
+			// THE REFUSAL IS DISCARDED HERE ON PURPOSE. It is only
+			// ever a person whose SEAT is gone, and the routes that
+			// are unguarded are how somebody signs out and how the
+			// sign-in screen renders — locking a leaver out of those
+			// would leave them holding a live cookie with no way to
+			// end it.
 			next.ServeHTTP(w, r)
+			return
+		}
+		if refusal != nil && !ActsAsThemselves(path) {
+			// RESOLVED AND STILL REFUSED. Logged at info rather than
+			// warn: a seat removed under somebody who is still signed
+			// in is an ordinary consequence of an offboarding, and
+			// the remedy is a rebind rather than an investigation.
+			log.Info("api_auth_seat_refused",
+				"route", path, "code", refusal.Code,
+				"detail", refusal.Detail, "remote", g.Client(r))
+			httpjson.FailWith(w, refusal.Status, refusal.Code,
+				map[string]string{"detail": refusal.Detail})
+			return
+		}
+		if how == iam.Unknown {
+			// 503 AND NEVER 401 ON A NODE THAT CANNOT TELL. A
+			// browser reads 401 as "sign in again" and discards the
+			// cookie, so one stalled applier answering 401 signs
+			// everybody on this node out and stampedes the identity
+			// provider — which is the failure internal/iam/session's
+			// whole three-valued shape exists to prevent, arriving
+			// at the one frame that could still undo it.
+			log.Warn("api_auth_unavailable",
+				"route", path, "remote", g.Client(r))
+			httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
+				RetryIdentitySeconds)
 			return
 		}
 		if how != iam.Resolved {

@@ -221,6 +221,14 @@ type Options struct {
 	// in the company as unheld on /health — see [chartapi.Held].
 	SeatHeld chartapi.Held
 
+	// Sessions turns a browser's cookie into the person holding it.
+	//
+	// OPTIONAL, and nil is the same posture that leaves [Options.Auth]
+	// nil: a node whose keyring cannot sign for the fleet, or which runs
+	// no identity domain, mints no cookie and therefore has none to
+	// resolve. Tier A tokens remain the whole of authentication there.
+	Sessions *auth.Sessions
+
 	// DevPrincipal is the identity an unauthenticated request resolves to
 	// on a development run, or nil.
 	//
@@ -408,7 +416,7 @@ func New(opts Options) (*App, error) {
 
 	a := &App{
 		guard: auth.New(opts.Bootstrap).BindSeats(opts.BoundSeat).
-			WithDevPrincipal(opts.DevPrincipal),
+			WithDevPrincipal(opts.DevPrincipal).WithSessions(opts.Sessions),
 		csrf:         auth.NewCSRF(opts.Bootstrap),
 		secure:       servedOverHTTPS(opts.Bootstrap),
 		state:        state,

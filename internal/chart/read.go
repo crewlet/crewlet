@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -43,6 +44,7 @@ type Reader struct {
 	log *statelog.Reader
 
 	committed func() statelog.Position
+	lag       func() time.Duration
 }
 
 // ReaderOptions is what a reader is built from.
@@ -57,6 +59,20 @@ type ReaderOptions struct {
 	// position, which is what a reader with no runner behind it has and
 	// what a read then honestly reports.
 	Committed func() statelog.Position
+
+	// Lag is how far behind the log this node's chart applier is, as a
+	// duration.
+	//
+	// A DURATION AND NOT THE RECORD COUNT [Answer.Lag] carries, because
+	// its reader compares it against [statelog.StallGrace] — the one
+	// threshold in this engine for "behind enough to matter" — and a
+	// count cannot be compared against a length of time without knowing
+	// how fast this node applies. The engine measures that; this package
+	// is handed the answer rather than deriving a second one.
+	//
+	// Nil answers zero, which is what a reader with no runner behind it
+	// honestly has: nothing to be behind.
+	Lag func() time.Duration
 }
 
 // NewReader builds the chart's read side.
@@ -70,9 +86,13 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 			"a guarantee, and a degradation invisible in the answer is worse " +
 			"than a refusal")
 	}
-	r := &Reader{db: opts.DB, log: opts.Log, committed: opts.Committed}
+	r := &Reader{db: opts.DB, log: opts.Log,
+		committed: opts.Committed, lag: opts.Lag}
 	if r.committed == nil {
 		r.committed = func() statelog.Position { return statelog.Position{} }
+	}
+	if r.lag == nil {
+		r.lag = func() time.Duration { return 0 }
 	}
 	return r, nil
 }
@@ -80,6 +100,9 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 // At is the position this node's rows were derived through, which every answer
 // here is true as of.
 func (r *Reader) At() statelog.Position { return r.committed() }
+
+// Lag is how far behind the log this node's chart applier is.
+func (r *Reader) Lag() time.Duration { return r.lag() }
 
 // Answer is what every read here carries beside its rows.
 //

@@ -328,11 +328,18 @@ func (r *retention) maintenance(ctx context.Context, now time.Time, out *statelo
 // than a count: "this node is 4m12s behind" is actionable and "this node is
 // 500 000 records behind" is a number an operator has to divide.
 func applyLagOf(health statelog.Health, running *runningDomain) time.Duration {
-	if health.Lag == nil || *health.Lag == 0 {
+	if health.Lag == nil {
+		// UNMEASURED IS NOT ZERO anywhere else in this file, and it is
+		// zero here for one reason: an alarm reading has no third value
+		// either, so the only honest thing a reading can say about a
+		// lag nobody could measure is nothing.
 		return 0
 	}
-	return time.Duration(*health.Lag) * time.Second /
-		time.Duration(max(int64(running.runner.Drain()), 1))
+	// ONE IMPLEMENTATION of the arithmetic, shared with the figure the
+	// request path reads. Written twice, an alarm firing at the stall
+	// grace and a session answering 503 at the same grace would
+	// eventually disagree about the same node.
+	return lagDurationOf(*health.Lag, 0, running.runner.Drain())
 }
 
 // observed fills the fields that come from this process's own recorder.

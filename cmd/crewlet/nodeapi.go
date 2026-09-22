@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/chartapi"
@@ -135,7 +137,7 @@ func nodeAPIToken(boot *config.Bootstrap, surface string) (string, error) {
 // this deployment does not sign in that way; a 503 would say it does and is
 // broken, and send an operator looking for an outage.
 func signInSurface(boot *config.Bootstrap, e *engine.Engine,
-	cipher secrets.Cipher) (*authapi.Service, error) {
+	cipher secrets.Cipher) (*authapi.Service, *auth.Sessions, error) {
 
 	reader, writer := e.IAM(), e.IAMWriter()
 	if reader == nil || writer == nil {
@@ -144,7 +146,7 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 			"reason", "this node runs no identity domain",
 			"hint", "node.roles narrows which domains a node applies; a "+
 				"seats-only satellite serves no sign-in surface")
-		return nil, nil
+		return nil, nil, nil
 	}
 	signer, err := session.New(session.Options{
 		Material:    boot.Secrets.TokenMaterial(),
@@ -158,9 +160,9 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 				"hint", "set secrets.keys and secrets.active_key; a cookie "+
 					"signed under a per-process key is one every other node "+
 					"rejects")
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("api: the session signer: %w", err)
+		return nil, nil, fmt.Errorf("api: the session signer: %w", err)
 	}
 	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
 		// THE FLEET'S OWN WINDOW, so a caller guessing against three
@@ -171,7 +173,7 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 		Logger:   logging.Get("api.auth"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("api: the sign-in throttle: %w", err)
+		return nil, nil, fmt.Errorf("api: the sign-in throttle: %w", err)
 	}
 	surface, err := authapi.New(authapi.Options{
 		Bootstrap: boot,
@@ -196,9 +198,65 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 		Provider: signInProvider(boot),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("api: the sign-in surface: %w", err)
+		return nil, nil, fmt.Errorf("api: the sign-in surface: %w", err)
 	}
-	return surface, nil
+	// AND THE OTHER HALF, built from the SAME signer. A cookie minted
+	// under one key and validated against another is a sign-in that
+	// appears to work and then does not stick — and it would do so only
+	// on the requests that landed on a node whose signer was built
+	// separately, which is the shape nobody reproduces.
+	sessions, err := auth.NewSessions(auth.SessionsDeps{
+		Signer:    signer,
+		Directory: reader,
+		// THE CHART VIEW, and the ZERO VALUE on a node with no chart
+		// domain — never nil, which internal/iam/session reads as the
+		// seatless arm. See [engine.SeatViewOf].
+		Chart:    engine.SeatViewOf(e),
+		External: boot.API.ExternalBase(),
+		OnReuse:  sessionReuse(e),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("api: the session arm: %w", err)
+	}
+	return surface, sessions, nil
+}
+
+// sessionReuse ends every session of a person whose cookie was replayed past
+// the rotation overlap.
+//
+// THE EPOCH AND NOT THE ONE SESSION, because a cookie that was replayed is a
+// cookie somebody else has, and the one thing nobody can establish from the
+// replay is which of the two holders is the person. Bumping the revocation
+// epoch ends them both and costs that person one sign-in; ending only the
+// lineage would leave whoever captured it holding whatever they rotate to
+// next.
+//
+// THE WRITE IS THE NODE'S OWN, not the person's: they did not ask for it, and
+// an authentication trail that recorded them as the author of their own
+// lockout would be wrong about the one row an investigation reads.
+func sessionReuse(e *engine.Engine) func(context.Context, string) {
+	return func(ctx context.Context, person string) {
+		writer := e.IAMWriter()
+		if writer == nil {
+			return
+		}
+		// WITHOUT CANCEL, because the request this was noticed on is
+		// about to be refused and its context cancelled — and a
+		// revocation that inherits a dead context does nothing at all,
+		// which is this engine's rule for every cleanup.
+		ctx = context.WithoutCancel(ctx)
+		opID := "session-reuse:" + person + ":" + uuid.NewString()
+		if _, err := writer.Revoke(ctx, person, opID,
+			"a session cookie was replayed past the rotation overlap"); err != nil {
+
+			logging.Get("api.auth").ErrorContext(ctx,
+				"iam_session_reuse_not_revoked", "person", person,
+				"error", err,
+				"detail", "the replayed cookie was refused, but this "+
+					"person's other sessions are still live; retry with "+
+					"crewlet iam revoke")
+		}
+	}
 }
 
 // signInProvider is the identity provider, or nil where none is configured.

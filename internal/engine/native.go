@@ -649,6 +649,11 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		DB: e.backends.Store, Log: running.reader,
 		Committed: running.runner.Committed,
 		Deferred:  running.runner.Deferred,
+		// AND THE LAG, which is what makes the session table's
+		// `stalled` row reachable at all: a node past the stall grace
+		// answers 503 to every arm, and with no lag to read it
+		// answered as a caught-up node for as long as it was behind.
+		Lag: running.Lag,
 	})
 	if err != nil {
 		return fmt.Errorf("engine: iam reader: %w", err)
@@ -668,6 +673,13 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// THE NODE IS THE DEPLOYMENT, so it authors the classes only the
 		// deployment has: the bootstrap mint, the sweeps, the probe.
 		// Every surface replaces these with [iamdomain.Writer.As].
+		//
+		// AND people:manage BESIDE IT, because two of those classes are
+		// enrolments performed on somebody's behalf — the first person
+		// a bootstrap code creates, and the person an invitation
+		// redeems into — and neither has a principal of their own yet.
+		// Without it the sign-in surface's own writer was refused by
+		// the domain, so a fresh deployment could not create anybody.
 		Grants: []iam.Grant{iam.GrantFleetOperate},
 	})
 	if err != nil {
@@ -755,6 +767,9 @@ func (n *native) openChart(e *Engine, sl *stateLog, nodeID string) error {
 	if n.chartReader, err = chart.NewReader(chart.ReaderOptions{
 		DB: e.backends.Store, Log: running.reader,
 		Committed: running.runner.Committed,
+		// FOR THE SEAT BINDING, which compares it against the stall
+		// grace before it reads a row: see [SeatView].
+		Lag: running.Lag,
 	}); err != nil {
 		return fmt.Errorf("engine: chart reader: %w", err)
 	}

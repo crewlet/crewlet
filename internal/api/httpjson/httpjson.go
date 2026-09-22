@@ -278,6 +278,21 @@ const (
 	// ask for another one, and because holding the link is already
 	// evidence it was issued to them.
 	CodeInviteSpent Code = "invite_spent"
+
+	// CodeSeatUnavailable is somebody whose session validated perfectly
+	// and whose SEAT the org chart no longer holds.
+	//
+	// A 403 AND NEVER A 401, which is why it is not folded into
+	// [CodeSessionRevoked]: the bearer is live and signing in again
+	// changes nothing, so a browser told to discard its cookie would
+	// loop through the sign-in page for ever. The detail beside it NAMES
+	// the seat, because the person locked out and whoever removed it both
+	// need to know which one.
+	//
+	// The wire value is internal/iam/session's own `CodeNoSeat`; the two
+	// are held equal by a test in internal/api/auth, since this package
+	// is a leaf and cannot import that one to share the constant.
+	CodeSeatUnavailable Code = "seat_unavailable"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -349,6 +364,10 @@ var codes = map[Code]string{
 	CodeSessionRevoked: "This session has ended. Sign in again.",
 	CodeBootstrapClosed: "The first-operator setup is not available on this " +
 		"deployment. Ask somebody who already has an account to invite you.",
+	CodeSeatUnavailable: "The seat you are bound to is no longer in this " +
+		"company's org chart, so there is nothing for you to act as. An " +
+		"administrator can bind you to another one.",
+
 	CodeInviteSpent: "This invitation is no longer valid. Ask whoever sent it " +
 		"for a new one.",
 }

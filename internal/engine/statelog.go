@@ -146,6 +146,66 @@ type runningDomain struct {
 	// vectors are DERIVED and compacted, so "as of a position" is not a
 	// question that has an answer about them.
 	reader *statelog.Reader
+
+	// lagNanos is how far behind the log this applier is, AS A DURATION,
+	// sampled on the position heartbeat.
+	//
+	// # Why it is cached rather than asked for
+	//
+	// The figure is a record COUNT divided by this applier's drain rate,
+	// and the count comes from the broker — a network round trip. What
+	// reads it is the REQUEST path: every session this node validates
+	// compares its own lag against [statelog.StallGrace] to tell a node
+	// that is merely behind from one that has stopped, which is the
+	// difference between serving a read and answering 503. A per-request
+	// round trip to the broker on the authentication path would make a
+	// broker blip an outage for everybody signed in.
+	//
+	// So it rides the heartbeat, which already takes the stream's last
+	// sequence every interval for the stall observation beside it, and
+	// the request path reads a number.
+	//
+	// UNREADABLE IS NOT ZERO. A heartbeat whose stream stats failed
+	// leaves the last value standing rather than storing a figure that
+	// reads as caught up — the same view the lag gauges take, for the
+	// same reason: a gauge has no third value, and neither has this.
+	//
+	// Atomic because the heartbeat writes it while every request reads
+	// it.
+	lagNanos atomic.Int64
+}
+
+// observeLag stores this applier's distance behind the log as a duration.
+func (d *runningDomain) observeLag(last, applied uint64) {
+	d.lagNanos.Store(int64(lagDurationOf(last, applied, d.runner.Drain())))
+}
+
+// lagDurationOf is how long behind a backlog of (last - applied) records is at a
+// measured drain rate.
+//
+// PURE OVER VALUES, for the reason internal/textindex gives for its ranking
+// arithmetic: a rule that can only be exercised through a running applier and
+// a live broker is a rule nobody re-measures, and this one decides whether a
+// person's session is served or answered 503.
+//
+// THE DRAIN RATE IS THE DENOMINATOR and it is this applier's own: "four
+// hundred records behind" is not a length of time until something says how
+// fast this node applies them, and a fleet's nodes differ by an order of
+// magnitude. A rate of zero is FLOORED AT ONE rather than divided by, which
+// reports a node that has applied nothing as one second behind per record —
+// deliberately pessimistic, because a node with no measured rate is the one
+// least able to claim it is nearly caught up.
+func lagDurationOf(last, applied uint64, drain float64) time.Duration {
+	if last <= applied {
+		return 0
+	}
+	return time.Duration(last-applied) * time.Second /
+		time.Duration(max(int64(drain), 1))
+}
+
+// Lag is how far behind the log this applier was at the last heartbeat.
+func (d *runningDomain) Lag() time.Duration {
+	return time.Duration(d.lagNanos.Load())
 }
 
 // stateLog is this node's whole state-log runtime.
@@ -1775,7 +1835,7 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 				health.Position.Seq, *health.LastSeq)
 		case !health.CaughtUp:
 			row.Detail = fmt.Sprintf("applying: %d record(s) behind the log's head",
-				lagOf(health))
+				lagSeqOf(health))
 		case health.Deferred > 0:
 			// CAUGHT UP AND STILL NOT READY. A deferred record is one
 			// this build cannot decode: the position moved past it
@@ -1793,11 +1853,15 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 	return out
 }
 
-// lagOf is a health's lag as a number, with the unmeasured case reported as
-// zero rather than as a nil dereference. An unmeasured lag never reaches here
-// — CaughtUp is false without one — so the fallback is a guard rather than a
-// case.
-func lagOf(h statelog.Health) uint64 {
+// lagSeqOf is a health's lag as a RECORD COUNT, with the unmeasured case
+// reported as zero rather than as a nil dereference. An unmeasured lag never
+// reaches here — CaughtUp is false without one — so the fallback is a guard
+// rather than a case.
+//
+// NAMED FOR ITS UNIT, beside [lagDurationOf] which answers the same question
+// in seconds. The two were `lagOf` and an inline division, which is how a
+// count and a duration come to be compared against one threshold.
+func lagSeqOf(h statelog.Health) uint64 {
 	if h.Lag == nil {
 		return 0
 	}
@@ -2376,6 +2440,11 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		behind := false
 		if stats, err := running.log.Stats(ctx); err == nil {
 			behind = stats.LastSeq > at.Seq
+			// AND HOW LONG BEHIND, for the request path. See
+			// [runningDomain.lagNanos]: this is the one loop that
+			// already holds both the stream's last sequence and
+			// this applier's own checkpoint every interval.
+			running.observeLag(stats.LastSeq, at.Seq)
 			// AND BELOW: the next record this node needs is gone from
 			// the log. It cannot replay its way back, so it adopts —
 			// the same repair the boot makes, made by a node that is

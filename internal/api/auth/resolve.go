@@ -135,24 +135,49 @@ func intersect(declared, ceiling []iam.Grant) []iam.Grant {
 // It attaches the answer to the context rather than returning it, because
 // [iam.From] is what every surface downstream reads and a second channel would
 // be a second answer.
-func (g *Guard) Resolve(r *http.Request) *http.Request {
+//
+// THE RESPONSE WRITER IS TAKEN rather than a value returned, for one reason:
+// resolving a SESSION can re-issue its cookie, and a re-issue that a caller
+// had to remember to write is one a caller eventually forgets to — leaving a
+// browser on a bearer whose idle deadline stops moving, signed out mid-work.
+// Nothing else is written here; the refusal is returned.
+func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
+	*http.Request, *Refusal) {
+
 	// THE DEVELOPMENT PRINCIPAL FIRST, and only for a request that
 	// presented nothing. It is nil on every build that did not ask for it
 	// and on every posture that refused it at construction, so this is a
 	// nil check on an ordinary run. See devprincipal.go.
 	if dev := g.devResolution(r); dev != nil {
-		return r.WithContext(iam.WithPrincipal(r.Context(), *dev))
+		return r.WithContext(iam.WithPrincipal(r.Context(), *dev)), nil
 	}
-	candidate := g.Credential(r)
-	if candidate == "" {
-		return r.WithContext(iam.WithAnonymous(r.Context()))
+	// THE EXPLICIT CREDENTIAL BEFORE THE AMBIENT ONE. sessions.go argues
+	// the order; what it buys is that a request presenting a WRONG bearer
+	// stays anonymous rather than being quietly upgraded by whatever
+	// cookie happened to be in the jar.
+	if candidate := g.Credential(r); candidate != "" {
+		entry, ok := g.entry(candidate)
+		if !ok {
+			// PRESENT AND WRONG IS STILL ANONYMOUS, not unknown:
+			// this node checked and the answer was no. Unknown is
+			// reserved for the question it could not ask.
+			return r.WithContext(iam.WithAnonymous(r.Context())), nil
+		}
+		return r.WithContext(
+			iam.WithPrincipal(r.Context(), g.principalFor(entry, g.now()))), nil
 	}
-	entry, ok := g.entry(candidate)
-	if !ok {
-		// PRESENT AND WRONG IS STILL ANONYMOUS, not unknown: this node
-		// checked and the answer was no. Unknown is reserved for the
-		// question it could not ask.
-		return r.WithContext(iam.WithAnonymous(r.Context()))
+	if g.sessions != nil {
+		principal, how, refusal, presented := g.sessions.resolve(w, r, g.ceiling)
+		if presented {
+			if how == iam.Resolved {
+				return r.WithContext(
+					iam.WithPrincipal(r.Context(), principal)), refusal
+			}
+			if how == iam.Unknown {
+				return r.WithContext(iam.WithUnresolved(r.Context(), errIdentityUnavailable)), refusal
+			}
+			return r.WithContext(iam.WithAnonymous(r.Context())), refusal
+		}
 	}
-	return r.WithContext(iam.WithPrincipal(r.Context(), g.principalFor(entry, g.now())))
+	return r.WithContext(iam.WithAnonymous(r.Context())), nil
 }

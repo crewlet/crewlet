@@ -1544,7 +1544,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// THE WAY IN. Built before the options below so a node that cannot
 	// serve one says so in its own log line rather than by a route that
 	// is quietly absent.
-	authSurface, err := signInSurface(boot, e, cipher)
+	authSurface, sessions, err := signInSurface(boot, e, cipher)
 	if err != nil {
 		return nil, err
 	}
@@ -1842,6 +1842,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// serve one — see [signInSurface] for the two postures that
 		// produce a nil and why each is honest rather than a fault.
 		Auth: authSurface,
+		// AND THE OTHER END OF THE COOKIE IT MINTS. Nil exactly when
+		// Auth is: a node that cannot sign one has none to check.
+		Sessions: sessions,
 		// WHETHER THIS NODE'S REPLICATED COPY IS FIT TO ANSWER FROM, for
 		// /ready. The ENGINE's own verdict rather than a second one built
 		// here: it is the same question that decides whether this node may

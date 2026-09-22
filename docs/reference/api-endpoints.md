@@ -226,6 +226,28 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > to tell "your token is wrong" from "the engine is down". Without it a reader
 > holding a stale token sees "retrying" for ever.
 >
+> **Two credential shapes reach every route, and the header wins.** A Tier A
+> bearer in `Authorization` is the deployment's own machine credential; a
+> `crewlet_session` cookie is a person who signed in. Both resolve to the same
+> principal, so no route knows which arrived. When a request carries both, the
+> **header** decides — a browser sends its cookie whether or not the caller
+> meant to, and an `Authorization` header is only ever there because somebody
+> put it there. A request presenting a *wrong* header therefore stays anonymous
+> rather than being upgraded by whatever cookie is in the jar.
+>
+> **`api.auth.max_grants` clamps a person exactly as it clamps a token.** The
+> ceiling is applied when the request is resolved, not written anywhere, so
+> lowering it takes effect on this node's next request — including for
+> somebody already signed in.
+>
+> **A person whose seat is gone is `403 seat_unavailable`, naming the seat.**
+> Their session is perfectly valid and signing in again changes nothing, so
+> `401` would loop a browser through the sign-in page for ever. The one surface
+> it does not cover is `/auth/*`, whose subject is a person's own credential
+> rather than the seat they hold: ending a session, re-proving identity and
+> enrolling a second factor go on working, or an offboarded person would be
+> left holding a live cookie with no way to sign out.
+>
 > **The guard is always mounted**, whether or not Tier A is present. An API
 > built without `api.auth` configuration has no token, so no candidate can
 > match and every guarded route answers `401` — which is all of them bar the
