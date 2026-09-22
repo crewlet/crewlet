@@ -235,7 +235,11 @@ function Band({
                 <span className="work-key mono">{bar.row.key}</span>
                 <span className="truncate">{bar.row.title}</span>
                 <PriorityMark priority={bar.row.priority} />
-                <Assignee handle={bar.row.assignee} seatName={chrome.seatName} />
+                <Assignee
+                  handle={bar.row.assignee}
+                  seatName={chrome.seatName}
+                  seatKind={chrome.seatKind}
+                />
               </a>
             ))}
           </div>

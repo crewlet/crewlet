@@ -57,7 +57,7 @@ import { EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
 import { DashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { Segmented } from "~/ui/primitives.tsx";
 import { filed, ProjectProgress, ProjectProgressLegend } from "./census.tsx";
@@ -175,7 +175,9 @@ function activeEmpty(archived: number, href: string) {
 
 export function Projects() {
   const org = useOrg();
-  const index = useMemo(() => indexOrg(org), [org]);
+  // THE CHART'S TWO ANSWERS ABOUT A HANDLE, from one lookup: the lead's badge
+  // draws the dashed ring off the KIND, and the last change prints the NAME.
+  const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
   const now = useNow();
   const [shownRaw, setShown] = useParam("shown", "active", "section");
   const shown: Shown = (SHOWN as readonly string[]).includes(shownRaw)
@@ -317,7 +319,7 @@ export function Projects() {
         // doing, wearing one column.
         cell: (row) =>
           row.lead?.handle ? (
-            <SeatCell handle={row.lead.handle} name={index.byHandle.get(row.lead.handle)?.name} />
+            <SeatCell handle={row.lead.handle} {...who(row.lead.handle)} />
           ) : (
             // A PROJECT WITH NO LEAD ROUTES ITS UNASSIGNED WORK TO NOBODY,
             // which is a finding rather than a blank cell.
@@ -398,16 +400,10 @@ export function Projects() {
         // SORTED BY WHEN, which is the question this column is for: a
         // directory read to find what has gone quiet is read newest-last.
         sortValue: (row) => row.last_change?.at ?? "",
-        cell: (row) => (
-          <LastChange
-            row={row}
-            now={now}
-            seatName={(handle) => index.byHandle.get(handle)?.name ?? handle}
-          />
-        ),
+        cell: (row) => <LastChange row={row} now={now} seatName={(handle) => who(handle).name} />,
       },
     ],
-    [index, now],
+    [who, now],
   );
 
   return (

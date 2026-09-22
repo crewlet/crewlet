@@ -75,7 +75,7 @@ import { CloseGlyph, DashboardGlyph, SearchGlyph } from "@crewlethq/icons/glyphs
 import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, seatResolvers } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import {
   anyFilter,
@@ -408,7 +408,7 @@ export function ItemsView({ project = "", host }: { project?: string; host?: Ite
   const bands = useMemo(() => bandsOf(groups), [groups]);
 
   const chrome: RowChrome = {
-    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    ...seatResolvers(index),
     types: catalogue.data?.types,
     statuses: detail?.statuses,
   };

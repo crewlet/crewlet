@@ -92,6 +92,7 @@ import {
   reportsCaption,
   seatPath,
   seatReading,
+  seatResolvers,
   seatSettings,
   statusLine,
   afkReason,
@@ -497,13 +498,13 @@ export function SeatScreen({ handle }: { handle: string }) {
   const phaseEvents = usePhaseEvents();
 
   const index = useMemo(() => indexOrg(org), [org]);
-  // A HANDLE IS NOT A NAME. The tracker's rows carry handles and a reader
-  // knows people by name, so every row renderer takes the resolution rather
-  // than each one doing its own lookup.
-  const chrome: RowChrome = useMemo(
-    () => ({ seatName: (h: string) => index.byHandle.get(h)?.name ?? h }),
-    [index],
-  );
+  // A HANDLE IS NOT A NAME, AND IT IS NOT A KIND EITHER. The tracker's rows
+  // carry handles; a reader knows people by name, and an identity badge draws
+  // the dashed ring off the seat's kind. Both come from the chart, so every
+  // row renderer takes the resolution rather than each one doing its own
+  // lookup — and they travel as a pair, because the kind is the half every
+  // builder forgot when each wrote its own name resolver.
+  const chrome: RowChrome = useMemo(() => seatResolvers(index), [index]);
   const seat = findSeat(index, handle);
   // THE TRAIL NAMES THE SEAT, not the slug the URL addresses it by. A handle is
   // DERIVED from the name — `agent-cto` for "Chief Technology Officer" — so with
@@ -1118,6 +1119,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                             <SeatChip
                               name={seat.unitLead}
                               handle={index.byName.get(seat.unitLead)?.handle}
+                              kind={index.byName.get(seat.unitLead)?.kind}
                             />
                           ) : index.hierarchy ? (
                             <span className="muted">none</span>
@@ -1128,7 +1130,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                         {
                           label: "Reports to",
                           value: manager ? (
-                            <SeatChip name={manager.name} handle={manager.handle} />
+                            <SeatChip
+                              name={manager.name}
+                              handle={manager.handle}
+                              kind={manager.kind}
+                            />
                           ) : index.hierarchy ? (
                             <span className="muted">nobody</span>
                           ) : (

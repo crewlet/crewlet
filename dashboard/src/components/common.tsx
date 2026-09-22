@@ -39,6 +39,7 @@ import {
   statusLine,
   toneOf,
   type Seat,
+  type SeatKind,
 } from "~/lib/seats.ts";
 import type { AgentRow, FeedRow, QueryErrorCode, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
@@ -69,12 +70,21 @@ export const RECORD_MAX_HEIGHT = 460;
 export function SeatChip({
   name,
   handle,
-  human,
+  kind,
   size = "sm",
 }: {
   name: string;
   handle?: string;
-  human?: boolean;
+  /**
+   * The seat's kind, which decides the badge's one variant.
+   *
+   * THE SAME PROP [SeatCell] TAKES, and it was a `human` boolean here — one
+   * fact spelled two ways across two components drawing the same badge, so a
+   * caller holding the chart's answer had to translate it at every site and
+   * eighteen of the nineteen simply did not. Both take the pair [seatLookup]
+   * returns now, which is one spread and cannot be half-applied.
+   */
+  kind?: SeatKind;
   size?: "sm" | "md";
 }) {
   const target = handle || name;
@@ -88,12 +98,13 @@ export function SeatChip({
       style={{ gap: "var(--space-2)", minWidth: 0 }}
       href={href(["company", "people", target])}
     >
-      {/* `dashed` IS our `human`, in uilet's own words: its Avatar doc calls
+      {/* `dashed` IS A HUMAN SEAT, in uilet's own words: its Avatar doc calls
           the drawn edge "a HUMAN seat: the engine does not run it", which is
-          the structural fact ours carried. `decorative` because the name is
-          printed immediately beside it — without it the row reads "Ada
-          Lovelace avatar, Ada Lovelace". */}
-      <Avatar name={name} size={size} variant={human ? "dashed" : "solid"} decorative />
+          the structural fact ours carried. A kind the chart does not hold
+          draws the neutral disc rather than claiming the seat is an agent.
+          `decorative` because the name is printed immediately beside it —
+          without it the row reads "Ada Lovelace avatar, Ada Lovelace". */}
+      <Avatar name={name} size={size} variant={kind === "human" ? "dashed" : "solid"} decorative />
       <span className="truncate">{name}</span>
     </a>
   );

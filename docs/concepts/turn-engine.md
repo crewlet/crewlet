@@ -175,9 +175,7 @@ The block rides the **user** message for the executor, never its system prompt: 
 
 One principle decides every budget: **elide payloads, never structure.**
 
-A *payload* is a tool **argument** — a message body, page HTML, a diff. It is unbounded, gets re-authored next round, and can never answer "did this already fire", so carrying it whole only buries the two lines that can. *Structure* — the round's own account of what it set out to do, the draft under review, the reviewer's correction — is carried **verbatim**: it is exactly what the next round must act on, and the ledger is its only carrier.
-
-*Structure* is everything else: the plan's steps, the draft under review, the reviewer's correction, the trigger, the reply that was sent. It is exactly what the next round must act on, and it is carried **verbatim**.
+A *payload* is a tool **argument** — a message body, page HTML, a diff. It is unbounded, gets re-authored next round, and can never answer "did this already fire", so carrying it whole only buries the two lines that can. *Structure* is everything else — the round's own account of what it set out to do, the draft under review, the reviewer's correction, the trigger, the reply that was sent — and it is carried **verbatim**: it is exactly what the next round must act on, and the ledger is its only carrier.
 
 It used not to be. Six further limits sat beside the two below, cutting each of those at 400–2000 runes — the principle above applied to the half it excludes. A reviewer's correction trimmed mid-instruction loses the engine-critical part of the only carrier it has, and unlike a chat message or an issue comment there is no surface to go back and re-read: on the cross-turn ledger the cut was applied at **write** time, so the stored row was the only copy.
 

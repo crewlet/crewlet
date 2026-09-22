@@ -367,10 +367,15 @@ beside it. `g` then a letter jumps between them.
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
 CEO. **Activity** shows it: *Live now* has the seat working, and **Turns**
-shows the turn as it runs — Plan, then Execute, then Review, each phase listing
-the rounds it took, the tools each round called, and the prompts the model
-actually saw. A phase that finishes updates in place rather than moving, so you
-can read one while the next is running.
+shows the turn as it runs — Execute, then Review, each phase listing the rounds
+it took, the tools each round called, and the prompts the model actually saw.
+A turn has those two phases: Execute both decides and acts, because the frame
+that works out what to do is the frame that does it, and Review then judges
+what the round actually landed. On a seat's very first turn one more runs
+before them — Onboarding, where the agent reads its own team's pages once. A
+phase that finishes updates in place rather than moving, so you can read one
+while the next is running. [Turn Engine](../concepts/turn-engine.md) is what
+each one does.
 
 Follow the turn to **Work** and **Knowledge**. Both are the engine's own —
 `tracker.backend` and `knowledge.backend` default to `native`, so your company

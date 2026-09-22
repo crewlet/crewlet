@@ -49,7 +49,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -515,7 +515,11 @@ export function PageView({ container, title }: { container: string; title: strin
   );
   usePageLabels(data?.page ? { [container]: container, [title]: data.page.title } : {});
 
-  const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
+  // THE CHART'S TWO ANSWERS ABOUT A HANDLE. The prose lines below want the
+  // NAME; a watcher's and a commenter's chip also draws the dashed ring off
+  // the KIND, so a name-only resolver made every human on this page an agent.
+  const who = seatLookup(index);
+  const seatName = (handle: string) => who(handle).name;
   const page = data?.page;
   // NEWEST FIRST — `internal/pages` reads the revisions `ORDER BY version
   // DESC`, and the header's "set by" line is the head of this list. Read once
@@ -631,7 +635,7 @@ export function PageView({ container, title }: { container: string; title: strin
                 </Card.Header>
                 <div className="row wrap" style={{ gap: "var(--space-2)" }}>
                   {page.watchers.map((w) => (
-                    <SeatChip key={w} name={seatName(w)} handle={w} />
+                    <SeatChip key={w} handle={w} {...who(w)} />
                   ))}
                 </div>
               </Card>
@@ -646,7 +650,7 @@ export function PageView({ container, title }: { container: string; title: strin
                   {data.comments.map((c) => (
                     <div key={c.id} className="comment">
                       <div className="row" style={{ gap: "var(--space-2)" }}>
-                        <SeatChip name={seatName(c.author)} handle={c.author} />
+                        <SeatChip handle={c.author} {...who(c.author)} />
                         <span className="muted" title={fmtDateTime(c.created_at)}>
                           {relTime(c.created_at, now)}
                         </span>

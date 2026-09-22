@@ -52,7 +52,7 @@ import { Callout, Card, EmptyState, EmptyValue, Skeleton, Tabs, Tag } from "@cre
 import { DashboardGlyph, TimelineGlyph, TuneGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, seatResolvers } from "~/lib/seats.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { pageCount, pageNote, statusLabel, STATUSES, typeName } from "~/lib/work.ts";
@@ -81,7 +81,7 @@ export function Project({ projectKey }: { projectKey: string }) {
   const state = useQuery("work_project", { key: projectKey }, { pollMs: 60_000 });
   const detail = state.data;
   const chrome: RowChrome = {
-    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    ...seatResolvers(index),
     types: detail?.types,
     statuses: detail?.statuses,
   };
@@ -361,7 +361,7 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
   );
   const detail = state.data;
   const chrome: RowChrome = {
-    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    ...seatResolvers(index),
     types: detail?.types,
     statuses: detail?.statuses,
   };
@@ -567,6 +567,7 @@ function projectFacts(detail: WorkProjectDetail, chrome?: RowChrome): HeaderFact
         <SeatChip
           name={chrome?.seatName?.(detail.lead.handle) ?? detail.lead.handle}
           handle={detail.lead.handle}
+          kind={chrome?.seatKind?.(detail.lead.handle)}
         />
       ) : (
         <span className="muted">nobody</span>

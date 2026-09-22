@@ -54,7 +54,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useNow } from "~/lib/clock.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { useTimeRange, type Offer } from "~/lib/range.ts";
 import { rest } from "~/protocol/index.ts";
 import type { SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
@@ -209,7 +209,9 @@ const OPERATOR_KINDS = "operator,human";
 export function Audit() {
   const now = useNow();
   const org = useOrg();
-  const index = useMemo(() => indexOrg(org), [org]);
+  // THE CHART'S TWO ANSWERS ABOUT A HANDLE — the name and the kind — since
+  // the only thing this screen asks of the chart is how to draw a writer.
+  const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
   const range = useTimeRange(now, AUDIT_OFFER, false);
   const { since, until } = range;
   const [actor, setActor] = useParam("actor", "");
@@ -372,7 +374,11 @@ export function Audit() {
         cell: (row) => (
           <span className="row gap-1">
             {row.actor ? (
-              <SeatCell handle={row.actor} name={index.byHandle.get(row.actor)?.name} />
+              // THE NAME AND THE KIND, from one lookup: the badge's dashed
+              // ring is a HUMAN seat, and a cell handed only the name draws
+              // every writer as an agent on a screen whose subject is the
+              // writers that are not.
+              <SeatCell handle={row.actor} {...who(row.actor)} />
             ) : (
               // THE ENGINE IS A WRITER. A chart apply and a
               // repair duty carry no actor at all, and rendering them as a
@@ -416,7 +422,7 @@ export function Audit() {
           ),
       },
     ],
-    [now, index],
+    [now, who],
   );
 
   const loading = work.loading || knowledge.loading || config.loading;

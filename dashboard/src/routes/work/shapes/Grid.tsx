@@ -330,7 +330,9 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // rather than a dash — an unassigned item routes to the project's lead,
       // and a project with no lead routes to nobody at all, so it is a state
       // worth seeing down a queue.
-      cell: (row) => <Assignee handle={row.assignee} seatName={chrome.seatName} />,
+      cell: (row) => (
+        <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
+      ),
     },
     updatedColumn(now),
   );
@@ -392,7 +394,11 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       shrink: true,
       cell: (row) =>
         row.assignee ? (
-          <SeatCell handle={row.assignee} name={chrome.seatName?.(row.assignee)} />
+          <SeatCell
+            handle={row.assignee}
+            name={chrome.seatName?.(row.assignee)}
+            kind={chrome.seatKind?.(row.assignee)}
+          />
         ) : (
           <EmptyValue label="Nobody holds this" />
         ),
@@ -782,7 +788,11 @@ function trashColumns(
           return <EmptyValue label="Its removal is older than the loaded history" />;
         return (
           <span className="row gap-1">
-            <SeatCell handle={record.actor} name={chrome.seatName?.(record.actor)} />
+            <SeatCell
+              handle={record.actor}
+              name={chrome.seatName?.(record.actor)}
+              kind={chrome.seatKind?.(record.actor)}
+            />
             {/* WHICH KIND OF WRITER, because that is the question a trash
                 screen exists to answer: an assistant removing a subtree and
                 a person removing one task look identical without it.

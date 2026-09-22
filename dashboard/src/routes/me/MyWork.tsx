@@ -105,7 +105,7 @@ import {
 import { FlagGlyph, KeyGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, type OrgIndex, type Seat } from "~/lib/seats.ts";
+import { indexOrg, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -179,9 +179,7 @@ export function MyWork() {
   // EVERY SEAT AND EVERY PERSON the chart names, so the screen can be reached
   // with nobody chosen and still offer somebody.
   const index = useMemo(() => indexOrg(org), [org]);
-  const chrome: RowChrome = {
-    seatName: (h) => index.byHandle.get(h)?.name ?? h,
-  };
+  const chrome: RowChrome = seatResolvers(index);
   // WHOSE DAY THIS IS, resolved rather than guessed.
   //
   // This fell back to the ALPHABETICALLY FIRST SEAT, so a screen titled "My
@@ -534,12 +532,7 @@ function WhoseDay({
             beside it would be chrome duplicating chrome. A handle the chart
             does not name still gets one: the name falls back to the handle,
             which is what the seat page resolves on too. */}
-        <SeatChip
-          name={seat?.name ?? handle}
-          handle={handle}
-          human={seat?.kind === "human"}
-          size="md"
-        />
+        <SeatChip name={seat?.name ?? handle} handle={handle} kind={seat?.kind} size="md" />
         <span className="mono t-caption">{handle}</span>
         <Tag>{ownDay ? "yours" : "their day"}</Tag>
       </div>
@@ -874,6 +867,7 @@ export function Asks({
             <SeatChip
               name={chrome?.seatName?.(ask.asked_by) ?? ask.asked_by}
               handle={ask.asked_by}
+              kind={chrome?.seatKind?.(ask.asked_by)}
             />
             <span className="muted">{relTime(ask.asked_at, now)}</span>
           </div>
