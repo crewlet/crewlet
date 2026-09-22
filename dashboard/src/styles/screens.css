@@ -2595,7 +2595,10 @@ details > summary.int-summary::-webkit-details-marker {
 /* ---- The census, and a meter in a cell ---------------------------------- */
 
 /* The bar under a project's header: the fact line says how much, and this says
-   the proportion. */
+   how much of it is DONE — an amount against everything filed, not a share of
+   three states. `routes/work/census.tsx` is where that reading is argued, and
+   it owns this wrapper so the page and the peek draw one census rather than
+   two widths. */
 .work-census {
   display: flex;
   flex-direction: column;
@@ -2607,6 +2610,16 @@ details > summary.int-summary::-webkit-details-marker {
 .work-meter {
   display: block;
   width: 120px;
+}
+/* WHEN, AND WHO, ON ONE LINE. Stacked, this one cell made every row in the
+   directory a line and a half tall while its other eight columns held single
+   values — so the grid's rhythm was set by the column a reader scans last.
+   Baseline-aligned, because the two parts are one sentence. */
+.work-lastchange {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
 }
 
 /* ---- The change log ------------------------------------------------------ */

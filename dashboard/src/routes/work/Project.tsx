@@ -7,8 +7,16 @@
  * card the company-wide list did, above the same board — so the first screenful
  * of a project was an overview nobody asked for, and the work started below the
  * fold. What a container can say that its rows cannot is who leads it, which
- * unit owns it, and how far along it is: five facts and one meter, in the
- * header every other object in this product wears.
+ * unit owns it, what it is for and how far along it is: five facts, a sentence
+ * and one meter, in the header every other object in this product wears —
+ * assembled by [ProjectHead], so the page and the rail draw the same parts in
+ * the same order.
+ *
+ * # An empty project is a state, not an empty list
+ *
+ * The counts are on the page before the list has asked anything, so a project
+ * nothing has ever been filed into says so from its own record rather than
+ * falling through to a grid reporting that no item matched filters nobody set.
  *
  * # Three lenses, and each is a different question
  *
@@ -26,11 +34,12 @@
  * Nothing here writes.
  */
 
-import { useMemo } from "react";
-import { href } from "~/app/router.tsx";
+import { useMemo, type ReactNode } from "react";
+import { href, useRoute } from "~/app/router.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 // THE HEADER'S FACT IS NOT THE TRACKER'S. `components/work.tsx` exports a
 // `Fact` that DRAWS one in an overview strip; this one is the VALUE an
 // [ObjectHeader] renders. Both are right and neither may be renamed for the
@@ -39,18 +48,7 @@ import { ObjectHeader, type Fact as HeaderFact } from "~/app/frame/ObjectHeader.
 import { NumberCell } from "~/app/frame/cells.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
-import {
-  Callout,
-  Card,
-  EmptyState,
-  EmptyValue,
-  Legend,
-  Skeleton,
-  StackedBar,
-  Tabs,
-  Tag,
-  DATA_COLOR_OTHER,
-} from "@crewlethq/ui";
+import { Callout, Card, EmptyState, EmptyValue, Skeleton, Tabs, Tag } from "@crewlethq/ui";
 import { DashboardGlyph, TimelineGlyph, TuneGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -59,11 +57,12 @@ import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { pageCount, pageNote, statusLabel, STATUSES, typeName } from "~/lib/work.ts";
 import { describeChange } from "~/lib/work.ts";
+import { filed, ProjectCensus } from "./census.tsx";
 import { ItemsView } from "./ItemsView.tsx";
 import { HistoryView } from "./History.tsx";
 import { FEED_PAGE } from "./feed.tsx";
 import { statusDot } from "./shapes/group.tsx";
-import type { WorkGroup, WorkProjectDetail, WorkTaskCounts } from "~/protocol/index.ts";
+import type { WorkGroup, WorkProjectDetail } from "~/protocol/index.ts";
 
 /** The lenses, in the order the strip draws them; the first is the default. */
 const LENSES = ["items", "overview", "history"] as const;
@@ -72,6 +71,12 @@ export function Project({ projectKey }: { projectKey: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const [lens, setLens] = useTab("lens", LENSES);
+  // THE TRASH IS THE ONE THING THE MAINTAINED COUNTS CANNOT SEE: a removed
+  // task leaves them (`internal/tracker/projectsread.go`), so a project whose
+  // every item was removed counts zero while `removed=true` has rows to draw.
+  // A plain READ of the list's own key — the list owns it, this only asks
+  // whether the reader went looking for what is not filed any more.
+  const inTrash = useRoute().query.get("removed") === "true";
 
   const state = useQuery("work_project", { key: projectKey }, { pollMs: 60_000 });
   const detail = state.data;
@@ -87,6 +92,8 @@ export function Project({ projectKey }: { projectKey: string }) {
   usePageLabels(detail?.name ? { [projectKey]: detail.name } : {});
   usePageCoverage(detail);
 
+  const nothingFiled = !!detail && filed(detail.task_counts) === 0 && !inTrash;
+
   if (state.error === "not_found") return <NoSuchProject projectKey={projectKey} />;
 
   return (
@@ -101,45 +108,39 @@ export function Project({ projectKey }: { projectKey: string }) {
       <QueryState error={state.error} loading={state.loading}>
         {detail && (
           <div className="work-main">
-            <ProjectBanners detail={detail} />
-            <ObjectHeader
-              kind="Project"
-              icon="view_column"
-              identifier={detail.key}
-              title={detail.name}
-              status={detail.archived ? <Tag appearance="outline">archived</Tag> : undefined}
-              facts={projectFacts(detail, chrome)}
-            />
-            {/* THE CENSUS AS A SHAPE, under the header rather than in a card of
-                its own above the work. The three numbers in the fact line say
-                how much; the bar says the proportion, which is the fact a
-                reader actually wants — "mostly finished" against "mostly
-                ahead". It is a SIBLING rather than a sixth fact because a bar
-                inside `.fact-value` is a bar in a truncated inline box, which
-                is no bar at all.
-
-                A BAR OF NOTHING IS NOT A CENSUS: three zero segments draw an
-                empty track that reads as a chart which failed to load rather
-                than as a project nobody has filed anything in. */}
-            {total(detail.task_counts) > 0 && (
-              <div className="work-census">
-                <ProjectCensus counts={detail.task_counts} />
-              </div>
-            )}
-            {detail.purpose && <p className="t-body measure">{detail.purpose}</p>}
+            <ProjectHead detail={detail} chrome={chrome} />
 
             <Tabs
               ariaLabel="Lens"
               value={lens}
               onValueChange={(value) => setLens(value as (typeof LENSES)[number])}
               items={[
-                { value: "items", label: "Items" },
+                // THE COUNT IS ON THE LENS A READER IS CHOOSING BETWEEN, from
+                // the project's own maintained census — no new read, and it
+                // agrees with the fact line by construction.
+                //
+                // AND ONLY ON THIS ONE, deliberately. Overview is a
+                // description rather than a collection, and History is PAGED:
+                // a count of the page it loaded would read as a count of the
+                // lens, which is the number a reader would plan against.
+                { value: "items", label: "Items", count: detail.task_counts.open },
                 { value: "overview", label: "Overview" },
                 { value: "history", label: "History" },
               ]}
             />
 
-            {lens === "items" && <ItemsView project={projectKey} />}
+            {/* NOTHING FILED IS THE PROJECT'S OWN STATE, not a list that
+                matched nothing. Gated on the maintained counts, so it is drawn
+                before the grid has answered and cannot be confused with a
+                narrowing — and it REPLACES the list, because a toolbar of
+                filters over nothing is a set of controls with nothing to
+                control. */}
+            {lens === "items" &&
+              (nothingFiled ? (
+                <NothingFiled detail={detail} />
+              ) : (
+                <ItemsView project={projectKey} />
+              ))}
             {lens === "overview" && <ProjectOverview detail={detail} chrome={chrome} />}
             {lens === "history" && <HistoryView container={`project:${projectKey}`} />}
           </div>
@@ -147,11 +148,6 @@ export function Project({ projectKey }: { projectKey: string }) {
       </QueryState>
     </>
   );
-}
-
-/** How much work a project holds at all, which decides whether a bar means anything. */
-function total(counts: WorkTaskCounts): number {
-  return counts.open + counts.done + counts.closed;
 }
 
 /**
@@ -384,33 +380,154 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
       <QueryState error={state.error} loading={state.loading}>
         {detail && (
           <>
-            <ObjectHeader
+            {/* THE SAME FOUR PARTS IN THE SAME ORDER as the page — see
+                [ProjectHead]. The rail's own coverage is the one thing the page
+                does not draw here, because the page publishes it into the
+                shell's slot instead, and it goes ABOVE the census: a banner
+                saying this answer is incomplete is a banner about the numbers
+                under it. */}
+            <ProjectHead
+              detail={detail}
+              chrome={chrome}
               size="peek"
-              kind="Project"
-              icon="view_column"
-              identifier={detail.key}
-              title={detail.name}
-              status={detail.archived ? <Tag appearance="outline">archived</Tag> : undefined}
-              facts={projectFacts(detail, chrome)}
+              coverage={<Coverage answer={detail} />}
             />
-            <div className="col gap-3">
-              <Coverage answer={detail} />
-              <ProjectBanners detail={detail} />
-              {/* WHY THIS PROJECT EXISTS, drawn whenever somebody wrote it:
-                  "is this the one I meant" is the question the rail answers,
-                  and a purpose is the sentence that answers it. */}
-              {detail.purpose && <p className="t-body measure">{detail.purpose}</p>}
-              {total(detail.task_counts) > 0 ? (
-                <ProjectCensus counts={detail.task_counts} />
-              ) : (
-                <span className="muted">No work has been filed in this project yet.</span>
-              )}
-              <ProjectFeed detail={detail} chrome={chrome} />
-            </div>
+            <ProjectFeed detail={detail} chrome={chrome} />
           </>
         )}
       </QueryState>
     </>
+  );
+}
+
+/**
+ * WHAT A PROJECT IS, above whatever is in it: the header, its lede, its
+ * findings and its census, in ONE order for the page and for the rail.
+ *
+ * The page drew the census BEFORE the purpose and the rail drew it after, so
+ * the same three parts read in two orders — and the page's banners sat ABOVE
+ * the object's own name, which puts a warning callout over the thing it is
+ * warning about. The facts were already shared for exactly this reason
+ * ([projectFacts]); the ORDER of the parts deserved the same treatment.
+ *
+ * THE LEDE IS A [PageNote], the way a seat's goal is (`routes/company/Seat.tsx`):
+ * an object's page says what it is for in one sentence under its name, and a
+ * project that declares no purpose still has one worth printing — which unit
+ * owns it, and whether anything has been filed at all. A hole where the lede
+ * goes is what a project with no purpose used to get.
+ */
+function ProjectHead({
+  detail,
+  chrome,
+  size = "page",
+  coverage,
+}: {
+  detail: WorkProjectDetail;
+  chrome: RowChrome;
+  size?: "page" | "peek";
+  coverage?: ReactNode;
+}) {
+  const parts = (
+    <>
+      <PageNote>{projectLede(detail)}</PageNote>
+      <ProjectBanners detail={detail} />
+      {coverage}
+      {/* THE CENSUS AS A SHAPE, under the header rather than in a card of its
+          own above the work. The three numbers in the fact line say how much;
+          the bar says how much of it is DONE, which is the fact a reader
+          actually wants — "mostly finished" against "barely started". It is a
+          SIBLING rather than a sixth fact because a bar inside `.fact-value` is
+          a bar in a truncated inline box, which is no bar at all. What the bar
+          MEANS is argued in `census.tsx`, where the directory's column reads it
+          too.
+
+          A BAR OF NOTHING IS NOT A CENSUS: a project nobody has filed anything
+          in has no proportion to draw, and an empty track there would say
+          "nothing is done yet" about a project with nothing to do.
+
+          THE RAIL SAYS SO IN WORDS AND THE PAGE DOES NOT, which is the one
+          place the two frames differ and the reason is structural: the page
+          draws [NothingFiled] in place of its list a few lines below, and
+          saying it twice in one viewport is what this screen's own page note
+          was already guilty of. The rail has no lens under it to carry the
+          sentence. */}
+      {filed(detail.task_counts) > 0 ? (
+        <ProjectCensus counts={detail.task_counts} />
+      ) : (
+        size === "peek" && <span className="muted">No work has been filed here yet.</span>
+      )}
+    </>
+  );
+  return (
+    <>
+      <ObjectHeader
+        size={size}
+        kind="Project"
+        icon="view_column"
+        identifier={detail.key}
+        title={detail.name}
+        status={detail.archived ? <Tag appearance="outline">archived</Tag> : undefined}
+        facts={projectFacts(detail, chrome)}
+      />
+      {/* THE PAGE'S OWN COLUMN SPACES THESE (`.work-main`); the rail has none
+          of its own, so the group carries one. */}
+      {size === "peek" ? <div className="col gap-3">{parts}</div> : parts}
+    </>
+  );
+}
+
+/**
+ * The sentence under a project's name.
+ *
+ * ITS PURPOSE WHERE SOMEBODY WROTE ONE — which is the unit's `purpose` in the
+ * company configuration, since that is where a project's comes from
+ * (`internal/engine/native.go`). A project declared on a SEAT rather than on a
+ * unit never has one at all, so the fallback is the ordinary case rather than
+ * the exception: it names the unit that owns the project and, when it is true,
+ * that nothing has been filed in it — the two facts a reader who opened the
+ * wrong key needs in order to know it is the wrong key.
+ */
+function projectLede(detail: WorkProjectDetail): string {
+  if (detail.purpose) return detail.purpose;
+  const unit = detail.unit.name || detail.unit.key;
+  const whose = unit
+    ? `${detail.key} is ${unit}'s project.`
+    : `${detail.key} is a project no unit in the chart owns.`;
+  if (filed(detail.task_counts) === 0) return `${whose} Nothing has been filed in it yet.`;
+  return unit
+    ? `${whose} A \`purpose\` on that unit in the company configuration is what this line would say.`
+    : whose;
+}
+
+/**
+ * A PROJECT WITH NOTHING IN IT, said from the project's own maintained counts.
+ *
+ * The page used to hand the whole body to the list, whose empty state is
+ * "Nothing matches — no item matches these filters. Widen them": a claim about
+ * a narrowing, on a screen with no filter set, about a project that has never
+ * held anything. The counts are on the page before the grid has asked
+ * anything, so this is drawn from the container rather than from a query that
+ * came back short, and it REPLACES the list — "Nothing matches" is for a query
+ * that genuinely narrowed.
+ *
+ * IT NAMES HOW WORK GETS FILED, because the dashboard writes nothing itself
+ * and a reader looking at an empty project is looking for the way in.
+ */
+function NothingFiled({ detail }: { detail: WorkProjectDetail }) {
+  return (
+    <EmptyState
+      icon={<DashboardGlyph size={32} />}
+      title={`No work has been filed in ${detail.name} yet`}
+      description="A seat files work with create_work_item, and an inbound webhook or a schedule is usually what sets one off. You can file one yourself through your own assistant at /operator/mcp, attributed to your token rather than to a seat."
+      // THE WAY OUT IS THE STATE'S OWN, not only the page bar's: a reader who
+      // opened the wrong key wants the company's work, and `action` is the slot
+      // this design system gives an empty state for exactly that.
+      action={
+        <a className="t-link" href={href(["work"])}>
+          All work →
+        </a>
+      }
+    />
   );
 }
 
@@ -480,30 +597,6 @@ function ProjectBanners({ detail }: { detail: WorkProjectDetail }) {
           current org chart does not have — work filed here routes to nobody.
         </Callout>
       )}
-    </>
-  );
-}
-
-/**
- * A project's census, drawn once.
- *
- * IN THE STATUS TONES the badges use rather than the chart hues, so the same
- * fact is not two colours on one screen — and NEVER WITHOUT ITS LEGEND, since
- * an unlabelled stack of three colours is three colours.
- */
-export function ProjectCensus({ counts }: { counts: WorkTaskCounts }) {
-  // AN `id` PER SEGMENT, which is what both of their components key on — and it
-  // is the status word rather than the position, so a census that gains a
-  // fourth group later does not renumber the three that were there.
-  const segments = [
-    { id: "open", label: "Open", value: counts.open, color: "var(--info)" },
-    { id: "done", label: "Done", value: counts.done, color: "var(--positive)" },
-    { id: "closed", label: "Closed", value: counts.closed, color: DATA_COLOR_OTHER },
-  ];
-  return (
-    <>
-      <StackedBar segments={segments} />
-      <Legend items={segments.map(({ id, label, color }) => ({ id, label, color }))} />
     </>
   );
 }

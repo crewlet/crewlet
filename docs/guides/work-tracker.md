@@ -705,13 +705,23 @@ screens rather than one:
   listing carrying `removed=true`. The strip above the bar holds the views
   somebody SAVED, never the five shapes.
 - **Projects** (`#/work/projects`) is the directory: every project with its
-  lead, the unit that owns it, its three maintained counts, how far along it is
-  and when its work last changed.
+  lead, the unit that owns it, its three maintained counts, how far along its
+  filed work is and when that work last changed. A row opens the project
+  **beside** the list rather than leaving it, and that panel's `Open ↗` is the
+  way to the project's own page (⌘-click or middle-click goes straight there).
+  The sentence over the grid is the company's own total, and when the engine
+  answered fewer projects than the company has it says so rather than quoting
+  the page as the company.
 - **History** (`#/work/history`) is the change log over a window you choose,
   with the kinds and the authors on this page as facets.
-- **A project** (`#/work/{KEY}`) opens on its work, with an **Overview** lens
-  for what the container itself declares — its statuses, its types, its labels
-  and its fields — and a **History** lens narrowed to it.
+- **A project** (`#/work/{KEY}`) opens on its work — the **Items** lens, which
+  says how many are open — with an **Overview** lens for what the container
+  itself declares (its statuses, its types, its labels and its fields) and a
+  **History** lens narrowed to it. Under the name is the project's purpose,
+  which is the `purpose` of the unit that declared its `project` key; a project
+  declared on a seat rather than on a unit has none, so the line says which
+  unit owns it instead. A project nothing has been filed into says so and names
+  the ways work arrives, rather than showing an empty list.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
 `/operator/mcp`. It serves the same work tools above, ten more no seat is

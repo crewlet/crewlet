@@ -10,7 +10,9 @@
  * Every case here is a rendering that, drawn wrong, says something true about
  * a different project — a missing lead drawn as a blank, a maintained
  * last-change instant drawn as "nothing has happened", a meter over a project
- * nobody has filed anything in.
+ * nobody has filed anything in — or a claim about the COMPANY that is really a
+ * claim about this page: the count in the toolbar, and the row whose click was
+ * meant to open a panel beside the list rather than leave it.
  */
 
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
@@ -18,6 +20,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { Projects } from "./Projects.tsx";
 import { Router } from "~/app/router.tsx";
+import { peekHref } from "~/app/frame/DetailRail.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkProjectRow } from "~/protocol/index.ts";
 
@@ -74,6 +77,11 @@ function asked(query: ReturnType<typeof serving>): Record<string, unknown> {
   return calls.findLast(([what]) => what === "work_projects")?.[1] ?? {};
 }
 
+/** What the rail was opened on, read out of the address the click wrote. */
+function peeked(): string | null {
+  return new URLSearchParams(location.hash.split("?")[1] ?? "").get("peek");
+}
+
 /** The grid row whose key cell holds this project. */
 function rowFor(key: string): HTMLElement {
   const cell = screen.getByText(key);
@@ -97,6 +105,101 @@ test("the workspace totals are one line over the rows", async () => {
   mount();
   await waitFor(() => expect(screen.getByText(/2 projects/)).toBeTruthy());
   expect(screen.getByText(/5 open · 6 done · 1 closed/)).toBeTruthy();
+});
+
+// THE COUNT IS THE COMPANY'S, NOT THE PAGE'S. The answer carries `total` and
+// `truncated` and the page read neither, so past the engine's own limit the
+// sentence said "200 projects" about a company that has more, with nothing on
+// screen to say the page had stopped short of it.
+test("the project count is the answer's total, and a short page says so", async () => {
+  serving({
+    work_projects: {
+      projects: [project(), project({ key: "PROD", name: "Product" })],
+      total: 340,
+      truncated: true,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/2 of 340 projects/)).toBeTruthy());
+  // AND WHAT THE OTHER NUMBERS COVER, which the count no longer implies: the
+  // sums are over the rows that arrived.
+  expect(screen.getByText(/ordered by key/)).toBeTruthy();
+  cleanup();
+
+  // A PAGE HOLDING EVERYTHING SAYS NOTHING EXTRA: "2 of 2" is one number
+  // printed twice, and the note would name a limit nothing reached.
+  serving({
+    work_projects: {
+      projects: [project(), project({ key: "PROD", name: "Product" })],
+      total: 2,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/2 projects/)).toBeTruthy());
+  expect(screen.queryByText(/ordered by key/)).toBeNull();
+});
+
+// A ROW OPENS THE PEEK, which is the question a directory is read with — "is
+// this the one I meant". The handler ignored its event, so the browser followed
+// the row's own anchor straight afterwards: the rail was opened and destroyed
+// by one click and the reader landed on the project's page every time.
+test("a plain click peeks beside the list rather than leaving it", async () => {
+  location.hash = "#/work/projects";
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+
+  // THE HREF IS THE FRAME'S OWN ADDRESS for the object, which is what the
+  // peek's `Open ↗` is built from too: a row and the panel it opens can never
+  // name different pages.
+  const link = container.querySelector<HTMLAnchorElement>("a.row-link");
+  expect(link?.getAttribute("href")).toBe(peekHref({ kind: "project", id: "ENG" }));
+
+  const plain = new MouseEvent("click", { bubbles: true, cancelable: true });
+  link?.dispatchEvent(plain);
+  expect(plain.defaultPrevented).toBe(true);
+  expect(peeked()).toBe("project:ENG");
+  expect(location.hash.split("?")[0]).toBe("#/work/projects");
+
+  // AND A MODIFIED CLICK FALLS THROUGH to the browser, or the anchor is a lie:
+  // ⌘-click, middle-click and "copy link address" are what it is there for.
+  const meta = new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true });
+  link?.dispatchEvent(meta);
+  expect(meta.defaultPrevented).toBe(false);
+});
+
+// THE NINTH COLUMN. It was declared `optional`, and on a screen with no Display
+// menu that means reachable only by hand-editing `cols=` — while the sentence
+// directly above the grid quotes the number it holds.
+test("closed work is a column of the grid, not a hidden one", async () => {
+  serving({
+    work_projects: {
+      projects: [project({ task_counts: { open: 3, done: 1, closed: 7 } })],
+      total: 1,
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  // THE HEAD ITSELF, not the legend under the grid, which spells the same word
+  // for the segment beside the fill.
+  await waitFor(() =>
+    expect(
+      [...container.querySelectorAll(".grid-head .grid-th")].map((h) => h.textContent),
+    ).toEqual([
+      "Key",
+      "Project",
+      "Lead",
+      "Unit",
+      "Open",
+      "Done",
+      "Closed",
+      "Progress",
+      "Last change",
+    ]),
+  );
+  expect(within(rowFor("ENG")).getByText("7")).toBeTruthy();
 });
 
 // A PROJECT WITH NO LEAD ROUTES ITS UNASSIGNED WORK TO NOBODY, which is a
@@ -143,8 +246,13 @@ test("when work last changed is the engine's own fact, and its absence says whic
   });
   mount();
   await waitFor(() => expect(screen.getByText("Nothing has been filed here")).toBeTruthy());
-  // THE INSTANT AND WHO MADE IT, on the project that has one.
-  expect(within(rowFor("ENG")).getAllByText("Ada Okonkwo").length).toBeGreaterThan(0);
+  // THE INSTANT AND WHO MADE IT, on the project that has one — and ON ONE LINE
+  // with it, because stacked they made every row in the directory a line and a
+  // half tall.
+  const when = rowFor("ENG").querySelector(".work-lastchange");
+  expect(when?.textContent).toMatch(/· Ada Okonkwo$/);
+  // ONE LINE: the stacked shape was a `.col`, and the name below the instant.
+  expect(when?.querySelector(".col")).toBeNull();
   expect(within(rowFor("NEW")).getByText("Nothing has been filed here")).toBeTruthy();
   expect(within(rowFor("OLD")).getByText("Filed before this node recorded one")).toBeTruthy();
 });
@@ -161,7 +269,7 @@ test("a change the engine made names the engine", async () => {
     },
   });
   mount();
-  await waitFor(() => expect(screen.getByText("the engine")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/· the engine/)).toBeTruthy());
 });
 
 // AN OPERATOR IS NOT A SEAT. A write made with an API token carries the
@@ -199,10 +307,57 @@ test("a project with nothing filed draws no meter", async () => {
   expect(container.querySelector(".crewlet-stacked-bar")).toBeNull();
 });
 
+/** Every part the bar actually drew, with the colour it drew it in. */
+function drawn(container: HTMLElement): { color: string; width: string }[] {
+  return [...container.querySelectorAll<HTMLElement>(".crewlet-stacked-bar__segment")].map((s) => ({
+    color: s.style.getPropertyValue("--crewlet-stacked-bar-segment-color"),
+    width: s.style.width,
+  }));
+}
+
+// THE METER IS AN AMOUNT, NOT A SHARE, which is the whole of what it claims: a
+// project holding one open item and nothing else used to draw a FULL solid bar
+// — 100% of its work is open — and read as a project that had finished
+// everything. Nothing done must fill nothing.
+test("a project with nothing done fills nothing", async () => {
+  serving({
+    work_projects: {
+      projects: [project({ task_counts: { open: 1, done: 0, closed: 0 } })],
+      total: 1,
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(container.querySelector(".crewlet-stacked-bar")).toBeTruthy());
+  // The one part drawn is the remainder, and it is the track: untinted.
+  expect(drawn(container)).toEqual([{ color: "transparent", width: "100%" }]);
+});
+
+// AND THE FILL IS DONE AGAINST EVERYTHING FILED. Three of ten done is three
+// tenths of the track, with closed work muted beside it and open work left as
+// the track — not a third of a bar over done + closed.
+test("done fills against everything filed, closed beside it", async () => {
+  serving({
+    work_projects: {
+      projects: [project({ task_counts: { open: 6, done: 3, closed: 1 } })],
+      total: 1,
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(container.querySelector(".crewlet-stacked-bar")).toBeTruthy());
+  expect(drawn(container)).toEqual([
+    { color: "var(--positive)", width: "30%" },
+    { color: "var(--color-data-other)", width: "10%" },
+    { color: "transparent", width: "60%" },
+  ]);
+});
+
 // AND THE LEGEND IS DRAWN ONCE FOR THE COLUMN rather than once per row: an
-// unlabelled stack of three colours is three colours, and forty legends is not
-// forty facts.
-test("the progress column carries one legend under the grid", async () => {
+// unlabelled stack of colours is colours, and forty legends is not forty facts.
+// It names WHAT FILLS the bar and nothing else — a swatch for the untinted
+// remainder would be a colour that is not on it.
+test("the progress column carries one legend, naming what fills", async () => {
   serving({
     work_projects: {
       projects: [project(), project({ key: "PROD", name: "Product" })],
@@ -213,6 +368,9 @@ test("the progress column carries one legend under the grid", async () => {
   const { container } = mount();
   await waitFor(() => expect(container.querySelectorAll(".crewlet-stacked-bar").length).toBe(2));
   expect(container.querySelectorAll(".crewlet-legend")).toHaveLength(1);
+  expect(
+    [...container.querySelectorAll(".crewlet-legend__label")].map((l) => l.textContent),
+  ).toEqual(["Done", "Closed"]);
 });
 
 // AN ARCHIVED PROJECT KEEPS ITS WORK AND STOPS TAKING NEW ITEMS, so it is not
@@ -258,8 +416,17 @@ test("a refused listing is said to be a refusal", async () => {
   expect(screen.queryByText("No work has been filed yet")).toBeNull();
 });
 
-test("a listing that answered with nothing says the company has filed nothing", async () => {
+// A PAGE ABOUT CONTAINERS SAYS SO WHEN IT HAS NONE. This drew the list
+// screen's "No work has been filed yet" — a sentence about ITEMS on the one
+// screen whose rows are projects — so a reader was sent looking for work rather
+// than for the configuration that mints a project.
+test("a company with no projects is told what a project is and where one comes from", async () => {
   serving({ work_projects: { projects: [], total: 0, complete: true } });
   mount();
-  await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("No project has been created yet")).toBeTruthy());
+  expect(screen.getByText(/declares its `project` key/)).toBeTruthy();
+  expect(screen.queryByText("No work has been filed yet")).toBeNull();
+  // AND IT IS SAID ONCE: the lede above the grid is what the page IS, not a
+  // second copy of where a project comes from.
+  expect(screen.getAllByText(/declares its `project` key/)).toHaveLength(1);
 });

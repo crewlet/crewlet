@@ -379,11 +379,11 @@ because every single-modifier combination worth having is already the browser's.
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
 | `#/me` | **My work** — the seven claims on one person's attention | `tab=assigned\|priorities\|asks\|unblocked\|collaborating\|watching\|checklist` · `handle=` (an operator reading somebody else's day) |
 | `#/work` | **All work** | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` + the filter grammar |
-| `#/work/projects` | **Projects** — the directory: every project, its lead, its counts and how far along it is | `shown=active\|archived\|all` · `sort=` |
+| `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page | `shown=active\|archived\|all` · `sort=` |
 | `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
-| `#/work/{KEY}` | **Project** | `lens=items\|overview\|history` · the same view strip and filter grammar, scoped to the project |
+| `#/work/{KEY}` | **Project** — the header says what the container is, its lede says what it is for, and **Items** carries the open count | `lens=items\|overview\|history` · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` (which change's routing) |
 | `#/company` | **Company** — the charter, the chart, and editing them | `lens=chart\|charter\|builder` (builder is *(operator)*) · `unit=` · `seat=` |
 | `#/company/people` | **People** — the one directory, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
@@ -2451,18 +2451,28 @@ is one of the rules on this page applied to a tracker.
   1280 — an ordinary laptop — one board column was left beside a detail
   panel, which is not a board.
 - **The charts answer the questions the numbers cannot.** A census bar says
-  the shape of a project where three counts say only their sizes; a load bar
+  how far along a project is where three counts say only their sizes; a load bar
   is drawn against the HEAVIEST QUEUE on screen rather than an absolute
   ceiling, because a queue of thirty is heavy in one company and a quiet week
   in another. All of them wear STATUS tones rather than the categorical hues,
   so one fact is never two colours on one screen.
+- **A progress meter is an AMOUNT, and its whole is stated.** The project
+  census fills with what is DONE against everything ever filed: closed work is
+  a muted segment beside the fill, because it left the question rather than
+  answering it, and open work is the untinted track. Drawn as a SHARE — each of
+  the three sized against their own sum — a project holding one open item drew
+  a full solid bar and read as finished, which is the state every project of a
+  young company is in. The legend names what FILLS the bar and nothing else: a
+  swatch for the remainder would be a colour that is not on it. The one meter is
+  drawn by `dashboard/src/routes/work/census.tsx`, in the project's header and
+  in the directory's Progress column, so the two cannot disagree about one row.
 
 ---
 
 ## Honest empty states
 
 A screen that renders a blank where data would go is a screen that cannot be
-trusted when it IS blank. Three distinctions the product makes everywhere:
+trusted when it IS blank. Four distinctions the product makes everywhere:
 
 - **Nothing happened** vs **nothing could be read.** "No events" on a fresh
   company and "no events" from a query the engine refused are the same empty
@@ -2492,6 +2502,21 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
   older rows the screen never saw, and a caption reading "some of this may be
   missing" is one nobody can act on where "Knowledge answered one page" says
   where to look.
+- **An empty CONTAINER** vs **a query that matched nothing.** A container says
+  its own emptiness, from what it already knows about itself, before the list
+  it holds has answered anything — and that state REPLACES the list rather than
+  sitting under it. A project page handed its whole body to the work list, so a
+  project nobody has ever filed anything in said "Nothing matches — no item
+  matches these filters. Widen them", with no filter set: a claim about a
+  narrowing that did not exist, on the day-one state of every project. It is
+  drawn from the project's own maintained counts now, names the project, and
+  says how work gets filed (a seat's `create_work_item`, an inbound webhook, a
+  schedule, or your own assistant at `/operator/mcp`). "Nothing matches" is
+  reserved for a query that genuinely narrowed. The same rule sorts the two
+  empty pages apart: the work list's empty state is about ITEMS and the
+  projects directory's is about PROJECTS, so a company with no projects is told
+  what a project is and that a unit's `project` key in the company
+  configuration is what mints one.
 
 Every empty state names what would fill it.
 
