@@ -280,7 +280,8 @@ A **view** is a saved query with a shape. Five shapes:
   comes back is **columns**: each one's count is over the whole set, never over
   the rows it carries, so a column of four hundred says four hundred and hands
   you twenty. Loading one further is `group=<value>`, which narrows the whole
-  query — including its totals.
+  query — including its totals — and the column holding everything nobody
+  filled in is loaded the same way, by naming `group` and leaving it empty.
 - **`calendar`** — by date, which is what you want when the question is "what
   is due". Its axis IS the `due` key, so the grid's own window spends the one
   key the grammar has for it: the fetch is bounded to the days on screen, the
@@ -299,6 +300,51 @@ A **view** is a saved query with a shape. Five shapes:
   value of a column at one place and sorts at its head. The sort it writes is
   the query's own `sort=`, so it orders the **whole set** rather than the page
   that happens to be loaded.
+
+### What a board groups on
+
+Any of these, as `group_by=` — and a second one as `group_by2=`, which splits
+each column into swimlanes:
+
+| Axis | Columns |
+|---|---|
+| `status` · `status_group` · `priority` | The closed sets, in the order they mean rather than by size |
+| `assignee` · `type` · `tag` · `project` · `unit` · `routing_unit` · `parent` | A column per distinct value, biggest first |
+| `f.<slug>` | A custom field's own values |
+| `due:day` · `due:week` · `start:week` | The calendar day or week a date falls in, headed `2031-04-16` or `2031-W16` |
+| `due:bucket` | **When** the work is due, relative to today |
+
+Every axis draws the absent value as its own labelled column — "nobody is
+assigned" is a question a board answers, not a row it hides.
+
+**`due:bucket` is the one that reads a calendar rather than a column.** Its six
+bands are the question somebody opens their own work to ask:
+
+| Band | What is in it |
+|---|---|
+| **Overdue** | Still open, and past its due date |
+| **Earlier** | Past its due date and *finished* |
+| **Today** | Due at any hour of today |
+| **This week** | Due after today, through the end of this week |
+| **Later** | Due after that |
+| **No due date** | Nobody set one |
+
+Two of those need a word. **Earlier** exists because "overdue" means open *and*
+past its date: work somebody delivered late is past its date and is not
+overdue, and filing it under Overdue would claim they still owe it. It is
+empty on the open-only answer a list gives you by default, because nothing
+there can be in it — it appears when you ask for finished work as well.
+And **This week** ends where the week does, Monday-anchored, which is the same
+week `due=range:sow..eow` means: on a Sunday it holds nothing, rather than
+rolling seven days forward into next week.
+
+The day these are cut on is **the company's own midnight, in the company's own
+timezone** — the same instant a row's overdue mark is derived from and the same
+one every `due=` filter is resolved against. That is the whole reason the bands
+are the engine's rather than each screen's: cut in a browser they were cut on
+*that reader's* midnight and *that reader's* week, so for anybody whose local
+day differs from the company's, a task sat under Earlier on a row the same
+answer marked as due today and not overdue.
 
 ### The timeline
 

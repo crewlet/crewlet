@@ -137,7 +137,7 @@ func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
 	dayStart := store.EncodeTime(anchor.At)
 
 	where := "t.removed_at IS NULL AND t.archived = 0 AND t.assignee <> '' " +
-		"AND t.status_group IN ('not_started','active')"
+		"AND t.status_group IN (" + openGroupsSQL + ")"
 	args := []any{dayStart}
 	if q.Unit != "" {
 		where += " AND EXISTS (SELECT 1 FROM tracker_projects p " +
