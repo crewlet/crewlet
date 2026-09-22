@@ -57,7 +57,7 @@ func TestNoResponseCapIsWrittenAsALiteral(t *testing.T) {
 	t.Parallel()
 
 	root := moduleRoot(t)
-	seen, bad := walkForLiteralCaps(t, root)
+	seen, bad := walkFor(t, root, literalCapsIn)
 
 	// A guard asserting an ABSENCE passes identically when the thing is
 	// absent and when the matcher has gone inert. The tree holds a dozen
@@ -112,14 +112,20 @@ func TestTheLiteralCapMatcherStillMatches(t *testing.T) {
 	}
 }
 
-// walkForLiteralCaps parses every non-test Go file under internal/ and cmd/,
-// returning how many io.LimitReader calls it resolved and where the literal
+// walkFor parses every non-test Go file under internal/ and cmd/ and runs one
+// matcher over each, returning how many calls it resolved and where the bad
 // ones are.
+//
+// GENERIC over the matcher because there are two guards in this file and a
+// second copy of a directory walk is the shape this whole file exists to
+// stop.
 //
 // TEST FILES ARE EXCLUDED, deliberately. A test that feeds a reader four
 // bytes to prove a cap bites is naming a fixture, not a policy, and forcing
 // it through a constant would make the case unreadable.
-func walkForLiteralCaps(t *testing.T, root string) (int, []string) {
+func walkFor(t *testing.T, root string,
+	match func(*token.FileSet, *ast.File, string) (int, []string),
+) (int, []string) {
 	t.Helper()
 
 	var seen int
@@ -140,7 +146,7 @@ func walkForLiteralCaps(t *testing.T, root string) (int, []string) {
 				t.Fatalf("parse %s: %v", path, parseErr)
 			}
 			where, _ := filepath.Rel(root, path)
-			n, hits := literalCapsIn(fset, file, where)
+			n, hits := match(fset, file, where)
 			seen += n
 			bad = append(bad, hits...)
 			return nil
@@ -216,4 +222,150 @@ func ioImportName(file *ast.File) (string, bool) {
 		return "io", true
 	}
 	return "", false
+}
+
+// TestACappedBufferReadsOnePastItsCeiling fails the build when a client
+// buffers a capped body without leaving itself a way to notice the overrun.
+//
+// # The shape the other guard could not see
+//
+// [TestNoResponseCapIsWrittenAsALiteral] judges the LIMIT, so every one of
+// these passed it by handing io.LimitReader a named constant — and then did
+// the thing the constant exists to prevent:
+//
+//	detail, _ := io.ReadAll(io.LimitReader(resp.Body, RefusalBytes))
+//	... string(detail) ...
+//
+// io.LimitReader stops AT its limit and reports io.EOF, which is
+// indistinguishable from a body that ended there. So the bytes past the
+// ceiling are gone, the read error is discarded, and what reaches the caller
+// is a severed value wearing a complete one's shape: a JSON object that fails
+// to decode into an EMPTY message, a sentence cut mid-word, invalid UTF-8
+// where a multi-byte rune straddled the boundary. That is the whole of what
+// this package's doc means by A CAP IS NOT A CUT, and it was live in six
+// vendor clients plus three calls in the E2B envd client while the literal
+// guard above reported the tree clean.
+//
+// # The rule
+//
+// Read ONE BYTE PAST the ceiling. Then `len(buf) > max` is the overrun, and a
+// caller can refuse naming the limit instead of quoting a fragment. That is
+// exactly what [ReadBody] does, and reaching for it is the better answer —
+// but the guard is written against the IDIOM rather than the helper, because
+// a client that open-codes the read for a reason of its own is still correct
+// as long as it leaves itself the extra byte.
+//
+// Only io.ReadAll is the subject. A streaming decoder over a LimitReader
+// (`json.NewDecoder(io.LimitReader(...))`) is deliberately NOT flagged:
+// nothing is buffered, so there is no severed value to hand on — see
+// [ReadBody]'s doc, which states that exemption.
+//
+// If this rule ever legitimately goes away, DELETE this guard rather than
+// adding an exception, for the reason the guard above gives.
+func TestACappedBufferReadsOnePastItsCeiling(t *testing.T) {
+	t.Parallel()
+
+	root := moduleRoot(t)
+	seen, bad := walkFor(t, root, cappedBuffersIn)
+
+	if seen == 0 {
+		t.Fatal("matched no io.ReadAll(io.LimitReader(...)) at all — this " +
+			"guard was certifying nothing")
+	}
+	for _, where := range bad {
+		t.Errorf("%s: a capped body is buffered without the +1 that makes an "+
+			"overrun visible, so the cap silently becomes a cut. Use "+
+			"httpx.ReadBody, which reads one past and refuses naming the "+
+			"limit, or pass `<cap>+1` and check len() yourself", where)
+	}
+}
+
+// TestTheCappedBufferMatcherStillMatches is the positive control, for the
+// reason the one above it exists: a guard asserting an absence passes
+// identically when the matcher goes inert.
+func TestTheCappedBufferMatcherStillMatches(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"capped and buffered flush to the cap", `io.ReadAll(io.LimitReader(r, httpx.RefusalBytes))`, true},
+		{"a literal, flush to the cap", `io.ReadAll(io.LimitReader(r, 2048))`, true},
+		{"one past the cap", `io.ReadAll(io.LimitReader(r, httpx.RefusalBytes+1))`, false},
+		{"one past a local constant", `io.ReadAll(io.LimitReader(r, maxEnvdFile+1))`, false},
+		{"one past a parameter", `io.ReadAll(io.LimitReader(r, max+1))`, false},
+		// A DECODER IS NOT A BUFFER: it consumes as it reads, so there is
+		// no severed value to hand on. ReadBody's doc states the exemption.
+		{"a streaming decoder", `json.NewDecoder(io.LimitReader(r, httpx.MaxResponseBody))`, false},
+		{"a drain", `io.Copy(io.Discard, io.LimitReader(r, httpx.DrainBytes))`, false},
+		{"an uncapped read", `io.ReadAll(r)`, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			src := "package p\nimport \"io\"\nvar _, _ = " + c.src + "\n"
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "x.go", src, 0)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			_, hits := cappedBuffersIn(fset, file, "x.go")
+			if got := len(hits) > 0; got != c.want {
+				t.Errorf("matched = %v, want %v for %s", got, c.want, c.src)
+			}
+		})
+	}
+}
+
+// cappedBuffersIn reports io.ReadAll(io.LimitReader(r, N)) calls whose N does
+// not leave the extra byte, and how many of the idiom it resolved at all.
+func cappedBuffersIn(fset *token.FileSet, file *ast.File, path string) (int, []string) {
+	name, ok := ioImportName(file)
+	if !ok {
+		return 0, nil
+	}
+	var seen int
+	var bad []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		outer, isCall := n.(*ast.CallExpr)
+		if !isCall || len(outer.Args) != 1 || !callsIO(outer.Fun, name, "ReadAll") {
+			return true
+		}
+		inner, isCall := outer.Args[0].(*ast.CallExpr)
+		if !isCall || len(inner.Args) != 2 || !callsIO(inner.Fun, name, "LimitReader") {
+			return true
+		}
+		seen++
+		if !readsOnePast(inner.Args[1]) {
+			bad = append(bad, fmt.Sprintf("%s:%d", path, fset.Position(inner.Pos()).Line))
+		}
+		return true
+	})
+	return seen, bad
+}
+
+// readsOnePast reports whether a limit expression ends in `+ 1`.
+//
+// The SHAPE rather than the value, because the ceiling itself is deliberately
+// a named constant this walk cannot resolve — that is the other guard's rule.
+// What is checkable here is that the author left themselves the extra byte.
+func readsOnePast(limit ast.Expr) bool {
+	sum, ok := limit.(*ast.BinaryExpr)
+	if !ok || sum.Op != token.ADD {
+		return false
+	}
+	one, ok := sum.Y.(*ast.BasicLit)
+	return ok && one.Kind == token.INT && one.Value == "1"
+}
+
+// callsIO reports whether an expression is a call to io.<fn>, resolved against
+// the file's own import name so a renamed import is still covered.
+func callsIO(fun ast.Expr, pkg, fn string) bool {
+	sel, ok := fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != fn {
+		return false
+	}
+	ident, ok := sel.X.(*ast.Ident)
+	return ok && ident.Name == pkg
 }
