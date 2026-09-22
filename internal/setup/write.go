@@ -56,15 +56,22 @@ type Config interface {
 	// under a name nothing points at.
 	Current(ctx context.Context) (string, error)
 
-	// Seat reads one seat's whole entity, as JSON, and SetSeat writes it
+	// Seat reads one seat's whole document, as JSON, and SetSeat writes it
 	// back under the same handle.
 	//
-	// A SEPARATE PATH FROM Apply, and it has to be: a merge patch replaces
-	// an array wholesale, so patching `roles` to change one seat would
-	// delete every other one. The entity route addresses a seat by its
-	// handle, which is its identity rather than its position.
+	// A SEPARATE PATH FROM Apply, and it has to be: a seat is not part of
+	// the stored configuration at all. It lives on the org chart's own
+	// log, where a change is one record arbitrated on that seat's own
+	// subject — so two people editing two different seats do not contend,
+	// where a merge patch over `roles` would have had one of them delete
+	// the other's seat outright.
+	//
+	// SetSeat REPORTS A LOG POSITION rather than a revision and an epoch,
+	// because it makes neither. `expect` is carried for the company-wide
+	// writes above and IGNORED here: it is an `If-Match` against a
+	// revision, and there is none to match.
 	Seat(ctx context.Context, handle string) ([]byte, error)
-	SetSeat(ctx context.Context, handle string, body []byte, summary, operator, expect string) (revisionID string, epoch int64, err error)
+	SetSeat(ctx context.Context, handle string, body []byte, summary, operator, expect string) (position string, err error)
 }
 
 // Source is the value the secret store records for a row this package wrote,
@@ -100,9 +107,23 @@ type Submission struct {
 
 // Result is what a submission produced.
 type Result struct {
-	RevisionID string   `json:"revision_id"`
-	Epoch      int64    `json:"epoch"`
-	Secrets    []string `json:"wrote_secrets"`
+	// RevisionID and Epoch are what a COMPANY-WIDE write produced. Both
+	// are empty on a per-seat write, which stores no revision — see
+	// ChartPosition.
+	RevisionID string `json:"revision_id"`
+	Epoch      int64  `json:"epoch"`
+
+	// ChartPosition is where a PER-SEAT write landed on the org chart's
+	// log, and it is the other half of the pair above rather than an
+	// addition to it: a seat is not part of the stored configuration, so
+	// such a write makes no revision and advances no epoch.
+	//
+	// ABSENT RATHER THAN STALE. Reporting the revision that happened to be
+	// active would name a document this write did not touch, and a client
+	// polling for it would wait for an activation that is never coming.
+	ChartPosition string `json:"chart_position,omitempty"`
+
+	Secrets []string `json:"wrote_secrets"`
 	// Reloaded reports that the document did not change and the epoch was
 	// advanced anyway, so a rotated value reached the running seats.
 	Reloaded bool `json:"reloaded"`
@@ -376,11 +397,15 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 	if err != nil {
 		return Result{}, fmt.Errorf("setup: encode seat %s: %w", in.Seat, err)
 	}
-	id, epoch, err := w.Config.SetSeat(ctx, in.Seat, body, in.Summary, in.Operator, in.Expect)
+	at, err := w.Config.SetSeat(ctx, in.Seat, body, in.Summary, in.Operator, in.Expect)
 	if err != nil {
 		return Result{Secrets: written}, err
 	}
-	return Result{RevisionID: id, Epoch: epoch, Secrets: written}, nil
+	// NO REVISION AND NO EPOCH, and they are ABSENT rather than stale: a
+	// per-seat write lands on the org chart's log and makes neither, so
+	// reporting the revision that happened to be active would name a
+	// document this write did not touch.
+	return Result{ChartPosition: at, Secrets: written}, nil
 }
 
 func (w Writer) now() time.Time {

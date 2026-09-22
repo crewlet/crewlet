@@ -351,13 +351,17 @@ func (s *surface) convertOneApp(t *testing.T, handle string, app map[string]any)
 }
 
 // seatDoc reads one seat back through the entity route the flow writes it on.
+// seatDoc is one seat's own document, read from THE CHART's half rather than
+// from the settings revision: a seat is not in the stored configuration any
+// more, and reading it there would answer a document this surface no longer
+// writes.
 func (s *surface) seatDoc(t *testing.T, handle string) []byte {
 	t.Helper()
-	res := s.do(t, http.MethodGet, "/config/roles/"+handle, "", nil)
-	if res.Code != http.StatusOK {
-		t.Fatalf("read the seat %s = %d: %s", handle, res.Code, res.Body)
+	body, err := s.seats.SeatDocument(t.Context(), handle)
+	if err != nil {
+		t.Fatalf("read the seat %s: %v", handle, err)
 	}
-	return res.Body.Bytes()
+	return body
 }
 
 // AN APP'S OWN WEBHOOK SECRET IS SEALED AND POINTED AT.
@@ -384,18 +388,18 @@ func TestAnAppsWebhookSecretIsSealedAndReachable(t *testing.T) {
 	}
 	// AND POINTED AT from the seat, which is the half that was missing.
 	body := s.seatDoc(t, "sre-lead")
+	// THE RUNTIME SEAT'S SHAPE: `github` at the top level rather than
+	// under `integrations`, which is what the chart's own blob holds.
 	var seat struct {
-		Integrations struct {
-			GitHub struct {
-				WebhookSecret string `json:"webhook_secret"`
-				PrivateKey    string `json:"private_key"`
-			} `json:"github"`
-		} `json:"integrations"`
+		GitHub struct {
+			WebhookSecret string `json:"webhook_secret"`
+			PrivateKey    string `json:"private_key"`
+		} `json:"github"`
 	}
 	if err := json.Unmarshal(body, &seat); err != nil {
 		t.Fatalf("decode the seat: %v", err)
 	}
-	if got := seat.Integrations.GitHub.WebhookSecret; got != "${GITHUB_APP_WEBHOOK_SECRET_SRE_LEAD}" {
+	if got := seat.GitHub.WebhookSecret; got != "${GITHUB_APP_WEBHOOK_SECRET_SRE_LEAD}" {
 		t.Errorf("the seat points at %q, so nothing can verify this app's deliveries", got)
 	}
 	// THE POINTER, NEVER THE VALUE. A secret in the document is one the

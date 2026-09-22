@@ -1194,7 +1194,7 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// The surface a DISCONNECT removes a block through. Until it is set
 	// the loop refuses a disconnect rather than running the teardown at
 	// the third-party app and leaving the block behind.
-	e.UseConfigWriter(engineConfigWriter{surface: configSurface})
+	e.UseConfigWriter(engineConfigWriter{surface: configSurface, engine: e})
 
 	// ONE PROCESS IS BOTH ENGINE AND API, sharing one broker and one store,
 	// and it is the only shape an API is served in. The API half is what
@@ -1541,6 +1541,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	setupSurface, err := setupapi.New(setupapi.Options{
 		Company: func() (*config.Company, *org.Organization) { return companyConfig(e) },
 		Config:  configSurface,
+		// THE OTHER HALF OF A COMPANY. A seat's own document is the org
+		// chart's, not the stored revision's, so a per-seat submission
+		// writes through the engine rather than through the config
+		// surface beside it.
+		Seats: e,
 		// The fleet's own store, sealed with the same keyring. A node with
 		// no secrets.keys still gets one, and every secret write through
 		// it refuses with no_keyring rather than storing plaintext.
@@ -2444,7 +2449,13 @@ func operatorLogFormat() logging.Format {
 // engineConfigWriter lets the reconcile loop remove a block through the same
 // PATCH /config surface every other write uses: one merge, one validation,
 // one compare-and-set onto the document.
-type engineConfigWriter struct{ surface *configapi.Service }
+// engineConfigWriter is the engine's own way back onto the company, and it
+// reaches TWO surfaces because a company is two things: the settings, through
+// the config service, and the org chart, through the engine itself.
+type engineConfigWriter struct {
+	surface *configapi.Service
+	engine  *engine.Engine
+}
 
 func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary, operator string) error {
 	_, err := w.surface.Apply(ctx, configapi.ApplyRequest{
@@ -2460,23 +2471,18 @@ func (w engineConfigWriter) Reload(ctx context.Context, summary, operator string
 	return err
 }
 
-// Seat and SetSeat are the per-seat write, through the entity route: a seat
-// is addressed by its handle, because a merge patch cannot reach one element
-// of a list without replacing the list.
+// Seat and SetSeat are the per-seat write, THROUGH THE CHART: a seat is not
+// part of the stored configuration any more, so there is no entity to splice
+// and no revision to store. See [engine.Engine.SeatDocument] for the document
+// the two carry and why its shape moved with them.
 func (w engineConfigWriter) Seat(ctx context.Context, handle string) ([]byte, error) {
-	entity, err := w.surface.Entity(ctx, "roles", handle)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(entity)
+	return w.engine.SeatDocument(ctx, handle)
 }
 
 func (w engineConfigWriter) SetSeat(
 	ctx context.Context, handle string, body []byte, summary, operator string,
 ) error {
-	_, err := w.surface.ApplyEntity(ctx, configapi.ApplyEntityRequest{
-		Kind: "roles", ID: handle, Body: body, Summary: summary, Operator: operator,
-	})
+	_, err := w.engine.SetSeatDocument(ctx, handle, body, summary, operator)
 	return err
 }
 

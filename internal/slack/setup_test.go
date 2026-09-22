@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
 )
@@ -146,11 +146,15 @@ func TestTheSlackSeatFormAsksOnlyForValuesThatAreRead(t *testing.T) {
 //
 // `ConfigPath` is where [setup] writes the answer, relative to the seat, and
 // it is a STRING — nothing connects it to the struct it addresses. A path
-// naming a field `config.Role` does not carry is a box an operator can fill in
-// and never submit: the company document is decoded with `KnownFields(true)`,
-// so the merged revision is refused whole at load rather than quietly dropping
-// the key. Walking the json tags is the only thing in the tree that ties the
-// two together.
+// naming a field the seat does not carry is a box an operator can fill in and
+// never submit. Walking the json tags is the only thing in the tree that ties
+// the two together.
+//
+// THE RUNTIME SEAT, [org.Role], and not the authored [config.Role]. A
+// per-seat write goes through the org chart, whose blob holds exactly this
+// shape — so a vendor identity sits at the top level, and a path written
+// against the authored document would resolve to nothing at the one moment it
+// is used.
 func TestEverySlackRequirementNamesAFieldTheSeatHas(t *testing.T) {
 	t.Parallel()
 	for _, r := range slack.Requirements("sre-lead", nil, nil) {
@@ -158,9 +162,18 @@ func TestEverySlackRequirementNamesAFieldTheSeatHas(t *testing.T) {
 			t.Errorf("%s says nowhere to write its answer", r.Field)
 			continue
 		}
-		if err := resolvePath(reflect.TypeFor[config.Role](), r.ConfigPath); err != nil {
+		if err := resolvePath(reflect.TypeFor[org.Role](), r.ConfigPath); err != nil {
 			t.Errorf("%s: %v", r.Field, err)
 		}
+	}
+	// THE CONTROL, and it is the case this walk exists for: the AUTHORED
+	// path these used to carry resolves in neither shape now, so a stale
+	// one would be caught rather than quietly written into a seat nobody
+	// reads.
+	if err := resolvePath(reflect.TypeFor[org.Role](),
+		"integrations.slack.bot_token"); err == nil {
+		t.Error("the authored path still resolves against the runtime seat, " +
+			"so this walk would not notice one left behind")
 	}
 }
 

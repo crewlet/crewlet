@@ -21,13 +21,16 @@ type ConfigWriter interface {
 	// result.
 	Apply(ctx context.Context, patch []byte, summary, operator string) error
 
-	// Seat reads one seat's whole entity as JSON, and SetSeat writes it
+	// Seat reads one seat's whole document as JSON, and SetSeat writes it
 	// back under the same handle.
 	//
-	// A SEPARATE PATH FROM Apply, and it has to be: a merge patch replaces
-	// an array wholesale, so patching `roles` to change one seat would
-	// delete every other one. The entity route addresses a seat by its
-	// handle, which is its identity rather than its position.
+	// A SEPARATE PATH FROM Apply, and it has to be: a seat is not part of
+	// the stored configuration at all. It lives on the org chart's own
+	// log, where a change is one record arbitrated on that seat's own
+	// subject — so two passes recording two seats' apps never contend,
+	// where a merge patch over `roles` would have had one delete the
+	// other's seat outright. See [Engine.SeatDocument] for the document
+	// the two carry and why its shape differs from the authored one.
 	//
 	// The GitHub pass writes here: an operator installs an agent's app in
 	// a browser, which tells the engine nothing, so the loop discovers the
@@ -357,17 +360,15 @@ func (e *Engine) editGitHubSeat(
 	if decodeErr := json.Unmarshal(body, &role); decodeErr != nil {
 		return fmt.Errorf("engine: decode the seat %s: %w", handle, decodeErr)
 	}
-	integrations, _ := role["integrations"].(map[string]any)
-	if integrations == nil {
-		return fmt.Errorf("engine: the seat %s has no integrations block", handle)
-	}
-	block, _ := integrations["github"].(map[string]any)
+	// `github` RATHER THAN `integrations.github`: this is the RUNTIME seat,
+	// which is the shape the chart's own blob holds. See
+	// [Engine.SeatDocument].
+	block, _ := role["github"].(map[string]any)
 	if block == nil {
 		return fmt.Errorf("engine: the seat %s has no github app to record against", handle)
 	}
 	edit(block)
-	integrations["github"] = block
-	role["integrations"] = integrations
+	role["github"] = block
 
 	updated, err := json.Marshal(role)
 	if err != nil {

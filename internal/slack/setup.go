@@ -61,10 +61,13 @@ func Requirements(handle string, seat *org.Role, resolve func(string) (string, b
 			Connect: true,
 			Label:   "Bot token",
 			Kind:    setup.KindSecret,
-			// RELATIVE TO THE SEAT. A seat is addressed by its handle
-			// through the entity route, because a merge patch cannot
-			// reach one element of a list without replacing the list.
-			ConfigPath: "integrations.slack.bot_token",
+			// RELATIVE TO THE SEAT, and to the RUNTIME seat: a
+			// per-seat write goes through the org chart, whose blob
+			// holds the shape org.Role declares, so this identity is
+			// `slack` rather than `integrations.slack`. A seat is
+			// addressed by its handle there, which is the subject its
+			// own changes are arbitrated on.
+			ConfigPath: "slack.bot_token",
 			Seat:       handle,
 			Required:   true,
 			// THE ROUTE TO THE VALUE, not a description of it.
@@ -108,7 +111,7 @@ func Requirements(handle string, seat *org.Role, resolve func(string) (string, b
 			Connect:    true,
 			Label:      "Signing secret",
 			Kind:       setup.KindSecret,
-			ConfigPath: "integrations.slack.signing_secret",
+			ConfigPath: "slack.signing_secret",
 			Seat:       handle,
 			Required:   true,
 			Help: "Navigate to [api.slack.com/apps](https://api.slack.com/apps) > " +

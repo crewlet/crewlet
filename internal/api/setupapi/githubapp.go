@@ -328,12 +328,17 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	return handle, nil
 }
 
-// recordSeatApp writes the app onto the seat, through the entity route.
+// recordSeatApp writes the app onto the seat, through the ORG CHART.
 //
-// THE ENTITY ROUTE, not a merge patch: a patch replaces an array wholesale,
-// so patching `roles` to change one seat would delete every other one. The
-// handle is the seat's identity rather than its position, which is exactly
-// what this route addresses by.
+// THE CHART, not a merge patch over the settings: a patch replaces an array
+// wholesale, so patching `roles` to change one seat would delete every other
+// one — and a seat is not in the settings at all any more. On the chart the
+// handle IS the subject a change is arbitrated on, so two passes recording
+// two seats' apps never contend.
+//
+// THE BLOCK IS `github` RATHER THAN `integrations.github`, because this is
+// the RUNTIME seat — the shape the chart's own blob holds — rather than the
+// authored document. See [engine.Engine.SeatDocument].
 func (s *Service) recordSeatApp(
 	ctx context.Context, handle string, app *github.CreatedApp, keyVar, hookRef string,
 ) error {
@@ -345,11 +350,7 @@ func (s *Service) recordSeatApp(
 	if decodeErr := json.Unmarshal(body, &role); decodeErr != nil {
 		return fmt.Errorf("setupapi: decode the seat %s: %w", handle, decodeErr)
 	}
-	integrations, _ := role["integrations"].(map[string]any)
-	if integrations == nil {
-		integrations = map[string]any{}
-	}
-	block, _ := integrations["github"].(map[string]any)
+	block, _ := role["github"].(map[string]any)
 	if block == nil {
 		block = map[string]any{}
 	}
@@ -367,14 +368,13 @@ func (s *Service) recordSeatApp(
 	// be a day after the first. Zero is the state the screen reports as
 	// "installed nowhere yet", which is a thing an operator can act on.
 	block["installation_id"] = 0
-	integrations["github"] = block
-	role["integrations"] = integrations
+	role["github"] = block
 
 	updated, err := json.Marshal(role)
 	if err != nil {
 		return fmt.Errorf("setupapi: encode the seat %s: %w", handle, err)
 	}
-	_, _, err = s.writer.Config.SetSeat(ctx, handle, updated,
+	_, err = s.writer.Config.SetSeat(ctx, handle, updated,
 		"give "+handle+" its own GitHub App", "setup", "")
 	if err != nil {
 		return fmt.Errorf("setupapi: record the app for %s: %w", handle, err)

@@ -299,12 +299,17 @@ type Requirement struct {
 	// company-wide one.
 	//
 	// IT CHANGES WHAT ConfigPath MEANS, and it has to. A company-wide
-	// path is absolute (`integrations.slack.typing_status`); a per-seat
-	// one is RELATIVE TO THE SEAT (`integrations.slack.bot_token`),
-	// because a seat is addressed by its handle rather than by its
-	// position, and a merge patch cannot reach a list element without
-	// replacing the whole list. So a per-seat write goes through the
-	// entity route instead, where the handle IS the address.
+	// path is absolute into the settings document
+	// (`integrations.slack.typing_status`); a per-seat one is RELATIVE TO
+	// THE RUNTIME SEAT (`slack.bot_token`), which is a different document
+	// with a different shape.
+	//
+	// A seat is not part of the stored configuration at all: it lives on
+	// the org chart's own log, where a change is one record arbitrated on
+	// that seat's own subject. So a per-seat write goes through the chart
+	// instead, carrying the seat's runtime document — the shape [org.Role]
+	// declares, in which a vendor identity sits at the top level rather
+	// than under `integrations`.
 	Seat string `json:"seat,omitempty"`
 
 	// Stored is what the config document holds at ConfigPath right now: a

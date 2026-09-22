@@ -309,6 +309,24 @@ func unitFrom(row chart.Unit) *Unit {
 	return unit
 }
 
+// SeatFrom is one chart row as the runtime model's seat, with the `manages:`
+// edges the row's own table holds.
+//
+// EXPORTED BECAUSE THE PER-SEAT WRITE NEEDS IT. A provisioning pass reads one
+// seat, edits a vendor identity inside it and writes it back, and it has to
+// see exactly what the view sees — the runtime document with the row's own
+// fields over it — or the two would disagree about a seat while both claiming
+// to describe it.
+//
+// IT IS NOT THE VIEW. Nothing here normalises: a `manages:` entry naming a
+// unit is still a unit key, no lead is inherited, and no auto-managed handle
+// has been added. That is deliberate and is what makes it safe to write back:
+// those are DERIVATIONS the view performs on every build, and persisting one
+// would turn a computed answer into a stored one that nothing recomputes.
+func SeatFrom(row chart.Seat, manages []string) *Role {
+	return seatFrom(row, manages)
+}
+
 // seatFrom is one row as the runtime model's seat.
 func seatFrom(row chart.Seat, manages []string) *Role {
 	// THE RUNTIME DOCUMENT FIRST, then the row's own fields over it — see

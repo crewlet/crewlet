@@ -33,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/whsec"
 )
@@ -89,6 +90,9 @@ type surface struct {
 	configs *store.Configs
 	// status is the fleet row every write on this surface records to.
 	status *statusStore
+	// seats is the org chart's half: a seat's own document, which the
+	// settings revision beside it does not carry.
+	seats *seatStore
 	// setup is the service itself, kept so a test can reach the app flow
 	// the webhook callback is served.
 	setup *setupapi.Service
@@ -149,6 +153,9 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	if opts.StateClaims == nil {
 		opts.StateClaims = coordmemory.NewFleet()
 	}
+	if opts.Seats == nil {
+		opts.Seats = &seatStore{}
+	}
 	svc, err := setupapi.New(opts)
 	if err != nil {
 		t.Fatalf("setupapi.New: %v", err)
@@ -171,6 +178,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		return setupapi.Options{
 			Company:     companySource(t, nil),
 			Config:      cfg,
+			Seats:       &seatStore{},
 			Secrets:     v,
 			Resolve:     v.get,
 			Passes:      setup.NewRunner(nil, nil, nil),
@@ -186,6 +194,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	for field, strip := range map[string]func(*setupapi.Options){
 		"Company":     func(o *setupapi.Options) { o.Company = nil },
 		"Config":      func(o *setupapi.Options) { o.Config = nil },
+		"Seats":       func(o *setupapi.Options) { o.Seats = nil },
 		"Secrets":     func(o *setupapi.Options) { o.Secrets = nil },
 		"Resolve":     func(o *setupapi.Options) { o.Resolve = nil },
 		"Passes":      func(o *setupapi.Options) { o.Passes = nil },
@@ -216,7 +225,7 @@ func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
 	v := &vault{}
 	s := &surface{
 		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(),
-		status: &statusStore{},
+		status: &statusStore{}, seats: &seatStore{},
 	}
 	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
 	// engine hands it over: a screen bound to the company this process
@@ -236,7 +245,7 @@ func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
 		return doc, o
 	}
 	s.setup = newService(t, setupapi.Options{
-		Company: s.company, Config: cfg, Secrets: v,
+		Company: s.company, Config: cfg, Seats: s.seats, Secrets: v,
 		// The resolution chain: what the vault holds is what resolved.
 		Resolve:   v.get,
 		Status:    s.status,
@@ -1349,9 +1358,11 @@ func TestSlackAnswersOneListPerAgentSeat(t *testing.T) {
 	}
 }
 
-// A PER-SEAT SUBMISSION WRITES THROUGH THE SEAT, not through a merge patch: a
-// patch replaces an array wholesale, so patching the roster to change one seat
-// would delete every other one.
+// A PER-SEAT SUBMISSION WRITES THROUGH THE SEAT'S OWN DOCUMENT, not through a
+// merge patch over the settings: a patch replaces an array wholesale, so
+// patching the roster to change one seat would delete every other one — and a
+// seat is not in the settings at all any more. It lands on the org chart,
+// where the handle IS the subject the change is arbitrated on.
 func TestAPerSeatSubmissionLeavesTheOtherSeatsAlone(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -1371,17 +1382,26 @@ func TestAPerSeatSubmissionLeavesTheOtherSeatsAlone(t *testing.T) {
 			t.Errorf("%s was not sealed", name)
 		}
 	}
-	// AND THE OTHER SEAT SURVIVES, which is what a merge patch would have
-	// destroyed.
+	// THE SEAT POINTS AT WHAT WAS SEALED, in the RUNTIME shape: `slack` at
+	// the top level, which is where a per-seat ConfigPath writes now.
+	seat := string(s.seatDoc(t, "sre-lead"))
+	if !strings.Contains(seat, "${SLACK_BOT_TOKEN_SRE_LEAD}") {
+		t.Fatalf("the seat does not point at its sealed token: %s", seat)
+	}
+	if strings.Contains(seat, "xoxb-one") {
+		t.Fatal("the seat's own document holds the credential itself")
+	}
+	// AND NOBODY ELSE WAS TOUCHED, which is what a merge patch over the
+	// roster would have destroyed. One seat was written and one only.
+	if len(s.seats.wrote) != 1 || s.seats.wrote[0] != "sre-lead" {
+		t.Fatalf("the write touched %v, want sre-lead alone", s.seats.wrote)
+	}
+	// AND THE SETTINGS DOCUMENT IS NOT WHERE IT WENT: a credential that
+	// reached a revision would be one every node stores and every export
+	// carries.
 	doc := s.do(t, http.MethodGet, "/config", "", nil)
-	if !strings.Contains(doc.Body.String(), `"cto"`) {
-		t.Fatalf("the other seat is gone from the document: %s", doc.Body)
-	}
-	if !strings.Contains(doc.Body.String(), "${SLACK_BOT_TOKEN_SRE_LEAD}") {
-		t.Fatalf("the seat does not point at its sealed token: %s", doc.Body)
-	}
-	if strings.Contains(doc.Body.String(), "xoxb-one") {
-		t.Fatal("the document holds the credential itself")
+	if strings.Contains(doc.Body.String(), "SLACK_BOT_TOKEN_SRE_LEAD") {
+		t.Fatalf("a per-seat write reached the settings revision: %s", doc.Body)
 	}
 }
 
@@ -1975,4 +1995,40 @@ func (v *vault) forget(names ...string) {
 	for _, name := range names {
 		delete(v.values, name)
 	}
+}
+
+// seatStore is the org chart's per-seat document, as a map.
+//
+// ITS OWN FAKE rather than the config surface's entity route, because they are
+// different documents now: a seat's own content lives on the chart's log, in
+// the RUNTIME shape, and the settings revision beside it carries no seats at
+// all.
+type seatStore struct {
+	docs  map[string][]byte
+	err   error
+	wrote []string
+}
+
+func (s *seatStore) SeatDocument(_ context.Context, handle string) ([]byte, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if body, held := s.docs[handle]; held {
+		return body, nil
+	}
+	return []byte(`{"name":"` + handle + `","handle":"` + handle + `"}`), nil
+}
+
+func (s *seatStore) SetSeatDocument(_ context.Context, handle string, body []byte,
+	_, _ string) (statelog.Position, error) {
+
+	if s.err != nil {
+		return statelog.Position{}, s.err
+	}
+	if s.docs == nil {
+		s.docs = map[string][]byte{}
+	}
+	s.docs[handle] = body
+	s.wrote = append(s.wrote, handle)
+	return statelog.Position{Stream: "CREWLET_CHART_LOG", Seq: uint64(len(s.wrote))}, nil
 }

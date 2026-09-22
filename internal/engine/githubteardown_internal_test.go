@@ -34,7 +34,10 @@ func newSeatWriter(handle string, app map[string]any) *seatWriter {
 	return &seatWriter{seats: map[string]map[string]any{
 		handle: {
 			"name": "SRE Lead", "handle": handle,
-			"integrations": map[string]any{"github": app},
+			// THE RUNTIME SEAT'S SHAPE: `github` at the top level,
+			// which is what the chart's own blob holds and what
+			// [Engine.SeatDocument] carries.
+			"github": app,
 		},
 	}}
 }
@@ -75,8 +78,7 @@ func (w *seatWriter) installation(handle string) (any, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	role := w.seats[handle]
-	integrations, _ := role["integrations"].(map[string]any)
-	block, _ := integrations["github"].(map[string]any)
+	block, _ := role["github"].(map[string]any)
 	id, ok := block["installation_id"]
 	return id, ok
 }

@@ -252,13 +252,13 @@ func (r *recorder) Seat(_ context.Context, handle string) ([]byte, error) {
 
 func (r *recorder) SetSeat(
 	_ context.Context, handle string, body []byte, summary, _, expect string,
-) (string, int64, error) {
+) (string, error) {
 	if r.failApp != nil {
-		return "", 0, r.failApp
+		return "", r.failApp
 	}
 	r.events = append(r.events,
 		"seat:"+handle+" body="+string(body)+" summary="+summary+" expect="+expect)
-	return "rev-3", 9, nil
+	return "CREWLET_CHART_LOG@1:9", nil
 }
 
 func (r *recorder) Current(context.Context) (string, error) {
