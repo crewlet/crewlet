@@ -909,11 +909,24 @@ func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog
 //   - the node is EVICTED, so its peers drop every record it publishes and
 //     its rows have already stopped being the fleet's;
 //   - the node is BELOW THE TRIM FLOOR, so records it never applied have been
-//     deleted and its rows have a hole nothing will fill;
+//     deleted and its rows have a hole nothing will fill — and a floor NOBODY
+//     COULD READ for four heartbeats takes the same branch, because an unread
+//     floor is not a floor that is satisfied;
+//   - its checkpoint names A STREAM THAT IS NOT THIS ONE, a log deleted and
+//     rebuilt under it, so its rows are keyed to a history that is gone;
+//   - the applied prefix is STALLED, so the node owes progress it has not
+//     made for [statelog.StallGrace] and every expectation it forms is stale;
 //   - it has held a record it CANNOT DECODE past [statelog.DeferralGrace],
 //     which is D122: under the grace nothing changes, because that covers
 //     every rolling upgrade; past it the honest reading is "this node cannot
 //     run this company's records" rather than "this node is briefly behind".
+//
+// BEING BEHIND IS NOT ON THAT LIST AND FIRES NOTHING HERE. A lag is the
+// admission gate's business, and a term here that read one sheds a company's
+// seats on its own writes: a single node released all seven of its seats on
+// each burst of tracker records, because the record it had not applied yet
+// made the reading `lag == 0` false for one heartbeat. What a stalled prefix
+// says and a lag does not is that the node is not applying its way out.
 //
 // Until this had a caller the `deferred_old` alarm told an operator "its seats
 // move at 30m0s" and its remedy said "its seats have already moved", and
@@ -1021,7 +1034,15 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 		lag = end - at.Seq
 	}
 	health.Lag = &lag
-	health.CaughtUp = lag == 0
+	// THE INSTANT IS THE LAG ABOVE; THE HISTORY IS THIS. `Drained` is the
+	// applier's own record of having reached the end of its log at least
+	// once, which is a property of a series and therefore not derivable
+	// from the subtraction beside it — and deriving it from that
+	// subtraction is what released every seat on this node each time
+	// somebody filed a work item. A STALL CLEARS IT, which is the "and not
+	// stalled since" half of the field: rows frozen for the stall grace
+	// stopped being a whole state the moment they stopped moving.
+	health.Drained = running.runner.Drained() && !health.Stalled
 	floor, err := s.trimFloor(running.domain.Name(),
 		func() uint32 { return at.Generation })(ctx)
 	if err != nil {
@@ -1605,9 +1626,10 @@ func (s *stateLog) registered() map[string]statelog.Registered {
 				health, err := s.health(s.run, running)
 				if err != nil {
 					// AN UNREADABLE HEALTH IS NOT A HEALTHY ONE:
-					// the zero value has CaughtUp false and no
-					// first sequence, which every gate reads as
-					// "cannot vouch for this".
+					// the zero value has Drained false, an
+					// unread floor and no first sequence, which
+					// every gate reads as "cannot vouch for
+					// this".
 					return statelog.Health{}
 				}
 				return health
@@ -1655,9 +1677,20 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 				"stream, or a broker restored from an older copy; `crewlet "+
 				"retention reanchor` follows the new one from its head",
 				health.Position.Seq, *health.LastSeq)
-		case !health.CaughtUp:
+		case health.Lag == nil:
+			// THE HEAD COULD NOT BE READ. It reaches here only from a
+			// health whose broker answered its bounds and not its
+			// stats, and the one thing this row must not print for it
+			// is "0 record(s) behind" — the number an unread lag
+			// cannot support, and the one a reader would act on.
+			row.Detail = "this node cannot tell how far behind the log it is"
+		case *health.Lag > 0:
+			// BEHIND IS NOT READY AND NOT WRONG. The seats this node
+			// holds stay put (see [statelog.Health.Healthy]); what
+			// this row feeds is the fleet view's "3 of 5", which is
+			// how an operator sees a fresh node catching up.
 			row.Detail = fmt.Sprintf("applying: %d record(s) behind the log's head",
-				lagOf(health))
+				*health.Lag)
 		case health.Deferred > 0:
 			// CAUGHT UP AND STILL NOT READY. A deferred record is one
 			// this build cannot decode: the position moved past it
@@ -1673,17 +1706,6 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 		out = append(out, row)
 	}
 	return out
-}
-
-// lagOf is a health's lag as a number, with the unmeasured case reported as
-// zero rather than as a nil dereference. An unmeasured lag never reaches here
-// — CaughtUp is false without one — so the fallback is a guard rather than a
-// case.
-func lagOf(h statelog.Health) uint64 {
-	if h.Lag == nil {
-		return 0
-	}
-	return *h.Lag
 }
 
 // startSnapshots runs the two halves of the fleet's own recovery path: this

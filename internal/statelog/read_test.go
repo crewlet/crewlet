@@ -54,7 +54,7 @@ func healthy() statelog.Health {
 	floor := uint64(1)
 	return statelog.Health{
 		Position:  statelog.Position{Stream: probeStream, Generation: 1, Seq: 100},
-		CaughtUp:  true,
+		Drained:   true,
 		Floor:     statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
 		Lag:       &lag,
 		FirstSeq:  &first,

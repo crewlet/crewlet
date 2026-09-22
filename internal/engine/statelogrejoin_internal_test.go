@@ -142,7 +142,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	for _, domain := range registeredDomains() {
 		registered = append(registered, statelog.Registered{
 			Domain:          domain,
-			Health:          func() statelog.Health { return statelog.Health{CaughtUp: true, Lag: &lag} },
+			Health:          func() statelog.Health { return statelog.Health{Drained: true, Lag: &lag} },
 			StreamCreatedAt: running.createdAt,
 		})
 	}
