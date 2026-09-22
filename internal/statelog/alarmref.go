@@ -41,8 +41,8 @@ var alarmMeaning = map[Kind]string{
 		"waits on — is spending a quarter of the whole read budget.",
 	KindLogHeadroom: "The log is within a tenth of its byte ceiling. A full " +
 		"log refuses writes rather than dropping records.",
-	KindBackupAge: "The newest verified backup is older than the policy asks " +
-		"for. The trim will not advance past it.",
+	KindBackupAge: "No verified backup has been recorded, or the newest is " +
+		"older than the policy asks for. The trim does not advance either way.",
 	KindTrimBlocked: "The trim has a term it cannot satisfy, so the log is " +
 		"growing toward its ceiling.",
 	KindDeferredOld: "This node has been holding records it cannot apply for " +

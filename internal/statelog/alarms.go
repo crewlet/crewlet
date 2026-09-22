@@ -196,10 +196,20 @@ type Reading struct {
 	HeadroomFraction *float64
 
 	// BackupAge is how old the newest verified backup is, and BackupMaxAge
-	// what the operator asked for. Both zero on a node with no backup
-	// policy, which is not an alarm — it is a deployment that has said it
-	// does not want one.
-	BackupAge, BackupMaxAge time.Duration
+	// what the operator asked for. A zero BackupMaxAge is a node with no
+	// backup policy, which is not an alarm — it is a deployment that has
+	// said it does not want one.
+	//
+	// BackupAge IS A POINTER, for the reason HeadroomFraction is one: zero
+	// is a real and reassuring value here — a copy verified this second —
+	// and "no verified backup has ever been recorded" is the opposite
+	// fact. A plain duration gave them one representation, so the reading
+	// was filled with a fabricated age past the policy to make the alarm
+	// fire, and the alarm then told a four-second-old company that its
+	// newest backup was twenty-five hours old. Nil is the absence, and the
+	// condition below says so in words.
+	BackupAge    *time.Duration
+	BackupMaxAge time.Duration
 
 	// TrimBlockedFor is how long the trim has been unable to advance, and
 	// TrimBlockedBy names the term holding it.
@@ -352,15 +362,33 @@ var table = []rule{
 		// THAT had been true for backup_max_age again — so a 24-hour
 		// policy alarmed at 48 hours, eight missed six-hourly runs after
 		// the first one that mattered.
+		//
+		// TWO STATES, because a company with no backup at all is not a
+		// company with an old one. Both fire — the trim does not advance
+		// either way and an operator has to hear it — but they are
+		// different facts and the detail says which. Fabricating an age
+		// to make the first condition cover the second is what this
+		// replaces, and it put "the newest verified backup is 25h0m0s
+		// old" in the log of a company four seconds after its first
+		// boot, one line above the trim term saying no backup had been
+		// recorded at all.
 		kind: KindBackupAge,
 		fires: func(r Reading) (string, bool) {
+			if r.BackupMaxAge <= 0 {
+				return "", false
+			}
+			if r.BackupAge == nil {
+				return fmt.Sprintf("no verified backup has been recorded, and "+
+					"the policy asks for one every %s", round(r.BackupMaxAge)), true
+			}
 			return fmt.Sprintf("the newest verified backup is %s old, and the "+
-					"policy asks for %s", round(r.BackupAge), round(r.BackupMaxAge)),
-				r.BackupMaxAge > 0 && r.BackupAge > r.BackupMaxAge
+					"policy asks for %s", round(*r.BackupAge), round(r.BackupMaxAge)),
+				*r.BackupAge > r.BackupMaxAge
 		},
 		remedy: "Run `crewlet backup` against any node, whatever its roles, " +
-			"and check whatever was meant to run it. The trim will not " +
-			"advance past a backup this old.",
+			"and check whatever was meant to run it. The trim does not " +
+			"advance past a backup older than the policy, and does not " +
+			"advance at all until there is one.",
 	},
 	{
 		kind: KindTrimBlocked,
@@ -551,6 +579,11 @@ func Evaluate(r Reading) []Alarm {
 // Frac is a measured fraction, for the two Reading fields whose zero value is
 // a real and alarming measurement rather than an absent one.
 func Frac(v float64) *float64 { return &v }
+
+// Age is a measured age, for the Reading field whose zero value is a real and
+// REASSURING measurement — a backup verified this second — rather than an
+// absent one.
+func Age(d time.Duration) *time.Duration { return &d }
 
 // Kinds is every alarm this engine can raise, sorted. For the reference doc
 // and for a surface that renders a row per kind.

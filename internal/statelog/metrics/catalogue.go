@@ -369,7 +369,13 @@ func Catalogue() []Instrument {
 				"took a backup; the disk records that one exists, and they " +
 				"differ in exactly the cases the alarm is for — a copy " +
 				"deleted, a volume never mounted, a schedule pointing at a " +
-				"path nobody ships from.",
+				"path nobody ships from. A node holding no manifest reports " +
+				"NO SERIES rather than a value: zero is the freshest backup " +
+				"imaginable and every other number is an age nobody " +
+				"measured, so neither can stand for an absence. The absence " +
+				"is what the `backup_age` alarm says in words, and an " +
+				"`absent()` rule over this gauge is what a collector alerts " +
+				"on.",
 		},
 		{
 			Name: BackupDuration, Kind: KindHistogram, Unit: UnitMilliseconds,

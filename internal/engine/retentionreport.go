@@ -246,15 +246,17 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 
 	out := statelog.Reading{BackupMaxAge: r.cfg.BackupMaxAge()}
 	if haveBackup {
-		out.BackupAge = now.Sub(newest.At)
-	} else {
-		// NO BACKUP AT ALL IS THE OLDEST BACKUP THERE IS, not the
-		// youngest. A zero age would read as a copy taken this second,
-		// which silences the one alarm a company that never backs up
-		// most needs — and "a company that never backs up never trims"
-		// is the term it is about to hit.
-		out.BackupAge = out.BackupMaxAge + time.Hour
+		out.BackupAge = statelog.Age(now.Sub(newest.At))
 	}
+	// AND NO BACKUP AT ALL IS LEFT NIL, which is the state itself rather
+	// than an age standing in for it. The alarm fires on nil exactly as it
+	// fires on an age past the policy — "a company that never backs up
+	// never trims" is the term it is about to hit — but it says which of
+	// the two it is. What this replaces filled the field with
+	// `BackupMaxAge + time.Hour` to reach the same threshold, and the
+	// alarm then told a company four seconds old that its newest verified
+	// backup was twenty-five hours old, one line above the trim term
+	// reporting that no backup had been recorded at all.
 	for _, name := range r.state.order {
 		running := r.state.domains[name]
 		if running == nil {
