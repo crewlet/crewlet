@@ -779,8 +779,18 @@ function trashColumns(
             <SeatCell handle={record.actor} name={chrome.seatName?.(record.actor)} />
             {/* WHICH KIND OF WRITER, because that is the question a trash
                 screen exists to answer: an assistant removing a subtree and
-                a person removing one task look identical without it. */}
-            {record.actor_kind && record.actor_kind !== "seat" && (
+                a person removing one task look identical without it.
+
+                `agent` IS THE ORDINARY CASE and the one left unmarked. The
+                four kinds the engine mints are `agent`, `human`, `operator`
+                and `system` (`tracker.AuthorKind`) — there is no `seat` among
+                them, so the word this checked against matched nothing and the
+                tag was drawn on EVERY removal, including every ordinary one.
+                A mark on every row is a mark that separates nothing, which is
+                the same rule the priority scale keeps for `normal`. The
+                history row one screen over already spelled it `agent`; this
+                is the copy that drifted. */}
+            {record.actor_kind && record.actor_kind !== "agent" && (
               <Tag appearance="outline">{record.actor_kind}</Tag>
             )}
           </span>
