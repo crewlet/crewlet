@@ -50,6 +50,8 @@ func TestOnlyAGateOrAReanchorEverProducesTheRootScope(t *testing.T) {
 			iamdomain.PeopleScope("p1")},
 		iamdomain.KindSession: {iamdomain.SessionSubject("lin1"),
 			iamdomain.PeopleScope("p1")},
+		iamdomain.KindInvalidation: {iamdomain.InvalidationSubject(),
+			iamdomain.RootScope()},
 		iamdomain.KindBootstrap: {iamdomain.BootstrapSubject(),
 			iamdomain.BucketScope(iamdomain.BootstrapBucket())},
 		iamdomain.KindSweep: {iamdomain.SweepSubject(17),
@@ -68,7 +70,8 @@ func TestOnlyAGateOrAReanchorEverProducesTheRootScope(t *testing.T) {
 	}
 
 	mayBeRoot := []iamdomain.ObjectKind{
-		iamdomain.KindEviction, iamdomain.KindGeneration,
+		iamdomain.KindInvalidation, iamdomain.KindEviction,
+		iamdomain.KindGeneration,
 	}
 	for _, kind := range iamdomain.ObjectKinds {
 		tc := subjects[kind]

@@ -119,10 +119,14 @@ func TestARecordWithNoVersionIsRefused(t *testing.T) {
 // A removal rides the ORDINARY PERSON SUBJECT, so a reader that keyed on the
 // kind would defer it — and a deferred removal here is a person the company
 // off-boarded still signing in on one node, with no later record that ever
-// corrects it because nothing names a removed person again.
-func TestOnlyARemovalAndAnEvictionInstallAGate(t *testing.T) {
+// corrects it because nothing names a removed person again. An invalidation is
+// the same failure one blast radius wider: deferred, a node goes on honouring
+// every bearer the company just ended.
+func TestOnlyARemovalAnInvalidationAndAnEvictionInstallAGate(t *testing.T) {
 	t.Parallel()
-	gates := []iamdomain.OpKind{iamdomain.OpRemove, iamdomain.OpEviction}
+	gates := []iamdomain.OpKind{
+		iamdomain.OpRemove, iamdomain.OpInvalidate, iamdomain.OpEviction,
+	}
 	for _, op := range iamdomain.OpKinds {
 		env := iamdomain.RecordEnvelope{Op: op}
 		want := slices.Contains(gates, op)

@@ -358,6 +358,35 @@ type Sweep struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
+// Invalidation ends every session in the company at once.
+//
+// PINNED AT [GateRecordVersion] FOR EVER, like a removal and an eviction: a
+// node that deferred this would go on honouring every bearer the company had
+// just invalidated, and no later record about any of those sessions repairs
+// it.
+//
+// ITS PAYLOAD IS TWO FIELDS AND WILL STAY TWO, which is what a pinned version
+// costs and what it buys. Anything a bearer-invalidation might later want to
+// say — which sessions, on whose authority, under what policy — belongs on a
+// record that is allowed to evolve, because a field added here could only be
+// read by builds that already had it.
+type Invalidation struct {
+	V int `json:"v"`
+
+	// Generation is the NEW value, stated rather than derived, for
+	// [Revocation.Epoch]'s reason: an applier that incremented a column
+	// would fold over an arrival order, and two nodes at one checkpoint
+	// have seen the same set in a different order.
+	Generation uint64 `json:"generation"`
+
+	// By is who decided. Nobody bumps this casually and everybody asks
+	// afterwards, so the answer rides the record rather than being
+	// reconstructed from an audit row somebody has to find.
+	By string `json:"by,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
 // Eviction gates a node's records on this log, or readmits it.
 type Eviction struct {
 	V int `json:"v"`
@@ -527,6 +556,23 @@ func DecodeSweep(data []byte) (Sweep, error) {
 	return s, nil
 }
 
+func EncodeInvalidation(i Invalidation) ([]byte, error) {
+	return jsoncarry.Encode(i, i.Extra)
+}
+
+func DecodeInvalidation(data []byte) (Invalidation, error) {
+	var i Invalidation
+	extra, err := jsoncarry.Decode(data, &i, invalidationFields)
+	if err != nil {
+		return Invalidation{}, fmt.Errorf("iamdomain: decode an invalidation: %w", err)
+	}
+	// NO VERSION CHECK, like a removal and an eviction: the payload is
+	// PINNED at [GateRecordVersion], so a version above this build's cannot
+	// exist, and the envelope pass has already refused it as a gate.
+	i.Extra = extra
+	return i, nil
+}
+
 func EncodeEviction(e Eviction) ([]byte, error) { return jsoncarry.Encode(e, e.Extra) }
 
 func DecodeEviction(data []byte) (Eviction, error) {
@@ -596,9 +642,10 @@ var (
 	removalFields    = jsoncarry.Names(Removal{}, "released")
 	bootstrapFields  = jsoncarry.Names(Bootstrap{}, "verifier", "minted_by",
 		"expires_at", "person")
-	sweepFields      = jsoncarry.Names(Sweep{}, "changes", "sessions", "expired")
-	evictionFields   = jsoncarry.Names(Eviction{}, "readmitted", "by")
-	generationFields = jsoncarry.Names(Generation{}, "prev_last_seq_seen",
+	sweepFields        = jsoncarry.Names(Sweep{}, "changes", "sessions", "expired")
+	invalidationFields = jsoncarry.Names(Invalidation{}, "by")
+	evictionFields     = jsoncarry.Names(Eviction{}, "readmitted", "by")
+	generationFields   = jsoncarry.Names(Generation{}, "prev_last_seq_seen",
 		"new_stream_created_at", "by")
 	credentialFields = jsoncarry.Names(Credential{}, "verifier",
 		"subject_blind", "expires_at", "revoked_at")

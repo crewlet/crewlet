@@ -558,3 +558,175 @@ func indexOf(haystack, needle string) int {
 	}
 	return -1
 }
+
+// THE FLEET-WIDE GENERATION MOVES ONE ROW AND NOBODY'S EPOCH.
+//
+// That separation is the whole reason the counter exists. Bumping every
+// person's revocation epoch instead is a write per person inside a transaction
+// the framework bounds by a row budget, so a company that had outgrown one
+// transaction would end SOME of its sessions — and the operator would have no
+// way to tell which.
+func TestInvalidatingEverySessionMovesOneRowAndNobodysEpoch(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	const id = "018f3a9c-0000-7000-8000-00000000001a"
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Sarah Chen", Email: "sarah.chen@example.com",
+		Login: "sarah.chen", OpID: "op-1",
+	}); err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	rig.drain()
+	if _, err := rig.writer.Revoke(rig.t.Context(), id, "op-revoke",
+		"signed out everywhere"); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	rig.drain()
+	before := rig.column(
+		`SELECT epoch FROM iam_revocation_epochs WHERE person_id = ?`, id)
+
+	if _, err := rig.writer.InvalidateAll(rig.t.Context(), "op-invalidate",
+		"restored from a backup"); err != nil {
+		t.Fatalf("invalidate: %v", err)
+	}
+	rig.drain()
+
+	if got := rig.column(
+		`SELECT generation FROM iam_session_generation`); len(got) != 1 ||
+		got[0] != "1" {
+		t.Errorf("the session generation reads %v, want exactly one row at 1", got)
+	}
+	after := rig.column(
+		`SELECT epoch FROM iam_revocation_epochs WHERE person_id = ?`, id)
+	if len(after) != 1 || len(before) != 1 || after[0] != before[0] {
+		t.Errorf("the person's revocation epoch moved from %v to %v — an "+
+			"invalidation that wrote per-person rows would be bounded by the "+
+			"apply transaction's row budget", before, after)
+	}
+	// AND IT IS ON THE TRAIL, in the horizon that keeps things: ending
+	// every session in the company is exactly the gesture somebody comes
+	// back to an audit a year later for.
+	if got := rig.column(
+		`SELECT class FROM iam_history WHERE op = 'invalidate'`); len(got) != 1 ||
+		got[0] != string(iamdomain.ClassChange) {
+		t.Errorf("the invalidation's trail rows read %v, want one classed %q",
+			got, iamdomain.ClassChange)
+	}
+}
+
+// AN OLDER INVALIDATION ARRIVING AFTER A NEWER ONE MUST NOT PULL THE
+// GENERATION BACK.
+//
+// A REDELIVERY ALONE COULD NOT SHOW THIS, and stating why is half the case:
+// the new generation is STATED on the record, so delivering one record twice
+// writes the value it already holds whatever the guard says, and an in-order
+// replay of two records ends on the higher one either way. What the monotone
+// guard defends is OUT-OF-ORDER arrival — a reordered fetch, a recovery, a
+// node catching up — so this applies the two records back to front, which is
+// the only arrangement in which an unguarded upsert is visible.
+//
+// Ungarded it un-ends every session the second bump ended, on one node, with
+// nothing that ever corrects it.
+func TestAnOlderInvalidationDoesNotPullTheGenerationBack(t *testing.T) {
+	t.Parallel()
+	rig := &sweepRigT{writeRig: newWriteRig(t)}
+	rig.apply(invalidationRecord(t, 2, 20), brokerAt)
+	rig.apply(invalidationRecord(t, 1, 10), brokerAt)
+
+	if got := rig.column(
+		`SELECT generation FROM iam_session_generation`); len(got) != 1 ||
+		got[0] != "2" {
+		t.Errorf("the session generation reads %v after the generation-1 "+
+			"record arrived behind the generation-2 one, want 2 — going "+
+			"backwards resurrects every session the second bump ended", got)
+	}
+}
+
+// invalidationRecord is one invalidation as the framework delivers it, at a
+// chosen generation and position.
+func invalidationRecord(t *testing.T, generation, seq uint64) statelog.Record {
+	t.Helper()
+	opID := fmt.Sprintf("invalidate-%d", generation)
+	payload, err := iamdomain.Encode(iamdomain.MutationRecord{
+		RecordEnvelope: iamdomain.RecordEnvelope{
+			V: iamdomain.RecordVersion, OpID: opID,
+			Subject: iamdomain.InvalidationSubject(),
+			Op:      iamdomain.OpInvalidate, Writer: "node-a",
+			Scope: iamdomain.RootScope(),
+		},
+		Actor: "operator", ActorKind: iam.KindPerson,
+		Mutation: mustJSON(t, iamdomain.Invalidation{
+			V: iamdomain.GateRecordVersion, Generation: generation,
+			By: "operator",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("encode an invalidation: %v", err)
+	}
+	return statelog.Record{
+		Envelope: statelog.Envelope{
+			V:    iamdomain.RecordVersion,
+			Kind: string(iamdomain.KindInvalidation),
+			Subject: statelog.Subject{
+				Kind: string(iamdomain.KindInvalidation),
+			},
+			Op: string(iamdomain.OpInvalidate), OpID: opID,
+		},
+		Position: statelog.Position{
+			Stream: iamdomain.Domain{}.Stream().Name, Seq: seq,
+		},
+		Payload: payload, StoredAt: brokerAt,
+	}
+}
+
+// TWO OPERATORS INVALIDATING AT ONCE CONTEND, AND THE SECOND SEES THE FIRST.
+//
+// The singleton subject is what buys it. On two subjects neither would
+// contend, both would read the same current generation, both would write the
+// same new one — and every cookie minted between them would survive a gesture
+// whose whole promise is that nothing issued before it does.
+func TestTwoInvalidationsContendAndLandAsTwoIncrements(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	for _, op := range []string{"op-a", "op-b"} {
+		if _, err := rig.writer.InvalidateAll(rig.t.Context(), op, "rotation"); err != nil {
+			t.Fatalf("invalidate %s: %v", op, err)
+		}
+		rig.drain()
+	}
+	if got := rig.column(
+		`SELECT generation FROM iam_session_generation`); len(got) != 1 ||
+		got[0] != "2" {
+		t.Errorf("two invalidations left the generation at %v, want 2 — a "+
+			"second bump that read a stale value would leave every cookie "+
+			"minted between them valid", got)
+	}
+}
+
+// AN INVALIDATION NEEDS THE ADMINISTRATIVE GRANT, UNLIKE A REVOCATION.
+//
+// The asymmetry is the blast radius: revoking is something a person does to
+// themselves and something the engine does on their behalf the moment somebody
+// else has their cookie, so gating it would make the fastest response to a
+// compromise the one that needs an administrator. Ending EVERYBODY's sessions
+// has no self-service reading at all.
+func TestInvalidatingEverySessionIsRefusedWithoutTheGrant(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	ungranted := rig.writer.As("nobody", iam.KindPerson, nil)
+	if _, err := ungranted.InvalidateAll(rig.t.Context(), "op-1", ""); !errors.Is(
+		err, iamdomain.ErrRefused) {
+		t.Errorf("an ungranted party invalidating every session got %v, want "+
+			"%v", err, iamdomain.ErrRefused)
+	}
+	// And the same party may still revoke their own sessions, which is the
+	// half that must never need an administrator.
+	if _, err := ungranted.Revoke(rig.t.Context(),
+		"018f3a9c-0000-7000-8000-00000000002a", "op-2", "signed out"); errors.Is(
+		err, iamdomain.ErrRefused) {
+		t.Error("revoking was refused for want of a grant, which would make " +
+			"the fastest response to a stolen cookie the one that needs an " +
+			"administrator")
+	}
+}

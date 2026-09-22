@@ -9,12 +9,58 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE TWO GATE KINDS, and the sweep.
+// THE THREE ESTATE-WIDE KINDS, and the sweep.
 //
-// Neither an eviction nor a reanchor is about anybody's identity: each is a
-// fact about the LOG. They write one row apiece so a replay reproduces them —
-// a recovery that had to be remembered is not a recovery — and they are the
-// only two kinds here whose scope is the whole estate.
+// An eviction and a reanchor are facts about the LOG rather than about
+// anybody's identity; an invalidation is about everybody and therefore about
+// nobody in particular. All three write one row apiece so a replay reproduces
+// them — a recovery that had to be remembered is not a recovery — and all
+// three declare the whole estate as their scope, which they can afford
+// because none of them is ever deferred.
+
+// applyInvalidation moves the fleet-wide generation every session bearer
+// carries, which ends every session in the company as each node applies it.
+//
+// ONE ROW, MONOTONE, and the guard is what makes a redelivery harmless: a
+// record naming a generation at or below the one already stored writes
+// nothing, so the second delivery of a bump is a no-op rather than a second
+// bump that would end sessions minted since the first.
+//
+// IT WRITES NO PER-PERSON ROW AT ALL, which is the whole reason the counter
+// exists: the alternative is bumping every person's revocation epoch, which is
+// a write per person in a transaction bounded by a row budget, and a company
+// that had outgrown one transaction would end SOME of its sessions.
+func (a *Applier) applyInvalidation(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
+	if at.record.Op != OpInvalidate {
+		return 0, fmt.Errorf("iamdomain: the record at %s is op %q on the "+
+			"invalidation subject, which this build has no case for",
+			at.position, at.record.Op)
+	}
+	invalidation, err := DecodeInvalidation(at.record.Mutation)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: the invalidation record at %s: %w",
+			at.position, err)
+	}
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO iam_session_generation
+			(singleton, generation, reason, bumped_at, by, version)
+		VALUES (0, ?, ?, ?, ?, ?)
+		ON CONFLICT(singleton) DO UPDATE SET
+			generation = excluded.generation,
+			reason     = excluded.reason,
+			bumped_at  = excluded.bumped_at,
+			by         = excluded.by,
+			version    = excluded.version
+		WHERE excluded.generation > iam_session_generation.generation`,
+		int64(invalidation.Generation), at.record.Reason, at.unix(),
+		invalidation.By, at.packed)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: move the session generation to %d: %w",
+			invalidation.Generation, err)
+	}
+	written, _ := result.RowsAffected()
+	return int(written), nil
+}
 
 // applyEviction records a node's removal from this log, or its readmission.
 //

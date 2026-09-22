@@ -243,7 +243,8 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 		"iam_invites":            {"bucket"},
 		"iam_bootstrap_codes":    {"bucket"},
 		"iam_sessions":           {"bucket"},
-		"iam_session_generation": {"bucket"},
+		"iam_revocation_epochs":  {"bucket"},
+		"iam_session_generation": {"generation"},
 		"iam_history":            {"class", "bucket"},
 	} {
 		got := columnsOf(t, db, table)

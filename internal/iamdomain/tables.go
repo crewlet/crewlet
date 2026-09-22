@@ -66,6 +66,15 @@ var ReproducibleTables = []string{
 	// row in the domain. Keeping it beside a person's sealed document
 	// would make the validation path read and decode a blob to learn one
 	// integer, on every request, for ever.
+	"iam_revocation_epochs",
+
+	// And the FLEET-WIDE generation a bearer also carries: one row about
+	// nobody, which `invalidate` moves to end every session in the
+	// company at once. It is separate from the epochs above because a
+	// restore rolls those back to an artefact's own instant — a
+	// revocation taken after the copy was made comes back with it — and
+	// this is the only number that can be moved forward without knowing
+	// who was affected.
 	"iam_session_generation",
 
 	// The authentication trail: who did what to whom, and why. It is the

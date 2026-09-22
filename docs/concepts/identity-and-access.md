@@ -375,7 +375,7 @@ An address is looked up by its **blind**: a keyed hash, so a node holding the
 key can compute it from an address and nobody else can go the other way.
 Signing in opens nothing.
 
-### The seven tables
+### The eight tables
 
 | Table | What it holds |
 |---|---|
@@ -384,7 +384,8 @@ Signing in opens nothing.
 | `iam_invites` | An address spoken for by somebody who has no person yet, and the grants redeeming it confers |
 | `iam_bootstrap_codes` | How a company with nobody in it acquires its first administrator |
 | `iam_sessions` | One row per session **lineage**. Rotations are not rows — a rotation id is derived — so this grows with sign-ins, not with requests |
-| `iam_session_generation` | One person's **revocation epoch**, in its own table because every request compares against it |
+| `iam_revocation_epochs` | One person's **revocation epoch**, in its own table because every request compares against it |
+| `iam_session_generation` | The **fleet-wide generation** every bearer carries: one row, about nobody, that `crewlet iam invalidate-all` moves to end every session in the company at once |
 | `iam_history` | The authentication trail: who did what to whom, and why |
 
 Beside those sit three **gate** tables — `iam_evictions`, `iam_log_generations`
@@ -397,6 +398,33 @@ Beside them sit the log's own three machinery tables — the operation ledger,
 the deferred records and their scope index — which are local to each node,
 excluded from the identity claim, and scrubbed out of any snapshot a node
 donates to a joining peer.
+
+### Two counters, and why there are two
+
+Ending a session is a **counter moving forward**, never a row being deleted and
+never two nodes comparing clocks. There are two of them, and they end different
+sets of sessions:
+
+- **A person's revocation epoch** (`iam_revocation_epochs`) ends every session
+  *that person* holds. Signing out everywhere, a password change and detected
+  token reuse all move it, and no capability is needed to move your own:
+  gating it would make the fastest response to a stolen cookie the one that
+  needs an administrator.
+- **The fleet-wide session generation** (`iam_session_generation`) ends *every*
+  session in the company. One row, about nobody, moved by
+  `crewlet iam invalidate-all`, and it requires the administrative grant.
+
+The second is not the first at a larger scale, and the difference is what a
+**restore** does. Restoring rolls the identity estate back to the instant the
+backup was taken, so a revocation performed after that instant is rolled back
+with it and the session somebody revoked comes back. The fleet-wide generation
+is the only number that can be pushed *forward* without knowing which sessions
+were affected — every cookie in existence carries a value below the new one —
+which is why bumping it is the restore runbook's last step.
+
+Both are stated on the record rather than incremented by the applier. An
+applier that did `+ 1` would fold over an arrival order, and two nodes at one
+checkpoint have seen the same set of records in a different order.
 
 ### Two retention horizons, and one
 

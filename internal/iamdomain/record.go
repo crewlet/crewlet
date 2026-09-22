@@ -33,6 +33,10 @@ const RecordVersion = 1
 // layer up: a node that deferred an eviction goes on applying records every
 // peer is dropping, and the rows it writes from them have no later record that
 // corrects them.
+//
+// [OpInvalidate] is the third, and it is the removal's reason at the widest
+// blast radius this domain has: a node that deferred it goes on honouring
+// every session bearer in the company after somebody ended them all.
 const GateRecordVersion = 1
 
 // OpKind is what a record does.
@@ -152,6 +156,30 @@ const (
 	// person per day.
 	OpClose OpKind = "close"
 
+	// OpInvalidate ends EVERY session in the company at once, on
+	// [KindInvalidation], by moving the fleet-wide generation a bearer
+	// carries. It INSTALLS A GATE.
+	//
+	// THE GATE IS THE WHOLE POINT. A node that deferred this record would
+	// go on honouring every cookie the company had just invalidated, and
+	// there is no later record about any of those sessions to repair it —
+	// which is the same shape of failure a deferred removal is, one
+	// blast radius wider.
+	//
+	// IT IS NOT [OpRevoke] AT A LARGER SCALE, and the difference is which
+	// counter moves: a revocation bumps one person's epoch and is rolled
+	// back by a restore along with every other row, while this moves the
+	// one number in the estate that can be pushed forward without knowing
+	// who was affected. That is exactly what the restore runbook's last
+	// step needs, because the sessions it has to end are the ones an
+	// artefact taken before the revocation still believes in.
+	//
+	// THE NEW GENERATION IS STATED ON THE RECORD, never incremented by the
+	// applier, for [OpRevoke]'s reason: an applier that did `+ 1` would
+	// fold over an arrival order, and two nodes at one checkpoint have
+	// seen the same set in a different order.
+	OpInvalidate OpKind = "invalidate"
+
 	// OpBootstrap moves the company's ONE bootstrap through its own life:
 	// minted, redeemed, or expired. Its subject is [KindBootstrap].
 	//
@@ -184,11 +212,11 @@ const (
 	OpGeneration OpKind = "generation"
 )
 
-// OpKinds are the sixteen, in the order they are documented.
+// OpKinds are the seventeen, in the order they are documented.
 var OpKinds = []OpKind{
 	OpInvite, OpClaim, OpRedeem, OpRelease, OpEnrol, OpUpdate, OpStatus,
-	OpRevoke, OpRemove, OpOpen, OpClose, OpBootstrap, OpSweep, OpBarrier,
-	OpEviction, OpGeneration,
+	OpRevoke, OpRemove, OpOpen, OpClose, OpInvalidate, OpBootstrap, OpSweep,
+	OpBarrier, OpEviction, OpGeneration,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -266,9 +294,13 @@ type RecordEnvelope struct {
 // and a deferred removal here is a person the company off-boarded still
 // signing in on one node. An eviction has a kind of its own and could have
 // been read either way; it is read here so the question is asked once, in one
-// place, for both.
+// place, for both — and so does an invalidation.
 func (e RecordEnvelope) InstallsGate() bool {
-	return e.Op == OpRemove || e.Op == OpEviction
+	switch e.Op {
+	case OpRemove, OpInvalidate, OpEviction:
+		return true
+	}
+	return false
 }
 
 // MutationRecord is one committed mutation: the envelope plus everything a

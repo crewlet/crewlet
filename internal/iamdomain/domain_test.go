@@ -160,7 +160,8 @@ func TestTheDurableTablesAreTheOnesTheDesignNames(t *testing.T) {
 	t.Parallel()
 	want := []string{
 		"iam_people", "iam_credentials", "iam_invites", "iam_bootstrap_codes",
-		"iam_sessions", "iam_session_generation", "iam_history",
+		"iam_sessions", "iam_revocation_epochs", "iam_session_generation",
+		"iam_history",
 		"iam_evictions", "iam_log_generations", "iam_removed",
 	}
 	got := slices.Clone(iamdomain.ReproducibleTables)

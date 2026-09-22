@@ -62,6 +62,16 @@ var historyClass = map[OpKind]HistoryClass{
 	// it is how somebody who had no account acquired the company's first
 	// administrator. It belongs in the horizon that keeps things.
 	OpBootstrap: ClassChange,
+
+	// AN INVALIDATION IS A CHANGE TOO, although what it does is end
+	// sessions, and the two arguments that separate the horizons both
+	// point the same way here. The short horizon exists because a sign-in
+	// row is a location-adjacent record of one person's working hours —
+	// and this row names nobody, so none of that applies. The long one
+	// exists because "who did this, and when" is asked a year later — and
+	// ending every session in the company is exactly the gesture somebody
+	// comes back to an audit trail for.
+	OpInvalidate: ClassChange,
 }
 
 // unrecorded are the ops that write NO history row, stated as a list rather

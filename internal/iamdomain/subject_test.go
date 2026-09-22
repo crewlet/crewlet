@@ -136,16 +136,20 @@ func TestValidateRefusesASubjectThatAddressesNothing(t *testing.T) {
 	}
 }
 
-// THE TWO SINGLETON KINDS ARE THE TWO THE GRAMMAR SAYS THEY ARE.
+// THE THREE SINGLETON KINDS ARE THE THREE THE GRAMMAR SAYS THEY ARE.
 //
 // Both directions: a kind that stopped needing an id would silently start
 // publishing to the log's own prefix, and a singleton that acquired one would
 // stop being a singleton — which for the bootstrap means two live ways into an
-// engine that has no other way in.
+// engine that has no other way in, and for the invalidation means two
+// operators ending the company's sessions without ever contending, each
+// reading the same generation and writing the same new one.
 func TestTheSingletonKindsAreTheOnesWithNoId(t *testing.T) {
 	t.Parallel()
 	singletons := map[iamdomain.ObjectKind]bool{
-		iamdomain.KindBootstrap: true, iamdomain.KindBarrier: true,
+		iamdomain.KindBootstrap:    true,
+		iamdomain.KindInvalidation: true,
+		iamdomain.KindBarrier:      true,
 	}
 	for _, kind := range iamdomain.ObjectKinds {
 		want := !singletons[kind]
@@ -193,16 +197,22 @@ func TestTheArbitratedKindsAreDerivedFromTheEnum(t *testing.T) {
 	}
 }
 
-// EXACTLY THREE KINDS MAY STATE THE WHOLE ESTATE AS THEIR SCOPE.
+// EXACTLY FOUR KINDS MAY STATE THE WHOLE ESTATE AS THEIR SCOPE.
 //
 // Both directions, because each failure is silent in its own way: a kind that
 // gained the permission would freeze every login in the company on the first
 // record a node could not decode, and one that lost it would be a gate or a
 // reanchor blocking only some reads while licensing the rest.
-func TestExactlyThreeKindsMayClaimTheWholeEstate(t *testing.T) {
+//
+// EVERY ONE OF THE FOUR IS A KIND THAT IS NEVER DEFERRED, which is what makes
+// the permission affordable: three install a gate and the fourth declares the
+// framework's own barrier scope, so none of them can be the record a node
+// cannot decode.
+func TestExactlyFourKindsMayClaimTheWholeEstate(t *testing.T) {
 	t.Parallel()
 	want := []iamdomain.ObjectKind{
-		iamdomain.KindEviction, iamdomain.KindGeneration, iamdomain.KindBarrier,
+		iamdomain.KindInvalidation, iamdomain.KindEviction,
+		iamdomain.KindGeneration, iamdomain.KindBarrier,
 	}
 	for _, kind := range iamdomain.ObjectKinds {
 		got := kind.RootScoped()

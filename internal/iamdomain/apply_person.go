@@ -202,7 +202,7 @@ func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 	// or reordered lower epoch must not take effect, and comparing versions
 	// would let one that arrived later win.
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO iam_session_generation
+		INSERT INTO iam_revocation_epochs
 			(person_id, epoch, reason, bumped_at, bucket, version)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(person_id) DO UPDATE SET
@@ -210,7 +210,7 @@ func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 			reason    = excluded.reason,
 			bumped_at = excluded.bumped_at,
 			version   = excluded.version
-		WHERE excluded.epoch > iam_session_generation.epoch`,
+		WHERE excluded.epoch > iam_revocation_epochs.epoch`,
 		id, int64(revocation.Epoch), at.record.Reason, at.unix(),
 		at.bucket(), at.packed)
 	if err != nil {
@@ -272,7 +272,7 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 	// never find a live session pointing at them.
 	for _, statement := range []struct{ what, sql string }{
 		{"sessions", `DELETE FROM iam_sessions WHERE person_id = ?`},
-		{"revocation epoch", `DELETE FROM iam_session_generation WHERE person_id = ?`},
+		{"revocation epoch", `DELETE FROM iam_revocation_epochs WHERE person_id = ?`},
 		{"credentials", `DELETE FROM iam_credentials WHERE person_id = ?`},
 		{"person", `DELETE FROM iam_people WHERE id = ?`},
 	} {

@@ -253,6 +253,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		rows, err = a.applyToken(ctx, tx, at, ObjectKind(rec.Subject.Kind))
 	case KindSession:
 		rows, err = a.applySession(ctx, tx, at)
+	case KindInvalidation:
+		rows, err = a.applyInvalidation(ctx, tx, at)
 	case KindBootstrap:
 		rows, err = a.applyBootstrap(ctx, tx, at)
 	case KindSweep:

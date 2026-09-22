@@ -326,7 +326,7 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 	decide := func(tx *sql.Tx) error {
 		var current int64
 		err := tx.QueryRowContext(ctx,
-			`SELECT epoch FROM iam_session_generation WHERE person_id = ?`,
+			`SELECT epoch FROM iam_revocation_epochs WHERE person_id = ?`,
 			personID).Scan(&current)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -357,6 +357,88 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
 			if err := decide(tx); err != nil {
+				return statelog.Decision{}, err
+			}
+			rec.Mutation = mutation
+			payload, err := Encode(rec)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			env, err := Domain{}.Envelope(payload)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			return statelog.Decision{Payload: payload, Envelope: env}, nil
+		},
+	}
+	result, err := w.publish(ctx, req)
+	return result.Position, err
+}
+
+// InvalidateAll ends every session in the company at once.
+//
+// AN ADMINISTRATOR'S GESTURE, unlike [Writer.Revoke], and the asymmetry is the
+// blast radius: revoking is something a person does to themselves and
+// something the engine does on their behalf at the moment somebody else has
+// their cookie, so gating it would make the fastest response to a compromise
+// the one that needs an administrator. Ending EVERYBODY's sessions is a
+// company-wide act with no self-service reading at all.
+//
+// WHAT IT IS FOR, stated where somebody will reach for it: the last step of a
+// restore. A restore rolls this estate back to an artefact's own instant, so a
+// revocation somebody performed after the copy was taken is rolled back with
+// it and the session they revoked comes back. Bumping the fleet-wide
+// generation is the only move that ends those sessions without knowing which
+// they were — every cookie in existence is below the new value.
+//
+// THE NEW GENERATION IS READ INSIDE THE SNAPSHOT AND STATED ON THE RECORD, for
+// [Writer.Revoke]'s reason: an applier that incremented would fold over an
+// arrival order, and two nodes at one checkpoint have seen the same set in a
+// different order.
+func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
+	statelog.Position, error) {
+
+	if err := w.mayAdminister(OpInvalidate); err != nil {
+		return statelog.Position{}, err
+	}
+	if opID == "" {
+		return statelog.Position{}, errors.New("iamdomain: invalidating every " +
+			"session needs an operation id — without one a retry of the " +
+			"gesture bumps the generation twice, which ends the sessions " +
+			"opened between the two")
+	}
+	rec, err := w.record(InvalidationSubject(), OpInvalidate, "", RootScope(),
+		nil, reason)
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	rec.OpID = opID
+	req := statelog.Request{
+		Subject: statelog.Subject{Kind: string(KindInvalidation)},
+		Scope:   rec.Scope.Resolve(rec.Subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+			var current int64
+			err := tx.QueryRowContext(ctx,
+				`SELECT generation FROM iam_session_generation WHERE singleton = 0`).
+				Scan(&current)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				// NEVER BUMPED IS ZERO, which is what a bearer minted
+				// before anybody ever invalidated anything carries. The
+				// first bump therefore lands at 1 and ends exactly the
+				// cookies that predate it.
+				current = 0
+			case err != nil:
+				return statelog.Decision{}, fmt.Errorf("iamdomain: read the "+
+					"session generation: %w", err)
+			}
+			mutation, err := EncodeInvalidation(Invalidation{
+				V: GateRecordVersion, Generation: uint64(current) + 1,
+				By: w.Actor,
+			})
+			if err != nil {
 				return statelog.Decision{}, err
 			}
 			rec.Mutation = mutation

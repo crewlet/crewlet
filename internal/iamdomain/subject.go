@@ -72,7 +72,7 @@ import (
 // with that literal in it.
 type ObjectKind string
 
-// The ten kinds.
+// The eleven kinds.
 //
 // EXPORTED AND ENUMERATED because four readers that cannot see each other all
 // compare against them: the publisher builds the subject, the wake feed's
@@ -145,6 +145,32 @@ const (
 	// thing a session does writes nothing at all.
 	KindSession ObjectKind = "session"
 
+	// KindInvalidation ends EVERY session in the company at once, on ONE
+	// subject for the whole domain, with no id.
+	//
+	// IT IS NOT CALLED A GENERATION, although the counter it moves is the
+	// one a bearer carries under that name and the row it writes is
+	// `iam_session_generation`. [KindGeneration] already means the LOG's
+	// own reanchor here and in every sibling domain, and two closed sets
+	// under one word is how a later change reaches for the wrong one while
+	// each side stays self-consistent — the same reason [iam.Stage] is not
+	// called a posture. So the kind is named for what it DOES, and the
+	// counter keeps the name the bearer already spells it by.
+	//
+	// ONE OBJECT, for [KindBootstrap]'s reason turned round: two operators
+	// invalidating the company's sessions must contend, because the whole
+	// value of the gesture is that nothing issued before it survives, and
+	// two concurrent bumps that did not contend would each read the same
+	// current value and write the same new one — leaving every cookie
+	// minted between them valid.
+	//
+	// IT INSTALLS A GATE ([OpInvalidate]), which is what buys it the root
+	// scope: a node that could not decode it would go on honouring every
+	// bearer the company had just ended, with no later record that repairs
+	// that, and there is no bucket to file it under because it is about
+	// nobody in particular.
+	KindInvalidation ObjectKind = "invalidation"
+
 	// KindBootstrap is the company's FIRST-PERSON bootstrap, on ONE
 	// subject for the whole domain, with no id.
 	//
@@ -186,6 +212,11 @@ const (
 
 	// KindGeneration is a reanchor's own record, create-only at an
 	// expectation of zero on a fresh stream, by the generation number.
+	//
+	// THE LOG'S GENERATION, never a session's. What ends every session in
+	// the company is [KindInvalidation], which moves a different counter
+	// for a different reason — the distinction is stated at both constants
+	// because the word alone cannot carry it.
 	KindGeneration ObjectKind = "generation"
 
 	// KindBarrier is the read index's payload-free append, on ONE subject
@@ -196,7 +227,7 @@ const (
 	KindBarrier ObjectKind = "barrier"
 )
 
-// ObjectKinds are the ten, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the eleven, and THE ORDER IS LOAD-BEARING.
 //
 // [statelogtest] publishes the FIRST THREE a domain declares, twice each, in
 // order — so the declaration decides what the framework's own suite certifies,
@@ -210,7 +241,8 @@ const (
 // rather than a domain.
 var ObjectKinds = []ObjectKind{
 	KindPerson, KindEmail, KindLogin, KindSeat, KindSession,
-	KindBootstrap, KindSweep, KindEviction, KindGeneration, KindBarrier,
+	KindInvalidation, KindBootstrap, KindSweep, KindEviction,
+	KindGeneration, KindBarrier,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -219,7 +251,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// NINE OF TEN DO. The barrier shares one subject across the whole domain, so
+// TEN OF ELEVEN DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
 // other one and write an anchor row per read into the transaction holding this
 // store's only writer.
@@ -227,17 +259,22 @@ func (k ObjectKind) Arbitrated() bool { return k != KindBarrier }
 
 // Identified reports whether this kind's subject carries an id.
 //
-// EIGHT OF TEN DO. The bootstrap and the barrier are the two kinds with
-// exactly one object in the whole domain, and both are singletons for a reason
-// stated at the constant rather than because an id was hard to choose.
+// EIGHT OF ELEVEN DO. The bootstrap, the invalidation and the barrier are the
+// three kinds with exactly one object in the whole domain, and each is a
+// singleton for a reason stated at its constant rather than because an id was
+// hard to choose.
 func (k ObjectKind) Identified() bool {
-	return k != KindBootstrap && k != KindBarrier
+	switch k {
+	case KindBootstrap, KindInvalidation, KindBarrier:
+		return false
+	}
+	return true
 }
 
 // RootScoped reports whether a record on this kind may state the whole estate
 // as its scope.
 //
-// THREE OF TEN MAY, and it is the tightest rule in this package because the
+// FOUR OF ELEVEN MAY, and it is the tightest rule in this package because the
 // cost of the root term here is the highest in the tree: a deferred record at
 // the root blocks every read whose closure it covers, which is every read in
 // the domain — so one record a node cannot decode would freeze every
@@ -250,7 +287,10 @@ func (k ObjectKind) Identified() bool {
 // — a node that cannot decode a record saying this log was reanchored cannot
 // certify any read over it either. A BARRIER may because its scope is the
 // framework's own [statelog.BarrierScope], which intersects nothing, and what
-// it declares is never read.
+// it declares is never read. An INVALIDATION may for the eviction's reason and
+// must: it installs a gate too, so it is never deferred, and it is about
+// everybody — a bucket would be a claim that it ends one sixty-fourth of the
+// company's sessions.
 //
 // THE BOOTSTRAP MAY NOT, although it is the other kind with no id and would
 // be the natural place to reach for "the whole estate". It writes a row like
@@ -259,7 +299,7 @@ func (k ObjectKind) Identified() bool {
 // decode it blocks a sixty-fourth of the domain rather than all of it.
 func (k ObjectKind) RootScoped() bool {
 	switch k {
-	case KindEviction, KindGeneration, KindBarrier:
+	case KindInvalidation, KindEviction, KindGeneration, KindBarrier:
 		return true
 	}
 	return false
@@ -310,6 +350,9 @@ func SessionSubject(lineage string) Subject {
 
 // BootstrapSubject is the company's one bootstrap.
 func BootstrapSubject() Subject { return Subject{Kind: KindBootstrap} }
+
+// InvalidationSubject is the company's one session-invalidation counter.
+func InvalidationSubject() Subject { return Subject{Kind: KindInvalidation} }
 
 // SweepSubject names one bucket's retention sweep.
 //

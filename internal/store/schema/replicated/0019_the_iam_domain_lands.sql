@@ -308,14 +308,20 @@ CREATE INDEX iam_sessions_person_idx ON iam_sessions (person_id, created_at DESC
 -- the largest table here, and the live listing is an operator opening a screen.
 CREATE INDEX iam_sessions_sweep_idx ON iam_sessions (bucket, ended_at, absolute_expires_at); -- both halves of the per-bucket collection
 
--- iam_session_generation — one person's REVOCATION EPOCH.
+-- iam_revocation_epochs — one person's REVOCATION EPOCH.
 --
 -- A TABLE OF ITS OWN rather than a column on iam_people, and the reason is the
 -- READ: every request carrying a session bearer compares against this, so it
 -- is the hottest row in the domain. Beside a person's sealed document it would
 -- mean reading and decoding a blob to learn one integer, on every request, for
 -- ever.
-CREATE TABLE iam_session_generation (
+--
+-- NAMED FOR WHAT IT HOLDS and not for what reads it. It is one number PER
+-- PERSON, and the fleet-wide number a bearer also carries is the singleton
+-- below — two counters with two writers, two meanings and two reasons to move,
+-- which is why the one that ends one person's sessions and the one that ends
+-- everybody's do not share a word.
+CREATE TABLE iam_revocation_epochs (
     person_id  TEXT    NOT NULL PRIMARY KEY,
     epoch      INTEGER NOT NULL DEFAULT 0,
     -- Why the epoch last moved: signing out everywhere, a password change, or
@@ -326,7 +332,43 @@ CREATE TABLE iam_session_generation (
     bucket     INTEGER NOT NULL DEFAULT 0,
     version    INTEGER NOT NULL
 );
-CREATE INDEX iam_session_generation_bucket_idx ON iam_session_generation (bucket, person_id); -- the per-bucket sweep
+CREATE INDEX iam_revocation_epochs_bucket_idx ON iam_revocation_epochs (bucket, person_id); -- the per-bucket sweep
+
+-- iam_session_generation — the FLEET-WIDE generation every session bearer
+-- carries, and the one row in this estate that is about nobody.
+--
+-- ONE ROW FOR THE WHOLE COMPANY, keyed on a constant, because what it answers
+-- is a single question: is every cookie issued before this moment still good?
+-- A bearer carries the generation it was minted under and a node compares it
+-- against this row, so bumping it ends every session of every person as each
+-- node applies the record — with no per-person write, no enumeration, and
+-- nothing to miss.
+--
+-- WHY IT IS NOT THE SUM OF THE PER-PERSON EPOCHS ABOVE. A restore rolls this
+-- estate back to an artefact's own instant, and a revocation epoch bumped
+-- after that artefact was taken is rolled back with it — so a session somebody
+-- revoked comes back. The restore runbook's last step (`crewlet iam
+-- invalidate-all`) bumps THIS counter, which every surviving cookie is below
+-- whatever the per-person rows were rolled back to. It is the only number in
+-- the estate that can be moved forward without knowing who was affected.
+--
+-- WRITTEN BY ONE OP, `invalidate`, which INSTALLS A GATE: a node that deferred
+-- it would go on honouring every bearer the company had just invalidated,
+-- which is the exact shape of failure a deferred gate always is.
+CREATE TABLE iam_session_generation (
+    -- Always 0. A singleton table's key is a constant rather than a magic
+    -- string, so the row cannot be duplicated by a writer that spelled its own
+    -- name differently.
+    singleton  INTEGER NOT NULL PRIMARY KEY,
+    generation INTEGER NOT NULL DEFAULT 0,
+    -- Why every session in the company was ended: a restore, a suspected
+    -- compromise, a key rotation somebody cut short. Nobody bumps this
+    -- casually and everybody asks why afterwards.
+    reason     TEXT    NOT NULL DEFAULT '',
+    bumped_at  INTEGER NOT NULL DEFAULT 0,
+    by         TEXT    NOT NULL DEFAULT '',
+    version    INTEGER NOT NULL
+);
 
 -- iam_history — the authentication trail.
 --
