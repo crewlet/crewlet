@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -51,11 +52,11 @@ func TestWriteProjectCarriesTheLeadAnswer(t *testing.T) {
 		want  bool
 	}{
 		"no lookup": {nil, false},
-		"not the lead": {func(context.Context, string, string) bool {
-			return false
+		"not the lead": {func(context.Context, string, string) (bool, error) {
+			return false, nil
 		}, false},
-		"the lead": {func(context.Context, string, string) bool {
-			return true
+		"the lead": {func(context.Context, string, string) (bool, error) {
+			return true, nil
 		}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -83,9 +84,9 @@ func TestWriteProjectResolvesTheLeadOnce(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	asked := 0
-	reg := projectRegistry(t, trk, func(context.Context, string, string) bool {
+	reg := projectRegistry(t, trk, func(context.Context, string, string) (bool, error) {
 		asked++
-		return true
+		return true, nil
 	})
 	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
 		"project":          "ENG",
@@ -345,7 +346,15 @@ func TestWriteProjectIsDeclaredDestructive(t *testing.T) {
 
 // ---- helpers ------------------------------------------------------------ //
 
-func leadAlways(context.Context, string, string) bool { return true }
+func leadAlways(context.Context, string, string) (bool, error) { return true, nil }
+
+// leadUnknown is a chart that could not answer — a node booting, applying a
+// revision, or behind the chart log. It is a fixture rather than an error
+// literal at the call sites because the outcome it drives is the one the
+// two-valued seam could not express at all.
+func leadUnknown(context.Context, string, string) (bool, error) {
+	return false, errors.New("this node is behind the chart log")
+}
 
 func projectRegistry(t *testing.T, trk *fakeTracker, leads builtin.LeadsProject) *tools.Registry {
 	return projectRegistryIn(t, trk, leads, "")
@@ -370,4 +379,38 @@ func projectRegistryIn(t *testing.T, trk *fakeTracker, leads builtin.LeadsProjec
 		t.Fatalf("register: %v", err)
 	}
 	return reg
+}
+
+// A CHART THAT COULD NOT ANSWER REFUSES THE WRITE, AND SAYS WHY.
+//
+// The outcome the two-valued seam had no way to express. `person` alone is
+// enough for the operator half of this authority, so a chart that could not
+// answer would land a lead's edit as an operator's — or, for a seat, refuse
+// it naming the lead relation rather than the lag. A node holds no company
+// while it is booting, while it is installing a revision, and for as long as
+// it is behind the chart log, and none of those is "you do not lead this".
+//
+// TOLD TO TRY AGAIN, which is the difference that matters to whoever is
+// holding the keyboard: they try again and it works, rather than going to
+// find an authority they already hold.
+func TestWriteProjectRefusesWhenTheChartCannotAnswer(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := projectRegistry(t, trk, leadUnknown)
+	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+		"project":     "ENG",
+		"tags_rename": map[string]any{"api": "Public API"},
+	})
+	if !got.Failed {
+		t.Fatalf("a chart that could not answer decided anyway: %q", got.Output)
+	}
+	if len(trk.tagAuthority) != 0 {
+		t.Errorf("the write landed with authority %+v, decided without the "+
+			"one relation it turns on", trk.tagAuthority[0])
+	}
+	for _, want := range []string{"cannot say who leads", "Try again"} {
+		if !strings.Contains(got.Output, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, got.Output)
+		}
+	}
 }

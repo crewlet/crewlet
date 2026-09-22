@@ -1655,7 +1655,24 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// task that still has an assignee.
 	if raw, held := args["routing_unit"]; held {
 		unit := strings.TrimSpace(argString(map[string]any{"v": raw}, "v"))
-		if t.leads == nil || !t.leads(ctx, actor.Handle, before.Task.Project) {
+		if t.leads == nil {
+			return failed(fmt.Sprintf("Pointing %s at a different team is the "+
+				"lead of %s's decision, and this surface cannot resolve who "+
+				"that is.", before.Task.Key, before.Task.Project)), nil
+		}
+		// AND A CHART THAT COULD NOT ANSWER IS TOLD APART FROM ONE THAT
+		// SAID NO. Under the bool this seam used to be, a node that was
+		// behind told a lead that re-routing their own project's work is
+		// somebody else's decision — naming a colleague who does not
+		// exist and sending them to ask.
+		led, err := t.leads(ctx, actor.Handle, before.Task.Project)
+		if err != nil {
+			return failed(fmt.Sprintf("This node cannot say who leads %s yet, "+
+				"so it will not decide whether you may point %s at a different "+
+				"team: %v. Try again in a moment.",
+				before.Task.Project, before.Task.Key, err)), nil
+		}
+		if !led {
 			return failed(fmt.Sprintf("Pointing %s at a different team is the "+
 				"lead of %s's decision, not yours. Ask them, or say in a "+
 				"comment why it belongs elsewhere.",

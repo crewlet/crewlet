@@ -53,10 +53,19 @@ type PersonReader interface {
 // configuration and this package holds none — and because a lead relation that
 // this package derived would be a second opinion about the hierarchy.
 //
+// THREE-VALUED, which is the shape [authz.Chart] states and the one this used
+// to collapse: the implementation opens with "does this node hold a company",
+// and a node that is booting, applying a revision or simply behind the chart
+// log is not a node saying "you lead nobody". Those are opposite facts, and
+// under one bool a lagging node silently demoted every lead in the company
+// while reporting itself healthy.
+//
 // NIL RESOLVES NOTHING, which degrades to "your own only": a company whose
 // surface did not wire this loses a lead's convenience rather than gaining a
-// hole.
-type Leads func(ctx context.Context, actor, handle string) bool
+// hole. That stays a false rather than becoming an error, because it is a
+// statement about the SURFACE and is true for every request it will ever
+// serve — where an unreadable chart clears on the next tick.
+type Leads func(ctx context.Context, actor, handle string) (bool, error)
 
 type getPerson struct{ deps WorkDeps }
 
@@ -168,8 +177,20 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// AND THE LEAD RELATION IS RESOLVED HERE and passed as a value,
 	// because the tracker has no chart — see the file head. A surface that
 	// wired no lookup resolves false, which degrades to "your own only".
+	//
+	// A CHART THAT COULD NOT ANSWER REFUSES THE CALL rather than deciding
+	// without it. It is the one case a bool could not carry: treated as
+	// "does not lead", a node that is merely behind tells a lead they may
+	// not re-order their own report's queue, and names the relation rather
+	// than the lag. Told to try again, they try again and it works.
 	if t.leads != nil && handle != actor.Handle {
-		authority.Lead = t.leads(ctx, actor.Handle, handle)
+		led, err := t.leads(ctx, actor.Handle, handle)
+		if err != nil {
+			return failed(fmt.Sprintf("this node cannot say who leads %s yet, "+
+				"so it will not decide whether you may set their priorities: "+
+				"%v. Try again in a moment.", handle, err)), nil
+		}
+		authority.Lead = led
 	}
 	// EVERY ENTRY IS RESOLVED TO AN ID, because the list is stored as ids
 	// and read back by joining on them — and this tool's own description

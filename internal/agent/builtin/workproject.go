@@ -60,7 +60,13 @@ type ProjectWriter interface {
 // NIL RESOLVES FALSE, which refuses every action naming what is missing — the
 // safe direction, and the one an operator can diagnose: a surface that wired
 // no lookup loses the verb rather than opening it to everybody.
-type LeadsProject func(ctx context.Context, actor, project string) bool
+//
+// THREE-VALUED, for the reason [Leads] carries: a node that holds no company
+// yet cannot tell a lead from a stranger, and the false it used to answer was
+// indistinguishable from "you do not lead this project". A lead locked out of
+// their own project's policy by a node that was merely lagging reads as a
+// permissions bug, and the node reports itself healthy throughout.
+type LeadsProject func(ctx context.Context, actor, project string) (bool, error)
 
 type writeProject struct {
 	deps  WorkDeps
@@ -228,7 +234,21 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// CHART by handle, and an operator token carries its own name rather
 	// than a seat's — so for the founder's own surface it always answers
 	// false. See [tracker.ProjectAuthority].
-	lead := t.leads != nil && t.leads(ctx, actor.Handle, key)
+	var lead bool
+	if t.leads != nil {
+		led, err := t.leads(ctx, actor.Handle, key)
+		if err != nil {
+			// UNKNOWN IS NOT A REFUSAL, and this is the one verb where
+			// deciding without the answer would WRITE: `person` alone is
+			// enough for the operator half, so a chart that could not
+			// answer would land a lead's edit as an operator's or refuse
+			// a lead naming the relation rather than the lag.
+			return failed(fmt.Sprintf("this node cannot say who leads %s yet, "+
+				"so it will not decide whether you may change its policy: %v. "+
+				"Try again in a moment.", key, err)), nil
+		}
+		lead = led
+	}
 	person := actor.Kind.Person()
 	writer := t.deps.ProjectWriter(actor)
 	out := map[string]any{"project": key}

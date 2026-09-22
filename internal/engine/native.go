@@ -1747,46 +1747,25 @@ func (e *Engine) enterSearch() func() {
 
 // LeadsProjectOf answers whether a handle leads the unit that owns a project.
 //
-// THE UNIT'S EFFECTIVE LEAD, inherited from an ancestor where the unit
-// declares none — because that is who actually answers for the project's work,
-// and refusing somebody whose parent unit's lead they are would send them
-// looking for an authority nobody holds.
+// THROUGH [ChartAuthority], which is the seam [authz.Decide] asks the same
+// question through. Two implementations of "who leads this" is two chances for
+// a tool surface and a route to answer differently about one person, which is
+// the class of divergence internal/authz exists to remove — so this is the
+// adapter, not a second walk.
 //
-// A PROJECT THIS BUILD CANNOT RESOLVE ANSWERS FALSE, which is the conservative
-// direction: the policy edit is then refused naming the project rather than
-// made by whoever asked.
-//
-// HERE RATHER THAN AT EITHER CALLER, because both surfaces ask it — a seat's
-// write_project and an operator's — and two copies of "who leads this" is two
-// chances for the seat surface and the operator surface to answer the same
-// question differently about the same person.
+// A PROJECT THIS BUILD CANNOT RESOLVE ANSWERS FALSE, and a node that cannot
+// read its chart at all answers an ERROR. Those used to be one value, and the
+// second is the one that mattered: a node booting, applying a revision or
+// behind the chart log told every lead in the company that they lead nothing.
 func LeadsProjectOf(e *Engine) builtin.LeadsProject {
-	return func(_ context.Context, actor, project string) bool {
-		c := e.Company()
-		if c == nil || c.Org == nil || actor == "" || project == "" {
-			return false
-		}
-		key := tracker.ProjectKey(project)
-		for unit := range c.Org.AllUnits() {
-			if tracker.ProjectKey(unit.Project) != key {
-				continue
-			}
-			if lead := c.Org.EffectiveLead(unit); lead != nil &&
-				lead.Handle() == actor {
+	return ChartAuthorityOf(e).LeadsProject
+}
 
-				return true
-			}
-		}
-		// A ROLE'S OWN PROJECT IS LED BY THAT ROLE. A seat that names
-		// its own project decides how it is filed, which is the only
-		// reading of "the lead" a one-seat project has.
-		for role := range c.Org.AllRoles() {
-			if tracker.ProjectKey(role.Project) == key &&
-				role.Handle() == actor {
-
-				return true
-			}
-		}
-		return false
-	}
+// LeadsOf answers whether one handle leads another, through the same seam.
+//
+// THE SECOND HALF OF THE SAME ADAPTER. The person surfaces resolved this with
+// their own lookup, which is exactly the second opinion about the hierarchy
+// that the tools' own seam doc warns against.
+func LeadsOf(e *Engine) builtin.Leads {
+	return ChartAuthorityOf(e).Leads
 }

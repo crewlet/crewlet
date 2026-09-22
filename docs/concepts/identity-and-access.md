@@ -200,6 +200,81 @@ gives them.
 
 ---
 
+## The authority table: one function decides
+
+A grant says what a principal *carries*. It does not say whether they may do a
+particular thing to a particular object — because most of the interesting
+answers are about a **relation**: your own inbox, the project you lead, the
+comment you wrote. One function takes that decision, over one table, and every
+surface asks it: an HTTP route, a seat's own tool, the operator's assistant.
+
+That matters because there used to be no such function. Three structs carried
+pre-resolved booleans into the tracker, each filled by a different surface from
+a different lookup, and two of them were filled *wrong* in ways that only
+showed up as a support question:
+
+- one flag existed purely because an operator's actor was a token label, which
+  is never a handle in the chart — so the lead check was false for every
+  operator by construction, and a founder re-ordering an agent's queue was
+  refused by the only tool that offered it;
+- the project lead lookup answered `false` both for "you do not lead this" and
+  for "this node holds no company yet". A node that is booting, installing a
+  revision or behind the chart log therefore told every lead in the company
+  that they lead nothing — while reporting itself healthy.
+
+### The nine rules
+
+| Rule | Covers | Decided by |
+|---|---|---|
+| **Read** | The board, pages, the org chart, the roster, the fleet, spend | `state:read` |
+| **Colleague write** | Filing, commenting, updating, ranking; authoring a page | `work:write` for work, `knowledge:write` for pages |
+| **Own record** | Marking an inbox, pinned views | The owner, or `fleet:operate` |
+| **Own or lead** | Priorities, a person's day, reading their queue | The owner, whoever leads them, or `fleet:operate` |
+| **Container** | A project's fields, default assignee, routing unit, tag renames | The project's lead, or `fleet:operate` |
+| **Destructive** | Removing and restoring a task; trashing and restoring a page | The **container's** lead, or `fleet:operate` |
+| **Purge** | Anything beyond recovery | `fleet:operate` **and** a principal that is not an agent |
+| **Authored** | Editing and removing a page comment | Whoever wrote it, or `fleet:operate` |
+| **Operator** | Configuration, secrets, integrations, the node itself | The grant the verb names |
+
+A lead may re-order what their report works on; marking somebody's mail read is
+a different gesture and nobody asked a lead to make it. A colleague may file
+work in a project and may not take it out again. An agent holding the
+deployment's own grant still cannot purge — an irreversible delete decided
+inside a turn is not something a model reaches for.
+
+**A verb with no row is refused.** Not defaulted, not passed through: a default
+is how a new verb ships ungated, and it ships looking correct. A walk over the
+table fails the build if a verb resolves to no rule, if a rule is declared and
+no verb uses it, or if a grant the vocabulary declares opens nothing at all —
+that last one is what caught `state:read` being asked for by nothing, back when
+reads were "any authenticated principal".
+
+### Cannot-tell is not no
+
+Every rule that asks about the chart can fail to get an answer, and that
+outcome is its own: the decision reports **unknown**, and a surface answers
+`503 try again` rather than `403 forbidden`. Telling somebody they may not do
+something sends them to go and ask for an authority they already hold.
+
+The admin grant is checked *before* the chart on every rule that has one, so an
+operator is never told "I cannot tell" by a node that is merely lagging.
+
+### Route policy travels with the route
+
+An HTTP route declares its verb where it is **mounted**, not in a middleware
+that inspects the request. A middleware runs before the router matches, so it
+has no route identity to decide from — anything it decided from would be a
+second router that has to agree with the real one, which is the divergence that
+made `/work/items/` and `/work/items/{key}/purge` one gate. A route mounted
+without a policy, or naming a verb with no rule, fails where it is written.
+
+One authority concern *does* live outside: a request whose path is not already
+canonical is refused, because `/work/items/../config` matches one pattern and
+reads to a person as another. It has to be outside, because Go's router cleans
+the path and redirects before it matches at all.
+
+---
+
 ## What is configured today
 
 The identity vocabulary above is what the engine *names*. What an operator sets
