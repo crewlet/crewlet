@@ -135,6 +135,48 @@ type ProjectRow struct {
 	Version  uint64 `json:"version"`
 }
 
+// ProjectCensus is how many projects each archival set holds.
+//
+// NARROWED BY `q` AND `unit`, AND BY NOTHING ELSE — it is the listing's own
+// question minus its archival term. A directory narrowed to one unit that
+// reported the whole company's archived count would offer a reader a segment
+// that is empty under the filter they are looking through.
+//
+// IT EXISTS BECAUSE A SEGMENTED SCREEN CANNOT ASK TWICE. Selecting one set
+// (which is what [ArchivedMode] is for) means an empty answer no longer says
+// whether the company has no projects or has archived every one of them — two
+// states one sentence cannot cover, and a reader acts on them differently. The
+// alternative was a screen that either guessed, hedged in its own copy, or
+// asked a second question per segment; the counts are one aggregate over rows
+// the listing is already scanning.
+type ProjectCensus struct {
+	Active   int `json:"active"`
+	Archived int `json:"archived"`
+}
+
+// Count is how many projects one archival mode selects out of this census.
+//
+// THE LISTING'S OWN `total` IS THIS, rather than a second `COUNT(*)` beside
+// it: a total counted separately from the census is a number that can disagree
+// with the one drawn beside it on the same screen.
+func (c ProjectCensus) Count(mode ArchivedMode) int {
+	switch mode {
+	case ArchivedExclude:
+		return c.Active
+	case ArchivedOnly:
+		return c.Archived
+	case ArchivedInclude:
+		return c.Active + c.Archived
+	}
+	// UNREACHABLE THROUGH [Reader.Projects], which refuses a mode that is
+	// not one before it reads. Zero rather than a panic, because an
+	// arithmetic helper is not where a bad enum should be discovered.
+	return 0
+}
+
+// Total is every project the census counted, whichever set was asked for.
+func (c ProjectCensus) Total() int { return c.Active + c.Archived }
+
 // ProjectListing is the answer.
 type ProjectListing struct {
 	Projects []ProjectRow `json:"projects"`
@@ -145,6 +187,12 @@ type ProjectListing struct {
 	// carries the rationale.
 	Total     int  `json:"total"`
 	Truncated bool `json:"truncated,omitempty"`
+
+	// Census is the same question's answer for BOTH archival sets, so a
+	// caller that selected one can still tell an empty set from an empty
+	// company — see [ProjectCensus]. `Total` is [ProjectCensus.Count] of
+	// the mode that was asked for.
+	Census ProjectCensus `json:"census"`
 
 	Level          statelog.ReadLevel `json:"read_level"`
 	LogSeq         uint64             `json:"log_seq"`
@@ -411,12 +459,15 @@ func (r *Reader) Projects(ctx context.Context, q ProjectQuery) (
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		rows, total, err := readProjectRows(ctx, tx, q, limit)
+		rows, census, err := readProjectRows(ctx, tx, q, limit)
 		if err != nil {
 			return err
 		}
-		listing.Projects, listing.Total = rows, total
-		listing.Truncated = total > len(rows)
+		// THE TOTAL IS THE CENSUS'S OWN ARITHMETIC, never a second count:
+		// one number cannot then disagree with the two drawn beside it.
+		listing.Projects, listing.Census = rows, census
+		listing.Total = census.Count(q.Archived)
+		listing.Truncated = listing.Total > len(rows)
 		position, applied, err := readCheckpoint(ctx, tx)
 		if err != nil {
 			return err
@@ -447,43 +498,53 @@ func projectListScope() statelog.ScopeSet {
 	return statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised()
 }
 
-// readProjectRows reads the projects a query names.
+// readProjectRows reads the projects a query names, and the census of both
+// archival sets under the same narrowing.
+//
+// THE NARROWING AND THE ARCHIVAL TERM ARE BUILT APART, because the census is
+// the listing's question MINUS the archival term and the rows are it WITH one.
+// Folded into one clause they could not both be asked.
 func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
-	limit int) ([]ProjectRow, int, error) {
+	limit int) ([]ProjectRow, ProjectCensus, error) {
 
-	where := []string{}
+	// narrowing is `q` and `unit`: what the caller asked ABOUT, as opposed
+	// to which archival set they asked FOR.
+	narrowing := []string{}
 	var args []any
-	// EXACTLY THE ASKED SET. [ArchivedInclude] is the only mode with no
-	// term, because it is the only one asking for both.
-	switch q.Archived {
-	case ArchivedExclude:
-		where = append(where, "p.archived = 0")
-	case ArchivedOnly:
-		where = append(where, "p.archived = 1")
-	}
 	if unit := strings.TrimSpace(q.Unit); unit != "" {
-		where = append(where, "p.unit = ?")
+		narrowing = append(narrowing, "p.unit = ?")
 		args = append(args, unit)
 	}
 	if term := strings.TrimSpace(q.Q); term != "" {
 		// THE KEY, THE NAME AND THE PURPOSE, because a filter box is
 		// typed into by somebody who remembers one of the three. LIKE
 		// with the term escaped, which is what [likeEscape] is for.
-		where = append(where, `(p.key LIKE ? ESCAPE '\' OR p.name LIKE ? `+
+		narrowing = append(narrowing, `(p.key LIKE ? ESCAPE '\' OR p.name LIKE ? `+
 			`ESCAPE '\' OR p.purpose LIKE ? ESCAPE '\')`)
 		pattern := "%" + likeEscape(term) + "%"
 		args = append(args, pattern, pattern, pattern)
 	}
-	clause := ""
-	if len(where) > 0 {
-		clause = " WHERE " + joinAnd(where)
+	narrowed := ""
+	if len(narrowing) > 0 {
+		narrowed = " WHERE " + joinAnd(narrowing)
 	}
 
-	var total int
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM tracker_projects p`+clause, args...).
-		Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("tracker: count the projects: %w", err)
+	// ONE AGGREGATE FOR BOTH SETS, grouped on the column that divides them
+	// — and it replaces the `COUNT(*)` that answered `total` alone, so the
+	// listing is no more queries than it was.
+	census, err := readProjectCensus(ctx, tx, narrowed, args)
+	if err != nil {
+		return nil, ProjectCensus{}, err
+	}
+
+	// EXACTLY THE ASKED SET. [ArchivedInclude] is the only mode with no
+	// term, because it is the only one asking for both.
+	clause := narrowed
+	switch q.Archived {
+	case ArchivedExclude:
+		clause = appendTerm(narrowed, "p.archived = 0")
+	case ArchivedOnly:
+		clause = appendTerm(narrowed, "p.archived = 1")
 	}
 
 	rows, err := tx.QueryContext(ctx, `
@@ -495,7 +556,7 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 		ORDER BY `+projectOrderBy(q)+`
 		LIMIT ?`, append(args, limit)...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("tracker: read the projects: %w", err)
+		return nil, ProjectCensus{}, fmt.Errorf("tracker: read the projects: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -510,7 +571,7 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 			&row.Counts.Done, &row.Counts.Closed, &change.At,
 			&change.Actor, &change.ActorKind, &archived,
 			&row.Version); err != nil {
-			return nil, 0, fmt.Errorf("tracker: scan a project: %w", err)
+			return nil, ProjectCensus{}, fmt.Errorf("tracker: scan a project: %w", err)
 		}
 		row.Archived = archived != 0
 		row.LastChange = change.value()
@@ -518,9 +579,56 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("tracker: read the projects: %w", err)
+		return nil, ProjectCensus{}, fmt.Errorf("tracker: read the projects: %w", err)
 	}
-	return out, total, nil
+	return out, census, nil
+}
+
+// appendTerm ANDs one more term onto a clause that may be empty.
+func appendTerm(clause, term string) string {
+	if clause == "" {
+		return " WHERE " + term
+	}
+	return clause + " AND " + term
+}
+
+// readProjectCensus counts both archival sets under one narrowing.
+//
+// GROUPED RATHER THAN TWO COUNTS, so the two halves are read in one pass over
+// one set of rows and cannot be taken from different snapshots — which,
+// inside the read's own transaction, is a property this does not have to think
+// about and would lose the moment somebody moved one of them.
+func readProjectCensus(ctx context.Context, tx *sql.Tx, narrowed string,
+	args []any) (ProjectCensus, error) {
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT p.archived, COUNT(*) FROM tracker_projects p`+narrowed+
+			` GROUP BY p.archived`, args...)
+	if err != nil {
+		return ProjectCensus{}, fmt.Errorf("tracker: count the projects: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var census ProjectCensus
+	for rows.Next() {
+		var archived, count int
+		if err := rows.Scan(&archived, &count); err != nil {
+			return ProjectCensus{}, fmt.Errorf("tracker: scan the project census: %w", err)
+		}
+		// ANY NON-ZERO IS ARCHIVED, which is how every other reader of
+		// this column reads it — the schema defaults it to 0 and the
+		// applier writes `boolInt`, but a column is not a bool and a
+		// reader that tested `== 1` would drop a row nobody can see.
+		if archived != 0 {
+			census.Archived += count
+			continue
+		}
+		census.Active += count
+	}
+	if err := rows.Err(); err != nil {
+		return ProjectCensus{}, fmt.Errorf("tracker: count the projects: %w", err)
+	}
+	return census, nil
 }
 
 // projectOrderBy is the ordering clause one query compiles to.

@@ -656,6 +656,16 @@ more live projects than that, the page held no archived row at all and the
 screen reported a company that had retired dozens as having archived nothing.
 The listing's `total` counts whichever set was asked for, never a wider one.
 
+Selecting a set leaves one question a caller cannot answer from the rows it
+got back — an empty answer says the *set* is empty, never whether the
+*company* is — so the listing also carries a **census**: `active` and
+`archived`, counted under the same `q` and `unit` as the rows and without the
+archival term. That is what lets a screen tell "no projects yet" from "every
+project archived" without asking twice, and it is why the Projects directory
+can say a company has filed nothing while sitting on its Active segment, and
+can tell a reader whose company wound a programme down exactly how many
+projects are waiting under Archived.
+
 An operator holds the same thirteen and more that no seat does, including the
 two below. `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. A

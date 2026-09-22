@@ -150,6 +150,95 @@ func TestAProjectListingSelectsOneArchivalSet(t *testing.T) {
 	}
 }
 
+// THE ANSWER CARRIES THE CENSUS OF BOTH SETS, whichever one it selected.
+//
+// Selecting one set is what makes the listing honest, and it is also what
+// leaves an empty answer ambiguous: a segmented screen asking for the live
+// projects and getting none cannot tell a company with no projects from one
+// that has archived every one of them, and those are opposite things to tell a
+// reader. The census is the listing's own question minus its archival term, so
+// the screen never has to guess and never has to ask twice.
+func TestAProjectListingCarriesTheCensusOfBothSets(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations"})
+	seedProject(t, r, tracker.Project{Key: "OLD", Name: "Retired", Archived: true})
+	seedProject(t, r, tracker.Project{Key: "GON", Name: "Wound down", Archived: true})
+
+	// THE SAME CENSUS UNDER EVERY MODE, because it describes the company
+	// rather than the answer: a screen on the Archived segment needs the
+	// active count to know the company is not empty.
+	for _, mode := range tracker.ArchivedModes {
+		listing := r.projects(tracker.ProjectQuery{Archived: mode})
+		if listing.Census.Active != 2 || listing.Census.Archived != 2 {
+			t.Errorf("archived=%s answers census %+v, want 2 active and 2 "+
+				"archived — the census is the same company whichever set was "+
+				"selected", mode, listing.Census)
+		}
+		// AND `total` IS THE CENSUS'S OWN ARITHMETIC. Counted separately
+		// it is a number that can disagree with the two beside it.
+		if want := listing.Census.Count(mode); listing.Total != want {
+			t.Errorf("archived=%s answers total=%d and a census counting %d",
+				mode, listing.Total, want)
+		}
+	}
+}
+
+// AND IT IS NARROWED BY THE SAME `q` AND `unit` THE LISTING IS.
+//
+// The census is the listing's question MINUS the archival term, not a count of
+// the whole company: a directory narrowed to one unit that reported the
+// company's archived total would offer a reader a segment that is empty under
+// the filter they are looking through.
+func TestTheProjectCensusIsNarrowedWithTheListing(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations",
+		Purpose: "keep the lights on", Unit: "platform"})
+	seedProject(t, r, tracker.Project{Key: "OLD", Name: "Retired",
+		Unit: "platform", Archived: true})
+	// OUTSIDE THE UNIT, and archived — so a census that ignored `unit`
+	// would report two archived where the filtered question has one.
+	seedProject(t, r, tracker.Project{Key: "GON", Name: "Gone",
+		Unit: "dissolved", Archived: true})
+
+	for _, c := range []struct {
+		name         string
+		q            tracker.ProjectQuery
+		active, arch int
+	}{
+		{"unit", tracker.ProjectQuery{Unit: "platform"}, 1, 1},
+		{"unit with nothing archived", tracker.ProjectQuery{Unit: "dissolved"}, 0, 1},
+		{"q on the purpose", tracker.ProjectQuery{Q: "lights"}, 1, 0},
+		{"q matching nothing", tracker.ProjectQuery{Q: "nothing at all"}, 0, 0},
+	} {
+		q := c.q
+		q.Archived = tracker.ArchivedExclude
+		listing := r.projects(q)
+		if listing.Census.Active != c.active || listing.Census.Archived != c.arch {
+			t.Errorf("%s: census is %+v, want %d active and %d archived — the "+
+				"census is narrowed with the listing", c.name, listing.Census,
+				c.active, c.arch)
+		}
+	}
+}
+
+// AND A COMPANY WITH NOTHING FILED CENSUSES AT ZERO, which is the one reading
+// a screen acts on by going and looking at its configuration.
+func TestAProjectCensusIsZeroOnACompanyWithNoProjects(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	// The harness's own ENG is the only project, so narrowing past it is
+	// how this suite reaches the empty company without a second harness.
+	listing := r.projects(tracker.ProjectQuery{
+		Archived: tracker.ArchivedExclude, Q: "no such project",
+	})
+	if listing.Census.Active != 0 || listing.Census.Archived != 0 ||
+		listing.Census.Total() != 0 {
+		t.Fatalf("census is %+v, want every count zero", listing.Census)
+	}
+}
+
 // A LISTING FILTERS ON WHAT A FILTER BOX IS TYPED INTO.
 func TestAProjectListingFilters(t *testing.T) {
 	t.Parallel()
