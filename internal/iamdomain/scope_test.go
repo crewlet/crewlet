@@ -352,3 +352,99 @@ func TestValidateRefusesAScopeAWriterCouldNotHaveMeant(t *testing.T) {
 		t.Errorf("an ordinary person record was refused: %v", err)
 	}
 }
+
+// A DEFERRED BUCKET MAKES THAT BUCKET'S PEOPLE UNAVAILABLE AND NOBODY ELSE'S.
+//
+// THE property the flat bucketed scope buys, and the reason it is 64 rather
+// than 1. A record a node cannot decode is filed under the buckets its writer
+// declared; a read about somebody probes their own bucket. If the two did not
+// line up, one undecodable record would either block nothing — the silent
+// failure — or block everybody, which during a rolling upgrade is every login
+// in the company.
+//
+// It is a property of the PATHS rather than of the probe, so it is asserted
+// over them: the framework's containment is a prefix comparison with the
+// separator appended, and what this case says is that a bucket's path covers
+// its own closure and no other's.
+func TestADeferredBucketCoversItsOwnPeopleAndNobodyElses(t *testing.T) {
+	t.Parallel()
+
+	// Two people who fall in different buckets. Found rather than
+	// assumed, because which bucket an id lands in is the hash's business
+	// and pinning one here would be a second copy of it.
+	var here, elsewhere string
+	for i := range 1000 {
+		id := "018f3a9c-0000-7000-8000-" + pad(i)
+		switch {
+		case here == "":
+			here = id
+		case iamdomain.BucketOf(id) != iamdomain.BucketOf(here):
+			elsewhere = id
+		}
+		if elsewhere != "" {
+			break
+		}
+	}
+	if elsewhere == "" {
+		t.Fatal("no two of a thousand ids fell in different buckets — the " +
+			"partition is not partitioning, so every deferral would block " +
+			"every read")
+	}
+
+	deferred := iamdomain.PeopleScope(here).
+		Resolve(iamdomain.PersonSubject(here)).Paths
+	if len(deferred) != 1 {
+		t.Fatalf("a record about one person declares %v", deferred)
+	}
+
+	// A READ ABOUT THAT PERSON IS COVERED.
+	mine := iamdomain.ReadScope(here).Paths
+	if !covers(deferred, mine) {
+		t.Errorf("a record deferred at %v does not cover a read at %v — the "+
+			"read would be served from a node holding a record it cannot "+
+			"decode about exactly that person", deferred, mine)
+	}
+	// A READ ABOUT SOMEBODY IN ANOTHER BUCKET IS NOT.
+	theirs := iamdomain.ReadScope(elsewhere).Paths
+	if covers(deferred, theirs) {
+		t.Errorf("a record deferred at %v covers a read at %v — one "+
+			"undecodable record would make every login in the company wait",
+			deferred, theirs)
+	}
+	// AND A READ THAT NAMES NOBODY IS COVERED BY EVERYTHING, which is the
+	// honest answer rather than a widening: a read that cannot say who it
+	// is about is one every deferred record concerns.
+	everyone := iamdomain.ReadScope().Paths
+	if !covers(deferred, everyone) {
+		t.Errorf("a record deferred at %v does not cover the directory read "+
+			"at %v — 'is this complete' would answer yes from a node holding "+
+			"a record it cannot read", deferred, everyone)
+	}
+}
+
+// covers is the framework's own containment, over two path sets.
+//
+// EITHER DIRECTION, which is the probe's own shape rather than a convenience:
+// a stored path INSIDE a query's closure is one the query is about, and a
+// stored path CONTAINING the query is one whose blast radius covers it. The
+// framework's deferral probe is two clauses for exactly that reason, and
+// neither finds the other's case.
+func covers(stored, query []string) bool {
+	for _, s := range stored {
+		for _, q := range query {
+			if statelog.Covers(s, q) || statelog.Covers(q, s) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// pad renders a counter as the tail of a uuid-shaped id.
+func pad(i int) string {
+	out := itoa(i)
+	for len(out) < 12 {
+		out = "0" + out
+	}
+	return out
+}

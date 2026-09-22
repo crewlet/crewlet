@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -335,3 +336,21 @@ func decodeBlindKey(value string) ([]byte, error) {
 // follows, so an operator listing their secrets sees it and a rekey moves it
 // with the rest.
 const ChartBlindIndexKey = "CREWLET_CHART_BLIND_INDEX_KEY"
+
+// personKeys is the per-person key store the identity applier shreds through.
+//
+// NIL ON A NODE WITH NO KEYRING, and that is a legitimate state rather than a
+// wiring mistake: such a node cannot seal or open anything, so a removal there
+// deletes the rows and the key is a peer's to destroy. Returning a sealer over
+// a nil cipher instead would make every shred report success while destroying
+// nothing, which is the failure a removal exists to prevent.
+func (e *Engine) personKeys() iamdomain.Shredder {
+	if e == nil || e.cipher == nil || e.backends.Fleet == nil {
+		return nil
+	}
+	sealer, err := iamdomain.NewSealer(fleetsecrets.New(e.backends.Fleet, e.cipher))
+	if err != nil {
+		return nil
+	}
+	return sealer
+}

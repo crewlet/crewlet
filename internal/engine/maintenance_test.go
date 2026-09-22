@@ -79,6 +79,20 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// naming it was the only place that showed.
 		"counterparty_profiles",
 		"events",
+		// THE IDENTITY ESTATE'S TWO, which sort here and are the first
+		// pair on this list belonging to a domain a node might not RUN.
+		// They are swept on the nodes that do, by the same per-node
+		// jobs every other domain's are — a node declining the domain
+		// has no rows in them to sweep, which is the correct amount of
+		// work rather than a case to special-case.
+		//
+		// The estate's OTHER retention — the authentication trail's two
+		// horizons — is deliberately NOT here: it is a record on the
+		// log rather than a local delete, because those rows are
+		// identity-claimed and two nodes sweeping on their own clocks
+		// would hold different bytes. See internal/iamdomain's sweep.
+		"iam_anchors",
+		"iam_ops",
 		// EVERY REGISTERED DOMAIN'S OPERATION LEDGER, and they are on
 		// this list for exactly the reason the list exists: each
 		// `<domain>_ops` migration says the table is swept and ships

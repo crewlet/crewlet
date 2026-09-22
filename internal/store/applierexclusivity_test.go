@@ -401,6 +401,26 @@ var allowedReplicatedWriter = []allowance{
 			"the record and its two gates, the object rows, the structure " +
 			"and the history.",
 	},
+	{
+		Prefix: "internal/iamdomain/apply", Kind: mechanism,
+		Why: "The identity estate's applier, across the files it is split " +
+			"over: the record and its two gates, the person and their " +
+			"credentials, the claims, the sessions and the bootstrap, the " +
+			"log's own gates, and the authentication trail. It is also the " +
+			"one applier in the tree that NEVER DECRYPTS — every sealed " +
+			"value it writes passes through as bytes, because opening one " +
+			"would mean a fleet-secret read inside the apply transaction.",
+	},
+	{
+		Prefix: "internal/iamdomain/sweep.go", Kind: mechanism,
+		Why: "The identity estate's retention sweep, which is applier code " +
+			"in a file the apply* prefix does not cover — named rather than " +
+			"inferred, for internal/tracker/fieldvalues.go's reason. It is a " +
+			"RECORD rather than a local delete because those rows are " +
+			"identity-claimed: two nodes sweeping on their own clocks would " +
+			"hold different bytes, and the claim that N copies are identical " +
+			"would become a claim about how synchronised they are.",
+	},
 
 	{
 		Prefix: "internal/learning/memsync/codec.go", Kind: notReplicated,

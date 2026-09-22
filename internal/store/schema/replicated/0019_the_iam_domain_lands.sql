@@ -225,8 +225,10 @@ CREATE TABLE iam_invites (
     document     BLOB    NOT NULL
 );
 CREATE INDEX iam_invites_email_idx ON iam_invites (email_blind, created_at DESC);           -- the invitations for one address
-CREATE INDEX iam_invites_open_idx ON iam_invites (expires_at) WHERE redeemed_at = 0;        -- the invitations still outstanding
-CREATE INDEX iam_invites_bucket_idx ON iam_invites (bucket, id);                            -- the per-bucket sweep
+-- PARTIAL AND BUCKET-LEADING, matching the sweep's own predicate. A redeemed
+-- invitation is never collected by age, so it has no business in the index the
+-- collection seeks on.
+CREATE INDEX iam_invites_open_idx ON iam_invites (bucket, expires_at) WHERE redeemed_at = 0; -- the invitations still outstanding, per bucket
 
 -- iam_bootstrap_codes — how a company with nobody in it acquires its first
 -- administrator.
@@ -252,8 +254,11 @@ CREATE TABLE iam_bootstrap_codes (
     version     INTEGER NOT NULL,
     document    BLOB    NOT NULL
 );
-CREATE INDEX iam_bootstrap_codes_open_idx ON iam_bootstrap_codes (expires_at) WHERE redeemed_at = 0; -- is there a live way in right now
-CREATE INDEX iam_bootstrap_codes_bucket_idx ON iam_bootstrap_codes (bucket, id);            -- the per-bucket sweep
+-- Every bootstrap code falls in ONE bucket, because the bootstrap has no person
+-- and takes the bucket of its own subject — so leading with it costs nothing
+-- and keeps this index the same shape as every other collection predicate,
+-- which is what stops the sweep's SQL having a special case for one table.
+CREATE INDEX iam_bootstrap_codes_open_idx ON iam_bootstrap_codes (bucket, expires_at) WHERE redeemed_at = 0; -- is there a live way in right now
 
 -- iam_sessions — one row per session LINEAGE.
 --
@@ -291,8 +296,17 @@ CREATE TABLE iam_sessions (
     document            BLOB    NOT NULL
 );
 CREATE INDEX iam_sessions_person_idx ON iam_sessions (person_id, created_at DESC);          -- one person's sessions, newest first
-CREATE INDEX iam_sessions_live_idx ON iam_sessions (absolute_expires_at) WHERE ended_at = 0; -- the sessions still live
-CREATE INDEX iam_sessions_bucket_idx ON iam_sessions (bucket, version);                     -- the per-bucket sweep's range delete
+-- ONE INDEX FOR BOTH HALVES OF THE SWEEP, and it leads with the bucket because
+-- the sweep does: a session is collected either because it ENDED long enough
+-- ago (bucket, a range over ended_at) or because it EXPIRED without ending
+-- (bucket, ended_at = 0, a range over absolute_expires_at). An index leading
+-- with the expiry would serve the second and leave the first scanning the
+-- whole table, which is the shape that looks like an index and is not.
+--
+-- The company-wide "which sessions are live" read then costs 64 seeks rather
+-- than one. That is the right way round: the sweep runs on every tick against
+-- the largest table here, and the live listing is an operator opening a screen.
+CREATE INDEX iam_sessions_sweep_idx ON iam_sessions (bucket, ended_at, absolute_expires_at); -- both halves of the per-bucket collection
 
 -- iam_session_generation — one person's REVOCATION EPOCH.
 --
@@ -465,3 +479,96 @@ CREATE TABLE iam_log_deferred_scope (
     PRIMARY KEY (position, path)
 );
 CREATE INDEX iam_log_deferred_scope_idx ON iam_log_deferred_scope (path, position);         -- the read barrier's coverage probe and the writer's step 0
+
+-- ---------------------------------------------------------------------------
+-- The three GATE tables: not the objects a record writes, but the state an
+-- apply reads BEFORE it writes anything.
+--
+-- Each is REPRODUCIBLE for the same reason its gate is trustworthy: the record
+-- that installs it is on this log, in this order, and every node reaches the
+-- same verdict from it with no clock and no coordination read. And they OUTLIVE
+-- the records that wrote them — a removal below the trim floor has no record
+-- left on the log to prove it happened, and its row is what still says so.
+-- ---------------------------------------------------------------------------
+
+-- iam_evictions — a node's removal from THIS log, or its readmission.
+--
+-- The gate is "records this node wrote ABOVE this position", and the position
+-- is the log's own — so every node reaches the same verdict about every record
+-- with no clock, no coordination read and no agreement beyond the order they
+-- all already have. That is what makes it the fence that still holds when
+-- coordination cannot be reached at all, which is the only state in which an
+-- eviction is permitted at all.
+CREATE TABLE iam_evictions (
+    node_id             TEXT    NOT NULL PRIMARY KEY,
+    at                  INTEGER NOT NULL,
+    by                  TEXT    NOT NULL DEFAULT '',
+    from_position       INTEGER NOT NULL,
+    -- NULL until a readmission, which is an INVERSE COMMIT rather than a
+    -- delete: an eviction's whole history survives a replay, and a node that
+    -- was evicted, readmitted and evicted again reads correctly rather than as
+    -- one long absence.
+    readmitted_position INTEGER,
+    version             INTEGER NOT NULL
+);
+
+-- iam_log_generations — every reanchor's audit row.
+--
+-- A reanchor is a committed record and therefore reproducible from the log;
+-- this is what a recovery replay writes and what the operator surface reads.
+CREATE TABLE iam_log_generations (
+    generation            INTEGER NOT NULL PRIMARY KEY,
+    at                    INTEGER NOT NULL,
+    by                    TEXT    NOT NULL DEFAULT '',
+    new_stream_created_at INTEGER NOT NULL DEFAULT 0,
+    prev_last_seq_seen    INTEGER NOT NULL DEFAULT 0,
+    record_id             TEXT    NOT NULL DEFAULT ''
+);
+
+-- iam_removed — who the company no longer has.
+--
+-- THE ONE OPERATION HERE WITH NO INVERSE, which is why it leaves a row behind
+-- rather than only deleting one. Every other record is a full post-state under
+-- a monotone guard, so a node that applied a stale one is repaired by the next
+-- record about that person; nothing ever names a removed person again. Without
+-- this row a redelivery of any earlier record about them would write the person
+-- back, on one node, for ever — and in THIS domain that is not a stale row, it
+-- is somebody the company off-boarded still signing in.
+--
+-- IT IS ALSO WHY THE ID OUTLIVES THE PERSON. What a removal destroys is their
+-- KEY, which makes their name and address unrecoverable from every artefact at
+-- once; the row and the id survive, because the authentication trail names them
+-- and a history whose authors evaporate is not an audit trail.
+--
+-- THE CLAIMS ARE COLUMNS HERE TOO, and they are what stops a removed person's
+-- address being silently re-enrolled as a different person while the claim's
+-- own subject still carries an anchor nobody can see the object of. A claim
+-- whose holder is removed is RELEASED by the same apply; what this row keeps is
+-- the record of which claims that was.
+CREATE TABLE iam_removed (
+    person_id   TEXT    NOT NULL PRIMARY KEY,
+    at          INTEGER NOT NULL,
+    -- The record that removed them, by its OPERATION ID rather than its
+    -- position: the apply that writes this row is the one that must be able to
+    -- run twice, and a position changes under a republish where an op id does
+    -- not.
+    record_id   TEXT    NOT NULL DEFAULT '',
+    actor       TEXT    NOT NULL DEFAULT '',
+    actor_kind  TEXT    NOT NULL DEFAULT '',
+    reason      TEXT    NOT NULL DEFAULT '',
+    -- The claims this person held when they were removed, as a JSON object,
+    -- so an operator asking "who held this address" after the fact has an
+    -- answer that is not a decryption of a key that no longer exists.
+    --
+    -- THE BLINDS RATHER THAN THE VALUES. A removal's whole promise is that the
+    -- address is unrecoverable; writing it here in the clear, in the one row
+    -- designed to outlive the person, would be the promise broken by the
+    -- mechanism that makes it.
+    claims_json TEXT    NOT NULL DEFAULT '{}',
+    bucket      INTEGER NOT NULL DEFAULT 0,
+    version     INTEGER NOT NULL
+);
+-- The gate's own read is by person_id and is served by the primary key. This
+-- index is for the OTHER reader: the operator surface asking who left recently,
+-- and the per-bucket sweep that has a horizon to range over.
+CREATE INDEX iam_removed_sweep_idx ON iam_removed (bucket, at);                             -- who left, per bucket, by age

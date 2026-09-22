@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsoncarry"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // RecordVersion is the record shape THIS BUILD can decode.
@@ -57,6 +58,17 @@ const (
 	// administrators claiming one address contend at the broker and exactly
 	// one wins. The loser is told which person holds it.
 	OpClaim OpKind = "claim"
+
+	// OpRedeem is an invitation being used, on [KindEmail].
+	//
+	// ITS OWN OP RATHER THAN A CLAIM, because the two halves it performs —
+	// marking the invitation spent and binding the address to the person
+	// it created — arbitrate on the same subject and must land together.
+	// Split into a claim plus an update, one could land without the other
+	// and nothing would be able to tell which: an invitation redeemed with
+	// the address unclaimed, or an address claimed by a person nobody
+	// invited.
+	OpRedeem OpKind = "redeem"
 
 	// OpRelease gives a claim back: an address changed, a login retired, a
 	// person unbound from a seat. Its subject is the claim's own.
@@ -172,10 +184,10 @@ const (
 	OpGeneration OpKind = "generation"
 )
 
-// OpKinds are the fourteen, in the order they are documented.
+// OpKinds are the sixteen, in the order they are documented.
 var OpKinds = []OpKind{
-	OpInvite, OpClaim, OpRelease, OpEnrol, OpUpdate, OpStatus, OpRevoke,
-	OpRemove, OpOpen, OpClose, OpBootstrap, OpSweep, OpBarrier,
+	OpInvite, OpClaim, OpRedeem, OpRelease, OpEnrol, OpUpdate, OpStatus,
+	OpRevoke, OpRemove, OpOpen, OpClose, OpBootstrap, OpSweep, OpBarrier,
 	OpEviction, OpGeneration,
 }
 
@@ -436,3 +448,38 @@ func Encode(rec MutationRecord) ([]byte, error) {
 var recordFields = jsoncarry.Names(MutationRecord{}, "op_id", "created_at",
 	"gen", "writer", "expect", "mutation", "person", "actor", "actor_kind",
 	"reason")
+
+// EncodeBarrier renders the framework's barrier append as one of this domain's
+// own records.
+//
+// A DOMAIN THAT DECLARES ONE GETS A READ INDEX and therefore `linearizable`,
+// and this domain needs one: "may this person act, as of now" is precisely a
+// question about a position, and answering it from a node that has not applied
+// a revocation is the failure the whole revocation epoch exists to prevent.
+func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
+	if env.Kind != statelog.BarrierKind {
+		return nil, fmt.Errorf("iamdomain: %q is not a barrier envelope", env.Kind)
+	}
+	if env.OpID != "" {
+		return nil, fmt.Errorf("iamdomain: a barrier carries no op id and this " +
+			"one has one — an op id becomes a message id, and a duplicate ack " +
+			"is served with no quorum round trip at all, which is the one thing " +
+			"a read barrier must never be")
+	}
+	return Encode(MutationRecord{
+		RecordEnvelope: RecordEnvelope{
+			V:       RecordVersion,
+			Subject: BarrierSubject(),
+			Op:      OpBarrier,
+			// THE BARRIER'S SCOPE IS RESOLVED FROM ITS KIND rather than
+			// from what is stated here — see [ScopeSet.Resolve] — so
+			// whatever a peer wrote, a barrier read back on this build
+			// intersects nothing and no linearizable read ever waits
+			// behind another. The root is stated because a scope must
+			// encode to something, and it is the one kind for which
+			// that choice is not read.
+			Scope: RootScope(),
+			Gen:   env.Gen,
+		},
+	})
+}

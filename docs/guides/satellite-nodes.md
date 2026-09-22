@@ -45,11 +45,12 @@ inbox topic, and the node holding that seat's lease is the one consuming
 it — so nothing that publishes has to know where the agent is, and a
 Slack message routed to that agent works exactly as before.
 
-A satellite is also a full **replica**, not just an agent host: it applies
-the company's shared state logs — the work tracker, the knowledge base and
-the search vectors — into its own database, exactly as a core node does.
-Which of those it applies follows from the roles you gave it, and nothing
-else; see
+A satellite is also a **replica**, not just an agent host: it applies the
+company's shared state logs — the work tracker, the knowledge base, the
+search vectors and the org chart — into its own database, exactly as a
+core node does. It does **not** replicate the identity estate unless you
+give it `ingress` or `workers`. Which logs it applies follows from the
+roles you gave it, and nothing else; see
 [which state-log domains the node runs](#which-state-log-domains-the-node-runs).
 
 ```mermaid
@@ -195,8 +196,8 @@ Two failures to know by sight:
 
 ## Which state-log domains the node runs
 
-The work tracker, the knowledge base and the search vectors are
-[replicated state machines](replication.md). Each is one ordered log the
+The work tracker, the knowledge base, the search vectors, the org chart
+and the identity estate are [replicated state machines](replication.md). Each is one ordered log the
 whole fleet shares, and a node that **runs** a domain applies that log
 into its own copy of the rows — so it can answer questions about it
 locally, and so it can donate a snapshot of it to a member that fell
@@ -207,23 +208,35 @@ separate key for it, no per-domain switch, and nothing to keep in step
 with the roles you already wrote: subtract a role and you subtract
 whatever that role was the only reason for.
 
-Today every role needs all three, so every node — satellite included —
-runs all three:
-
 | Role | Domains it runs | Why it needs them |
 |---|---|---|
-| `ingress` | `tracker`, `vectors`, `pages` | It serves the board, the knowledge base and search over the REST API and the dashboard |
-| `seats` | `tracker`, `vectors`, `pages` | A turn reads and writes all three |
-| `workers` | `tracker`, `vectors`, `pages` | The retention sweep runs over each one's ledger, and the embedding duty is what fills the vectors |
+| `ingress` | `tracker`, `vectors`, `pages`, `chart`, **`iam`** | It serves the board, the knowledge base, search and the org chart over the REST API and the dashboard — and it resolves who is asking, which is the identity estate |
+| `seats` | `tracker`, `vectors`, `pages`, `chart` | A turn reads and writes all four |
+| `workers` | `tracker`, `vectors`, `pages`, `chart`, **`iam`** | The retention sweep runs over each one's ledger, the embedding duty fills the vectors, and the identity duties sweep sessions and report duplicate claims |
 
-Every cell being the same is a **decision, not an absence**: each domain
-states in its own right that every role needs it, and a node running no
-domain at all refuses to boot rather than coming up as a member that
-serves no work item, no page and no search. So narrowing a satellite to
-`roles: [seats]` changes nothing about what it applies today. What the
-derivation buys is that a domain added later can narrow — and on the day
-one does, the roles already in your Tier A files are what decides, rather
-than a new key you have to add to every node.
+Four of the five run everywhere, and that is a **decision, not an
+absence**: each of them states in its own right that every role needs it,
+and a node running no domain at all refuses to boot rather than coming up
+as a member that serves no work item, no page and no search.
+
+**The identity estate is the one that narrows.** A seats-only satellite
+does not run it, and that is the point of the derivation: no turn reads
+it — a seat's principal is its own handle and its authority comes from the
+[org chart](../concepts/chart-domain.md) — so a satellite running it would
+pay the disk, the applier and a share of the stream budget to hold a
+directory of your people that it authenticates nobody against.
+
+> **Reading a satellite's tables.** `iam_people` on a seats-only node is
+> **empty because the domain is not running**, not because the company has
+> nobody. The two are the same rows. Anything asking a satellite who holds
+> a seat gets "this node does not hold that answer" rather than "nobody" —
+> and if you are querying the database directly, that distinction is yours
+> to make.
+
+So narrowing a satellite to `roles: [seats]` now changes something real:
+it stops replicating people, credentials and sessions to a host you put
+somewhere else on purpose. If that host also needs to serve the API, give
+it `ingress` and it will run the estate too.
 
 Two rules follow from it, and both are worth knowing before you need
 them:
@@ -261,7 +274,7 @@ crewlet validate crewlet.yaml -json
   "warnings": [],
   "summary": {
     "roles": ["seats"],
-    "domains": ["tracker", "vectors", "pages"],
+    "domains": ["tracker", "vectors", "pages", "chart"],
     "stream": "nats",
     "coordination": "embedded-kv",
     "store": "/var/lib/crewlet/sat-eu-1.db"
@@ -300,7 +313,7 @@ curl -s http://node-a:8000/health | python3 -m json.tool
   "node": "node-a",
   "status": "ok",
   "seats": ["ceo", "eng"],
-  "domains": ["tracker", "vectors", "pages"]
+  "domains": ["tracker", "vectors", "pages", "chart", "iam"]
 }
 ```
 

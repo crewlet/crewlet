@@ -144,17 +144,24 @@ func TestTheMachineryTablesAreLocalAndTheRestAreReplicated(t *testing.T) {
 	}
 }
 
-// THE SEVEN DURABLE TABLES ARE THE SEVEN, NAMED.
+// THE DURABLE TABLES ARE THE ONES THE DESIGN NAMES, SPELLED OUT.
 //
 // Spelled out rather than counted, because the inventory is what the scrub
 // list, the identity claim and the local sweep are all derived from: a table
 // that quietly left it is three lists that are silently short, and a count
 // would go green the moment somebody added a different one.
+//
+// SEVEN OBJECT TABLES AND THREE GATE TABLES. The gates are reproducible for
+// the same reason they are trustworthy — the record that installs one is on
+// this log, in this order, and every node reaches the same verdict from it —
+// and they OUTLIVE the records that wrote them, which is the whole of why
+// `iam_removed` is a row rather than only a deletion.
 func TestTheDurableTablesAreTheOnesTheDesignNames(t *testing.T) {
 	t.Parallel()
 	want := []string{
 		"iam_people", "iam_credentials", "iam_invites", "iam_bootstrap_codes",
 		"iam_sessions", "iam_session_generation", "iam_history",
+		"iam_evictions", "iam_log_generations", "iam_removed",
 	}
 	got := slices.Clone(iamdomain.ReproducibleTables)
 	slices.Sort(got)

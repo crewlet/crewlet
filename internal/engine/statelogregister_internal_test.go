@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -146,6 +147,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		search.Domain{}.Name(),
 		pages.Domain{}.Name(),
 		chart.Domain{}.Name(),
+		iamdomain.Domain{}.Name(),
 	}
 	got := []string{}
 	for _, domain := range registeredDomains() {
@@ -239,15 +241,31 @@ func TestEveryRegisteredDomainSaysWhichNodesRunIt(t *testing.T) {
 	}
 }
 
-// TestEveryRoleCombinationRunsEveryShippedDomain.
+// TestEveryRoleCombinationRunsTheDomainsItsEntriesName.
 //
-// All three shipped domains run everywhere, and that is a DECISION rather than
-// an absence — an ingress node serves all three over the API, a seats node
-// reads and writes all three inside a turn, and a workers node sweeps them and
-// runs the embedding duty. This is what says the decision is still the one in
-// the register, over every role set the parser accepts, so a fourth domain
-// that narrows it has to change this case on purpose.
-func TestEveryRoleCombinationRunsEveryShippedDomain(t *testing.T) {
+// FOUR OF THE FIVE RUN EVERYWHERE, and that is a DECISION rather than an
+// absence: an ingress node serves the tracker, the vectors, the knowledge base
+// and the chart over the API, a seats node reads and writes all four inside a
+// turn, and a workers node sweeps them and runs the embedding duty.
+//
+// THE FIFTH NARROWS, which is what this case is now two-sided about. The
+// identity estate runs on ingress and workers and NOT on a seats-only
+// satellite: no turn reads it, so such a node would pay for the disk, the
+// applier and a share of the stream budget to hold a directory of people it
+// authenticates nobody against.
+//
+// Both directions, because each failure is silent in its own way. A domain
+// that quietly stopped narrowing puts personal data on every satellite in the
+// fleet. One that quietly started narrowing leaves a node applying none of its
+// records while reporting itself healthy — which nothing above it can tell
+// from a node that is merely behind.
+func TestEveryRoleCombinationRunsTheDomainsItsEntriesName(t *testing.T) {
+	// The domains that narrow, and where each of them runs. Spelled out
+	// rather than derived from the predicate, because deriving it would be
+	// asserting the predicate against itself.
+	narrowing := map[string][]placement.NodeRole{
+		iamdomain.Domain{}.Name(): {placement.RoleIngress, placement.RoleWorkers},
+	}
 	all := []string{string(placement.RoleIngress), string(placement.RoleSeats),
 		string(placement.RoleWorkers)}
 	for _, combo := range subsetsOf(all) {
@@ -256,15 +274,42 @@ func TestEveryRoleCombinationRunsEveryShippedDomain(t *testing.T) {
 			t.Fatalf("ParseRoles(%v): %v", combo, err)
 		}
 		part := participationOf(roles)
-		if len(part.Unrun) != 0 {
-			t.Errorf("roles %v decline %v — no shipped domain narrows on roles, so "+
-				"this is a register entry that changed without this case",
-				combo, domainNames(part.Unrun))
+		run := map[string]bool{}
+		for _, entry := range part.Run {
+			run[entry.Domain.Name()] = true
 		}
-		if len(part.Run) != len(register()) {
-			t.Errorf("roles %v run %d of %d domains", combo, len(part.Run), len(register()))
+		for _, entry := range register() {
+			name := entry.Domain.Name()
+			want := true
+			if where, narrows := narrowing[name]; narrows {
+				want = false
+				for _, role := range where {
+					if roles.Has(role) {
+						want = true
+					}
+				}
+			}
+			if run[name] != want {
+				t.Errorf("roles %v %s %s, want the opposite — a domain that "+
+					"quietly stopped narrowing puts its rows on every node, "+
+					"and one that quietly started leaves a node applying none "+
+					"of its records while reporting itself healthy",
+					combo, ranOrNot(run[name]), name)
+			}
+		}
+		if len(part.Run)+len(part.Unrun) != len(register()) {
+			t.Errorf("roles %v run %d and decline %d of %d domains", combo,
+				len(part.Run), len(part.Unrun), len(register()))
 		}
 	}
+}
+
+// ranOrNot renders a participation for the message above.
+func ranOrNot(ran bool) string {
+	if ran {
+		return "run"
+	}
+	return "decline"
 }
 
 // TestADeclinedDomainIsUnrunAndNeverBoth, which is the property every reader
@@ -356,5 +401,50 @@ func TestAPeerThatDeclaresNoRolesRunsEveryDomain(t *testing.T) {
 	if participationIn(onlyIngress, seatsOnly).Runs(narrowed) {
 		t.Fatalf("the fixture predicate admits %q on a seats-only node, so the "+
 			"cases above prove nothing", narrowed)
+	}
+}
+
+// EVERY REGISTERED DOMAIN'S SEAMS ARE COMPLETE, and the boot check is where a
+// gap has to be found.
+//
+// [statelog.NewPublisher] refuses a nil Rows, Fence or Gates BY NAME, so a
+// half-built write authority is a boot failure with an explanation rather than
+// a node that appends records the fleet drops one at a time. But it only
+// refuses at the moment a publisher is built, and `NewSeams` is a closure —
+// so a domain whose constructor returned two of three would boot every other
+// domain first and fail on one line deep inside the fifth.
+//
+// This is that check, run over the register directly. A domain that appends
+// AND declares an eviction reader needs all four, and the entries that leave
+// Evicted nil say why at the field.
+func TestEveryRegisteredDomainsSeamsAreComplete(t *testing.T) {
+	for _, entry := range register() {
+		name := entry.Domain.Name()
+		if entry.NewSeams == nil {
+			t.Errorf("%s declares no write authority at all", name)
+			continue
+		}
+		// A NIL STATELOG AND A NIL RUNNER ARE WHAT THIS CAN PASS, and
+		// what it therefore checks is the SHAPE: a constructor that
+		// reaches for a store handle answers an error, which is itself
+		// the signal that the seams are built from the engine rather
+		// than from constants. Either outcome is legitimate; a
+		// constructor that returned a PARTIAL set is not.
+		seams, err := entry.NewSeams(&stateLog{nodeID: "boot-check"}, nil)
+		if err != nil {
+			continue
+		}
+		for field, absent := range map[string]bool{
+			"Rows":  seams.Rows == nil,
+			"Fence": seams.Fence == nil,
+			"Gates": seams.Gates == nil,
+		} {
+			if absent {
+				t.Errorf("%s's write authority has no %s — statelog.NewPublisher "+
+					"refuses that by name, so this domain would fail the boot "+
+					"on one line inside the fifth constructor rather than here",
+					name, field)
+			}
+		}
 	}
 }

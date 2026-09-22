@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -282,6 +283,44 @@ func register() []registration {
 				bytes, derived := stream.ChartMaxBytes()
 				return domainCeiling{Bytes: bytes,
 					Field: "stream.chart_log_max_bytes", Explicit: !derived}
+			},
+		},
+		{
+			Domain: iamdomain.Domain{},
+			NewApplier: func(s *stateLog) (statelog.Applier, error) {
+				// THE SHREDDER, because removing a person is a key
+				// deletion rather than a row deletion and the apply is
+				// the only thing that sees every removal on every node.
+				// Nil is legal and means a node with no keyring: it
+				// deletes the rows and the key is a peer's to destroy.
+				return iamdomain.NewApplier(s.nodeID, s.shredder), nil
+			},
+			NewSeams: func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
+				rows, err := iamdomain.NewRows(s.db)
+				if err != nil {
+					return writeSeams{}, err
+				}
+				fence := iamdomain.NewFence(s.db, s.nodeID)
+				fence.Cursor = runner.Committed
+				fence.Floor = s.trimFloor(iamdomain.Domain{}.Name(),
+					func() uint32 { return runner.Committed().Generation })
+				return writeSeams{Rows: rows, Fence: fence,
+					Gates: iamdomain.NewGates(s.db), Evicted: fence.Evicted}, nil
+			},
+			Barrier:      iamdomain.EncodeBarrier,
+			OpsRetention: statelog.OpsRetention,
+			// THE FIRST DOMAIN THAT NARROWS, which is what
+			// participationIn's own comment anticipated.
+			Participates: servesPeople,
+			// NOT DERIVED FROM THE DISK either, like the org chart's and
+			// for a different reason: this log grows with the company's
+			// HEADCOUNT and how often people sign in, and a volume has
+			// nothing to say about either. The parameter stays so the
+			// table is one shape — see [config.Stream.IamMaxBytes].
+			Ceiling: func(stream config.Stream, _ int64) domainCeiling {
+				bytes, derived := stream.IamMaxBytes()
+				return domainCeiling{Bytes: bytes,
+					Field: "stream.iam_log_max_bytes", Explicit: !derived}
 			},
 		},
 	}
@@ -559,3 +598,32 @@ func recordKeyring(boot *config.Bootstrap) statelog.Keyring {
 // everywhere is a DECISION, and the next domain's entry is where somebody
 // decides differently.
 func everyNode(placement.RoleSet) bool { return true }
+
+// servesPeople is the participation of the IDENTITY estate, and it is the
+// first predicate in this register that says no to anybody.
+//
+// AN AGENT SEAT NEVER READS THIS DOMAIN. A seat's principal is its own handle,
+// its authority is decided by internal/authz from the ORG CHART, and its work
+// arrives on its mailbox — so a seats-only satellite gains nothing from these
+// rows and pays for them three times over: the disk, the applier, and its
+// share of a stream budget every other log is sized into. A satellite holding
+// a directory of the company's people, which it authenticates nobody against,
+// is the specific thing the Participates field was added for.
+//
+// INGRESS BECAUSE IT SERVES REQUESTS: resolving who is asking, validating a
+// session bearer against a revocation epoch, and refusing one that is over.
+// WORKERS BECAUSE IT SWEEPS: the per-bucket retention sweep, the
+// duplicate-claim report, and the retry that destroys a key a removal could
+// not reach.
+//
+// # What a node that does NOT run it must never do
+//
+// Answer a question about people from an empty table. `iam_people` on a
+// satellite is empty because the domain is not running, not because the
+// company has nobody — and the two are the same rows. Every reader in this
+// estate is three-valued for that reason: "nobody holds this seat" and "this
+// node does not hold that answer" send a caller to opposite places, and the
+// second is a 503.
+func servesPeople(roles placement.RoleSet) bool {
+	return roles.Has(placement.RoleIngress) || roles.Has(placement.RoleWorkers)
+}

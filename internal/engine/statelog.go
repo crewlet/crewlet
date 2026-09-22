@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -184,6 +185,21 @@ type stateLog struct {
 	// which is a build with no skill parser wired.
 	skills      pages.SkillDetector
 	nudgeSkills func()
+
+	// shredder destroys a removed person's data encryption key, which is
+	// what the IDENTITY APPLIER does to a person after the rows that
+	// removed them are durable. Threaded down for nudgeChart's reason: the
+	// apply is the only thing that sees every removal on every node.
+	//
+	// IT IS THE ONE CONSEQUENCE OF A RECORD IN THAT DOMAIN THAT IS NOT A
+	// ROW, and it happens POST-COMMIT — destroying a key inside the apply
+	// transaction would destroy it for a removal that then rolled back,
+	// and nothing could put it back.
+	//
+	// Nil answers "this node holds no key store", which is a legitimate
+	// state rather than a wiring mistake: a node with no keyring deletes
+	// the rows and the key is a peer's to destroy.
+	shredder iamdomain.Shredder
 
 	// nudgeChart is what the CHART APPLIER calls after a committed batch,
 	// threaded down for the same reason nudgeSkills is: the apply is the
@@ -416,8 +432,8 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
 		metrics: e.metrics,
 		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
-		nudgeChart: e.nudgeChart,
-		ceilings:   ceilings, volume: streamVolume(boot),
+		nudgeChart: e.nudgeChart, shredder: e.personKeys(),
+		ceilings: ceilings, volume: streamVolume(boot),
 		run: runCtx, stop: cancel,
 	}
 	// PROVISION EVERY LOG FIRST, and only then decide whether this node

@@ -387,6 +387,12 @@ Signing in opens nothing.
 | `iam_session_generation` | One person's **revocation epoch**, in its own table because every request compares against it |
 | `iam_history` | The authentication trail: who did what to whom, and why |
 
+Beside those sit three **gate** tables — `iam_evictions`, `iam_log_generations`
+and `iam_removed` — which are not objects a record writes but the state an
+apply reads *before* it writes anything. They outlive the records that made
+them: a removal below the trim floor has no record left on the log to prove it
+happened, and `iam_removed` is what still says so.
+
 Beside them sit the log's own three machinery tables — the operation ledger,
 the deferred records and their scope index — which are local to each node,
 excluded from the identity claim, and scrubbed out of any snapshot a node
@@ -416,6 +422,36 @@ skewed clocks delete identical rows. It runs per **bucket**: the estate is
 divided into 64 partitions by a hash of the person's id, so one horizon's worth
 of deletions is 64 bounded transactions rather than one unbounded one.
 
+### Removing somebody destroys a key, not a row
+
+Deleting a person's row removes them from every node's current database and
+from nothing else. The backups still hold them, the donated snapshots still
+hold them, and the log — which is the only copy of what no node has applied
+yet — holds the record that wrote them, byte for byte, for as long as
+retention says. A removal that only deleted rows would be a promise the estate
+cannot keep.
+
+So each person's name and address are sealed under a key that is **theirs
+alone**, kept in the company's sealed secret store, and removing them
+**destroys that key**. Every copy of the ciphertext, wherever it already is,
+becomes unreadable at once — nothing has to be found or rewritten.
+
+The row and the id survive on purpose. The authentication trail names them, and
+a history whose authors evaporate is not an audit trail: "who suspended this
+person, and when" has to keep answering after they have gone.
+
+Two consequences worth knowing before you see them:
+
+- **A removal is durable before the key is destroyed.** The rows commit first;
+  the key goes afterwards. The other order would destroy a key for a removal
+  that then rolled back, and nothing could put it back. If the key deletion
+  fails — a coordination outage — the person is removed everywhere and their
+  key lives on, which is a state a duty finds and retries.
+- **A value that will not decrypt is not the same as an outage.** A removed
+  person's row reports itself as *shredded*; a decryption failure on somebody
+  who has not been removed is a key-store problem. Rendering the second as the
+  first would tell you somebody had been off-boarded who had not.
+
 ### A stalled identity log does not stop your agents
 
 This is the first strictly-ordered domain whose health does **not** gate seat
@@ -433,6 +469,15 @@ What a stall gates instead is the request path, one request at a time: a node
 that has not yet applied a revocation is designed to answer a session with
 **503**, never 401. A 401 tells a browser to sign in again, and one stalled
 applier would stampede your identity provider.
+
+**A seats-only node does not run this domain at all.** It is the first domain
+whose participation narrows on `node.roles`: ingress runs it because it serves
+requests, workers runs it because it sweeps, and a satellite that only holds
+seats runs neither — so it does not pay the disk, the applier or a share of
+the stream budget to hold a directory of people it authenticates nobody
+against. The corollary matters when you read a satellite's tables: `iam_people`
+there is empty because the domain is not running, **not** because the company
+has nobody, and every reader in this estate is three-valued for that reason.
 
 ### Sizing `stream.iam_log_max_bytes`
 

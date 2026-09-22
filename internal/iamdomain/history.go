@@ -47,6 +47,7 @@ func (c HistoryClass) Valid() bool { return slices.Contains(HistoryClasses, c) }
 var historyClass = map[OpKind]HistoryClass{
 	OpInvite:  ClassChange,
 	OpClaim:   ClassChange,
+	OpRedeem:  ClassChange,
 	OpRelease: ClassChange,
 	OpEnrol:   ClassChange,
 	OpUpdate:  ClassChange,

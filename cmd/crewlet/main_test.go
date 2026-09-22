@@ -91,7 +91,7 @@ func TestValidateReportsWhatTheConfigDescribes(t *testing.T) {
 	// that setting which is otherwise invisible until the node boots.
 	for _, want := range []string{
 		"Acme", "2 agent seats", "1 LLM providers", "embedded", "local",
-		"domains [tracker vectors pages chart]",
+		"domains [tracker vectors pages chart iam]",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary %q does not mention %q", got, want)
