@@ -51,21 +51,54 @@ afterEach(() => {
 });
 
 /** One socket answering each question with a fixture. */
-function serving(answers: Partial<Record<QueryName, unknown>>) {
+function serving(answers: Partial<Record<QueryName, unknown>>, org: unknown = flatOrg) {
   const query = vi.fn(
     async (what: string, _params?: Record<string, unknown>) => answers[what as QueryName] ?? {},
   );
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
-  vi.mocked(useOrg).mockReturnValue({
-    name: "Acme",
-    roles: [
-      { name: "Ada Okonkwo", handle: "ada", kind: "human", contact: { slack_user_id: "U0A" } },
-      { name: "Rui Santos", handle: "rui", kind: "human", contact: { slack_user_id: "U0R" } },
-    ],
-  } as never);
+  vi.mocked(useOrg).mockReturnValue(org as never);
   return query;
 }
+
+/** Two seats and no derived block: every reporting line is UNKNOWN. */
+const flatOrg = {
+  name: "Acme",
+  roles: [
+    { name: "Ada Okonkwo", handle: "ada", kind: "human", contact: { slack_user_id: "U0A" } },
+    { name: "Rui Santos", handle: "rui", kind: "human", contact: { slack_user_id: "U0R" } },
+  ],
+};
+
+/** The same company with the ENGINE's own hierarchy: Ada leads Rui, not Bo. */
+const derivedSeat = (handle: string, name: string, reports: string[] = []) => ({
+  handle,
+  name,
+  kind: "human",
+  placed_by_ref: false,
+  manager: "",
+  managers: null,
+  reports: reports.length ? reports : null,
+  auto_reports: null,
+  onboarding_chain: null,
+});
+const ledOrg = {
+  name: "Acme",
+  roles: [
+    { name: "Ada Okonkwo", handle: "ada", kind: "human" },
+    { name: "Rui Santos", handle: "rui", kind: "human" },
+    { name: "Bo Nakamura", handle: "bo", kind: "human" },
+  ],
+  units: [],
+  derived: {
+    units: [],
+    seats: [
+      derivedSeat("ada", "Ada Okonkwo", ["rui"]),
+      derivedSeat("rui", "Rui Santos"),
+      derivedSeat("bo", "Bo Nakamura"),
+    ],
+  },
+};
 
 const emptyDay = {
   handle: "ada",
@@ -546,6 +579,144 @@ test("the page publishes the person's coverage, once", async () => {
   for (const answer of published) {
     expect((answer as { handle?: string }).handle).toBe("ada");
   }
+});
+
+// ---------------------------------------------------------------------------
+// Whose day to read
+// ---------------------------------------------------------------------------
+
+/** The picker's rows, as the listbox draws them once it is open. */
+async function pickerRows(): Promise<HTMLElement[]> {
+  fireEvent.click(await screen.findByRole("combobox", { name: "Whose day" }));
+  return await waitFor(() => {
+    const rows = screen.getAllByRole("option");
+    if (rows.length === 0) throw new Error("the listbox has not opened");
+    return rows;
+  });
+}
+
+// YOURS, THEN YOUR LINE, THEN ANYBODY. Flat and alphabetical the control
+// answered "which of the company's seats" with every seat, in an order that
+// has nothing to do with the question — and the two days a reader opens are
+// their own and one of their reports'.
+test("the picker leads with your own day, then the seats you lead", async () => {
+  serving(
+    {
+      viewer: ada,
+      work_my_work: emptyDay,
+      work_items: noWork,
+      work_workload: { rows: [], complete: true },
+    },
+    ledOrg,
+  );
+  mount();
+  const rows = await pickerRows();
+  // THE HEADING THROUGH THE ACCESSIBLE NAME, not through the package's own
+  // class: a group is labelled by an element rather than by an attribute, and
+  // a test reaching for the class would be asserting the drawing.
+  const groupOf = (row: HTMLElement) => {
+    const id = row.closest("[role=group]")?.getAttribute("aria-labelledby");
+    return (id && document.getElementById(id)?.textContent) || "";
+  };
+  const labelled = rows.map((r) => [groupOf(r), r.textContent ?? ""] as const);
+  expect(labelled.find(([, text]) => text.includes("Ada Okonkwo"))?.[0]).toBe("Yours");
+  expect(labelled.find(([, text]) => text.includes("Rui Santos"))?.[0]).toBe("Your line");
+  expect(labelled.find(([, text]) => text.includes("Bo Nakamura"))?.[0]).toBe("Anybody");
+});
+
+// AND EACH ROW SAYS HOW MUCH IS ON THAT DESK, which is the one fact that makes
+// the control worth opening and the one it did not carry.
+test("a picker row says how much open work is on that desk", async () => {
+  serving(
+    {
+      viewer: ada,
+      work_my_work: emptyDay,
+      work_items: noWork,
+      work_workload: { rows: [{ handle: "rui", open: 4 }], complete: true },
+    },
+    ledOrg,
+  );
+  mount();
+  const rows = await pickerRows();
+  const text = (name: string) =>
+    rows.find((r) => (r.textContent ?? "").includes(name))?.textContent;
+  expect(text("Rui Santos")).toContain("4 open items");
+  // A HANDLE THE ANSWER DID NOT NAME HOLDS NOTHING, because the read returns a
+  // row only for somebody with open work — a real zero rather than a gap.
+  expect(text("Bo Nakamura")).toContain("nothing open");
+});
+
+// ZERO AND UNKNOWN ARE DIFFERENT. An answer that stopped at its handle cap, or
+// one that could not account for every change, has not said that a desk is
+// empty — and a row claiming it had would be a lead reassigning work on a
+// figure nobody measured.
+test("an incomplete workload answer claims no desk is empty", async () => {
+  serving(
+    {
+      viewer: ada,
+      work_my_work: emptyDay,
+      work_items: noWork,
+      work_workload: { rows: [{ handle: "rui", open: 4 }], complete: true, truncated: true },
+    },
+    ledOrg,
+  );
+  mount();
+  const rows = await pickerRows();
+  for (const row of rows) {
+    expect(row.textContent).not.toContain("nothing open");
+    expect(row.textContent).not.toContain("open item");
+  }
+});
+
+// WITHOUT THE ENGINE'S OWN HIERARCHY THERE IS NO LINE TO DRAW. An older engine
+// sends no derived block, so who reports to whom is UNKNOWN rather than empty,
+// and a "Your line" heading over nothing would be a claim this client cannot
+// make.
+test("no derived hierarchy draws no line, rather than an empty one", async () => {
+  serving({
+    viewer: ada,
+    work_my_work: emptyDay,
+    work_items: noWork,
+    work_workload: { rows: [], complete: true },
+  });
+  mount();
+  const rows = await pickerRows();
+  const groups = rows.map((r) => {
+    const id = r.closest("[role=group]")?.getAttribute("aria-labelledby");
+    return (id && document.getElementById(id)?.textContent) || "";
+  });
+  expect(groups).not.toContain("Your line");
+  expect(groups).toContain("Yours");
+});
+
+// AND THERE IS NO "PICK SOMEBODY" ROW FOR A READER WHO HAS A DAY. It wrote the
+// parameter's own fallback, which the router deletes, so it resolved straight
+// back to their own seat and the control re-labelled itself with their name —
+// a row that silently refuses. Their way back is the "Yours" row.
+test("a bound reader is offered no row that returns them where they are", async () => {
+  serving(
+    {
+      viewer: ada,
+      work_my_work: emptyDay,
+      work_items: noWork,
+      work_workload: { rows: [], complete: true },
+    },
+    ledOrg,
+  );
+  mount();
+  const rows = await pickerRows();
+  expect(rows.map((r) => r.textContent)).not.toContain("Pick somebody");
+});
+
+// AND A READER THE ENGINE WILL REFUSE IS OFFERED NO PICKER AT ALL. Naming
+// anybody's handle needs a credential, so for an anonymous reader every row is
+// a refusal — and the screen's own sentence named that pick as the remedy.
+test("an anonymous reader gets the credential sentence, not a menu of refusals", async () => {
+  serving({ viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" } });
+  mount();
+  await waitFor(() => expect(screen.getByText(/No credential is presented/)).toBeTruthy());
+  expect(screen.queryByRole("combobox", { name: "Whose day" })).toBeNull();
+  expect(screen.queryByText(/pick somebody above/)).toBeNull();
 });
 
 // THE INBOX IS NOT ONE OF THE CLAIMS. What REACHED somebody is a different

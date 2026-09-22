@@ -92,12 +92,21 @@ import { useTab } from "~/app/frame/tabs.ts";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
-import { Callout, EmptyState, InlineCode, Select, Skeleton, Tabs, Tag } from "@crewlethq/ui";
+import {
+  Callout,
+  EmptyState,
+  InlineCode,
+  Select,
+  Skeleton,
+  Tabs,
+  Tag,
+  type SelectOption,
+} from "@crewlethq/ui";
 import { FlagGlyph, KeyGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, type Seat } from "~/lib/seats.ts";
-import { relTime } from "~/lib/format.ts";
+import { indexOrg, type OrgIndex, type Seat } from "~/lib/seats.ts";
+import { plural, relTime } from "~/lib/format.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useNow } from "~/lib/clock.ts";
 import { pageCount, type Scope } from "~/lib/work.ts";
@@ -107,6 +116,7 @@ import type {
   WorkChecklistRow,
   WorkMyWork,
   WorkPersonState,
+  WorkloadAnswer,
   WorkSummary,
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -169,15 +179,11 @@ export function MyWork() {
   // EVERY SEAT AND EVERY PERSON the chart names, so the screen can be reached
   // with nobody chosen and still offer somebody.
   const index = useMemo(() => indexOrg(org), [org]);
-  // THE PICKER OFFERS NAMES AND SENDS HANDLES. A list of slugs is the
-  // database's vocabulary; the person choosing knows their colleagues by name.
-  const handles = useMemo(
-    () =>
-      index.seats
-        .map((s) => ({ value: s.handle, label: s.name }))
-        .sort((a, b) => a.label.localeCompare(b.label)),
-    [index],
-  );
+  // WHO IS CARRYING HOW MUCH, for the picker. One read over every handle at
+  // once — the alternative is a `work_my_work` per colleague, which is a round
+  // trip per option — and it is the whole company's rather than this person's,
+  // so it does not move when the day being read does.
+  const workload = useQuery("work_workload", undefined, { pollMs: 60_000 });
   const chrome: RowChrome = {
     seatName: (h) => index.byHandle.get(h)?.name ?? h,
   };
@@ -264,6 +270,30 @@ export function MyWork() {
           IS, so it is the band above the strip rather than a pill up here —
           see [WhoseDay]. */}
       <PageActions>
+        {/* IN THE PAGE BAR RATHER THAN IN A SIDEBAR. Whose day this is a
+            FILTER on the screen you are on, and the product's grammar puts a
+            filter in the page's own bar and keeps the sidebar for destinations
+            with paths of their own (`app/nav.ts`). The bar is where a screen's
+            own controls go, and choosing whose day to read is something you
+            DO — which is the other half of the same rule that moved the
+            whose-day pill out of it.
+
+            NOT OFFERED TO A READER THE ENGINE WILL REFUSE. `work_my_work` and
+            `work_person` are scoped: naming anybody's handle needs a
+            credential, and a caller presenting none gets `errNotYours` — so
+            for an anonymous reader every row here is a refusal, and the empty
+            state below names the one remedy there is instead. */}
+        {!viewer.anonymous && (
+          <Select
+            width="auto"
+            value={whose}
+            onChange={(value) => setHandle(String(value))}
+            ariaLabel="Whose day"
+            placeholder="Pick somebody"
+            active={whose !== ""}
+            options={whoseDayOptions(index, viewer.handle, workload.data)}
+          />
+        )}
         <a className="t-link" href={href(["inbox"])}>
           Inbox →
         </a>
@@ -276,27 +306,6 @@ export function MyWork() {
         the questions waiting on them, and what became workable while they were away.
       </PageNote>
 
-      <div className="toolbar">
-        {/* THE EMPTY OPTION IS A REAL ROW, not their `placeholder`: choosing
-            nobody is a state this screen has — it is how a reader gets back to
-            "pick somebody" — and a placeholder is only ever the label over an
-            unset value, with nothing to select.
-
-            IN THE PAGE RATHER THAN IN A SIDEBAR. Whose day this is a FILTER on
-            the screen you are on, and the product's own grammar puts a filter
-            in the page's bar and keeps the sidebar for destinations with paths
-            of their own (`app/nav.ts`). */}
-        <Select
-          width="auto"
-          value={whose}
-          onChange={(value) => setHandle(String(value))}
-          ariaLabel="Whose day"
-          placeholder="Pick somebody"
-          active={whose !== ""}
-          options={[{ value: "", label: "Pick somebody" }, ...handles]}
-        />
-      </div>
-
       {/* THREE STATES, and they are not one empty state. A reader with no
           token, a reader whose token names no seat, and a reader who simply has
           not chosen somebody need three different sentences — and only the last
@@ -306,7 +315,7 @@ export function MyWork() {
           <EmptyState
             icon={<KeyGlyph size={32} />}
             title="No credential is presented"
-            description="A day belongs to a person, and this browser has not said who it is. Set an API token, or pick somebody above to read their day."
+            description="A day belongs to a person, and this browser has not said who it is. Set an API token: a day is somebody's own record, so reading one — yours or anybody's — is a question the engine answers for a caller it can name."
           />
         ) : viewer.unbound ? (
           <EmptyState
@@ -534,6 +543,100 @@ function WhoseDay({
       )}
     </>
   );
+}
+
+/**
+ * The whose-day picker's rows: yours, then your line, then anybody.
+ *
+ * # Why it is grouped at all
+ *
+ * Flat and alphabetical it answered "which of the company's forty seats" with
+ * forty seats, in an order that has nothing to do with the question. The two
+ * days a reader actually opens are their own and one of their reports', and
+ * both were somewhere in the middle of the alphabet. The line comes from the
+ * chart the dashboard already holds — the ENGINE's derived reports, explicit
+ * and automatic, so it matches who the company thinks reports to whom rather
+ * than a second reading of `manages` in this language.
+ *
+ * # And why each row carries a count
+ *
+ * A picker over people is chosen from by asking "who is loaded" — which is the
+ * one fact that makes the control worth opening and the one it did not carry.
+ * `work_workload` answers every handle's open work in one read.
+ *
+ * ORDERED BY NAME INSIDE EACH GROUP, NEVER BY THE COUNT. A row ordered by a
+ * live figure re-orders itself on the next poll, so the row a reader is
+ * reaching for moves between the decision to press it and the press.
+ *
+ * ZERO AND UNKNOWN ARE DIFFERENT. `work_workload` returns a row only for
+ * somebody holding open work, so an absent handle is a real zero — but only
+ * where the answer is COMPLETE and did not stop at its handle cap. Short of
+ * that the row says nothing at all rather than claiming an empty desk.
+ *
+ * # The line is UNKNOWN without the engine's own hierarchy
+ *
+ * `OrgIndex.hierarchy` false means every reporting line is unknown rather than
+ * absent — an older engine sends no `derived` block — so the group is not
+ * drawn at all there. An empty "Your line" would say this reader leads nobody,
+ * which is a claim this client cannot make.
+ *
+ * # And the empty row is only for a reader with no day of their own
+ *
+ * `setHandle("")` writes the parameter's own fallback, which the router
+ * deletes, so for a BOUND reader "Pick somebody" resolved straight back to
+ * their own seat and the control re-labelled itself with their name — a row
+ * that silently refuses. Their way back is the "Yours" row above. For a reader
+ * whose credential names no seat it is the state they are in, and a real row
+ * rather than the control's `placeholder`, because a placeholder is a label
+ * over an unset value with nothing to select.
+ */
+export function whoseDayOptions(
+  index: OrgIndex,
+  viewerHandle: string,
+  load: WorkloadAnswer | null | undefined,
+): SelectOption[] {
+  // THE COUNTS ARE A FACT OR THEY ARE NOTHING — see the head.
+  const known = !!load && load.complete !== false && !load.truncated;
+  const open = new Map((load?.rows ?? []).map((r) => [r.handle, r.open]));
+  const describe = (handle: string) => {
+    if (!known) return handle;
+    const held = open.get(handle) ?? 0;
+    return `${handle} · ${held === 0 ? "nothing open" : plural(held, "open item")}`;
+  };
+
+  // A SEAT WITH NO HANDLE CANNOT BE PICKED. The engine reports one for every
+  // seat it runs; a projection with no derived block reports none, and such a
+  // row used to be offered with an empty value — which is the SAME value as
+  // the empty row below, so picking a colleague landed on "nobody chosen".
+  const named = index.seats.filter((s) => s.handle);
+  const byName = (a: Seat, b: Seat) => a.name.localeCompare(b.name);
+  const row = (seat: Seat, group: string): SelectOption => ({
+    value: seat.handle,
+    label: seat.name,
+    description: describe(seat.handle),
+    group,
+    // WHAT THE SEARCH MATCHES. A reader types either the name they know or
+    // the handle they saw in a URL, and the label carries only the first.
+    text: `${seat.name} ${seat.handle}`,
+  });
+
+  const mine = viewerHandle ? index.byHandle.get(viewerHandle) : undefined;
+  const line =
+    index.hierarchy && mine
+      ? mine.reports.filter((s) => s.handle && s.handle !== mine.handle).sort(byName)
+      : [];
+  const inLine = new Set(line.map((s) => s.handle));
+
+  const out: SelectOption[] = [];
+  // NO EMPTY ROW FOR A READER WITH A DAY OF THEIR OWN — see the head.
+  if (!mine) out.push({ value: "", label: "Pick somebody" });
+  if (mine) out.push(row(mine, "Yours"));
+  for (const seat of line) out.push(row(seat, "Your line"));
+  for (const seat of named.sort(byName)) {
+    if (seat.handle === mine?.handle || inLine.has(seat.handle)) continue;
+    out.push(row(seat, "Anybody"));
+  }
+  return out;
 }
 
 /** What each tab is called. */
