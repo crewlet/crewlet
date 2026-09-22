@@ -138,6 +138,20 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+			// THE ROW THIS WRITE REPLACES, read in THIS transaction
+			// and for one question only: a content record is full
+			// post-state, so a write that omits the opaque half
+			// CLEARS it, and clearing the company's configuration is
+			// not a public edit. See [Writer.mayReplace].
+			prior, found, err := readUnit(ctx, tx, key)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			if found {
+				if err := w.mayReplace(prior.Runtime); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
 			payload := UnitPayload{
 				V: DocumentVersion, Key: key, Name: content.Name,
 				Type: content.Type, Purpose: content.Purpose,
@@ -205,6 +219,14 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 			// the team it IS in would ever look. A seat that moved
 			// between the caller's read and this write is told to
 			// re-read rather than having its write filed wrongly.
+			// WHAT IS BEING REPLACED, which the payload cannot say:
+			// a content write is full post-state, so one that omits
+			// the opaque half CLEARS it. See [Writer.mayReplace].
+			if found {
+				if err := w.mayReplace(prior.Runtime); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
 			if found && prior.UnitKey != unit {
 				return statelog.Decision{}, fmt.Errorf("chart: the write on "+
 					"%s states that it sits in %q and the chart has it in %q "+

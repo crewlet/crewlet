@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -628,6 +629,13 @@ func (n *native) openChart(e *Engine, sl *stateLog, nodeID string) error {
 		Seal:      e.chartSealer(),
 		Actor:     nodeID,
 		ActorKind: chart.AuthorOperator,
+		// THE NODE ITSELF IS THE DEPLOYMENT, so it authors every class
+		// the chart has: the seeding import, the structural tidying a
+		// duty does, and the runtime half of every seat a revision
+		// describes. Every surface then narrows it with
+		// [chart.Writer.As], which REPLACES these rather than adding to
+		// them — a caller's party is never this one.
+		Grants: []iam.Grant{iam.GrantConfigWrite},
 	})
 	if err != nil {
 		return fmt.Errorf("engine: chart writer: %w", err)

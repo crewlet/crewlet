@@ -293,6 +293,14 @@ func writeGrantFor(k ObjectKind) iam.Grant {
 		return iam.GrantWorkWrite
 	case KindPage, KindContainer:
 		return iam.GrantKnowledgeWrite
+	case KindUnit:
+		// A UNIT IS THE COMPANY'S OWN SHAPE, not a colleague's work, so
+		// no colleague-write verb takes one — and stating the grant
+		// anyway is the difference between a kind that is unreachable
+		// here and one that falls through to the empty gate below by
+		// accident. Chart writes reach their authority through
+		// ClassContainer and ClassOperator instead.
+		return iam.GrantConfigWrite
 	}
 	return ""
 }

@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -52,6 +54,18 @@ type Writer struct {
 	OperatorID string
 	TurnID     string
 
+	// Grants is what this writer's party is entitled to, and it is read by
+	// exactly one thing: [Writer.mayAuthor], which refuses a record the
+	// party may not publish. See grant.go for why the domain decides that
+	// half at all, and why it is not a second opinion about the half
+	// internal/authz decides.
+	//
+	// A WRITER WITH NONE IS A REAL PARTY rather than a misconfiguration —
+	// an agent editing its own team's content holds no capability and
+	// should not — so the zero value is fail-closed instead of refused:
+	// it may author the public half and nothing else.
+	Grants []iam.Grant
+
 	// Revision is the company configuration revision a write came from,
 	// when it came from one. Its ABSENCE is the answer to "which edit did
 	// this": nobody's — somebody did it by hand.
@@ -85,6 +99,7 @@ type WriterDeps struct {
 
 	Actor      string
 	ActorKind  AuthorKind
+	Grants     []iam.Grant
 	OperatorID string
 	TurnID     string
 	Revision   string
@@ -121,6 +136,7 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 	return &Writer{
 		publisher: deps.Publisher, db: deps.DB, seal: deps.Seal,
 		Actor: deps.Actor, ActorKind: deps.ActorKind,
+		Grants:     slices.Clone(deps.Grants),
 		OperatorID: deps.OperatorID, TurnID: deps.TurnID,
 		Revision: deps.Revision, Now: now,
 	}, nil
@@ -131,9 +147,18 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 //
 // A COPY RATHER THAN AN ARGUMENT, for the reason this file's header gives: a
 // writer acts as one party, and a surface serving many takes one writer each.
-func (w *Writer) As(actor string, kind AuthorKind) *Writer {
+//
+// THE GRANTS TRAVEL WITH THE ACTOR AND ARE NOT OPTIONAL, because they are a
+// property of the party rather than of the writer this one was cloned from.
+// Carrying the previous party's grants forward is the defect this signature
+// exists to make unwritable: a surface resolving an anonymous caller would
+// hand them whatever the node itself holds. A party with no capabilities
+// passes nil and may author the public half, which is the honest answer for
+// an agent editing its own team.
+func (w *Writer) As(actor string, kind AuthorKind, grants []iam.Grant) *Writer {
 	next := *w
 	next.Actor, next.ActorKind = actor, kind
+	next.Grants = slices.Clone(grants)
 	return &next
 }
 
@@ -335,6 +360,12 @@ func (w *Writer) decideRemoval(subject Subject, opID string, at time.Time,
 func (w *Writer) record(subject Subject, op OpKind, opID string, at time.Time,
 	scope ScopeSet, payload any) (statelog.Decision, error) {
 
+	// THE DOMAIN'S OWN HALF OF THE AUTHORITY QUESTION, asked here because
+	// this is the one funnel every decide in this package reaches. See
+	// grant.go for what it decides and what it deliberately does not.
+	if err := w.mayAuthor(classOf(payload)); err != nil {
+		return statelog.Decision{}, err
+	}
 	body, err := marshal(payload)
 	if err != nil {
 		return statelog.Decision{}, err

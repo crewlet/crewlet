@@ -70,6 +70,9 @@ const (
 	KindTask ObjectKind = "task"
 	// KindProject is a project and the policy that governs its items.
 	KindProject ObjectKind = "project"
+	// KindUnit is a team in the org chart, and the container a chart
+	// content write is decided against.
+	KindUnit ObjectKind = "unit"
 	// KindPage is one knowledge page.
 	KindPage ObjectKind = "page"
 	// KindContainer is a page container.
@@ -84,7 +87,8 @@ const (
 
 // ObjectKinds are the six, in declaration order.
 var ObjectKinds = []ObjectKind{
-	KindTask, KindProject, KindPage, KindContainer, KindPerson, KindCompany,
+	KindTask, KindProject, KindUnit, KindPage, KindContainer, KindPerson,
+	KindCompany,
 }
 
 // Valid reports whether a kind is one this build knows.

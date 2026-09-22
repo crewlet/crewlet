@@ -86,6 +86,26 @@ const (
 	ActionPageCommentEdit   Action = "pages.comment.edit"
 	ActionPageCommentRemove Action = "pages.comment.remove"
 
+	// --- the org chart ---------------------------------------------- //
+	//
+	// THE SPLIT IS THE DOMAIN'S OWN, not a taxonomy invented here. Half of
+	// every chart object is OPAQUE to the chart domain and travels on the
+	// row's `document` — a seat's model chain, its credentials, its sandbox
+	// cell, its worker grants and schedules, an mcp_env block — because
+	// internal/chart can say what a unit key and a parent mean and cannot
+	// say what an `mcp_env` key is for. That half is equivalent to shell on
+	// every engine host: a stdio MCP server is exec.Command with the
+	// config's command. So it is decided as an operator surface, and the
+	// public half — a name, a goal, who somebody manages — is decided by
+	// whoever leads the unit.
+	ActionChartRead        Action = "chart.read"
+	ActionChartReadRuntime Action = "chart.runtime.read"
+	ActionChartContent     Action = "chart.content.write"
+	ActionChartRuntime     Action = "chart.runtime.write"
+	ActionChartStructure   Action = "chart.structure.write"
+	ActionChartRename      Action = "chart.rename"
+	ActionChartImport      Action = "chart.import"
+
 	// --- the company's own controls --------------------------------- //
 	ActionConfigRead     Action = "config.read"
 	ActionConfigWrite    Action = "config.write"
@@ -186,6 +206,33 @@ var rules = map[Action]rule{
 	ActionPageCommentEdit:   {class: ClassAuthored},
 	ActionPageCommentRemove: {class: ClassAuthored},
 
+	ActionChartRead: {class: ClassRead},
+	// THE RUNTIME HALF IS THE COMPANY DOCUMENT by another name — the same
+	// credentials, the same MCP commands, the same shape of every secret
+	// the company holds — so it takes the grant that reads that document
+	// rather than the one that reads the board.
+	ActionChartReadRuntime: {class: ClassOperator, grant: iam.GrantConfigRead},
+	// A CONTENT EDIT IS THE UNIT'S LEAD'S, which is what makes the chart
+	// writable by somebody other than whoever holds the deployment: a lead
+	// renaming their own team, restating its purpose or correcting a seat's
+	// goal is not a configuration change.
+	ActionChartContent: {class: ClassContainer},
+	// STRUCTURE IS THE COMPANY'S. The domain serialises every structural
+	// record on ONE subject for the whole chart, deliberately, because two
+	// reparents through a common ancestor can each be locally valid and
+	// jointly produce a cycle — so a move is never a fact about one unit
+	// and is not one lead's to make.
+	ActionChartStructure: {class: ClassOperator, grant: iam.GrantConfigWrite},
+	// A RENAME IS THE COMPANY'S although the domain arbitrates it per
+	// object rather than on the structure's one subject. An address is how
+	// every other domain refers to a thing — a `manages:` entry, a lead, a
+	// channel binding, the account name a vendor holds — so reassigning one
+	// inside a namespace the whole company shares is not a fact about one
+	// team, whatever subject it contends on.
+	ActionChartRename:  {class: ClassOperator, grant: iam.GrantConfigWrite},
+	ActionChartRuntime: {class: ClassOperator, grant: iam.GrantConfigWrite},
+	ActionChartImport:  {class: ClassOperator, grant: iam.GrantConfigWrite},
+
 	ActionConfigRead:     {class: ClassOperator, grant: iam.GrantConfigRead},
 	ActionConfigWrite:    {class: ClassOperator, grant: iam.GrantConfigWrite},
 	ActionSecretList:     {class: ClassOperator, grant: iam.GrantConfigRead},
@@ -201,6 +248,23 @@ var rules = map[Action]rule{
 // Actions is every verb this build authorizes, sorted, for the walks that ask
 // whether a surface covered all of them.
 func Actions() []Action { return slices.Sorted(maps.Keys(rules)) }
+
+// GrantOf reports the capability a verb requires, and whether the table knows
+// the verb at all.
+//
+// EMPTY WITH ok IS A REAL ANSWER: every class but [ClassOperator] decides
+// from the principal's relation to the object and asks for no capability. The
+// pair is what lets a walk tell "this verb needs nothing" from "nobody has
+// written a rule for this verb", which are the two answers a single empty
+// string folds together.
+//
+// EXPORTED FOR THE WALKS, on [ClassOf]'s own terms — a caller that read this
+// and decided for itself would be the second implementation this package
+// exists to remove. Use [Decide].
+func GrantOf(a Action) (iam.Grant, bool) {
+	r, ok := rules[a]
+	return r.grant, ok
+}
 
 // ClassOf reports which rule governs a verb.
 //
