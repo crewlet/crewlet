@@ -42,7 +42,7 @@ export interface ToolCall {
 
 /** What a screen knows about the object it is showing. */
 export interface Subject {
-  kind: "item" | "page" | "seat" | "project" | "goal" | "notice";
+  kind: "item" | "page" | "seat" | "project" | "notice";
   /** The identifier the tools take — a key, a uuid, a handle. */
   id: string;
   /** Whose object it is, where a screen has it for a label. */
@@ -148,8 +148,6 @@ export function callsFor(subject: Subject): ToolCall[] {
           args: { project: id, default_assignee: "" },
         },
       ];
-    case "goal":
-      return [{ tool: "write_work_goal", label: "Post an update", args: { id, update: "…" } }];
     case "notice":
       // THE INBOX IS THE CALLER'S OWN — `mark_inbox` names no handle, because
       // the operator's credential is whose inbox it is. And an entry is a

@@ -83,10 +83,30 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	// about is still a record of what happened.
 	if len(applied) > 0 {
 		fields = jsonOf(applied)
-	} else if notify != nil {
-		// A COMMENT, A MENTION OR AN ASK carries fields no document
-		// comparison can produce, so the notification's own are kept
-		// wherever the apply found nothing to compare.
+	} else if notify != nil && len(notify.Fields) > 0 {
+		// THE RECORD'S OWN STATEMENT, wherever the apply found nothing
+		// to compare — AND ONLY WHEN IT HAS ONE.
+		//
+		// The length guard is what keeps this column to ONE spelling of
+		// "nothing moved". [TaskDeltas] returns a NIL map when no field
+		// moved, `jsonOf` is `json.Marshal`, and a nil map marshals to
+		// the literal `null` — so on `notify != nil` alone every loud
+		// commit that moved nothing (a comment, an ask, a purge wake, a
+		// late repair) stored `null` here while every other row stored
+		// `{}`. Both read as empty and neither breaks a reader, which
+		// is exactly why it went unnoticed: two spellings of one fact
+		// in one column, waiting for the first query that compares
+		// them.
+		//
+		// The comment that stood here claimed "a comment, a mention or
+		// an ask carries fields no document comparison can produce",
+		// and that was never true: a comment's wake builds its deltas
+		// with [TaskDeltas] like every other, so this branch can carry
+		// no key the one above could not. What it is actually for is a
+		// record whose notification was built by a DIFFERENT build —
+		// the only way the two sets can differ — and a retired kind is
+		// gated before it ever reaches an apply, so on a current build
+		// the two agree or both are empty.
 		fields = jsonOf(notify.Fields)
 	}
 
@@ -341,8 +361,8 @@ const InboxRetentionDefaultDays = 365
 // company wrote a notice whose subject was a uuid. [InboxNotice.SubjectKey]
 // says what it is for: "an inbox of uuids is an inbox nobody reads."
 //
-// Zero for a subject that has no item key — a project, a view, a person, a
-// goal — which is the honest value rather than a missing one.
+// Zero for a subject that has no item key — a project, a view, a person —
+// which is the honest value rather than a missing one.
 type subjectKeys struct{ Project, Key string }
 
 // inboxSubjectKey is the key a notice carries.

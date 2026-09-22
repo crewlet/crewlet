@@ -23,10 +23,13 @@
  *
  * # Width
  *
- * 420 px, dragged between 360 and 640, remembered per viewer. Under 1180 px it
+ * 420 px, dragged between 360 and 640, remembered per viewer. Under 1200 px it
  * is a drawer over the content instead: the rail plus a 236 px sidebar plus a
  * readable list does not fit, and the sidebar is the one that collapses first
- * because it is one keystroke away.
+ * because it is one keystroke away. The threshold itself is
+ * `--peek-drawer-max` in frame.css, which is where its arithmetic — the 444 px
+ * list floor, the chrome in front of it, and the density the chrome scales
+ * with — is written down; this number is a copy of that one, so read it there.
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";

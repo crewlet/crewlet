@@ -64,10 +64,7 @@ describe("navigation identity", () => {
     expect(workspaceOf(["activity", "turns", "abc"])).toBe("activity");
     expect(workspaceOf(["activity", "events", "abc"])).toBe("activity");
     expect(workspaceOf(["work", "ENG-42"])).toBe("work");
-    // GOALS IS WORK'S, although its first segment is its own: the tier above
-    // projects belongs with the projects, and a rail row that unmarked itself
-    // whenever somebody opened a goal would be the proof it does not.
-    expect(workspaceOf(["goals"])).toBe("work");
+    // A SEGMENT NO WORKSPACE OWNS IS NOBODY'S, which is the case below.
     expect(workspaceOf([])).toBe("inbox");
   });
 
@@ -290,18 +287,65 @@ test("every fixed destination names itself rather than reading as a key", () => 
   }
 });
 
-// A WORKSPACE THAT OWNS TWO FIRST SEGMENTS still says which one you are on.
-//
-// Work owns `work` and `goals`. The trail read "Work" for both, so the goals
-// list and the company's board were indistinguishable in the page bar and in
-// the browser tab — which is exactly what a breadcrumb exists to prevent.
-test("a second owned segment names itself in the trail", () => {
-  const goals = crumbsFor(["goals"]);
-  expect(goals.map((c) => c.label)).toEqual(["Work", "Goals"]);
-  expect(goals[0]?.path).toEqual(["work"]);
-  expect(goals[1]?.path).toBeUndefined();
-  // And the workspace's OWN landing page is still a single crumb.
-  expect(crumbsFor(["work"]).map((c) => c.label)).toEqual(["Work"]);
+/**
+ * HOW DEEP THE FIXED PART OF A TRAIL GOES, which is a fact about this file
+ * that the STYLESHEET is written against.
+ *
+ * `.crumbs` in frame.css gives the trail a floor and, past it, a scroller,
+ * and the note on that rule quotes the width of the deepest fixed ancestry
+ * this function can produce — measured in Chromium at `--fs-sm`: "Admin /
+ * Configuration / Revisions /" at 26.53ch, 31.53ch beside the 5ch stub the
+ * last crumb floors at. That note was written when the deepest was believed
+ * to be two crumbs ("Admin / Infrastructure /"), and it had been three on
+ * three admin routes since before it was written: a fourth level, or a fourth
+ * branch, would leave it stale in exactly the same way, and a stylesheet
+ * cannot see this file.
+ *
+ * So this is the premise, held here where it lives. The WIDTH is not
+ * assertable in a test — jsdom has no fonts and computes no layout — but the
+ * shape is, and the shape is what moved.
+ */
+test("three fixed ancestors is the deepest trail the route table produces", () => {
+  // The three branches `adminCrumbs` spells out, and the ancestry each draws.
+  const three: [string[], string[]][] = [
+    [
+      ["admin", "config", "revisions", "01JCFG"],
+      ["Admin", "Configuration", "Revisions"],
+    ],
+    [
+      ["admin", "fleet", "domains", "tracker"],
+      ["Admin", "Infrastructure", "Domains"],
+    ],
+    [
+      ["admin", "tools", "servers", "github"],
+      ["Admin", "Tools", "Servers"],
+    ],
+  ];
+  for (const [path, ancestry] of three) {
+    const crumbs = crumbsFor(path);
+    expect(
+      crumbs.slice(0, -1).map((c) => c.label),
+      `#/${path.join("/")}`,
+    ).toEqual(ancestry);
+  }
+
+  // AND NOTHING IS DEEPER, walked from the two tables rather than listed.
+  // Every destination, with an id under it — and with each RESERVED SEGMENT
+  // under it first, because that is what the three branches above are made of:
+  // `revisions`, `domains` and `servers` are literals in `adminCrumbs`, so a
+  // walk that only ever appended `x` would never reach one and would pass
+  // through a fourth level being added to any of them. (Tried: it does.)
+  const under: string[][] = [["x"], ["x", "y"]];
+  for (const seg of RESERVED_SEGMENTS) under.push([seg], [seg, "x"], [seg, "x", "y"]);
+  for (const dest of DESTINATIONS) {
+    for (const tail of under) {
+      const path = [...dest.path, ...tail];
+      expect(
+        crumbsFor(path).length,
+        `#/${path.join("/")} is deeper than the trail's floor was measured against`,
+      ).toBeLessThanOrEqual(4);
+    }
+  }
 });
 
 /**

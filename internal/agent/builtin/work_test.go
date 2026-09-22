@@ -74,8 +74,6 @@ type fakeTracker struct {
 	depended  []tracker.DependencyChange
 	dependErr error
 
-	goalListing      tracker.GoalListing
-	goalsWritten     []tracker.Goal
 	projectEdits     []tracker.ProjectEdit
 	projectAuthority []tracker.ProjectAuthority
 	tagEdits         []tracker.TagEdit
@@ -175,23 +173,6 @@ func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
 		f.params[key] = fmt.Sprint(value)
 	}
 	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
-}
-
-func (f *fakeTracker) Goals(context.Context, tracker.GoalQuery) (tracker.GoalListing, error) {
-	return f.goalListing, nil
-}
-
-func (f *fakeTracker) WriteGoal(_ context.Context, _ string, goal tracker.Goal) (
-	tracker.WriteResult, error) {
-
-	if f.writeErr != nil {
-		return tracker.WriteResult{}, f.writeErr
-	}
-	f.goalsWritten = append(f.goalsWritten, goal)
-	return tracker.WriteResult{
-		Outcome:  statelog.OutcomeApplied,
-		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 30},
-	}, nil
 }
 
 func (f *fakeTracker) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
@@ -932,8 +913,8 @@ func TestEveryListArgumentReachesTheGrammar(t *testing.T) {
 // NO SEAT HOLDS AN OPERATOR-ONLY TOOL.
 //
 // Each of them is a decision a PERSON makes about how the company runs: what
-// its vocabulary is, what a goal is, how a tab strip is arranged, what
-// somebody's queue and inbox are. A seat given any of them is a seat editing
+// its vocabulary is, how a tab strip is arranged, what somebody's queue and
+// inbox are. A seat given any of them is a seat editing
 // the rules it is judged by — and the two that would matter most are the
 // catalogue (a create refused for an undeclared type is a signal a person
 // needs to see, not one the seat should widen away) and the person record (a
@@ -950,7 +931,6 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
 		ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
-		GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
 		TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
@@ -970,7 +950,6 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 		Work: builtin.WorkDeps{
 			Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
 			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
-			GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 			PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
@@ -1046,7 +1025,6 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 	work := builtin.WorkDeps{
 		Reader: trk, Writer: trk.as,
 		ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
-		GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
 		TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },

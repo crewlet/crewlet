@@ -304,13 +304,12 @@ export function WorkItem({ id }: { id: string }) {
   // spelling and every internal link carries the id, so a trail reading
   // `work / 4f3c…` told a reader nothing they did not already have from the URL
   // bar. This is what the comment that stood here has always claimed was
-  // happening and nothing was doing — the same gap `#/goals/{id}` had beside it.
+  // happening and nothing was doing.
   //
-  // THE KEY AND NOT THE TITLE, unlike the goal's crumb: a breadcrumb is the
-  // ADDRESS rather than a title, `ENG-42` is an address a person can read and
-  // paste, and the title is on the header immediately below it. A goal's uuid
-  // is an address nobody can read, which is why it spends its crumb on a
-  // name.
+  // THE KEY AND NOT THE TITLE: a breadcrumb is the ADDRESS rather than a
+  // title, `ENG-42` is an address a person can read and paste, and the title
+  // is on the header immediately below it. A crumb spends itself on a name
+  // only where the address is a uuid nobody can read.
   usePageLabels(item ? { [id]: item.key } : {});
 
   return (
@@ -513,8 +512,8 @@ export function Subtasks({
   /**
    * Open a child in the rail instead of navigating to it.
    *
-   * ONE CALLBACK RATHER THAN A HOOK, for the reason `GoalPanel` takes one:
-   * this panel is rendered directly by its own suite,
+   * ONE CALLBACK RATHER THAN A HOOK: this panel is rendered directly by its
+   * own suite,
    * and `usePeekControls` reads the navigator, so reaching for it here would
    * make every case in that file stand up a router it has no use for.
    *

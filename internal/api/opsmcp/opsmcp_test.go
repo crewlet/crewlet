@@ -207,10 +207,6 @@ func (stubWorkReader) ExpandedQuery(_ context.Context, params map[string]any,
 	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
 }
 
-func (stubWorkReader) Goals(context.Context, tracker.GoalQuery) (tracker.GoalListing, error) {
-	return tracker.GoalListing{}, nil
-}
-
 func (stubWorkReader) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
 	return tracker.CatalogueAnswer{}, nil
 }

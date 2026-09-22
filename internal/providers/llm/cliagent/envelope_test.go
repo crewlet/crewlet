@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -220,5 +221,47 @@ func TestAPartiallyReadableCallListKeepsWhatItCanRun(t *testing.T) {
 	}
 	if len(env.ToolCalls) != 1 || env.ToolCalls[0].Name != "submit_work" {
 		t.Errorf("calls = %+v", env.ToolCalls)
+	}
+}
+
+// A WIDE ID IS EXECUTED, not displayed, so rounding it runs the call against
+// the wrong row with nothing anywhere reporting an error. Every other decoder
+// on an argument path in this engine reads through json.Number for that
+// reason; this was the one that did not.
+func TestAWideArgumentIDSurvivesTheEnvelope(t *testing.T) {
+	for _, reply := range []string{
+		`{"tool_calls": [{"name": "get_issue", "arguments": {"id": 1234567890123456789}}]}`,
+		// The STRING form of an argument list takes the same path, and it is
+		// the form a model that learned OpenAI's wire format reproduces.
+		`{"tool_calls": [{"name": "get_issue", "arguments": "{\"id\": 1234567890123456789}"}]}`,
+	} {
+		env := ParseEnvelope(reply)
+		if len(env.ToolCalls) != 1 {
+			t.Fatalf("ParseEnvelope(%s) gave %d calls, want 1", reply, len(env.ToolCalls))
+		}
+		raw, err := json.Marshal(env.ToolCalls[0].Arguments)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		if string(raw) != `{"id":1234567890123456789}` {
+			t.Errorf("arguments re-encoded as %s, want the id unchanged", raw)
+		}
+	}
+}
+
+// A TAIL IS NOT A DOCUMENT, on the one path where a model's raw text reaches
+// the decoder whole: the STRING form of an argument list, which is what a
+// model that learned OpenAI's wire format reproduces. A Decoder reads one
+// value and stops, so `{"a":1}garbage` would decode clean and the suffix be
+// dropped in silence — where the `json.Unmarshal` this replaced refused it and
+// the call fell back to no arguments. Refusing is the honest answer: half a
+// model's arguments is not its request.
+func TestAnArgumentListWithATailIsRefused(t *testing.T) {
+	env := ParseEnvelope(`{"tool_calls": [{"name": "get_issue", "arguments": "{\"id\": 1}garbage"}]}`)
+	if len(env.ToolCalls) != 1 {
+		t.Fatalf("ParseEnvelope gave %d calls, want 1", len(env.ToolCalls))
+	}
+	if got := env.ToolCalls[0].Arguments; len(got) != 0 {
+		t.Errorf("Arguments = %v, want none — the text had a tail", got)
 	}
 }

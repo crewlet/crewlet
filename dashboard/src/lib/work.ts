@@ -125,7 +125,7 @@ export function typeName(slug: string | undefined, types?: WorkTypeDef[]): strin
 }
 
 /**
- * The engine's thirty-two change kinds, each with the mark it is drawn as and
+ * The engine's twenty-seven change kinds, each with the mark it is drawn as and
  * the phrase a person reads.
  *
  * A MARK RATHER THAN A HUE, which is this file's own rule for a task type a few
@@ -137,7 +137,7 @@ export function typeName(slug: string | undefined, types?: WorkTypeDef[]): strin
  *
  * AND A PHRASE, because `kind.replaceAll("_", " ")` after an actor's name reads
  * "ada watchers". Only the kinds an apply can compare two documents for produce
- * deltas — `tracker.TaskDeltas` covers twelve task fields and nothing else — so
+ * deltas — `tracker.TaskDeltas` covers eleven task fields and nothing else — so
  * `watchers`, `relations`, `checklist`, `archived`, `reparented` and the whole
  * comment family reach the reader through this column alone.
  *
@@ -170,7 +170,6 @@ export const CHANGES: { kind: string; mark: MarkName; phrase: string }[] = [
   { kind: "project_created", mark: "create_new_folder", phrase: "created the project" },
   { kind: "project_updated", mark: "folder", phrase: "changed the project" },
   { kind: "policy_changed", mark: "shield", phrase: "changed the project's policy" },
-  { kind: "goal_updated", mark: "target", phrase: "changed a goal" },
   { kind: "view_saved", mark: "save", phrase: "saved a view" },
   { kind: "catalogue_updated", mark: "settings", phrase: "changed the catalogue" },
   { kind: "prioritised", mark: "arrow_upward", phrase: "reordered somebody's priorities" },
@@ -182,7 +181,7 @@ const BY_KIND = new Map(CHANGES.map((change) => [change.kind, change]));
 /**
  * The mark a change of this kind is drawn as.
  *
- * `difference` — "something changed", claimed by none of the thirty-two — for a
+ * `difference` — "something changed", claimed by none of the twenty-seven — for a
  * kind a NEWER PEER wrote. The event envelope evolves additive-only, so a
  * rolling upgrade puts kinds this build has never heard of on the wire, and a
  * row that drew nothing for one would read as a rendering fault.
@@ -196,29 +195,6 @@ export function changePhrase(kind: string): string {
   // The raw kind for one from a newer peer — lower-cased and unpunctuated rather
   // than `humanize`d, because this lands mid-sentence after a name.
   return BY_KIND.get(kind)?.phrase ?? kind.replaceAll("_", " ");
-}
-
-/**
- * A goal's health, and what each value is called.
- *
- * HERE RATHER THAN ON THE SCREEN THAT DRAWS IT. These were declared inside
- * `routes/work/Goals.tsx` and a `health` delta needs the same four words in a
- * sentence — two copies of one vocabulary is the shape this file exists to end
- * (see its own doc). The TONE stays with the screen: a tone is a drawing
- * decision and a sentence has no room for one.
- *
- * A VALUE THIS BUILD HAS NEVER HEARD OF RENDERS AS ITSELF, humanized, which is
- * the same last resort [statusLabel] takes.
- */
-export const GOAL_HEALTHS: { value: string; label: string }[] = [
-  { value: "on_track", label: "On track" },
-  { value: "at_risk", label: "At risk" },
-  { value: "off_track", label: "Off track" },
-  { value: "done", label: "Done" },
-];
-
-export function healthLabel(health: string): string {
-  return GOAL_HEALTHS.find((h) => h.value === health)?.label ?? humanize(health);
 }
 
 /**
@@ -384,11 +360,19 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
  * One entry of a task's own history, in a sentence.
  *
  * A DIFFERENT SHAPE FROM THE FEED'S, and that is not duplication: a history
- * entry's `fields` is the notification SNAPSHOT, whose values are sometimes a
- * from/to pair and sometimes the state the change produced — the applier writes
- * the deltas where it can compare two documents and the notification's own
- * fields where it cannot (a comment, a mention, an ask). A renderer that assumed
- * one shape printed `[object Object]` on the other.
+ * entry's `fields` arrives typed `Record<string, unknown>`, so this renderer
+ * proves the shape rather than assuming it — one that assumed wrong printed
+ * `[object Object]`.
+ *
+ * THE BARE-VALUE ARM IS DEFENSIVE, NOT A SHAPE THE ENGINE WRITES, and the
+ * comment that stood here said otherwise: it claimed the applier writes "the
+ * notification's own fields" as plain scalars for a comment, a mention or an
+ * ask. It does not, and never did. `fields_json` is `jsonOf` of a
+ * `map[string]Delta` on both of its two paths (`internal/tracker/apply_history.go`),
+ * and `Delta`'s `From`/`To` carry no `omitempty` — so every value this engine
+ * has ever written to that column has BOTH keys and takes the pair arm. The
+ * arm below is what stops a payload this build cannot type-check from
+ * rendering as `[object Object]`, which is a different and smaller claim.
  *
  * THE EXCERPT IS DELIBERATELY NOT A RUNG. It used to be the one below the
  * deltas, and for the whole comment family the excerpt IS the comment body:
@@ -444,8 +428,8 @@ export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
  */
 function deltaValue(field: string, value: string, ctx: LabelContext): string {
   if (!value) return "";
-  // THE ENGINE JOINS A LIST WITH ", " BEFORE IT STORES IT (wake.go, goals.go),
-  // so it splits back on the same separator.
+  // THE ENGINE JOINS A LIST WITH ", " BEFORE IT STORES IT (wake.go), so it
+  // splits back on the same separator.
   const people = (handles: string) =>
     handles
       .split(", ")
@@ -457,9 +441,6 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
     case "type":
       return typeName(value, ctx.types);
     case "assignee":
-    case "owners":
-    case "members":
-    case "mentions":
       return people(value);
     case "tags":
       return value
@@ -476,12 +457,6 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
     // this build does not recognise passes through rather than being guessed at.
     case "estimate":
       return /^\d+m$/.test(value) ? fmtMinutes(Number(value.slice(0, -1))) : value;
-    case "health":
-      return healthLabel(value);
-    // The checkbox vocabulary [fieldValueText] already uses. "false" is a real
-    // side of this delta — an UN-archive — so both sides render.
-    case "archived":
-      return value === "true" ? "Yes" : "No";
     default:
       return value;
   }

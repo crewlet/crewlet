@@ -66,15 +66,16 @@ test("a meter with no ceiling is not announced as an empty one", () => {
 });
 
 // A BAR AT 100% IS TWO OPPOSITE PIECES OF NEWS. A budget at 100% is refused
-// charges; a goal at 100% is the goal reached. The tone was derived from the
-// fill alone — 75% caution, 100% critical — which is exactly right for a
-// budget and exactly backwards for progress: a goal three quarters of the way
-// there rendered as a WARNING, and one fully achieved would have rendered as
-// a CRISIS. The direction cannot be derived from a ratio, so the caller
-// states it and the prop is required rather than defaulted.
+// charges; a completion bar at 100% is the thing finished. The tone was
+// derived from the fill alone — 75% caution, 100% critical — which is exactly
+// right for a budget and exactly backwards for progress: three quarters of the
+// way there rendered as a WARNING, and fully achieved would have rendered as
+// a CRISIS. The direction cannot be derived from a ratio, so the caller states
+// it and the prop is required rather than defaulted — which is what this case
+// keeps true now that no screen passes `achieved`.
 const toneOf = (el: HTMLElement) => el.querySelector(".meter-fill")?.getAttribute("data-tone");
 
-test("a budget warns as it fills and a goal celebrates", () => {
+test("a budget warns as it fills and progress celebrates", () => {
   const spent = (used: number) =>
     toneOf(render(<Meter used={used} max={100} ariaLabel="Budget" fullMeans="spent" />).container);
   const achieved = (used: number) =>

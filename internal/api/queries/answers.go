@@ -446,7 +446,6 @@ func Register(r *Registry, s Sources) {
 		// was `work_activity.notified`: a boolean saying that
 		// somebody, somewhere, was told.
 		r.Register("work_routing", s.workRouting)
-		r.Register("work_goals", s.workGoals)
 		r.Register("work_catalogue", s.workCatalogue)
 		r.Register("work_person", s.workPerson)
 	}

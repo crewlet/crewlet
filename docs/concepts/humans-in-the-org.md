@@ -82,7 +82,7 @@ everyone else as work handed over.
 **The queue is `#/inbox`**, and it is the dashboard's landing screen. Opening it
 with an API token resolves that token's id against every seat's
 `crewlet_operator_id` and shows the person it names: their notices, the one
-reason of nineteen that routed each one, and what is waiting on a decision. A
+reason of eighteen that routed each one, and what is waiting on a decision. A
 token bound to no seat is not an error — it is an operator outside the org
 chart — and the screen says so rather than showing somebody else's queue or an
 empty one, naming the line of company configuration that would give it a

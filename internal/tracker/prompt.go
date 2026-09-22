@@ -19,14 +19,14 @@ import (
 // this reads that back rather than re-deriving a judgement the router made
 // with more information.
 //
-// # Nineteen reasons, THREE FRAMES
+// # Eighteen reasons, THREE FRAMES
 //
-// The router distinguishes nineteen reasons because the routing rules genuinely
-// differ — a blocker's dependent and a goal's owner are reached by different
-// paths. What a RECIPIENT needs to be told collapses to three: somebody is
-// asking you, this is your work, or this is activity you follow. A prompt with
-// nineteen openers would be nineteen places for one sentence to drift, and the
-// reason itself is rendered in the header either way.
+// The router distinguishes eighteen reasons because the routing rules
+// genuinely differ — a blocker's dependent and a task's watcher are reached by
+// different paths. What a RECIPIENT needs to be told collapses to three:
+// somebody is asking you, this is your work, or this is activity you follow. A
+// prompt with eighteen openers would be eighteen places for one sentence to
+// drift, and the reason itself is rendered in the header either way.
 //
 // # This prompt DOES name tools, and that is the exception rather than a lapse
 //
@@ -97,9 +97,9 @@ func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 		return key
 	}
 	// A NON-TASK WAKE KEYS ON ITS OWN OBJECT. Falling through to an empty
-	// key would put every goal update in the company into ONE ledger — a
-	// conversation key is what separates threads, and a shared empty one
-	// merges them all.
+	// key would put every person-scoped wake in the company into ONE
+	// ledger — a conversation key is what separates threads, and a shared
+	// empty one merges them all.
 	if id := metadata[MetaObjectID]; id != "" {
 		return metadata[MetaObject] + ":" + id
 	}
@@ -146,7 +146,7 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 	// THE OBJECT DECIDES THE FRAME, before the reason does. Every opener
 	// below says "A task…", the header is labelled **Task:** and the
 	// context block sends the reader to get_work_item — none of which is
-	// true of a goal or a person's priority list.
+	// true of a person's priority list.
 	//
 	// AN ABSENT KEY IS A TASK, which is what keeps a record written by an
 	// older build rendering exactly as it did: this metadata arrived with
@@ -247,8 +247,6 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 		b.WriteString("A checklist item assigned to you changed.")
 	case ReasonCollaborator:
 		b.WriteString("A task you are collaborating on changed.")
-	case ReasonGoalOwner:
-		b.WriteString("A goal you own or are part of changed.")
 	case ReasonWatcher:
 		b.WriteString("A task you are watching changed.")
 	case ReasonUnwatched:

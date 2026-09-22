@@ -122,7 +122,6 @@ describe("routing", () => {
       ["company", "people", "ada"],
       ["company", "units", "platform"],
       ["work", "ENG-42"],
-      ["goals", "66666666-6666-4666-8666-666666666666"],
       ["knowledge", "ENG", "Deploy runbook"],
       ["admin", "fleet", "node-a"],
       ["admin", "integrations", "slack"],

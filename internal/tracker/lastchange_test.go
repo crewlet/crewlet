@@ -332,7 +332,7 @@ func TestTheMigrationBackfillsTheLastChangeFromTheHistory(t *testing.T) {
 	}
 
 	for _, statement := range backfillStatements(t,
-		"0015_a_project_says_when_its_work_last_changed.sql") {
+		"0016_a_project_says_when_its_work_last_changed.sql") {
 		writeReplicated(t, r, statement)
 	}
 

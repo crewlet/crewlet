@@ -44,7 +44,7 @@ import (
 // make the writer's own deferral probe miss the record it is meant to see.
 type ObjectKind string
 
-// The fourteen kinds.
+// The thirteen kinds.
 //
 // EXPORTED AND ENUMERATED because four readers that cannot see each other all
 // compare against them: the publisher builds the subject, the wake feed's
@@ -75,9 +75,6 @@ const (
 
 	// KindView is a saved view.
 	KindView ObjectKind = "view"
-
-	// KindGoal is a goal and its targets.
-	KindGoal ObjectKind = "goal"
 
 	// KindPerson is one person's inbox, priorities and pins.
 	KindPerson ObjectKind = "person"
@@ -121,21 +118,24 @@ const (
 	KindBarrier ObjectKind = "barrier"
 )
 
-// ObjectKinds are the fourteen, in the order they are documented.
+// ObjectKinds are the thirteen, in the order they are documented.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindCounter, KindTags,
-	KindCatalogue, KindView, KindGoal, KindPerson, KindAlias,
+	KindCatalogue, KindView, KindPerson, KindAlias,
 	KindTurn, KindGeneration, KindEviction, KindRankOrder, KindBarrier,
 }
 
-// KindSprint is RETIRED, and it is a constant for the reason every other wire
-// value here is one: a literal this build must still recognise is no less a
-// wire value for having stopped being writable.
+// KindSprint and KindGoal are RETIRED, and they are constants for the reason
+// every other wire value here is one: a literal this build must still
+// recognise is no less a wire value for having stopped being writable.
 //
-// It is deliberately NOT in [ObjectKinds], so [ObjectKind.Valid] is false for
-// it, nothing mints a subject for it, the domain classifies no table for it
-// and it arbitrates nothing. What it buys is [RetiredKinds] below.
-const KindSprint ObjectKind = "sprint"
+// They are deliberately NOT in [ObjectKinds], so [ObjectKind.Valid] is false
+// for them, nothing mints a subject for either, the domain classifies no table
+// for them and they arbitrate nothing. What that buys is [RetiredKinds] below.
+const (
+	KindSprint ObjectKind = "sprint"
+	KindGoal   ObjectKind = "goal"
+)
 
 // RetiredKinds are the kinds this build once published and no longer applies.
 //
@@ -166,6 +166,8 @@ var RetiredKinds = []ObjectKind{
 	// sprint record written before that is one an upgraded node reads
 	// past.
 	KindSprint,
+	// Goals left it in 0015, and the same sentence covers them.
+	KindGoal,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -179,7 +181,7 @@ func (k ObjectKind) Retired() bool { return slices.Contains(RetiredKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// TWELVE OF FOURTEEN DO. A turn is ADDITIVE — it records spend that happened
+// ELEVEN OF THIRTEEN DO. A turn is ADDITIVE — it records spend that happened
 // and races nobody — and a barrier is arbitrated by nothing at all: every
 // barrier shares one subject, so an expectation there would serialise the
 // whole company's linearizable reads behind one another and write an anchor
@@ -246,9 +248,6 @@ func TagsSubject(key string) Subject { return Subject{Kind: KindTags, ID: key} }
 
 // ViewSubject names one saved view by its id.
 func ViewSubject(id string) Subject { return Subject{Kind: KindView, ID: id} }
-
-// GoalSubject names one goal and its targets by its id.
-func GoalSubject(id string) Subject { return Subject{Kind: KindGoal, ID: id} }
 
 // PersonSubject names one person's inbox, priorities and pins — keyed on the
 // HANDLE rather than on a uuid, because the handle is the identity every
@@ -352,7 +351,7 @@ func ParseSubject(wire string) (Subject, bool) {
 // HomedInAProject reports a kind whose scope path is qualified by a project it
 // does not name itself.
 //
-// # The four, and why they are the four
+// # The three, and why they are the three
 //
 // A scope path is a containment hierarchy, so an object's own path sits under
 // its container's — which is what makes a project-wide deferral cover its
@@ -361,18 +360,18 @@ func ParseSubject(wire string) (Subject, bool) {
 // project in its id; a catalogue and a person live in a family;
 // and the three fleet-wide kinds are about the whole domain.
 //
-// These four do not. A task's subject is a uuid and its project is a mutable
+// These three do not. A task's subject is a uuid and its project is a mutable
 // column, and a turn's subject is the task it is about — so for both the
-// container is a fact only the writer holds. A view and a goal may live in a
-// project or at the top of the company, so their container is a choice rather
-// than a lookup.
+// container is a fact only the writer holds. A view may live in a project or
+// at the top of the company, so its container is a choice rather than a
+// lookup.
 //
 // [KindTask] and [KindTurn] additionally REQUIRE one: there is no such thing
 // as a task outside a project, so an empty container there is a writer that
 // forgot rather than a workspace-homed object.
 func (k ObjectKind) HomedInAProject() bool {
 	switch k {
-	case KindTask, KindTurn, KindView, KindGoal:
+	case KindTask, KindTurn, KindView:
 		return true
 	}
 	return false
@@ -380,12 +379,11 @@ func (k ObjectKind) HomedInAProject() bool {
 
 // Routable reports an object kind whose records can wake somebody.
 //
-// THREE, and the two beyond a task are there because their wakes are about a
-// PERSON rather than about a row: a goal's owners hear that the outcome they
-// committed the company to moved, and one person hears that somebody else
-// wrote their priority list. Neither is reachable from a task's own routing —
-// an assignee, a watcher, a dependent — which is why the parser used to drop
-// them both and why they arrive under their own reasons instead.
+// TWO, and the one beyond a task is there because its wake is about a PERSON
+// rather than about a row: one person hears that somebody else wrote their
+// priority list. That is not reachable from a task's own routing — an
+// assignee, a watcher, a dependent — which is why the parser used to drop it
+// and why it arrives under its own reason instead.
 //
 // EVERY OTHER KIND IS MACHINERY OR IS ANNOUNCED ELSEWHERE. A counter, an alias
 // and a rank order have no audience at all; a catalogue, a view, a tag set and
@@ -399,7 +397,7 @@ func (k ObjectKind) HomedInAProject() bool {
 // seat in the company woken by a bookkeeping append.
 func (k ObjectKind) Routable() bool {
 	switch k {
-	case KindTask, KindGoal, KindPerson:
+	case KindTask, KindPerson:
 		return true
 	}
 	return false
@@ -417,7 +415,7 @@ func (k ObjectKind) Routable() bool {
 // edit filed as `patch`, a purge as `purge` rather than `purged`, and neither
 // is a [ChangeKind] any filter can name.
 //
-// The six document kinds and the task are exactly the kinds [Applier.apply]
+// The five document kinds and the task are exactly the kinds [Applier.apply]
 // routes to a path that writes one. Everything else — a barrier, a turn, an
 // eviction, a generation, an alias, a rank order, a counter — is machinery
 // with no audience and no entry in anybody's account of what happened, so a
@@ -429,7 +427,7 @@ func (k ObjectKind) Routable() bool {
 func (k ObjectKind) RecordsHistory() bool {
 	switch k {
 	case KindTask, KindProject, KindTags, KindCatalogue,
-		KindView, KindGoal, KindPerson:
+		KindView, KindPerson:
 		return true
 	}
 	return false

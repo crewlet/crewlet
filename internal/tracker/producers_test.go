@@ -454,10 +454,6 @@ func reasonAlone(reason tracker.Reason) *tracker.Notify {
 		n := base(tracker.ChangeStatus)
 		n.Snapshot.Collaborators = []string{"co"}
 		return n
-	case tracker.ReasonGoalOwner:
-		n := base(tracker.ChangeGoalUpdated)
-		n.Snapshot.GoalOwners = []string{"go"}
-		return n
 	case tracker.ReasonWatcher:
 		n := base(tracker.ChangeStatus)
 		n.Snapshot.Watchers = []string{"wa"}

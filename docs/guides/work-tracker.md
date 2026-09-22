@@ -269,55 +269,6 @@ own name.
 
 A task carries at most **40** tags, and a project declares at most **512**.
 
-## Goals
-
-**Goals** are the tier above projects: a name, owners, dates, a health value
-and a free-text group label. A goal has **targets**, and a target references
-work — a project, a set of tasks, a number somebody moves by hand. Goals
-deliberately have no *stored* percentage: what a goal is at is what its targets
-say, and a stored number would be a second answer that drifts the moment a task
-in a target closes without anybody editing the goal.
-
-So the number is **computed on every read**, from the rows the read already
-holds:
-
-| Target type | What it is at |
-|---|---|
-| `tasks` | the fraction of the tasks it reaches that are **finished** — `done` and `cancelled` alike, because the status *group* decides. A removed task is not counted on either side, so tidying up never moves a goal backwards. |
-| `number`, `percent` | the fraction of the distance from its start to its goal, **clamped** to 0–100%: a target routinely overshoots, and a progress bar at 130% is a rendering bug in every screen that draws one. The raw number is on the target. |
-| `binary` | one or zero. |
-
-A goal's own progress is the **unweighted mean** of its targets. Weighting
-would be a second set of numbers somebody has to maintain and nobody would, and
-an unweighted mean is wrong *visibly* rather than quietly: two targets, one
-enormous and one trivial, read as half done when the trivial one lands, and the
-reader can see exactly which it was.
-
-A goal with **no targets has no progress at all** — not zero. "Nothing has
-happened" and "there is nothing to measure" are different facts, and a goal
-rendered at 0% because nobody set a target is one somebody escalates.
-
-**Health is not inferred.** The targets say what has moved; only an owner knows
-whether the movement is on track. A goal at 90% with a week left and one at 90%
-with a day left are different situations, and no arithmetic separates them.
-
-**A health update is what somebody wrote.** `write_work_goal(update: {health,
-text})` appends one — it never rewrites an existing one, and the author and
-the instant are stamped by the engine rather than sent by the caller, because
-an update is an assessment filed under somebody's name on a date. The history
-is carried forward on every save: a goal save is a whole post-state replace,
-and one that dropped the updates would destroy the only part of a goal written
-in prose.
-
-Goals are **read** by every seat with `list_work_goals` and at
-`GET /work/goals`, and on the dashboard's Goals screen. **Writing** one is an
-operator gesture — `write_work_goal`, not a seat's: a seat setting its own
-goals is a seat marking its own homework. The read is a seat's for the same
-reason reading the catalogue is, and for one more: a goal names owners and
-members, and **every one of them is woken when the commitment moves** — so a
-seat told its goal changed and holding no verb to read a goal would have been
-handed a riddle.
-
 ## Views
 
 A **view** is a saved query with a shape. Five shapes:
@@ -494,14 +445,13 @@ correct board.
 
 ## What a seat can do
 
-Fourteen tools, and they are deliberately few — eight that act on a task,
+Thirteen tools, and they are deliberately few — eight that act on a task,
 three that read the container it is filed into, one that writes the one part of
-that container a seat owns, one that reads the company's goals, and one about
-CHANGE rather than about state:
+that container a seat owns, and one about CHANGE rather than about state:
 
 | Tool | What it does |
 |---|---|
-| `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, `goal`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
+| `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
 | `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below |
 | `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it |
@@ -513,7 +463,6 @@ CHANGE rather than about state:
 | `list_projects` | every project work is filed into, with how much open work each holds, when its work last changed and who changed it, and who leads it. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
 | `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
-| `list_work_goals` | the company's goals, what each is at, and the health updates written against them. A read only — setting a goal is a person's |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
 
@@ -579,7 +528,7 @@ default assignee are the **lead's**, and archiving the project
 itself takes a person's own credential. Every one of those is gated inside the
 verb, and each refusal names who can.
 
-An operator holds the same fourteen and more that no seat does, including the
+An operator holds the same thirteen and more that no seat does, including the
 two below. `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. A
 removal hides an item from every list and board and destroys nothing — its
@@ -691,8 +640,8 @@ screens rather than one:
   and its fields — and a **History** lens narrowed to it.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
-`/operator/mcp`. It serves the same work tools above, eleven more no seat is
-given — `list_work_views`, `save_work_view`, `write_work_goal`,
+`/operator/mcp`. It serves the same work tools above, ten more no seat is
+given — `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`, `mark_inbox`, `set_pins`,
 `set_priorities`, `remove_work_item` and `restore_work_item`
 — the five page tools beside them and knowledge
@@ -708,28 +657,19 @@ which are attributed to somebody.
 
 ## A handle is checked before it is stored
 
-Every argument that names a colleague — a task's assignee, a goal's owners and
-members, a project's default assignee, whose priority list is being written —
-is resolved against the company's own roster before the write, and a name
-nobody has is **refused**, listing the seats.
+Every argument that names a colleague — a task's assignee, a project's default
+assignee, whose priority list is being written — is resolved against the
+company's own roster before the write, and a name nobody has is **refused**,
+listing the seats.
 
 That is not tidiness. An unknown handle fails *silently and permanently*: it is
 stored, it rides the change's routing snapshot, it becomes a candidate — and
 the wake path drops it against the live roster with no error and no log. The
 write answers `applied`, and the person it named never hears anything. A
-misspelling is indistinguishable from a colleague who is simply quiet. On a
-goal it is worse still, because a goal update reaches its owners and *nobody
-else*: there is no lead fallback to catch the fall, so one typo silences that
-goal for everybody, for ever.
+misspelling is indistinguishable from a colleague who is simply quiet.
 
 A name is **resolved**, not merely checked — so a caller that typed a role's
 name rather than its handle gets the handle back rather than a refusal.
-
-**A handle already on the object is kept.** People leave, and a save that
-carries a departed owner is not adding a typo — it is carrying what is there.
-A whole-document write is refused only when its set of unresolvable names
-*grows*, because the alternative is a goal whose owner left being permanently
-unsaveable, including the one edit that takes them off it.
 
 ### Dependencies, and the set-valued arguments
 
@@ -833,8 +773,8 @@ half an object either fails to parse it or reads the half it got as the whole.
 
 A change that concerns somebody becomes a **wake** — a turn on that seat, with
 a prompt written for the reason it reached them. Most wakes are about a task:
-you were assigned it, mentioned on it, watching it, blocked by it. Two are
-not, and they exist because the thing that moved is not a row on a board:
+you were assigned it, mentioned on it, watching it, blocked by it. One is not,
+and it exists because the thing that moved is not a row on a board:
 
 **One wake per person per change**, whatever number of reasons name them: the
 first reason in the precedence order wins and the rest are dropped. Somebody
@@ -851,11 +791,10 @@ lead only when the change named nobody else at all.
 
 | Wake | Who hears it | What it asks |
 |---|---|---|
-| `goal_updated` | every owner and every member of the goal | nothing — re-plan your own work if the health moved |
 | `prioritised` | the person whose queue somebody else wrote | **an answer**: take it up, or say why you cannot |
 
-A third is about a task and is listed apart from the others because of what it
-says rather than what it is about:
+A second is about a task and is listed apart because of what it says rather
+than what it is about:
 
 | Wake | Who hears it | What it asks |
 |---|---|---|
@@ -869,16 +808,12 @@ stated reason — and nothing else. It quotes neither the title nor the body,
 because the record outlives the rows: an excerpt of what was purged would keep
 a copy of exactly that, on the log, for its whole retention window.
 
-Only `prioritised` **addresses** its recipient. A goal's owners are told so they can
-act in the work, not so they can reply — a wake that asked for an answer on
-every health update would fill the tracker with "noted, thanks". Being told
-what to do next by somebody above you is a different thing, and silence on it
-is indistinguishable from a message that was lost.
-
-Neither of the two sends you to `get_work_item` for the object it is about: a
-goal's id is not a task key, and a pointer at one costs a round and a failed
-tool call to discover. Each names the tool that answers its own question —
-`list_work_goals`, `my_work`. A `purged` wake sends you nowhere for the sharper
+`prioritised` **addresses** its recipient: being told what to do next by
+somebody above you is an instruction, and silence on it is indistinguishable
+from a message that was lost. It names the tool that answers its own question —
+`my_work` — rather than pointing at the object it is written on, because a
+person's handle is not a task key and a pointer at one costs a round and a
+failed tool call to discover. A `purged` wake sends you nowhere for the sharper
 version of the same reason: the row is gone from every node, so the tool would
 answer `not_found`.
 
@@ -976,7 +911,7 @@ primary key is `(record_id, recipient)`, so both directions are index reads and
 neither costs the other anything.
 
 Read it at `GET /work/routing/{record_id}`, or open an item's **Woke** tab in
-the dashboard. Every recipient names the one reason of nineteen that found them,
+the dashboard. Every recipient names the one reason of eighteen that found them,
 whether the notice *asks* something of them, and whether they were reached only
 because nobody better was found — a lead who hears about a report's task
 because the report has left, with the rank saying which substitute they were.

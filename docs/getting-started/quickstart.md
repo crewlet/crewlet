@@ -404,7 +404,7 @@ client at `/operator/mcp` with your API token:
 }
 ```
 
-It gets the same fourteen tools a seat holds, and its writes are attributed to
+It gets the same thirteen tools a seat holds, and its writes are attributed to
 the token's own name rather than to a seat — so an audit can tell your edit
 from an agent's. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).

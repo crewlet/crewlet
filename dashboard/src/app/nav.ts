@@ -93,8 +93,8 @@ export const RAIL: RailRow[] = [
     label: "Work",
     icon: "check",
     path: ["work"],
-    owns: ["work", "goals"],
-    hint: "Projects, items and goals",
+    owns: ["work"],
+    hint: "Projects and items",
     chord: "w",
   },
   {
@@ -261,14 +261,6 @@ export const DESTINATIONS: Destination[] = [
     icon: "view_column",
     path: ["work", "projects"],
     hint: "Every project, who leads it, and how far along it is",
-  },
-  {
-    key: "goals",
-    workspace: "work",
-    label: "Goals",
-    icon: "target",
-    path: ["goals"],
-    hint: "The tier above projects, and what its targets say right now",
   },
   {
     // THE LOG, FOR THE REASON THE OVERVIEW GOT A PAGE. The tracker's change

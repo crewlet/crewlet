@@ -435,3 +435,23 @@ func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
 		},
 	})
 }
+
+// cleanHandles trims, drops empties and deduplicates, preserving order.
+func cleanHandles(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if v = strings.TrimSpace(v); v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}

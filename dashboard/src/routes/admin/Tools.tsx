@@ -31,7 +31,7 @@ import {
   SearchGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { QueryState, Section, SeatChip } from "~/components/common.tsx";
+import { QueryState, RECORD_MAX_HEIGHT, Section, SeatChip } from "~/components/common.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { NumberCell, KeyCell } from "~/app/frame/cells.tsx";
@@ -446,8 +446,13 @@ function ToolBody({ name }: { name: string }) {
               ]}
             />
             <Disclosure title="The schema as JSON" mono>
+              {/* BOUNDED, like every other record block. A large MCP server's
+                  tool takes a schema of hundreds of lines, and an unbounded
+                  block pushes the rest of the screen off under it — which is
+                  the case `RECORD_MAX_HEIGHT` is written down for. */}
               <CodeBlock
                 plain
+                maxHeight={RECORD_MAX_HEIGHT}
                 selectable
                 label={`${tool.name}'s input schema, as JSON`}
                 code={JSON.stringify(tool.input_schema, null, 2)}

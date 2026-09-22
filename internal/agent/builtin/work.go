@@ -60,7 +60,6 @@ type WorkReader interface {
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
 		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
-	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
 	Thread(ctx context.Context, q tracker.ThreadQuery,
@@ -156,10 +155,6 @@ type WorkDeps struct {
 	// the verb into one interface would make a seat's registration
 	// implement a method nothing there may call.
 	ViewWriter func(actor Actor) ViewWriter
-
-	// GoalWriter resolves the goal write side for one actor, and is the
-	// operator surface's alone for the same reason ViewWriter is.
-	GoalWriter func(actor Actor) GoalWriter
 
 	// CatalogueWriter resolves the workspace catalogue write side, and is
 	// the operator surface's alone for the reason the two above are.
@@ -596,10 +591,6 @@ func (t *listWorkItems) Parameters() map[string]any {
 				"description": "A team's key: the work routed to that team, " +
 					"whoever holds it.",
 			},
-			"goal": map[string]any{
-				"type":        "string",
-				"description": "A goal's id: the work counted against it.",
-			},
 			"field_filters": map[string]any{
 				"type": "object",
 				"description": "Filter on this company's own custom fields, " +
@@ -674,7 +665,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	for _, key := range []string{
 		"assignee", "limit", "removed",
 		"type", "priority", "due", "updated", "created",
-		"reporter", "watcher", "unit", "goal",
+		"reporter", "watcher", "unit",
 		"sort", "cursor", "view",
 	} {
 		if v, held := args[key]; held {
@@ -1376,10 +1367,9 @@ func (d WorkDeps) resolveRef(ctx context.Context, tool, field, ref string) (stri
 // Because an unknown one fails silently and permanently. It is stored, it
 // rides the routing snapshot, it becomes a candidate — and [tracker.Route]
 // drops it against the live roster with no error, no per-candidate log and no
-// metric. The write answers `outcome: applied`; the person it named never
-// hears anything; and on a goal there is not even a lead to catch the fall,
-// because `goal_updated` is deliberately outside the fallback set. A
-// misspelling is indistinguishable from a colleague who is simply quiet.
+// metric. The write answers `outcome: applied` and the person it named never
+// hears anything, so a misspelling is indistinguishable from a colleague who
+// is simply quiet.
 //
 // # Why HERE and not in the tracker
 //
@@ -1418,41 +1408,6 @@ func (d WorkDeps) resolveHandle(tool, field, arg string) (string, string) {
 	}
 	return "", fmt.Sprintf("%s names %s %q and it matches %s. Name one of them "+
 		"exactly.", tool, field, clip(handle), strings.Join(matchHandles(found), " or "))
-}
-
-// resolveHandles is the same for a LIST, and the difference is the one that
-// makes a whole-post-state write safe.
-//
-// A SAVE MAY NOT GROW THE UNRESOLVABLE SET, rather than refusing any save that
-// carries one. `write_work_goal` replaces the whole document, so a flat
-// refusal would make a goal whose owner LEFT THE COMPANY permanently
-// unsaveable — including the one edit that removes them. A departure is
-// repaired by editing the object, never blocked by it; a typo adds a name that
-// was not there before, and that is what is refused.
-func (d WorkDeps) resolveHandles(tool, field string, args, before []string) (
-	[]string, string) {
-
-	known := map[string]bool{}
-	for _, h := range before {
-		known[strings.TrimSpace(h)] = true
-	}
-	out := make([]string, 0, len(args))
-	for _, arg := range args {
-		handle, refusal := d.resolveHandle(tool, field, arg)
-		if refusal == "" {
-			out = append(out, handle)
-			continue
-		}
-		if known[strings.TrimSpace(arg)] {
-			// ALREADY ON THE OBJECT. Somebody left, or was renamed;
-			// the save carries them because it carries everything, and
-			// refusing it would leave nobody able to take them off.
-			out = append(out, strings.TrimSpace(arg))
-			continue
-		}
-		return nil, refusal
-	}
-	return out, ""
 }
 
 // matchHandles renders an ambiguous resolution's candidates.

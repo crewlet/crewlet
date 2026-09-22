@@ -104,7 +104,6 @@ type WorkReader interface {
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
 		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
-	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
 	Projects(ctx context.Context, q tracker.ProjectQuery) (
 		tracker.ProjectListing, error)
@@ -369,43 +368,6 @@ func viewContainer(p Params) (tracker.Container, error) {
 		id = strings.ToUpper(id)
 	}
 	return tracker.Container{Kind: kind, ID: id}, nil
-}
-
-// workGoals answers the company's goals, each with what its targets say.
-//
-// THE PROGRESS IS COMPUTED, never stored — see [tracker.Reader.Goals]. A
-// stored percentage is a second answer to a question that already has one, and
-// the two drift the moment a task in a target closes without anybody editing
-// the goal.
-func (s Sources) workGoals(ctx context.Context, p Params) (any, error) {
-	fresh, err := freshness(p)
-	if err != nil {
-		return nil, err
-	}
-	listing, err := s.Work.Goals(ctx, tracker.GoalQuery{
-		ID:       strings.TrimSpace(p.String("id")),
-		Owner:    strings.TrimSpace(p.String("owner")),
-		Group:    strings.TrimSpace(p.String("group")),
-		Archived: p.Bool("archived", false),
-		// THE CALLER'S OWN — see [freshness].
-		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]any{
-		"goals": listing.Goals, "read_level": listing.Level,
-		"log_seq": listing.LogSeq, "applied_through": listing.AppliedThrough,
-		"complete": listing.Complete,
-	}
-	if listing.LogLag != nil {
-		out["log_lag"] = *listing.LogLag
-	}
-	if listing.Incomplete != nil {
-		out["incomplete"] = listing.Incomplete
-	}
-	return out, nil
 }
 
 // workCatalogue answers what a task may BE and what it may carry.

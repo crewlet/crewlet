@@ -441,22 +441,21 @@ export function Segmented<T extends string>({
  *     unclamped too, which is the second half of the ARIA note further down.
  *
  *  2. `meterTone` HAS THE "SPENT" POLARITY WELDED IN — `>= 100` is `danger`,
- *     `>= 75` is `warning` — so a bar measuring PROGRESS reads a finished goal
- *     as a crisis and a goal three quarters of the way there as a warning.
- *     `routes/work/Goals.tsx` measures progress. A caller can override with
- *     `tone`, but an override computed per call site from the same ratio is
- *     the rule spelled at every site rather than once, which is precisely what
- *     `fullMeans` exists to replace. What it would need is a
- *     `fullMeans`/`polarity` prop feeding `meterTone`, or a second exported
- *     ramp for the achieved direction.
+ *     `>= 75` is `warning` — so a bar measuring PROGRESS reads a finished
+ *     outcome as a crisis and one three quarters of the way there as a
+ *     warning. A caller can override with `tone`, but an override computed per
+ *     call site from the same ratio is the rule spelled at every site rather
+ *     than once, which is precisely what `fullMeans` exists to replace. What
+ *     it would need is a `fullMeans`/`polarity` prop feeding `meterTone`, or a
+ *     second exported ramp for the achieved direction.
  *
  * # The direction is the caller's to state, because it is not derivable
  *
  * A bar at 100% is two opposite pieces of news depending on what it measures.
- * A budget at 100% is refused charges; a goal at 100% is the goal reached.
- * The tone was derived from the fill alone — 75% caution, 100% critical —
- * which is exactly right for a budget and exactly backwards for progress: a
- * goal three-quarters of the way there rendered as a WARNING, and one fully
+ * A budget at 100% is refused charges; a completion bar at 100% is the thing
+ * finished. The tone was derived from the fill alone — 75% caution, 100%
+ * critical — which is exactly right for a budget and exactly backwards for
+ * progress: three-quarters of the way there rendered as a WARNING, and fully
  * achieved would have rendered as a CRISIS.
  *
  * So `fullMeans` is REQUIRED rather than defaulted. A default would be the
@@ -468,7 +467,12 @@ export function Segmented<T extends string>({
  *                  warns before it gets there.
  *   - `achieved` — progress towards something wanted. Full is GOOD and says
  *                  so; nothing below it is a fault the bar can diagnose, so
- *                  everything short of done is simply the accent.
+ *                  everything short of done is simply the accent. NOTHING IN
+ *                  THE PRODUCT MEASURES THIS TODAY — the goals screen did,
+ *                  and it left with goals — which is exactly why the prop is
+ *                  still required rather than defaulted: the next progress
+ *                  bar has to state its direction instead of inheriting the
+ *                  budget ramp in silence.
  *
  * `tone` still overrides both, for the cases a caller knows something the
  * ratio does not — a budget already refusing charges is critical at any fill.

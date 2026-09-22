@@ -543,3 +543,31 @@ func TestAnEntryWithNoTimeStillHasAHeading(t *testing.T) {
 		t.Errorf("a timeless entry lost its heading:\n%s", got)
 	}
 }
+
+// A LEDGER LINE IS READ, by the model every round and by a person on the seat
+// screen. `json.Marshal` escapes `<`, `>` and `&` for an HTML document, and
+// neither audience is one: a URL argument rendered `?a=1\\u0026b=2` costs six
+// bytes of the budget this package exists to spend well, and reads as noise.
+func TestRenderedArgumentsAreNotEscapedForHTML(t *testing.T) {
+	t.Parallel()
+	got := renderArgs(map[string]any{
+		"url": "https://example.com/s?a=1&b=2",
+		"md":  "<b>x</b>",
+	}, FormatOptions{})
+	if strings.Contains(got, `\u0026`) || strings.Contains(got, `\u003c`) {
+		t.Errorf("renderArgs = %s, want the characters rather than their escapes", got)
+	}
+	if !strings.Contains(got, "?a=1&b=2") || !strings.Contains(got, "<b>x</b>") {
+		t.Errorf("renderArgs = %s, want both arguments verbatim", got)
+	}
+	// STILL ONE LINE. A ledger is joined with newlines, so a stray one from
+	// the encoder would split a call across two entries.
+	if strings.Contains(got, "\n") {
+		t.Errorf("renderArgs = %q, want one line", got)
+	}
+	// STILL JSON.
+	var back map[string]any
+	if err := json.Unmarshal([]byte(got), &back); err != nil {
+		t.Fatalf("renderArgs produced something that is not JSON: %v", err)
+	}
+}

@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -210,6 +211,17 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 // two-day estimate was stored as two MINUTES and nothing was refused.
 func scheduleInt(raw any) (int, bool) {
 	switch v := raw.(type) {
+	case json.Number:
+		// BACK THROUGH THIS FUNCTION rather than repeating the whole-number
+		// and finiteness discipline below, which is the half a second
+		// spelling always gets wrong. An integer past 2^53 is not a
+		// schedule field — these are minutes and story points — so the
+		// float is the honest intermediate here, unlike in [argInt].
+		f, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return scheduleInt(f)
 	case float64:
 		// JSON has one number type, so a whole number arrives here. A
 		// fraction is not a whole number of minutes and is refused
@@ -238,6 +250,12 @@ func scheduleInt(raw any) (int, bool) {
 
 func scheduleFloat(raw any) (float64, bool) {
 	switch v := raw.(type) {
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return scheduleFloat(f)
 	case float64:
 		return v, finite(v)
 	case int:

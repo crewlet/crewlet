@@ -90,6 +90,11 @@ func (w *SkillUse) Reflect(ctx context.Context, t Turn) ([]events.Payload, error
 		if !use.Recorded {
 			out = append(out, types.SkillTelemetryWriteFailed{
 				AgentHandle: t.Event.AgentHandle, SkillID: id,
+				// THE TURN THAT DROVE THE WRITE, which every other
+				// event this pass publishes has always carried and
+				// this one did not — so the one panel an operator
+				// opens after a failed write could never show it.
+				TurnID: t.Event.TurnID, WorkKey: t.WorkKey(),
 				Kind: "mark_used",
 				// No Error: MarkUsed has no error to return, by design,
 				// so what this reports is that the write did not land
@@ -112,6 +117,10 @@ func (w *SkillUse) Reflect(ctx context.Context, t Turn) ([]events.Payload, error
 			// row's counters move without reviving it.
 			PriorState:     types.SkillStateStale,
 			TransitionedAt: now.UTC().Format(time.RFC3339),
+			// The turn that put the skill back in use. The curator's own
+			// revival has no turn behind it and carries none — see
+			// [types.SkillRevived].
+			TurnID: t.Event.TurnID, WorkKey: t.WorkKey(),
 		})
 	}
 	return out, nil

@@ -736,8 +736,8 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 	}
 	// THE CONTAINER IS TAKEN AND CHECKED RATHER THAN ASSUMED. Most kinds
 	// carry their own home in their subject and must not be given a second
-	// one; a view and a goal choose theirs. Accepting one where it means
-	// nothing would let a caller file a person's record under a project.
+	// one; a view chooses its own. Accepting one where it means nothing
+	// would let a caller file a person's record under a project.
 	if container != "" && !subject.Kind.HomedInAProject() {
 		return WriteResult{}, fmt.Errorf("tracker: a %s names container %q, "+
 			"and its own path is derived from its subject — a container here "+
