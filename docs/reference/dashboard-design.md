@@ -257,6 +257,18 @@ Two kinds, and nothing is both:
   menu, whose button says what is on, so the arrangement is readable without
   opening anything.
 
+`URL_HOMES` in `lib/work.ts` is where that is declared per key rather than per
+paragraph: every URL key the work list carries names the control that owns it —
+chip, menu, or one of the three that are deliberately neither and carry their
+reason at the entry. `routes/work/toolbar/grammar.test.tsx` holds it against
+the SCREEN in both directions, reading the key set out of `ItemsView.tsx`
+rather than listing it: every key the list puts on the address has a home, and
+every home is a key the list actually writes. Both halves fail silently
+otherwise — a key with no home is a narrowing reachable only by editing the
+address, which `unit=` was for its chip's whole life while the Clear control
+walked past it, and a key with two is two controls for one fact that disagree
+the first time either writes.
+
 The one control outside both is the **scope** switch (open / closed /
 everything), which is always set to something: as a chip it would either be
 permanently present, which is not a chip, or absent on its default, which hides
