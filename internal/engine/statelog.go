@@ -348,7 +348,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	// is a fact about a stream that exists. Interleaving provision with
 	// the decision — the obvious per-domain loop — would ask the question
 	// of the first domain before the second's stream had been created,
-	// and a stream created a moment ago reports a first sequence of 1,
+	// and a stream created a moment ago reports a first sequence of 0,
 	// which reads as "nothing was trimmed" for a log the fleet has been
 	// writing to for months.
 	// ONE CEILING OVER THE WHOLE STATE-LOG BRING-UP, for
@@ -1127,8 +1127,8 @@ func (c *Company) Epoch() map[string]any {
 	return epoch
 }
 
-// joinIfBehind adopts a peer's snapshot when this node cannot replay its way
-// back, and does nothing at all when it can.
+// join adopts a peer's snapshot when this node cannot replay its way back,
+// and does nothing at all when it can.
 //
 // # The question, and why it is asked here
 //
@@ -1715,11 +1715,10 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 // # Why both halves, and why neither is optional
 //
 // A node too far behind to replay adopts a peer's snapshot — that is
-// [Engine.joinIfBehind], and it is the recipient. A recipient with no donor is
-// a mechanism that can never complete: the join asks the fleet, nothing
-// answers, and the node comes up on the history it has for ever. Half of this
-// wired is worse than none, because the half that IS wired reports itself
-// working.
+// [Engine.join], and it is the recipient. A recipient with no donor is a
+// mechanism that can never complete: the join asks the fleet, nothing answers,
+// and the node comes up on the history it has for ever. Half of this wired is
+// worse than none, because the half that IS wired reports itself working.
 //
 // So they start together, and they are the same node's: every member both
 // takes and serves, because there is no leader here to be the designated
