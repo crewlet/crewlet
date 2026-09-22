@@ -631,6 +631,17 @@ tracker's. Optional, it was wrong on the second caller the day that caller
 arrived: a tracker chart announced a page count as a window count, in a noun
 nothing on that screen is.
 
+**A log reaches its older rows by fetching them.** A page boundary is not a
+window: telling a reader to narrow the window to see what came before this page
+sends them toward fewer and newer rows. So a log that fills its page offers
+**Load older**, holds the pages it has, and discards all of them together when
+the window or a server-side facet changes — pages fetched under the previous
+question are rows the engine would never have answered for this one, and the
+cursor walks that question's history. While a reader is paging back the first
+page is held still: the cursor was minted from its last row, so re-reading it
+under a poll pushes that row out and the changes between two pages belong to
+neither, which is a silent hole in the middle of a log.
+
 **A date is a band, not a wider cell.** A row's time column is sized for a wall
 clock, which is right for every row in a log but the first of each day — and
 that one used to render the full instant in the same 62 px track, so it wrapped
@@ -744,6 +755,17 @@ none of it:
 the route cannot supply (`usePageLabels`), the coverage of the answer it drew
 from (`usePageCoverage`), and its own controls. Twenty screens each drawing
 their own header is how five of them came to drop the coverage badge.
+
+**And only a SCREEN publishes — a body rendered inside one never does.** The
+frame holds one coverage slot with one setter, so a reusable body that published
+from inside another screen fought that screen's own answer: on
+`#/work/{KEY}?lens=history` the project's read and the log's read both wrote it,
+whichever polled last won, and switching lenses unmounted the log and cleared the
+slot to nothing over a page still showing the project it had read. A body states
+its own rows' coverage INLINE instead, beside the rows, which is what a peek rail
+and the Items lens already do. The two halves never both apply: a screen
+publishes and draws none, a body draws and publishes none, and the same component
+serving as both takes that as a prop rather than guessing.
 
 **Every object screen publishes the name it draws, and it is the same string.**
 A route addresses an object by its identifier — a turn or a trace or an event

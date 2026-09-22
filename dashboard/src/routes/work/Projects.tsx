@@ -33,7 +33,6 @@ import { DateCell, NumberCell, SeatCell } from "~/app/frame/cells.tsx";
 import { usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Coverage } from "~/components/work.tsx";
 import { EmptyValue, Legend, StackedBar, Tag, DATA_COLOR_OTHER } from "@crewlethq/ui";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -227,7 +226,6 @@ export function Projects() {
           done · {totals.closed} closed
         </span>
         <span className="spacer" />
-        <Coverage answer={state.data} />
         <Segmented
           value={shown}
           onChange={(value) => setShown(value)}
