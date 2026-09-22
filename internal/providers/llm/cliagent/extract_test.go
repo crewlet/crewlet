@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -188,6 +189,128 @@ func TestOutputIsCappedWithoutLosingTheStart(t *testing.T) {
 	}
 }
 
+// THE CAP NEVER LEAVES THE BUFFER HOLDING INVALID UTF-8. The cut lands where
+// the byte count runs out, which for any output that is not ASCII is
+// mid-character — a progress frame's box-drawing runes, a model's em dash, a
+// non-Latin filename. A split character reaches an operator as U+FFFD through
+// the error it is pasted into, and reaches a model the same way.
+//
+// Every cap position across a string whose runes are 1, 2, 3 and 4 bytes wide,
+// so some boundary falls inside each width.
+func TestTheCapNeverSplitsACharacter(t *testing.T) {
+	t.Parallel()
+	const mixed = "aé€𝄞bcé€𝄞"
+	for limit := range len(mixed) + 2 {
+		for _, chunk := range []int{1, 3, len(mixed)} {
+			var buf cappedBuffer
+			buf.limit = limit
+			// Written in chunks as a pipe hands them over, because a
+			// rune straddles two Writes whenever a read splits it: a
+			// walk back inside one chunk alone leaves the buffer
+			// ending on a lead byte whose remainder was in it.
+			for i := 0; i < len(mixed); i += chunk {
+				end := min(i+chunk, len(mixed))
+				if _, err := buf.Write([]byte(mixed[i:end])); err != nil {
+					t.Fatalf("Write: %v", err)
+				}
+			}
+			got := buf.String()
+			if !utf8.ValidString(got) {
+				t.Errorf("limit %d, chunk %d: kept %q, which is not valid UTF-8",
+					limit, chunk, got)
+			}
+			if !strings.HasPrefix(mixed, got) {
+				t.Errorf("limit %d, chunk %d: kept %q, which is not a prefix",
+					limit, chunk, got)
+			}
+			// THE COUNT STAYS HONEST: every byte the reader is not
+			// seeing is reported, the split character's included, or
+			// the marker that renders it understates the loss.
+			if want := len(mixed) - len(got); buf.Truncated() != want {
+				t.Errorf("limit %d, chunk %d: Truncated = %d, want %d",
+					limit, chunk, buf.Truncated(), want)
+			}
+		}
+	}
+}
+
+// ONCE THE CAP HAS TAKEN A BYTE THE BUFFER IS SEALED: what it holds is a
+// PREFIX of the stream, not a sampling of it. The rune trim frees room exactly
+// the width of the character it removed, and the very next bytes off the pipe
+// are that character's own continuation bytes — so a buffer that kept
+// accepting would refill the hole with them and put the invalid encoding
+// straight back, one byte at a time, on the input shape this type is written
+// for. Bytes from past the cut are not contiguous with what precedes them
+// either: spliced in, they show an operator a line that never followed the one
+// above it.
+func TestOnceTheCapHasDroppedTheBufferIsSealed(t *testing.T) {
+	t.Parallel()
+	// 61 c3a9 e282ac f09d849e: the cap falls one byte into the four-byte
+	// rune, so the trim gives back three bytes of room and the three bytes
+	// that follow are exactly what it removed.
+	const mixed = "aé€𝄞"
+	var buf cappedBuffer
+	buf.limit = 7
+	for i := range len(mixed) {
+		if _, err := buf.Write([]byte(mixed[i : i+1])); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+	if got := buf.String(); got != "aé€" {
+		t.Errorf("kept %q, want the whole characters that fit before the cap", got)
+	}
+	// Every byte the reader is not shown is counted, the trimmed lead byte
+	// included, or the marker that renders the loss understates it.
+	if want := len(mixed) - len("aé€"); buf.Truncated() != want {
+		t.Errorf("Truncated = %d, want %d", buf.Truncated(), want)
+	}
+	// And nothing arriving later is spliced into the freed room, however
+	// well it would fit.
+	if _, err := buf.Write([]byte("tail")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got := buf.String(); got != "aé€" {
+		t.Errorf("a later write was spliced past the cut: %q", got)
+	}
+	if want := len(mixed) - len("aé€") + len("tail"); buf.Truncated() != want {
+		t.Errorf("Truncated = %d, want %d", buf.Truncated(), want)
+	}
+}
+
+// Output the CLI itself emitted broken is NOT rewritten. Trimming it would be
+// this package claiming a cut it did not make, and would put bytes into a
+// count that means "what the cap took".
+//
+// The two shapes that must survive the trim are the two a truncated character
+// is not: a byte no UTF-8 encoding begins with, and a run of continuation
+// bytes with no lead byte anywhere behind them.
+func TestTheCapLeavesTheCLIsOwnBrokenBytesAlone(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		bytes []byte
+	}{
+		{"an impossible lead byte", []byte{0xff, 0xfe, 0xfd, 0xfc, 0xfb}},
+		{"orphaned continuation bytes", []byte{0x80, 0x81, 0x82, 0x83, 0x84}},
+		// A lead byte followed by something that cannot continue it is a
+		// broken encoding rather than a short one, and stays as it is.
+		{"a lead byte with no continuation", []byte{0xe2, 0x41, 0x42, 0x43, 0x44}},
+	} {
+		var buf cappedBuffer
+		buf.limit = 4
+		if _, err := buf.Write(tc.bytes); err != nil {
+			t.Fatalf("%s: Write: %v", tc.name, err)
+		}
+		if got := buf.String(); len(got) != 4 {
+			t.Errorf("%s: kept %d bytes, want the 4 the cap allowed: %q",
+				tc.name, len(got), got)
+		}
+		if buf.Truncated() != 1 {
+			t.Errorf("%s: Truncated = %d, want 1", tc.name, buf.Truncated())
+		}
+	}
+}
+
 // A stderr tail must say that it is a tail, or an operator reads the last
 // fifty lines as the whole story.
 func TestTheStderrTailSaysWhatItDropped(t *testing.T) {
@@ -196,7 +319,7 @@ func TestTheStderrTailSaysWhatItDropped(t *testing.T) {
 	for i := range 120 {
 		lines = append(lines, string(rune('a'+i%26)))
 	}
-	got := tail(strings.Join(lines, "\n"))
+	got := tail(strings.Join(lines, "\n"), 0)
 	if !strings.Contains(got, "70 earlier lines omitted") {
 		t.Errorf("the tail does not say what it dropped:\n%s", got)
 	}
@@ -204,8 +327,233 @@ func TestTheStderrTailSaysWhatItDropped(t *testing.T) {
 		t.Errorf("kept %d lines, want 50", strings.Count(got, "\n"))
 	}
 	// A short one is passed through whole, with no marker.
-	if got := tail("one\ntwo"); got != "one\ntwo" {
+	if got := tail("one\ntwo", 0); got != "one\ntwo" {
 		t.Errorf("a short stderr was altered: %q", got)
+	}
+}
+
+// A STREAM CUT AT THE CAP HAS NO END LEFT TO TAKE A TAIL FROM. The capped
+// buffer keeps the HEAD, so the last lines of what survived are where the cap
+// fell rather than what the CLI last said — and a crash trace's crash is
+// exactly the part that goes missing. Unmarked it reads as a CLI that simply
+// stopped talking, which sends an operator looking for a hang.
+func TestTheTailSaysWhenTheCapTookTheEnd(t *testing.T) {
+	t.Parallel()
+	got := tail("a\nb", 4096)
+	if !strings.Contains(got, "4096") {
+		t.Errorf("the tail does not say how much the cap took:\n%s", got)
+	}
+	if !strings.Contains(got, "where the cap fell") {
+		t.Errorf("the tail does not say these are not the CLI's last words:\n%s", got)
+	}
+	if !strings.HasPrefix(got, "a\nb") {
+		t.Errorf("the marker displaced the output it annotates:\n%s", got)
+	}
+}
+
+// And every operator-facing message that renders a stream carries that mark,
+// because [tail] cannot know it unless the caller pairs the text with ITS OWN
+// drop count — the mistake the rawResult methods exist to make unwritable.
+func TestEveryRenderedStreamCarriesItsOwnDropCount(t *testing.T) {
+	t.Parallel()
+	res := &rawResult{
+		stdout: "out", stderr: "err",
+		droppedStdout: 11, droppedStderr: 22,
+	}
+	for _, tc := range []struct {
+		name string
+		got  string
+		want string
+		not  string
+	}{
+		{"stderr", res.stderrTailText(), "22", "11"},
+		{"stdout", res.stdoutTailText(), "11", "22"},
+		{"stderr detail", res.stderrDetailText(), "22", "11"},
+		// stderr has content, so the failure tail is stderr's and must
+		// not be annotated with stdout's loss.
+		{"failure picks stderr", res.failureTailText("parsed"), "22", "11"},
+	} {
+		if !strings.Contains(tc.got, tc.want) {
+			t.Errorf("%s: does not report its own drop count %s:\n%s",
+				tc.name, tc.want, tc.got)
+		}
+		if strings.Contains(tc.got, tc.not) {
+			t.Errorf("%s: reports the other stream's drop count %s:\n%s",
+				tc.name, tc.not, tc.got)
+		}
+	}
+	// With nothing on stderr the failure tail falls to what was parsed out
+	// of stdout, which is a substring of that stream and inherits its cap.
+	quiet := &rawResult{stdout: "out", droppedStdout: 11}
+	if got := quiet.failureTailText("parsed"); !strings.Contains(got, "11") {
+		t.Errorf("a parsed answer did not inherit stdout's drop count:\n%s", got)
+	}
+}
+
+// AND THE CLASSIFIED FAILURE IS A RENDERED STREAM TOO, which is the caller
+// that was quoting one line of a possibly-clipped stream with no mark on it at
+// all — a blanket "every caller does" in [cappedBuffer]'s own doc that this
+// package's own code contradicted.
+//
+// THE STREAM IS ASKED, NOT INFERRED: the hit names the haystack it matched in,
+// so the line cannot be annotated with the other stream's loss.
+func TestAClassifiedMarkerCarriesItsOwnStreamsDropCount(t *testing.T) {
+	t.Parallel()
+	res := &rawResult{
+		stdout:        "spent: plan exhausted\nand a transcript after it",
+		stderr:        "auth: token expired\nand a trace after it",
+		droppedStdout: 11, droppedStderr: 22,
+	}
+	for _, tc := range []struct {
+		name string
+		hit  markerHit
+		want string
+		not  string
+	}{
+		{"stdout", markerHit{Said: "spent: plan exhausted", Stream: markerStdout}, "11", "22"},
+		{"stderr", markerHit{Said: "auth: token expired", Stream: markerStderr}, "22", "11"},
+	} {
+		got := res.markerText(tc.hit, res.stdout)
+		if !strings.Contains(got, tc.hit.Said) {
+			t.Errorf("%s: the vendor's own sentence is gone:\n%s", tc.name, got)
+		}
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("%s: does not report its own drop count %s:\n%s", tc.name, tc.want, got)
+		}
+		if strings.Contains(got, tc.not) {
+			t.Errorf("%s: reports the other stream's drop count %s:\n%s", tc.name, tc.not, got)
+		}
+		if !strings.Contains(got, string(tc.hit.Stream)) {
+			t.Errorf("%s: does not name the stream the line came out of:\n%s", tc.name, got)
+		}
+		// MARKED. A selection a reader cannot tell from a whole reply
+		// fails the same way an unmarked cut does.
+		if !strings.Contains(got, "…") {
+			t.Errorf("%s: one line of a longer stream is not marked as one:\n%s", tc.name, got)
+		}
+		// AND HONEST ABOUT WHERE THE REST IS, which is nowhere: a CLI's
+		// streams are read once and dropped, so an invented route would
+		// be worse than the admitted gap.
+		if !strings.Contains(got, "kept nowhere") {
+			t.Errorf("%s: does not say the remainder is unrecoverable:\n%s", tc.name, got)
+		}
+	}
+
+	// AND SAYS NONE OF IT WHERE THE LINE *IS* THE STREAM. A standing clause
+	// about a remainder that does not exist on every rate limit is how a
+	// reader learns to skip the sentence it hangs off.
+	clean := &rawResult{stderr: "auth: token expired\n"}
+	got := clean.markerText(markerHit{Said: "auth: token expired", Stream: markerStderr}, "")
+	if got != "auth: token expired" {
+		t.Errorf("a line that is the whole stream was annotated anyway: %q", got)
+	}
+}
+
+// AND THE QUANTITY IT REPORTS IS THE STREAM'S, NEVER THE EXTRACTED ANSWER'S.
+// [Provider.completion] hands the classifier the answer the extractor located,
+// so on a JSONL profile the sentinel matches inside a few hundred bytes of
+// answer that came out of thousands of bytes of transcript. Measuring the
+// answer states the wrong quantity about stdout — and where the answer IS the
+// matched line it drops the mark entirely, which is the unmarked selection
+// [rawResult.markerText] exists to prevent.
+func TestAMarkerFoundInAnExtractedAnswerIsMeasuredAgainstItsStream(t *testing.T) {
+	t.Parallel()
+
+	answer := "spent: your plan is exhausted"
+	transcript := `{"type":"run.lifecycle.started"}` + "\n" +
+		strings.Repeat(`{"type":"tool.progress","text":"working"}`+"\n", 40) +
+		`{"type":"assistant","text":"spent: your plan is exhausted"}` + "\n"
+	res := &rawResult{stdout: transcript}
+
+	got := res.markerText(markerHit{Said: answer, Stream: markerStdout}, answer)
+	if !strings.Contains(got, answer) {
+		t.Fatalf("the vendor's own sentence is gone:\n%s", got)
+	}
+	// MARKED, although the located answer is the whole of the matched line:
+	// stdout held the transcript around it, and a reader cannot otherwise
+	// tell this line from the whole of what the CLI wrote.
+	if !strings.Contains(got, "…") {
+		t.Errorf("one line out of a transcript is not marked as one:\n%s", got)
+	}
+	if want := fmt.Sprintf("%d bytes on stdout", len(transcript)); !strings.Contains(got, want) {
+		t.Errorf("does not report what stdout held (%q):\n%s", want, got)
+	}
+	// Anchored on "out of " so the assertion cannot be satisfied by the
+	// stream's own figure happening to end in the answer's digits.
+	if bad := fmt.Sprintf("out of %d bytes", len(answer)); strings.Contains(got, bad) {
+		t.Errorf("reports the extracted answer's length as the stream's (%q):\n%s", bad, got)
+	}
+
+	// AND STILL SAYS NOTHING WHERE THE STREAM *IS* THE LINE. A text profile
+	// declares stdout to be the answer, so located and the stream are one
+	// string and there is no remainder to point at.
+	plain := &rawResult{stdout: answer + "\n"}
+	if got := plain.markerText(markerHit{Said: answer, Stream: markerStdout}, answer); got != answer {
+		t.Errorf("a line that is the whole of stdout was annotated anyway: %q", got)
+	}
+}
+
+// AND THE CLASSIFIER NAMES THE STREAM ON EVERY HIT, because the render above
+// reads that field and a zero value would silently pair a stderr line with
+// stdout's loss. Both marker kinds, both haystacks — the pairing is only
+// unwritable if the name is always written.
+func TestEveryMarkerHitNamesTheStreamItMatchedIn(t *testing.T) {
+	t.Parallel()
+	p := Profile{
+		LimitMarkers: []LimitMarker{{Sentinel: "usage limit reached"}},
+		AuthMarkers:  []AuthMarker{{Sentinel: "please run /login"}},
+	}
+	for _, tc := range []struct {
+		name   string
+		answer string
+		stderr string
+		want   markerStream
+	}{
+		{"limit in the answer", "your usage limit reached for today", "", markerStdout},
+		{"limit on stderr", "", "error: usage limit reached", markerStderr},
+		{"auth in the answer", "please run /login first", "", markerStdout},
+		{"auth on stderr", "", "error: please run /login", markerStderr},
+	} {
+		hit, ok := classifyMarkers(p, tc.answer, tc.stderr)
+		if !ok {
+			t.Fatalf("%s: nothing classified", tc.name)
+		}
+		if hit.Stream != tc.want {
+			t.Errorf("%s: Stream = %q, want %q", tc.name, hit.Stream, tc.want)
+		}
+	}
+}
+
+// A VERSION PROBE READS ONE LINE, so the output cap reaches it in exactly one
+// shape: a stdout that overran with no newline anywhere in what survived. Then
+// the "version" is a PREFIX, and a report printing it beside `written for` —
+// which an operator compares by eye — is worse than a report printing nothing.
+//
+// The two inputs to that answer sit in different places, which is why this is
+// asked of [rawResult] rather than derived at the call site: a caller reading
+// only the drop count refuses every long-but-fine probe, and one reading only
+// the newline refuses none of the broken ones.
+func TestTheVersionLineKnowsWhetherTheCapReachedIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		res     rawResult
+		want    string
+		wantCut bool
+	}{
+		{"a clean probe", rawResult{stdout: "2.0.31 (Claude Code)\n"},
+			"2.0.31 (Claude Code)", false},
+		{"clipped after the version line",
+			rawResult{stdout: "2.0.31 (Claude Code)\nthen a stream", droppedStdout: 4096},
+			"2.0.31 (Claude Code)", false},
+		{"clipped inside the version line",
+			rawResult{stdout: "2.0.3", droppedStdout: 4096}, "2.0.3", true},
+		{"one line, nothing dropped", rawResult{stdout: "2.0.31"}, "2.0.31", false},
+	} {
+		line, cut := tc.res.stdoutFirstLine()
+		if line != tc.want || cut != tc.wantCut {
+			t.Errorf("%s: (%q, %v), want (%q, %v)", tc.name, line, cut, tc.want, tc.wantCut)
+		}
 	}
 }
 
@@ -234,6 +582,23 @@ func TestAClippedStdoutIsRefusedRatherThanParsed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "incomplete") {
 		t.Errorf("the refusal does not say the answer is incomplete: %v", err)
+	}
+	// IT MUST NAME A REMEDY THAT EXISTS. It used to say "raise
+	// cli.max_output_bytes", a field neither config tier has ever had:
+	// `crewlet validate` refuses it as unknown, so the one instruction
+	// given to an operator whose seat had stopped answering was a dead end.
+	if strings.Contains(err.Error(), "max_output_bytes") {
+		t.Errorf("the refusal names a config field that does not exist: %v", err)
+	}
+	// AND BOTH HALVES OF A REMEDY THAT TAKES TWO FIELDS: [Profile.validate]
+	// refuses text_events without event_type_path, so a message naming only
+	// the first sends an operator to a config that will not load.
+	for _, want := range []string{
+		"not configurable", "event_type_path", "text_events", "refused at load",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not offer %q: %v", want, err)
+		}
 	}
 	// A SERVER failure, so the fallback chain may try another member and the
 	// credential is not benched: nothing about the prompt was rejected.

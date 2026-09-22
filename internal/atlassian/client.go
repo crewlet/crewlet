@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // AdminBaseURL is where every organization-level call goes. It is not the
@@ -461,19 +462,30 @@ func (c *Client) call(ctx context.Context, key, method, path string, body, out a
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// REFUSED PAST THE CEILING, not read up to it: this body is both the
-	// refusal's detail and the success's payload, so a silent cut turns
-	// one into half a sentence and the other into "unexpected end of JSON
-	// input" — an error naming neither this endpoint nor the cap.
+	// THE STATUS DECIDES THE CEILING, which is why it is read before the
+	// body rather than after it. A refused answer is not a payload: it is
+	// an explanation, and past [httpx.RefusalBytes] it is a rendered
+	// document that arrived instead of one — which is the ordinary shape
+	// of an Atlassian admin 403 behind an SSO wall. Read at the SUCCESS
+	// ceiling instead, a refusal could put 32 MiB of markup through
+	// detailFrom and a multi-megabyte `message` into an operator's log.
+	if resp.StatusCode >= http.StatusBadRequest {
+		// REFUSED PAST THE CEILING, not read up to it. A CAP IS NOT A
+		// CUT: io.LimitReader stops at its limit and reports io.EOF, so
+		// a capped refusal is half a page quoted as the whole of one.
+		body, readErr := httpx.ReadBody(resp.Body, httpx.RefusalBytes)
+		return &APIError{
+			Status: resp.StatusCode, Method: method, Path: path,
+			Detail: detailFrom(resp.Header.Get("Content-Type"), body, readErr),
+		}
+	}
+	// REFUSED PAST THE CEILING here too, and the ceiling is the larger one
+	// because this body is a payload a caller decodes: a silent cut makes
+	// it "unexpected end of JSON input", an error naming neither this
+	// endpoint nor the cap.
 	answer, err := httpx.ReadBody(resp.Body, httpx.MaxResponseBody)
 	if err != nil {
 		return fmt.Errorf("atlassian: read %s %s: %w", method, path, err)
-	}
-	if resp.StatusCode >= http.StatusBadRequest {
-		return &APIError{
-			Status: resp.StatusCode, Method: method, Path: path,
-			Detail: detailFrom(resp.Header.Get("Content-Type"), answer),
-		}
 	}
 	if out == nil || len(answer) == 0 {
 		return nil
@@ -486,17 +498,34 @@ func (c *Client) call(ctx context.Context, key, method, path string, body, out a
 
 // detailFrom pulls Atlassian's own words out of a refusal.
 //
-// Its admin APIs answer in more than one shape, so this tries each — and then
-// hands anything else to [httpx.Refusal] rather than to the caller verbatim.
+// Its admin APIs answer in more than one shape, so this tries each — the
+// vendor half of the split [httpx.Refusal]'s doc draws — and hands every
+// other outcome to [httpx.RefusalOf] rather than to the caller verbatim.
 //
 // IT USED TO RETURN THE RAW BODY, on the reasoning that an operator needs what
 // Atlassian said and an empty string helps nobody. Both clauses are true and
 // the conclusion was wrong for the shape Atlassian actually sends: a 403 from
 // its admin API arrives as an HTML page, so a whole rendered document —
 // doctype, head, inline styles, script tags — reached the log around a
-// sentence nobody could find. The body is read with a megabyte cap, so it
-// reached it in full.
-func detailFrom(contentType string, body []byte) string {
+// sentence nobody could find.
+//
+// # Atlassian's own envelope is bounded too, and that was the residue
+//
+// Dropping the markup left the envelope arm unbounded, which is the same
+// defect with a nicer shape: `message` is a string Atlassian chooses, this
+// value becomes [APIError.Detail], and Detail reaches a log line and a
+// reconcile finding. Bounded at [httpx.RefusalDetail], which is the tree's
+// named answer for the length of an error LINE — five times under the read
+// ceiling, because what is worth READING off a refused call and what is worth
+// QUOTING in one sentence are different questions. [textcut.Within] rather
+// than Ellipsis, because RefusalDetail is a ceiling the suite asserts, so the
+// marker fits inside it; and MARKED at all because an Atlassian message cut
+// mid-clause reads as a complete one.
+//
+// The whole message is not recoverable from this process — the body is read
+// once and dropped — so the marker is the only thing telling a reader to go
+// to Atlassian's own admin audit log for the rest.
+func detailFrom(contentType string, body []byte, readErr error) string {
 	var shaped struct {
 		Message string `json:"message"`
 		Detail  string `json:"detail"`
@@ -505,20 +534,20 @@ func detailFrom(contentType string, body []byte) string {
 			Title  string `json:"title"`
 		} `json:"errors"`
 	}
-	if err := json.Unmarshal(body, &shaped); err == nil {
+	if readErr == nil && json.Unmarshal(body, &shaped) == nil {
 		for _, candidate := range []string{shaped.Message, shaped.Detail} {
 			if candidate != "" {
-				return candidate
+				return textcut.Within(candidate, httpx.RefusalDetail)
 			}
 		}
 		for _, e := range shaped.Errors {
 			if e.Detail != "" {
-				return e.Detail
+				return textcut.Within(e.Detail, httpx.RefusalDetail)
 			}
 			if e.Title != "" {
-				return e.Title
+				return textcut.Within(e.Title, httpx.RefusalDetail)
 			}
 		}
 	}
-	return httpx.Refusal(contentType, body)
+	return httpx.RefusalOf(contentType, body, readErr)
 }

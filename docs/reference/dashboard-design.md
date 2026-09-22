@@ -329,7 +329,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/company/people/{handle}` | **Seat** — agent or human | agent: overview · work · turns · conversations · memory · cost · access · schedules; human: overview · work · access. `conversation=` opens one thread |
 | `#/company/units/{id}` | **Unit** — lead, purpose, goals, seats, sub-units | |
 | `#/knowledge` | **Knowledge** — live search over the backend | `q=` |
-| `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` |
+| `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` · `title=` · `parent=` (one page's children, which is where a page detail's capped Children list points) |
 | `#/knowledge/{CONTAINER}/{Title}` | **Page** | |
 | `#/activity` | **Live now** — what the company is doing at this moment | `window=15m\|1h\|6h` |
 | `#/activity/turns` · `#/activity/turns/{id}` | **Turns** — every phase, round by round | |
@@ -615,6 +615,55 @@ A facet count is computed with its **own** filter lifted and every other one
 applied, because that is the only meaning it can have: a chip says how many rows
 choosing it would show. Counted through its own filter, every chip but the
 selected one reads zero and the rail is a dead end.
+
+### A count over one page says which page
+
+The same question one level up, and the engine answers it: every bounded read
+in this product states what it left out. A listing reads **one row past its
+limit** and answers `truncated`; a feed mints a `next_cursor` only when that
+extra row came back. So the client never infers a cut from `rows.length >=
+limit` — a container holding exactly fifty pages holds every page it has, and
+the inference puts a caution about missing data on a complete answer. **Asked,
+not inferred.**
+
+Three things are drawn from that flag, and a card that draws one without the
+others is half the fact:
+
+- **The count is marked**, `50+` rather than `50` — `pageCount`. A header
+  count renders its value verbatim and carries no scope of its own, so a bare
+  length over a read the engine bounded is a number the reader takes for a
+  total. A seat with four thousand diary notes and a seat with fifty drew the
+  same chip; the tracker's activity strip drew "20" whether the company had
+  made twenty changes or twenty thousand. `+` rather than a word, because this
+  product already spells "at least this many" that way.
+- **Which part of the set it is**, because that is a property of the read's
+  ORDER and not of the page. The tracker's feeds come back newest first, so
+  their page is the newest rows; `internal/pages` lists `ORDER BY p.container,
+  p.title`, so a page listing that filled is the alphabetically FIRST rows. The
+  slice is a required argument to `pageNote` for that reason — "the newest 50
+  pages" over a title-ordered read names a set the reader cannot see and sends
+  them looking for recent writing that was never in the answer.
+- **Where the rest is**, as a footer under the card it is about
+  (`CutNote`) — a filter that re-asks, a link to the screen that pages it,
+  or, where a question genuinely takes no paging parameter, the table that
+  holds the whole set. "There are more" with no answer to "more where" is a
+  dead end.
+
+It draws **nothing** when the read was whole. A note that always rendered would
+put "and that is all of them" under every healthy card in the product, which is
+how the one case that matters arrives as a changed word nobody reads. And it is
+a footer rather than a subtitle, because `Card.Header`'s subtitle truncates by
+contract — a slot that cuts is the one place a sentence about a cut may not
+live.
+
+**A peek is bounded here rather than by the engine, and the same rule holds.**
+A rail that lists the first eight pages of a container, or the first twelve
+seats with memory, is drawing from something this screen already holds — so the
+bound is a named constant with its reason at the definition (`PEEK_PAGES`,
+`PEEK_WRITERS`, `PEEK_SEATS`), never a literal at the call site, and what it
+leaves out is counted and linked: "12 more pages in this container →". Twelve
+cards under a heading reading *What each seat has learned for itself* is a
+claim about a company the screen had decided not to show.
 
 ### The frame-level keys
 

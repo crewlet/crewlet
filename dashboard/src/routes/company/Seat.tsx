@@ -8,6 +8,7 @@
 import { useId, useMemo, useRef, type ReactNode } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import {
+  CutNote,
   QueryState,
   RECORD_MAX_HEIGHT,
   SeatChip,
@@ -104,6 +105,22 @@ import {
 import { configValueKind, fmtCount, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { spanWords } from "~/lib/range.ts";
+// THE TURNS READ'S OWN HORIZON, from the screen that declares it. The
+// whole-company list offers the same widest window and clamps `days` to the
+// same number, and the Turns table below sends it; a second copy here would be
+// two spellings of one horizon with nothing to keep them in step.
+import { TURN_MAX_DAYS, TURN_MAX_RANGE } from "~/routes/activity/Turns.tsx";
+// THE PRODUCT'S ONE SPELLING OF A CAPPED COUNT, from the tracker's own value
+// module: `50+` for a chip drawn over a page, beside [CutNote]'s sentence for
+// what is behind it. Four panels on this screen draw a count over a read the
+// engine bounded, and a second spelling here would make one seat's `50+` and
+// another screen's read as two different facts.
+// AND THE ENGINE'S OWN COUNT OF A MATCHED SET, which is a different fact from
+// a page's length and is drawn beside it on the work tab: `total_hint` is
+// computed over the unpaged predicate, so it answers "how much is on this
+// seat's plate" where a page length can only ever answer "how much did this
+// card draw". [totalHint] stays silent when the two agree.
+import { pageCount, totalHint } from "~/lib/work.ts";
 import {
   attempts,
   fromLiveCall,
@@ -120,6 +137,7 @@ import type {
   ConversationEntry,
   CounterpartyProfile,
   EventRecord,
+  WorkItemsAnswer,
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -170,6 +188,84 @@ const HUMAN_TABS = ["overview", "work", "access"] as const;
 type Tab = (typeof AGENT_TABS)[number];
 
 const seatTurnKey = (g: { turnId: string }) => g.turnId;
+
+/**
+ * How many turns the Turns table draws for one seat.
+ *
+ * FIFTY, which is `internal/store.DefaultTurnPage` — a turn row is narrow (no
+ * payload, no prompts) and the page is sized to what a person scans, which is
+ * exactly what this table is for: finding the turn that failed last Tuesday.
+ * The whole-company list on `#/activity/turns` asks for the ceiling instead
+ * (`store.MaxTurnPage`, 200) because its rows also fold into a chart, and an
+ * axis drawn from a scannable page reports a busy company as quiet.
+ *
+ * THE READ ASKS FOR ONE MORE THAN THIS, and the extra row is EVIDENCE rather
+ * than a row: it is dropped before anything draws it, and its presence is what
+ * the `50+` chip and the note under the table are saying. ASKED, NOT INFERRED —
+ * `turns.length === 50` is wrong in both directions on the boundary.
+ *
+ * WHICH IS ALSO WHY THE ANSWER'S OWN `next` IS NOT READ.
+ * `internal/api/queries.turns` mints it whenever `len(rows) > 0`, so it is a
+ * resume point and NOT an evidence row: taken as one it would put "there are
+ * more" under every complete list in the product, including a seat's first
+ * turn. The probe row is the only evidence this read offers.
+ */
+const SEAT_TURN_PAGE = 50;
+
+/**
+ * How many open assigned items the work tab lists.
+ *
+ * FIFTY, which is `internal/tracker.PageDefault`, and the card states the
+ * engine's own `total_hint` beside it rather than raising the ask: what a
+ * reader wants from "Assigned and open" is HOW MUCH is on this seat's plate,
+ * and that is a count over the whole matched set which the answer already
+ * carries — where a bigger page, up to `tracker.PageMax` of 500, would only
+ * move the boundary and still draw a number that saturates. Past whatever page
+ * is asked for, the read's own `next_cursor` is the only way on, and no screen
+ * in this product consumes one for work items yet — which is what the note
+ * under the list says rather than implying a click that finishes the job.
+ */
+const SEAT_WORK_PAGE = 50;
+
+/**
+ * How many chat threads the Threads roster asks for.
+ *
+ * TWO HUNDRED — `internal/api/queries.MaxConversationPage`, the read's
+ * CEILING rather than its default of fifty — because this pane is the only
+ * reader of the roster in the product and the read offers no cursor past the
+ * ceiling. The engine's default is sized for a list that is WORKED, and that
+ * reasoning holds for a seat tool picking one thread; here the rows below the
+ * fiftieth were reachable from nowhere at all, and naming a SQL table as the
+ * way to them while three quarters of the answer sat behind one unsent
+ * parameter is the shape this rule exists to stop. Above the ceiling the table
+ * genuinely is where the rest is, and the note says so.
+ */
+const THREAD_PAGE = 200;
+
+/**
+ * What the tracker counted, over the whole set this card drew a page of.
+ *
+ * SEPARATE FROM THE CHIP because they are two facts: the chip is how many rows
+ * are on screen and whether the read filled, and this is `total_hint` — the
+ * engine's own count over the UNPAGED predicate, taken in the same transaction
+ * as the rows, with `total_capped` saying whether the count stopped at its
+ * ceiling rather than reaching the end. A seat with two hundred open assigned
+ * items can only say so here; no page size answers it.
+ *
+ * SILENT WHEN IT ADDS NOTHING, which is [totalHint]'s own rule: a hint equal to
+ * what is drawn is the row count said twice, and `undefined` rather than `""`
+ * because an empty subtitle still renders its own element.
+ *
+ * A FUNCTION rather than an expression at the call site so the two branches are
+ * exercised directly, and so the tracker's wording — "50 tasks of 213 matching"
+ * — is composed in one place out of the helpers that already own each half.
+ */
+function itemTotal(answer: WorkItemsAnswer | null | undefined): string | undefined {
+  if (!answer) return undefined;
+  const shown = (answer.items ?? []).length;
+  const hint = totalHint(answer.total_hint ?? 0, shown, answer.total_capped);
+  return hint ? `${plural(shown, "task")} ${hint}` : undefined;
+}
 
 /**
  * The operator-gated half of a seat, said precisely when it cannot be shown.
@@ -571,7 +667,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   // seat as often as the reader's own.
   const threads = useQuery(
     "conversations",
-    { handle, ...(thread ? { conversation: thread } : {}) },
+    { handle, limit: THREAD_PAGE, ...(thread ? { conversation: thread } : {}) },
     { enabled: tab === "threads" },
   );
   // A PERSON RECORD IS A HUMAN'S. A seat has a MAILBOX — the durable
@@ -606,7 +702,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       // Backend Engineer, which are the subtasks of an epic the CTO owns.
       subtasks: "separate",
       sort: "-priority,updated",
-      limit: 50,
+      limit: SEAT_WORK_PAGE,
     },
     { enabled: tab === "work", pollMs: 30_000 },
   );
@@ -627,7 +723,20 @@ export function SeatScreen({ handle }: { handle: string }) {
   // would otherwise ask for every turn in the company.
   const turnList = useQuery(
     "turns",
-    { role, limit: 50 },
+    // ONE MORE THAN THE PAGE. See [SEAT_TURN_PAGE]: the extra row is the only
+    // evidence this read offers that a seat has more turns than the table
+    // holds, because the answer's own `next` is minted unconditionally.
+    //
+    // AND THE WINDOW IS NAMED, which is the other half of the same rule. A
+    // `turns` read that sends no `days` does not get everything: `store.Turns`
+    // falls back to `store.DefaultTurnDays`, a week, and floors that against
+    // `store.EventHistory` — so the list was cut on a TIME axis as well, by a
+    // number no constant held, that nothing on screen marked and that neither
+    // the `+` chip nor the note below could ever have said, both being
+    // evidence about the PAGE. [TURN_MAX_DAYS] is the read's own ceiling AND
+    // the floor it will not reach past, so the time axis now cuts nothing this
+    // read could have returned, and the page is the only cut left to mark.
+    { role, days: TURN_MAX_DAYS, limit: SEAT_TURN_PAGE + 1 },
     // TWENTY SECONDS, the cadence `routes/activity/Turns.tsx` already gives the
     // same question — a store aggregate with no push behind it. Asked once at
     // mount, this table froze its iterations, tokens and running flag at
@@ -748,6 +857,17 @@ export function SeatScreen({ handle }: { handle: string }) {
     () => new Map((turnList.data?.turns ?? []).map((t) => [t.turn_id, t])),
     [turnList.data],
   );
+  // THE PAGE, AND THE EVIDENCE ROW DROPPED. The read asks for one past
+  // [SEAT_TURN_PAGE]; the extra row is never drawn, and whether it came back is
+  // the whole of what the chip's `+` and the note under the table assert. The
+  // lookup above is deliberately built over the WHOLE answer rather than this:
+  // it resolves one turn id to its row, so an extra row is extra coverage,
+  // where the table below is a page and has to say which one it is.
+  const seatTurns = useMemo(
+    () => (turnList.data?.turns ?? []).slice(0, SEAT_TURN_PAGE),
+    [turnList.data],
+  );
+  const moreTurns = (turnList.data?.turns ?? []).length > SEAT_TURN_PAGE;
   const liveTurns = useMemo(() => turns.filter((g) => g.live), [turns]);
   const doneTurns = useMemo(() => turns.filter((g) => !g.live), [turns]);
   const liveTurnKeys = useMemo(() => liveTurns.map(seatTurnKey), [liveTurns]);
@@ -1414,7 +1534,39 @@ export function SeatScreen({ handle }: { handle: string }) {
               }
             >
               <Card padding="none">
-                <Card.Header count={(items.data?.items ?? []).length}>
+                <Card.Header
+                  // TWO FACTS, AND THEY ARE NOT ONE NUMBER.
+                  //
+                  // The CHIP is how many rows this card drew and whether the
+                  // read filled — `work_items` reads one row past the limit and
+                  // mints `next_cursor` only on it (`internal/tracker`
+                  // .readTasksJoined), so this is ASKED, NOT INFERRED. A bare
+                  // length saturated at [SEAT_WORK_PAGE]: a seat holding two
+                  // hundred open assigned items drew the identical chip as one
+                  // holding fifty, under an empty state whose own wording
+                  // ("Nothing open is assigned to them") says this card is
+                  // meant to answer how much is on their plate.
+                  //
+                  // The SUBTITLE is the engine's own count of the whole matched
+                  // set — `total_hint`, computed over the unpaged predicate in
+                  // the same transaction, with `total_capped` saying whether it
+                  // stopped at the ceiling. That is the number the question
+                  // actually wants, and no page size can supply it: raising the
+                  // ask would only move the boundary.
+                  //
+                  // IN THE TRACKER'S OWN WORDS, and drawn only where it adds
+                  // one: `#/work` renders exactly "50 items of 213 matching"
+                  // over the same read, so this is that sentence with this
+                  // card's noun. [totalHint] answers "" when the hint equals
+                  // what is on screen, and then the subtitle is dropped rather
+                  // than left to restate the chip beside it.
+                  count={
+                    items.data
+                      ? pageCount((items.data.items ?? []).length, !!items.data.next_cursor)
+                      : undefined
+                  }
+                  subtitle={itemTotal(items.data)}
+                >
                   <Card.Title>Assigned and open</Card.Title>
                 </Card.Header>
                 <RowList
@@ -1422,6 +1574,45 @@ export function SeatScreen({ handle }: { handle: string }) {
                   now={now}
                   chrome={chrome}
                   hrefOf={(row) => href(["work", row.key])}
+                />
+                {/* WHERE THE REST IS, said as precisely as it can be.
+                    `#/work` runs the same `work_items` question at the list
+                    view's own larger page and draws the company's total beside
+                    it, so the rows past this card's fifty are there — and the
+                    link carries this seat and the open scope so it opens on the
+                    same set rather than on the company's board.
+
+                    IT IS NOT A COMPLETE ROUTE AND IS NOT SOLD AS ONE. That
+                    screen groups subtasks under their roots where this card
+                    files each on its own (`subtasks=separate`, which the Work
+                    screen has no control for), and it draws one page too. Past
+                    both, `work_items`' `next_cursor` is the only way on and
+                    nothing in this product consumes one yet — so the sentence
+                    names the cursor rather than implying a click that finishes
+                    the job. */}
+                <CutNote
+                  shown={(items.data?.items ?? []).length}
+                  more={!!items.data?.next_cursor}
+                  one="task"
+                  slice="priority"
+                  whole={
+                    <>
+                      <a
+                        className="t-link"
+                        href={href(["work"], {
+                          view: "list",
+                          assignee: handle,
+                          scope: "open",
+                          sort: "-priority,updated",
+                        })}
+                      >
+                        Their work on the tracker →
+                      </a>{" "}
+                      — the same read at the list&apos;s larger page, with subtasks folded under
+                      their parents. Past that page the answer&apos;s own `next_cursor` is the only
+                      way further.
+                    </>
+                  }
                 />
               </Card>
             </QueryState>
@@ -1469,17 +1660,33 @@ export function SeatScreen({ handle }: { handle: string }) {
                 ROLE, which is what a phase record carries — so a reader
                 looking for the turn that failed last Tuesday has a list to
                 look in, and each row opens that turn in the rail. */}
-            {(turnList.data?.turns ?? []).length > 0 && (
+            {seatTurns.length > 0 && (
               <Card padding="none">
                 <Card.Header
                   icon={<NeurologyGlyph size="sm" />}
-                  count={(turnList.data?.turns ?? []).length}
-                  subtitle="Every turn the event store holds for this seat, newest first."
+                  // A PAGE, AND THE CHIP SAYS SO. This read is bounded — see
+                  // [SEAT_TURN_PAGE] — and the subtitle stated the opposite in
+                  // words: "Every turn the event store holds for this seat,
+                  // newest first." over fifty rows told a seat with five
+                  // hundred turns, in prose, that fifty is all it has. An
+                  // unmarked count merely omits a fact; a sentence like that
+                  // one denies it.
+                  //
+                  // WHAT IT SAYS NOW IS THE WINDOW, which the read names
+                  // explicitly for the reason written at the ask: `days` is
+                  // [TURN_MAX_DAYS], the floor the event log will not answer
+                  // past, so the sentence describes the set this page is taken
+                  // from rather than claiming to be all of it.
+                  //
+                  // ASKED, NOT INFERRED: the `+` is the probe row coming back,
+                  // never `turns.length === SEAT_TURN_PAGE`.
+                  count={turnList.data ? pageCount(seatTurns.length, moreTurns) : undefined}
+                  subtitle="The newest turns for this seat, as far back as the event store is readable."
                 >
                   <Card.Title>Turns</Card.Title>
                 </Card.Header>
                 <DataGrid
-                  rows={turnList.data?.turns ?? []}
+                  rows={seatTurns}
                   rowKey={(t) => t.turn_id}
                   rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
                   columns={[
@@ -1553,6 +1760,36 @@ export function SeatScreen({ handle }: { handle: string }) {
                       ),
                     },
                   ]}
+                />
+                {/* WHERE THE OLDER TURNS ARE, and it is a screen rather than a
+                    table: `#/activity/turns` runs the same `turns` question
+                    with a TIME WINDOW in front of it, at `store.MaxTurnPage`
+                    rows a window. Narrowing the window is what reaches past
+                    this page, which is why the link carries this seat's role:
+                    `turns` is keyed on the ROLE a phase record carries,
+                    exactly as the read above it is.
+
+                    AND IT CARRIES THE WINDOW, because that screen's own
+                    fallback is `7d` — narrower than the table it is offered
+                    under. A link labelled "older turns" that opened on a
+                    shorter horizon than the list the reader clicked it from
+                    would answer the question with less than they already had.
+                    [TURN_MAX_RANGE] is the same horizon this table asked for,
+                    so the destination opens where this page ends and every
+                    narrower window is a click away from there. */}
+                <CutNote
+                  shown={seatTurns.length}
+                  more={moreTurns}
+                  one="turn"
+                  slice="newest"
+                  whole={
+                    <a
+                      className="t-link"
+                      href={href(["activity", "turns"], { role, window: TURN_MAX_RANGE })}
+                    >
+                      Older turns, by window →
+                    </a>
+                  }
                 />
               </Card>
             )}
@@ -1651,7 +1888,37 @@ export function SeatScreen({ handle }: { handle: string }) {
                 <Card padding="none">
                   <Card.Header
                     icon={<ChatGlyph size="sm" />}
-                    count={threads.data?.conversations?.length ?? 0}
+                    // THE ROSTER IS A PAGE AND THE ENGINE SAYS SO.
+                    // `ConversationsAnswer.truncated` covers this list alone —
+                    // `entries` beside it is a whole thread, bounded by the
+                    // write-time trim rather than by a page — and it was
+                    // declared with that rule written out and read nowhere. A
+                    // bare length here saturates at the page size, so a seat
+                    // holding four hundred threads and one holding fifty drew
+                    // the same chip.
+                    //
+                    // ASKED, NOT INFERRED: the engine reads one row past the
+                    // page as evidence, so a seat holding exactly the page
+                    // reports itself whole.
+                    //
+                    // WHERE THE REST IS: `conversations` takes a `limit` up to
+                    // `MaxConversationPage` and no cursor, and this read now
+                    // ASKS FOR THAT CEILING — see [THREAD_PAGE]. It asked for
+                    // the default of fifty while the note pointed at a SQL
+                    // table, which put a hundred and fifty rows behind a
+                    // database file and one unsent parameter. Above the ceiling
+                    // the table genuinely is the answer, and the note says so
+                    // there.
+                    //
+                    // AND A COUNT THAT HAS NOT ANSWERED IS NO COUNT, which is
+                    // the rule the pane beside it keeps: `threads.data` is null
+                    // until the answer lands, and a `0` before then is a
+                    // quantity stated about a seat nobody has read.
+                    count={
+                      threads.data
+                        ? pageCount(threads.data.conversations?.length ?? 0, threads.data.truncated)
+                        : undefined
+                    }
                   >
                     <Card.Title>Threads</Card.Title>
                   </Card.Header>
@@ -1684,6 +1951,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                       description="A seat writes one entry per turn that took part in a thread — a chat message, an issue comment, a page discussion."
                     />
                   )}
+                  <CutNote
+                    shown={threads.data?.conversations?.length ?? 0}
+                    more={Boolean(threads.data?.truncated)}
+                    one="thread"
+                    slice="newest"
+                    whole="This is the read's whole ceiling — past it the roster is only in this node's conversation_sessions table, which the ledger trims on its own retention rather than here."
+                  />
                 </Card>
 
                 <Card padding="none">
@@ -1753,7 +2027,25 @@ export function SeatScreen({ handle }: { handle: string }) {
                 <Card padding="none">
                   <Card.Header
                     icon={<Book2Glyph size="sm" />}
-                    count={memory.data?.diary?.length ?? 0}
+                    // THE NEWEST `MemoryPageLimit` NOTES, NEVER THE SEAT'S
+                    // WHOLE DIARY. The engine reads one row past the page and
+                    // answers `diary_truncated`; a bare length saturated at 50,
+                    // so "what does this seat remember" — the one question this
+                    // panel exists for — answered 50 for a seat with fifty
+                    // notes and 50 for a seat with four thousand. The skills
+                    // panel below has carried its own `skills_total` for
+                    // exactly this reason since it landed.
+                    //
+                    // WHERE THE REST IS: `agent_memory` takes no paging
+                    // parameter, so the whole diary is only in this node's
+                    // `agent_diary` table, keyed by the seat's derived agent
+                    // id. The note says these are the newest of them rather
+                    // than pointing at a screen that does not exist.
+                    count={
+                      memory.data
+                        ? pageCount(memory.data.diary?.length ?? 0, memory.data.diary_truncated)
+                        : undefined
+                    }
                     subtitle="what this seat chose to remember"
                   >
                     <Card.Title>Private diary</Card.Title>
@@ -1779,12 +2071,34 @@ export function SeatScreen({ handle }: { handle: string }) {
                       description="A seat writes here by calling reflect_and_persist during a turn."
                     />
                   )}
+                  <CutNote
+                    shown={memory.data?.diary?.length ?? 0}
+                    more={Boolean(memory.data?.diary_truncated)}
+                    one="note"
+                    slice="newest"
+                    whole="The whole diary is in this node's agent_diary table; the seat itself reaches the older notes by similarity at turn start."
+                  />
                 </Card>
 
                 <Card padding="none">
                   <Card.Header
                     icon={<LayersGlyph size="sm" />}
-                    count={memory.data?.episodes?.length ?? 0}
+                    // AS THE DIARY ABOVE IT, and the saturation bites harder
+                    // here: an episode is written on every completed turn, so a
+                    // seat that has worked for a week is past the page and drew
+                    // "50" for ever after.
+                    //
+                    // WHERE THE REST IS: this node's `episodes` table, keyed by
+                    // the seat's handle. `agent_memory` takes no paging
+                    // parameter either.
+                    count={
+                      memory.data
+                        ? pageCount(
+                            memory.data.episodes?.length ?? 0,
+                            memory.data.episodes_truncated,
+                          )
+                        : undefined
+                    }
                     subtitle="one row per completed turn, searched by similarity at turn start"
                   >
                     <Card.Title>Past turns</Card.Title>
@@ -1866,6 +2180,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                       },
                     ]}
                   />
+                  <CutNote
+                    shown={memory.data?.episodes?.length ?? 0}
+                    more={Boolean(memory.data?.episodes_truncated)}
+                    one="turn"
+                    slice="newest"
+                    whole="The rest are in this node's episodes table; Activity → Turns pages over the turns they summarise."
+                  />
                 </Card>
 
                 <Card padding="none">
@@ -1917,7 +2238,22 @@ export function SeatScreen({ handle }: { handle: string }) {
                 <Card padding="none">
                   <Card.Header
                     icon={<GroupGlyph size="sm" />}
-                    count={memory.data?.counterparties?.length ?? 0}
+                    // AS THE TWO PANELS ABOVE. `counterparties_truncated` is
+                    // the engine's own evidence row on
+                    // `Counterparties.List` — the profiles come back newest
+                    // first, so the page is the colleagues this seat has dealt
+                    // with most recently rather than an alphabetical slice.
+                    //
+                    // WHERE THE REST IS: this node's `counterparty_profiles`
+                    // table, keyed by the observing seat's handle.
+                    count={
+                      memory.data
+                        ? pageCount(
+                            memory.data.counterparties?.length ?? 0,
+                            memory.data.counterparties_truncated,
+                          )
+                        : undefined
+                    }
                   >
                     <Card.Title>Who it has worked with</Card.Title>
                   </Card.Header>
@@ -1935,6 +2271,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                       description="Built up from observed interactions. Nothing read these until now — the key was on the answer and the store behind it was never asked."
                     />
                   )}
+                  <CutNote
+                    shown={memory.data?.counterparties?.length ?? 0}
+                    more={Boolean(memory.data?.counterparties_truncated)}
+                    one="colleague"
+                    slice="newest"
+                    whole="The rest are in this node's counterparty_profiles table, keyed by this seat's handle."
+                  />
                 </Card>
               </div>
             </QueryState>

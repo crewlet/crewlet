@@ -711,6 +711,46 @@ remaining failures are about *this build not being able to read the CLI*,
 which is a fact about your machine — so the chain walking to another
 entry is the right move.
 
+**A fifth outcome, and the only one that is the engine's own doing.** The
+engine reads a CLI's stdout and stderr into a 32 MiB buffer each — far
+above the largest real completion, and low enough that a full set of
+runaway children cannot put the process under memory pressure. The knob
+that bounds how many of those there are is
+**`providers.llm.<KEY>.cli.max_concurrent`** (4 by default), which is
+this provider's own semaphore over CLI *processes* — not
+`node.max_concurrent`, which counts agent *turns* per node and never
+spawns anything itself. At the default that is 256 MiB of buffer worst
+case, beside the 200–400 MB resident each CLI child costs anyway, and the
+worst case needs every child to overrun at once. The 32 MiB is a
+constant, not a setting: both ends of that range are fixed by facts an
+operator cannot move. A **stdout** that reaches it
+is **refused**, because a clipped answer is not an answer — the failure
+is a retryable `server` one, so the fallback chain may carry the seat to
+another entry, and the message names the two things that are actually
+yours to change (a `jsonl` profile streaming a whole transcript where
+`text_events` would take one terminal event, or a model that does not
+stop). A **stderr** that reaches it costs diagnosis rather than
+correctness, so the completion still returns; every failure message that
+quotes a stream says how many bytes the cap took and that the text
+therefore **ends where the cap fell rather than where the CLI stopped**,
+which matters most for the one thing you would read a stderr tail for —
+a crash trace whose crash is exactly the part that went missing. That
+includes the one-line messages: a [limit or auth
+sentinel](#falling-back-to-a-metered-key) is reported as the vendor's own
+line, and where the stream held more than that line the message says how
+much more, out of which stream, and that the remainder is **kept
+nowhere** — a CLI's output is read once and dropped, so there is no
+second place to look and the message does not pretend there is. The
+overrun is logged as `cli_agent_output_truncated` either way.
+
+The **version probe** refuses a clipped stdout too, for a narrower
+reason. It reads a single line, so the cap normally costs it
+nothing — whatever overran came after the newline that ended the version
+string. If the CLI wrote 32 MiB with *no* newline in it, the surviving
+"version" is a prefix, and `doctor` reports that as a problem naming
+`cli.overrides.version_args` instead of printing a truncated version
+beside `written for` for you to compare by eye.
+
 ### When the CLI answers with nothing
 
 A model that spends its whole output budget on hidden reasoning exits 0,
@@ -1452,6 +1492,47 @@ it; a `vendor-default` profile whose shell ran is a problem stating the
 trust you are taking on; a web tool that could not fetch is a problem
 pointing at the vendor's sandbox flags and the egress proxy the child
 environment was told about.
+
+**A failed probe quotes what the CLI said instead**, because that is what
+tells you which failure you have: a smoke test that got prose rather than
+a tool call is an envelope your profile cannot read
+(`cli.overrides.text_paths` and friends), while one that got *nothing* is
+a model that spent its answer on hidden reasoning, and only the quote
+separates them. The quote is bounded at 400 bytes and **marked with `…`
+where it was cut** — enough to recognise a wrongly-shaped tool-call
+envelope with the sentence a model wraps around it, and short enough to
+stay inside a fixed-width report.
+
+When it *has* cut, the line says so and says where the rest is, and the
+rest is **on the same page**: the report prints every shortened reply
+whole, under a `probe replies` block at its foot.
+
+```
+problems:
+  - failed — the CLI answered but produced no parseable tool call, so seats on
+    this provider will burn a corrective round every turn. It said: "Sure — I'll
+    confirm the tool channel works by calling the smoke tool.…" That quote is the
+    first 400 of 1182 bytes; the whole answer is printed under `probe replies`
+    at the foot of this report.
+probe replies:
+  smoke — the whole answer, 1182 bytes, quoted above to the first 400:
+    Sure — I'll confirm the tool channel works by calling the smoke tool.
+    …
+```
+
+A healthy report has no such block: it quotes nothing, so there is
+nothing to recover. Nothing *else* keeps the answer — a probe's
+completion is not stored anywhere — which is why it rides the report
+rather than a log line. A debug log line would be a dead end on the run
+that needs it. `doctor` takes no `-log-level` flag and reads no
+`logging:` block; like every command except `crewlet run` it logs at
+`warn` unless you exported `CREWLET_LOG_LEVEL=debug` (see [Environment
+Variables](../reference/environment-variables.md)) *before* the run —
+which asks you to have predicted the failure. That lever turns up the
+next run, not the one already on your screen, so getting the answer any
+other way means re-running `doctor` — three more real completions off
+your plan, for a *different* reply, because the model is not
+deterministic.
 
 One caveat worth stating plainly: `doctor` spends three real completions.
 On a subscription that is a few thousand tokens of your plan's allowance,

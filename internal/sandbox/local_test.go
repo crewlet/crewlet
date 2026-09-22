@@ -3,15 +3,21 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
@@ -1134,11 +1140,256 @@ func TestControlOutputIsBoundedRatherThanTheEnginesMemory(t *testing.T) {
 	for range 8 {
 		c.Write(make([]byte, captureLimit/4))
 	}
-	if len(c.String()) > captureLimit+64 {
-		t.Fatalf("captured %d bytes, want it bounded near %d", len(c.String()), captureLimit)
+	out := c.String()
+	// The retained windows, plus the mark, and nothing else: the buffer is a
+	// memory guard first, so what it holds may not scale with what it was
+	// handed.
+	if len(out) > captureLimit+len(captureMark)+64 {
+		t.Fatalf("captured %d bytes, want it bounded near %d", len(out), captureLimit)
 	}
-	if !strings.Contains(c.String(), "truncated") {
+	if cap(c.head) > captureHead || len(c.ring) > captureTail {
+		t.Fatalf("capture holds head cap %d and ring %d, want %d and %d",
+			cap(c.head), len(c.ring), captureHead, captureTail)
+	}
+	if !strings.Contains(out, "truncated") {
 		t.Fatal("truncation was silent")
+	}
+}
+
+// A control command's output is read by an operator AND by the model — a failed
+// setup step's stderr is the whole account of the failure — and the two places
+// meaning lives are the two ends: a runtime refuses on its first line, an
+// install or a build prints its error after megabytes of progress. Keeping only
+// the head handed the second caller the progress and dropped the error.
+func TestControlCaptureKeepsBothEndsAndNamesTheGap(t *testing.T) {
+	const (
+		head = "FIRST-THING-IT-SAID\n"
+		tail = "\nLAST-THING-IT-SAID"
+	)
+	middle := make([]byte, 4*captureLimit)
+	for i := range middle {
+		middle[i] = 'x'
+	}
+
+	var c capture
+	c.Write([]byte(head))
+	c.Write(middle)
+	c.Write([]byte(tail))
+	out := c.String()
+
+	if !strings.HasPrefix(out, head) {
+		t.Fatalf("the head was lost: %.60q", out)
+	}
+	if !strings.HasSuffix(out, tail) {
+		t.Fatalf("the tail was lost: %.60q", out[max(0, len(out)-60):])
+	}
+	// The gap is NAMED, in bytes: "truncated" alone cannot tell a hundred
+	// dropped bytes from a hundred megabytes, and those are different
+	// operator problems.
+	// Every byte is ASCII here, so no rune repair happens and the three
+	// numbers are exact: the two windows are full and the gap is the rest.
+	written := len(head) + len(middle) + len(tail)
+	wantMark := fmt.Sprintf(captureMark, written-captureLimit, captureHead, captureTail)
+	if !strings.Contains(out, wantMark) {
+		t.Fatalf("the mark does not name the gap; want %q in the capture", wantMark)
+	}
+}
+
+// The overflowing write used to set no flag at all — only a LATER write did —
+// so a command whose output ended on the write that overran the cap was
+// reported as complete. The single write below is exactly that case.
+func TestControlCaptureMarksAnOverflowThatEndsTheOutput(t *testing.T) {
+	var c capture
+	c.Write(make([]byte, captureLimit+1))
+	if !strings.Contains(c.String(), "truncated") {
+		t.Fatal("the write that overran the cap was dropped silently")
+	}
+}
+
+// A bare byte cut through a multi-byte rune is invalid UTF-8, and it reaches
+// the operator and the model as a replacement character: the JSON encoder that
+// carries it substitutes U+FFFD rather than refusing, so nothing downstream
+// ever reports the damage. The window has TWO cuts, not one — where the head
+// ENDS and where the retained tail BEGINS — and each is a separate repair with
+// a separate way of being wrong.
+//
+// The alignments are covered by arithmetic rather than hoped for, which is what
+// a single-padding sweep got wrong here: every rune below is 3 bytes and
+// captureTail is 3*65536, so padding the START of the stream moves only the
+// head's cut — the tail's first byte stayed on a rune boundary for every value
+// of it, and the tail repair was never once exercised. Where the tail cuts is
+// decided by the TOTAL length instead, because the ring keeps the last
+// captureTail bytes of whatever was written. So lead bytes walk the head cut
+// through its three residues and trail bytes walk the tail cut through its
+// three, and the nine pairs leave neither edge a lucky alignment to hide in.
+func TestControlCaptureNeverSplitsARune(t *testing.T) {
+	chunk := []byte(strings.Repeat("€", 4096))
+	for lead := range 3 {
+		for trail := range 3 {
+			var c capture
+			if lead > 0 {
+				c.Write([]byte(strings.Repeat(".", lead)))
+			}
+			for range 2 + 4*captureLimit/len(chunk) {
+				c.Write(chunk)
+			}
+			if trail > 0 {
+				c.Write([]byte(strings.Repeat(".", trail)))
+			}
+			out := c.String()
+			if !strings.Contains(out, "truncated") {
+				t.Fatalf("lead %d trail %d: nothing was dropped, so this case "+
+					"exercises no cut at all", lead, trail)
+			}
+			if !utf8.ValidString(out) {
+				t.Fatalf("lead %d trail %d: the capture is not valid UTF-8", lead, trail)
+			}
+		}
+	}
+}
+
+// The head repair must undo THIS TYPE'S cut and nothing else. A command that
+// printed a byte no UTF-8 encoding has — binary on stdout, a short write of its
+// own — has not been cut by anything, so removing it would be the capture
+// claiming a cut it did not make and charging the command's own bytes to a gap
+// that means "what the window dropped". That is the case DecodeLastRune cannot
+// separate from a genuinely interrupted character, and the reason the walk asks
+// utf8.FullRune instead.
+func TestControlCaptureKeepsBytesTheCommandItselfPrintedBroken(t *testing.T) {
+	printed := append(bytes.Repeat([]byte("a"), captureHead-1), 0xFF)
+
+	var c capture
+	c.Write(printed)                    // fills the head exactly, ending on 0xFF
+	c.Write(make([]byte, captureLimit)) // overruns, so the head edge is a real cut
+
+	out := c.String()
+	if !strings.HasPrefix(out, string(printed)) {
+		t.Fatalf("the capture rewrote the command's own bytes: head ends %q, want %q",
+			out[max(0, captureHead-4):min(len(out), captureHead)], printed[captureHead-4:])
+	}
+	// And the mark still says the head is whole, so the three numbers in it
+	// keep adding up to what the command wrote.
+	if !strings.Contains(out, fmt.Sprintf("kept the first %d ", captureHead)) {
+		t.Fatalf("the mark understates the head it kept: %.200q", out[captureHead:])
+	}
+}
+
+// THE CAPTURE'S BUDGET IS THE WHOLE COST, and rendering it is where that is
+// easiest to lose. The ring has wrapped exactly when a capture is at its limit,
+// so unwrapping it into one slice — or building the result by concatenating
+// strings — takes a second and a third copy of a quarter-megabyte precisely
+// where [runHost] is already holding two captures, one per stream. The RETAINED
+// fields are asserted above; nothing there can see a copy taken and released
+// inside String, which is what this measures.
+//
+// The measurement is TotalAlloc rather than an allocation count: the claim is
+// in bytes, and a count cannot tell a 3-byte mark from a 192 KiB window. It is
+// not parallel and takes no lock, so the only other allocators in the window
+// are the runtime's own, which is what the slack is for.
+func TestRenderingACaptureDoesNotCopyWhatItAlreadyHolds(t *testing.T) {
+	var c capture
+	c.Write(make([]byte, captureHead))
+	for range 8 {
+		c.Write(make([]byte, captureTail/2))
+	}
+	if c.dropped() == 0 {
+		t.Fatal("the ring never wrapped, so this would measure the cheap path")
+	}
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	out := c.String()
+	runtime.ReadMemStats(&after)
+
+	allocated := after.TotalAlloc - before.TotalAlloc
+	// The result is the floor: it is captureLimit of text and the caller asked
+	// for it. The slack is one head window, which covers the mark and the
+	// runtime's own noise while being a third of the smallest copy — the ring —
+	// that could be taken here.
+	if ceiling := uint64(len(out) + captureHead); allocated > ceiling {
+		t.Fatalf("String() allocated %d bytes to render %d, want at most %d: "+
+			"something is copying a window the capture already holds",
+			allocated, len(out), ceiling)
+	}
+}
+
+// THE ORPHAN RUN CAN CROSS THE RING'S WRAP, and then clearing the first segment
+// alone leaves a continuation byte at the head of the second — which is the
+// same broken value the repair exists to prevent, reached by the one path a
+// single-segment tail never had.
+//
+// It is reachable rather than theoretical: the segment boundary is wherever the
+// ring's write position happens to sit, and the alignment below is arithmetic
+// rather than luck — the retained window opens on the SECOND byte of a
+// three-byte rune (a two-byte orphan run) while the first segment is one byte
+// long, so the second orphan can only be at the start of the segment after it.
+func TestTheTailRepairFollowsAnOrphanRunAcrossTheRingsWrap(t *testing.T) {
+	// tailSeen ≡ -1 (mod captureTail) puts the ring's position one byte from
+	// its end, so the first segment is that single byte; the leading 'a' then
+	// shifts the rune grid so the window opens mid-character.
+	const want = 2*captureTail - 1
+	stream := make([]byte, 0, want)
+	stream = append(stream, 'a')
+	stream = append(stream, strings.Repeat("€", (want-2)/3)...)
+	for len(stream) < want {
+		stream = append(stream, 'b')
+	}
+
+	var c capture
+	c.Write(make([]byte, captureHead))
+	for chunk := 0; chunk < len(stream); chunk += 1 << 16 {
+		c.Write(stream[chunk:min(chunk+1<<16, len(stream))])
+	}
+	if c.tailSeen != want {
+		t.Fatalf("tailSeen = %d, want %d", c.tailSeen, want)
+	}
+	first, second := c.tailSegments()
+	if len(first) != 1 || utf8.RuneStart(first[0]) || utf8.RuneStart(second[0]) {
+		t.Fatalf("the fixture does not straddle the wrap: first = % x, second starts % x",
+			first, second[0])
+	}
+
+	if out := c.String(); !utf8.ValidString(out) {
+		t.Fatalf("the repair stopped at the ring's wrap: the capture is not valid UTF-8 "+
+			"(tail starts % x)", out[strings.Index(out, "…\n")+len("…\n"):][:4])
+	}
+}
+
+// A capture that dropped nothing must be the command's output verbatim: a mark
+// on a value nothing touched is a lie about it, and the repairs exist only to
+// undo this type's own cut.
+func TestControlCaptureIsVerbatimWhenNothingIsDropped(t *testing.T) {
+	var c capture
+	c.Write([]byte("Ünicode ✓ "))
+	c.Write([]byte("and more"))
+	if got := c.String(); got != "Ünicode ✓ and more" {
+		t.Fatalf("capture = %q, want it verbatim", got)
+	}
+}
+
+// A box id names a directory under <root>/boxes and, in container mode, the
+// container. A collision in container mode is refused by the runtime; in direct
+// mode MkdirAll simply succeeds and two runs share one workspace, one
+// credential seed and one job record, silently. So the id is the WHOLE minted
+// value — it used to be its first sixteen hex characters, with no arithmetic
+// anywhere saying why half was enough.
+func TestBoxIDIsTheWholeMintedValue(t *testing.T) {
+	whole := len(strings.ReplaceAll(uuid.NewString(), "-", ""))
+	seen := make(map[string]bool, 1000)
+	for range 1000 {
+		id := newBoxID()
+		if len(id) != whole {
+			t.Fatalf("newBoxID() = %q (%d chars), want the whole %d-character value",
+				id, len(id), whole)
+		}
+		if strings.Trim(id, "0123456789abcdef") != "" {
+			t.Fatalf("newBoxID() = %q, want lowercase hex only (it is a path segment "+
+				"and a container name)", id)
+		}
+		if seen[id] {
+			t.Fatalf("newBoxID() repeated %q", id)
+		}
+		seen[id] = true
 	}
 }
 

@@ -57,6 +57,39 @@ const SCOPES = [
   { sigil: ">", label: "commands", hint: "theme, density, this page" },
 ] as const;
 
+/**
+ * How many ranked hits the list draws before it stops.
+ *
+ * FORTY, which is a bound on the LIST rather than on the answer: the hits are
+ * built from indexes this tab already holds — the org, the tools, the recents,
+ * one work answer — so nothing is fetched to rank them, and the cost forty
+ * bounds is a modal rendering four hundred rows a reader will never arrow
+ * down to. It is generous on purpose: a palette that cut at ten would hide
+ * seats from a company that has thirty.
+ *
+ * AND IT IS MARKED, like every other cut in this product. The row under the
+ * list says `40 of 112`, because the pre-cut total is one expression away —
+ * `ranked.length`, the whole ranked set, which this component holds in memory.
+ * This doc used to argue that a palette is the one shape where a bound needs no
+ * marker beside it, on the grounds that refining is how a reader gets past it.
+ * Refining IS how they get past it, and that is an argument for the value forty
+ * rather than against saying which forty: a reader who cannot see that the
+ * other seventy-two exist has no reason to keep typing, and the two hits they
+ * wanted are indistinguishable from a company that does not have them.
+ *
+ * WHERE THE REST IS, therefore: in the same in-memory indexes, one keystroke
+ * away — the destination table, the org projection, the tool registry and the
+ * recents are all held by this tab, so narrowing RE-RANKS what is already here
+ * rather than asking for another page. The `#` scope is the one that re-reads,
+ * and it never reaches this bound at all: it asks the engine for eight.
+ *
+ * ONE CONSTANT AND ONE CUT. The literal `40` was written twice — in the `>`
+ * command scope and in the general one — which is two numbers that agree until
+ * somebody edits one; the slice itself is now taken once, outside the ranking,
+ * which is also what lets the pre-cut total be stated.
+ */
+const MAX_HITS = 40;
+
 /** Is this the shape of an id somebody pasted out of a log? */
 const UUIDISH = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
 const HEXISH = /^[0-9a-f]{16,64}$/i;
@@ -196,7 +229,11 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const refusal = answers ? work.error : null;
   const searching = asked && !answers;
 
-  const hits = useMemo<Hit[]>(() => {
+  // THE WHOLE RANKED SET, uncut — see [MAX_HITS] for why the cut is taken
+  // afterwards rather than inside each branch: the pre-cut length is what the
+  // row under the list states, and a branch that sliced on its way out would
+  // have thrown it away three times.
+  const ranked = useMemo<Hit[]>(() => {
     const query = term.toLowerCase();
     const out: { hit: Hit; rank: number }[] = [];
     const push = (hit: Hit, rank: number) => out.push({ hit, rank });
@@ -286,10 +323,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         if (s < 0) continue;
         push(command, s);
       }
-      return out
-        .sort((a, b) => a.rank - b.rank)
-        .slice(0, 40)
-        .map((r) => r.hit);
+      return out.sort((a, b) => a.rank - b.rank).map((r) => r.hit);
     }
 
     // A pasted id is a destination, not a search term — offer it first and
@@ -444,11 +478,14 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       );
     }
 
-    return out
-      .sort((a, b) => a.rank - b.rank)
-      .slice(0, 40)
-      .map((r) => r.hit);
+    return out.sort((a, b) => a.rank - b.rank).map((r) => r.hit);
   }, [term, sigil, index, agents, tools, nav, recents, work.data, answers, refusal, prefs, route]);
+
+  // THE LIST, CUT ONCE. Every scope passes through here, the `#` one included:
+  // its own bound is the engine's `limit: 8` and it has never reached forty, so
+  // an arm that skipped the slice would be a second rule about the same list
+  // that nothing ever exercises.
+  const hits = useMemo(() => ranked.slice(0, MAX_HITS), [ranked]);
 
   useEffect(() => setCursor(0), [q]);
   useEffect(() => {
@@ -561,6 +598,20 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
               })}
             </div>
           ))}
+          {/* THE CUT, SAID — [CutNote]'s job one floor down, in the one list in
+              this product that is not a card. Not a `role="option"` and not a
+              button: it is a fact about the rows above it, so the arrow keys
+              walk past nothing and `hits.length` stays the cursor's bound.
+
+              THE PRE-CUT TOTAL IS `ranked.length`, which is the whole ranked
+              set this component already holds — so the number is READ rather
+              than inferred from the page being full. */}
+          {ranked.length > hits.length && (
+            <div className="palette-item" style={{ color: "var(--text-muted)" }}>
+              {hits.length.toLocaleString()} of {ranked.length.toLocaleString()} — keep typing to
+              narrow.
+            </div>
+          )}
         </div>
         <div className="palette-foot">
           {/* THE SCOPES ARE IN THE FOOTER, because a sigil nobody is told

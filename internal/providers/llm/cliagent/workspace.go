@@ -147,6 +147,17 @@ func seatSlug(seat string) string {
 	}
 	sum := sha256.Sum256([]byte(seat))
 	if len(slug) > slugReadable {
+		// A BARE BYTE CUT IS SAFE HERE and nowhere else in this package:
+		// the loop above folded every rune outside [a-z0-9-_] to a single
+		// '-', so slug is ASCII by construction and no multi-byte
+		// character can straddle the boundary. On anything that still
+		// holds the CLI's own text this would be the bug
+		// [github.com/crewlet/crewlet/internal/textcut] exists to end —
+		// and textcut is wrong here for the opposite reason, because its
+		// marker would be one more character folded into a path element
+		// rather than a note about one. Nothing is lost either way: the
+		// digest below is over the WHOLE handle, so the cut costs
+		// readability and never injectivity.
 		slug = slug[:slugReadable]
 	}
 	if slug == "" {

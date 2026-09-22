@@ -402,6 +402,28 @@ export function PhaseCard({
             {record.emptyAnswerRounds} empty
           </Tag>
         )}
+        {/* THE PHASE'S TEXT IS NOT ITS FINISHED ANSWER. A length stop arrives
+            as an ordinary 200 with a short body, so without this chip a phase
+            whose prose stops mid-word and one that decided it was done are the
+            same card — and it is the transcript BELOW this header that the
+            reader is about to take at face value. Latched over the phase
+            rather than per round, which is how the loop records it: a severed
+            round taints what the phase stands behind however many clean rounds
+            follow. Beside the round cap because they are the two ways a phase
+            ends short, and it is `danger` rather than `warning` because the
+            round cap merely stopped the loop while this cut the answer itself.
+
+            NOTHING IS RECOVERED BY CLICKING: what survives IS `response`,
+            whole, and the rest was never generated. The fix is the entry's
+            own `max_output_tokens`, which is what the title says. */}
+        {record.outputTruncated && (
+          <Tag
+            variant="danger"
+            title="the model hit its output cap mid-answer — what is below stops short of what it was writing; raise max_output_tokens on this provider entry"
+          >
+            output cut
+          </Tag>
+        )}
         {record.rescueFired && (
           <Tag variant="warning" title="the phase did not submit on its first run and was re-asked">
             rescued

@@ -367,6 +367,62 @@ func TestStartFailureSurfacesTheServersLastWords(t *testing.T) {
 	}
 }
 
+// THE CRASH TAIL AN OPERATOR ACTUALLY READS CARRIES ITS OWN DROP COUNT.
+//
+// server_stderr_tail is the one place a failed start explains itself, and it
+// renders a WINDOW: a server that logged its config, its plugins and then its
+// traceback has pushed the beginning of its own story out of the tail. Without
+// the count the event reads as the whole of what the server said, and an
+// operator goes looking for a cause that was logged and dropped.
+//
+// The field is present at zero as well, because a field that appears only
+// sometimes is a field a log query misses — and zero is itself the evidence
+// that these lines ARE everything the server wrote.
+func TestTheCrashTailEventReportsItsDroppedLines(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		written     int
+		wantDropped int
+	}{
+		{"nothing dropped", 3, 0},
+		{"a flood before the traceback", tailLines + 7, 7},
+	} {
+		lines := make([]string, tc.written)
+		for i := range lines {
+			lines[i] = "line-" + strconv.Itoa(i)
+		}
+		lines[len(lines)-1] = "KeyError: 'TOKEN'"
+		log, rec := recorder()
+		spec := helperSpec(t, "crasher", "serve", map[string]string{
+			helperStderrEnv: strings.Join(lines, "\n"),
+			helperExitEnv:   "1",
+		})
+		if _, err := connect(t.Context(), spec, log); err == nil {
+			t.Fatalf("%s: a child that exits before the handshake must fail the connect", tc.name)
+		}
+		tails := rec.find("server_stderr_tail")
+		if len(tails) == 0 {
+			t.Fatalf("%s: no server_stderr_tail was logged", tc.name)
+		}
+		dropped, ok := tails[0].Attrs["dropped_lines"].(int64)
+		if !ok {
+			t.Fatalf("%s: the crash tail carries no dropped_lines field: %v",
+				tc.name, tails[0].Attrs)
+		}
+		if int(dropped) != tc.wantDropped {
+			t.Errorf("%s: dropped_lines = %d after %d lines, want %d",
+				tc.name, dropped, tc.written, tc.wantDropped)
+		}
+		// The kept end is still the end: the count explains what is missing
+		// from the front, never what the tail replaced at the back.
+		got, _ := tails[0].Attrs["lines"].([]string)
+		if len(got) == 0 || got[len(got)-1] != "KeyError: 'TOKEN'" {
+			t.Errorf("%s: the tail lost the line that names the cause: %v", tc.name, got)
+		}
+	}
+}
+
 func TestEmptyDeclaredEnvVarIsWarned(t *testing.T) {
 	t.Parallel()
 	// Almost always an unresolved ${VAR}. The server comes up, fails to
@@ -487,7 +543,7 @@ func waitForTail(t *testing.T, c *client, want int) []string {
 	deadline := time.Now().Add(5 * time.Second)
 	var tail []string
 	for time.Now().Before(deadline) {
-		tail = c.stderrTail()
+		tail, _ = c.stderrTail()
 		if len(tail) >= want {
 			return tail
 		}

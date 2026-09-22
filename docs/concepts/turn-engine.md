@@ -530,7 +530,13 @@ phase**, extensions included: a first round whose prose was severed leaves
 that prose in the record however cleanly the rest of the phase runs. It is
 reported rather than raised, because whether a cut answer can stand is the
 phase's question — a round that emitted whole tool calls before it ran out
-has done real work.
+has done real work. **The dashboard marks the phase card with it**, in the
+danger tone rather than the warning one the round cap takes: a round cap
+stopped the loop, while this cut the answer the card is about to show, so the
+transcript underneath it cannot be read as what the model meant to say. What
+survives is whole — the record keeps every token that was generated, and the
+rest was never generated at all — so the fix is the cap and nothing recovers
+the missing half.
 
 > **The cap is `providers.llm.<entry>.max_output_tokens`**, and
 > `output_truncated` is what tells you to raise it. It always means

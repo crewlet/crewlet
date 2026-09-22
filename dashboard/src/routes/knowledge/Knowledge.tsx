@@ -50,11 +50,35 @@ import type { PageContainer, PageSummary } from "~/protocol/index.ts";
 // the reader just opened and one of the three forgets the middle button.
 import { pageAddress, PageLink } from "./Pages.tsx";
 
+/**
+ * How many seats the memory grid names before it stops and points at the
+ * roster.
+ *
+ * TWELVE, which is three full rows of the auto grid this section draws at a
+ * typical width — enough that a company of a dozen seats is shown whole, and a
+ * clean stopping point for one that is not. It was a bare `.slice(0, 12)` at
+ * the call site under a heading reading "What each seat has learned for
+ * itself": a literal with no name, no reason and NOTHING SAYING A CUT HAD
+ * HAPPENED, so a company of forty seats was told that its twelve were the
+ * ones with memory — over a section whose whole claim is "each".
+ *
+ * IT IS A PEEK, LIKE THE TWO BELOW IT, so it is bounded here rather than in
+ * the read: the seats come from the org projection this screen already holds,
+ * so nothing is fetched to draw them and the rest are one click away on the
+ * roster. That is why this is a cut with a marker rather than a paged read.
+ */
+const PEEK_SEATS = 12;
+
 export function Knowledge() {
   const org = useOrg();
   const [q, setQ] = useParam("q", "");
   const [draft, setDraft] = useState(q);
   const index = useMemo(() => indexOrg(org), [org]);
+  // THE SET THE SECTION IS ABOUT, derived once: the empty state asks whether
+  // there are any, the grid draws the first [PEEK_SEATS] of them and the link
+  // under it counts the rest. Three copies of one filter is how a heading
+  // comes to describe a different set from the cards under it.
+  const agentSeats = useMemo(() => index.seats.filter((s) => s.kind === "agent"), [index]);
 
   // Searching is a real request against a real wiki, so it runs on submit
   // rather than on every keystroke: a per-character search would put one
@@ -291,7 +315,7 @@ export function Knowledge() {
             quickstart's own example is — rendered this section's title and
             hint above an empty grid, so the screen appeared to be broken
             rather than to be describing a company that has none. */}
-        {index.seats.filter((s) => s.kind === "agent").length === 0 ? (
+        {agentSeats.length === 0 ? (
           <EmptyState
             size="compact"
             icon={<NeurologyGlyph size="xl" />}
@@ -300,31 +324,39 @@ export function Knowledge() {
           />
         ) : (
           <div className="grid grid-auto">
-            {index.seats
-              .filter((s) => s.kind === "agent")
-              .slice(0, 12)
-              .map((seat) => (
-                <a
-                  key={seat.handle}
-                  className="seat-card"
-                  href={href(["company", "people", seat.handle], { tab: "memory" })}
-                >
-                  <div className="row">
-                    <span className="attention-icon" data-severity="info">
-                      <DatabaseGlyph size="sm" />
-                    </span>
-                    <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-                      <strong className="truncate t-cell">{seat.name}</strong>
-                      <span className="truncate t-caption mono">@{seat.handle}</span>
-                    </span>
-                    <ArrowForwardGlyph size="sm" />
-                  </div>
-                  <span className="t-caption truncate">
-                    {seat.goal || "memory, episodes and skills"}
+            {agentSeats.slice(0, PEEK_SEATS).map((seat) => (
+              <a
+                key={seat.handle}
+                className="seat-card"
+                href={href(["company", "people", seat.handle], { tab: "memory" })}
+              >
+                <div className="row">
+                  <span className="attention-icon" data-severity="info">
+                    <DatabaseGlyph size="sm" />
                   </span>
-                </a>
-              ))}
+                  <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+                    <strong className="truncate t-cell">{seat.name}</strong>
+                    <span className="truncate t-caption mono">@{seat.handle}</span>
+                  </span>
+                  <ArrowForwardGlyph size="sm" />
+                </div>
+                <span className="t-caption truncate">
+                  {seat.goal || "memory, episodes and skills"}
+                </span>
+              </a>
+            ))}
           </div>
+        )}
+        {/* THE CUT, SAID, AND WHERE THE REST ARE. The same shape the container
+            rail below uses for its own peek — a caption link counting what is
+            not drawn — rather than a second visual language for one fact.
+            Without it the grid stopped at twelve cards under a heading
+            promising "each seat", which is a claim about a company the screen
+            had decided not to show. */}
+        {agentSeats.length > PEEK_SEATS && (
+          <a className="t-link t-caption" href={href(["company", "people"])}>
+            {plural(agentSeats.length - PEEK_SEATS, "more agent seat")} on the roster →
+          </a>
         )}
       </Section>
     </>

@@ -212,6 +212,11 @@ type APIError struct {
 	Method string
 	Path   string
 	Status int
+	// Detail is what the instance SAID, distilled by [httpx.RefusalOf] —
+	// so an empty Detail means the instance sent an empty body and nothing
+	// else. A page with no <title>, a shape this build does not know and a
+	// body that ran past the read ceiling each report themselves; that
+	// invariant is stated in httpx, where it holds for every client.
 	Detail string
 }
 
@@ -263,10 +268,26 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail := readDetail(resp.Header.Get("Content-Type"), resp.Body)
+		// REFUSED PAST THE CEILING, not read up to it. A CAP IS NOT A CUT:
+		// io.LimitReader stops at its limit and reports io.EOF, so a capped
+		// read hands the distiller a body indistinguishable from one that
+		// genuinely ended there, so a rendered page arriving where an API
+		// response belongs is quoted half-way through as the whole of one.
+		// [httpx.ReadBody] reads one byte past and REFUSES, so the overrun
+		// becomes something [httpx.RefusalOf] can state with the ceiling
+		// that caused it.
+		//
+		// THROUGH [httpx.RefusalOf] and not a copy of its rule: this client
+		// reads no vendor error envelope of its own before it, so there is no
+		// vendor half to keep here. A second implementation of the shared
+		// half would pick its own sentinel wording, its own bound and its own
+		// marker for a value every client reports the same way, and the drift
+		// would be invisible — both copies still compile and both still
+		// produce a plausible string.
+		body, readErr := httpx.ReadBody(resp.Body, httpx.RefusalBytes)
 		return &APIError{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Detail: strings.TrimSpace(detail),
+			Detail: httpx.RefusalOf(resp.Header.Get("Content-Type"), body, readErr),
 		}
 	}
 	if out == nil {
@@ -616,31 +637,4 @@ func firstOf(values ...string) string {
 		}
 	}
 	return ""
-}
-
-// readDetail reads a refusal's body, SAYING when it cut.
-//
-// An unmarked cut leaves "the explanation is off-screen" and "the third-party app
-// explained itself badly" as the same string, which is the distinction the
-// reader most needs — and the read error is reported rather than dropped,
-// because a body that died mid-read is a different fact from a short one.
-//
-// THROUGH [httpx.Refusal], which is what turns [httpx.RefusalBytes] from a
-// mitigation into an answer: past that cap a body is not explaining the
-// refusal, it is an HTML page that arrived where an API response belongs, and
-// what an unfiltered read did about it was serve two kilobytes of that page.
-func readDetail(contentType string, body io.Reader) string {
-	raw, err := io.ReadAll(io.LimitReader(body, httpx.RefusalBytes+1))
-	cut := len(raw) > httpx.RefusalBytes
-	text := httpx.Refusal(contentType, raw)
-	switch {
-	case cut && text != "":
-		return text +
-			"\n…(the rest of the response is past the " +
-			strconv.Itoa(httpx.RefusalBytes) + "-byte cap this build reads)"
-	case err != nil && text == "":
-		return "(the response body could not be read: " + err.Error() + ")"
-	default:
-		return text
-	}
 }

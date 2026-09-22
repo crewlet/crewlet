@@ -164,8 +164,14 @@ func (c *client) reportStartFailure(cause error) {
 		return
 	}
 	c.reapChild(true)
-	if tail := c.child.relay.lines(); len(tail) > 0 {
-		c.log.Error("server_stderr_tail", "server", c.name, "lines", tail, "error", cause.Error())
+	// dropped_lines is logged ALWAYS, not only when it is non-zero: a field
+	// that appears only sometimes is a field a log query misses, and zero is
+	// itself the evidence that matters here — it says these are every line
+	// the server wrote, rather than the end of something longer. See
+	// [tailLines] for where a non-zero count's lines went.
+	if tail, dropped := c.child.relay.lines(); len(tail) > 0 {
+		c.log.Error("server_stderr_tail", "server", c.name, "lines", tail,
+			"dropped_lines", dropped, "error", cause.Error())
 	}
 }
 
@@ -400,10 +406,11 @@ func (c *client) reapChild(cleanClose bool) {
 	c.log.Warn("server_stderr_reader_forced", "server", c.name)
 }
 
-// stderrTail is the server's last words, for diagnostics. Empty for HTTP.
-func (c *client) stderrTail() []string {
+// stderrTail is the server's last words and how many earlier lines the tail
+// window dropped to keep them. Empty and zero for HTTP, which has no child.
+func (c *client) stderrTail() ([]string, int) {
 	if c.child == nil {
-		return nil
+		return nil, 0
 	}
 	return c.child.relay.lines()
 }

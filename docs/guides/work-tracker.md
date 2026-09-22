@@ -705,6 +705,23 @@ Both states are in the attention queue: `flag=one_sided` is the repair still
 pending, `flag=one_sided_final` the one a person has to resolve. The `flag`
 filter takes any number of values and matches a task carrying **any** of them.
 
+**Closing a blocker tells whoever is waiting**, and a second repair exists for
+when that wake does not go out — a record deferred and applied later, a
+notification the valve dropped, an edge authored *after* the close. The same
+`tracker` duty sends the notice late, marked as late so a person who hears
+hours after the fact can see why. It is bounded by a **log position** rather
+than by a clock, so a duty that did not run for six minutes catches up on that
+window rather than skipping it, and an outage of any length is caught up on the
+next sweep. The dependent's **assignee** is the only recipient, so a dependent
+nobody holds is not told: whoever picks it up reads its state then.
+
+It sends at most **64 notices a sweep** (one every fifteen minutes), because
+each one is a durable record every node applies and a single bulk cancel can
+clear every edge naming hundreds of tasks at once. **Nothing is dropped to that
+bound**: the repair keeps its position on a window it could not finish, so the
+dependents it did not reach come up on the next sweep, and a backlog of a
+thousand leaves at 64 a sweep until everybody has been told.
+
 **Every row says what it waits on.** A listed task carries `blocked` — one bit,
 "something is holding this up" — and `waiting_on`, the same edges carrying
 *which* task, whether that blocker is still `open`, and whether the edge is

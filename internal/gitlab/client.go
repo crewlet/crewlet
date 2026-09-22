@@ -98,14 +98,27 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
+		// REFUSED PAST THE CEILING, not read up to it — the same rule the
+		// write half follows, because the read half is the one every
+		// reconcile pass drives and a self-managed instance behind a
+		// proxy answers both of them with the same page. A CAP IS NOT A
+		// CUT: io.LimitReader stops at its limit and reports io.EOF, so
+		// the first [httpx.RefusalBytes] of that page reached this Detail
+		// as though GitLab had said it — byte-sliced, so a multi-byte
+		// rune straddling the boundary left invalid UTF-8, and unmarked,
+		// so nothing said a page had been cut in half. The read error was
+		// discarded into `_`, which turned a body that failed halfway
+		// into an empty Detail reading as "the instance said nothing".
+		body, readErr := httpx.ReadBody(resp.Body, httpx.RefusalBytes)
 		// TYPED, like the write half's. A caller deciding what a refusal
 		// means — 404 is "not there yet", 403 is "this credential
 		// cannot" — would otherwise substring-match a message whose
-		// wording differs by GitLab version and by locale.
+		// wording differs by GitLab version and by locale. That is also
+		// why the Detail beside it may not be a severed prefix of a page:
+		// it is the half an operator reads.
 		return &APIError{
 			Method: http.MethodGet, Path: path, Status: resp.StatusCode,
-			Detail: httpx.Refusal(resp.Header.Get("Content-Type"), detail),
+			Detail: httpx.RefusalOf(resp.Header.Get("Content-Type"), body, readErr),
 		}
 	}
 	if out == nil {

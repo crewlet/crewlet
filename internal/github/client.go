@@ -189,10 +189,23 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
+		// REFUSED PAST THE CEILING, not read up to it — the same rule the
+		// App half of this package follows, because it is one vendor and
+		// one rule. A CAP IS NOT A CUT: io.LimitReader stops at its limit
+		// and reports io.EOF, so the first [httpx.RefusalBytes] of a
+		// gateway's page reached an operator's error as though GitHub had
+		// said exactly that, byte-sliced so a multi-byte rune straddling
+		// the boundary made the Detail invalid UTF-8, and with nothing
+		// marking that a page had been cut in half. It failed quietly in
+		// both directions too: a >2 048-byte JSON envelope arrived
+		// truncated, failed to Unmarshal, and was pasted in severed, while
+		// a page whose </title> sat past the ceiling yielded no title at
+		// all and an empty Detail that reads as "GitHub said nothing". The
+		// read error was discarded into `_` and did the same.
+		body, readErr := httpx.ReadBody(resp.Body, httpx.RefusalBytes)
 		return &APIError{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Detail: httpx.Refusal(resp.Header.Get("Content-Type"), detail),
+			Detail: httpx.RefusalOf(resp.Header.Get("Content-Type"), body, readErr),
 		}
 	}
 	if out == nil {

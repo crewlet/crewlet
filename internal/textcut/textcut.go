@@ -36,6 +36,32 @@
 // functions whose docs point at each other rather than one that quietly
 // means different things in different packages.
 //
+// # The two EDGE walks, and why they live here too
+//
+// [TrimSplitRune] and [TrimOrphanContinuation] are the same rule asked from
+// the other side. The three functions above are handed a budget and the whole
+// value, so each can look at the byte sitting on the cut it is about to make.
+// These two are handed a slice whose edge a cut has ALREADY fallen on — a
+// capped buffer that stopped accepting, a ring that keeps the last N bytes —
+// with nothing on the other side of that edge to look at, and the only
+// question left is whether what remains begins and ends on whole characters.
+//
+// They are here rather than beside either caller because two callers need the
+// identical walk: the cliagent's capped buffer and the sandbox's capture both
+// hold a window of somebody else's output and both have to answer the same
+// question at the same two edges. Written twice they would drift on the half
+// nobody re-reads, which is the failure this package's first paragraph is
+// about and the one [Ellipsis] and [Within] were already split to prevent.
+// [TrimOrphanContinuation] serves the START edge, which only a windowed
+// capture has — a head-only cut never exposes one — and it travels with
+// [TrimSplitRune] because a window has both edges and repairing one without
+// the other is how a caller ends up with half the rule.
+//
+// BYTES, like everything else here, and both return a SUB-SLICE of what they
+// were handed rather than a copy: the callers are memory-bounded buffers whose
+// whole reason for existing is that reading them back does not allocate a
+// second copy of what they hold.
+//
 // # Cutting is the last resort, not the first
 //
 // Most of what this package once shortened is no longer shortened at all, and
@@ -117,4 +143,76 @@ func Bytes(s string, max int) string {
 		max--
 	}
 	return s[:max]
+}
+
+// TrimSplitRune drops a trailing character that a CUT interrupted, and leaves
+// everything else exactly as it was.
+//
+// For the buffer whose end is where somebody else's cap fell: it is not being
+// shortened to a budget — it is already at one — and the only thing left to
+// decide is whether the last character in hand is whole.
+//
+// The walk looks back at most [utf8.UTFMax]-1 bytes, which is not an
+// optimisation: a lead byte further back than that already has a whole
+// character's worth of bytes after it, so nothing beyond is evidence about
+// this edge.
+//
+// [utf8.FullRune] is the predicate rather than a DecodeLastRune comparison,
+// and the difference is not stylistic. Decoding answers (RuneError, 1) for a
+// SHORT encoding and for an IMPOSSIBLE one alike, and only the first is a
+// character a cut interrupted. A lone 0xFF the source itself emitted is the
+// second: it renders as one replacement character whatever is done with it,
+// and removing it would be the caller claiming a cut it never made — and, in
+// both callers here, charging somebody else's bytes to a count that means
+// "what I dropped". FullRune calls an invalid encoding full and answers false
+// only for a short-but-otherwise-valid one, which is exactly what a cut leaves
+// behind.
+func TrimSplitRune(b []byte) []byte {
+	for i := len(b) - 1; i >= 0 && i > len(b)-utf8.UTFMax; i-- {
+		if !utf8.RuneStart(b[i]) {
+			continue
+		}
+		if utf8.FullRune(b[i:]) {
+			return b
+		}
+		return b[:i]
+	}
+	return b
+}
+
+// TrimOrphanContinuation drops the continuation bytes left at the START of b
+// when a cut fell inside a character — the far edge of a window whose other
+// edge [TrimSplitRune] answers.
+//
+// THE TWO EDGES ASK DIFFERENT QUESTIONS, which is why this is a second
+// function rather than the walk above run in the other direction. At the end
+// of a slice there are bytes BEFORE the suspect one, so "did a cut split this,
+// or did the source emit it broken" is answerable and must be asked. At the
+// start there is nothing before it at all: a leading continuation byte is not
+// a character under any reading, and no evidence exists that could tell an
+// orphan of a cut from one the source emitted. So the end edge is decided and
+// the start edge is simply cleared — at most [utf8.UTFMax]-1 bytes, the
+// longest run one interrupted character can leave.
+//
+// A LONGER RUN THAN THAT IS LEFT ALONE, and the bound is the whole reason
+// rather than a cost saving: four continuation bytes in a row are not one
+// interrupted character under any encoding, so they are the source's own
+// broken bytes and clearing them would be the same false claim [TrimSplitRune]
+// refuses to make at the other edge.
+func TrimOrphanContinuation(b []byte) []byte {
+	// MEASURED FIRST, THEN DECIDED, because the two outcomes this doc
+	// describes are all-or-nothing and a loop that strips as it walks
+	// delivers neither: it stops at the bound mid-run and hands back the
+	// remainder, so a four-byte run came out as one orphan — not cleared,
+	// not left alone, and now indistinguishable from a real cut's residue.
+	run := 0
+	for run < len(b) && !utf8.RuneStart(b[run]) {
+		run++
+		if run > utf8.UTFMax-1 {
+			// Longer than any interrupted character can leave, so
+			// these are the source's own bytes. Left whole.
+			return b
+		}
+	}
+	return b[run:]
 }

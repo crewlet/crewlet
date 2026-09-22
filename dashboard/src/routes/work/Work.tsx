@@ -1015,7 +1015,8 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
                   // constant on every project busier than it. See [pageCount].
                   count={feed.data ? pageCount(records.length, !!feed.data.next_cursor) : undefined}
                   subtitle={
-                    pageNote(records.length, !!feed.data?.next_cursor, "change") || undefined
+                    pageNote(records.length, !!feed.data?.next_cursor, "change", "newest") ||
+                    undefined
                   }
                 >
                   <Card.Title>Recent activity</Card.Title>
@@ -1844,7 +1845,7 @@ export function ActivityFeed({
         // element.
         subtitle={
           [
-            pageNote(records.length, !!answer?.next_cursor, "change"),
+            pageNote(records.length, !!answer?.next_cursor, "change", "newest"),
             answer?.complete === false
               ? "This node holds records it cannot read, so changes may be missing from this list."
               : "",

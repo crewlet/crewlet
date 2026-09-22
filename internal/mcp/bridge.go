@@ -414,14 +414,21 @@ func (b *Bridge) Call(ctx context.Context, instance, tool string, args map[strin
 	return entry.client.callTool(ctx, tool, args)
 }
 
-// StderrTail returns a stdio server's last words, for diagnostics. Empty for
-// an HTTP server or an unknown name.
-func (b *Bridge) StderrTail(name string) []string {
+// StderrTail returns a stdio server's last words, for diagnostics, and how many
+// earlier lines the bounded tail dropped to keep them. Empty and zero for an
+// HTTP server or an unknown name.
+//
+// The count travels with the lines rather than being left to a caller to infer
+// from len == [tailLines]: that inference is wrong in both directions — a
+// server that wrote exactly tailLines lines dropped none — and a renderer that
+// showed the window unmarked would present a windowed tail as the whole of what
+// a failing server said. [tailLines] states where the dropped lines are.
+func (b *Bridge) StderrTail(name string) (lines []string, dropped int) {
 	b.mu.RLock()
 	entry, ok := b.servers[name]
 	b.mu.RUnlock()
 	if !ok {
-		return nil
+		return nil, 0
 	}
 	return entry.client.stderrTail()
 }

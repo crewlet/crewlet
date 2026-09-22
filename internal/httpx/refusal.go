@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"encoding/json"
+	"fmt"
 	"html"
 	"regexp"
 	"strings"
@@ -44,8 +45,21 @@ const RefusalDetail = 400
 // So a non-JSON body is read for what it can honestly yield and nothing more:
 // an HTML page's TITLE, which is where a proxy, a gateway and a login wall all
 // put the reason ("403 Forbidden", "Sign in to continue"), and plain text as
-// itself. A page with no title yields nothing, which is the honest answer — the
-// status code is carried separately and already says more than the markup does.
+// itself. A page with no title yields nothing HERE — the markup is layout and
+// the status code already says more than it does — and [RefusalOf] is what
+// turns that nothing into a line, because a dropped page reported as "" reads
+// as an endpoint that was silent.
+//
+// # What is cut, and how it is marked
+//
+// The distilled line is bounded by [RefusalDetail] with [textcut.Within]
+// rather than [textcut.Bytes]: that budget is a CEILING its callers assert,
+// so the marker has to fit inside it rather than push past it, and an
+// unmarked cut is a severed sentence read as a whole one. The whole body is
+// not recoverable from this process — it is read once and dropped — which is
+// why the marker is the only thing standing between a reader and a half
+// sentence they will treat as the endpoint's complete answer; the rest of it
+// is in the endpoint's own logs.
 //
 // # Shared, because the fallback is the part that was wrong everywhere
 //
@@ -64,12 +78,94 @@ func Refusal(contentType string, body []byte) string {
 		// A SHAPE THE CALLER DID NOT KNOW. Pretty-printed JSON in a log line
 		// is noise, and a compact object is at least readable, so it is
 		// re-encoded rather than passed through.
-		return textcut.Bytes(compactJSON(text), RefusalDetail)
+		return textcut.Within(compactJSON(text), RefusalDetail)
 	case looksHTML(contentType, text):
-		return textcut.Bytes(titleOf(text), RefusalDetail)
+		return textcut.Within(titleOf(text), RefusalDetail)
 	default:
-		return textcut.Bytes(collapseSpace(text), RefusalDetail)
+		return textcut.Within(collapseSpace(text), RefusalDetail)
 	}
+}
+
+// RefusalOf is [Refusal] for a caller that read the body with [ReadBody], and
+// it is the call every vendor client makes.
+//
+// # Three outcomes, because "" used to mean all three
+//
+// A client that reads a refusal body has three things to report and had one
+// word for them. [Refusal] answers the middle one — the body arrived, here is
+// what it said — and the two it cannot see are the two an operator most needs
+// kept apart:
+//
+//   - THE BODY WAS NOT READ, because it ran past [RefusalBytes] or the
+//     connection failed part way through it. [ReadBody] refuses rather than
+//     cutting and its error carries the ceiling, so the line names that
+//     ceiling instead of implying the first 2 048 bytes are what was said.
+//   - THE BODY ARRIVED AND DISTILLED TO NOTHING, which is an HTML page with
+//     no <title>. Dropping the markup is right — it is layout, not an
+//     explanation — but reporting the drop as "" says the endpoint was
+//     silent, when what actually happened is that a proxy answered a page.
+//
+// So an empty answer from here means exactly one thing: the endpoint sent an
+// empty body. [github.com/crewlet/crewlet/internal/mattermost.Error]'s Message
+// field documents that invariant, and it is enforced here because this is the
+// function that decides it.
+//
+// # One copy, because a second one drifts silently
+//
+// A client that wrote these arms itself would be choosing its own sentinel
+// wording, its own bound and its own marker for a value class every client
+// reports the same way — the shape internal/textcut, internal/whsec and
+// internal/jsprovision each exist to have ended. The drift would be invisible:
+// every copy still compiles, and every copy still produces a plausible
+// string, so nothing but a reader comparing two logs would notice.
+//
+// # Where the whole body is
+//
+// Nowhere in this process, deliberately: a refusal body is read once and
+// dropped, so there is no store column and no event payload to recover it
+// from. That is exactly why nothing here may quote a prefix of it — the
+// endpoint's own logs hold the whole answer, and this line has to say the
+// body went unread rather than imply it has been quoted.
+func RefusalOf(contentType string, body []byte, err error) string {
+	if err != nil {
+		// MARKED, NAMED AND BOUNDED. The sentinel's own text carries the
+		// ceiling that refused the body, and a transport failure's text is
+		// the only unbounded part of this line — so it is cut INSIDE
+		// [RefusalDetail] rather than at a literal, with the marker that
+		// stops a severed sentence reading as a complete one.
+		return textcut.Within("the refusal body could not be read: "+err.Error(), RefusalDetail)
+	}
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		// THE ONE THING "" IS ALLOWED TO MEAN.
+		return ""
+	}
+	if line := Refusal(contentType, body); line != "" {
+		return line
+	}
+	return fmt.Sprintf("the endpoint answered %d bytes with nothing quotable in them: %s",
+		len(body), unquotable(contentType, text))
+}
+
+// unquotable names what a body that distilled to nothing actually was.
+//
+// [Refusal] yields nothing over a body that HAS content in exactly one case:
+// an HTML document whose <title> is missing or empty. The JSON arm re-encodes
+// to at least a pair of quotes and the plain-text arm keeps the body's own
+// text, so neither can reach here. Naming the case is what makes the line
+// worth reading — "a page with no title" sends an operator to the proxy in
+// front of the endpoint, where a bare "unquotable" sends them nowhere.
+//
+// The second arm is not decoration and not dead-by-accident: this is a
+// CLASSIFIER over its two inputs rather than a branch of the caller's
+// control flow, and a line that asserted HTML over a body that was not HTML
+// would be a worse answer than the "" it replaces. It is reached the moment
+// [Refusal] learns to drop any other shape.
+func unquotable(contentType, text string) string {
+	if looksHTML(contentType, text) {
+		return "an HTML page with no <title>, which is layout rather than an explanation"
+	}
+	return "a shape with no sentence, envelope or title in it"
 }
 
 func looksJSON(contentType, text string) bool {

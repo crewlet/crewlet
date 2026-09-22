@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // hostCommand is one command to run on the engine host.
@@ -23,36 +24,231 @@ type hostCommand struct {
 	timeout time.Duration
 }
 
-// captureLimit bounds what one control command's output may cost in memory.
+// captureLimit bounds what one control command's output may cost in memory,
+// and it is ALL the memory one capture ever holds: the head is allocated at
+// [captureHead] and the tail ring at [captureTail], each once, and neither
+// grows afterwards. READING IT BACK ADDS NO THIRD BUFFER either — [capture.String]
+// writes the ring's two segments straight into the one result — because the
+// condition under which the ring has wrapped is exactly the condition under
+// which a capture is at its limit, so a copy taken to unwrap it would land on
+// every capture already costing the most. [runHost] holds two of these per
+// control command, one per stream, so the figure is doubled there and nowhere
+// else.
 //
 // A control command produces a line or two; this exists for the pathological
 // case — a runtime that streams a pull progress bar, an image whose entrypoint
-// floods stderr — where an unbounded buffer would be the engine's memory. The
-// coding job's own output does not come through here at all: it is redirected
-// to files inside the box and read back by the runner.
+// floods stderr, a provisioning step that prints every file it unpacks — where
+// an unbounded buffer would be the engine's memory. The coding job's own output
+// does not come through here at all: it is redirected to files inside the box
+// and read back by the runner WHOLE, so nothing here has to preserve a
+// transcript.
+//
+// WHAT FALLS BETWEEN THE TWO WINDOWS IS NOT RECOVERABLE ANYWHERE, and that is
+// stated rather than hidden: [capture.String] names the gap in bytes, in the
+// value an operator reads. The obvious alternative, spilling the whole stream
+// to a file, has nowhere to spill — [runHost] also serves probes that run
+// before any box exists (`docker info`, the reaper's `ps`) and calls made while
+// one is being torn down, so there is frequently no box directory to write
+// into, and a spill file for progress-bar noise would need a lifecycle nothing
+// would ever run. The exit code, which is the other half of what a caller acts
+// on, is never truncated and never inferred from this text.
 const captureLimit = 256 << 10
 
-// capture is a bounded io.Writer. Once full it keeps the HEAD, because a
-// command's first output is its error message and its last is progress noise.
+// captureHead and captureTail split that budget between the two places a
+// command's meaning actually lives. Keeping only one end loses the message for
+// half of [runHost]'s callers, which is what a head-only capture did.
+//
+// THE HEAD is what a command said before it went wrong — a container runtime's
+// one-line refusal, a registry auth prompt, the banner above it. 64 KiB is some
+// eight hundred 80-column lines, far past any runtime's refusal.
+//
+// THE TAIL takes the larger share because a PROVISIONING command explains
+// itself LAST: [ApplySetup] hands a failed step's stderr to the operator and to
+// the model as the entire account of the failure, and an install or a build
+// prints megabytes of progress and then the error. Keeping the head alone
+// handed that caller the progress and dropped the error — the precise shape of
+// cut this split exists to end. A TIMED-OUT command wants the same end and is
+// served by the same share: runHost prints its own notice and then the whole
+// capture, both windows and the mark, and where the split exists at all — the
+// output is past captureLimit — the point a stuck child stalled at is its LAST
+// output rather than its first.
+const (
+	captureHead = 64 << 10
+	captureTail = captureLimit - captureHead
+)
+
+// captureMark is what a reader sees in place of what was dropped.
+//
+// It is IN BAND because it has to be: [ExecResult] carries two strings and an
+// exit code, so a flag beside the text would reach neither the operator reading
+// a setup failure nor the model reading it back. It names the size of the gap
+// and the size of both windows, because "truncated" alone cannot tell a
+// hundred dropped bytes from a hundred megabytes, and those are different
+// operator problems.
+const captureMark = "\n… output truncated: %d bytes dropped here " +
+	"(kept the first %d and the last %d) …\n"
+
+// capture is a bounded io.Writer over one control command's output.
+//
+// It keeps the first [captureHead] bytes and the LAST [captureTail] bytes and
+// drops the middle, MARKED with [captureMark] so a windowed capture can never
+// be mistaken for a whole one. Neither edge of the gap lands inside a character:
+// this text reaches an operator and an LLM (see [ApplySetup]), and a byte cut
+// through a multi-byte rune is invalid UTF-8 — a JSON encoder substitutes
+// U+FFFD, a model reads a replacement character, a terminal prints a box. What
+// it does NOT do is repair bytes the COMMAND printed broken: undoing somebody
+// else's cut would be this type claiming one it never made, which is the
+// argument [github.com/crewlet/crewlet/internal/textcut.TrimSplitRune] carries
+// for both places that ask it.
+//
+// One writer at a time, which is what it gets: os/exec's copying goroutines own
+// it until Wait returns and runHost reads it only after that.
 type capture struct {
-	buf      []byte
-	overflow bool
+	// head is the first captureHead bytes. Allocated to its full capacity
+	// on first use rather than grown, so this type's footprint is
+	// captureLimit exactly instead of whatever append's growth rounds up to.
+	head []byte
+
+	// ring holds the last captureTail bytes of everything past the head. A
+	// ring rather than a slice compacted when it overruns: compaction moves
+	// the whole retained tail on every write once full, which over a
+	// megabyte progress bar is hundreds of megabytes of memmove for output
+	// nobody will read.
+	ring    []byte
+	ringPos int
+
+	// tailSeen counts every byte that went past the head, retained or not.
+	// The dropped count is then arithmetic over it rather than bookkeeping
+	// spread across the write paths — which is how the old capture came to
+	// flag an overflow only when a SECOND write arrived after the cut, and
+	// to report a command whose output ended on the overflowing write as
+	// complete.
+	tailSeen int
 }
 
 func (c *capture) Write(p []byte) (int, error) {
-	if room := captureLimit - len(c.buf); room > 0 {
-		c.buf = append(c.buf, p[:min(room, len(p))]...)
-	} else {
-		c.overflow = true
+	written := len(p)
+	if room := captureHead - len(c.head); room > 0 {
+		if c.head == nil {
+			c.head = make([]byte, 0, captureHead)
+		}
+		take := min(room, len(p))
+		c.head = append(c.head, p[:take]...)
+		p = p[take:]
 	}
-	return len(p), nil
+	if len(p) > 0 {
+		c.writeTail(p)
+	}
+	// The whole write is always reported as taken: a short count is an error
+	// to io.Copy, and os/exec would abandon the rest of the command's output
+	// rather than drain it — which is the one thing a cap must not cause.
+	return written, nil
 }
 
-func (c *capture) String() string {
-	if c.overflow {
-		return string(c.buf) + "\n… output truncated"
+// writeTail records p in the ring, keeping its last captureTail bytes.
+func (c *capture) writeTail(p []byte) {
+	c.tailSeen += len(p)
+	if c.ring == nil {
+		c.ring = make([]byte, captureTail)
 	}
-	return string(c.buf)
+	if len(p) >= captureTail {
+		copy(c.ring, p[len(p)-captureTail:])
+		c.ringPos = 0
+		return
+	}
+	n := copy(c.ring[c.ringPos:], p)
+	if n < len(p) {
+		copy(c.ring, p[n:])
+	}
+	c.ringPos = (c.ringPos + len(p)) % captureTail
+}
+
+// dropped is how many bytes fell between the head and the retained tail.
+func (c *capture) dropped() int {
+	if c.tailSeen <= captureTail {
+		return 0
+	}
+	return c.tailSeen - captureTail
+}
+
+// tailSegments is the retained tail in logical order, oldest byte first, as the
+// one or two slices the ring ALREADY holds.
+//
+// Two slices rather than one is the whole of [captureLimit]'s memory claim:
+// unwrapping the ring into a single slice costs a second captureTail buffer,
+// taken exactly when the ring has wrapped — which is exactly when the capture
+// is already at its limit and [runHost] is holding two of them. The caller
+// writes the segments in order instead, which is the same bytes in the same
+// order with no copy between.
+func (c *capture) tailSegments() (first, second []byte) {
+	switch {
+	case c.tailSeen == 0:
+		return nil, nil
+	case c.tailSeen <= captureTail:
+		// Never wrapped, so the ring is a plain prefix and ringPos is the
+		// length. (At exactly captureTail ringPos is 0 from the modulo,
+		// which is why this reads tailSeen and not ringPos.)
+		return c.ring[:c.tailSeen], nil
+	default:
+		return c.ring[c.ringPos:], c.ring[:c.ringPos]
+	}
+}
+
+// String renders the capture: the two windows, with [captureMark] between them
+// naming what fell in the gap.
+//
+// BOTH EDGES OF THE GAP ARE REPAIRED, and both repairs are the shared ones. The
+// head ENDS where this type's cut fell, so whether it interrupted a character
+// is [textcut.TrimSplitRune]'s question — the one the tree's other capped
+// buffer asks of itself for the same reason. The retained tail BEGINS on
+// whatever byte the ring wrapped onto, so the continuation bytes orphaned there
+// are [textcut.TrimOrphanContinuation]'s. Neither edge is a cut TO a budget and
+// so neither is [textcut.Bytes]: the head is already exactly its budget, which
+// that function would hand back untouched, and the tail's edge is at its START,
+// which no head-cutting helper can express at all.
+//
+// The result is built in ONE pre-sized buffer for the reason [captureLimit]
+// gives: every intermediate string here is a quarter-megabyte copy of what the
+// capture already holds.
+func (c *capture) String() string {
+	first, second := c.tailSegments()
+	gap := c.dropped()
+	if gap == 0 {
+		// Nothing was dropped, so the two windows are contiguous and this is
+		// the command's output verbatim — including a trailing partial rune
+		// if the command was killed mid-write. No marker and no repair: the
+		// repairs below exist to undo OUR cut, and a marker on a value
+		// nothing touched would be a lie about it. (second is empty here: a
+		// ring that never wrapped is one segment.)
+		var out strings.Builder
+		out.Grow(len(c.head) + len(first))
+		out.Write(c.head)
+		out.Write(first)
+		return out.String()
+	}
+	retained := len(first) + len(second)
+	head := textcut.TrimSplitRune(c.head)
+	first = textcut.TrimOrphanContinuation(first)
+	if len(first) == 0 {
+		// The orphan run crossed the ring's wrap: the first segment was
+		// shorter than one character's continuation bytes and went entirely,
+		// so the value now starts at the second segment — with nothing before
+		// it either, which is the one condition that walk asks for.
+		second = textcut.TrimOrphanContinuation(second)
+	}
+	kept := len(first) + len(second)
+	// Every byte this call itself discarded is counted into the gap, so the
+	// three numbers in the mark add up to what the command actually wrote.
+	gap += len(c.head) - len(head) + retained - kept
+	mark := fmt.Sprintf(captureMark, gap, len(head), kept)
+
+	var out strings.Builder
+	out.Grow(len(head) + len(mark) + kept)
+	out.Write(head)
+	out.WriteString(mark)
+	out.Write(first)
+	out.Write(second)
+	return out.String()
 }
 
 // flattenEnv renders an env map as os/exec's KEY=value slice.

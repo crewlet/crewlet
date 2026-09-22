@@ -398,7 +398,7 @@ func (p *Provider) completion(
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, 0, fmt.Errorf(
 			"the CLI did not answer within %s — raise cli.timeout_seconds if this model "+
-				"legitimately reasons for longer:\n%s", p.timeout, tail(res.stderr)))
+				"legitimately reasons for longer:\n%s", p.timeout, res.stderrTailText()))
 	}
 
 	// A CLIPPED ANSWER IS NOT AN ANSWER. stdout past maxOutput is dropped by
@@ -409,12 +409,27 @@ func (p *Provider) completion(
 	// Refused as a SERVER failure so the fallback chain may try another
 	// member and the credential is not benched: nothing about the prompt was
 	// rejected.
+	//
+	// THE REMEDIES IT NAMES ARE ONES THAT EXIST, AND BOTH HALVES OF THE ONE
+	// THAT TAKES TWO FIELDS. This used to say "raise cli.max_output_bytes",
+	// a field neither config tier has ever had — `crewlet validate` refuses
+	// it as unknown — so an operator hitting the one failure that stops a
+	// seat answering was sent to a setting they could not write. [maxOutput]
+	// says why it is a constant; what is left for them to change is the
+	// profile's event filter and the model. The filter is named as a PAIR
+	// because [Profile.validate] refuses either alone: text_events with no
+	// event_type_path has nothing to match on, so a message naming only the
+	// first would send them to a config that will not load.
 	if res.droppedStdout > 0 {
 		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
-			"the CLI wrote more than %d bytes to stdout and %d were dropped, so "+
-				"the answer is incomplete — raise cli.max_output_bytes for this "+
-				"provider, or point it at a model that streams less",
-			maxOutput, res.droppedStdout))
+			"the %s CLI wrote more than %d bytes to stdout and %d were dropped, so "+
+				"the answer is incomplete. The cap is the engine's and is not "+
+				"configurable: either this profile is streaming a whole transcript "+
+				"where it could take one terminal event (set cli.overrides."+
+				"event_type_path AND text_events together on providers.llm.%s — "+
+				"either alone is refused at load), or the model behind it does not "+
+				"stop, in which case point the entry at one that does",
+			p.agent, maxOutput, res.droppedStdout, p.key))
 	}
 
 	out := extract(p.profile, res.stdout)
@@ -441,14 +456,21 @@ func (p *Provider) completion(
 	// located it is the only thing the vendor said that matters.
 	said := nonEmpty(out.text, res.stdout)
 	if hit, ok := classifyMarkers(p.profile, said, res.stderr); ok {
-		return nil, p.fail(hit.Kind, hit.Retry,
-			fmt.Errorf("%s", nonEmpty(hit.Said, firstLine(said, res.stderr))))
+		// THROUGH THE PAIRING, never by composing the line here. The
+		// sentence a sentinel matched is one line of a stream that may
+		// have been clipped at [maxOutput], and the count that says so
+		// sits in a field beside three others of the same type — so the
+		// render takes the hit (which names its own stream) rather than a
+		// caller's guess at which count goes with it. See
+		// [rawResult.markerText] for what it adds to the bare line and
+		// why the remainder is not recoverable.
+		return nil, p.fail(hit.Kind, hit.Retry, fmt.Errorf("%s", res.markerText(hit, said)))
 	}
 
 	if res.exitCode != 0 || out.failed {
 		return nil, p.fail(llm.KindFatal, 0, fmt.Errorf(
 			"the CLI exited %d:\n%s", res.exitCode,
-			tail(nonEmpty(res.stderr, out.text, res.stdout))))
+			res.failureTailText(out.text)))
 	}
 	if strings.TrimSpace(res.stdout) == "" {
 		// Exit zero and nothing on stdout AT ALL — no envelope, no
@@ -460,7 +482,7 @@ func (p *Provider) completion(
 		// member, and the credential is not cooled.
 		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
 			"the %s CLI exited 0 but printed nothing at all%s",
-			p.agent, stderrDetail(res.stderr)))
+			p.agent, res.stderrDetailText()))
 	}
 	if !out.located {
 		// THE PROFILE HAS DRIFTED FROM THE CLI. Its output parsed, and
@@ -487,7 +509,7 @@ func (p *Provider) completion(
 				"installed CLI, so nothing it printed can be read as the model's "+
 				"reply. Run `crewlet llm doctor %s` and set "+
 				"providers.llm.%s.cli.overrides.text_paths. It printed:\n%s",
-			p.agent, PathList(p.profile.TextPaths), p.key, p.key, tail(res.stdout)))
+			p.agent, PathList(p.profile.TextPaths), p.key, p.key, res.stdoutTailText()))
 	}
 	// LOCATED AND EMPTY IS AN ANSWER OF NOTHING, NOT A FAULT. The CLI
 	// exited 0, reported no error, and the path this profile looks in
@@ -582,32 +604,58 @@ func classifyMarkers(p Profile, text, stderr string) (markerHit, bool) {
 	// its own credential. A profile whose CLI reports on stderr and
 	// nowhere else opts out, and then no sentence the model writes can
 	// classify anything.
-	haystacks := []string{text, stderr}
+	//
+	// EACH HAYSTACK CARRIES ITS OWN NAME rather than the name being
+	// recovered from which branch matched: [markerHit.Stream] is what
+	// pairs the reported line with the right drop count downstream, and a
+	// name assigned by construction cannot be assigned wrongly.
+	haystacks := []struct {
+		stream markerStream
+		text   string
+	}{{markerStdout, text}, {markerStderr, stderr}}
 	if p.markerScope() == MarkerScopeStderr {
-		haystacks = []string{stderr}
+		haystacks = haystacks[1:]
 	}
 	for _, marker := range p.LimitMarkers {
 		for _, hay := range haystacks {
-			idx := strings.Index(hay, marker.Sentinel)
+			idx := strings.Index(hay.text, marker.Sentinel)
 			if idx < 0 {
 				continue
 			}
 			return markerHit{
-				Kind:  llm.KindRateLimit,
-				Retry: resetAfter(hay[idx:], marker),
-				Said:  lineAt(hay, idx),
+				Kind:   llm.KindRateLimit,
+				Retry:  resetAfter(hay.text[idx:], marker),
+				Said:   lineAt(hay.text, idx),
+				Stream: hay.stream,
 			}, true
 		}
 	}
 	for _, marker := range p.AuthMarkers {
 		for _, hay := range haystacks {
-			if idx := strings.Index(hay, marker.Sentinel); idx >= 0 {
-				return markerHit{Kind: llm.KindAuth, Said: lineAt(hay, idx)}, true
+			if idx := strings.Index(hay.text, marker.Sentinel); idx >= 0 {
+				return markerHit{
+					Kind: llm.KindAuth, Said: lineAt(hay.text, idx), Stream: hay.stream,
+				}, true
 			}
 		}
 	}
 	return markerHit{Kind: llm.KindFatal}, false
 }
+
+// markerStream names which of a child's two streams a sentinel matched in.
+//
+// A named type rather than a bool because the value is PRINTED as well as
+// switched on: the message [rawResult.markerText] builds says which stream the
+// vendor's sentence came out of, and a bool would mean a second place deciding
+// what to call it. It never crosses a wire and never comes off one, so there
+// is nothing here for a Valid() to defend — every value is minted by
+// [classifyMarkers] a few lines above.
+type markerStream string
+
+const (
+	markerStdout markerStream = "stdout"
+	markerStderr markerStream = "stderr"
+)
 
 // markerHit is what a matched sentinel tells the caller.
 //
@@ -623,6 +671,11 @@ type markerHit struct {
 	// Said is the line the sentinel matched on — the vendor's own words,
 	// in the place the vendor put them.
 	Said string
+	// Stream is which haystack that line came out of, so the message
+	// rendering it can pair it with that stream's own [maxOutput] drop
+	// count. Set on every hit this function reports true for; it is
+	// meaningless on the false return, which carries no line either.
+	Stream markerStream
 }
 
 // lineAt returns the line of s containing byte offset idx, trimmed.
@@ -680,8 +733,14 @@ func (p *Provider) fail(kind llm.ErrorKind, retryAfter time.Duration, err error)
 	}
 }
 
-// firstLine is the first non-empty line across the given texts, for a failure
-// message that names the vendor's own sentence rather than its whole reply.
+// firstLine is the first non-empty line across the given texts.
+//
+// A FALLBACK ONLY, reached from [rawResult.markerText] when a sentinel matched
+// a line that trimmed to nothing — a sentinel whose own text opens with a
+// newline, which [sentinelProblem] does not refuse. Everywhere else the line
+// is [markerHit.Said], located AT the sentinel. Whatever this returns is
+// reported as one line of a longer stream by the caller, never on its own, for
+// the reason that caller's doc gives.
 func firstLine(texts ...string) string {
 	for _, text := range texts {
 		for line := range strings.SplitSeq(text, "\n") {
@@ -691,19 +750,6 @@ func firstLine(texts ...string) string {
 		}
 	}
 	return "no output"
-}
-
-// stderrDetail appends a CLI's stderr to a message, or nothing when it wrote
-// none.
-//
-// A trailing empty ":" after a sentence that already said what went wrong is
-// how a message stops reading like one — and stderr is genuinely absent on the
-// paths that use this, because a CLI that exits 0 usually says nothing there.
-func stderrDetail(stderr string) string {
-	if strings.TrimSpace(stderr) == "" {
-		return ""
-	}
-	return " It wrote on stderr:\n" + tail(stderr)
 }
 
 // nonEmpty is the first of the given strings with content.

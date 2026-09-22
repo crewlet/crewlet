@@ -197,3 +197,52 @@ describe("the work scope is a server query, so it has four answers", () => {
     expect(screen.queryByText(/Nothing matches/)).toBeNull();
   });
 });
+
+describe("the list is bounded, and the bound is stated", () => {
+  /** A company with more seats than the palette draws. */
+  const crowd = (n: number) => ({
+    name: "Acme",
+    roles: Array.from({ length: n }, (_, i) => ({
+      name: `Seat ${i}`,
+      handle: `seat-${i}`,
+      goal: "work",
+    })),
+  });
+
+  // `MAX_HITS`. Held as a literal here on purpose: the constant is the thing
+  // under test, and importing it would let the two move together silently.
+  const MAX = 40;
+
+  test("a ranked set past the cut says which slice of it is on screen", () => {
+    // THE DEFECT: this cut carried no marker at all, on the argument that
+    // refining is how a reader gets past it. Refining is — and a reader who
+    // cannot see that seventy-two more matched has no reason to keep typing,
+    // so the two hits they wanted are indistinguishable from a company that
+    // does not have them.
+    const { type } = open((store) => store.applyOrg(crowd(112)));
+    type("@seat");
+    // THE PRE-CUT TOTAL IS READ, not inferred from the page being full: the
+    // whole ranked set is in memory one expression before the slice.
+    expect(screen.getByText(/40 of 112 — keep typing to narrow\./)).toBeDefined();
+    expect(screen.getAllByRole("option")).toHaveLength(MAX);
+  });
+
+  test("a ranked set that fits says nothing", () => {
+    // THE CONTROL. A line that always drew would put "3 of 3" under every
+    // short answer in the product, which is how the one case that matters
+    // becomes a row nobody reads.
+    const { type } = open((store) => store.applyOrg(crowd(3)));
+    type("@seat");
+    expect(screen.queryByText(/keep typing to narrow/)).toBeNull();
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+  });
+
+  test("the cut does not move the cursor's bound", () => {
+    // THE ROW IS A FACT, NOT AN OPTION: it must not be arrowable, or Down
+    // forty times would land on a line with nothing to open.
+    const { type } = open((store) => store.applyOrg(crowd(112)));
+    type("@seat");
+    const rows = screen.getAllByRole("option");
+    expect(rows.every((r) => !/keep typing/.test(r.textContent ?? ""))).toBe(true);
+  });
+});

@@ -25,8 +25,18 @@ import { useMemo } from "react";
 import { plainText, renderMarkdown } from "~/lib/markdown.ts";
 import { collapse, diffLines, diffStat, type DiffSection } from "~/lib/diff.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Card, cx, EmptyState, FilterChip, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
+import { CutNote, QueryState, SeatChip } from "~/components/common.tsx";
+import {
+  Button,
+  Card,
+  cx,
+  EmptyState,
+  FilterChip,
+  Input,
+  Select,
+  Skeleton,
+  Tag,
+} from "@crewlethq/ui";
 // OURS, DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` selects as the arrows move, `tabs` is manual but
 // demands a `panelId` naming a TabPanel neither of these rows controls. Both
@@ -51,6 +61,15 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
+// THE TRACKER'S OWN SPELLING OF A CAPPED COUNT — `50+` rather than `50` —
+// because a header count is the same number in a different slot wherever it
+// is drawn, and this screen bounds three reads. See [pageCount].
+//
+// THE SENTENCE IS NOT TAKEN THE SAME WAY. [CutNote] renders `pageNote` under a
+// card whose rest is somewhere else, and this screen's children card is one of
+// those; the browse's own pager is NOT, and [PageBar] says why it writes its
+// own sentence rather than composing that one.
+import { pageCount } from "~/lib/work.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { Page, PageRevision, PageSummary } from "~/protocol/index.ts";
@@ -64,6 +83,25 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "info" | "n
   draft: "warning",
   trashed: "neutral",
 };
+
+/**
+ * How many pages one window of the browse asks for.
+ *
+ * FIFTY, which is `internal/pages.DefaultLimit` — the size this read has always
+ * answered at, now stated at the call site rather than left to the engine's
+ * default. It is stated because the WINDOW is this screen's arithmetic now: the
+ * pager below the grid steps by exactly this many, so a page size the engine
+ * chose and the screen guessed would step over rows or repeat them the first
+ * time either number moved.
+ *
+ * NOT `internal/pages.MaxLimit` (500), although the read would serve it. A
+ * browse is read a screenful at a time, and five hundred rows is a scroll
+ * nobody finishes — the ceiling is how a report is drawn, not a list. What the
+ * ceiling bought before this screen could page was reach, and the pager buys
+ * that outright: every row in a container is now behind a next click rather
+ * than behind a bigger single answer.
+ */
+const PAGE = 50;
 
 /**
  * A page's address, which is what the frame carries and what the engine reads.
@@ -233,26 +271,104 @@ export function Pages({ container: fromPath }: { container?: string }) {
   // key made it unlinkable. Choosing one NAVIGATES rather than filtering.
   const container = fromPath ?? "";
   const setContainer = (key: string) => nav.to(key ? ["knowledge", key] : ["knowledge"]);
-  const [title, setTitle] = useParam("title", "");
+
+  // WHERE THIS WINDOW STARTS, and the reason the browse has one at all: the
+  // `pages` read takes `limit` AND `offset` (`internal/pages.Filter`, clamped
+  // in `internal/api/queries.pageList`), and this screen sent neither — so a
+  // container holding four hundred pages answered its alphabetically first
+  // fifty for ever, and the note under the grid could only point at filters
+  // that narrow rather than at the rest of the set. Every row is now behind a
+  // Next click.
+  //
+  // A URL PARAMETER, like every other piece of this screen's state: a window
+  // is a place, so it is linkable and survives a reload.
+  //
+  // PARSED DEFENSIVELY because a hash is hand-editable: a non-number, a
+  // negative or a fraction reads as the first page rather than as an offset
+  // the engine would refuse.
+  const [offsetRaw, setOffsetParam] = useParam("offset", "");
+  const offset = Math.max(0, Math.trunc(Number(offsetRaw)) || 0);
+  const setOffset = (next: number) => setOffsetParam(next > 0 ? String(next) : "");
+  // A NEW FILTER IS A NEW LIST, so it starts at that list's first page. Written
+  // here rather than taken from `useParam`'s own setter because the reset and
+  // the filter are ONE move: two `nav.filter` calls in a row would leave the
+  // old offset on the new filter for one render, and that render is a read —
+  // narrowing from page nine of every container to one container answered
+  // nothing at all, which reads exactly like a container with no pages.
+  const narrow = (patch: Record<string, string | null>) => nav.filter({ ...patch, offset: null });
+
+  const [title] = useParam("title", "");
+  const setTitle = (next: string) => narrow({ title: next || null });
   // THREE STATES on the wire and three here: only the tool-skill pages
   // (auditing the catalogue), everything but them (an ordinary browse), and
   // everything. A checkbox would make one of the three unreachable.
-  const [kind, setKind] = useParam("kind", "prose");
+  //
+  // AND ALL THREE ARE SPELLED, `all` included, because this state has to be
+  // LINKABLE: the detail's "every child" link carries it — a page's children
+  // are not filtered by kind at all, so a link that left this on `prose` landed
+  // on a list holding fewer rows than the card it was under — and `href` drops
+  // an empty value from a query record (see `buildHash`), so `kind=""` is a
+  // state a click can reach and an anchor cannot. `kind=all` also says what it
+  // is in an address bar, where `kind=` reads as a key somebody half-typed.
+  const [kind] = useParam("kind", "prose");
+  const setKind = (next: string) => narrow({ kind: next === "prose" ? null : next });
+  // ONE PAGE'S CHILDREN, AND THIS IS WHERE THEY ARE REACHABLE. A page detail
+  // read takes no paging parameter — `internal/pages` says so at
+  // `Detail.ChildrenTruncated` — so it answers the first window of a page's
+  // children and a flag, and names `list_pages` with `parent` as where the
+  // rest is. That question is this screen's, so the filter is this screen's
+  // too: without it the fifty-first child of a container index page was
+  // reachable by an agent's tool and by nobody reading the dashboard.
+  //
+  // A URL PARAMETER rather than component state, like every other filter here:
+  // the children of a page is a place, so it is linkable, bookmarkable and
+  // what the detail's own "more children" link points at.
+  const [parent] = useParam("parent", "");
+  const setParent = (next: string) => narrow({ parent: next || null });
 
   const containers = useQuery("containers", undefined, { pollMs: 60_000 });
 
-  const params: Record<string, unknown> = {};
-  if (container) params.container = container;
+  const params: Record<string, unknown> = { limit: PAGE };
+  if (offset > 0) params.offset = offset;
   if (title) params.title = title;
   if (kind === "skills") params.skills = true;
   if (kind === "prose") params.skills = false;
+  // A PAGE'S CHILDREN ARE NOT A CONTAINER'S, so a `parent` REPLACES the
+  // container term rather than joining it. `internal/pages.Reader.Get`
+  // collects children on `p.parent_id` alone, and nothing constrains a child
+  // to its parent's container: `pages.Store.Create` stores the parent id
+  // without checking it against the container, and the `write_page` tool lets
+  // a model name `container` and `parent` independently. A container term here
+  // would therefore drop exactly the children a reader has no way to know are
+  // missing — under a link whose words are "Every child of this page".
+  //
+  // THE PATH SEGMENT STAYS WHAT IT IS. `#/knowledge` with no container is the
+  // SEARCH screen (`app/App.tsx`), so a browse can only be addressed inside
+  // one; while a parent is set that segment is where the reader came from
+  // rather than a filter, which is why the container controls are not drawn
+  // beside the chip that names the scope.
+  if (parent) params.parent = parent;
+  else if (container) params.container = container;
 
   const { data, loading, error } = useQuery("pages", params, { pollMs: 20_000 });
+  // THE FILTER SAYS WHOSE CHILDREN, which is a title and not the uuid in the
+  // address bar. Read only when one is set — a second question on every browse
+  // to label a chip that is not drawn would be a read nobody asked for — and a
+  // read that has not answered falls back to naming no page rather than
+  // claiming one: the chip's job is to say the list is narrowed, which is true
+  // before the title lands.
+  const parentPage = useQuery("page", { id: parent }, { enabled: parent !== "" });
 
-  const rows = useMemo(
-    () => [...(data?.pages ?? [])].sort((a, b) => tsKey(b.updated_at) - tsKey(a.updated_at)),
-    [data],
-  );
+  // THE ENGINE'S OWN ORDER, UNTOUCHED. `internal/pages` lists `ORDER BY
+  // p.container, p.title` and this screen is a NUMBERED WINDOW over that
+  // ordering — the bar under the grid reads "Pages 201–250" — so re-sorting
+  // the rows before they are drawn numbers positions in an order the reader
+  // cannot see: a range in the alphabet printed under rows arranged by time.
+  //
+  // A COLUMN HEAD STILL SORTS, and that is a different question: it reorders
+  // the rows of THIS window, which is a claim about what is on screen rather
+  // than about where the window was cut from.
+  const rows = useMemo(() => data?.pages ?? [], [data]);
   const containerKeys = useMemo(
     () => (containers.data?.containers ?? []).map((c) => c.key).sort(),
     [containers.data],
@@ -262,11 +378,11 @@ export function Pages({ container: fromPath }: { container?: string }) {
   // whatever the toolbar above is set to. Published rather than handed to the
   // rail, because only the list knows that order; see `PeekHost`.
   //
-  // THIS SCREEN'S OWN ORDER — newest first, which is also the grid's default
-  // sort. A column sort lives inside the grid and is not something this screen
-  // can read back, so a reader who re-sorts steps in updated order instead:
-  // one order both halves agree on beats a stepper that claims to follow a
-  // sequence it cannot see.
+  // THIS SCREEN'S OWN ORDER — the engine's, which is what the grid draws and
+  // what the window under it is numbered in. A column sort lives inside the
+  // grid and is not something this screen can read back, so a reader who
+  // re-sorts steps in the engine's order instead: one order both halves agree
+  // on beats a stepper that claims to follow a sequence it cannot see.
   usePeekNeighbours(
     useMemo(() => rows.map((r) => ({ kind: "page" as const, id: pageAddress(r) })), [rows]),
   );
@@ -295,22 +411,29 @@ export function Pages({ container: fromPath }: { container?: string }) {
         </div>
         {/* THE "ANY" ROW IS AN OPTION RATHER THAN A PLACEHOLDER: their
             `placeholder` only labels the empty trigger, and a reader who has
-            chosen a container needs a row to choose their way back out. */}
-        <Select
-          // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
-          // `width: 100%` unless told otherwise, and its own doc says why that
-          // is wrong here: "a filter row of full-width selects is one question
-          // per line, which is not what a filter bar is".
-          width="auto"
-          value={container}
-          onChange={(value) => setContainer(String(value))}
-          ariaLabel="Container"
-          active={container !== ""}
-          options={[
-            { value: "", label: "Every container" },
-            ...containerKeys.map((key) => ({ value: key, label: key })),
-          ]}
-        />
+            chosen a container needs a row to choose their way back out.
+
+            AND NOT WHILE A PARENT IS SET, because the read drops its container
+            term then (see `params` above): a picker showing `LEAD` selected
+            would name a filter the list is not applying. The chip below is the
+            scope while one is set, and clearing it brings this back. */}
+        {!parent && (
+          <Select
+            // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+            // `width: 100%` unless told otherwise, and its own doc says why
+            // that is wrong here: "a filter row of full-width selects is one
+            // question per line, which is not what a filter bar is".
+            width="auto"
+            value={container}
+            onChange={(value) => setContainer(String(value))}
+            ariaLabel="Container"
+            active={container !== ""}
+            options={[
+              { value: "", label: "Every container" },
+              ...containerKeys.map((key) => ({ value: key, label: key })),
+            ]}
+          />
+        )}
         <Segmented
           value={kind}
           onChange={setKind}
@@ -318,12 +441,33 @@ export function Pages({ container: fromPath }: { container?: string }) {
           options={[
             { value: "prose", label: "Pages", title: "Everything but the tool-skill pages" },
             { value: "skills", label: "Tool skills", title: "The machinery a phase is offered" },
-            { value: "", label: "All" },
+            { value: "all", label: "All", title: "Prose and tool skills together" },
           ]}
         />
       </div>
 
-      {containers.data?.containers?.length ? (
+      {parent && (
+        <div className="row wrap" style={{ gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
+          {/* PRESSED AND CLEARABLE, which is what a `FilterChip` is: this is
+              the one filter on the screen with no control of its own, because
+              it is arrived at from a page rather than chosen from a list. A
+              banner would say the same thing in a shape a reader cannot switch
+              off. */}
+          <FilterChip pressed onClick={() => setParent("")}>
+            {parentPage.data?.page.title
+              ? `Children of ${parentPage.data.page.title}`
+              : "Children of one page"}
+          </FilterChip>
+          {/* WHICH CONTAINERS THIS IS OVER, said rather than left to the
+              missing picker. A child is filed wherever its author put it and
+              need not share its parent's container, so this list is every
+              container — and a reader who has just watched the container
+              controls disappear is owed the reason. */}
+          <span className="t-caption">In every container.</span>
+        </div>
+      )}
+
+      {!parent && containers.data?.containers?.length ? (
         <div className="row wrap" style={{ gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
           {containers.data.containers.map((c) => (
             // A BADGE THAT ACTS IS A `FilterChip` OVER THERE, which is the
@@ -359,22 +503,57 @@ export function Pages({ container: fromPath }: { container?: string }) {
         empty={
           rows.length
             ? undefined
-            : containerKeys.length === 0
-              ? {
-                  title: "Nothing has been written down yet",
-                  hint: "A container is created the first time somebody writes into it. Give a unit a `space` and its seats will have somewhere to file what they learn.",
+            : offset > 0
+              ? // PAST THE END IS NOT AN EMPTY CONTAINER, and it is a state the
+                // pager can be linked into: a bookmark taken on page nine is
+                // still a window after the pages behind it are trashed. Said
+                // plainly, with the way back, rather than as "No pages here" —
+                // which is the one wording that makes a reader believe a
+                // container they are looking at is empty.
+                {
+                  title: "Nothing on this page of the list",
+                  hint: `This window starts at page ${offset + 1} and the list no longer reaches that far. Go back to the first page below.`,
                 }
-              : {
-                  title: "No pages here",
-                  hint: "Nothing in this node's copy of the knowledge base matches. Seats write pages with write_page, and a page's container comes from the unit's `space` field.",
-                }
+              : containerKeys.length === 0
+                ? {
+                    title: "Nothing has been written down yet",
+                    hint: "A container is created the first time somebody writes into it. Give a unit a `space` and its seats will have somewhere to file what they learn.",
+                  }
+                : {
+                    title: "No pages here",
+                    hint: "Nothing in this node's copy of the knowledge base matches. Seats write pages with write_page, and a page's container comes from the unit's `space` field.",
+                  }
         }
       >
-        <Card>
+        <Card padding="none">
+          {/* WHAT THIS GRID IS A GRID OF, and whether it is all of it.
+              `PagesAnswer.truncated` has been declared with its rule written
+              out — ASKED, NOT INFERRED — and read by the sibling container peek
+              alone, while THIS screen, the one the product calls "every page,
+              browsed", drew the engine's page size as the company's knowledge
+              base and had no paging of its own to get past it.
+
+              THE SAME TREATMENT AS THAT PEEK: the flag is read, never
+              `rows.length >= limit`, because a container holding exactly the
+              limit holds every row it has and the inference puts a caution
+              about missing data on a complete answer.
+
+              `padding="none"` because a card built from header and footer slots
+              draws its own body inset, and the grid sits flush inside it — the
+              shape every other listing card on this screen's siblings takes. */}
+          <Card.Header
+            icon={<DescriptionGlyph size="sm" />}
+            count={data ? pageCount(rows.length, Boolean(data.truncated)) : undefined}
+          >
+            <Card.Title>Pages</Card.Title>
+          </Card.Header>
           <DataGrid<PageSummary>
             rows={rows}
             rowKey={(r) => r.id}
-            defaultSort="-updated"
+            // NO DEFAULT SORT, so the grid draws the rows in the order the
+            // engine picked this window in — see `rows` above. A default of
+            // `-updated` rearranged the window by time under a bar numbering
+            // it by title.
             // THE ROW IS A REAL LINK to the page, so ⌘-click, the middle button
             // and the status bar all behave — and a plain click opens the page
             // beside the list instead, because "is this the one I meant" is
@@ -488,7 +667,99 @@ export function Pages({ container: fromPath }: { container?: string }) {
           />
         </Card>
       </QueryState>
+
+      {/* THE WINDOW, AND THE WAY THROUGH IT.
+          OUTSIDE THE `QueryState`, which is the one thing that decides where
+          this lives: `empty` renders INSTEAD of its children, so a pager in the
+          card would disappear on exactly the state that needs it most — a
+          window past the end of a list that has since been trimmed, where
+          Previous is the only way back to anything at all. */}
+      <PageBar
+        shown={rows.length}
+        more={Boolean(data?.truncated)}
+        offset={offset}
+        set={setOffset}
+      />
     </>
+  );
+}
+
+/**
+ * The browse's window: which rows these are, and the two clicks either side.
+ *
+ * WHY THIS SCREEN PAGES AT ALL. `internal/api/queries.pageList` clamps `limit`
+ * to `pages.MaxLimit` and passes `offset` straight through, and this screen
+ * sent neither — so a container holding four hundred pages answered its
+ * alphabetically first fifty on every read, and the note under the grid could
+ * only offer filters that NARROW. Narrowing is not reaching: a reader after the
+ * fifty-first page by title had to guess a substring of a title they had never
+ * seen.
+ *
+ * NOT [CutNote], and not [pageNote] either. `CutNote` draws only when there is
+ * MORE — right for a card whose rest is in a table or behind a link, wrong for
+ * a control: on the last page of nine there is nothing more and the reader
+ * still has to get back. So the bar draws whenever the list is windowed in
+ * EITHER direction.
+ *
+ * AND ITS SENTENCE IS THE RANGE'S OWN. Every sentence [pageNote] has begins
+ * "The first" or "The newest", which is true of a page taken from the START of
+ * a set and false of every window after it — the one thing this bar exists to
+ * move. Composed here it printed "The first 50 pages in title order" beside
+ * "Pages 201–250": a marker contradicting the range next to it, which is
+ * strictly worse than no marker. The order was right; the shape of the claim
+ * was not.
+ *
+ * THE RANGE IS COUNTED FROM THE OFFSET rather than from the rows, because those
+ * are two different facts: the rows say how many came back and the offset says
+ * where they start, and a page of forty at offset 200 is rows 201–240.
+ *
+ * THE ORDER IS STATED, NEVER "the newest". `internal/pages` lists `ORDER BY
+ * p.container, p.title`, so the window is a range in THAT ordering — which is
+ * also what makes an offset meaningful at all, a stable order being the whole
+ * of what a numbered window rests on. The grid above draws the rows in it
+ * unsorted, so the sentence names an order the reader can see.
+ */
+function PageBar({
+  shown,
+  more,
+  offset,
+  set,
+}: {
+  shown: number;
+  more: boolean;
+  offset: number;
+  set: (next: number) => void;
+}) {
+  if (offset === 0 && !more) return null;
+  const range =
+    shown > 0
+      ? `Pages ${(offset + 1).toLocaleString()}–${(offset + shown).toLocaleString()} · ordered by container, then title`
+      : "";
+  // ONLY WHEN THERE IS MORE, on [pageNote]'s own reasoning: "and that is all of
+  // them" under every last page is how the one case that matters arrives as a
+  // changed word nobody reads. The disabled Next button says the same thing in
+  // the shape a control has.
+  const rest = more ? "there are more" : "";
+  return (
+    <div className="row wrap" style={{ gap: "var(--space-2)", marginTop: "var(--space-3)" }}>
+      <span className="t-caption">
+        {range}
+        {range && rest ? " · " : ""}
+        {rest}
+      </span>
+      <span className="spacer" />
+      <Button
+        size="small"
+        variant="secondary"
+        disabled={offset === 0}
+        onClick={() => set(Math.max(0, offset - PAGE))}
+      >
+        Previous
+      </Button>
+      <Button size="small" variant="secondary" disabled={!more} onClick={() => set(offset + PAGE)}>
+        Next
+      </Button>
+    </div>
   );
 }
 
@@ -611,16 +882,78 @@ export function PageView({ container, title }: { container: string; title: strin
 
             {data.children?.length ? (
               <Card>
-                <Card.Header>
-                  <Card.Title>{`Children (${data.children.length})`}</Card.Title>
+                {/* THE COUNT IS THE CARD'S, not the title's, which is where
+                    every other count in this product is drawn — and it has to
+                    be, because this one can be a floor. A detail read takes no
+                    paging parameter, so the engine answers the first window of
+                    a page's children by title and says `children_truncated`;
+                    the flag was declared with that rule and read nowhere, so an
+                    index page with hundreds of children drew "Children (50)"
+                    and a reader had no way to know the other four hundred
+                    existed, let alone reach them. */}
+                <Card.Header
+                  icon={<AccountTreeGlyph size="sm" />}
+                  count={pageCount(data.children.length, Boolean(data.children_truncated))}
+                >
+                  <Card.Title>Children</Card.Title>
                 </Card.Header>
+                {/* THE CHILD'S OWN CONTAINER, which is on the row. Addressed
+                    under the PARENT's, a child filed elsewhere resolves to a
+                    different page of that title or to none: `internal/pages`
+                    locates `CONTAINER/Title` by matching both. Nothing keeps
+                    the two the same — a create stores the parent id without
+                    checking it against the container, and `write_page` lets a
+                    model name `container` and `parent` independently. */}
                 <ul className="list">
                   {data.children.map((child) => (
                     <li key={child.id}>
-                      <a href={href(["knowledge", page.container, child.title])}>{child.title}</a>
+                      <a href={href(["knowledge", child.container, child.title])}>{child.title}</a>
                     </li>
                   ))}
                 </ul>
+                {/* AND THE REST IS ONE CLICK, which is the whole reason the
+                    browse learned a `parent` filter: the engine's own note on
+                    this flag names `list_pages` with `parent` as where the rest
+                    is, and that is a tool an agent can call and a person
+                    cannot. The link asks the same question from the screen that
+                    PAGES it — which is what makes "every" the true word. The
+                    detail read takes no `offset` and answers one window of
+                    fifty; the browse takes both `limit` and `offset`, so a page
+                    with four hundred children is walked from there.
+
+                    `kind=all` BECAUSE A CHILD IS NOT FILTERED BY KIND. This
+                    card lists what `internal/pages.Reader.Get` returned, and
+                    that read applies no skills predicate at all — the browse
+                    defaults to prose, so without this the "every child" link
+                    landed on a list holding FEWER rows than the card it was
+                    under, and a page whose children are tool skills reached an
+                    empty one.
+
+                    AND NOR IS IT FILTERED BY CONTAINER, which is the same
+                    defect on the other axis: that read applies no container
+                    predicate either, and a child need not share its parent's
+                    container. The destination drops its own container term
+                    whenever `parent` is set — see `params` in [Pages] — so the
+                    path segment below only decides which address the browse is
+                    reached at, never which children it shows. */}
+                <CutNote
+                  shown={data.children.length}
+                  more={Boolean(data.children_truncated)}
+                  one="child"
+                  many="children"
+                  slice="alphabetical"
+                  whole={
+                    <a
+                      className="t-link"
+                      href={href(["knowledge", page.container], {
+                        parent: page.id,
+                        kind: "all",
+                      })}
+                    >
+                      Every child of this page →
+                    </a>
+                  }
+                />
               </Card>
             ) : null}
 
@@ -801,7 +1134,16 @@ export function PagePeek({ id }: { id: string }) {
               </Card>
 
               <Card>
-                <Card.Header icon={<AccountTreeGlyph size="sm" />} count={children.length}>
+                <Card.Header
+                  icon={<AccountTreeGlyph size="sm" />}
+                  // A FLOOR WHEN THE ENGINE CAPPED IT, exactly as the page
+                  // itself draws the same read. A `page` answer takes no
+                  // paging parameter, so `children` is the first window of
+                  // them and `children_truncated` is the whole of what says
+                  // so; drawn as a plain `50` it is a number a reader takes
+                  // for a total.
+                  count={pageCount(children.length, Boolean(data?.children_truncated))}
+                >
                   <Card.Title>Where it sits</Card.Title>
                 </Card.Header>
                 <div className="col gap-2">
@@ -830,6 +1172,31 @@ export function PagePeek({ id }: { id: string }) {
                     <span className="muted">Nothing is filed under it.</span>
                   )}
                 </div>
+                {/* THE REST, FROM THE RAIL TOO. This is the one panel here
+                    whose read the engine bounds, and a rail that said "there
+                    are more" without a way to them would be a dead end inside
+                    a dead end. The destination is the browse the full page
+                    links at, on the same terms — see that link for why it
+                    carries `kind=all` and why the container in the path does
+                    not narrow it. */}
+                <CutNote
+                  shown={children.length}
+                  more={Boolean(data?.children_truncated)}
+                  one="child"
+                  many="children"
+                  slice="alphabetical"
+                  whole={
+                    <a
+                      className="t-link"
+                      href={href(["knowledge", page.container], {
+                        parent: page.id,
+                        kind: "all",
+                      })}
+                    >
+                      Every child of this page →
+                    </a>
+                  }
+                />
               </Card>
 
               <Card>
@@ -1114,10 +1481,23 @@ function PageChanges({
 }) {
   const feed = useQuery("page_activity", { page: pageID }, { pollMs: 60_000 });
   const changes = feed.data?.changes ?? [];
+  // A NON-EMPTY CURSOR IS THE ENGINE'S OWN "there is at least one more", which
+  // is the reading the tracker's own feeds take: `readActivity` asks for one
+  // row past `MaxPageChanges` and mints a cursor only when that row came back,
+  // so it is never `changes.length === 100` — wrong on the boundary in both
+  // directions. It was declared on `PageActivityAnswer` and read nowhere, so a
+  // page saved two hundred times drew "Activity (100)" as its whole history.
+  const more = Boolean(feed.data?.next_cursor);
   return (
     <Card>
-      <Card.Header icon={<TimelineGlyph size="sm" />}>
-        <Card.Title>{`Activity (${changes.length})`}</Card.Title>
+      <Card.Header
+        icon={<TimelineGlyph size="sm" />}
+        // A COUNT THAT HAS NOT ANSWERED IS NO COUNT — `Card.Header` draws every
+        // value but `undefined`, 0 included, and a `0` before the read lands is
+        // a quantity stated about a page nobody has read.
+        count={feed.data ? pageCount(changes.length, more) : undefined}
+      >
+        <Card.Title>Activity</Card.Title>
       </Card.Header>
       <QueryState
         error={feed.error}
@@ -1160,6 +1540,18 @@ function PageChanges({
           ))}
         </div>
       </QueryState>
+      {/* NEWEST FIRST — `internal/pages` reads the feed `ORDER BY h.version
+          DESC` — so the page a reader is looking at is the most recent
+          changes, and the older ones are behind the cursor. Said rather than
+          implied: a feed that stops at a hundred and says nothing reads as a
+          page that stopped changing. */}
+      <CutNote
+        shown={changes.length}
+        more={more}
+        one="change"
+        slice="newest"
+        whole="Older ones are behind this page of the history; the turn links above reach the work that made them."
+      />
     </Card>
   );
 }

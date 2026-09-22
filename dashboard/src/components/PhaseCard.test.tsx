@@ -43,6 +43,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     roundsUsed: 0,
     exhaustedRounds: false,
     emptyAnswerRounds: 0,
+    outputTruncated: false,
     rescueFired: false,
     decision: "",
     notes: "",
@@ -392,5 +393,36 @@ describe("the phase body reads in the order the phase happened", () => {
     const error = all.findIndex((el) => el.textContent === "no model answered");
     expect(error).toBeGreaterThanOrEqual(0);
     expect(error).toBeLessThan(all.indexOf(screen.getByRole("button", { name: /^Prompt/ })));
+  });
+});
+
+/**
+ * A CUT ANSWER IS NOT A FINISHED ONE, and the card is where that gets said.
+ *
+ * A length stop arrives as an ordinary 200 with a short body, so the
+ * transcript in this card stops mid-word and reads exactly like a model that
+ * decided it was done — which is how the reviewer came to judge a half-written
+ * answer as the seat's considered work. The engine states it on every
+ * `agent_phase_completed` and nothing on this side read it.
+ *
+ * Asserted in BOTH directions: a chip that always drew would be the same
+ * defect the other way round, and this card's fixture leaves every other
+ * warning flag quiet so the pill under test is the only one it can draw.
+ */
+describe("a phase the model's output cap stopped", () => {
+  test("says so, in the state it names", () => {
+    const { container } = render(<PhaseCard record={phase({ outputTruncated: true })} />);
+    expect(screen.getByText("output cut")).toBeTruthy();
+    // COLOUR IS NEVER THE ONLY CARRIER, but it is a carrier: this is the one
+    // flag that says the text below cannot be taken at face value.
+    expect(container.querySelector(".crewlet-tag--danger")).not.toBeNull();
+    // AND IT NAMES THE FIX. "Raise something" with nothing named is a chip a
+    // reader can only shrug at.
+    expect(screen.getByTitle(/max_output_tokens/)).toBeTruthy();
+  });
+
+  test("a phase that ran to its own end draws no such chip", () => {
+    render(<PhaseCard record={phase()} />);
+    expect(screen.queryByText("output cut")).toBeNull();
   });
 });

@@ -40,6 +40,9 @@ import (
 	"math"
 	"strings"
 	"unicode"
+	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The BM25 parameters.
@@ -158,7 +161,22 @@ func tokenize(text string, yield func(term string)) {
 			return
 		}
 		if len(term) > MaxTermLength {
-			term = truncateTerm(term)
+			// THE SHARED CUT, not a private one. A plain slice at
+			// MaxTermLength splits a multi-byte rune, and the
+			// invalid UTF-8 that produces is substituted by the
+			// JSON encoder and read back as a replacement
+			// character — so the query side would analyze the same
+			// word to a different term and never match it.
+			// [textcut.Bytes] is exactly that rule for exactly
+			// this case (a value consumed by something that does
+			// not read prose, where an appended marker would
+			// become part of the value). This was a hand-rolled
+			// copy of it whose own doc argued the two "must not
+			// drift into needing each other", which is the
+			// argument this tree has lost four times: the copy had
+			// already drifted, returning the raw unsafe slice on
+			// the one branch the walk-back could not satisfy.
+			term = textcut.Bytes(term, MaxTermLength)
 		}
 		yield(term)
 	}
@@ -171,28 +189,6 @@ func tokenize(text string, yield func(term string)) {
 	}
 	flush()
 }
-
-// truncateTerm cuts a long token at a rune boundary.
-//
-// A plain slice at MaxTermLength splits a multi-byte rune, and the invalid
-// UTF-8 that produces is substituted by the JSON encoder and read back as a
-// replacement character — so the query side would analyze the same word to a
-// different term and never match it. (internal/textcut carries the general
-// form of this rule; it is inlined here because this cut appends nothing and
-// the two must not drift into needing each other.)
-func truncateTerm(term string) string {
-	cut := MaxTermLength
-	for cut > 0 && !isRuneStart(term[cut]) {
-		cut--
-	}
-	if cut == 0 {
-		return term[:MaxTermLength]
-	}
-	return term[:cut]
-}
-
-// isRuneStart reports whether b begins a UTF-8 rune.
-func isRuneStart(b byte) bool { return b&0xC0 != 0x80 }
 
 // Posting is one term's presence in one document.
 type Posting struct {
@@ -278,6 +274,56 @@ func Score(idf float64, p Posting, c Corpus) float64 {
 // Cut on a RUNE boundary and, where one is near, on a word boundary. Bytes
 // rather than runes for the limit itself: this is a budget against a prompt,
 // and a prompt is billed in bytes on the wire.
+//
+// # What a reader gets back, and where the rest of it is
+//
+// ALWAYS MARKED AT THE END THAT WAS CUT, and only there: an elided head opens
+// with "…", an elided tail closes with one, and a window that reaches the
+// document's own start or end claims nothing. A snippet is a POINTER — its
+// job is to say which document to open — and the document itself is whole in
+// the replicated estate, reachable through the seat's own knowledge and
+// tracker tools (`search_knowledge` returns the id; reading the page or the
+// work item returns the body) and through the same LexicalSource the indexer
+// tokenises it from — [github.com/crewlet/crewlet/internal/search] owns both.
+// Nothing here is the only copy of anything.
+//
+// THE MARKER IS NOT COUNTED AGAINST limit, which is [textcut.Ellipsis]'s rule
+// and is deliberate for the same reason: the budget bounds the CONTENT, and a
+// caller that needs the total bounded passes a smaller limit. So a result may
+// run up to two markers — six bytes — past limit. That is safe here because
+// the callers' budget is a prompt-cost guide rather than a ceiling anything
+// refuses at; a value with a limit somebody enforces wants [textcut.Within]
+// instead.
+//
+// # A limit of zero or less is EMPTY here, and UNBOUNDED in knowledge.Snippet
+//
+// Two functions of the same name doing the same job in one tree read opposite
+// meanings off the same zero, so the contract is stated here rather than
+// discovered: this one yields the empty string, and the difference is not an
+// oversight to fold away.
+//
+// A budget that is a WINDOW cannot read its own absence as "no window". This
+// function's limit is the width of the window it centres on the match, and a
+// width of zero is zero bytes of it — the same reading [textcut.Bytes] gives
+// a non-positive budget, which is the tree's authority on byte cuts and the
+// family this one belongs to. Reading it as unbounded would make an unset
+// field return the whole document, times the hit count, times the phase's
+// round cap, into a prompt somebody pays for: a cap of 0 that returns
+// everything is the opposite of a cap, and it fails expensively and silently
+// where the empty snippet fails visibly and free.
+//
+// The other one, [github.com/crewlet/crewlet/internal/knowledge.Snippet], is
+// not a window — it is a head cut from the document's own start, and it
+// documents zero as unbounded. No production caller passes it zero (both pass
+// a named constant), so the divergence costs nothing today and is purely a
+// trap for the next reader who assumes one contract while holding the other.
+// Hence this paragraph, and hence the test beside it that pins THIS side.
+//
+// A limit too small to hold content lands in the same place for the same
+// reason, and that is the honest answer rather than a marker alone: a snippet
+// that is only an ellipsis costs prompt bytes to say nothing, where an absent
+// snippet leaves the hit's title and id — which are what a pointer is for —
+// standing on their own.
 func Snippet(body string, terms []string, limit int) string {
 	body = strings.Join(strings.Fields(body), " ")
 	if body == "" || limit <= 0 {
@@ -294,7 +340,7 @@ func Snippet(body string, terms []string, limit int) string {
 		if start < 0 {
 			start = 0
 		}
-		for start > 0 && !isRuneStart(body[start]) {
+		for start > 0 && !utf8.RuneStart(body[start]) {
 			start--
 		}
 	}
@@ -302,22 +348,73 @@ func Snippet(body string, terms []string, limit int) string {
 	if end >= len(body) {
 		return trimToWord(body[start:], start > 0, false)
 	}
-	for end > start && !isRuneStart(body[end]) {
+	for end > start && !utf8.RuneStart(body[end]) {
 		end--
 	}
 	return trimToWord(body[start:end], start > 0, true)
 }
 
-// firstTermIndex finds where the earliest query term appears, or -1.
+// firstTermIndex finds where the earliest query term appears, ignoring case,
+// as an offset into BODY's own bytes, or -1.
+//
+// SCANNED IN BODY'S OWN COORDINATES rather than in a lowercased copy of it,
+// and that is a correctness requirement rather than a preference. Lowercasing
+// maps rune by rune, and a lowercase rune can be LONGER than the one it came
+// from: U+023A "Ⱥ" is two bytes and lowercases to U+2C65 "ⱥ" at three. So an
+// index into the folded copy is not an index into body — and [Snippet] slices
+// body with what this returns. A body carrying enough of those before the
+// match indexed PAST len(body) and panicked the search that asked for the
+// snippet (`index out of range`, measured on 100 of them ahead of the term),
+// and short of the panic every such rune slid the window one byte further
+// from the sentence the reader came for.
+//
+// Folding a copy and mapping each of its bytes back to the rune that produced
+// it would answer the same question, at one int per byte of the document per
+// hit. Folding the CANDIDATE RUNE instead allocates nothing — where the old
+// shape allocated a whole second copy of the body — and cannot disagree with
+// itself about where a byte came from. The scan is bounded: a term is at most
+// [MaxTermLength] bytes, so a candidate position is rejected after at most
+// that many rune comparisons, and the first one rejects almost all of them.
 func firstTermIndex(body string, terms []string) int {
-	lower := strings.ToLower(body)
-	best := -1
+	// The first rune of each term, folded once rather than per candidate
+	// position. Folded on BOTH sides throughout: a term [Terms] produced is
+	// already lowercase, but this is exported surface and a term that
+	// silently never matches is worse than one compare.
+	heads := make([]rune, 0, len(terms))
 	for _, term := range terms {
-		if at := strings.Index(lower, term); at >= 0 && (best < 0 || at < best) {
-			best = at
+		head, _ := utf8.DecodeRuneInString(term)
+		heads = append(heads, unicode.ToLower(head))
+	}
+	for i, r := range body {
+		lower := unicode.ToLower(r)
+		for t, term := range terms {
+			if lower != heads[t] {
+				continue
+			}
+			if foldedPrefix(body[i:], term) {
+				return i
+			}
 		}
 	}
-	return best
+	return -1
+}
+
+// foldedPrefix reports whether s begins with term, compared rune by rune under
+// the same [unicode.ToLower] the tokenizer lowercases with — so a term the
+// analyzer produced matches the text it was produced from, whatever case that
+// text is in.
+func foldedPrefix(s, term string) bool {
+	for _, want := range term {
+		if s == "" {
+			return false
+		}
+		got, size := utf8.DecodeRuneInString(s)
+		if unicode.ToLower(got) != unicode.ToLower(want) {
+			return false
+		}
+		s = s[size:]
+	}
+	return true
 }
 
 // trimToWord drops a partial word at each cut end and marks the elision.

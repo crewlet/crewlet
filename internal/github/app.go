@@ -151,7 +151,8 @@ type ManifestOptions struct {
 
 // AppNameMax is GitHub's own ceiling on an app name, in CHARACTERS.
 //
-// Runes rather than bytes, which is why this is not a [textcut] budget: GitHub
+// Runes rather than bytes, which is why this is not a
+// [github.com/crewlet/crewlet/internal/textcut] budget: GitHub
 // counts characters, and a company whose name is not ASCII would be refused at
 // a third of its real allowance by a byte count.
 const AppNameMax = 34
@@ -671,10 +672,19 @@ func (c *AppClient) call(ctx context.Context, method, path string, body, out any
 	defer func() { _ = res.Body.Close() }()
 
 	if res.StatusCode < 200 || res.StatusCode > 299 {
-		detail, _ := io.ReadAll(io.LimitReader(res.Body, httpx.RefusalBytes))
+		// REFUSED PAST THE CEILING, not read up to it. A CAP IS NOT A CUT:
+		// io.LimitReader stops at its limit and reports io.EOF, so the
+		// first [httpx.RefusalBytes] of a gateway's page reached an
+		// operator's error as though the endpoint had said exactly that —
+		// byte-sliced, so a multi-byte rune straddling the boundary made
+		// the Detail invalid UTF-8, with nothing marking that anything was
+		// dropped. The read error was discarded too, so a body that failed
+		// halfway arrived as an empty Detail, which reads as "GitHub said
+		// nothing". [httpx.ReadBody] reads one byte past and says so.
+		body, readErr := httpx.ReadBody(res.Body, httpx.RefusalBytes)
 		return &APIError{
 			Method: method, Path: path, Status: res.StatusCode,
-			Detail: strings.TrimSpace(string(detail)),
+			Detail: httpx.RefusalOf(res.Header.Get("Content-Type"), body, readErr),
 		}
 	}
 	if out == nil {

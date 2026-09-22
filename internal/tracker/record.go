@@ -93,10 +93,16 @@ const (
 	// relation, and is counted against MaxCommitBytes 128 edges at a
 	// time.
 	MaxRelationNote = 256
-	// MaxDependents is the OTHER end, and it is the cap that bounds a
-	// status write's declared scope: a group change on a blocker rewrites
-	// two columns on every dependent, so the record enumerates at most
-	// this many object terms and never needs a covering one.
+	// MaxDependents is the OTHER end, and it is what a write on a blocker
+	// has to enumerate: a group change there rewrites two columns on
+	// every dependent, so the record names one object term per dependent
+	// — plus one for the blocker itself.
+	//
+	// THAT PLUS ONE IS WHY A BLOCKER AT THIS CAP IS THE ONE TASK whose
+	// enumeration exceeds [MaxScopeTerms], and why
+	// [ScopeSet.withObjects] falls back to the covering container there
+	// rather than refusing: refused, such a task could never be closed,
+	// renamed, or have a dependent removed again.
 	MaxDependents = 64
 
 	// MaxChecklists, MaxChecklistItems and MaxChecklistItemsTotal bound

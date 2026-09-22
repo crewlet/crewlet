@@ -915,17 +915,60 @@ export function pageCount(shown: number, more: boolean): string {
 }
 
 /**
+ * WHICH PART OF THE SET a capped page is, which is a property of the read's own
+ * ORDER and never of the page.
+ *
+ * THREE VALUES BECAUSE THIS PRODUCT HAS THREE ORDERS, and saying the wrong one
+ * is worse than saying nothing: a tracker feed comes back `created_at DESC`, so
+ * its page is the newest changes; `internal/pages` lists `ORDER BY p.container,
+ * p.title`, so a page list that filled is an ALPHABETICAL slice — "the newest 50
+ * pages" over it names a set the reader cannot see and sends them looking for
+ * recent writing that was never in the answer; and a `work_items` read sorted
+ * `-priority,updated` is neither, so the seat page's "Assigned and open" card
+ * had no true value to pass until `priority` existed. The knowledge screen's own
+ * container peek already says this in prose for exactly one derived date; this
+ * is the same fact as a value.
+ *
+ * A CLOSED SET rather than free text, so the sentence is written once per
+ * order rather than once per caller — and so a caller whose order is none of
+ * these cannot quietly pick the nearest one: it fails to compile until the
+ * order it actually asked for is added here, beside the sentence that names it.
+ */
+export type PageSlice = "newest" | "alphabetical" | "priority";
+
+/**
  * What a capped page says for itself, and "" when it is the whole set.
  *
  * EMPTY RATHER THAN A REASSURANCE. A note that always drew would put "and that
  * is all of them" under every healthy card in the product, which is how the one
  * case that matters arrives as a changed word nobody reads.
  *
+ * THE SLICE IS REQUIRED, on [pageCount]'s own reasoning about its second
+ * argument and `FacetRail`'s about "over what is loaded or over what exists": a
+ * default of `newest` would be right for the two feeds this started with and
+ * silently wrong for every title-ordered read added after, with nothing at the
+ * call site to say a decision was skipped.
+ *
  * The caller passes it on to a `subtitle`, which must be `undefined` and never
  * `""`: the empty string still renders the subtitle's own element.
  */
-export function pageNote(shown: number, more: boolean, one: string, many?: string): string {
-  return more ? `The newest ${plural(shown, one, many)}; there are more.` : "";
+export function pageNote(
+  shown: number,
+  more: boolean,
+  one: string,
+  slice: PageSlice,
+  many?: string,
+): string {
+  if (!more) return "";
+  const count = plural(shown, one, many);
+  switch (slice) {
+    case "newest":
+      return `The newest ${count}; there are more.`;
+    case "alphabetical":
+      return `The first ${count} in title order; there are more.`;
+    case "priority":
+      return `The first ${count} by priority; there are more.`;
+  }
 }
 
 /** A view's `status_group` mapped back onto the three segments. */

@@ -117,6 +117,32 @@ func (a *assets) serve(w http.ResponseWriter, r *http.Request, name string) {
 	_, _ = w.Write(data)
 }
 
+// etagDigestBytes is how much of the SHA-256 an ETag carries: 10 bytes, so 80
+// bits in twenty hex characters.
+//
+// THE COMPARISON IS PAIRWISE, which is what makes 80 bits ample rather than
+// marginal. A browser holds exactly one validator per URL and sends it back as
+// If-None-Match for that URL alone, so the only question this width has to
+// answer is whether a CHANGED file hashes to the same prefix as the copy that
+// browser already cached: 2^-80. It is deliberately NOT read as a birthday
+// bound over the bundle — two different assets sharing a value is harmless
+// here, because ETags are never compared across paths — and reading it that
+// way is what makes 80 bits look like 40 and invites someone to "fix" it.
+//
+// Stating it is worth the paragraph because of what a collision costs: the
+// browser keeps a stale module while the server serves a new one, which is
+// precisely the half-old, half-new page the [assets] doc says the no-cache
+// policy exists to prevent.
+//
+// The whole 32 bytes would be correct too, and this is not an argument about
+// bytes on the wire. It is that past 80 bits no further digit changes any
+// outcome, so the honest move is to name the width and its arithmetic rather
+// than leave a literal the next reader has to re-derive. An ETag is also not a
+// CUT of a value anybody needs back: it is a validator DERIVED from the asset,
+// never a shortened copy of it, and the asset itself is served beside it on
+// every 200.
+const etagDigestBytes = 10
+
 func (a *assets) etagFor(name string, data []byte) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -124,7 +150,7 @@ func (a *assets) etagFor(name string, data []byte) string {
 		return cached
 	}
 	sum := sha256.Sum256(data)
-	etag := `"` + hex.EncodeToString(sum[:10]) + `"`
+	etag := `"` + hex.EncodeToString(sum[:etagDigestBytes]) + `"`
 	a.etags[name] = etag
 	return etag
 }

@@ -174,7 +174,8 @@ func waitForGrandchildPID(t *testing.T, c *client) int {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		for _, line := range c.stderrTail() {
+		tail, _ := c.stderrTail()
+		for _, line := range tail {
 			if rest, ok := strings.CutPrefix(line, "GRANDCHILD "); ok {
 				pid, err := strconv.Atoi(strings.TrimSpace(rest))
 				if err != nil {

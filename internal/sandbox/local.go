@@ -427,10 +427,43 @@ func (l *Local) layout(id string) (boxLayout, error) {
 
 func (l *Local) containerName(id string) string { return ContainerPrefix + id }
 
+// newBoxID mints one box's identity: a whole UUID, its dashes removed, as 32
+// lowercase hex characters.
+//
+// NOTHING IS CUT HERE, and that is the change worth explaining. This was
+// `uuid.NewString()` with the dashes stripped and then `[:16]` — half of the
+// minted value discarded, with no arithmetic beside it saying why half was
+// enough and nowhere at all to read the rest. Sixteen hex characters is 64
+// bits, which is very probably fine; "very probably" is the problem, because
+// the two ways a collision lands here are not symmetrical:
+//
+//   - In container mode the id is also the container name, and `run --name`
+//     refuses a name already in use — so the box fails loudly at creation.
+//   - In direct mode the id is only a directory name, and os.MkdirAll on an
+//     existing directory SUCCEEDS. Two runs would then share one workspace,
+//     one seeded credential set and one job record ([recordLeader] rewrites
+//     it), and whichever finished first would delete the other's checkout at
+//     teardown. Nothing would report any of it.
+//
+// So the id carries the whole of what was minted. The dashes come out because
+// the id is one path segment under <root>/boxes and the suffix of a container
+// name ([ContainerPrefix]), where a single unbroken token is what an operator
+// greps and what keeps the prefix visible; removing them is lossless, since a
+// UUID's dashes are positional and the canonical form is recoverable from the
+// hex. The tree's other truncations of this shape — internal/workkey keeping
+// 128 bits of a SHA-256, [github.com/crewlet/crewlet/internal/providers/credential.Hint]
+// keeping 48 — state their collision arithmetic and can afford to, because each
+// is a DIGEST: a short name for a value that exists whole elsewhere, where a
+// collision costs a mis-grouped log line. This is not a digest. It IS the
+// identity, minted here and stored nowhere else, so there is no arithmetic that
+// would make discarding half of it recoverable.
+func newBoxID() string {
+	return strings.ReplaceAll(uuid.NewString(), "-", "")
+}
+
 // Create mints a box and, in container mode, starts the container behind it.
 func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
-	id := uuid.NewString()
-	id = strings.ReplaceAll(id, "-", "")[:16]
+	id := newBoxID()
 	layout, err := l.layout(id)
 	if err != nil {
 		return nil, err

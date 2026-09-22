@@ -62,8 +62,56 @@ const (
 	// refused halfway is a caller told "failed" about tasks that changed.
 	MaxBulkBytes = 8 << 20
 
-	// WalkBatch is one batch of a paced walk — a cross-project move's
-	// descendants, a merge's children.
+	// WalkBatch is how many records one bounded step publishes — one
+	// batch of a paced walk, or one whole tick of a duty repair.
+	//
+	// THE SAME 64 as [MaxBulkTasks] and for its reason: each of these is
+	// a fan-out of independent records, and this is how many of them one
+	// step hands every node's serial applier at once. The read that feeds
+	// a step is bounded by the same number, so nothing here reads a
+	// quantity that grows with the company.
+	//
+	// # IT MEANS A DIFFERENT THING AT EACH KIND OF CALL SITE
+	//
+	// A WALK PAGES UNTIL DRAINED inside its own claim, and there the
+	// value is the size of a step rather than a bound on the walk. A
+	// project's re-spread ([RespreadPlan.Batch]) publishes ONE record per
+	// batch and sleeps [pace] over what that batch just cost every peer,
+	// so what moves with the value is how much of the walk lands on an
+	// applier at a time. A merge's children ([Writer.reparentOnto]) pages
+	// straight on and publishes one record PER CHILD, so there it is only
+	// how many rows one read returns.
+	//
+	// TWO DUTY REPAIRS TAKE ONE BATCH PER TICK and then wait for the next
+	// sweep, and for those two this IS the company's fleet-wide repair
+	// throughput: the missed-unblocked notices ([ScanUnblocked]), one
+	// record per dependent told, and the one-sided mirrors
+	// ([ScanOneSided]), at most this many EDGES resolved by
+	// [PlanOneSided] into one record per subject. So each of them lands
+	// at most 64 records on every node's applier per sweep, a sweep being
+	// maintenance.Interval, fifteen minutes — a backlog of a thousand
+	// late notices drains in about four hours, which is the figure
+	// docs/guides/work-tracker.md gives an operator and which
+	// TestTheRepairDrainIsWhatTheOperatorGuidePromises holds this number
+	// to. Nothing is lost to that pacing: each keeps its position (or its
+	// flag) on a window it could not finish and the rest come up next
+	// sweep.
+	//
+	// THE OTHER TWO DUTY JOBS ARE BOUNDED PER UNIT, NOT PER TICK, and
+	// that is the blast radius a retune has to price rather than a detail
+	// of theirs. [duty.clearDuplicates] takes one batch PER PROJECT and
+	// loops every flagged project, so one tick publishes a rank-order
+	// record for each of them, each re-minting up to this many keys.
+	// [duty.finishMerges] takes this many MERGES and runs
+	// [Writer.reparentOnto] to exhaustion on every one, so one tick can
+	// publish a record per subtask of 64 whole subtrees. Both keep their
+	// own gate — the project flag, `merging = 1` — so what a tick cuts is
+	// read again next sweep.
+	//
+	// Widening this therefore divides the repair drain AND multiplies
+	// what one sweep lands on every applier, and narrowing it does the
+	// reverse — which is the trade this number is, and why it is stated
+	// here rather than at any one of its call sites.
 	WalkBatch = 64
 
 	// ClaimTTL is how long the durable claim a walking sequence holds
@@ -741,16 +789,18 @@ func (h *held) release(ctx context.Context) {
 //	the subtree carries that the target lacks → A the alias on the former
 //	key at expectation 0 → A the counter, a RANGE mint for the whole
 //	subtree → A the root task, carrying the range's BASE and its length →
-//	per batch of ≤64 descendants, A per descendant on its own subject →
-//	release.
+//	A per descendant on its own subject, in the (depth, id) order the range
+//	was minted against → release.
 //
 // # Why the base rides the root record
 //
-// The range's base is NOT recoverable afterwards. By the time a duty completes
-// an abandoned walk, other creates have advanced the counter — so a duty that
-// recomputed the base would assign a different key to the same descendant on a
-// different node, and the walk would stop being idempotent. The ordering by
-// (depth, id) fixes the ORDER; only the base fixes the ORIGIN.
+// The range's base is NOT recoverable afterwards. By the time anything picks
+// up an abandoned walk, other creates have advanced the counter — so a
+// completion that recomputed the base would assign a different key to the same
+// descendant on a different node, and the walk would stop being idempotent. The
+// ordering by (depth, id) fixes the ORDER; only the base fixes the ORIGIN. That
+// is what a completion needs; what exists to perform one is the residue note
+// below.
 //
 // THE SOURCE PROJECT'S ORDER IS NOT REWRITTEN. The rows leave it entirely, so
 // there is nothing to place; what covers a reader whose closure names the
@@ -758,10 +808,22 @@ func (h *held) release(ctx context.Context) {
 //
 // CRASH RESIDUE: a tag declared with no task yet (harmless); an alias for a key
 // still held (harmless — the apply never lowers `current`); a numbering gap of
-// at most 64; descendants still keyed in the old project. REPAIRER: the tracker
-// duty, on a claim whose heartbeat aged past [ClaimStale], completes the walk
-// idempotently — a descendant whose row already carries the target project
-// writes nothing.
+// at most 1 + [MaxDescendants], which is the range this mints in one go; and
+// descendants still keyed in the old project, which is the one that shows.
+//
+// REPAIRER: NOBODY YET, AND THE GAP IS STATED RATHER THAN IMPLIED. The walk is
+// idempotent by construction — a descendant whose row already carries the
+// target project writes nothing, and the base rides the root record (see
+// [KeyMint]) precisely so a completion assigns the same keys on any node at any
+// later time — but [Jobs] registers no job that finds a half-moved subtree, and
+// re-issuing the gesture is REFUSED by the pre-flight below, which reads the
+// root as already in the target. So a walk that dies mid-subtree leaves a
+// subtree nothing in this build finishes. Completing it needs the same shape
+// every other repair here has: a fact a writer stamped (the applier flagging a
+// task whose project differs from its parent's, as it flags a long rank and an
+// abandoned merge) plus a gated duty job over that flag — a scan for it would
+// be a whole-table join on every tick, which is what this file's duty is
+// against. Until then the honest report is that there is no repairer.
 func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target string,
 	newTags []Tag) (WriteResult, error) {
 
@@ -874,9 +936,17 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		if _, err := w.moveOne(ctx, step, descendant, target,
 			append(append([]string{}, descendant.FormerKeys...), descendant.Key),
 			&KeyMint{N: n}); err != nil {
-			return result, fmt.Errorf("tracker: %d of %d descendants moved; the "+
-				"tracker duty completes the rest idempotently: %w",
-				i, len(subtree), err)
+			// NAMING WHAT IS LEFT BEHIND rather than promising a
+			// repair: no duty job completes this walk, and the root is
+			// already in the target by now, so re-issuing the gesture
+			// is refused by the pre-flight above. The subtree is split
+			// until somebody moves the rest, and a caller told
+			// "idempotent, it will sort itself out" would never look.
+			return result, fmt.Errorf("tracker: task %s moved to %s with %d of "+
+				"%d descendants; the rest are still in %s and nothing "+
+				"completes this walk on its own — re-issuing the move is "+
+				"refused because the root has already moved: %w",
+				taskID, target, i, len(subtree), root.Project, err)
 		}
 	}
 	result.Key, result.Rank = rootKey, rootRank
@@ -1079,9 +1149,15 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 // SHARED BY THE SEQUENCE AND THE DUTY, which is what [readChildBatch]'s
 // selection buys: the duty's repair is a RE-RUN of the batch the holder did
 // not reach, not a second algorithm that has to keep agreeing with this one.
-// A merge's children are one of the three walks [WalkBatch] is named for, and
-// the value buys the same two things here as there — a bounded read whatever
-// the subtree's size, and a bounded stretch between the claim's heartbeats.
+// A merge's children are one of the TWO walks that page until drained (the
+// other is a project's re-spread; [WalkBatch] states what the number buys at
+// each of its shapes), and here it buys the two a page buys: a read bounded
+// whatever the subtree's size, and a burst bounded the same way.
+//
+// IT DOES NOT BOUND THE STRETCH BETWEEN THE CLAIM'S HEARTBEATS, which is the
+// tempting second reason and is not true of this code: [held.beat] renews on a
+// ticker in a goroutine of its own, every [ClaimHeartbeat] whatever this loop
+// is doing, so no batch size could lengthen or shorten that.
 //
 // THE STEP ID IS KEYED ON THE CHILD rather than on its position in the walk,
 // because a re-run's batches do not divide the same way: the moved ones are

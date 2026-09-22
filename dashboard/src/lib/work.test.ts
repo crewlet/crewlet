@@ -910,11 +910,45 @@ test("a count over one page says whether the page is the whole of it", () => {
 
 test("a page that is the whole set says nothing at all", () => {
   // Not "and that is all of them": a note that always drew is a note nobody
-  // reads by the time it matters.
-  expect(pageNote(3, false, "change")).toBe("");
+  // reads by the time it matters. Both slices, because a reassurance under a
+  // whole answer is the same mistake whichever order the read came back in.
+  expect(pageNote(3, false, "change", "newest")).toBe("");
+  expect(pageNote(3, false, "page", "alphabetical")).toBe("");
 });
 
 test("a capped page names what it is the newest of, agreeing with its noun", () => {
-  expect(pageNote(20, true, "change")).toBe("The newest 20 changes; there are more.");
-  expect(pageNote(1, true, "change")).toBe("The newest 1 change; there are more.");
+  expect(pageNote(20, true, "change", "newest")).toBe("The newest 20 changes; there are more.");
+  expect(pageNote(1, true, "change", "newest")).toBe("The newest 1 change; there are more.");
+});
+
+// THE SLICE IS THE READ'S OWN ORDER, and saying the wrong one sends a reader
+// looking for rows that were never in the answer. `internal/pages` lists
+// `ORDER BY p.container, p.title`, so a page list that filled holds the
+// alphabetically first pages and NOT the newest ones — which is the sentence
+// the knowledge screen already writes in prose for its derived date.
+test("a title-ordered page does not claim to be the newest of anything", () => {
+  expect(pageNote(50, true, "page", "alphabetical")).toBe(
+    "The first 50 pages in title order; there are more.",
+  );
+  expect(pageNote(1, true, "child", "alphabetical")).toBe(
+    "The first 1 child in title order; there are more.",
+  );
+  expect(pageNote(50, true, "page", "alphabetical")).not.toContain("newest");
+});
+
+// THE THIRD ORDER, and the reason the set is closed. A seat's "Assigned and
+// open" card reads `work_items` sorted `-priority,updated`, which is neither
+// the newest nor title order — so before this value existed the only way to
+// mark that card was to pass a slice that names a set the reader cannot see.
+test("a priority-ordered page says so, and borrows neither other order's words", () => {
+  expect(pageNote(50, true, "task", "priority")).toBe(
+    "The first 50 tasks by priority; there are more.",
+  );
+  expect(pageNote(1, true, "task", "priority")).toBe(
+    "The first 1 task by priority; there are more.",
+  );
+  expect(pageNote(50, true, "task", "priority")).not.toContain("newest");
+  expect(pageNote(50, true, "task", "priority")).not.toContain("title order");
+  // AND IT IS STILL SILENT OVER A WHOLE SET.
+  expect(pageNote(3, false, "task", "priority")).toBe("");
 });
