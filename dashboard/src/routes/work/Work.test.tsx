@@ -574,6 +574,41 @@ test("a project list that answered with nothing says the company has filed nothi
   await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
 });
 
+// THE FIXTURE ABOVE IS NOT WHAT THE ENGINE SENDS, WHICH IS HOW THIS SCREEN
+// SHIPPED BROKEN.
+//
+// `readProjectRows` returned a nil slice for a company with no projects and
+// `ProjectListing.Projects` carries no `omitempty`, so the wire said
+// `"projects": null` — and `projects?.length === 0` is `undefined === 0`,
+// which is false. Every case above hands the screen `projects: []`, because a
+// fixture is written by somebody who already knows the answer, so the suite
+// was green through every photograph of the real product drawing the ordinary
+// list on a brand-new company.
+//
+// THIS ONE IS THE ENGINE'S OWN BYTES, copied from what
+// `TestAnEmptyProjectListingEncodesAnEmptyArray` encodes — census, coverage
+// and all — so the screen is exercised against the answer it actually gets.
+// The engine's half of the fix is what makes it pass; the case is here so
+// that a regression on either side of the wire goes red.
+test("the engine's own empty-company answer draws the no-work panel", async () => {
+  serving({
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: {
+      projects: [],
+      total: 0,
+      census: { active: 0, archived: 0 },
+      read_level: "stale",
+      log_seq: 0,
+      applied_through: 0,
+      log_lag: 0,
+      complete: true,
+    },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+});
+
 // THE LIST IS HEADED BY THE AXIS THE QUERY WAS SENT ON. A saved view may
 // carry `group_by` with nothing in the URL — `buildItemsParams` resolves the
 // axis as the URL's OR the view's — so a list handed the URL key alone had no
