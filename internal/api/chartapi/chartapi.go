@@ -125,7 +125,7 @@ type Fleet interface {
 	ImportReady(ctx context.Context) (reason string, err error)
 }
 
-// Principal is who is acting, resolved from the request.
+// Principal is who is acting, resolved from the request — THREE-VALUED.
 //
 // A SEAM BECAUSE THE ANSWER IS NOT THIS PACKAGE'S. What a request presented
 // is established by whatever guards the API, and this surface has to decide
@@ -134,10 +134,14 @@ type Fleet interface {
 // they would eventually disagree, and the shape of that disagreement is a
 // write allowed to one identity and recorded under another.
 //
-// ZERO IS NOBODY, and that is a real answer rather than an error: [iam]'s own
-// stage rule refuses every action for it, so an unauthenticated request is
-// refused by the table rather than by a second check here.
-type Principal func(*http.Request) iam.Principal
+// IT RETURNS THE RESOLUTION AND NOT ONLY THE PRINCIPAL, because the zero
+// principal is TWO different facts wearing one shape: a caller who presented
+// nothing, and a caller this node could not check. [iam]'s stage rule refuses
+// both — correctly for the first, and as a 403 for the second, which sends
+// somebody holding a perfectly good credential to go and reset it, for as long
+// as the identity estate is unreachable. The second is a 503 about this NODE,
+// and only the resolution can tell them apart.
+type Principal func(*http.Request) (iam.Principal, iam.Resolution)
 
 // Service is the /chart surface.
 type Service struct {
@@ -159,11 +163,20 @@ type Service struct {
 // is not visible from a pattern, and a decision about the body has to be
 // taken once the body is in hand.
 func (s *Service) guard(r *http.Request, p authz.Policy) authz.Decision {
+	principal, how := s.principal(r)
+	if how == iam.Unknown {
+		// THE UNKNOWN ARM IS THIS NODE'S FAULT, and it is answered as
+		// such rather than folded into the table's refusal: deciding
+		// it as the zero principal would return a 403 naming a grant
+		// the caller may very well hold, on every request, for as long
+		// as the identity estate was unreadable.
+		return authz.Decision{Err: iam.Reason(r.Context())}
+	}
 	var object authz.Object
 	if p.Object != nil {
 		object = p.Object(r)
 	}
-	return authz.Decide(r.Context(), s.principal(r), p.Action, object, s.chart)
+	return authz.Decide(r.Context(), principal, p.Action, object, s.chart)
 }
 
 // report is one evaluation over what this node is running.

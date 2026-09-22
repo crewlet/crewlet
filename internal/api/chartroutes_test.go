@@ -50,7 +50,7 @@ func chartPatterns(t *testing.T) []string {
 	svc, err := chartapi.New(chartapi.Options{
 		Reader:    chartReaderStub{},
 		Authority: func(string, chart.AuthorKind, []iam.Grant) chartapi.Writer { return nil },
-		Principal: func(*http.Request) iam.Principal { return iam.Principal{} },
+		Principal: resolved(func() iam.Principal { return iam.Principal{} }),
 		Chart:     authz.NoChart{},
 	})
 	if err != nil {
@@ -100,4 +100,16 @@ func (chartReaderStub) Imports(context.Context, int, statelog.Freshness) (
 func (chartReaderStub) Import(context.Context, string, statelog.Freshness) (
 	chart.Import, bool, chart.Answer, error) {
 	return chart.Import{}, false, chart.Answer{}, nil
+}
+
+// resolved adapts a principal source to the three-valued seam.
+//
+// EVERY CASE HERE IS ABOUT THE AUTHORITY TABLE rather than about the
+// resolution, so they all say [iam.Resolved] and this says it once. The
+// unknown arm has its own case, which is the only place a test should be
+// spelling a resolution out.
+func resolved(of func() iam.Principal) chartapi.Principal {
+	return func(*http.Request) (iam.Principal, iam.Resolution) {
+		return of(), iam.Resolved
+	}
 }

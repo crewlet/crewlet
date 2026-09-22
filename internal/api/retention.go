@@ -118,7 +118,11 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	operator := auth.OperatorID(caller)
 	point := coord.BackupPoint{
 		Owner: coord.OperatorBackupOwner,
 		At:    time.Now().UTC(),
@@ -262,19 +266,18 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	operator, ok := auth.OperatorFrom(r.Context())
-	if !ok || operator == "" {
-		// THE GUARD ALREADY REFUSED AN UNAUTHENTICATED CALLER, so this
-		// is the build with no operator identity on the context at all.
-		// The write path refuses it too, and refusing here names the
-		// reason rather than surfacing the writer's own.
-		writeJSON(w, http.StatusForbidden, map[string]string{
-			"error": "operator_required",
-			"detail": "a purge is an operator gesture and this request carries " +
-				"no operator identity",
-		})
+	// THE THREE ARMS, THROUGH THE ONE READER. This bound the bool and
+	// refused on it, which was right as far as it went and covered two
+	// different facts with one 403: a caller who presented nothing, and a
+	// caller this node could not check. The second is a 503 about this
+	// node — a purge is irreversible, and telling somebody holding a valid
+	// credential that they are forbidden is the answer most likely to make
+	// them try it again under a different one.
+	caller, ok := auth.Caller(w, r)
+	if !ok {
 		return
 	}
+	operator := auth.OperatorID(caller)
 
 	// THE CALLER MAY BRING ITS OWN OPERATION ID, and this is the one
 	// route where that matters. A purge that answers `unknown` has no
@@ -334,7 +337,11 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 			})
 			return
 		}
-		operator, _ := auth.OperatorFrom(r.Context())
+		caller, ok := auth.Caller(w, r)
+		if !ok {
+			return
+		}
+		operator := auth.OperatorID(caller)
 		// A FRESH ID PER PRESS, unlike the chart apply's derived one:
 		// every node computes the chart's id from the revision so the
 		// losers collapse, but two operators evicting one node are two
@@ -439,7 +446,11 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	operator := auth.OperatorID(caller)
 	gen, err := a.capacity.Reanchor(r.Context(), engine.ReanchorRequest{
 		Stream: stream, Confirm: confirm, By: operator,
 		Force: r.URL.Query().Get("force") == "true",
@@ -477,7 +488,11 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	operator := auth.OperatorID(caller)
 	op, err := a.capacity.SetCapacity(r.Context(), engine.CapacityRequest{
 		Stream: stream, TargetMaxBytes: target, By: operator,
 		Assert: r.URL.Query().Get("assert_excluded") == "true",
@@ -579,7 +594,11 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what strin
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	operator := auth.OperatorID(caller)
 	log.Info("capacity_gesture", "operator", operator, "gesture", what, "stream", stream)
 	writeJSON(w, http.StatusOK, map[string]any{"operation": operationOrNil(op)})
 }

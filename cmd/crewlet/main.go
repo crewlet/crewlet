@@ -30,7 +30,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -1478,15 +1477,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			grants []iam.Grant) chartapi.Writer {
 			return e.ChartWriter().As(actor, kind, grants)
 		},
-		// WHO IS ASKING, from the guard this build HAS. A Tier A bearer
-		// token carries no capabilities of its own and opens every route
-		// it reaches, so it translates to a machine principal holding
-		// every grant — and one bound to a chart seat acts as that seat,
-		// which is what makes a lead's own edit reachable without the
-		// admin path. See internal/api/auth's principal.go, which goes
-		// with the rest of this posture when real sessions land.
-		Principal: func(r *http.Request) iam.Principal {
-			return auth.Principal(r.Context(), e.BoundSeat)
+		// WHO IS ASKING, THREE-VALUED, straight from what the guard
+		// resolved. It used to be a blunt translation beside the
+		// guard — a recognised token became a machine principal
+		// holding every grant — and that was a second security
+		// decision about one request: the guard admitted a credential
+		// and this told the authority table it could do anything. The
+		// guard composes the principal now, from the token's own
+		// declared grants intersected with this node's ceiling, and
+		// the seat binding travels with it.
+		Principal: func(r *http.Request) (iam.Principal, iam.Resolution) {
+			return iam.From(r.Context())
 		},
 		// WHO LEADS WHOM, three-valued: a node that is booting, applying
 		// a revision or behind the log answers "cannot tell" rather than
@@ -1616,6 +1617,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// else reached from here creates a context.
 	app, err := api.New(api.Options{ //nolint:contextcheck // see the paragraph above
 		Bootstrap: boot,
+		// THE CHART'S HALF OF EVERY PRINCIPAL the guard resolves: which
+		// credential a human seat claims, so somebody at the dashboard
+		// acts as themselves rather than as the token they hold.
+		BoundSeat: e.BoundSeat,
 		Runtime:   runtime,
 		// THE ENGINE'S OWN RECEIVER, not a second one built here. The API
 		// verifies tokens this process's engine minted, and two receivers

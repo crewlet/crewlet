@@ -152,8 +152,14 @@ func (a *App) serveFrom(build func() any) http.HandlerFunc {
 // mapping so a named route and the generic form cannot answer one failure two
 // ways.
 func (a *App) answerHTTP(w http.ResponseWriter, r *http.Request, what string, params queries.Params) {
-	operatorID, _ := auth.OperatorFrom(r.Context())
-	data, err := a.queries.AnswerWith(r.Context(), what, params, operatorID)
+	// THE REGISTRY STILL KEYS ON AN OPERATOR ID, so the principal is
+	// converted rather than passed: what an operator-only question asks is
+	// "is there somebody", and the total answer here is safe because it
+	// answers [iam.AnonymousActor] — a name config refuses to every real
+	// credential — for a request nobody resolved. The question then fails
+	// its own operator check rather than being answered to nobody.
+	data, err := a.queries.AnswerWith(r.Context(), what, params,
+		auth.OperatorOf(r.Context()))
 	if err != nil {
 		writeQueryError(w, what, err)
 		return

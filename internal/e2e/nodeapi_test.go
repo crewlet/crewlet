@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -169,8 +168,17 @@ func wireAPI(
 			grants []iam.Grant) chartapi.Writer {
 			return e.ChartWriter().As(actor, kind, grants)
 		},
-		Principal: func(r *http.Request) iam.Principal {
-			return auth.Principal(r.Context(), e.BoundSeat)
+		// WHO IS ASKING, THREE-VALUED, straight from what the guard
+		// resolved. It used to be a blunt translation beside the
+		// guard — a recognised token became a machine principal
+		// holding every grant — and that was a second security
+		// decision about one request: the guard admitted a credential
+		// and this told the authority table it could do anything. The
+		// guard composes the principal now, from the token's own
+		// declared grants intersected with this node's ceiling, and
+		// the seat binding travels with it.
+		Principal: func(r *http.Request) (iam.Principal, iam.Resolution) {
+			return iam.From(r.Context())
 		},
 		Chart:   engine.ChartAuthorityOf(e),
 		Fleet:   e,
@@ -182,6 +190,7 @@ func wireAPI(
 
 	opts := api.Options{
 		Bootstrap:    boot,
+		BoundSeat:    e.BoundSeat,
 		Runtime:      runtime,
 		Chart:        chartSurface,
 		QueueBackend: backends.Queue.Backend(),

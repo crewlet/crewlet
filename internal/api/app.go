@@ -170,6 +170,22 @@ type chartMounter interface {
 // on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
 // unset environment variable), and the defaults a test injects.
 type Options struct {
+	// BoundSeat maps a Tier A token id to the chart seat that claims it,
+	// and answers empty for a credential nobody in the chart claims.
+	//
+	// THE COMPANY'S HALF OF A PRINCIPAL. `contact.crewlet_operator_id`
+	// declares the binding, and it is what makes somebody at the dashboard
+	// act as THEMSELVES rather than as the credential they hold — without
+	// it every authority rule asking "do you lead this" falls through to
+	// the admin grant, and a founder is indistinguishable from a CI
+	// pipeline in every audit row and every refusal.
+	//
+	// OPTIONAL, and its absence is an ordinary wiring rather than a
+	// mistake: an API built before any company is active has no chart to
+	// ask, and every credential is then unbound — which is exactly what
+	// an unbound one already means.
+	BoundSeat func(operatorID string) string
+
 	// Bootstrap supplies the auth posture. Nil is permitted and is not the
 	// same as absent config: the guard then refuses every write, because
 	// nobody has said who may make one.
@@ -323,7 +339,7 @@ func New(opts Options) (*App, error) {
 	}
 
 	a := &App{
-		guard:        auth.New(opts.Bootstrap),
+		guard:        auth.New(opts.Bootstrap).BindSeats(opts.BoundSeat),
 		state:        state,
 		runtime:      opts.Runtime,
 		nodeID:       opts.Sources.NodeID,
@@ -771,7 +787,8 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 // one implementation, not two that agree today.
 func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 	what := r.PathValue("what")
-	operatorID, _ := auth.OperatorFrom(r.Context())
+	// See [App.answerHTTP] for why this is the total reader.
+	operatorID := auth.OperatorOf(r.Context())
 
 	// Params come from the query string, read through the same accessors a
 	// socket frame's JSON object goes through — which is what stops a

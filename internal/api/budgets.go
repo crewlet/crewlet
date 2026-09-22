@@ -38,6 +38,14 @@ type budgetResetter interface {
 // — because the alternative is an operator typing `-scope ""` and being told
 // nothing matched while the counters they meant to clear kept refusing turns.
 func (a *App) serveBudgetReset(w http.ResponseWriter, r *http.Request) {
+	// WHO IS CLEARING A SPEND CEILING, resolved before anything is read
+	// and refused three-valued: an unreadable identity estate answers 503
+	// rather than letting an irreversible operator action land
+	// unattributed.
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
 	scope := r.URL.Query().Get("scope")
 
 	// READ FIRST, so the answer NAMES what it cleared. A count alone
@@ -63,7 +71,7 @@ func (a *App) serveBudgetReset(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "budget_reset_failed"})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	operator := auth.OperatorID(caller)
 	log.Info("budget_reset", "operator", operator, "scope", scope, "cleared", n)
 	if cleared == nil {
 		cleared = []string{}

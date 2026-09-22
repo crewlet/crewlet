@@ -859,10 +859,15 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	writeApplied(w, applied)
 }
 
-// operatorOf is who the guard authenticated on this request, or empty.
+// operatorOf is who a write on this request is attributed to.
+//
+// TOTAL, never empty: every route on this surface is always guarded, so a
+// request reaching here carries a resolved principal — and the case that is
+// left, a handler somebody mounted outside the guard, records the name config
+// refuses to every real credential rather than an empty `created_by` that
+// reads as a revision nobody wrote.
 func operatorOf(r *http.Request) string {
-	operator, _ := auth.OperatorFrom(r.Context())
-	return operator
+	return auth.OperatorOf(r.Context())
 }
 
 // nudge tells every node an activation happened.

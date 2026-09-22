@@ -18,8 +18,17 @@ import (
 // guards that fail the build on a hand-built subject or a second copy of a
 // shared pattern.
 
-// operatorBody returns the AST of Guard.Operator.
-func operatorBody(t *testing.T) *ast.FuncDecl {
+// comparisonBody returns the AST of Guard.entry, which is where the token
+// comparison lives.
+//
+// IT FOLLOWED THE COMPARISON. This read Guard.Operator while that function
+// held the loop; it now composes an answer from `entry`, and a walk left
+// pointing at it would have found no compare and no loop and reported the
+// absence as a failure — or, had it been written to tolerate that, would have
+// certified a comparison it was no longer reading. Which function is walked is
+// the one thing this suite cannot get wrong quietly, so it fails loudly when
+// the name is gone.
+func comparisonBody(t *testing.T) *ast.FuncDecl {
 	t.Helper()
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "auth.go", nil, 0)
@@ -28,12 +37,12 @@ func operatorBody(t *testing.T) *ast.FuncDecl {
 	}
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "Operator" || fn.Recv == nil {
+		if !ok || fn.Name.Name != "entry" || fn.Recv == nil {
 			continue
 		}
 		return fn
 	}
-	t.Fatal("Guard.Operator not found — this guard is asserting about nothing")
+	t.Fatal("Guard.entry not found — this guard is asserting about nothing")
 	return nil
 }
 
@@ -43,7 +52,7 @@ func TestTheTokenComparisonIsConstantTime(t *testing.T) {
 	// long it takes to say it: string comparison stops at the first byte
 	// that differs, so an attacker can find a token one byte at a time.
 	found := false
-	ast.Inspect(operatorBody(t), func(n ast.Node) bool {
+	ast.Inspect(comparisonBody(t), func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -59,7 +68,7 @@ func TestTheTokenComparisonIsConstantTime(t *testing.T) {
 		return true
 	})
 	if !found {
-		t.Error("Guard.Operator does not use subtle.ConstantTimeCompare: " +
+		t.Error("Guard.entry does not use subtle.ConstantTimeCompare: " +
 			"the token is compared in a way that leaks it a byte at a time")
 	}
 }
@@ -70,7 +79,7 @@ func TestTheTokenLoopDoesNotStopAtTheFirstMatch(t *testing.T) {
 	// on how many did not — the same leak the constant-time compare above
 	// exists to close, reintroduced one level up.
 	var early bool
-	ast.Inspect(operatorBody(t), func(n ast.Node) bool {
+	ast.Inspect(comparisonBody(t), func(n ast.Node) bool {
 		loop, ok := n.(*ast.RangeStmt)
 		if !ok {
 			return true
@@ -86,7 +95,7 @@ func TestTheTokenLoopDoesNotStopAtTheFirstMatch(t *testing.T) {
 		return true
 	})
 	if early {
-		t.Error("Guard.Operator leaves its comparison loop early: the time it " +
+		t.Error("Guard.entry leaves its comparison loop early: the time it " +
 			"takes then depends on which token matched")
 	}
 }

@@ -147,6 +147,19 @@ const (
 	// into an empty result — "this company has no work" is an answer a
 	// person acts on.
 	CodeUnavailable Code = "unavailable"
+
+	// CodeIdentityUnavailable is a request this node could not decide WHO
+	// made, because the identity estate could not be read.
+	//
+	// DISTINCT FROM CodeInvalidToken, AND THE DISTINCTION IS THE WHOLE
+	// POINT. That one is a refusal about the CALLER — this node checked
+	// and the credential is not one it accepts — and the only sensible
+	// response is to present a different one. This is a refusal about the
+	// NODE: the credential may be perfect and nothing here could tell.
+	// Answered as a 401 it would send everybody in the company to reset a
+	// working password for as long as the outage lasted, which is the
+	// three-valued rule internal/coord states, applied to authentication.
+	CodeIdentityUnavailable Code = "identity_unavailable"
 )
 
 // The setup-pass set: refusals from running a third-party app's provisioning
@@ -227,6 +240,9 @@ var codes = map[Code]string{
 	CodeBadParams: "That query was asked with a parameter this endpoint does not accept.",
 	CodeUnavailable: "This node cannot answer that yet — something it reads " +
 		"is still catching up. Ask again in a moment.",
+	CodeIdentityUnavailable: "This node cannot tell who you are at the moment — " +
+		"the identity estate could not be read. Your credential is probably " +
+		"fine; try again shortly.",
 
 	CodePassInFlight: "A setup pass for this integration is already running. " +
 		"Wait for it to finish rather than starting a second one.",
@@ -420,4 +436,23 @@ func Refuse(w http.ResponseWriter, err error) {
 		return
 	}
 	Fail(w, http.StatusBadRequest, CodeUnreadableBody)
+}
+
+// Unavailable writes a 503 carrying a Retry-After, which is the pair a client
+// needs to tell "come back" from "do not come back".
+//
+// ONE WRITER, because the header and the envelope have to agree: a 503 with no
+// Retry-After is indistinguishable to a client from a node that is down for
+// good, and a Retry-After on a refusal that is not retryable teaches a client
+// to hammer one that never will be. Seconds rather than a duration, because
+// that is what the header carries and converting at each call site is how two
+// of them come to round differently.
+//
+// It is NOT a second Fail: the body is [FailWithFields]'s, so the envelope's
+// three parts are assembled in exactly one place however a refusal is reached.
+func Unavailable(w http.ResponseWriter, code Code, retryAfterSeconds int) {
+	if retryAfterSeconds > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+	}
+	FailWithFields(w, http.StatusServiceUnavailable, code, nil)
 }

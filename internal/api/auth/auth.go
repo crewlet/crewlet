@@ -26,10 +26,14 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -130,26 +134,33 @@ const (
 	OTLPPrefix    = "/otlp/"
 )
 
-// readMethods are treated as reads for allow_anonymous_read.
+// readMethods are the methods that change nothing and start nothing.
 var readMethods = map[string]struct{}{
 	http.MethodGet: {}, http.MethodHead: {}, http.MethodOptions: {},
 }
 
 // IsRead reports whether a method is a read: GET, HEAD or OPTIONS.
 //
-// Exported because a read is a read to more than the guard. The drain gate
-// serves reads for the same reason allow_anonymous_read may open them: a read
-// changes nothing and starts nothing, and a second list of which methods those
-// are would be a second answer to one question.
+// THE GUARD NO LONGER BRANCHES ON IT — every guarded route needs a credential
+// whatever the method — and it stays exported because a read is a read to more
+// than the guard: the DRAIN gate goes on serving reads while it refuses
+// everything that would start work, and the authorization layer above still
+// classifies a route by verb. A second list of which methods those are would
+// be a second answer to one question.
 func IsRead(method string) bool {
 	_, ok := readMethods[strings.ToUpper(method)]
 	return ok
 }
 
-// loopbackHosts are bind addresses no other machine can reach. Anonymous reads
-// on one of these are a laptop; anonymous reads on anything else are a decision
-// somebody may not have made deliberately — which is the difference between
-// stating the posture and warning about it.
+// loopbackHosts are bind addresses no other machine can reach.
+//
+// WHAT READS THIS IS NARROWER THAN IT WAS. It used to decide whether an open
+// read posture on this bind deserved a warning; that posture is gone. What is
+// left is the development principal, which is refused outright off loopback —
+// and note that `api.auth.local`'s own insecure rule deliberately judges the
+// EXTERNAL URL instead, because a hardened node binds loopback behind its
+// proxy and a bind check would permit the insecure posture in exactly the
+// deployment that must refuse it.
 var loopbackHosts = map[string]struct{}{
 	"127.0.0.1": {}, "::1": {}, "localhost": {}, "localhost6": {},
 }
@@ -201,36 +212,92 @@ func Unguarded(path string) bool {
 // nothing else. What is still served without a credential is [Unguarded], and
 // only that.
 type Guard struct {
-	// tokens maps operator id to token. Empty is a real posture: no
-	// candidate can match, so every guarded route is refused outright.
-	// Config refuses it once the API is served, which is where a
-	// `crewlet validate` on a laptop catches it.
-	tokens map[string]string
+	// tokens maps operator id to that token's whole Tier A entry — its
+	// value, the grants it may use and the colleague level it reaches
+	// the company's work at. Empty is a real posture: no candidate can
+	// match, so every guarded route is refused outright. Config refuses
+	// it once the API is served, which is where a `crewlet validate` on
+	// a laptop catches it.
+	//
+	// THE WHOLE ENTRY RATHER THAN THE VALUE, because what a surface
+	// needs is a PRINCIPAL rather than an id: a credential's blast
+	// radius is stated where it is pinned, and the guard is the last
+	// frame that holds both the request and the entry it matched.
+	tokens map[string]config.APIToken
+
+	// ceiling is this node's own `api.auth.max_grants`, intersected into
+	// every principal at the moment it is resolved. See
+	// [Guard.principalFor].
+	ceiling []iam.Grant
+
+	// stepUp is `api.auth.session.step_up`, which is how long presenting
+	// a credential authorises an administrative gesture.
+	stepUp time.Duration
+
+	// now is the clock, injectable so a case can pin what a principal's
+	// freshness is measured against.
+	now func() time.Time
+
+	// boundSeat maps a Tier A token id to the chart seat that claims it,
+	// and answers empty for a credential nobody in the chart claims.
+	//
+	// THE COMPANY'S HALF OF A PRINCIPAL, handed in rather than read here,
+	// because it comes from the org chart and this package resolves a
+	// CREDENTIAL. `contact.crewlet_operator_id` is what declares the
+	// binding, and carrying it is what makes a LEAD relation reachable at
+	// all: without the seat handle every authority rule asking "do you
+	// lead this" falls through to the admin grant, and a founder is
+	// indistinguishable from a CI pipeline in every audit row and every
+	// refusal.
+	//
+	// Nil is an ordinary wiring — a guard built before any company is
+	// active — and answers as an unbound credential does.
+	boundSeat func(operatorID string) string
+}
+
+// BindSeats installs the chart lookup that lets a bound credential act as its
+// seat, and returns the guard for chaining.
+//
+// CALLED ONCE, AT WIRING TIME, before this guard serves anything: the lookup
+// is read on every request and a guard whose seam moved under a request in
+// flight would attribute one write two ways.
+func (g *Guard) BindSeats(lookup func(operatorID string) string) *Guard {
+	g.boundSeat = lookup
+	return g
 }
 
 // New builds the guard from Tier A.
 //
-// It does not fail. The pairings that would leave nothing reachable — no tokens
-// with anonymous reads turned off — and the reserved token id are refused by
-// config validation, which is where a `crewlet validate` on a laptop can catch
-// them rather than a process discovering them at bind time.
+// It does not fail. Every posture that would leave this surface unreachable —
+// no credential once a port is set, no ceiling, no external address, no
+// keyring — and the reserved token id are refused by config validation, which
+// is where a `crewlet validate` on a laptop can catch them rather than a
+// process discovering them at bind time.
 func New(b *config.Bootstrap) *Guard {
 	if b == nil {
 		// No Tier A at all: nobody has said who may act, so nothing
 		// authenticates and every guarded route is refused. That is
 		// the honest reading, and it is the same answer as a config
 		// listing no tokens.
-		return &Guard{}
+		//
+		// AND NO CEILING, which grants nothing rather than everything
+		// — see [intersect] for why that direction is the only safe
+		// one.
+		return &Guard{now: time.Now}
 	}
 	auth := b.API.Auth
-	tokens := make(map[string]string, len(auth.Tokens))
+	tokens := make(map[string]config.APIToken, len(auth.Tokens))
 	for _, entry := range auth.Tokens {
-		tokens[entry.ID] = entry.Token
+		tokens[entry.ID] = entry
 	}
 	if len(tokens) > 0 {
-		log.Info("api_auth_tokens_loaded", "count", len(tokens))
+		log.Info("api_auth_tokens_loaded", "count", len(tokens),
+			"grant_ceiling", auth.CeilingHash())
 	}
-	return &Guard{tokens: tokens}
+	return &Guard{
+		tokens: tokens, ceiling: auth.MaxGrants,
+		stepUp: auth.Session.StepUp(), now: time.Now,
+	}
 }
 
 // Tokens reports how many credentials are loaded, for the same startup line.
@@ -258,13 +325,26 @@ func (g *Guard) Operator(candidate string) (string, bool) {
 	// match: an early exit makes the time taken depend on WHICH id
 	// matched, which is exactly the leak the constant-time compare below
 	// exists to close.
-	matched := ""
-	for operatorID, expected := range g.tokens {
-		if subtle.ConstantTimeCompare([]byte(candidate), []byte(expected)) == 1 {
-			matched = operatorID
+	matched, _ := g.entry(candidate)
+	return matched.ID, matched.ID != ""
+}
+
+// entry is the Tier A token a candidate matches, compared in constant time.
+//
+// EVERY TOKEN IS COMPARED, and the loop does not stop at the first match: an
+// early exit makes the time taken depend on WHICH id matched, which is exactly
+// the leak the constant-time compare exists to close.
+func (g *Guard) entry(candidate string) (config.APIToken, bool) {
+	if candidate == "" {
+		return config.APIToken{}, false
+	}
+	var matched config.APIToken
+	for _, held := range g.tokens {
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(held.Token)) == 1 {
+			matched = held
 		}
 	}
-	return matched, matched != ""
+	return matched, matched.ID != ""
 }
 
 // SocketPath is the dashboard's live socket, the one route whose credential
@@ -326,17 +406,71 @@ func (g *Guard) Requires(path, _ string) bool {
 // operatorKey carries the authenticated operator id down the handler chain.
 type operatorKey struct{}
 
-// OperatorFrom returns the operator id the guard attached, if any.
-func OperatorFrom(ctx context.Context) (string, bool) {
-	id, ok := ctx.Value(operatorKey{}).(string)
-	return id, ok
+// OperatorOf is the id a write on this request is ATTRIBUTED to, and it is
+// total: a request nobody resolved answers [iam.AnonymousActor] rather than
+// the empty string.
+//
+// # Why it has no second value, and why that is not the discarded bool
+//
+// It is not how a handler asks whether somebody is there — [Caller] is, and
+// the difference is that Caller writes the refusal and has nothing to drop.
+// This is what a handler calls AFTER that question has been answered, at the
+// moment a row is written, on a surface where the guard has already refused
+// everything but [iam.Resolved].
+//
+// So its total answer covers the case that is left: a handler reached by a
+// path nobody wired through the guard. An empty `created_by` there reads as a
+// write nobody made, and a reader filtering the audit trail would never find
+// it; `anonymous` is a name config refuses to every real credential, so the
+// row says plainly that this engine could not name its author.
+func OperatorOf(ctx context.Context) string {
+	principal, how := iam.From(ctx)
+	if how != iam.Resolved {
+		return iam.AnonymousActor
+	}
+	return OperatorID(principal)
 }
 
-// WithOperator attaches an operator id, for a surface that authenticates
-// outside the middleware — the WebSocket handshake, whose credential arrives on
-// the query string rather than as a header.
+// OperatorID is the id a principal is recorded under on the surfaces that key
+// on one: the bare token id, without the `token:` class its login carries,
+// because that is the string a stored revision's `created_by` and a secret's
+// `set_by` already hold.
+//
+// A CONVERSION RATHER THAN A SECOND IDENTITY. What a row should carry in the
+// long run is [iam.ActorFor]'s answer — a name AND a kind — and this exists
+// for the columns that predate it, so the day those two tables take their
+// author kind from that function nothing migrates.
+func OperatorID(p iam.Principal) string {
+	return strings.TrimPrefix(p.Login, TokenLoginPrefix)
+}
+
+// WithOperator attaches a principal carrying one operator id and NO GRANTS.
+//
+// ATTRIBUTION, NEVER AUTHORITY, and the empty grant set is the whole of what
+// makes that safe: it names who a write is recorded as and opens nothing. The
+// real resolution is [Guard.Resolve], which composes a principal from the Tier
+// A entry it matched — its grants, its colleague level, its freshness — and
+// every request through [Guard.Middleware] takes that path.
+//
+// What is left for this is a caller that already knows the id and needs the
+// row it writes to say so: a test standing a handler up directly, and any
+// surface that authenticated by some other means and has nothing to look the
+// entry up with. A principal from here can be recorded and can do nothing.
 func WithOperator(ctx context.Context, operatorID string) context.Context {
-	return context.WithValue(ctx, operatorKey{}, operatorID)
+	// AN EMPTY ID IS NOBODY, and it attaches the FINDING rather than a
+	// principal with no name. Attached as one, every reader asking "is
+	// somebody there" is told yes and then writes a row whose author
+	// column is the bare class prefix — which is the failure the whole
+	// three-valued resolution exists to make impossible.
+	if operatorID == "" {
+		return iam.WithAnonymous(ctx)
+	}
+	return iam.WithPrincipal(ctx, iam.Principal{
+		ID:    uuid.NewSHA1(TokenNamespace, []byte(operatorID)),
+		Login: TokenLogin(operatorID),
+		Kind:  iam.KindMachine,
+		Stage: iam.StageActive,
+	})
 }
 
 // Middleware wraps a handler with the guard.
@@ -352,23 +486,27 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 
-		// ATTRIBUTION AND AUTHORIZATION ARE DIFFERENT QUESTIONS, and the
-		// credential is resolved for both. A route that does not REQUIRE
-		// a token can still be told who presented one — which is what
-		// lets an operator-only query be answered on a surface the
-		// anonymous-read posture lets through. Skipping the resolution
-		// on an unguarded route made that unreachable: the query arrived
-		// with a valid token, no operator attached, and came back
+		// ATTRIBUTION AND AUTHORIZATION ARE DIFFERENT QUESTIONS, and
+		// the credential is resolved for both. A route that does not
+		// REQUIRE one can still be told who presented one — the
+		// webhook edge attributing a delivery, a probe answered
+		// differently for an operator — and skipping the resolution
+		// there made that unreachable: the request arrived with a
+		// valid token, no principal attached, and came back
 		// unauthorized to a caller holding the right credential.
-		operatorID, authenticated := g.Presented(r)
-		if authenticated {
-			r = r.WithContext(WithOperator(r.Context(), operatorID))
-		}
+		//
+		// EVERY REQUEST LEAVES HERE CARRYING AN ANSWER, which is what
+		// stops [iam.From] reading a handler nobody wired through this
+		// as [iam.Unknown] — silence is not anonymity, and that
+		// distinction is only worth anything if the resolver actually
+		// runs everywhere.
+		r = g.Resolve(r)
+		principal, how := iam.From(r.Context())
 		if !g.Requires(path, r.Method) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !authenticated {
+		if how != iam.Resolved {
 			// A LOG LINE, AND DELIBERATELY NOT AN EVENT. Whoever can
 			// reach this listener authors the rate of these, with no
 			// credential and no identity — so no per-attempt event
@@ -394,7 +532,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
-		log.Debug("api_auth_ok", "operator_id", operatorID, "route", path)
+		log.Debug("api_auth_ok", "operator_id", OperatorID(principal), "route", path)
 		next.ServeHTTP(w, r)
 	})
 }

@@ -46,6 +46,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -220,19 +221,24 @@ func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// THE GUARD IS THE APP'S, not a second one here: this path is in
 		// [auth.GuardedPrefixes], so a request that reaches this handler
-		// has already presented a valid operator token. Reading the id
-		// off the context rather than re-checking it is what keeps one
-		// decision about who may write.
-		operator, ok := auth.OperatorFrom(r.Context())
-		if !ok || operator == "" {
+		// has already presented a valid operator token. Reading the
+		// principal off the context rather than re-checking it is what
+		// keeps one decision about who may write.
+		//
+		// IT IS READ THROUGH [auth.Caller] so the two arms it used to
+		// fold together stay apart: a caller who presented nothing is
+		// a 401, and one this node could not CHECK is a 503 — and a
+		// surface that answered 401 to the second would send an
+		// operator's assistant to re-authenticate against an estate
+		// that is simply unreachable.
+		if _, ok := auth.Caller(w, r); !ok {
 			// UNREACHABLE if the guard is mounted, and refused rather
 			// than trusted if it somehow is not: this surface writes to
 			// the company, and a write with no writer is the one thing
 			// it must never record.
 			log.WarnContext(r.Context(), "operator_mcp_unguarded",
 				"detail", "a request reached the operator MCP surface with no "+
-					"operator on its context; the auth guard is not in front of it")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+					"principal on its context; the auth guard is not in front of it")
 			return
 		}
 		streamable.ServeHTTP(w, r)
@@ -260,9 +266,16 @@ func (s *Server) Handler() http.Handler {
 // it lets anybody with the token write as anybody, and a tracker whose author
 // field can be chosen by the writer is not an audit trail.
 func WorkActor(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
-	id, ok := auth.OperatorFrom(ctx)
-	if !ok || id == "" {
-		return builtin.Actor{}, fmt.Errorf("opsmcp: no operator on this request")
+	// AN ERROR RATHER THAN A FALLBACK NAME, unlike the HTTP surfaces'
+	// attribution helper: this is reached inside a TOOL CALL, where there
+	// is a caller waiting for an answer and the honest one is that the
+	// write did not happen. [auth.OperatorOf]'s total answer is right
+	// where a row is being written either way; here nothing has to be.
+	principal, how := iam.From(ctx)
+	id := auth.OperatorID(principal)
+	if how != iam.Resolved || id == "" {
+		return builtin.Actor{}, fmt.Errorf(
+			"opsmcp: this request carries no operator (%s)", how)
 	}
 	// THE OPERATOR'S OWN NAME IS THE HANDLE, and the kind says it is not a
 	// seat. A tracker whose author field is chosen by the writer is not an
@@ -286,9 +299,11 @@ func WorkActor(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
 // same person as two people three rows apart, and that a reader filtering on
 // a name matched half of what they did.
 func PageActor(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
-	id, ok := auth.OperatorFrom(ctx)
-	if !ok || id == "" {
-		return pages.Actor{}, fmt.Errorf("opsmcp: no operator on this request")
+	principal, how := iam.From(ctx)
+	id := auth.OperatorID(principal)
+	if how != iam.Resolved || id == "" {
+		return pages.Actor{}, fmt.Errorf(
+			"opsmcp: this request carries no operator (%s)", how)
 	}
 	return pages.Actor{Handle: id, Kind: pages.AuthorOperator, OperatorID: id}, nil
 }

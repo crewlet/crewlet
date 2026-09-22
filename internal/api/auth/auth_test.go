@@ -34,7 +34,9 @@ func serve(t *testing.T, g *auth.Guard, method, path, header string) (*http.Resp
 	t.Helper()
 	var seen string
 	handler := g.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen, _ = auth.OperatorFrom(r.Context())
+		if principal, how := iam.From(r.Context()); how == iam.Resolved {
+			seen = auth.OperatorID(principal)
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest(method, path, nil)
@@ -344,15 +346,15 @@ func TestAValidTokenIsAttributedEvenWhereItIsNotRequired(t *testing.T) {
 
 func TestNobodyIsReportedAsAbsentRatherThanAsAnEmptyName(t *testing.T) {
 	t.Parallel()
-	// OperatorFrom answers (id, ok), and the two halves have to agree. A
-	// failed resolution attached as an empty NAME reads as ok=true with no
-	// id — so a caller that checks ok, which is the whole point of
-	// returning it, is told somebody is there.
+	// A FAILED RESOLUTION IS A FINDING, never a principal with an empty
+	// name: attached as one, a caller asking "is somebody there" — which
+	// is the whole point of the resolution — is told yes.
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
 
 	var present bool
 	handler := g.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		_, present = auth.OperatorFrom(r.Context())
+		_, how := iam.From(r.Context())
+		present = how == iam.Resolved
 	}))
 	req := httptest.NewRequest("GET", "/events", nil)
 	req.Header.Set("Authorization", "Bearer wrong")
@@ -419,11 +421,21 @@ func TestASocketCanAttachItsOwnOperator(t *testing.T) {
 	// rather than a header, so the stream handler authenticates it itself
 	// and hands the id down the same way the middleware does.
 	ctx := auth.WithOperator(t.Context(), "founder")
-	if got, ok := auth.OperatorFrom(ctx); !ok || got != "founder" {
-		t.Errorf("operator = %q/%v", got, ok)
+	principal, how := iam.From(ctx)
+	if how != iam.Resolved || auth.OperatorID(principal) != "founder" {
+		t.Errorf("operator = %q/%v", auth.OperatorID(principal), how)
 	}
-	if _, ok := auth.OperatorFrom(t.Context()); ok {
-		t.Error("a bare context reported an operator")
+	// AND IT CARRIES NO AUTHORITY, which is what makes attaching one
+	// outside the guard safe: it names a writer and opens nothing.
+	if len(principal.Grants) != 0 {
+		t.Errorf("an attributed principal carries grants: %v", principal.Grants)
+	}
+	// A BARE CONTEXT IS UNKNOWN, not anonymous: a handler nobody wired
+	// through the guard looks exactly like one whose resolver found
+	// nobody, and reading either as the other is how a surface decides it
+	// is safe to serve because nothing told it otherwise.
+	if _, how := iam.From(t.Context()); how != iam.Unknown {
+		t.Errorf("a bare context resolved as %q, want unknown", how)
 	}
 }
 

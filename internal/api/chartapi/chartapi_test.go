@@ -207,7 +207,7 @@ func serve(t *testing.T, r *reader, who iam.Principal, relation rel) rig {
 	svc, err := chartapi.New(chartapi.Options{
 		Reader:    r,
 		Authority: func(string, chart.AuthorKind, []iam.Grant) chartapi.Writer { return w },
-		Principal: func(*http.Request) iam.Principal { return who },
+		Principal: resolved(func() iam.Principal { return who }),
 		Chart:     relation,
 	})
 	if err != nil {
@@ -555,7 +555,7 @@ func TestEveryChartRouteIsMountedThroughTheAuthorityTable(t *testing.T) {
 	svc, err := chartapi.New(chartapi.Options{
 		Reader:    &reader{},
 		Authority: func(string, chart.AuthorKind, []iam.Grant) chartapi.Writer { return &writer{} },
-		Principal: func(*http.Request) iam.Principal { return nobody() },
+		Principal: resolved(nobody),
 		Chart:     rel{},
 	})
 	if err != nil {
@@ -596,7 +596,7 @@ func TestASurfaceBuiltWithoutItsPartsIsRefused(t *testing.T) {
 	full := chartapi.Options{
 		Reader:    &reader{},
 		Authority: func(string, chart.AuthorKind, []iam.Grant) chartapi.Writer { return &writer{} },
-		Principal: func(*http.Request) iam.Principal { return nobody() },
+		Principal: resolved(nobody),
 		Chart:     rel{},
 	}
 	for _, c := range []struct {
@@ -740,9 +740,9 @@ func TestAnImportIsRefusedWhileTheFleetIsMixedVersion(t *testing.T) {
 			svc, err := chartapi.New(chartapi.Options{
 				Reader:    &reader{},
 				Authority: func(string, chart.AuthorKind, []iam.Grant) chartapi.Writer { return w },
-				Principal: func(*http.Request) iam.Principal {
+				Principal: resolved(func() iam.Principal {
 					return leadOf(iam.GrantConfigWrite)
-				},
+				}),
 				Chart: leads(), Fleet: c.fleet,
 			})
 			if err != nil {
@@ -765,5 +765,17 @@ func TestAnImportIsRefusedWhileTheFleetIsMixedVersion(t *testing.T) {
 				t.Errorf("the refusal does not name the lagging node: %s", rec.Body)
 			}
 		})
+	}
+}
+
+// resolved adapts a principal source to the three-valued seam.
+//
+// EVERY CASE HERE IS ABOUT THE AUTHORITY TABLE rather than about the
+// resolution, so they all say [iam.Resolved] and this says it once. The
+// unknown arm has its own case, which is the only place a test should be
+// spelling a resolution out.
+func resolved(of func() iam.Principal) chartapi.Principal {
+	return func(*http.Request) (iam.Principal, iam.Resolution) {
+		return of(), iam.Resolved
 	}
 }

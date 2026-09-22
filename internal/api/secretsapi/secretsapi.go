@@ -171,7 +171,11 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "open the secret", err)
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	operator := auth.OperatorID(caller)
 	log.WarnContext(r.Context(), "secret_revealed", "name", name, "operator", operator)
 	// NO-STORE, and it is not decoration: without it a value can sit in a
 	// shared proxy's cache, which is a credential leak with no log line
@@ -214,7 +218,11 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		httpjson.Refuse(w, err)
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	operator := auth.OperatorID(caller)
 	source := r.URL.Query().Get("source")
 	if source == "" {
 		source = "api"
@@ -248,7 +256,11 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "remove the secret", err)
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	operator := auth.OperatorID(caller)
 	log.InfoContext(r.Context(), "secret_removed", "name", name,
 		"removed", removed, "operator", operator)
 	writeJSON(w, http.StatusOK, map[string]any{"name": name, "removed": removed})
@@ -285,7 +297,11 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	operator := auth.OperatorID(caller)
 	moved, err := s.store.Rekey(r.Context(), s.keyID, operator, s.now())
 	if err != nil {
 		// THE NAMES THAT DID MOVE travel with the refusal. A partial

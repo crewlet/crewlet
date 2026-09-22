@@ -293,8 +293,13 @@ const MaxOpID = 128
 // reaching here means the decision allowed it; what this covers is the
 // narrower case of a surface whose resolver answered nothing, where an empty
 // author column would read as a write nobody made.
+//
+// THE RESOLUTION IS DELIBERATELY NOT RE-EXAMINED HERE. [Service.guard] has
+// already refused an unknown one with a 503, so a request reaching this
+// function carries an answer; asking again would be a second decision about
+// one request, and the two would drift the day somebody changed one of them.
 func (s *Service) writerFor(r *http.Request) Writer {
-	p := s.principal(r)
+	p, _ := s.principal(r)
 	actor := iam.ActorFor(p)
 	// THE PARTY'S OWN GRANTS, handed to a domain that refuses what they do
 	// not cover. This surface has already asked internal/authz the same

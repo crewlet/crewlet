@@ -2273,10 +2273,13 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	}
 }
 
-// operatorOf is who the guard authenticated, or empty.
+// operatorOf is who a write on this request is attributed to.
+//
+// TOTAL, never empty, for [auth.OperatorOf]'s reason: this surface is always
+// guarded, so what is left is a handler mounted outside the guard — and a
+// credential sealed under an empty author is one nobody can trace.
 func operatorOf(r *http.Request) string {
-	operator, _ := auth.OperatorFrom(r.Context())
-	return operator
+	return auth.OperatorOf(r.Context())
 }
 
 // disconnectRequest is what the Disconnect dialog sends.
