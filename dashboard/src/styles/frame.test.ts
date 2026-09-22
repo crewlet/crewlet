@@ -1106,5 +1106,66 @@ describe("a work item's history", () => {
     expect(row).toMatch(/border-bottom:\s*1px solid var\(--border-subtle\)/);
     expect(row).toMatch(/align-items:\s*baseline/);
     expect(row).toMatch(/grid-template-columns:\s*18px minmax\(0, 1fr\) auto auto/);
+    // AND ITS TRACKS ARE SEPARATED. See the rule below for the class of
+    // defect; this is the row it was found on, and `--space-3` is the
+    // sibling `.work-feed-row`'s so the two grammars cannot drift.
+    expect(row).toMatch(/gap:\s*var\(--space-3\)/);
+    expect(block(css, ".work-feed-row")).toMatch(/gap:\s*var\(--space-3\)/);
   });
+});
+
+// A GRID ROW WITH TWO CONTENT-SIZED TRACKS AT THE END DECLARES A GAP.
+//
+// `.work-hist-row` shipped `18px minmax(0, 1fr) auto auto` with no gap, and on
+// every entry that carried both the row read "quiet5m ago": two `auto` tracks
+// are sized to their own content and butt against each other, with no leading,
+// no padding and no border between them. One `auto` cannot show it — it sits
+// against a flexible track or the row's edge — and a FIXED track hides it,
+// which is what happened here: the 18px glyph column held a 12px mark, and the
+// 6px of slack inside it read as a gap that was never declared.
+//
+// IN THE SHEET, because that is the only place it is visible. jsdom computes
+// no layout, so every suite that renders one of these rows stays green at any
+// value; a screenshot is the only other witness, and this one survived one.
+//
+// THE GAP MAY COME FROM THE BASE RULE, which is why this looks the class up
+// rather than reading one body: `.work-rows[data-ordinals="true"]` restates
+// the track list to insert an ordinal column and takes its gap from
+// `.work-rows`, which is correct and is not a second declaration to keep in
+// step.
+test("a grid row with more than one content-sized track declares a gap", () => {
+  const offenders: string[] = [];
+  for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
+    const css = sheet(name).replace(/\/\*[\s\S]*?\*\//g, "");
+    const rulesIn = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+    const gapped = new Set<string>();
+    for (const rule of rulesIn) {
+      if (!/(?:^|[;{\s])(?:gap|column-gap|grid-column-gap)\s*:/.test(rule[2]!)) continue;
+      for (const one of rule[1]!.split(",")) gapped.add(one.trim());
+    }
+    for (const rule of rulesIn) {
+      const tracks = /grid-template-columns:\s*([^;]+)/.exec(rule[2]!);
+      if (!tracks) continue;
+      // FUNCTIONS FIRST: `minmax(auto, 1fr)` and `repeat(auto-fill, …)` both
+      // spell the word and neither is a bare track, so they are collapsed
+      // before the count.
+      const bare = tracks[1]!
+        .replace(/[a-z-]+\([^()]*\)/g, "X")
+        .trim()
+        .split(/\s+/);
+      if (bare.filter((track) => track === "auto").length < 2) continue;
+      for (const one of rule[1]!.split(",")) {
+        const sel = one.trim();
+        // THE SELECTOR'S OWN LEADING COMPOUND, so a variant that only
+        // restates the tracks is answered by the rule it varies.
+        const base = /^(\.[\w-]+)/.exec(sel)?.[1];
+        if (gapped.has(sel) || (base && gapped.has(base))) continue;
+        offenders.push(`${name}: ${sel}`);
+      }
+    }
+  }
+  expect(
+    offenders,
+    "two `auto` tracks butt against each other — declare a gap, as `.work-feed-row` does",
+  ).toEqual([]);
 });

@@ -2953,6 +2953,17 @@ details > summary.int-summary::-webkit-details-marker {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto auto;
   align-items: baseline;
+  /* A TRACK IS NOT A GAP, which is how this row shipped reading "quiet5m ago".
+     The tail and the timestamp are two `auto` tracks sized to their own
+     content, so with nothing between them a row that carried both painted the
+     marker hard against the instant — and the one place that looked like a gap
+     was the 6px of slack inside the 18px glyph column, which is the glyph's own
+     track and says nothing about the other three boundaries. `--space-3` is
+     `.work-feed-row`'s, the sibling grid of the same font size drawing the same
+     kind of line, so the two cannot drift; the tail keeps its tighter
+     `--space-2` inside itself, because `quiet` and `turn →` are one group and
+     the tracks around them are columns. */
+  gap: var(--space-3);
   /* SEPARATED BY MORE THAN THEIR OWN LEADING, which `--space-1` was not: 4px of
      padding put 8px between two entries while the lines inside one sit 18px
      apart, so a wrapped panel read as a single block of prose with no boundary
