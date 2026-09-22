@@ -99,12 +99,43 @@ func Set(h http.Header, policy string) {
 
 // Apply is middleware that sets the [API] policy on every response before the
 // next handler runs, so a handler that serves a page only has to replace it.
-func Apply(next http.Handler) http.Handler {
+//
+// `secure` says a browser reaches this deployment over https, which adds
+// [HSTS]. It is the deployment's `api.external_url` that decides it and never
+// the bind address or `r.TLS`: the engine ordinarily sits behind a
+// TLS-terminating proxy, so the request it receives is plain http on a
+// loopback socket, and a check on either would send the header from nowhere
+// and from exactly the deployments that need it.
+func Apply(next http.Handler, secure bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		Set(w.Header(), API)
+		if secure {
+			w.Header().Set("Strict-Transport-Security", HSTS)
+		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+// HSTS is what an https deployment tells a browser about coming back.
+//
+// # Why a year, and why subdomains are not included
+//
+// A YEAR is what makes it worth setting at all: the header only protects a
+// browser that has already been here once, so a short max-age leaves a window
+// open on every device that has not visited recently — which is the device an
+// attacker on a café network is waiting for.
+//
+// NO `includeSubDomains`, and that is a decision rather than an omission. This
+// engine is one host and knows nothing about its neighbours: a deployment at
+// `crewlet.example.com` sending it would commit every other name under
+// `example.com` to https for a year, including ones served by somebody who
+// never agreed to it and cannot undo it inside that year. An operator who
+// wants it sets it at the proxy that actually owns the domain.
+//
+// NO `preload` for the sharper form of the same reason: preloading is a
+// submission to a list shipped inside browsers, and it is close to
+// irreversible. Nothing this engine emits should enrol a domain in that.
+const HSTS = "max-age=31536000"
 
 // inlineStyle and inlineScript find an inline block and its content.
 //

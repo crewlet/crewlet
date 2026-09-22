@@ -31,8 +31,21 @@ import (
 
 // App is the HTTP surface: the dashboard, the live socket and the REST routes.
 type App struct {
-	guard  *auth.Guard
-	cors   *auth.CORS
+	guard *auth.Guard
+	cors  *auth.CORS
+
+	// csrf refuses a state change a cross-site page could have caused.
+	// Separate from cors because the two answer different questions: CORS
+	// decides whether an attacker's page may READ the answer, and on a
+	// write that is the part they do not need.
+	csrf *auth.CSRF
+
+	// secure says a BROWSER reaches this deployment over https, which is
+	// what the `Strict-Transport-Security` header turns on. Read from
+	// `api.external_url` rather than from the bind address or `r.TLS`:
+	// this engine ordinarily sits behind a TLS-terminating proxy, so the
+	// request it receives is plain http on a loopback socket.
+	secure bool
 	state  *livestate.LiveState
 	stream *stream.Service
 
@@ -340,6 +353,8 @@ func New(opts Options) (*App, error) {
 
 	a := &App{
 		guard:        auth.New(opts.Bootstrap).BindSeats(opts.BoundSeat),
+		csrf:         auth.NewCSRF(opts.Bootstrap),
+		secure:       servedOverHTTPS(opts.Bootstrap),
 		state:        state,
 		runtime:      opts.Runtime,
 		nodeID:       opts.Sources.NodeID,
@@ -502,7 +517,17 @@ func New(opts Options) (*App, error) {
 	// And the drain gate sits inside all three, next to the routes it
 	// refuses: see [App.drainGate].
 	a.cors = auth.NewCORS(opts.Bootstrap)
-	a.handler = pagepolicy.Apply(a.cors.Middleware(a.guard.Middleware(a.drainGate(mux))))
+	// THE ORDER IS THE ARGUMENT. Outermost is the page policy, so a
+	// response no handler thought about still carries its headers. Then
+	// CORS, which must answer a preflight before the guard sees it — a
+	// browser attaches no credential to one. Then the guard, which
+	// resolves the principal. Then the CSRF check, INSIDE the guard
+	// because the credential's SHAPE is what decides whether a missing
+	// Origin is a refusal, and nothing before the guard knows which shape
+	// arrived.
+	a.handler = pagepolicy.Apply(
+		a.cors.Middleware(a.guard.Middleware(a.csrf.Middleware(a.drainGate(mux)))),
+		a.secure)
 	return a, nil
 }
 
@@ -852,4 +877,17 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		writeJSON(w, http.StatusInternalServerError,
 			map[string]string{"error": stream.CodeQueryFailed})
 	}
+}
+
+// servedOverHTTPS reports whether a browser reaches this deployment over TLS.
+//
+// THE EXTERNAL URL AND NOTHING ELSE, for the reason [App.secure] gives: the
+// bind address and `r.TLS` both describe the hop between the proxy and this
+// process, which on a hardened node is plain http over loopback — so either
+// would withhold the header from exactly the deployments that need it.
+func servedOverHTTPS(b *config.Bootstrap) bool {
+	if b == nil {
+		return false
+	}
+	return strings.HasPrefix(b.API.ExternalBase(), "https://")
 }

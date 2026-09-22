@@ -160,6 +160,17 @@ const (
 	// working password for as long as the outage lasted, which is the
 	// three-valued rule internal/coord states, applied to authentication.
 	CodeIdentityUnavailable Code = "identity_unavailable"
+
+	// CodeCSRFOrigin is a state-changing request a cross-site page could
+	// have caused: an `Origin` naming somewhere this deployment is not
+	// reached at, or a cookie-authenticated request carrying none.
+	//
+	// ITS OWN CODE rather than a 403 sharing the authorization one,
+	// because the two send a reader to opposite places: a missing grant
+	// is somebody asking for more than they hold, and this is a request
+	// that may be exactly what its holder is allowed to do and did not
+	// ask for.
+	CodeCSRFOrigin Code = "csrf_origin"
 )
 
 // The setup-pass set: refusals from running a third-party app's provisioning
@@ -240,6 +251,8 @@ var codes = map[Code]string{
 	CodeBadParams: "That query was asked with a parameter this endpoint does not accept.",
 	CodeUnavailable: "This node cannot answer that yet — something it reads " +
 		"is still catching up. Ask again in a moment.",
+	CodeCSRFOrigin: "That request came from a page this deployment does not " +
+		"serve, so it was refused without being carried out.",
 	CodeIdentityUnavailable: "This node cannot tell who you are at the moment — " +
 		"the identity estate could not be read. Your credential is probably " +
 		"fine; try again shortly.",

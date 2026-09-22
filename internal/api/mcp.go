@@ -72,7 +72,13 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 	}
 	mux := http.NewServeMux()
 	mountBridge(mux, bridge)
-	return pagepolicy.Apply(auth.New(bootstrap).Middleware(mux))
+	// NO CSRF GATE HERE, and it is not an omission: this listener serves
+	// one route, the tool bridge, whose credential is a signed token in
+	// its own path rather than anything a browser attaches — so there is
+	// no cross-site request for a check to refuse. A box running generated
+	// code is not a browser and has no origin to send.
+	return pagepolicy.Apply(auth.New(bootstrap).Middleware(mux),
+		servedOverHTTPS(bootstrap))
 }
 
 // mountOperator registers the operator MCP surface, or says why it did not.
