@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 	"time"
@@ -58,10 +59,17 @@ func TestAttributionFieldsAreTheEngines(t *testing.T) {
 
 // deltaFields is every field name TaskDeltas writes, observed rather than
 // listed: two tasks differing in every field, and the keys that come back.
+//
+// WITH A CATALOGUE, because one of the names is only reachable with one: a
+// task's custom-field values are keyed by field id and are named by SLUG or
+// not at all, so a nil map here would hide `fields` from a gate whose whole
+// job is to report the complete set.
 func deltaFields(t *testing.T) []string {
 	t.Helper()
 	before, after := twoDifferentTasks()
-	moved := tracker.TaskDeltas(before, after)
+	moved := tracker.TaskDeltas(before, after, map[string]tracker.FieldDef{
+		"f-sev": {ID: "f-sev", Slug: "severity", Type: tracker.FieldText},
+	})
 	if len(moved) == 0 {
 		t.Fatal("two tasks differing in every field produced no deltas, so this " +
 			"gate is comparing the client against an empty list")
@@ -82,31 +90,78 @@ func twoDifferentTasks() (tracker.Task, tracker.Task) {
 	due := time.Date(2026, 3, 8, 17, 0, 0, 0, time.UTC)
 	later := due.Add(24 * time.Hour)
 	earlier := start.Add(-24 * time.Hour)
+	oldParent, newParent := "t-old-parent", "t-new-parent"
+	cascadeRoot := "t-root"
 	before := tracker.Task{
 		Title:           "Before",
+		Body:            "was",
 		Status:          tracker.Status("todo"),
 		Assignee:        "ada",
+		Reporter:        "cy",
 		Priority:        tracker.Priority("low"),
 		Project:         "ENG",
+		RoutingUnit:     "Engineering",
+		Parent:          &oldParent,
 		Type:            "task",
 		Tags:            []string{"one"},
+		Watchers:        []string{"ada"},
+		Muted:           []string{"ada"},
+		Collaborators:   []string{"ada"},
+		Dependents:      []string{"t-1"},
+		Relations:       edgesTo("t-2"),
+		DueAllDay:       true,
+		Checklists:      []tracker.Checklist{{ID: "c-1", Name: "Setup"}},
+		Fields:          map[string]json.RawMessage{"f-sev": json.RawMessage(`"low"`)},
 		StartAt:         &start,
 		DueAt:           &due,
 		EstimateMinutes: 30,
 		Points:          1,
 	}
 	after := tracker.Task{
-		Title:           "After",
-		Status:          tracker.Status("in_progress"),
-		Assignee:        "bo",
-		Priority:        tracker.Priority("high"),
-		Project:         "OPS",
-		Type:            "bug",
-		Tags:            []string{"two"},
+		Title:         "After",
+		Body:          "is now",
+		Status:        tracker.Status("in_progress"),
+		Assignee:      "bo",
+		Reporter:      "di",
+		Priority:      tracker.Priority("high"),
+		Project:       "OPS",
+		RoutingUnit:   "Platform",
+		Parent:        &newParent,
+		Type:          "bug",
+		Tags:          []string{"two"},
+		Watchers:      []string{"bo"},
+		Muted:         []string{"bo"},
+		Collaborators: []string{"bo"},
+		Dependents:    []string{"t-3"},
+		Relations:     edgesTo("t-4"),
+		Checklists: []tracker.Checklist{{
+			ID:    "c-1",
+			Name:  "Setup",
+			Items: []tracker.ChecklistItem{{ID: "i-1", Done: true}},
+		}},
+		Fields:   map[string]json.RawMessage{"f-sev": json.RawMessage(`"high"`)},
+		Archived: true,
+		Removed: &tracker.Tombstone{
+			By: "bo", Kind: tracker.AuthorHuman, RemovedWith: &cascadeRoot,
+		},
 		StartAt:         &earlier,
 		DueAt:           &later,
 		EstimateMinutes: 90,
 		Points:          5,
 	}
 	return before, after
+}
+
+// edgesTo is one edge of EVERY declared kind, so the fixture moves every
+// relation field rather than whichever one it happened to name.
+//
+// FROM [tracker.RelationKinds], for the reason [tracker.TaskDeltas] derives
+// its fields from the same slice: a fifth kind of edge is covered here with no
+// second edit.
+func edgesTo(other string) []tracker.Relation {
+	out := make([]tracker.Relation, 0, len(tracker.RelationKinds))
+	for _, kind := range tracker.RelationKinds {
+		out = append(out, tracker.Relation{Kind: kind, Other: other})
+	}
+	return out
 }

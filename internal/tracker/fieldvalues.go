@@ -98,15 +98,18 @@ const MaxFieldValueSeq = MaxOptions
 // The delete is the caller's, exactly as it is for every other collection —
 // see [Applier.explodeTask] — so a record that cleared a field leaves no row
 // behind.
+//
+// THE DECLARATIONS ARE HANDED IN rather than read here, because the apply's
+// other reader of them is [TaskDeltas] and two reads of one document in one
+// transaction is waste that can also drift. [Applier.applyTask] reads them
+// exactly when a side of the commit carries values, which is precisely when
+// the guard below does not return — so a non-empty `task.Fields` and a nil map
+// cannot both be true.
 func (a *Applier) explodeFieldValues(ctx context.Context, tx *sql.Tx,
-	task Task, c applyContext) (int, error) {
+	task Task, declared map[string]FieldDef, c applyContext) (int, error) {
 
 	if len(task.Fields) == 0 {
 		return 0, nil
-	}
-	declared, err := declaredFields(ctx, tx, task.Project)
-	if err != nil {
-		return 0, err
 	}
 	written := 0
 	// SORTED BY FIELD ID, so two nodes applying one record write the same

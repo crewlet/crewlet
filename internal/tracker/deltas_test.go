@@ -1,8 +1,10 @@
 package tracker
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The comparisons, exercised as VALUES.
@@ -30,7 +32,7 @@ func TestAnEdgeDeltaIsAboutMembershipRatherThanOrder(t *testing.T) {
 		{Kind: RelationWaitingOn, Other: "a"},
 		{Kind: RelationWaitingOn, Other: "b"},
 	}}
-	if moved := TaskDeltas(one, other); moved != nil {
+	if moved := TaskDeltas(one, other, nil); moved != nil {
 		t.Errorf("re-stating one edge set in another order recorded %v, and "+
 			"nothing about the task changed", moved)
 	}
@@ -38,7 +40,7 @@ func TestAnEdgeDeltaIsAboutMembershipRatherThanOrder(t *testing.T) {
 	// would pass for a comparison that answers nothing at all.
 	grew := Task{Relations: append([]Relation{{Kind: RelationWaitingOn, Other: "c"}},
 		other.Relations...)}
-	if got := TaskDeltas(other, grew)["waiting_on"]; got != (Delta{From: "a, b", To: "a, b, c"}) {
+	if got := TaskDeltas(other, grew, nil)["waiting_on"]; got != (Delta{From: "a, b", To: "a, b, c"}) {
 		t.Errorf("adding an edge recorded %+v", got)
 	}
 }
@@ -58,7 +60,7 @@ func TestEveryRelationKindGetsItsOwnDeltaField(t *testing.T) {
 		after.Relations = append(after.Relations,
 			Relation{Kind: kind, Other: "other-" + string(kind)})
 	}
-	moved := TaskDeltas(before, after)
+	moved := TaskDeltas(before, after, nil)
 	for _, kind := range RelationKinds {
 		got, recorded := moved[string(kind)]
 		if !recorded {
@@ -75,7 +77,7 @@ func TestEveryRelationKindGetsItsOwnDeltaField(t *testing.T) {
 	// for that direction everywhere else. It is not a fifth relation kind
 	// because it is not an authored edge: it is the copy a blocker carries
 	// so a close can name who it unblocks.
-	mirrored := TaskDeltas(Task{}, Task{Dependents: []string{"dep-2", "dep-1"}})
+	mirrored := TaskDeltas(Task{}, Task{Dependents: []string{"dep-2", "dep-1"}}, nil)
 	if got := mirrored["blocking"]; got != (Delta{From: "", To: "dep-1, dep-2"}) {
 		t.Errorf("the mirror recorded %+v", got)
 	}
@@ -241,5 +243,395 @@ func TestAnUnmovedDocumentRecordsNothing(t *testing.T) {
 		(Delta{From: "builds it", To: "ships it"}) {
 
 		t.Errorf("a purpose edit recorded %+v", got)
+	}
+}
+
+// A PEOPLE SET IS A SET, so its delta is about membership and not about order.
+//
+// The three handle collections on a task are assembled rather than arranged:
+// [settleWatch] rebuilds the watcher list by removing a handle and appending
+// it, and a caller may state a whole set it read in any order. Recorded in
+// document order, every re-statement that moved nobody would write a change
+// into a table nothing rewrites — which is the same failure the edge sets are
+// sorted to avoid, one collection along.
+func TestThePeopleSetsRecordMembershipRatherThanOrder(t *testing.T) {
+	t.Parallel()
+	one := Task{
+		Watchers:      []string{"bo", "ana"},
+		Muted:         []string{"cy", "bo"},
+		Collaborators: []string{"di", "ana"},
+	}
+	other := Task{
+		Watchers:      []string{"ana", "bo"},
+		Muted:         []string{"bo", "cy"},
+		Collaborators: []string{"ana", "di"},
+	}
+	if moved := TaskDeltas(one, other, nil); moved != nil {
+		t.Errorf("re-stating three sets in another order recorded %v, and "+
+			"nothing about the task changed", moved)
+	}
+	// AND A REAL MEMBERSHIP CHANGE IS RECORDED, or the assertion above
+	// would pass for a comparison that answers nothing at all.
+	grew := other
+	grew.Watchers = []string{"ana", "bo", "zed"}
+	grew.Collaborators = nil
+	moved := TaskDeltas(other, grew, nil)
+	if got := moved["watchers"]; got != (Delta{From: "ana, bo", To: "ana, bo, zed"}) {
+		t.Errorf("adding a watcher recorded %+v", got)
+	}
+	if got := moved["collaborators"]; got != (Delta{From: "ana, di", To: ""}) {
+		t.Errorf("clearing the collaborators recorded %+v — an emptied set is "+
+			"the empty string, which every renderer draws as an em dash", got)
+	}
+}
+
+// A MUTE IS ITS OWN FIELD RATHER THAN A SUBTRACTION FROM THE WATCHERS.
+//
+// [Wake.snapshot] subtracts the muted from the watchers because it is building
+// a ROUTING list and the feed must never have to remember to. A DELTA records
+// what the document holds, and folding the two here would make "was never
+// watching" and "chose to stop" the same row — the one distinction those two
+// fields exist to keep, and the one an unwatch is entirely about.
+func TestAMuteIsRecordedApartFromTheWatcherSet(t *testing.T) {
+	t.Parallel()
+	// What [settleWatch] leaves behind for an unwatch: out of the set AND
+	// into the muted list, in one patch.
+	before := Task{Watchers: []string{"ana", "bo"}}
+	after := Task{Watchers: []string{"bo"}, Muted: []string{"ana"}}
+	moved := TaskDeltas(before, after, nil)
+	if got := moved["watchers"]; got != (Delta{From: "ana, bo", To: "bo"}) {
+		t.Errorf("the watcher set recorded %+v", got)
+	}
+	if got := moved["muted"]; got != (Delta{From: "", To: "ana"}) {
+		t.Errorf("the mute recorded %+v — a watcher row that did not say who "+
+			"opted out is the row this field exists to complete", got)
+	}
+	// AND A MUTE WITH THE WATCH INTACT IS THE OTHER HALF: somebody still
+	// on the list who has asked not to hear. Only `muted` moves, so a
+	// delta that had folded the two would record nothing at all.
+	muted := Task{Watchers: []string{"ana", "bo"}, Muted: []string{"ana"}}
+	if moved := TaskDeltas(before, muted, nil); len(moved) != 1 {
+		t.Errorf("muting a watcher who stays on the list recorded %v, and it "+
+			"is exactly one change", moved)
+	}
+}
+
+// A BODY DELTA IS A MARKER AND NEVER THE PROSE.
+//
+// [MaxBody] is 32 KiB and `tracker_history` is never swept, so carrying both
+// sides would put 64 KiB on one log line on every node for the life of the
+// company — while the mutation the row already stores holds the text for
+// anybody who needs it.
+func TestABodyDeltaCarriesASizeAndNotTheText(t *testing.T) {
+	t.Parallel()
+	prose := "the quick brown fox"
+	written := TaskDeltas(Task{}, Task{Body: prose}, nil)["body"]
+	if strings.Contains(written.To, "fox") {
+		t.Fatalf("the body delta carried the prose: %+v", written)
+	}
+	if written != (Delta{From: "", To: "19 bytes"}) {
+		t.Errorf("writing a body recorded %+v — the empty `from` is what a "+
+			"renderer draws as an em dash for a task that had none", written)
+	}
+	cleared := TaskDeltas(Task{Body: prose}, Task{}, nil)["body"]
+	if cleared != (Delta{From: "19 bytes", To: ""}) {
+		t.Errorf("clearing a body recorded %+v", cleared)
+	}
+	// AND A REWRITE OF THE SAME LENGTH IS STILL A CHANGE, which is the
+	// whole reason [deltaSet.mark] exists: the two markers read the same,
+	// and the KEY's presence is what says the field moved. Compared on the
+	// text, as `add` does, a typo fix would have recorded nothing.
+	same := TaskDeltas(Task{Body: prose}, Task{Body: "the quick brown cat"}, nil)
+	if got, held := same["body"]; !held || got != (Delta{From: "19 bytes", To: "19 bytes"}) {
+		t.Errorf("an edit that kept the length recorded %+v (held=%v)", got, held)
+	}
+	// An unchanged body is not a change, or every commit would carry one.
+	if moved := TaskDeltas(Task{Body: prose}, Task{Body: prose}, nil); moved != nil {
+		t.Errorf("an untouched body recorded %v", moved)
+	}
+}
+
+// A CHECKLIST DELTA IS COUNTS PER NAMED LIST, and a promotion is its own
+// number.
+//
+// A task carries [MaxChecklists] lists holding [MaxChecklistItemsTotal] items
+// between them, so the items themselves cannot ride a log line. What makes the
+// counts sufficient rather than merely cheap is the promotion column:
+// promoting an item to a subtask is a `checklist` commit that moves neither
+// the done count nor the total, so counts alone would have left the one
+// checklist gesture this build has recording nothing at all.
+func TestAChecklistDeltaCountsItemsPerNamedList(t *testing.T) {
+	t.Parallel()
+	subtask := "t-9"
+	before := Task{Checklists: []Checklist{{
+		ID: "c-1", Name: "Setup", Items: []ChecklistItem{
+			{ID: "i-1", Name: "clone"}, {ID: "i-2", Name: "build"},
+			{ID: "i-3", Name: "ship"},
+		},
+	}}}
+	done := before
+	done.Checklists = []Checklist{{
+		ID: "c-1", Name: "Setup", Items: []ChecklistItem{
+			{ID: "i-1", Name: "clone", Done: true}, {ID: "i-2", Name: "build"},
+			{ID: "i-3", Name: "ship"},
+		},
+	}}
+	got := TaskDeltas(before, done, nil)["checklists"]
+	if got != (Delta{From: "Setup: 0 of 3 done", To: "Setup: 1 of 3 done"}) {
+		t.Errorf("checking an item off recorded %+v", got)
+	}
+	if strings.Contains(got.To, "clone") {
+		t.Errorf("the checklist delta carried an item's text: %+v", got)
+	}
+
+	// A SECOND LIST IS NAMED BY BEING THERE on one side only, which is how
+	// an addition and a removal read as two different pictures.
+	added := done
+	added.Checklists = []Checklist{
+		done.Checklists[0],
+		{ID: "c-2", Name: "Rollout", Items: []ChecklistItem{{ID: "i-4"}}},
+	}
+	if got := TaskDeltas(done, added, nil)["checklists"]; got !=
+		(Delta{From: "Setup: 1 of 3 done", To: "Setup: 1 of 3 done, Rollout: 0 of 1 done"}) {
+
+		t.Errorf("adding a list recorded %+v", got)
+	}
+
+	// AND A PROMOTION, which moves neither count.
+	promoted := done
+	promoted.Checklists = []Checklist{{
+		ID: "c-1", Name: "Setup", Items: []ChecklistItem{
+			{ID: "i-1", Name: "clone", Done: true},
+			{ID: "i-2", Name: "build", PromotedTo: &subtask},
+			{ID: "i-3", Name: "ship"},
+		},
+	}}
+	if got := TaskDeltas(done, promoted, nil)["checklists"]; got !=
+		(Delta{From: "Setup: 1 of 3 done", To: "Setup: 1 of 3 done (1 promoted)"}) {
+
+		t.Errorf("promoting an item recorded %+v, and the one checklist "+
+			"gesture this build has must not write an empty row", got)
+	}
+	// A list nobody named is still attachable to something.
+	nameless := Task{Checklists: []Checklist{{ID: "c-7"}}}
+	if got := TaskDeltas(Task{}, nameless, nil)["checklists"]; got.To != "c-7: 0 of 0 done" {
+		t.Errorf("a nameless list recorded %+v", got)
+	}
+}
+
+// A CUSTOM FIELD IS NAMED BY ITS SLUG, WHICH TAKES THE CATALOGUE.
+//
+// Values are keyed by field ID precisely so a rename never re-points one, and
+// an id is a uuid — so the declarations in hand are what turn the key back
+// into the word somebody typed, and a choice's stored option id back into the
+// option they picked. Without them the comparison is SKIPPED rather than
+// keyed by uuid, because `0f3c…=3 → 0f3c…=5` is worse on every surface than
+// no delta at all.
+func TestACustomFieldDeltaIsNamedBySlugOrNotAtAll(t *testing.T) {
+	t.Parallel()
+	declared := map[string]FieldDef{
+		"f-sev": {ID: "f-sev", Slug: "severity", Type: FieldText},
+		"f-env": {ID: "f-env", Slug: "environment", Type: FieldDropdown, Config: FieldConfig{
+			Options: []Option{
+				{ID: "o-1", Slug: "staging"}, {ID: "o-2", Slug: "production"},
+			},
+		}},
+		"f-eta": {ID: "f-eta", Slug: "eta_days", Type: FieldNumber},
+	}
+	before := Task{Fields: map[string]json.RawMessage{
+		"f-sev": json.RawMessage(`"low"`),
+		"f-env": json.RawMessage(`"o-1"`),
+		"f-eta": json.RawMessage(`3`),
+	}}
+	after := Task{Fields: map[string]json.RawMessage{
+		"f-sev": json.RawMessage(`"high"`),
+		"f-env": json.RawMessage(`"o-2"`),
+		"f-eta": json.RawMessage(`3`),
+	}}
+	got := TaskDeltas(before, after, declared)["fields"]
+	// ORDERED BY SLUG, both sides, and `eta_days` did not move so it is on
+	// neither — [paramsText]'s rule, for [paramsText]'s reason.
+	if got != (Delta{
+		From: "environment=staging, severity=low",
+		To:   "environment=production, severity=high",
+	}) {
+		t.Errorf("two moved fields recorded %+v", got)
+	}
+
+	// THE WRITER'S FRAME HOLDS NO CATALOGUE, so it records no `fields` at
+	// all rather than a pair of uuids.
+	if _, held := TaskDeltas(before, after, nil)["fields"]; held {
+		t.Error("a comparison with no catalogue named a field by its id")
+	}
+
+	// A FIELD NOBODY DECLARES IS COUNTED. There is no slug to name it
+	// with, and dropping it in silence would make a commit that moved only
+	// such a value read as a commit that moved nothing.
+	foreign := Task{Fields: map[string]json.RawMessage{
+		"f-sev": json.RawMessage(`"low"`),
+		"f-env": json.RawMessage(`"o-1"`),
+		"f-eta": json.RawMessage(`3`),
+		"f-???": json.RawMessage(`"anything"`),
+	}}
+	if got := TaskDeltas(before, foreign, declared)["fields"]; got !=
+		(Delta{From: "", To: "1 undeclared"}) {
+
+		t.Errorf("a value for an undeclared field recorded %+v", got)
+	}
+	// AND NOTHING MOVING RECORDS NOTHING, or every commit on a task with
+	// custom values would carry an empty pair.
+	if moved := TaskDeltas(before, before, declared); moved != nil {
+		t.Errorf("an untouched field map recorded %v", moved)
+	}
+}
+
+// A MULTI-VALUED FIELD KEEPS ITS MEMBERS APART FROM ITS NEIGHBOURS.
+//
+// ", " separates one FIELD from the next on a delta side, so the members of
+// one field cannot use it: a labels field holding two options would otherwise
+// read as two fields, one of them nameless.
+func TestAMultiValuedFieldSeparatesItsOwnMembers(t *testing.T) {
+	t.Parallel()
+	declared := map[string]FieldDef{
+		"f-lab": {ID: "f-lab", Slug: "labels", Type: FieldLabels, Config: FieldConfig{
+			Options: []Option{{ID: "o-1", Slug: "api"}, {ID: "o-2", Slug: "ui"}},
+		}},
+	}
+	after := Task{Fields: map[string]json.RawMessage{
+		"f-lab": json.RawMessage(`["o-1","o-2"]`),
+	}}
+	if got := TaskDeltas(Task{}, after, declared)["fields"]; got !=
+		(Delta{From: "", To: "labels=api/ui"}) {
+
+		t.Errorf("a two-option labels field recorded %+v", got)
+	}
+}
+
+// THE FOUR SCALARS RECORD THEIR MOVES, and the two ids stay ids.
+//
+// `parent` and `removed_with` name ANOTHER TASK'S ROW, so they carry its id
+// and never its key: `tracker_history` is inside this domain's identity claim
+// and is repaired by nothing, so a node that had not applied that task would
+// store a different string there for ever. The activity read resolves them.
+func TestTheScalarTaskFieldsRecordWhatMoved(t *testing.T) {
+	t.Parallel()
+	oldParent, newParent, root := "t-1", "t-2", "t-root"
+	before := Task{
+		Reporter: "ana", RoutingUnit: "Engineering", Parent: &oldParent,
+	}
+	after := Task{
+		Reporter: "bo", RoutingUnit: "Platform", Parent: &newParent,
+		Archived: true,
+		Removed:  &Tombstone{By: "bo", RemovedWith: &root},
+	}
+	moved := TaskDeltas(before, after, nil)
+	for field, want := range map[string]Delta{
+		"reporter":     {From: "ana", To: "bo"},
+		"routing_unit": {From: "Engineering", To: "Platform"},
+		"parent":       {From: "t-1", To: "t-2"},
+		// BOTH STATES PRESENT for a flag, which is [boolText]'s rule:
+		// "— → true" would read as a field that had no value before.
+		"archived": {From: "false", To: "true"},
+		// THE ONE THING A TOMBSTONE HOLDS that the history row's own
+		// actor, actor_kind and created_at do not already carry.
+		"removed_with": {From: "", To: "t-root"},
+	} {
+		if got := moved[field]; got != want {
+			t.Errorf("%s = %+v, want %+v", field, got, want)
+		}
+	}
+	// A ROOT HAS NO PARENT, and losing one is a move like any other.
+	orphaned := TaskDeltas(Task{Parent: &oldParent}, Task{}, nil)["parent"]
+	if orphaned != (Delta{From: "t-1", To: ""}) {
+		t.Errorf("clearing a parent recorded %+v", orphaned)
+	}
+	// AND AN ORDINARY REMOVAL WENT WITH NOTHING, so it records nothing
+	// here: `removed_with` answers "was this a cascade", and a task
+	// somebody removed on purpose is not one.
+	alone := TaskDeltas(Task{}, Task{Removed: &Tombstone{By: "bo"}}, nil)
+	if _, held := alone["removed_with"]; held {
+		t.Errorf("a removal that took nothing with it recorded %v", alone)
+	}
+}
+
+// WHAT A CARD CARRIES AND WHAT A HISTORY ROW CARRIES DIFFER IN EXACTLY ONE
+// FIELD.
+//
+// [TaskDeltas] is exported so that the two frames cannot disagree about what
+// moved, and this is the whole of the one split that remains: the APPLIER
+// holds the project's catalogue and the WRITER does not, so a custom-field
+// move is history-only. Everything else a task can move reaches both, and a
+// field held back from the notification "because a card is one line" would be
+// that disagreement re-introduced by hand.
+func TestACardCarriesEveryDeltaButTheCatalogueOne(t *testing.T) {
+	t.Parallel()
+	declared := map[string]FieldDef{
+		"f-sev": {ID: "f-sev", Slug: "severity", Type: FieldText},
+	}
+	before := Task{
+		Key: "ENG-1", Watchers: []string{"ana"},
+		Fields: map[string]json.RawMessage{"f-sev": json.RawMessage(`"low"`)},
+	}
+	after := Task{
+		Key: "ENG-1", Watchers: []string{"ana", "bo"}, Archived: true,
+		Fields: map[string]json.RawMessage{"f-sev": json.RawMessage(`"high"`)},
+	}
+
+	card := Wake{Kind: ChangeWatchers, Before: before, After: after}.Notify(nil)
+	if got := card.Fields["watchers"]; got != (Delta{From: "ana", To: "ana, bo"}) {
+		t.Errorf("a watcher change reached the card as %+v — a card that "+
+			"named no watcher is the row this field exists to complete", got)
+	}
+	if got := card.Fields["archived"]; got != (Delta{From: "false", To: "true"}) {
+		t.Errorf("the archive flag reached the card as %+v", got)
+	}
+	if got, held := card.Fields["fields"]; held {
+		t.Errorf("the card carried %+v for a custom field — the writer holds "+
+			"no catalogue, so it could only have named it by uuid", got)
+	}
+
+	// AND THE APPLIER'S OWN ANSWER IS THE SAME SET PLUS THAT ONE FIELD, so
+	// the history row is a superset of the card rather than a second
+	// opinion about it.
+	row := TaskDeltas(before, after, declared)
+	for name, got := range card.Fields {
+		if row[name] != got {
+			t.Errorf("the row records %+v for %s and the card %+v — one "+
+				"function answers both, so they cannot differ", row[name], name, got)
+		}
+	}
+	if got := row["fields"]; got != (Delta{From: "severity=low", To: "severity=high"}) {
+		t.Errorf("the history row recorded %+v for the custom field", got)
+	}
+	if len(row) != len(card.Fields)+1 {
+		t.Errorf("the row records %v and the card %v — the catalogue field is "+
+			"the only difference there is meant to be", row, card.Fields)
+	}
+}
+
+// MAKING A DUE DATE ALL-DAY IS A CHANGE THE INSTANT CANNOT SHOW.
+//
+// An all-day date is stored as the company's own midnight, so the gesture that
+// turns a midnight due date into an all-day one moves the flag and leaves the
+// instant exactly where it was. Compared on `due` alone that is a row saying
+// the schedule changed and naming nothing — the same failure the schedule
+// fields were added to these deltas to end, one field along.
+func TestMakingADueDateAllDayIsRecorded(t *testing.T) {
+	t.Parallel()
+	midnight := time.Date(2031, 4, 16, 0, 0, 0, 0, time.UTC)
+	timed := Task{DueAt: &midnight}
+	allDay := Task{DueAt: &midnight, DueAllDay: true}
+
+	moved := TaskDeltas(timed, allDay, nil)
+	if got := moved["due_all_day"]; got != (Delta{From: "false", To: "true"}) {
+		t.Errorf("making a due date all-day recorded %+v", got)
+	}
+	if _, held := moved["due"]; held {
+		t.Error("the instant did not move and is in the deltas")
+	}
+	// AND A TASK WITH NO ALL-DAY DATE ON EITHER SIDE RECORDS NOTHING, or
+	// every commit in the company would carry the flag.
+	if moved := TaskDeltas(timed, timed, nil); moved != nil {
+		t.Errorf("an untouched schedule recorded %v", moved)
 	}
 }

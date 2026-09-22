@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -339,5 +340,235 @@ func TestATaskDeltaRowIsUnchangedByTheEdgeFields(t *testing.T) {
 		t.Errorf("a status change recorded %s — a commit that moved no edge "+
 			"must write the same bytes it wrote before the edge fields "+
 			"existed", got)
+	}
+}
+
+// AND IT IS STILL WHAT IT ALWAYS WAS AFTER THE TEN FIELDS BELOW ARRIVED.
+//
+// This is [TestATaskDeltaRowIsUnchangedByTheEdgeFields]'s assertion against a
+// task that CARRIES every one of the new fields: a body, a reporter, a
+// watcher, a checklist and a custom value. `fields_json` is inside the state
+// log's identity claim and every row already in a company's history was
+// written by the old comparison, so a commit that moved none of them must
+// still write exactly the bytes it wrote before — a comparison that recorded
+// a field's CURRENT value rather than its move would put all five on every
+// status change in the company for ever.
+func TestATaskDeltaRowIsUnchangedByTheNewFields(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	if _, err := r.writer.WriteFields(t.Context(), "op-fields", []tracker.FieldDef{
+		{ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldText},
+	}); err != nil {
+		t.Fatalf("declare a field: %v", err)
+	}
+	r.drain()
+
+	task := newTask("t-1")
+	task.Key = "ENG-t-1"
+	task.Body = "what this is about"
+	task.Reporter = "cy"
+	task.RoutingUnit = "Engineering"
+	task.Watchers = []string{"ana"}
+	task.Collaborators = []string{"bo"}
+	task.Checklists = []tracker.Checklist{{
+		ID: "c-1", Name: "Setup", Items: []tracker.ChecklistItem{{ID: "i-1"}},
+	}}
+	task.Fields = map[string]json.RawMessage{"severity": json.RawMessage(`"low"`)}
+	if _, err := r.writer.CreateTask(t.Context(), "op-create", task, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+
+	status := tracker.StatusInProgress
+	if _, err := r.writer.UpdateTask(t.Context(), "op-status", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &status},
+		tracker.ChangeStatus, nil); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+	r.drain()
+
+	if got := r.fieldsForSubject("t-1"); got != `{"status":{`+
+		`"from":"todo","to":"in_progress"}}` {
+
+		t.Errorf("a status change on a task carrying a body, a reporter, a "+
+			"watcher, a checklist and a custom value recorded %s — a commit "+
+			"that moved none of them must write the bytes it always wrote", got)
+	}
+}
+
+// A WATCHER ROW NAMES WHO, AND A MUTE SAYS WHO OPTED OUT.
+//
+// A `watchers` commit is the sharpest of the ten: the kind says the watchers
+// changed and the row said nothing else, so the History page and the item's
+// History tab both drew the bare word for the one change whose entire content
+// is a handle. The two fields are separate because [settleWatch] writes both —
+// an unwatch drops a handle from the set AND mutes it — and folding them would
+// make "was never watching" and "chose to stop" the same row.
+func TestAWatchCommitRecordsTheHandlesThatMoved(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "t-1")
+
+	if _, err := r.writer.UpdateTask(t.Context(), "op-watch", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{
+			Watch: &tracker.WatchIntent{Handle: "bo", Watch: true},
+		}, tracker.ChangeWatchers, nil); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	r.drain()
+	if got := r.fieldsForSubject("t-1"); got != `{"watchers":{"from":"","to":"bo"}}` {
+		t.Errorf("starting to watch recorded %s", got)
+	}
+
+	if _, err := r.writer.UpdateTask(t.Context(), "op-unwatch", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{
+			Watch: &tracker.WatchIntent{Handle: "bo", Watch: false},
+		}, tracker.ChangeWatchers, nil); err != nil {
+		t.Fatalf("unwatch: %v", err)
+	}
+	r.drain()
+	// BOTH HALVES OF THE ONE GESTURE, which is what an unwatch is.
+	if got := r.fieldsForSubject("t-1"); got != `{`+
+		`"muted":{"from":"","to":"bo"},`+
+		`"watchers":{"from":"bo","to":""}}` {
+
+		t.Errorf("an unwatch recorded %s", got)
+	}
+}
+
+// A CUSTOM FIELD IS RESOLVED TO ITS SLUG INSIDE THE APPLY.
+//
+// This is the one delta the WRITER cannot compute, and the case that holds the
+// wiring for it: values are keyed by field ID, the applier reads the project's
+// declarations to write the value rows, and the same map is what turns the key
+// back into the word somebody typed. Without it the row would have read
+// `f-sev=low → f-sev=high` — and a project declaring its fields with minted
+// uuids would have printed those instead.
+func TestACustomFieldRowNamesTheFieldBySlug(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	if _, err := r.writer.WriteFields(t.Context(), "op-fields", []tracker.FieldDef{
+		{ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldDropdown,
+			Config: tracker.FieldConfig{Options: []tracker.Option{
+				{ID: "o-low", Slug: "low", Name: "Low"},
+				{ID: "o-high", Slug: "high", Name: "High"},
+			}}},
+	}); err != nil {
+		t.Fatalf("declare a field: %v", err)
+	}
+	r.drain()
+	filedTask(t, r, "t-1")
+
+	set := map[string]json.RawMessage{"severity": json.RawMessage(`"low"`)}
+	if _, err := r.writer.UpdateTask(t.Context(), "op-set", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Fields: &set},
+		tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("set the field: %v", err)
+	}
+	r.drain()
+	// THE OPTION'S SLUG, NOT ITS ID. [coerceOption] stores the option id so
+	// a rename never re-points a stored value, and the same catalogue is
+	// what reads it back out.
+	if got := r.fieldsForSubject("t-1"); got != `{"fields":{`+
+		`"from":"","to":"severity=low"}}` {
+
+		t.Errorf("setting a custom field recorded %s", got)
+	}
+
+	raise := map[string]json.RawMessage{"severity": json.RawMessage(`"high"`)}
+	if _, err := r.writer.UpdateTask(t.Context(), "op-raise", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Fields: &raise},
+		tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("raise the field: %v", err)
+	}
+	r.drain()
+	if got := r.fieldsForSubject("t-1"); got != `{"fields":{`+
+		`"from":"severity=low","to":"severity=high"}}` {
+
+		t.Errorf("re-pointing a custom field recorded %s", got)
+	}
+
+	// AND CLEARING IT IS THE SAME FACT BACKWARDS, on a commit whose only
+	// content is the clearing — the row that would otherwise be empty.
+	empty := map[string]json.RawMessage{}
+	if _, err := r.writer.UpdateTask(t.Context(), "op-clear", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Fields: &empty},
+		tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("clear the field: %v", err)
+	}
+	r.drain()
+	if got := r.fieldsForSubject("t-1"); got != `{"fields":{`+
+		`"from":"severity=high","to":""}}` {
+
+		t.Errorf("clearing a custom field recorded %s", got)
+	}
+}
+
+// A BODY EDIT SAYS THAT ONE HAPPENED AND HOW BIG IT IS, AND NEVER THE PROSE.
+//
+// `update_work_item` carries a whole description, [MaxBody] is 32 KiB and this
+// table is never swept — so a row carrying both sides would be 64 KiB per
+// edit on every node for the life of the company. The mutation is already on
+// this row's own `document` column for anybody who needs the text.
+func TestABodyEditRecordsAMarkerRatherThanTheProse(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "t-1")
+
+	written := "the original description, at some length"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-body", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Body: &written},
+		tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("write the body: %v", err)
+	}
+	r.drain()
+	if got := r.fieldsForSubject("t-1"); got != `{"body":{"from":"","to":"40 bytes"}}` {
+		t.Errorf("writing a body recorded %s", got)
+	}
+
+	// A REWRITE OF THE SAME LENGTH IS STILL A CHANGE. The two markers read
+	// the same, and the key's presence is what says the field moved —
+	// compared on the text, a typo fix would have recorded nothing at all.
+	fixed := "the original description, at some weight"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-typo", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Body: &fixed},
+		tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("fix the body: %v", err)
+	}
+	r.drain()
+	if got := r.fieldsForSubject("t-1"); got !=
+		`{"body":{"from":"40 bytes","to":"40 bytes"}}` {
+
+		t.Errorf("an edit that kept the length recorded %s", got)
+	}
+}
+
+// A RE-PARENT NAMES BOTH ENDS, BY ID.
+//
+// `reparented` was one of the kinds whose row read as the bare word: the
+// dashboard's own change table says so, and a person asking "where did this
+// move from" had nothing on the row to answer with. The id rather than the key
+// is `deltas.go`'s rule — a key is a fact about another task's row — and the
+// activity read resolves it against the rows this node holds when it answers.
+func TestAReparentRecordsBothParentsByID(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.applyWhileWriting()
+	filedTask(t, r, "t-parent")
+	filedTask(t, r, "t-child")
+
+	parent := "t-parent"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-adopt", "t-child", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Parent: &parent},
+		tracker.ChangeReparented, nil); err != nil {
+		t.Fatalf("re-parent: %v", err)
+	}
+	r.drain()
+	if got := r.fieldsForSubject("t-child"); got !=
+		`{"parent":{"from":"","to":"t-parent"}}` {
+
+		t.Errorf("a re-parent recorded %s", got)
 	}
 }

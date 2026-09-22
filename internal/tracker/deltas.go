@@ -84,7 +84,9 @@ const MaxDeltaElement = MaxDeltaValue / 4
 
 // deltaSet is the fields a comparison found, and the ONE place the two rules
 // every producer shares are written: a side that reads the same on both ends
-// did not move, and a set past [MaxDeltas] is trimmed deterministically.
+// did not move ([deltaSet.add], and [deltaSet.mark] for the two fields that
+// carry a marker instead of a value), and a set past [MaxDeltas] is trimmed
+// deterministically.
 //
 // ONE TYPE RATHER THAN A CLOSURE PER FUNCTION, because "the same text is not a
 // change" written seven times is six chances for one of them to say something
@@ -94,8 +96,29 @@ type deltaSet map[string]Delta
 // add records one field's move, and ignores one that did not happen.
 func (d deltaSet) add(field, from, to string) {
 	if from != to {
-		d[field] = Delta{From: from, To: to}
+		d.mark(field, from, to)
 	}
+}
+
+// mark records a move the CALLER has already established, whatever the two
+// sides read.
+//
+// THE ONE EXCEPTION TO "a side that reads the same on both ends did not move",
+// and it exists because two of a task's fields carry a MARKER rather than the
+// value — which is the only shape those two can honestly take in a log line.
+// A body delta carries a SIZE and never the prose, so replacing one paragraph
+// with another of the same length moves the task and leaves both markers
+// identical; a custom-field delta carries each value CUT to
+// [MaxDeltaElement], so two long values differing past the cut render the
+// same. In both the KEY'S PRESENCE is the statement that the field moved and
+// the sides say what can be said about it — which is strictly more honest than
+// [deltaSet.add]'s silence, and is why the caller establishes the move from
+// the VALUES rather than from their renderings.
+//
+// Every other field uses [deltaSet.add]: its text is the whole value, so two
+// sides reading the same IS the field not having moved.
+func (d deltaSet) mark(field, from, to string) {
+	d[field] = Delta{From: from, To: to}
 }
 
 // done is the set as a delta map: NIL when nothing moved, and trimmed to
