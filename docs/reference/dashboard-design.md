@@ -620,7 +620,7 @@ and they are not interchangeable:
 - the whole **group says something**, in one line, because every property in it
   is absent — `whenAllAbsent`. A section of nothing is not the same claim as a
   row of nothing: a fresh task spent a heading, a hairline and four dashes
-  learning the reader that nothing about it is scheduled, which in a 420px peek
+  telling the reader that nothing about it is scheduled, which in a 420px peek
   is most of the space between the header and the description. "Nothing
   scheduled: no dates, no estimate, no size." states it once, the heading stays
   — the group exists and is empty, which is not the claim the *dropped* case
