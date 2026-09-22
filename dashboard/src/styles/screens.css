@@ -2179,7 +2179,20 @@ details > summary.int-summary::-webkit-details-marker {
   border-top: 1px solid var(--border-subtle);
 }
 
-/* ---- The body, and the peek beside it ----------------------------------- */
+/* ---- The body ------------------------------------------------------------
+   ONE COLUMN, AND THE PEEK IS NOT IN IT. The tracker grew its own peek — a
+   second column of this grid, sized here, flipped to a drawer by a media
+   query of its own — and the frame took it over: `.app` carries a fourth
+   track for `--peek-w` and every screen in the product can open one. The
+   rules that sized it here matched `[data-peek="true"]` on THIS element,
+   which nothing has ever set: the attribute lives on the shell's root. So
+   they were dead the day the peek moved and stayed in the sheet, shipped in
+   the bundle, with a measured threshold in their comment that no longer
+   governed anything. CSS that matches nothing is indistinguishable from CSS
+   whose selector somebody broke.
+
+   WHERE THE THRESHOLD LIVES NOW is `--peek-drawer-max` in frame.css, with
+   its arithmetic written at the definition. */
 
 /* ONE COLUMN. The peek is the FRAME's — a fourth track of `.app` while the
    rail is open, a drawer under `--peek-drawer-max` (frame.css) — so nothing
@@ -2464,6 +2477,20 @@ details > summary.int-summary::-webkit-details-marker {
      glyph of a fixed size and does not. A literal 32px would be right at one
      setting and wrong at the other two. */
   grid-template-columns: calc(var(--row-inline) + 16px) 74px auto minmax(0, 1fr) auto auto auto auto;
+  /* AND THE NARROW SET IS THE SAME FOUR, DECLARED ONCE. Two different
+     questions ask for it — a WINDOW too small to hold eight columns, and a
+     BOX too small whatever the window is doing (a list inside a 420px peek)
+     — and neither can be asked in the other's terms, so there are two rules
+     at the foot of this file. What there may not be is two track lists: a
+     track list is POSITIONAL, so a set that drifts from the order above
+     hands a cell the wrong column and says nothing about it. Priority, key,
+     status, title — the same three opening tracks a reader scans down.
+
+     AND ITS FIRST TRACK CARRIES THE INSET TOO, for the reason the wide
+     list gives above: the row pads itself by `--row-inline` and a subgrid
+     item's padding comes out of the first track it spans, so a bare `16px`
+     resolved to nothing and the mark came to rest on the key beside it. */
+  --work-rows-narrow: calc(var(--row-inline) + 16px) 70px auto minmax(0, 1fr);
   /* THE GUTTER BELONGS TO WHOEVER OWNS THE TRACKS. On a subgridded axis a
      row's own `column-gap` is ignored and the parent's is used — so declared
      on the row it silently became zero, and a type icon sat on top of the
@@ -2884,6 +2911,16 @@ details > summary.int-summary::-webkit-details-marker {
   gap: var(--space-4);
   min-width: 0;
 }
+/* THE SUBTASK LIST MEASURES ITSELF. A named container rather than an
+   anonymous one, because `.page` is a size container too and an unnamed
+   `@container` query binds to the NEAREST one — which would be this card
+   here and the page on any list that forgot the class, i.e. one rule
+   answering two different questions depending on where it was used. The
+   query is in the responsive block at the foot of this file. */
+.work-subtasks {
+  container: subtasks / inline-size;
+}
+
 /* ONLY THE RAIL STICKS — the main column is what scrolls past it. */
 .work-item-side {
   position: sticky;
@@ -3037,16 +3074,32 @@ a.work-cal-chip {
 }
 
 /* ---- Responsive ---------------------------------------------------------
-   Where the peek stops fitting beside the body is the FRAME's threshold,
-   `--peek-drawer-max` in frame.css, not one of this sheet's: the rail is a
-   track of `.app`, and under that width it is a drawer over whatever screen
-   is open. This sheet keeps the two steps that are the work screens' own —
-   the item page's rail, and the phone. */
+   THE PEEK'S OWN STEP IS NOT HERE ANY MORE, and there is nothing left for
+   this file to say about it: the peek is a column of the shell's grid, and
+   `--peek-drawer-max` in frame.css is where it stops being one, with its
+   arithmetic at the definition. What stood here was a `@media (max-width:
+   1500px)` over `.work-body[data-peek="true"]` — a threshold measured from
+   the board, for a peek this screen used to own and no longer does, on a
+   selector nothing has set since the frame took the peek over.
 
-/* THE ITEM PAGE KEEPS ITS OWN THRESHOLD. It is a page rather than a pane
-   beside a board — there is no third column competing with it — so its
-   properties rail sits beside the body for as long as both are readable. */
-@media (max-width: 1180px) {
+   WHAT IS LEFT IS MEASURED FROM THE BOX, NOT THE WINDOW. The item page's own
+   step turns on how wide the PAGE COLUMN is, and that is the window less the
+   rail, less the workspace sidebar, less an open peek — every one of them a
+   thing the reader moves. A viewport number is a guess at their sum on the
+   day it was written, and it was wrong the moment a peek could open over any
+   screen: at 1280 with one open the item page kept a 300px rail beside a
+   171px body, which is the arrangement the threshold exists to prevent, at
+   twenty widths of window. `page` is the shell's own named container. */
+
+/* THE ITEM PAGE'S RAIL SITS BESIDE ITS BODY while both are readable, and the
+   body's floor is the one already measured for the list: 444px is under what
+   a work row needs for a key, a title and an assignee (see
+   `--peek-drawer-max` in frame.css), and an item page draws that row for
+   every subtask. Beside it the rail is 300, the gap is `--space-4` and the
+   page's own inset is `--space-5` twice — 56px at normal density and 63.84 at
+   comfortable — so 444 + 300 + 64 = 808, and the WIDEST density is what the
+   one number has to clear, exactly as the peek's own threshold argues. */
+@container page (max-width: 808px) {
   .work-item {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -3055,29 +3108,50 @@ a.work-cal-chip {
   }
 }
 
+/* A SUBTASK LIST IS A LIST INSIDE A BOX, and the box is 420px in a peek
+   whatever the window is doing. `.work-rows` declares eight tracks and the
+   narrow set below the phone breakpoint is a VIEWPORT query, so a peek on a
+   wide screen got all eight: 90px of fixed tracks, seven gaps and four
+   content-sized cells resolve before the title's `minmax(0, 1fr)` and the
+   title is starved to almost nothing. The same 444px floor decides it, read
+   off the list's own container — one rule that serves the peek, the item page
+   and a phone, where the viewport query could only ever serve the last. */
+@container subtasks (max-width: 444px) {
+  .work-rows {
+    grid-template-columns: var(--work-rows-narrow);
+  }
+  /* DROPPED RATHER THAN EMPTIED, as the phone block does it: a hidden cell
+     still holds a column of nothing. */
+  .work-cell-due,
+  .work-cell-type,
+  .work-cell-who,
+  .work-row .work-row-when {
+    display: none;
+  }
+}
+
 @media (max-width: 860px) {
   /* The rail becomes a scrolling strip of chips above the head: a company
      with nine projects still needs to reach all nine. */
-  /* FOUR COLUMNS ON A PHONE, and they are the four the ROW still renders, in
-     the order it renders them: key, status, title, type. The tracks are
+  /* FOUR COLUMNS ON A PHONE: priority, key, status, title. The tracks are
      re-declared on the LIST, since that is where they live — a row is a
-     subgrid of whatever the list has — and the four items that are gone are
+     subgrid of whatever the list has — and the four cells that are gone are
      dropped rather than emptied, or they would each still hold a column of
-     nothing. A `display: none` item takes no track, so what is left simply
-     moves up: the key lands in track one, which is why this list is NOT the
-     desktop list with four tracks lopped off.
+     nothing.
 
-     AND TRACK ONE CARRIES THE ROW'S INSET, for the reason the desktop list
-     gives at length: a subgrid item's padding is subtracted from its first
-     and last tracks, so a bare `16px` here left the KEY in a cell zero wide
-     and `PROD-4` painted straight over the status pill beside it. Measured at
-     700px. It is 70px because that is the key's own width, not the mark's —
-     the mark is not drawn at this size at all. */
+     THIS WAS WRITTEN FOR THE OLD ORDER and not redone with it. The row used
+     to open with the TYPE icon and carry the status after the title; it now
+     opens with the priority mark and puts the status before it. The hidden
+     cells still named the priority, so on a phone the first surviving cell
+     was the KEY — in the 16px track meant for a glyph — and the status badge
+     sat in the 70px one meant for the key, with the title's flexible track
+     spent on a badge. The set itself is `--work-rows-narrow`, declared beside
+     the wide one, so the two orders cannot part again. */
   .work-rows {
-    grid-template-columns: calc(var(--row-inline) + 70px) auto minmax(0, 1fr) auto;
+    grid-template-columns: var(--work-rows-narrow);
   }
-  .work-cell-prio,
   .work-cell-due,
+  .work-cell-type,
   .work-cell-who,
   .work-row .work-row-when {
     display: none;

@@ -123,9 +123,30 @@ function inlineInset(body: string): string {
   return inline === "0" || inline === "0px" ? "" : inline;
 }
 
-/** A track a browser sizes from content, and therefore adds the inset back to. */
+/**
+ * A track whose end cell cannot come up short, for one of two reasons.
+ *
+ * SIZED FROM CONTENT — `auto`, `min-content`, `max-content`, `fit-content()`.
+ * The subgrid's own inset is part of what it contributes to sizing the track,
+ * so the browser hands it straight back and the column simply comes out that
+ * much wider.
+ *
+ * OR SIZED FROM WHAT IS LEFT — a `fr`. A flexible track takes the slack after
+ * every other track is placed, so the row still fits and nothing is pushed
+ * into a neighbour; what the inset costs there is that the cell's content box
+ * is that much narrower than the track, which on the one flexible column these
+ * lists have — the title, which truncates — is invisible. It is also the only
+ * honest answer available: `calc(var(--row-inline) + 1fr)` is not a length and
+ * no CSS states an inset on a flex track, so a gate that refused one would be
+ * a gate nothing could ever satisfy.
+ *
+ * What is left is a FIXED track, which is the one that resolves to zero or
+ * less and overflows into the column beside it.
+ */
 const absorbs = (track: string) =>
-  ["auto", "min-content", "max-content"].includes(track) || track.startsWith("fit-content(");
+  ["auto", "min-content", "max-content"].includes(track) ||
+  track.startsWith("fit-content(") ||
+  /(^|[\s,(])[\d.]+fr\s*\)?$/.test(track);
 
 /**
  * What is wrong with one owning grid's track list, given the inset its subgrid
@@ -159,13 +180,41 @@ function paddedSubgrids(): Map<string, string> {
   return out;
 }
 
+/**
+ * A track list that is one `var(--x)`, resolved to what `--x` is declared as.
+ *
+ * A SET DECLARED ONCE AND USED TWICE IS STILL A TRACK LIST. The narrow set is
+ * declared beside the wide one — a track list is positional, so two copies
+ * that drift hand every cell the wrong column — and read literally this scan
+ * saw one opaque term at each end and reported both as faults. Resolving it is
+ * what keeps the indirection and the check in the same tree: the alternative
+ * was to excuse a `var()` end, which would have made every future set
+ * invisible to the gate by spelling it as one.
+ *
+ * ONE HOP AND NO MORE: a custom property whose value is another is a chain
+ * nothing here writes, and a resolver that followed one would need a cycle
+ * guard for a case that does not exist.
+ */
+function resolveVar(tracks: string[]): string[] {
+  if (tracks.length !== 1) return tracks;
+  const name = /^var\(\s*(--[\w-]+)\s*\)$/.exec(tracks[0]!)?.[1];
+  if (!name) return tracks;
+  for (const [, body] of rules()) {
+    const m = new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;]+)`).exec(body);
+    if (m) return terms(m[1]!);
+  }
+  // DECLARED NOWHERE is a fault of its own, and it stays one term so the
+  // check below reports it rather than passing an empty list.
+  return tracks;
+}
+
 /** Every track list declared for `selector`, base rule and breakpoints alike. */
 function trackLists(selector: string): string[][] {
   const out: string[][] = [];
   for (const [sel, body] of rules()) {
     if (sel !== selector) continue;
     const m = /(?:^|;)\s*grid-template-columns\s*:\s*([^;]+)/.exec(body);
-    if (m) out.push(terms(m[1]!));
+    if (m) out.push(resolveVar(terms(m[1]!)));
   }
   return out;
 }
@@ -225,4 +274,27 @@ test("and the check can tell — a bare fixed track at either end is reported", 
     [],
   );
   expect(faults(terms("auto 74px auto"), "var(--row-inline)")).toEqual([]);
+  // A FLEXIBLE END IS CLEAN and a fixed one beside it is still reported, so
+  // the `fr` arm widened the predicate by exactly one shape.
+  expect(faults(terms("16px 70px auto minmax(0, 1fr)"), "var(--row-inline)")).toHaveLength(1);
+  expect(
+    faults(terms("calc(var(--row-inline) + 16px) 70px auto minmax(0, 1fr)"), "var(--row-inline)"),
+  ).toEqual([]);
+  expect(faults(terms("1fr 70px 24px"), "var(--row-inline)")).toHaveLength(1);
+});
+
+// AND A SET DECLARED ONCE IS READ THROUGH. `--work-rows-narrow` holds the
+// phone and peek track list, and a scan that stopped at the `var()` would
+// report two faults on a list that is right — or, worse, none on one that is
+// not, the day somebody spells a bare `16px` end behind a name.
+test("a track list behind a custom property is resolved before it is checked", () => {
+  const lists = trackLists(".work-rows");
+  expect(lists.length).toBeGreaterThanOrEqual(2);
+  for (const tracks of lists) {
+    expect(tracks.length, tracks.join(" ")).toBeGreaterThan(1);
+    expect(
+      tracks.some((t) => t.startsWith("var(--work-rows")),
+      tracks.join(" "),
+    ).toBe(false);
+  }
 });
