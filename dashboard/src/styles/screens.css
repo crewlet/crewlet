@@ -2588,17 +2588,6 @@ details > summary.int-summary::-webkit-details-marker {
 .work-band .count-chip {
   margin-left: auto;
 }
-/* THE SECOND AXIS IS A BAND INSIDE A BAND, and the indent is what says which
-   is which: a sub-band at the same inset as its parent reads as a sibling, so a
-   list cut two ways would look like one cut once with twice as many groups. */
-.work-band-sub {
-  padding-left: calc(var(--row-inline) + var(--space-4));
-  background: var(--surface-panel);
-  text-transform: none;
-  letter-spacing: normal;
-  font-weight: var(--fw-medium);
-  color: var(--text-muted);
-}
 /* A BAND'S OWN COLOUR IS ITS STATE where the band IS a state — which is only
    true of the due bands on somebody's day, where "overdue" is the one thing a
    person has to see before anything else. Every other axis is identity and
@@ -2609,6 +2598,11 @@ details > summary.int-summary::-webkit-details-marker {
 .work-band[data-band="today"] {
   color: var(--info-ink);
 }
+/* THE PANEL A RUN OF `.work-row`s SITS IN. The work screen's own list is a
+   `DataGrid` now — one renderer, two column sets, see `shapes/Grid.tsx` — so
+   what draws this is the EMBEDDED lists: My work's day, stacked under its due
+   bands. The rule below outlives that move because it is a rule about a panel
+   and the bands inside it, and My work has both. */
 .work-list {
   display: flex;
   flex-direction: column;
@@ -2634,30 +2628,6 @@ details > summary.int-summary::-webkit-details-marker {
   display: flex;
   flex-direction: column;
   min-width: 0;
-}
-.work-band-foot {
-  padding: var(--space-2) var(--row-inline);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border-subtle);
-}
-.work-band-foot a {
-  color: var(--accent-ink);
-}
-.work-band-foot a:hover {
-  color: var(--text);
-}
-/* THE END OF A COMPLETE LIST. It is the LAST thing inside the list's own panel,
-   which is what makes it read as the end of the rows rather than as a caption
-   under a box — so the rule it carries is on top, where the band feet carry
-   theirs underneath. Quiet: it is an answer to a question nobody asked out
-   loud, and it must not compete with the rows it closes. */
-.work-foot {
-  padding: var(--space-2) var(--row-inline);
-  border-top: 1px solid var(--border-subtle);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
 }
 
 /* ---- The census, and a meter in a cell ---------------------------------- */
