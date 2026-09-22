@@ -101,6 +101,58 @@ func TestEveryTableSortKeyIsOneTheGrammarTakes(t *testing.T) {
 	}
 }
 
+// AND THE PROJECTS DIRECTORY'S ORDERINGS ARE THE ENGINE'S, IN BOTH DIRECTIONS.
+//
+// Unlike the table's sort keys above, this pair has to match exactly. The
+// directory's answer is a PAGE — the engine stops at [MaxProjectsPerAnswer] —
+// so the ordering is applied by the engine and the grid is told not to re-sort
+// what it was handed; which means the dashboard's list is not a subset of the
+// engine's, it is a second copy of it.
+//
+// Both directions fail silently. A key the directory offers and the engine
+// refuses is not a mis-sorted column: [Reader.Projects] refuses the read, the
+// route answers `bad_params`, and the frame draws that as the SCREEN being at
+// fault with no retry — a whole directory lost to one header. A key the engine
+// grew with no header for it is an ordering nobody can reach, and it is the
+// half that goes unnoticed for as long as nobody misses it.
+func TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes(t *testing.T) {
+	t.Parallel()
+
+	body, err := clientsource.Declaration(clientsource.Tree,
+		`(?s)const PROJECT_SORT_KEYS = \[(.*?)\] as const`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := clientsource.Strings(body)
+	if len(client) == 0 {
+		t.Fatal("the directory sorts on nothing at all, so this gate certifies nothing")
+	}
+
+	for _, key := range client {
+		// THROUGH THE PARSER, not against a copy of its list — the same
+		// reason the table's gate gives: what decides whether a header
+		// works is the engine's own answer to the key the click sends.
+		q, err := tracker.ParseProjectQuery(tracker.MapParams{"sort": key})
+		if err != nil {
+			t.Errorf("the directory offers a %q header and the engine refuses "+
+				"it: %v — the click does not mis-sort the column, it refuses "+
+				"the read and takes the directory down with it", key, err)
+			continue
+		}
+		if !q.Sort.Valid() {
+			t.Errorf("%q parsed to %q, which is not an ordering", key, q.Sort)
+		}
+	}
+
+	for _, key := range tracker.ProjectSortNames() {
+		if !slices.Contains(client, key) {
+			t.Errorf("the engine orders projects by %q and the directory has no "+
+				"header for it, so nothing can ask for it. The directory names "+
+				"%v", key, client)
+		}
+	}
+}
+
 // AND EVERY CHANGE KIND THE ENGINE WRITES HAS A MARK AND A PHRASE.
 //
 // The item's history draws a kind as a mark and names it in a phrase, and the
