@@ -2103,6 +2103,13 @@ details > summary.int-summary::-webkit-details-marker {
   justify-content: flex-end;
   gap: var(--space-2);
 }
+/* THE TWO SET QUESTIONS UNDER A TYPED FIELD'S BOX are the same rows a listed
+   field ends with, so they are the same list — divided from the form above it
+   by the rule every other section of this panel is divided by, rather than
+   reading as two more things to type into. */
+.work-menu-form + .work-menu-list {
+  border-top: 1px solid var(--border-subtle);
+}
 .work-menu-empty {
   padding: var(--space-3);
   font-size: var(--fs-2xs);
