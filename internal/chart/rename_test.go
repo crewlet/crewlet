@@ -1,6 +1,7 @@
 package chart_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chart"
@@ -99,4 +100,171 @@ func (r *writeRig) mustUnit(key string) chart.Unit {
 		r.t.Fatalf("read unit %s: %v", key, err)
 	}
 	return got.Unit
+}
+
+// A CLAIM ON AN ADDRESS SOMEBODY ELSE HOLDS IS REFUSED, NOT STALLED.
+//
+// The key is the table's PRIMARY KEY, so a claim that reached the apply
+// against a row holding it raised `UNIQUE constraint failed: chart_units.key`
+// — and an apply error is not one node's problem. Every node reads the same
+// record, fails the same way and can never get past it, so one rename onto a
+// taken address took the chart domain down across the fleet. Measured before
+// this was checked: the write was accepted and the drain died on record 3.
+func TestAClaimOnALiveAddressIsRefusedAtTheWrite(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-a", op(chart.OpCreateUnit, chart.KindUnit, "platform", ""))
+	r.batch("op-b", op(chart.OpCreateUnit, chart.KindUnit, "infra", ""))
+
+	_, err := r.applyRekey("op-rename", "infra", "platform")
+	if err == nil {
+		t.Fatal("a claim on a key another unit holds was accepted; its apply " +
+			"raises on the primary key, on every node, for ever")
+	}
+	if !errors.Is(err, chart.ErrRefused) {
+		t.Errorf("err = %v, want a refusal a caller can tell from a fault", err)
+	}
+	// AND BOTH UNITS ARE EXACTLY AS THEY WERE.
+	if got := r.mustUnit("platform"); got.Key != "platform" {
+		t.Errorf("platform = %q after the refused claim", got.Key)
+	}
+	if got := r.mustUnit("infra"); got.Key != "infra" {
+		t.Errorf("infra = %q after the refused claim", got.Key)
+	}
+}
+
+// AND A RETIRED ONE IS HELD TOO, UNTIL IT IS RELEASED.
+//
+// A former key goes on resolving, which is the whole of what the alias list
+// buys: a `manages:` entry somebody wrote before the rename still reaches the
+// unit. Letting a second object claim that address would re-point every one of
+// those references, silently, at a unit that never had them — so the address
+// is held until the alias falls off the end of [chart.MaxFormerKeys] or the
+// object holding it goes.
+func TestAFormerKeyIsRefusedForAnotherUnitUntilItIsReleased(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-a", op(chart.OpCreateUnit, chart.KindUnit, "platform", ""))
+	r.batch("op-b", op(chart.OpCreateUnit, chart.KindUnit, "design", ""))
+	if _, err := r.applyRekey("op-rename", "infrastructure", "platform"); err != nil {
+		t.Fatalf("rename platform to infrastructure: %v", err)
+	}
+
+	// `platform` is nobody's live key now, and it still answers.
+	if got := r.mustUnit("platform"); got.Key != "infrastructure" {
+		t.Fatalf("the retired key resolves to %q, want the renamed unit", got.Key)
+	}
+	_, err := r.applyRekey("op-steal", "platform", "design")
+	if err == nil {
+		t.Fatal("a second unit took an address another one still answers to, " +
+			"so every reference written before the rename now reaches a unit " +
+			"that never had them")
+	}
+	if !errors.Is(err, chart.ErrRefused) {
+		t.Errorf("err = %v, want a refusal", err)
+	}
+}
+
+// AND RENAMING BACK IS NOT A COLLISION WITH ITSELF.
+//
+// The control for both cases above: an object claiming an address IT used to
+// answer to is claiming something that already resolves to it. A check that
+// asked only "is this address held" would refuse exactly this, which is the
+// one rename an operator is most likely to make — the undo.
+func TestAUnitCanTakeBackAnAddressItUsedToAnswerTo(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-a", op(chart.OpCreateUnit, chart.KindUnit, "platform", ""))
+	if _, err := r.applyRekey("op-rename", "infrastructure", "platform"); err != nil {
+		t.Fatalf("rename platform to infrastructure: %v", err)
+	}
+	if _, err := r.applyRekey("op-undo", "platform", "infrastructure"); err != nil {
+		t.Fatalf("rename infrastructure back to platform: %v — an object "+
+			"cannot collide with its own retired address", err)
+	}
+	got := r.mustUnit("platform")
+	if got.Key != "platform" {
+		t.Errorf("key = %q, want the address it took back", got.Key)
+	}
+	// AND THE ORIGIN IS STILL THE ONE IT WAS CREATED UNDER, which the undo
+	// must not disturb: it was frozen by the first rename and never moves.
+	if got.OriginKey != "platform" {
+		t.Errorf("origin = %q, want the key the unit was created under", got.OriginKey)
+	}
+}
+
+// A SEAT'S HANDLE IS HELD ON THE SAME TERMS, and it has further to fall.
+//
+// chart_seats.handle is a primary key too, so the stall is identical — and a
+// seat also carries the identity every durable thing it owns is keyed on, so
+// a claim that landed would put two seats' rows in one row's place.
+func TestAClaimOnALiveHandleIsRefusedAtTheWrite(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-hire", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""),
+		op(chart.OpCreateSeat, chart.KindSeat, "dana-okafor", ""))
+
+	_, err := r.writer.WriteRekey(t.Context(), "op-clash",
+		chart.ObjectRef{Kind: chart.KindSeat, ID: "dana-okafor"}, "sarah-chen")
+	if err == nil {
+		t.Fatal("a claim on a handle another seat holds was accepted")
+	}
+	if !errors.Is(err, chart.ErrRefused) {
+		t.Errorf("err = %v, want a refusal", err)
+	}
+}
+
+// AND THE ONE THE DECIDE CANNOT SEE IS DECLINED BY THE APPLY.
+//
+// A claim arbitrates on the ADDRESS's subject and a create on the STRUCTURE's,
+// so the two never contend at the broker: a claim decided while an address was
+// free can be applied after a create that took it. That ordering is legal and
+// there is no way to make it not be — which is exactly why the apply asks
+// again rather than trusting the decide.
+//
+// What it must NOT do is raise. The key is a primary key, so the UPDATE would
+// fail the constraint on every node, identically, on a record none of them can
+// ever get past — one lost rename becoming a stalled domain across the fleet.
+// So the claim is dropped and everything else on the log goes on applying,
+// which is what this asserts: the record AFTER the collision lands.
+func TestAClaimThatLostTheRaceIsDroppedRatherThanStallingTheDomain(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-a", op(chart.OpCreateUnit, chart.KindUnit, "platform", ""))
+
+	// PUBLISHED, NOT APPLIED: the estate still has no `infra`, so the claim
+	// below is decided against a snapshot in which the address is free.
+	if _, err := r.writer.WriteBatch(t.Context(), "op-b", chart.Batch{
+		Operations: []chart.Operation{
+			op(chart.OpCreateUnit, chart.KindUnit, "infra", ""),
+		}}); err != nil {
+		t.Fatalf("publish the create: %v", err)
+	}
+	if _, err := r.writer.WriteRekey(t.Context(), "op-rename",
+		chart.ObjectRef{Kind: chart.KindUnit, ID: "infra"}, "platform"); err != nil {
+		t.Fatalf("the claim was refused against a snapshot with no infra: %v", err)
+	}
+	// THE DRAIN ITSELF IS THE ASSERTION: it applies every record in turn and
+	// fails the test on the first that raises, which is precisely the state
+	// this guards against. Nothing can be queued BEHIND the claim first — a
+	// second structural write is refused until this node has applied the one
+	// ahead of it, which is the write authority doing its job.
+	r.drain()
+
+	if got := r.mustUnit("platform"); got.Key != "platform" {
+		t.Errorf("platform = %q, want the claim dropped and the unit as it was",
+			got.Key)
+	}
+	if got := r.mustUnit("infra"); got.Key != "infra" {
+		t.Errorf("infra = %q, want the unit that won the address", got.Key)
+	}
+	// AND THE DOMAIN TOOK THE NEXT RECORD, which is what tells a dropped
+	// claim from a stopped applier: a stalled domain cannot apply anything
+	// again, ever, on any node.
+	r.batch("op-c", op(chart.OpCreateUnit, chart.KindUnit, "design", ""))
+	if got := r.mustUnit("design"); got.Key != "design" {
+		t.Errorf("design = %q — the record behind the collision never landed, "+
+			"which is the domain stalling rather than one rename being lost",
+			got.Key)
+	}
 }

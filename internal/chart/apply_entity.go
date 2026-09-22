@@ -222,6 +222,29 @@ func (a *Applier) rekeyUnit(ctx context.Context, tx *sql.Tx, at applyContext,
 		// none of them can act on.
 		return 0, nil
 	}
+	// AND THE ADDRESS IS STILL FREE, asked HERE and not only at the decide.
+	//
+	// DECLINED, NOT FAILED, which is the whole point of asking again: the key
+	// is this table's PRIMARY KEY, so a claim that reaches the UPDATE against
+	// a row holding it raises `UNIQUE constraint failed` — and an apply error
+	// is not one node's problem. Every node reads the same record, fails the
+	// same way and cannot get past it, so one lost rename would take the
+	// chart domain down across the fleet. The decide refuses this case where
+	// an operator can be told ([Writer.WriteRekey]); it cannot refuse ALL of
+	// it, because a create arbitrates on a different subject from a claim, so
+	// the log may legally order a create of this address after the claim on
+	// it was decided.
+	//
+	// Every node reaches the same verdict from the same rows, which is what
+	// keeps the copies identical — the same reason [Applier.rekeyUnit]'s
+	// absent-object case above returns nothing rather than raising.
+	holder, held, err := addressHolder(ctx, tx, KindUnit, key)
+	if err != nil {
+		return 0, err
+	}
+	if held && holder != former {
+		return 0, nil
+	}
 	// THE ORIGIN IS FROZEN BY THE FIRST REKEY AND NEVER AGAIN, which is the
 	// one moment the create address is still known: a unit that has been
 	// rekeyed before already carries it, and one that has not is answering
@@ -319,6 +342,17 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, err
 	}
 	if !found {
+		return 0, nil
+	}
+	// AND THE HANDLE IS STILL FREE, declined rather than raised, for the
+	// reason [Applier.rekeyUnit] gives at the same point: `handle` is this
+	// table's PRIMARY KEY, and an apply that raises is a record every node
+	// fails on identically and for ever.
+	holder, held, err := addressHolder(ctx, tx, KindSeat, handle)
+	if err != nil {
+		return 0, err
+	}
+	if held && holder != former {
 		return 0, nil
 	}
 	// FROZEN BY THE FIRST REKEY, for the reason [Applier.rekeyUnit] gives —

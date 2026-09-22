@@ -131,13 +131,20 @@ type Batch struct {
 	Reason string
 }
 
-// ErrRefused reports a batch this chart's own rules refuse.
+// ErrRefused reports a write this chart's own rules refuse.
 //
 // A SENTINEL because the caller has to tell it from a contention failure and
 // from a broker that is down: a refusal is the caller's to fix and the other
 // two are not, and a surface that reported all three the same way would have
-// somebody retrying a batch that can never land.
-var ErrRefused = errors.New("chart: the batch is refused")
+// somebody retrying a write that can never land.
+//
+// ITS TEXT NAMES NO SHAPE OF WRITE, because it is a suffix on every one of
+// them: a batch, a key claim, a removal, one object's content. It read "the
+// batch is refused" and was wrapped by ten sentences, six of which are about
+// something that is not a batch — so a person renaming a unit was handed a
+// sentence ending in a noun their command never used, and the sentence in
+// front of it is the one that already says what was refused and why.
+var ErrRefused = errors.New("chart: refused by this chart's own rules")
 
 // RefusalError names the one operation that failed and the rule it broke.
 type RefusalError struct {

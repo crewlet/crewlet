@@ -164,6 +164,23 @@ a reference somebody typed resolving, and a reference nobody has followed in
 sixteen renames is not worth a row growing for ever. The origin is uncapped and
 is one value, because an identity a cap could drop would be no identity at all.
 
+**An address somebody still answers to cannot be taken, retired or not.** A
+rename onto a key another unit holds is refused, and so is one onto a key
+another unit merely *used* to hold — because a retired key still resolves, so
+handing it to a second object would silently re-point every reference written
+before the first one moved. Renaming *back* is not a collision: an object
+claiming an address it used to answer to is claiming something that already
+resolves to it, which is the undo an operator is most likely to want.
+
+The rule is enforced twice, and the second place is the important one. A claim
+arbitrates on the **address's** own subject and a create on the **structure's**,
+so the two never contend at the broker: a claim decided while an address was
+free can be applied after a create that took it. That ordering is legal and
+cannot be made otherwise, so the apply asks again and **drops** the claim
+rather than raising — the key is a primary key, and an apply that raised would
+fail on every node identically, on a record none of them can ever get past,
+turning one lost rename into a stalled domain across the fleet.
+
 **An unchanged revision is a no-op.** Re-activating a config revision the chart
 has already imported — which is the credential-rotation gesture, and therefore
 routine — writes nothing and wakes nobody. Every node reaches that conclusion

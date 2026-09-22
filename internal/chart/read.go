@@ -290,6 +290,32 @@ func resolveUnit(ctx context.Context, tx *sql.Tx, key string) (Unit, bool, error
 	return byFormerKey(ctx, tx, "chart_units", key, DecodeUnit)
 }
 
+// addressHolder is the object that ALREADY answers to this address — live or
+// retired — named as it is addressed now, or empty when nothing does.
+//
+// TWO CALLERS THAT MUST AGREE: the claim's decide, which refuses an address
+// somebody else holds, and the apply, which declines one. Written twice they
+// would eventually differ about whether a RETIRED address counts, and the two
+// answers are a refused rename and a stalled domain.
+//
+// It answers with the holder's CURRENT address rather than a boolean, because
+// the one claim that must still be allowed is a rename BACK: an object moving
+// onto an address it used to answer to is claiming something that already
+// resolves to it, and a bare "held" could not tell that from a collision.
+func addressHolder(ctx context.Context, tx *sql.Tx, kind ObjectKind,
+	address string) (string, bool, error) {
+
+	switch kind {
+	case KindUnit:
+		unit, found, err := resolveUnit(ctx, tx, address)
+		return unit.Key, found, err
+	case KindSeat:
+		seat, found, err := resolveSeat(ctx, tx, address)
+		return seat.Handle, found, err
+	}
+	return "", false, nil
+}
+
 // resolveSeat is [resolveUnit] for a seat.
 func resolveSeat(ctx context.Context, tx *sql.Tx, handle string) (Seat, bool, error) {
 	seat, found, err := readSeat(ctx, tx, handle)
