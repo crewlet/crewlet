@@ -172,6 +172,18 @@ func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
 		t.Errorf("the party is %v, want the seat first and the credential "+
 			"behind it", got)
 	}
+	// AND THE KIND IS A PERSON'S, which is the OTHER thing an authority
+	// gate asks: a lead relation is between two people in the chart, so
+	// every gate resolves it for [builtin.Actor.Record] and then falls
+	// back to [tracker.AuthorKind.Person] — the arm that carries a
+	// re-route, a project's policy and somebody's queue when the walk
+	// finds nothing. Kept `operator` rather than folded into `human`,
+	// which is what keeps the author field honest, so the predicate is
+	// what the gates have to turn on.
+	if !bound.Kind.Person() {
+		t.Errorf("a bound token's kind %q is not a person's, so every "+
+			"authority gate refuses the person holding it", bound.Kind)
+	}
 
 	// AN UNBOUND TOKEN IS AN ORDINARY STATE — an operator outside the org
 	// chart — and it writes under its own id exactly as before.
@@ -184,6 +196,13 @@ func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
 	}
 	if unbound.Record() != "ci" {
 		t.Errorf("an unbound token writes %q's record, want its own", unbound.Record())
+	}
+	// AND IT IS A PERSON'S CREDENTIAL TOO, which is the only authority it
+	// can ever hold: no ancestor walk reaches a name the chart does not
+	// have, so without this arm an unbound token could not re-route an
+	// item, declare a field or order a queue at all.
+	if !unbound.Kind.Person() {
+		t.Errorf("an unbound token's kind %q is not a person's", unbound.Kind)
 	}
 
 	// AND A BUILD WITH NO CHART LOADED IS THE SAME ORDINARY STATE rather

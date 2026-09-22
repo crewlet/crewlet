@@ -130,7 +130,7 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// company-wide feed is the one answer that is both expensive and
 	// almost never what was meant.
 	if q.Task == "" && q.Project == "" {
-		q.Project = t.deps.defaultProject(actor.Handle)
+		q.Project = t.deps.defaultProject(actor)
 		if q.Project == "" {
 			q.Workspace = true
 		}

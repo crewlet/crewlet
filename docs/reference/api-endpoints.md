@@ -2008,12 +2008,25 @@ That identity is **two facts, not one**. A write is attributed to the token,
 with author kind `operator`, always — there is deliberately no way to ask this
 surface to act as a seat. But if the chart binds that token to a human seat
 with `contact.crewlet_operator_id`, the surface also knows *who the caller is*,
-and that is what the person tools key on: `mark_inbox`, `set_pins` and
-`set_priorities` write **that person's** record and sign it with the token,
-while `get_my_work`, `get_person` and `work_inbox` answer for both of that
-person's names. An unbound token is an operator outside the chart and writes
-its own record under its own id, which is ordinary. See
+and that is what every tool keys on that asks who the caller **is** rather than
+who wrote it: `mark_inbox`, `set_pins` and `set_priorities` write **that
+person's** record and sign it with the token; `my_work`, `get_person` and
+`work_inbox` answer for both of that person's names, and so does the viewer
+`list_work_items` expands `preset=my_queue` and `preset=priorities` against; a
+`watch: true`, a comment and a create all record **that person** as the
+watcher; a create with no `project` files into their team's; and the lead
+relation `routing_unit` and `write_project` are gated on is resolved for them.
+An unbound token is an operator outside the chart and writes its own record
+under its own id, which is ordinary. See
 [Humans in the org](../concepts/humans-in-the-org.md).
+
+A person's own credential also carries an **authority of its own**, bound or
+not, and it is the same one a human seat writing from the dashboard has: a
+re-route, a project's field declarations and somebody else's queue are open to
+a person where they are a lead's alone for a seat. A lead relation is between
+two people in the org chart, and a token nobody bound is in no chart — so
+without it an operator could not re-route the work they own, and with it the
+company's own credential is never locked out of its own tracker.
 
 Plus **ten no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,

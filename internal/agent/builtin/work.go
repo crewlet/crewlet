@@ -797,7 +797,18 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// asks two things about the reader: what they hold, and what is
 	// unclaimed in THEIR container.
 	q, err := t.deps.Reader.ExpandedQuery(ctx, params, tracker.Viewer{
-		Handle: actor.Handle, Project: t.deps.defaultProject(actor.Handle),
+		// AND IT IS THE ACTOR'S OWN PARTY, exactly as `my_work` asks:
+		// for a seat its one handle, and for a bound operator the person
+		// their credential names plus the credential itself. Asked about
+		// the bare author, `preset=my_queue` answered a founder's
+		// assistant about the TOKEN — a party no colleague has ever
+		// assigned anything to — and `preset=priorities` about a queue
+		// nobody wrote. The two fields rather than [Actor.Party],
+		// because a viewer is a party plus a container and the grammar
+		// derives the party from them ([tracker.Viewer.Party]).
+		Handle:     actor.Record(),
+		OperatorID: actor.OperatorID,
+		Project:    t.deps.defaultProject(actor),
 	},
 		t.deps.now(), t.deps.zone())
 	if err != nil {
@@ -1309,9 +1320,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		task.Parent = &parent
 	}
 	if task.Project == "" {
-		if t.deps.DefaultProject != nil {
-			task.Project = t.deps.DefaultProject(actor.Handle)
-		}
+		task.Project = t.deps.defaultProject(actor)
 		if task.Project == "" {
 			return failed("create_work_item needs a `project`: your team owns " +
 				"none, so there is no default. Ask which project this belongs " +
@@ -1362,7 +1371,14 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// THE REPORTER WATCHES WHAT THEY FILED, and so does the assignee. Set
 	// at the write rather than derived at the wake: a watcher list built
 	// later would be built from a row that has moved on.
-	task.Watchers = handles(actor.Handle, task.Assignee)
+	//
+	// AND THE WATCH IS THE PERSON'S, which is [Actor.Record] and not the
+	// author beside it: `reporter` is attribution and stays the token,
+	// but a watcher is an ADDRESS — the party registry resolves SEATS, so
+	// a token id in the set is dropped at every later wake and renders as
+	// a colleague on the item. A founder whose assistant filed the work
+	// heard nothing about it again.
+	task.Watchers = handles(actor.Record(), task.Assignee)
 
 	// THE LABELS BEFORE THE TASK, because the create refuses one the
 	// project has not declared and the declare is a separate record on a
@@ -1573,6 +1589,12 @@ type updateWorkItem struct {
 	// own work into your own team is what every seat does, and pointing
 	// somebody ELSE's work at a different team is a decision about who
 	// owns it.
+	//
+	// OR A PERSON'S OWN, which is the second arm at the gate itself and
+	// not a fact about this seam: a lead relation is between two people in
+	// the chart, and an operator's credential is in no chart — so this
+	// lookup alone would have locked the company's own token out of the
+	// verb entirely.
 	leads LeadsProject
 }
 
@@ -1637,9 +1659,9 @@ func (t *updateWorkItem) Parameters() map[string]any {
 				"type": "string",
 				"description": "Point this item at a different team, by its " +
 					"id or its name: that team's lead hears that work routes " +
-					"to them now. The project lead's to set — filing your own " +
-					"work into your own team is what `unit` on " +
-					"create_work_item does.",
+					"to them now. The project lead's to set, or a person's " +
+					"own — filing your own work into your own team is what " +
+					"`unit` on create_work_item does.",
 			},
 			"waiting_on":   setArgSchema("The items this one is blocked BY. Each is a key or an id."),
 			"blocking":     setArgSchema("The items blocked BY this one. Each is a key or an id."),
@@ -1754,7 +1776,18 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// task that still has an assignee.
 	if raw, held := args["routing_unit"]; held {
 		unit := strings.TrimSpace(argString(map[string]any{"v": raw}, "v"))
-		if t.leads == nil || !t.leads(ctx, actor.Handle, before.Task.Project) {
+		// EITHER AUTHORITY IS ENOUGH, and the operator half is why the
+		// lookup is not the whole answer: it resolves a lead from the ORG
+		// CHART by handle, and an operator's actor carries the TOKEN's own
+		// name. Asked about [Actor.Handle] it therefore answered false for
+		// every operator, a bound founder included, and the one surface a
+		// person re-routes from could not use the verb at all. Asked about
+		// [Actor.Record] it is the person behind the credential, and
+		// [tracker.AuthorKind.Person] is the arm for a human at the
+		// dashboard and for the token nobody bound — the same pair
+		// `write_project` resolves, for the same reason.
+		lead := t.leads != nil && t.leads(ctx, actor.Record(), before.Task.Project)
+		if !lead && !actor.Kind.Person() {
 			return failed(fmt.Sprintf("Pointing %s at a different team is the "+
 				"lead of %s's decision, not yours. Ask them, or say in a "+
 				"comment why it belongs elsewhere.",
@@ -1979,7 +2012,15 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 		// announced their removal in the wake. The writer resolves it
 		// against the task's current sets inside its own snapshot, which
 		// is the only place a single consistent read of them exists.
-		patch.Watch = &tracker.WatchIntent{Handle: actor.Handle, Watch: watch}
+		//
+		// AND IT IS THE PERSON'S OWN WATCH — [Actor.Record], not the
+		// author. A bound operator's `watch: true` wrote the TOKEN's name
+		// into the watcher set, where the `watchers` history delta
+		// rendered it as a colleague, the person's own seat was not
+		// following the item, and every later wake dropped it against the
+		// roster. Attribution is the other question and is unchanged: the
+		// commit still names the credential.
+		patch.Watch = &tracker.WatchIntent{Handle: actor.Record(), Watch: watch}
 		if kind == tracker.ChangeFields {
 			kind = tracker.ChangeWatchers
 		}
@@ -2171,7 +2212,12 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
 		Ask:     ask,
 		Answers: strings.TrimSpace(argString(args, "answers")),
-		Author:  actor.Handle,
+		// THE PERSON, because this is what the inference is asked about:
+		// an ask is answered by the one it was ADDRESSED to, and an ask
+		// names a seat. Under the token's own name a bound operator
+		// answering the question put to their seat stamped nothing, and
+		// the ask stayed open on the board.
+		Author: actor.Record(),
 	})
 	if refusal != "" {
 		return failed(refusal), nil
@@ -2199,7 +2245,9 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	patch := tracker.TaskPatch{
 		Comment: comment,
 		Watch: &tracker.WatchIntent{
-			Handle: actor.Handle, Watch: true, Auto: true,
+			// THE PERSON'S, NOT THE CREDENTIAL'S — the same
+			// [Actor.Record] the explicit gesture takes.
+			Handle: actor.Record(), Watch: true, Auto: true,
 		},
 	}
 	got, err := writer.UpdateTask(ctx,
@@ -2252,7 +2300,10 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // asked anything.
 func unansweredWarning(task tracker.Task, actor Actor, comment *tracker.Comment) string {
 	switch {
-	case task.Assignee == "" || task.Assignee == actor.Handle:
+	// AGAINST THE PERSON RATHER THAN THE AUTHOR: an assignee is a seat,
+	// and a bound operator commenting on their own task matched nothing —
+	// so the warning told them they were waking themselves.
+	case task.Assignee == "" || task.Assignee == actor.Record():
 		return ""
 	case comment.Ask != "" || len(comment.Mentions) > 0:
 		return ""
@@ -2349,17 +2400,23 @@ func (d WorkDeps) now() time.Time {
 	return d.Now()
 }
 
-// defaultProject is the seat's own, or empty where its unit owns none.
+// defaultProject is the caller's own, or empty where their unit owns none.
 //
-// ONE SPELLING, because three tools fall back to it and a second copy would
+// ONE SPELLING, because five tools fall back to it and a second copy would
 // be the one that stopped matching — a create filing into the seat's project
 // while a describe answered about another is the shape that teaches a model
 // the wrong vocabulary for the container it is writing to.
-func (d WorkDeps) defaultProject(handle string) string {
+//
+// IT TAKES THE ACTOR RATHER THAN A HANDLE, so that WHICH of an actor's names
+// the chart is asked about is decided once here rather than at each call. It
+// is [Actor.Record]: a home project is a fact about the PERSON, and a token
+// is in no chart at all — so a bound founder's assistant was refused its own
+// team's project by five tools that each spelled the identity separately.
+func (d WorkDeps) defaultProject(a Actor) string {
 	if d.DefaultProject == nil {
 		return ""
 	}
-	return d.DefaultProject(handle)
+	return d.DefaultProject(a.Record())
 }
 
 func (d WorkDeps) zone() *time.Location {

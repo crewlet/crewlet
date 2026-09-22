@@ -200,9 +200,9 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	project := strings.TrimSpace(argString(args, "project"))
 	if project == "" {
-		// THE SEAT'S OWN, which is what a model omitting the argument
+		// THE CALLER'S OWN, which is what a model omitting the argument
 		// meant — and the one project it is certain to be asking about.
-		project = t.deps.defaultProject(actor.Handle)
+		project = t.deps.defaultProject(actor)
 	}
 	if project == "" {
 		return failed("Name a project — this seat's unit owns none, so there " +
