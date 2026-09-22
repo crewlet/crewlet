@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // askEvent builds an ask THE WAY internal/a2a BUILDS IT: events.New over the

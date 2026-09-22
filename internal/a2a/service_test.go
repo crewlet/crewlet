@@ -613,7 +613,7 @@ func TestTheWakeStillPointsAtTheTurnThatCausedIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	wakes := rec.onlyTo(topics.AgentInbox("bob"))
+	wakes := rec.onlyTo(inbox("bob"))
 	if len(wakes) != 1 || wakes[0].ParentTurnID != "run-ask" {
 		t.Fatalf("the ask's wake points at %q, want the asking turn",
 			wakes[0].ParentTurnID)
@@ -623,7 +623,7 @@ func TestTheWakeStillPointsAtTheTurnThatCausedIt(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Reply: %v", err)
 	}
-	replies := rec.onlyTo(topics.AgentInbox("alice"))
+	replies := rec.onlyTo(inbox("alice"))
 	if len(replies) != 1 || replies[0].ParentTurnID != "run-answer" {
 		t.Fatalf("the answer's wake points at %q, want the answering turn",
 			replies[0].ParentTurnID)
