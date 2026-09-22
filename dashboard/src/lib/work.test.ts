@@ -318,6 +318,85 @@ test("a history entry renders a delta pair and a bare value alike", () => {
   ).toBe("Mentions: ada, bo");
 });
 
+// ONE SENTENCE, TWO SURFACES. The feed read `fields` as a from/to map and the
+// item's history read it as either shape, so the two worded one commit two ways
+// — and the feed printed `[object Object]` for the half it could not read. Both
+// go through one function now and differ on the excerpt rung alone, which is
+// what these two halves assert together.
+test("the feed and a history entry word one commit identically", () => {
+  const fields = { status: { from: "todo", to: "done" }, assignee: { from: "", to: "ada" } };
+  const said = `Status: To do → Done, Assignee: ${EMPTY_VALUE} → ada`;
+  expect(describeChange(record({ kind: "comment", fields, excerpt: "ignore me" }), {})).toBe(said);
+  expect(describeHistory(change({ kind: "comment", fields }), {})).toBe(said);
+});
+
+// AND THE WORDING IS GENERIC OVER THE KIND. Nothing below the entry point
+// switches on it: `fields_json` carries no tag saying what its entries are
+// about, so a renderer that branched on the kind would be guessing at a shape
+// it can read. The consequence is what this case pins — a kind this build has
+// never heard of renders its deltas exactly as a `status` commit does, which is
+// also what will happen the day the engine starts recording deltas for the
+// kinds that carry none today (`relations`, `project_updated`, `view_saved`,
+// `person_updated`), with nothing here to change.
+test("a delta renders the same whatever kind of change carried it", () => {
+  const fields = { purpose: { from: "Ship it", to: "Ship it well" } };
+  for (const kind of ["project_updated", "view_saved", "person_updated", "a_kind_from_2030"]) {
+    expect(describeHistory(change({ kind, fields }), {})).toBe("Purpose: Ship it → Ship it well");
+  }
+  // A COLLECTION THE NOTIFICATION CARRIED WHOLE, which is the other shape and
+  // takes no second rule either.
+  expect(
+    describeHistory(change({ kind: "relations", fields: { waiting_on: ["ENG-1"] } }), {}),
+  ).toBe("Waiting on: ENG-1");
+});
+
+// AND A KIND THAT MOVED NOTHING IS STILL THE KIND. The engine records no deltas
+// at all for several of these today, and inventing a sentence for them would be
+// this screen making something up about somebody's company.
+test("a change with nothing recorded against it names its kind", () => {
+  expect(describeHistory(change({ kind: "project_updated" }), {})).toBe("changed the project");
+  expect(describeChange(record({ kind: "project_updated" }), {})).toBe("project updated");
+});
+
+// A NOTIFICATION IS ADDRESSED AND A LOG IS NOT. `tracker.prioritisedWake` writes
+// the card the woken seat reads — "…of your priorities" — which is correct for
+// that seat and second person to every other reader of the company-wide log.
+// The record names whose it is (a person subject's id IS the handle), so the
+// owner is always nameable.
+test("a sentence written for one seat is re-addressed to whoever is reading it", () => {
+  const woken = record({
+    kind: "prioritised",
+    subject_kind: "person",
+    subject_id: "agent-swe",
+    excerpt: "founder put ENG-1 at position 1 of your priorities",
+  });
+  expect(describeChange(woken, { viewer: "ada" })).toBe(
+    "founder put ENG-1 at position 1 of agent-swe's priorities",
+  );
+  // THE COMPANY'S OWN WORD FOR THEM, like every other handle on the screen.
+  expect(describeChange(woken, { viewer: "ada", seatName: () => "Sam Wu" })).toContain(
+    "Sam Wu's priorities",
+  );
+  // AND SECOND PERSON SURVIVES FOR THE ONE READER IT IS TRUE OF.
+  expect(describeChange(woken, { viewer: "agent-swe" })).toContain("your priorities");
+  // NOBODY IN PARTICULAR IS NOT THE OWNER: an anonymous reader is told whose
+  // queue it is rather than being addressed as them.
+  expect(describeChange(woken, {})).toContain("agent-swe's priorities");
+});
+
+// SCOPED TO A PERSON SUBJECT, because that is the only kind of record the engine
+// addresses to somebody. A task's excerpt is a comment body or a description,
+// and its "you" belongs to whoever wrote it — rewriting that would put the
+// task's own owner into a sentence somebody else typed.
+test("an excerpt on a task is left exactly as it was written", () => {
+  expect(
+    describeChange(
+      record({ kind: "comment", subject_key: "ENG-1", excerpt: "can you take this one?" }),
+      { viewer: "ada" },
+    ),
+  ).toBe("can you take this one?");
+});
+
 // ---------------------------------------------------------------------------
 // Custom fields
 // ---------------------------------------------------------------------------
