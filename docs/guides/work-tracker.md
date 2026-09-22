@@ -496,6 +496,14 @@ whole member and ends with a count of what it left out (`+12 more`), and a
 list whose members a person does not read — an inbox, say — is recorded as its
 size.
 
+A dependency is where the stored form would otherwise show: an edge records the
+other item by its **id**, because its key belongs to that item's own row and a
+history row is written once and corrected by nothing. So the **answer** carries
+a `keys` map naming the items its deltas point at, resolved when the question is
+asked rather than when the change was made — which is what lets a screen draw
+"Waiting on: — → ENG-2" from a row that stored a uuid. An item this node has not
+applied is simply missing from the map, and a reader falls back to the id.
+
 The three project reads are a seat's for the same reason the catalogue read
 is: a create refuses a project the company does not have, a type it has not
 declared and a required field left empty, and a model that cannot **read** any
