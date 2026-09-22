@@ -276,8 +276,14 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// that explain it — and a detail that left them out rendered a task
 	// filed with a severity as one that carried none, beside a board that
 	// had just filtered on that very field.
+	//
+	// AND THE CHART, so the properties panel reads "Engineering" where the
+	// row holds `eng` — the same seam the board column and the project
+	// directory resolve through, so one screen cannot call a team two
+	// things. See [tracker.TaskDetail.Units].
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments: true, History: true, Links: true, Fields: true,
+		Units: s.chartUnits(),
 	}, fresh)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):

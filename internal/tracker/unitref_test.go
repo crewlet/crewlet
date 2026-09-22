@@ -190,6 +190,81 @@ func TestAProjectsUnitKeyRendersAsItsName(t *testing.T) {
 	}
 }
 
+// AN ITEM'S OWN PAGE READS THE TEAM'S NAME, whichever spelling its row holds.
+//
+// The document's two strings stay exactly as they were written — they are the
+// record — and the answer carries the chart's reading of them beside it. A
+// screen rendering the document raw showed `plat` where the same company's
+// board column said `Platform`.
+func TestATasksDetailResolvesBothUnitsAgainstTheChart(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	unitTask(t, r, "old", "Platform") // filed before the id existed
+	unitTask(t, r, "new", "plat")     // filed after it
+	unitTask(t, r, "gone", "dissolved")
+	unitTask(t, r, "none", "")
+
+	detail := func(id string) tracker.TaskDetail {
+		t.Helper()
+		got, err := r.reader.Task(t.Context(), id,
+			tracker.DetailWants{Units: nimbus},
+			statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			t.Fatalf("read %s: %v", id, err)
+		}
+		return got
+	}
+	for _, id := range []string{"old", "new"} {
+		got := detail(id)
+		if got.Units == nil {
+			t.Fatalf("%s carries no resolved units at all", id)
+		}
+		if !got.Units.Filed.Resolved || got.Units.Filed.Name != "Platform" {
+			t.Errorf("%s's filed unit resolves to %+v, want Platform",
+				id, got.Units.Filed)
+		}
+		// THE ROW'S OWN SPELLING IS WHAT THE KEY CARRIES, because that is
+		// what the record holds and what a filter link has to send.
+		if got.Units.Filed.Key != got.Task.FiledUnit {
+			t.Errorf("%s's filed key is %q, want the stored %q",
+				id, got.Units.Filed.Key, got.Task.FiledUnit)
+		}
+		// AND THE ROUTING HALF IS RESOLVED TOO: a screen draws both.
+		if !got.Units.Routing.Resolved || got.Units.Routing.Name != "Platform" {
+			t.Errorf("%s's routing unit resolves to %+v, want Platform",
+				id, got.Units.Routing)
+		}
+		// THE DOCUMENT IS UNTOUCHED — it is the record.
+		if got.Task.FiledUnit == "" || got.Task.RoutingUnit == "" {
+			t.Errorf("%s's document lost its own unit strings: %+v", id, got.Task)
+		}
+	}
+	// A TEAM THE CHART HAS LOST IS FLAGGED rather than rendered as a team
+	// named nothing: `resolved: false` is the finding.
+	if got := detail("gone"); got.Units == nil || got.Units.Filed.Resolved ||
+		got.Units.Filed.Key != "dissolved" || got.Units.Filed.Name != "" {
+		t.Errorf("a task filed against a team the chart has lost reads %+v, "+
+			"want the stored key unresolved", got.Units)
+	}
+	// AND A TASK FILED INTO NO TEAM CARRIES NOTHING, because that is what
+	// its two empty strings already say.
+	if got := detail("none"); got.Units != nil {
+		t.Errorf("a task filed into no unit carries %+v, want no units block", got.Units)
+	}
+	// WITH NO CHART every reference is honestly unresolved rather than
+	// silently blank — the state a process holding no org is in.
+	blind, err := r.reader.Task(t.Context(), "new", tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("read new with no chart: %v", err)
+	}
+	if blind.Units == nil || blind.Units.Filed.Resolved ||
+		blind.Units.Filed.Key != "plat" {
+		t.Errorf("with no chart the filed unit reads %+v, want the raw key "+
+			"unresolved", blind.Units)
+	}
+}
+
 // A TEAM'S VIEW STRIP IS ONE STRIP, whichever of the team's two spellings it
 // is asked for by.
 //

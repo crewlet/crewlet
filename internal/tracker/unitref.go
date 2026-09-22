@@ -95,6 +95,28 @@ func resolveUnit(units Units, stored string) (UnitRef, LeadRef) {
 	return UnitRef{Key: stored, Name: unit.Name, Resolved: found}, unit.Lead
 }
 
+// taskUnits renders a task's two unit references against the chart, or nil
+// for a task that names neither.
+//
+// NIL FOR NEITHER rather than a pair of empty refs: "this work belongs to no
+// team" is what the document's two empty strings already say, and repeating
+// it as an object on every answer would put a rendering of nothing in front
+// of every reader — see [TaskDetail.Units].
+//
+// THE ROUTING HALF IS RESOLVED SEPARATELY even though it usually equals the
+// filed one: the two diverge exactly when somebody re-routes an item, which
+// is the case a screen draws both halves for.
+func taskUnits(units Units, task Task) *TaskUnits {
+	filed, routing := strings.TrimSpace(task.FiledUnit), strings.TrimSpace(task.RoutingUnit)
+	if filed == "" && routing == "" {
+		return nil
+	}
+	out := TaskUnits{}
+	out.Filed, _ = resolveUnit(units, filed)
+	out.Routing, _ = resolveUnit(units, routing)
+	return &out
+}
+
 // CanonicalContainer is a container addressed the way the engine keys one.
 //
 // A CONTAINER IS AN ADDRESS, and every kind but one is already canonical by

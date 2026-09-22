@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -314,6 +315,30 @@ func TestTheItemQueryAsksForEveryPart(t *testing.T) {
 	want := tracker.DetailWants{Comments: true, History: true, Links: true, Fields: true}
 	if w.taskWants != want {
 		t.Errorf("work_item asked the reader for %+v, want %+v", w.taskWants, want)
+	}
+}
+
+// AND IT ASKS WITH THE CHART, so the properties panel reads a team's NAME
+// where the row holds its key.
+//
+// What a task's unit fields hold is [org.Unit.Key] — an id on any company
+// that gave its units one, which is a word chosen so that a rename moves
+// nothing and therefore a word nobody reads. Without the chart this answer
+// carried the id alone, and an item page said `eng` beside a board column
+// that said Engineering. An unresolved reference is also a FINDING — the team
+// has left the chart — so a surface that holds a chart and does not pass it
+// reports every task as orphaned.
+func TestTheItemQueryAsksWithTheChart(t *testing.T) {
+	w := &stubWork{}
+	cfg := company(t)
+	if _, err := askNative(t, queries.Sources{
+		Work: w, Company: func() *config.Company { return cfg },
+	}, "work_item", map[string]any{"id": "ENG-1"}); err != nil {
+		t.Fatalf("work_item: %v", err)
+	}
+	if w.taskWants.Units == nil {
+		t.Error("work_item read the item with no chart, so its unit fields " +
+			"render as a key nobody reads and as a team the chart has lost")
 	}
 }
 

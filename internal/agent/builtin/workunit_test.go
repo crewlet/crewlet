@@ -95,6 +95,32 @@ func TestARerouteStoresTheUnitsOwnKey(t *testing.T) {
 	}
 }
 
+// GET_WORK_ITEM READS WITH THE CHART, so its answer carries the team's NAME
+// beside the key the row holds.
+//
+// A model acts on the key — it is what a `unit=` filter takes, and that filter
+// takes the name too — but a model also writes PROSE about the item it just
+// read, into a comment, a chat message or a hand-off, and "filed into eng" is
+// a sentence about a slug nobody outside the config file has seen. It is also
+// the only way this surface can say a team has LEFT the chart, which is the
+// difference between a stale unit and a typo.
+func TestGetWorkItemReadsWithTheChart(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{
+		Reader: trk, Writer: trk.as, Units: stubUnits{},
+	})
+	if got := callWork(t, reg, builtin.GetWorkItemTool,
+		map[string]any{"item": "ENG-1"}); got.Failed {
+		t.Fatalf("get_work_item failed: %s", got.Output)
+	}
+	if trk.wants.Units == nil {
+		t.Error("get_work_item read the item with no chart, so a model is " +
+			"handed a unit key with no name and every team reads as one the " +
+			"chart has lost")
+	}
+}
+
 // viewRegistry is the operator surface the two view tools are registered on,
 // with the chart behind it.
 func viewRegistry(t *testing.T, trk *fakeTracker, views builtin.ViewWriter) *tools.Registry {

@@ -1056,6 +1056,19 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	if refusal != "" {
 		return failed(refusal), nil
 	}
+	// THE CHART, so the answer carries the team's NAME beside the key the
+	// row holds. A model acts on the key — it is what a `unit=` filter
+	// takes, and that filter takes the name too — but a model also writes
+	// PROSE about the item it just read, into a comment, a chat message
+	// or a hand-off, and "filed into eng" is a sentence about a slug
+	// nobody outside the config file has seen. It is also the only way
+	// this surface can say a team has left the chart, which is the
+	// difference between a stale unit and a typo.
+	//
+	// It is passed WHEREVER A CHART IS HELD rather than gated on a caller
+	// asking, because an unresolved reference is a FINDING: a surface
+	// that could resolve and did not would report every task as orphaned.
+	want.Units = t.deps.Units
 	detail, err := t.deps.Reader.Task(ctx, id, want, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
