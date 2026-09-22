@@ -191,6 +191,11 @@ func (stubUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
 	}, true
 }
 
+func (s stubUnits) AllUnits() []tracker.ChartUnit {
+	unit, _ := s.ResolveUnit("plat")
+	return []tracker.ChartUnit{unit}
+}
+
 // MY_WORK TAKES NO HANDLE, ever.
 //
 // A model that could name whose day to read could read anybody's — which is a

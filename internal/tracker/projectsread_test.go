@@ -667,6 +667,8 @@ func TestADescriptionGroupsFieldsAndNamesTheShadowed(t *testing.T) {
 // engine does not have.
 type chart []tracker.ChartUnit
 
+func (c chart) AllUnits() []tracker.ChartUnit { return c }
+
 func (c chart) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
 	ref = strings.ToLower(strings.TrimSpace(ref))
 	for _, unit := range c {

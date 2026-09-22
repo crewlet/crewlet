@@ -137,6 +137,118 @@ func TestAUnitColumnIsHeadedWithTheTeamsName(t *testing.T) {
 	}
 }
 
+// A TEAM IS ONE COLUMN, whichever spelling each of its rows was filed under.
+//
+// A unit answers to two spellings and which one a row holds is decided by when
+// it was written, so a board grouped on the COLUMN drew one team as two
+// columns — both headed with its name, its counts split down the middle —
+// from the moment a founder added an id. That is the same defect the `unit=`
+// filter was fixed for, on the surface a lead actually reads.
+func TestAUnitColumnIsOneColumnPerTeam(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	unitTask(t, r, "old", "Platform") // filed before the id existed
+	unitTask(t, r, "new", "plat")     // filed after it
+	unitTask(t, r, "other", "Product")
+	unitTask(t, r, "gone", "dissolved")
+
+	for _, axis := range []string{"unit", "routing_unit"} {
+		answer := r.askWith(nimbus, map[string]any{
+			"container": "project:ENG", "group_by": axis,
+		})
+		// THE KEY IS THE TEAM'S, and both rows are under it.
+		plat := groupOf(t, answer, "plat")
+		if plat.Count != 2 || len(plat.Rows) != 2 {
+			t.Errorf("group_by=%s draws the team's column with %d counted and "+
+				"%d rows, want both the row filed under its name and the row "+
+				"filed under its id", axis, plat.Count, len(plat.Rows))
+		}
+		if plat.Label != "Platform" {
+			t.Errorf("group_by=%s heads the column %q, want Platform", axis, plat.Label)
+		}
+		// AND THE NAME IS NOT A COLUMN OF ITS OWN any more.
+		for _, group := range answer.Groups {
+			if group.Key == "Platform" {
+				t.Errorf("group_by=%s still draws a second column under the "+
+					"team's name", axis)
+			}
+		}
+		// A TEAM THE CHART HAS LOST KEEPS ITS OWN COLUMN, under the
+		// literal its rows hold: folding it into anything would invent a
+		// home for work whose team is gone.
+		if gone := groupOf(t, answer, "dissolved"); gone.Count != 1 || gone.Label != "" {
+			t.Errorf("group_by=%s draws the dissolved team as %+v, want its "+
+				"own column under the stored key", axis, gone)
+		}
+	}
+}
+
+// AND A NARROWING TO THAT COLUMN TAKES EITHER SPELLING, because a caller
+// writes the one it has: a board's own column hands back the key, and a person
+// or a model types the name.
+func TestANarrowingToAUnitColumnTakesEitherSpelling(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	unitTask(t, r, "old", "Platform")
+	unitTask(t, r, "new", "plat")
+	unitTask(t, r, "other", "Product")
+
+	for _, ref := range []string{"plat", "Platform", "PLATFORM"} {
+		answer := r.askWith(nimbus, map[string]any{
+			"container": "project:ENG", "group_by": "unit", "group": ref,
+		})
+		got := groupOf(t, answer, "plat")
+		if got.Count != 2 {
+			t.Errorf("group=%s narrows to %d, want the team's two rows", ref, got.Count)
+		}
+		if len(answer.Groups) != 1 {
+			t.Errorf("group=%s draws %d columns, want the one narrowed to",
+				ref, len(answer.Groups))
+		}
+	}
+	// A SECOND AXIS NARROWS THE SAME WAY, which is the other caller-supplied
+	// key an axis compares — `subgroup=` reaches the inner axis through the
+	// join-free form rather than through the one above.
+	lanes := r.askWith(nimbus, map[string]any{
+		"container": "project:ENG", "group_by": "assignee",
+		"group_by2": "unit", "subgroup": "Platform", "show_closed": "true",
+	})
+	var counted int
+	for _, column := range lanes.Groups {
+		for _, lane := range column.Subgroups {
+			if lane.Key == "plat" {
+				counted += lane.Count
+			}
+		}
+	}
+	if counted != 2 {
+		t.Errorf("subgroup=Platform counts %d, want the team's two rows", counted)
+	}
+}
+
+// WITH NO CHART THE COLUMN IS THE STORED VALUE, unchanged: a process holding
+// no org cannot fold what it cannot resolve, and inventing a grouping would be
+// a claim rather than an absence.
+func TestAUnitColumnWithNoChartIsTheStoredValue(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	unitTask(t, r, "old", "Platform")
+	unitTask(t, r, "new", "plat")
+
+	answer := r.askWith(nil, map[string]any{
+		"container": "project:ENG", "group_by": "unit",
+	})
+	if len(answer.Groups) != 2 {
+		t.Fatalf("with no chart the board draws %d columns, want one per "+
+			"stored spelling", len(answer.Groups))
+	}
+	for _, key := range []string{"plat", "Platform"} {
+		if got := groupOf(t, answer, key); got.Count != 1 {
+			t.Errorf("the %s column counts %d, want its own row", key, got.Count)
+		}
+	}
+}
+
 // A WORKLOAD NARROWS BY EITHER SPELLING TOO. The screen that asks was handed
 // a unit from somewhere else — a chart, a project row, a URL — and which of
 // the two names it holds is not something the reader can assume.

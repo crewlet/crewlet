@@ -61,6 +61,16 @@ import (
 // finished work, and a Done lane on it would claim "nothing is done" about a
 // set that was never asked. [admittedColumns] names the filters that decide
 // it, and why an open axis and the second axis are left as they are.
+//
+// # Two axes group on something other than their column
+//
+// Every axis above is its column's own value. The two UNIT axes are not: a
+// unit answers to two spellings — its id and its name — and which one a row
+// holds is whatever was true when it was filed, so grouping on the string
+// drew one team as two columns. They group on the unit's KEY instead, folded
+// in SQL, and a caller's `group=` is folded the same way so either spelling
+// narrows to the one column. [unitAxis] is the expression and
+// [groupAxis.Canonical] is the caller's half.
 
 // MaxGroups bounds how many columns one answer draws.
 //
@@ -183,6 +193,23 @@ type groupAxis struct {
 	// [labelsOf].
 	Labels func(key string) string
 
+	// Canonical spells a value the way [groupAxis.Expr] spells it.
+	//
+	// Only the unit axes have one, and it is what lets `group=` and
+	// `subgroup=` take either of a team's spellings: that expression folds
+	// every spelling onto the unit's KEY, so a narrowing written with the
+	// name would compare against a value the column never emits — a board
+	// with a column and a narrowing to it that answers nothing.
+	//
+	// It is applied to a key that came from an ANSWER too, where it is a
+	// no-op: the key is already canonical and resolving one answers
+	// itself. One rule over both, rather than two paths that have to agree
+	// about which keys are which.
+	//
+	// Absent everywhere else, because every other axis's expression emits
+	// the stored value and a caller's value is that value.
+	Canonical func(key string) string
+
 	// Exists is the JOIN-FREE form of this axis as a predicate, used when
 	// `group=<value>` narrows the whole query. It has to be join-free
 	// because the narrowed predicate is shared with the count hint and
@@ -194,6 +221,7 @@ type groupAxis struct {
 
 // filter renders this axis as a predicate on one value.
 func (a groupAxis) filter(key string) (string, []any) {
+	key = a.canonical(key)
 	if a.Exists != nil {
 		return a.Exists(key)
 	}
@@ -206,6 +234,19 @@ func (a groupAxis) filter(key string) (string, []any) {
 			append(append([]any{}, a.ExprArgs...), a.ExprArgs...)
 	}
 	return a.Expr + " = ?", append(append([]any{}, a.ExprArgs...), key)
+}
+
+// canonical is [groupAxis.Canonical] where the axis has one, and the key
+// itself where it does not.
+//
+// THE EMPTY KEY IS NEVER RESOLVED. It is the column of rows with NO value on
+// this axis, on every axis — a state rather than a name — and handing it to a
+// resolver would ask the chart for a unit called nothing.
+func (a groupAxis) canonical(key string) string {
+	if key == "" || a.Canonical == nil {
+		return key
+	}
+	return a.Canonical(key)
 }
 
 // compileGroup turns a grouping key into its axis.
@@ -283,15 +324,9 @@ func compileGroup(key string, fields map[string]resolvedField,
 	case "project":
 		return groupAxis{Expr: "t.project_key"}, nil
 	case "unit":
-		return groupAxis{
-			Expr: "t.filed_unit", Unset: "(no unit)",
-			Labels: unitLabels(units),
-		}, nil
+		return unitAxis("t.filed_unit", units), nil
 	case "routing_unit":
-		return groupAxis{
-			Expr: "t.routing_unit", Unset: "(no unit)",
-			Labels: unitLabels(units),
-		}, nil
+		return unitAxis("t.routing_unit", units), nil
 	case "parent":
 		return groupAxis{Expr: "COALESCE(t.parent_id, '')", Unset: "(no parent)"}, nil
 	case "tag":
@@ -594,6 +629,7 @@ func groupRows(ctx context.Context, tx *sql.Tx, axis groupAxis, key string,
 // The expression's own bindings ride with it for the reason [groupAxis.filter]
 // gives, and the empty key writes it twice there too.
 func (a groupAxis) joinedFilter(key string) (string, []any) {
+	key = a.canonical(key)
 	if key == "" {
 		return "(" + a.Expr + " IS NULL OR " + a.Expr + " = '')",
 			append(append([]any{}, a.ExprArgs...), a.ExprArgs...)
@@ -631,6 +667,64 @@ func labelsOf(table map[string]string) func(string) string {
 		return nil
 	}
 	return func(key string) string { return table[key] }
+}
+
+// unitAxis is a unit column grouped on the TEAM rather than on the string.
+//
+// A unit answers to two spellings — its id and its name — and which one a row
+// holds is decided by when it was written, because a filed unit is a record of
+// what was true and nothing rewrites it. Grouped on the column, a company that
+// gave a team an id therefore drew that ONE team as TWO columns, both headed
+// with its name, splitting its counts down the middle: everything filed before
+// the id under one, everything after it under the other. That is the defect
+// the `unit=` filter was fixed for, one surface along.
+//
+// So the expression folds every spelling onto the unit's KEY, in SQL, with the
+// spellings BOUND rather than written into the statement — a unit's name is
+// prose a founder typed, and prose reaching a statement as text is how an
+// injection gets in. One arm per unit that carries an id, two bound values
+// each; the expression appears at most three times in one statement (the
+// SELECT, the narrowing and a subgroup's), so the driver's own variable
+// ceiling is reached at a few hundred id-carrying units — an order of
+// magnitude past any org chart, and a loud refusal rather than a wrong answer
+// if one ever arrives.
+//
+// A COMPANY THAT SET NO IDS GETS NO CASE AT ALL. Its every key IS its name, so
+// every arm would be `WHEN x THEN x` — which the ELSE already answers — and
+// the expression is the bare column it has always been. Same for a nil chart,
+// which is the honest state of a process holding no org.
+//
+// A STORED UNIT THE CHART NO LONGER HAS KEEPS ITS OWN COLUMN, through the
+// ELSE, under the literal the rows hold. It is a team that has left the chart:
+// folding it into anything would be inventing a home for work whose team is
+// gone, and [unitLabels] is what says so on the heading.
+func unitAxis(column string, units Units) groupAxis {
+	axis := groupAxis{Expr: column, Unset: "(no unit)", Labels: unitLabels(units)}
+	if units == nil {
+		return axis
+	}
+	var arms strings.Builder
+	for _, unit := range units.AllUnits() {
+		key, name := strings.TrimSpace(unit.Key), strings.TrimSpace(unit.Name)
+		if key == "" || name == "" || key == name {
+			continue
+		}
+		arms.WriteString(" WHEN ? THEN ?")
+		axis.ExprArgs = append(axis.ExprArgs, name, key)
+	}
+	if arms.Len() > 0 {
+		axis.Expr = "CASE " + column + arms.String() + " ELSE " + column + " END"
+	}
+	// AND A CALLER'S OWN VALUE IS SPELLED THE WAY THE EXPRESSION SPELLS
+	// IT, so `group=Engineering` and `group=eng` narrow to the one column
+	// the board draws — see [groupAxis.Canonical].
+	axis.Canonical = func(key string) string {
+		if unit, found := units.ResolveUnit(key); found {
+			return unit.Key
+		}
+		return key
+	}
+	return axis
 }
 
 // unitLabels is what a person reads on a unit column.

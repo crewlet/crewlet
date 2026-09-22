@@ -29,6 +29,22 @@ type Units interface {
 	// spellings, however it is cased — and false where the chart has no
 	// such unit.
 	ResolveUnit(ref string) (ChartUnit, bool)
+
+	// AllUnits is every unit the chart holds, for the one question
+	// resolution cannot answer: the BOARD groups rows it has not read yet,
+	// so it has to fold the spellings onto their keys inside the statement
+	// — see [unitAxis] — and that needs the whole set up front.
+	//
+	// ON THE INTERFACE rather than a second one the grouping asserts for,
+	// which is the choice that fails LOUDLY: a chart that could not
+	// enumerate would silently group on the stored string, which is
+	// exactly the split-column defect this removes and is invisible in the
+	// answer. One method on one seam is a compile error instead.
+	//
+	// The order is the chart's own walk. Nothing here depends on it: the
+	// arms of one CASE are mutually exclusive by construction, since a
+	// unit key is unique across the company by admission rule.
+	AllUnits() []ChartUnit
 }
 
 // ChartUnit is one unit as the chart answers it.

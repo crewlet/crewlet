@@ -1260,11 +1260,37 @@ func (c chartUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
 	return tracker.ChartUnit{Key: unit.Key(), Name: unit.Name, Lead: lead}, true
 }
 
+// AllUnits is the whole chart, for the board — see [tracker.Units].
+//
+// EVERY UNIT, in the org's own walk order, each with the lead its rows would
+// route to: this is the same answer [chartUnits.ResolveUnit] gives one
+// reference at a time, and two derivations of one unit's identity is how the
+// board and the filter come to disagree about which team a row belongs to.
+func (c chartUnits) AllUnits() []tracker.ChartUnit {
+	if c.org == nil {
+		return nil
+	}
+	var out []tracker.ChartUnit
+	for unit := range c.org.AllUnits() {
+		// THROUGH THE RESOLVER, by the unit's own key, so the pair
+		// cannot drift: whatever ResolveUnit says a unit's key, name and
+		// lead are is what the enumeration says too.
+		if resolved, found := c.ResolveUnit(unit.Key()); found {
+			out = append(out, resolved)
+		}
+	}
+	return out
+}
+
 // liveUnits resolves against the epoch current when the tool RUNS.
 type liveUnits struct{ engine *Engine }
 
 func (l liveUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
 	return ChartUnits(l.engine.Company().Org).ResolveUnit(ref)
+}
+
+func (l liveUnits) AllUnits() []tracker.ChartUnit {
+	return ChartUnits(l.engine.Company().Org).AllUnits()
 }
 
 // liveSeats resolves a people field's value to exactly one handle, against the
