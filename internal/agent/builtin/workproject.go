@@ -130,30 +130,10 @@ func (t *writeProject) Parameters() map[string]any {
 				"description": "REPLACES this project's own field " +
 					"declarations — send the whole set, read describe_project " +
 					"first. These sit beside the workspace's, they do not " +
-					"replace them. The project lead's.",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"id":                   map[string]any{"type": "string", "description": "Omit for a new field."},
-						"slug":                 map[string]any{"type": "string"},
-						"name":                 map[string]any{"type": "string"},
-						"type":                 map[string]any{"type": "string", "enum": toAny(fieldTypeNames())},
-						"required":             map[string]any{"type": "boolean"},
-						"required_in_subtasks": map[string]any{"type": "boolean"},
-						"archived": map[string]any{
-							"type":        "boolean",
-							"description": "One-way; values stay on their tasks.",
-						},
-						"pinned":           map[string]any{"type": "boolean"},
-						"hide_from_agents": map[string]any{"type": "boolean"},
-						"description":      map[string]any{"type": "string"},
-						"options": map[string]any{
-							"type":  "array",
-							"items": map[string]any{"type": "object"},
-						},
-					},
-					"required": []any{"slug", "name", "type"},
-				},
+					"replace them. Each declaration is whole too: a key left " +
+					"out is cleared, `config` and its options included. The " +
+					"project lead's.",
+				"items": fieldDeclarationSchema(),
 			},
 			"default_assignee": map[string]any{
 				"type": "string",

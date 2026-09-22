@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -210,3 +211,101 @@ func sortedKeys(m map[string]string) []string {
 	out := slices.Sorted(maps.Keys(m))
 	return out
 }
+
+// argIntValue and argFloatValue read a number, reporting whether they COULD.
+//
+// # Why not [argInt] and [argFloat]
+//
+// Because both answer a fallback for a value they cannot read, and every
+// caller of these two holds a value whose zero is a SETTING rather than an
+// absence: zero minutes and zero points both mean UNESTIMATED, a `min` of 0 is
+// a real floor, and a `precision` of 0 declares a field exact to whole
+// numbers. So an unreadable value became `&0` and the write succeeded —
+// `estimate_minutes: "two hours"` answered `applied` and wiped the estimate,
+// which is the exact failure the schedule reader's own header says it exists
+// to prevent, in the half of it that was not written to the rule. [argFloat]'s
+// doc states the condition under which its zero is right — "every caller of
+// this one has a field whose zero IS its default" — and these are the callers
+// that broke it.
+//
+// The parse is the WHOLE string rather than [fmt.Sscanf]'s prefix, which is
+// the other half of the same bug: `Sscanf("%d")` reads "2 days" as 2, so a
+// two-day estimate was stored as two MINUTES and nothing was refused.
+//
+// THEY LIVE HERE rather than beside the schedule, because the custom-field
+// declaration reads its `precision` and its `min`/`max` bounds by the same
+// rule and a second spelling of the json.Number / finiteness discipline is how
+// one of them stops matching the other — the objection [textcut] and [whsec]
+// each record for a grammar that was written twice.
+func argIntValue(raw any) (int, bool) {
+	switch v := raw.(type) {
+	case json.Number:
+		// BACK THROUGH THIS FUNCTION rather than repeating the whole-number
+		// and finiteness discipline below, which is the half a second
+		// spelling always gets wrong. An integer past 2^53 is none of the
+		// things this reads — minutes, story points, decimal places — so
+		// the float is the honest intermediate here, unlike in [argInt].
+		f, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return argIntValue(f)
+	case float64:
+		// JSON has one number type, so a whole number arrives here. A
+		// fraction is not a whole number of minutes, nor of decimal
+		// places, and is refused rather than truncated to one nobody
+		// typed.
+		//
+		// FINITE FIRST, because the fraction test does not cover it: an
+		// infinity IS its own truncation, so it passed, and `int(+Inf)`
+		// is not defined by the language — it lands on the platform's
+		// minimum int, which the negative check below then refuses as a
+		// NEGATIVE estimate. Right answer, wrong reason, and a message
+		// naming a sign nobody typed.
+		if math.IsNaN(v) || math.IsInf(v, 0) || v != math.Trunc(v) {
+			return 0, false
+		}
+		return int(v), true
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		return n, err == nil
+	}
+	return 0, false
+}
+
+func argFloatValue(raw any) (float64, bool) {
+	switch v := raw.(type) {
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return argFloatValue(f)
+	case float64:
+		return v, finite(v)
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case string:
+		// [strconv.ParseFloat] ACCEPTS "NaN", "Inf" and "infinity" in
+		// every casing, which is why the check is here rather than left
+		// to the caller: a size of NaN passed the `points < 0` guard
+		// below — every comparison with NaN is false — and an infinity
+		// passed it honestly, so both reached the writer. Downstream
+		// neither is a number a total can be summed from, and JSON
+		// cannot even encode them, so the failure surfaced as a broken
+		// answer somewhere with no memory of who typed it.
+		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return n, err == nil && finite(n)
+	}
+	return 0, false
+}
+
+// finite is what a size has to be: a real number a total can be summed from,
+// which NaN and the infinities are not.
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }

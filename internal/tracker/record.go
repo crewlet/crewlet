@@ -921,6 +921,16 @@ type Rollup struct {
 }
 
 // FieldConfig is everything a field's type may need.
+//
+// EVERY KEY HERE IS DECLARABLE, which is a property somebody has to keep: a
+// setting no surface can set and nothing reads is a knob a reader will one day
+// wire up to whatever they guess it meant. `Tracking` and `Rollup` stay
+// although the tracker refuses both — a refusal has to DECODE what it refuses,
+// and each names something this build could one day compute — while `Project`
+// went, because it named nothing: a field's project is the document it is
+// declared in, which is what [declaredFields] merges, and a second copy of it
+// on the declaration was written by nothing, read by nothing and checked by
+// nothing.
 type FieldConfig struct {
 	Options   []Option `json:"options,omitempty"`
 	Unit      string   `json:"unit,omitempty"`
@@ -930,7 +940,6 @@ type FieldConfig struct {
 	Time      bool     `json:"time,omitempty"`
 	Progress  string   `json:"progress,omitempty"`
 	Tracking  []string `json:"tracking,omitempty"`
-	Project   string   `json:"project,omitempty"`
 	Multi     bool     `json:"multi,omitempty"`
 	Rollup    *Rollup  `json:"rollup,omitempty"`
 }
@@ -955,18 +964,21 @@ type FieldDef struct {
 	// checklist item promoted into a subtask.
 	RequiredInSubtasks bool `json:"required_in_subtasks,omitempty"`
 
-	Default json.RawMessage `json:"default,omitempty"`
-	Config  FieldConfig     `json:"config,omitzero"`
+	Config FieldConfig `json:"config,omitzero"`
 
 	// Archived is ONE-WAY: values stay on their tasks, leave the value
 	// table, and a restored field is a NEW declaration — because a field
 	// that came back with its old id would silently re-admit values
 	// validated against a definition nobody has seen for a year.
-	Archived       bool   `json:"archived,omitempty"`
-	Pinned         bool   `json:"pinned,omitempty"`
-	HideFromAgents bool   `json:"hide_from_agents,omitempty"`
-	CreatedBy      string `json:"created_by,omitempty"`
+	Archived       bool `json:"archived,omitempty"`
+	Pinned         bool `json:"pinned,omitempty"`
+	HideFromAgents bool `json:"hide_from_agents,omitempty"`
 
+	// CreatedBy and CreatedAt are the WRITE's, never the caller's — see
+	// [stampFields]. They are served on every catalogue read, and nothing
+	// wrote them: a tag records who declared it and a field did not, which
+	// is the same column on the same kind of vocabulary.
+	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitzero"`
 }
 

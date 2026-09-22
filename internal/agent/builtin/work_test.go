@@ -76,11 +76,19 @@ type fakeTracker struct {
 
 	projectEdits     []tracker.ProjectEdit
 	projectAuthority []tracker.ProjectAuthority
-	tagEdits         []tracker.TagEdit
-	tagAuthority     []tracker.TagAuthority
-	tagWarnings      []string
-	ensured          [][]string
-	ensuredIn        []string
+
+	// declaredTypes and declaredFields are the catalogue as the WRITE
+	// tools composed it, which is the half of those verbs that lives in
+	// this package: the tracker's own suite certifies what it does with a
+	// declaration, and nothing else can say what a model's arguments
+	// BECAME.
+	declaredTypes  [][]tracker.TaskType
+	declaredFields [][]tracker.FieldDef
+	tagEdits       []tracker.TagEdit
+	tagAuthority   []tracker.TagAuthority
+	tagWarnings    []string
+	ensured        [][]string
+	ensuredIn      []string
 
 	projectQuery tracker.ProjectQuery
 	projects     tracker.ProjectListing
@@ -392,6 +400,38 @@ func (f *fakeTracker) WriteTags(_ context.Context, opID, project string,
 		Outcome: statelog.OutcomeApplied, Version: 4,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 14},
 		Warnings: f.tagWarnings,
+	}, nil
+}
+
+// The CATALOGUE write side, which is the OPERATOR's alone. The declaration a
+// tool composed is what a case here asserts; whether the tracker accepts it is
+// the tracker's own suite (internal/tracker/config_test.go), and a second copy
+// of that gate in this fake would certify nothing but itself.
+func (f *fakeTracker) WriteTypes(_ context.Context, opID string,
+	types []tracker.TaskType) (tracker.WriteResult, error) {
+
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	f.declaredTypes = append(f.declaredTypes, types)
+	f.opIDs = append(f.opIDs, opID)
+	return tracker.WriteResult{
+		Outcome: statelog.OutcomeApplied, Version: 5,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 15},
+	}, nil
+}
+
+func (f *fakeTracker) WriteFields(_ context.Context, opID string,
+	fields []tracker.FieldDef) (tracker.WriteResult, error) {
+
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	f.declaredFields = append(f.declaredFields, fields)
+	f.opIDs = append(f.opIDs, opID)
+	return tracker.WriteResult{
+		Outcome: statelog.OutcomeApplied, Version: 6,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 16},
 	}, nil
 }
 
