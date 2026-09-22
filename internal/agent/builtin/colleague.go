@@ -136,6 +136,11 @@ func Corpus(o *org.Organization) []colleague.Seat {
 	for role := range o.AllRoles() {
 		seat := colleague.Seat{
 			Handle: role.Handle(), Name: role.Name, Kind: string(role.Kind),
+			// AND WHAT IT USED TO BE CALLED. A model addresses a
+			// colleague by the name it remembers, and a rename does not
+			// reach what an earlier turn wrote down — see
+			// [colleague.Seat.Former].
+			Former:   role.FormerHandles,
 			External: map[string]string{},
 		}
 		if seat.Kind == "" {

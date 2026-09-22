@@ -54,8 +54,16 @@ const (
 	MethodExternalID      Method = "external_id"
 	MethodExactRole       Method = "exact_role"
 	MethodCaseInsensitive Method = "case_insensitive"
-	MethodSubstring       Method = "substring"
-	MethodFuzzy           Method = "fuzzy"
+	// MethodFormerHandle is an address this seat USED to answer to.
+	//
+	// BELOW EVERY LIVE MATCH AND ABOVE EVERY APPROXIMATE ONE, which is the
+	// only rank that is not wrong. Above the live tiers, a seat renamed
+	// away from a name another seat now holds would answer for it. Below
+	// the approximate ones, a name somebody wrote down exactly would lose
+	// to a substring of somebody else's.
+	MethodFormerHandle Method = "former_handle"
+	MethodSubstring    Method = "substring"
+	MethodFuzzy        Method = "fuzzy"
 )
 
 // Label is the phrase shown to a model beside an ambiguous candidate.
@@ -63,6 +71,12 @@ func (m Method) Label() string {
 	switch m {
 	case MethodCaseInsensitive:
 		return "case / format match"
+	case MethodFormerHandle:
+		// SAID OUT LOUD, because this is the one tier whose answer is a
+		// seat the query does not name: somebody reading the list has to
+		// know the handle they typed is retired, or they will type it
+		// again.
+		return "previous name"
 	case MethodSubstring:
 		return "partial-name match"
 	case MethodFuzzy:
@@ -81,6 +95,16 @@ type Seat struct {
 	// External maps a transport to this seat's id there (slack, jira,
 	// confluence), for the exact-id tier.
 	External map[string]string
+
+	// Former are the handles this seat used to answer to.
+	//
+	// A MODEL TYPES WHAT IT REMEMBERS, which is this package's whole
+	// premise — and what it remembers after a rename is the old handle.
+	// Without them a renamed colleague was unreachable by the name every
+	// earlier turn, page and channel topic used, and the tool answered
+	// "no such colleague" over a seat sitting right there. See
+	// [MethodFormerHandle] for why they are their own tier.
+	Former []string
 }
 
 // Candidate is one match, with how it was found.
@@ -96,6 +120,7 @@ type entry struct {
 	seat   Seat
 	handle string // normalised handle
 	name   string // normalised role name
+	former []string
 }
 
 // Resolve returns every candidate for a query, best tier first.
@@ -111,9 +136,13 @@ func Resolve(query string, seats []Seat) []Candidate {
 		if s.Handle == "" {
 			continue
 		}
-		corpus = append(corpus, entry{
-			seat: s, handle: Normalize(s.Handle), name: Normalize(s.Name),
-		})
+		e := entry{seat: s, handle: Normalize(s.Handle), name: Normalize(s.Name)}
+		for _, was := range s.Former {
+			if folded := Normalize(was); folded != "" {
+				e.former = append(e.former, folded)
+			}
+		}
+		corpus = append(corpus, e)
 	}
 
 	var out []Candidate
@@ -169,6 +198,25 @@ func Resolve(query string, seats []Seat) []Candidate {
 	for _, e := range corpus {
 		if e.handle == q || e.name == q {
 			add(e, MethodCaseInsensitive, 1)
+		}
+	}
+	if len(out) > 0 {
+		return sortByHandle(out)
+	}
+
+	// TIER 2b — an address one of these seats USED to answer to, folded the
+	// same way tier 2 folds a live one.
+	//
+	// ITS OWN TIER, AND AFTER EVERY LIVE MATCH. Run inside tier 1 or 2 it
+	// would make a live handle and another seat's retired one AMBIGUOUS,
+	// and the caller's contract is that two candidates means it must not
+	// pick — so one seat renamed away from a name another seat now holds
+	// would make that name unusable for both. Short-circuiting before the
+	// approximate tiers is the other half: a name somebody wrote down
+	// exactly must not lose to a substring of somebody else's.
+	for _, e := range corpus {
+		if slices.Contains(e.former, q) {
+			add(e, MethodFormerHandle, 1)
 		}
 	}
 	if len(out) > 0 {

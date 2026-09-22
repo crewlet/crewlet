@@ -174,7 +174,7 @@ The engine ships these tools (`internal/agent/builtin`, registered in the epoch'
 
 | Tool | Registered when | Purpose |
 |------|-----------------|---------|
-| `lookup_colleague` | always | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; returns the candidate list when more than one seat matches |
+| `lookup_colleague` | always | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; a handle a seat **used to** answer to resolves too, ranked below every live match and above every approximate one; returns the candidate list when more than one seat matches |
 | `a2a_ask` | the node has a stream and a coordination store | Ask one AI colleague one question. The colleague is woken on its own inbox and answers in its own turn, so the call returns as soon as the question is sent |
 | `use_skill` | a learning store | Load one of the seat's own [synthesized skills](agent-learning.md#5-synthesizer-skill-induction) on demand |
 | `refine_skill` | a learning store | Replace a synthesized skill's body with a corrected procedure; the previous version is kept |
