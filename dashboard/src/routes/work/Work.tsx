@@ -42,12 +42,30 @@ export function Work() {
   // nothing, over a read that failed. A reader acts on that, by filing the
   // duplicate.
   const projects = useQuery("work_projects", { limit: 1 }, { pollMs: 120_000 });
-  // AN ANSWER WITH NO LIST IN IT IS NOT A LIST OF NOTHING. Only a listing
-  // that actually carried its `projects` array and carried it empty is a
-  // company with no projects; an answer missing the field — a newer build's
-  // envelope, a stub — is not a count of zero, and reading it as one drew
-  // "no work has been filed" over a list that was never asked.
-  const none = projects.data?.projects?.length === 0;
+  // THE CENSUS, NOT THE ROWS. This read is the ACTIVE set — the engine's own
+  // default — so an empty answer is two states a reader acts on oppositely:
+  // a company with no projects at all, and one that has archived every one of
+  // them. Gated on the rows, a company with four archived projects holding
+  // hundreds of items was told "nothing can be filed until a unit declares a
+  // `project` key, and this company has none", which is false twice over.
+  //
+  // So the same number the directory reads: `work_projects` answers with
+  // `census` over BOTH sets under the same narrowing, whatever the `limit`,
+  // precisely because a segmented read cannot derive the other segment from
+  // rows that are not on screen.
+  //
+  // AN ANSWER WITH NO CENSUS IN IT IS NOT A CENSUS OF NOTHING — the rule the
+  // rows already had. A listing that carried the field is the only thing that
+  // can conclude a company is empty; an answer missing it (a newer build's
+  // envelope, a stub) is not a count of zero, and reading it as one draws a
+  // positive statement over a read that never happened.
+  const census = projects.data?.census;
+  const none = !!census && census.active + census.archived === 0;
+  // EVERY PROJECT ARCHIVED IS A COMPANY WITH WORK IN IT. The list below is
+  // narrowed to the active set by the item query's own default, so it answers
+  // nothing — and the honest sentence for that is the LIST's, carrying this
+  // count and the way to the projects it names.
+  const archived = census && census.active === 0 ? census.archived : 0;
 
   return (
     <>
@@ -76,7 +94,7 @@ export function Work() {
             nothing: while it is in flight or refused, the list is drawn, and a
             refusal is said beside it, because "this is not an empty company"
             is the fact a reader acts on. */}
-        {none && projects.data ? <NoWorkYet /> : <ItemsView />}
+        {none ? <NoWorkYet /> : <ItemsView archivedProjects={archived} />}
         <QueryState error={projects.error} loading={false} />
       </div>
     </>

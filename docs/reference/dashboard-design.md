@@ -3009,6 +3009,22 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   state happens — is a screen missing a number, and the fix is to send the
   number rather than to word around it.
 
+  **And the directory is not the only reader of it.** Every surface that draws
+  a conclusion from an empty project listing reads the same census, because
+  every one of them asks the ACTIVE set: the Work rail's Projects section, and
+  the `#/work` landing, which replaces the whole list with "No work has been
+  filed yet". Read from the ROWS, each concluded the first state — so a
+  company that had archived all four of its projects was told by the rail that
+  no project had been created and by the landing that nothing could be filed
+  until a unit declared a `project` key, both beside a directory saying all
+  four had been archived, and both false about a company holding every item it
+  ever filed. `active + archived === 0` is the only thing that draws the
+  first-run panel now; `active === 0 && archived > 0` keeps the ordinary list
+  and gives it an empty state naming the count with the way to
+  `#/work/projects?shown=archived` — the same sentence the directory's own
+  Active state writes, because it is the same fact. An answer carrying no
+  census concludes neither, on the rule its rows already followed.
+
 Every empty state names what would fill it.
 
 **And a restart is not an empty company.** The pushed surfaces come from the
