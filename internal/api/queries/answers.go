@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -309,11 +310,11 @@ var ErrNotFound = errors.New("queries: no such record")
 // have that surface at all.
 func Register(r *Registry, s Sources) {
 	if s.State != nil {
-		r.Register("agent", s.agent)
-		r.Register("tokens", s.tokens)
+		r.Register("agent", iam.GrantStateRead, s.agent)
+		r.Register("tokens", iam.GrantStateRead, s.tokens)
 	}
 	if s.Events != nil {
-		r.Register("events", s.events)
+		r.Register("events", iam.GrantTranscriptRead, s.events)
 		// THE SAME ROWS WITH A TIME AXIS, which the listing has no
 		// dimension for: a page of rows says what happened and nothing
 		// about when the company was busy. A second question rather than
@@ -321,32 +322,32 @@ func Register(r *Registry, s Sources) {
 		// shapes and one route returning either would make every caller
 		// branch on what came back — the same split `tokens` and
 		// `token_series` already carry.
-		r.Register("event_series", s.eventSeries)
-		r.Register("event", s.event)
-		r.Register("trace", s.trace)
+		r.Register("event_series", iam.GrantTranscriptRead, s.eventSeries)
+		r.Register("event", iam.GrantTranscriptRead, s.event)
+		r.Register("trace", iam.GrantTranscriptRead, s.trace)
 		// A turn is its own question, not a slice of the trace: one trace
 		// can span several turns and one turn several traces. See the
 		// answer, and migration 0014 which made it askable at all.
-		r.Register("turn", s.turn)
+		r.Register("turn", iam.GrantTranscriptRead, s.turn)
 		// AND THE LIST OF THEM, which did not exist: a turn is the unit
 		// of work this engine does and every other surface is a
 		// projection of one. The dashboard faked it by paging the raw
 		// feed sixty-one times and folding in the browser.
-		r.Register("turns", s.turns)
+		r.Register("turns", iam.GrantTranscriptRead, s.turns)
 		// The company's phase records, with their payloads. `events` cannot
 		// serve this: its listing never selects the payload, and a phase
 		// record without one has no prompts, no response and no decision.
-		r.Register("phases", s.phases)
+		r.Register("phases", iam.GrantTranscriptRead, s.phases)
 		// AND THE TIME AXIS. `tokens` is a breakdown whose every row is a
 		// sum over the whole window, so it cannot say WHEN — which is the
 		// question a cost explorer is for. Gated on the event store rather
 		// than on the projection: the projection holds a day, and an axis
 		// that changed source when a reader widened the range is a seam
 		// across the one comparison the screen exists to make.
-		r.Register("token_series", s.tokenSeries)
+		r.Register("token_series", iam.GrantStateRead, s.tokenSeries)
 	}
 	if s.Health != nil {
-		r.Register("stream", s.stream)
+		r.Register("stream", iam.GrantStateRead, s.stream)
 	}
 	if s.Coord != nil {
 		// OPERATOR-ONLY, like every other answer the Admin workspace
@@ -359,18 +360,18 @@ func Register(r *Registry, s Sources) {
 		// was the one destination of the five where the client claimed
 		// a guard the server did not keep, and on a node with
 		// `api.allow_anonymous_read` an anonymous GET read all of it.
-		r.RegisterOperator("fleet", s.fleet)
+		r.Register("fleet", iam.GrantFleetOperate, s.fleet)
 	}
 	// WHO IS ASKING. Registered unconditionally: a process with no company
 	// still has a credential presented to it, and "this token resolves to
 	// no seat" is the answer a screen needs in order to say what to bind.
-	r.Register("viewer", s.viewer)
+	r.Register("viewer", iam.GrantStateRead, s.viewer)
 	if s.Runs != nil {
 		// ONE SCHEDULE'S OWN HISTORY, gated on the LEDGER rather than on
 		// the company: the configured rows are a projection of the org
 		// and this is a store read, so a node with one and not the other
 		// is a real shape.
-		r.Register("schedule_runs", s.scheduleRuns)
+		r.Register("schedule_runs", iam.GrantStateRead, s.scheduleRuns)
 	}
 	if s.Company != nil {
 		// Gated on the COMPANY, not on the durable counter: the caps are
@@ -378,10 +379,10 @@ func Register(r *Registry, s Sources) {
 		// answers "these are the ceilings, and nobody can read the usage",
 		// which is a real state an operator needs to see and is not the
 		// same as the question being unavailable here.
-		r.Register("budgets", s.budgets)
+		r.Register("budgets", iam.GrantStateRead, s.budgets)
 		// Both are projections of the epoch: what the company DECLARES,
 		// which is a different question from what it has done.
-		r.Register("schedules", s.schedules)
+		r.Register("schedules", iam.GrantStateRead, s.schedules)
 		// OPERATOR-ONLY, alone among the projections, because of what it
 		// projects. `/setup` is guarded in FULL — reads included — for the
 		// reason its own package doc gives: "the list of which credentials
@@ -390,16 +391,16 @@ func Register(r *Registry, s Sources) {
 		// hold a secret, which are half-set-up, and the address each is
 		// registered against. Serving it anonymously guarded the write and
 		// published the reconnaissance.
-		r.RegisterOperator("integrations", s.integrations)
+		r.Register("integrations", iam.GrantConfigRead, s.integrations)
 		// Gated on the COMPANY, not on the searcher, for the same reason
 		// budgets is: "this company has no knowledge backend configured" is
 		// a fact the company alone establishes, and it is a far more useful
 		// answer than an unknown query. A nil searcher IS the answer here,
 		// not the absence of one.
-		r.Register("knowledge", s.knowledgeSearch)
+		r.Register("knowledge", iam.GrantStateRead, s.knowledgeSearch)
 	}
 	if s.Sandbox != nil {
-		r.Register("sandbox_runs", s.sandboxRuns)
+		r.Register("sandbox_runs", iam.GrantStateRead, s.sandboxRuns)
 	}
 	if s.Retention != nil {
 		// OPERATOR-ONLY. The answer names every node in the fleet, its
@@ -407,34 +408,34 @@ func Register(r *Registry, s Sources) {
 		// which machine to take out to lose the company's history — and
 		// it is read by a person or their cron, never by the dashboard's
 		// anonymous shell.
-		r.RegisterOperator("retention", s.retention)
+		r.Register("retention", iam.GrantFleetOperate, s.retention)
 	}
 	// The NATIVE backends, each gated on its own reader: a company can run
 	// the native tracker on Confluence, or the native knowledge base on
 	// Jira, and registering the pair together would offer one screen a
 	// question its half of the company cannot answer.
 	if s.Work != nil {
-		r.Register("work_items", s.workItems)
-		r.Register("work_item", s.workItem)
+		r.Register("work_items", iam.GrantStateRead, s.workItems)
+		r.Register("work_item", iam.GrantStateRead, s.workItem)
 		// A SEPARATE QUESTION from `work_items`, for the reason
 		// `containers` is separate from `pages`: a screen draws the tab
 		// strip once and the rows in it on every filter change.
-		r.Register("work_views", s.workViews)
+		r.Register("work_views", iam.GrantStateRead, s.workViews)
 		// A SEPARATE QUESTION from `work_items` for the reason
 		// `work_views` is: a home screen draws the project list once
 		// and its rows' tasks on every navigation, and the counts here
 		// are three MAINTAINED columns rather than an aggregate over
 		// every task in the company.
-		r.Register("work_projects", s.workProjects)
-		r.Register("work_project", s.workProject)
+		r.Register("work_projects", iam.GrantStateRead, s.workProjects)
+		r.Register("work_project", iam.GrantStateRead, s.workProject)
 		// AND WHO IS CARRYING HOW MUCH, across every project at once.
 		// A caller that grouped it itself paid one round trip per
 		// project and rewrote the arithmetic per surface.
-		r.Register("work_workload", s.workWorkload)
+		r.Register("work_workload", iam.GrantStateRead, s.workWorkload)
 		// THE FEED IS ITS OWN QUESTION, because it is ordered by the
 		// LOG rather than by anything a board sorts on: one durable
 		// table at any age, with a cursor that is a position.
-		r.Register("work_activity", s.workActivity)
+		r.Register("work_activity", iam.GrantStateRead, s.workActivity)
 		// AND ONE PERSON'S DAY, plus the notices that reached them.
 		//
 		// SCOPED RATHER THAN OPERATOR-ONLY — see [Sources.viewerHandle].
@@ -447,34 +448,34 @@ func Register(r *Registry, s Sources) {
 		// dashboard is for — is fictional. `work_person` has always
 		// been registered ungated, so this is what already ships rather
 		// than a new posture.
-		r.Register("work_my_work", s.workMyWork)
+		r.Register("work_my_work", iam.GrantStateRead, s.workMyWork)
 		// THE READER HAS ALWAYS EXISTED and nothing asked it: twenty
 		// typed wake reasons, an addressed flag, a fallback flag and
 		// this person's own read and snooze marks, swept on a 365-day
 		// retention and reaching no screen.
-		r.Register("work_inbox", s.workInbox)
+		r.Register("work_inbox", iam.GrantStateRead, s.workInbox)
 		// WHO ONE CHANGE WOKE. The applier has written the set
 		// since the domain landed and its only trace on any surface
 		// was `work_activity.notified`: a boolean saying that
 		// somebody, somewhere, was told.
-		r.Register("work_routing", s.workRouting)
-		r.Register("work_catalogue", s.workCatalogue)
-		r.Register("work_person", s.workPerson)
+		r.Register("work_routing", iam.GrantStateRead, s.workRouting)
+		r.Register("work_catalogue", iam.GrantStateRead, s.workCatalogue)
+		r.Register("work_person", iam.GrantStateRead, s.workPerson)
 	}
 	if s.Pages != nil {
-		r.Register("pages", s.pageList)
-		r.Register("page", s.page)
+		r.Register("pages", iam.GrantStateRead, s.pageList)
+		r.Register("page", iam.GrantStateRead, s.page)
 		// A SEPARATE QUESTION from `pages`, not a facet of it: a browser
 		// draws the container list once and the page list on every
 		// navigation, and folding them together would ship every
 		// container's record with every page listing.
-		r.Register("containers", s.containers)
+		r.Register("containers", iam.GrantStateRead, s.containers)
 		// WHAT HAPPENED TO THE PAGES, which `pages_history` has recorded
 		// since the domain landed with two indexes naming readers nobody
 		// wrote — and ONE REVISION'S BODY, which the detail's summaries
 		// could say existed and never show.
-		r.Register("page_activity", s.pageActivity)
-		r.Register("page_revision", s.pageRevision)
+		r.Register("page_activity", iam.GrantStateRead, s.pageActivity)
+		r.Register("page_revision", iam.GrantStateRead, s.pageRevision)
 	}
 	if s.Diary != nil || s.Episodes != nil || s.Skills != nil ||
 		s.Counterparties != nil {
@@ -484,10 +485,10 @@ func Register(r *Registry, s Sources) {
 		// empty lists for the rest — which is what a client needs to
 		// tell "this seat has learned nothing" from "this node does not
 		// keep that half".
-		r.Register("agent_memory", s.agentMemory)
+		r.Register("agent_memory", iam.GrantTranscriptRead, s.agentMemory)
 	}
 	if s.Channels != nil {
-		r.Register("a2a_channels", s.a2aChannels)
+		r.Register("a2a_channels", iam.GrantTranscriptRead, s.a2aChannels)
 	}
 	if s.WorkSearch != nil {
 		// SEARCH IS A QUESTION, not a filter on the board, and it is
@@ -495,22 +496,22 @@ func Register(r *Registry, s Sources) {
 		// reader is what `search_work` gives a seat, and the operator
 		// reading the same company had only `q=` — an escaped LIKE over
 		// the excerpt, gated to a span of days.
-		r.Register("work_search", s.workSearch)
+		r.Register("work_search", iam.GrantStateRead, s.workSearch)
 	}
 	if s.Conversations != nil {
 		// SCOPED, like every other per-seat question — see
 		// [Sources.viewerHandle].
-		r.Register("conversations", s.conversations)
+		r.Register("conversations", iam.GrantTranscriptRead, s.conversations)
 	}
 	if s.Config != nil {
 		// OPERATOR-ONLY, all three. Reading the config document exposes
 		// the whole company — its org chart, which integrations are
 		// wired, and every ${VAR} reference by name — which is what makes
 		// /config the one prefix never eligible for anonymous read.
-		r.RegisterOperator("config", s.configDocument)
-		r.RegisterOperator("config_audit", s.configAudit)
-		r.RegisterOperator("config_diff", s.configDiff)
-		r.RegisterOperator("config_entities", s.configEntities)
+		r.Register("config", iam.GrantConfigRead, s.configDocument)
+		r.Register("config_audit", iam.GrantConfigRead, s.configAudit)
+		r.Register("config_diff", iam.GrantConfigRead, s.configDiff)
+		r.Register("config_entities", iam.GrantConfigRead, s.configEntities)
 	}
 }
 

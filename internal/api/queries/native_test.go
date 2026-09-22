@@ -9,7 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -232,23 +235,58 @@ var personalQuestions = map[string]bool{
 // askNative runs one question against a registry built from these sources,
 // returning the error rather than failing on it: every case here is about a
 // refusal, which the shared `ask` helper turns into a Fatalf.
+// askNative asks as the ORDINARY DASHBOARD READER: a credential holding
+// `state:read` and nothing else, which is the reader that replaced the
+// anonymous posture.
+//
+// It is that rather than a credential holding everything, deliberately: these
+// cases are about the board and the wiki, and asking them with the narrowest
+// credential that may see either is what keeps a question quietly gaining a
+// wider grant from going unnoticed here.
 func askNative(t *testing.T, s queries.Sources, what string, params map[string]any) (any, error) {
 	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	return r.Answer(t.Context(), what, params, "")
+	return r.Answer(asGrants(t, "", iam.GrantStateRead), what, params, "")
 }
 
-// askAsOperator is askNative with a token, for the questions RegisterOperator
-// guards. Separate rather than a parameter on the one above, so no case here
-// can hand itself a credential by accident.
+// askTranscripts is askNative for the questions that serve what a turn SAID:
+// prompts, tool arguments, diary entries, a seat's notes on who it has worked
+// with. They carry their own grant because the ordinary board reader must not
+// reach them — that is the whole of what splitting `state:read` from
+// `transcripts:read` buys.
+func askTranscripts(t *testing.T, s queries.Sources, what string,
+	params map[string]any) (any, error) {
+
+	t.Helper()
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	return r.Answer(asGrants(t, "", iam.GrantStateRead, iam.GrantTranscriptRead),
+		what, params, "")
+}
+
+// askAsOperator is askNative for the questions that describe the DEPLOYMENT
+// rather than the company's work. Separate rather than a parameter on the one
+// above, so no case here can hand itself a wider credential by accident.
 func askAsOperator(t *testing.T, s queries.Sources, what string,
 	params map[string]any) (any, error) {
 
 	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	return r.Answer(t.Context(), what, params, "ops-1")
+	return r.Answer(asGrants(t, "ops-1", iam.AllGrants...), what, params, "ops-1")
+}
+
+// asGrants is a context carrying a credential with exactly these grants.
+func asGrants(t *testing.T, id string, grants ...iam.Grant) context.Context {
+	t.Helper()
+	if id == "" {
+		id = "reader"
+	}
+	return iam.WithPrincipal(t.Context(), iam.Principal{
+		ID: uuid.New(), Login: "token:" + id, Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: grants,
+	})
 }
 
 // A QUESTION WITH NO SOURCE IS UNREGISTERED, not registered-and-empty. A
@@ -455,7 +493,7 @@ func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) 
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, "")
+	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{}, "")
 	if !errors.Is(err, queries.ErrUnavailable) {
 		t.Fatalf("a node that is behind answered %v — a read refusal that "+
 			"reaches a client as a plain failure is rendered as a broken "+
@@ -485,7 +523,7 @@ func TestARefusalWaitingCannotClearIsNotAnInvitationToRetry(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, "")
+	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{}, "")
 	if err == nil {
 		t.Fatal("a refused read answered successfully")
 	}
@@ -507,7 +545,7 @@ func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, "")
+	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{}, "")
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("err = %v, want ErrBadParams", err)
 	}

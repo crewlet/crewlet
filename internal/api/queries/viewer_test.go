@@ -85,7 +85,7 @@ func TestAnUnboundTokenAnswersItsOperatorIdAndNoSeat(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, viewerSources(t, &stubWork{}))
-	answered, err := r.Answer(t.Context(), "viewer", nil, "ops-nobody")
+	answered, err := r.Answer(everyGrant(t), "viewer", nil, "ops-nobody")
 	got := answerMap(t, answered, err)
 	if got["operator_id"] != "ops-nobody" {
 		t.Errorf("operator_id = %v, want the id the token carries", got["operator_id"])

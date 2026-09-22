@@ -27,6 +27,16 @@ func answeredMap(t *testing.T, s queries.Sources, what string,
 	return answerMap(t, got, err)
 }
 
+// answeredTranscripts is [answeredMap] for the questions that serve what a
+// turn SAID, which carry their own grant.
+func answeredTranscripts(t *testing.T, s queries.Sources, what string,
+	params map[string]any) map[string]any {
+
+	t.Helper()
+	got, err := askTranscripts(t, s, what, params)
+	return answerMap(t, got, err)
+}
+
 func answeredAsOperator(t *testing.T, s queries.Sources, what string,
 	params map[string]any) map[string]any {
 
@@ -217,7 +227,7 @@ func TestTheThreadLedgerIsScopedToTheCallersOwnSeat(t *testing.T) {
 	}
 
 	// Somebody else's, with no credential at all.
-	if _, err := askNative(t, s, "conversations", map[string]any{"handle": "bo"}); err == nil {
+	if _, err := askTranscripts(t, s, "conversations", map[string]any{"handle": "bo"}); err == nil {
 		t.Error("an anonymous caller read another seat's threads")
 	}
 }
@@ -294,7 +304,8 @@ func TestASeatsCounterpartyProfilesReachTheMemoryAnswer(t *testing.T) {
 	s := viewerSources(t, &stubWork{})
 	s.Counterparties = store
 
-	got := answeredMap(t, s, "agent_memory", map[string]any{"id": "ana"})
+	raw, err := askTranscripts(t, s, "agent_memory", map[string]any{"id": "ana"})
+	got := answerMap(t, raw, err)
 	if store.observer != "ana" {
 		t.Errorf("the store was asked about %q", store.observer)
 	}
@@ -333,7 +344,7 @@ func TestAFailedCounterpartyReadIsNotAnEmptyList(t *testing.T) {
 	sentinel := errors.New("the store could not be reached")
 	s := viewerSources(t, &stubWork{})
 	s.Counterparties = &stubCounterparties{err: sentinel}
-	if _, err := askNative(t, s, "agent_memory", map[string]any{"id": "ana"}); !errors.Is(
+	if _, err := askTranscripts(t, s, "agent_memory", map[string]any{"id": "ana"}); !errors.Is(
 		err, sentinel) {
 
 		t.Errorf("a failed profile read answered %v, want the failure", err)

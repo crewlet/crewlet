@@ -12,7 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/google/uuid"
 )
 
 // configSurface builds a config service over a real store with one revision.
@@ -54,15 +56,25 @@ func TestTheConfigQueryIsOperatorOnly(t *testing.T) {
 	t.Parallel()
 	// Reading the document exposes the whole company — its org chart,
 	// which integrations are wired, and every ${VAR} reference by name.
-	// That is what makes /config the one prefix never eligible for
-	// anonymous read, and the socket must not be the way around it.
+	// That is what makes it need `config:read` of its own, and the socket
+	// must not be the way around it: the ordinary dashboard reader holds
+	// `state:read` and must reach none of these.
 	surface, _ := configSurface(t, companyDoc)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Config: surface})
 
+	narrow := iam.WithPrincipal(t.Context(), iam.Principal{
+		ID: uuid.New(), Login: "token:reader", Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead},
+	})
 	for _, what := range []string{"config", "config_audit", "config_diff", "config_entities"} {
-		if _, err := r.Answer(t.Context(), what, nil, ""); err == nil {
-			t.Errorf("%s answered a caller with no operator", what)
+		if _, err := r.Answer(narrow, what, nil, "reader"); err == nil {
+			t.Errorf("%s answered the ordinary dashboard reader", what)
+		}
+		// The control: the grant it DOES need is answered, or the
+		// assertion above would pass on a question nothing can reach.
+		if got := r.Needs(what); got != iam.GrantConfigRead {
+			t.Errorf("%s needs %q, want %q", what, got, iam.GrantConfigRead)
 		}
 	}
 }
@@ -117,7 +129,7 @@ func TestTheEntityQueryRefusesWhatItCannotAddress(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := r.Answer(t.Context(), "config_entities", tc.params, "operator")
+			_, err := r.Answer(everyGrant(t), "config_entities", tc.params, "operator")
 			if err == nil {
 				t.Fatal("answered rather than refused")
 			}
@@ -162,7 +174,7 @@ func TestTheConfigQueryOnAnUnconfiguredNodeIsNullNotAnError(t *testing.T) {
 	surface, _ := configSurface(t)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Config: surface})
-	data, err := r.Answer(t.Context(), "config", nil, "operator")
+	data, err := r.Answer(everyGrant(t), "config", nil, "operator")
 	if err != nil {
 		t.Fatalf("config: %v", err)
 	}
@@ -220,7 +232,7 @@ func TestADiffOfARevisionThatIsGoneIsNullNotAnError(t *testing.T) {
 	surface, _ := configSurface(t, companyDoc)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Config: surface})
-	data, err := r.Answer(t.Context(), "config_diff",
+	data, err := r.Answer(everyGrant(t), "config_diff",
 		map[string]any{"revision_id": "00000000-0000-0000-0000-000000000000"}, "operator")
 	if err != nil {
 		t.Fatalf("config_diff: %v", err)
@@ -235,7 +247,7 @@ func TestTheDiffQueryNeedsARevision(t *testing.T) {
 	surface, _ := configSurface(t, companyDoc)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Config: surface})
-	if _, err := r.Answer(t.Context(), "config_diff", nil, "operator"); err == nil {
+	if _, err := r.Answer(everyGrant(t), "config_diff", nil, "operator"); err == nil {
 		t.Fatal("a diff query with no revision was answered")
 	}
 }

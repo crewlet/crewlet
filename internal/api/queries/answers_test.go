@@ -72,7 +72,7 @@ func registryOver(t *testing.T, s queries.Sources) *queries.Registry {
 // a typed value rather than a map.
 func askRaw(t *testing.T, r *queries.Registry, what string, params map[string]any) any {
 	t.Helper()
-	got, err := r.Answer(t.Context(), what, params, "")
+	got, err := r.Answer(everyGrant(t), what, params, "")
 	if err != nil {
 		t.Fatalf("%s: %v", what, err)
 	}
@@ -81,7 +81,7 @@ func askRaw(t *testing.T, r *queries.Registry, what string, params map[string]an
 
 func ask(t *testing.T, r *queries.Registry, what string, params map[string]any) map[string]any {
 	t.Helper()
-	got, err := r.Answer(t.Context(), what, params, "")
+	got, err := r.Answer(everyGrant(t), what, params, "")
 	if err != nil {
 		t.Fatalf("%s: %v", what, err)
 	}
@@ -110,7 +110,7 @@ func TestAQuestionWithNoSourceIsNotRegistered(t *testing.T) {
 	if got := r.Names(); !slices.Equal(got, []string{"viewer"}) {
 		t.Errorf("names = %v, want only the caller's own questions", got)
 	}
-	if _, err := r.Answer(t.Context(), "events", nil, ""); !errors.Is(err, queries.ErrUnknown) {
+	if _, err := r.Answer(everyGrant(t), "events", nil, ""); !errors.Is(err, queries.ErrUnknown) {
 		t.Errorf("err = %v, want ErrUnknown", err)
 	}
 }
@@ -198,7 +198,7 @@ func TestAgentAnswersASeatItHasNeverSeen(t *testing.T) {
 func TestAgentNeedsARole(t *testing.T) {
 	t.Parallel()
 	r := registryOver(t, queries.Sources{State: livestate.New()})
-	if _, err := r.Answer(t.Context(), "agent", nil, ""); !errors.Is(err, queries.ErrBadParams) {
+	if _, err := r.Answer(everyGrant(t), "agent", nil, ""); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("err = %v, want ErrBadParams", err)
 	}
 }
@@ -345,7 +345,7 @@ func TestStreamAnswersHealthUnderItsOwnName(t *testing.T) {
 	if got := ask(t, r, "stream", nil); got["status"] != "ok" {
 		t.Errorf("answer = %+v", got)
 	}
-	if _, err := r.Answer(t.Context(), "health", nil, ""); !errors.Is(err, queries.ErrUnknown) {
+	if _, err := r.Answer(everyGrant(t), "health", nil, ""); !errors.Is(err, queries.ErrUnknown) {
 		t.Errorf("a push kind is answerable as a query: %v", err)
 	}
 }
@@ -407,7 +407,7 @@ func TestACursorWithoutItsTimestampIsRefused(t *testing.T) {
 	// or repeat whatever collided with it, silently.
 	db := openStore(t)
 	r := registryOver(t, queries.Sources{Events: db.Events()})
-	_, err := r.Answer(t.Context(), "events", map[string]any{"before_id": "e1"}, "")
+	_, err := r.Answer(everyGrant(t), "events", map[string]any{"before_id": "e1"}, "")
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("err = %v, want ErrBadParams", err)
 	}
@@ -496,7 +496,7 @@ func TestEventAnswersOneRowWithItsPayload(t *testing.T) {
 	r := registryOver(t, queries.Sources{Events: db.Events()})
 
 	rows := ask(t, r, "events", nil)["events"].([]store.EventRecord)
-	got, err := r.Answer(t.Context(), "event", map[string]any{"id": rows[0].ID}, "")
+	got, err := r.Answer(everyGrant(t), "event", map[string]any{"id": rows[0].ID}, "")
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestEventAndTraceNeedTheirIdentifiers(t *testing.T) {
 	db := openStore(t)
 	r := registryOver(t, queries.Sources{Events: db.Events()})
 	for _, what := range []string{"event", "trace"} {
-		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(err, queries.ErrBadParams) {
+		if _, err := r.Answer(everyGrant(t), what, nil, ""); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%s: err = %v, want ErrBadParams", what, err)
 		}
 	}
@@ -885,7 +885,7 @@ func TestAMissingEventIsNotFoundRatherThanAFailure(t *testing.T) {
 	seedEvents(t, db.Events(), 1, nil)
 	r := registryOver(t, queries.Sources{Events: db.Events()})
 
-	_, err := r.Answer(t.Context(), "event", map[string]any{"id": "ev-nobody-published"}, "")
+	_, err := r.Answer(everyGrant(t), "event", map[string]any{"id": "ev-nobody-published"}, "")
 	if !errors.Is(err, queries.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
@@ -1022,7 +1022,7 @@ func TestATokensWindowThatEndsWhereItBeginsIsRefused(t *testing.T) {
 	// reader scrubbing a range hits all three.
 	r := registryOver(t, queries.Sources{State: livestate.New()})
 	at := time.Now().UTC().Format(time.RFC3339)
-	_, err := r.Answer(t.Context(), "tokens", map[string]any{"since": at, "until": at}, "")
+	_, err := r.Answer(everyGrant(t), "tokens", map[string]any{"since": at, "until": at}, "")
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("err = %v, want ErrBadParams", err)
 	}

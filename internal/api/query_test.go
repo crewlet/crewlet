@@ -19,8 +19,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -239,7 +239,7 @@ func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 	// path or a driver's own message, and this route is reachable under
 	// the anonymous read posture.
 	a := seededApp(t, nil)
-	a.Queries().Register("boom", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("boom", iam.GrantStateRead, func(context.Context, queries.Params) (any, error) {
 		return nil, errors.New("open /var/lib/crewlet/crewlet.db: permission denied")
 	})
 
@@ -262,7 +262,7 @@ func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.T) {
 	t.Parallel()
 	a := seededApp(t, nil)
-	a.Queries().Register("blip", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("blip", iam.GrantStateRead, func(context.Context, queries.Params) (any, error) {
 		return nil, fmt.Errorf("list leases: %w", coord.ErrUnavailable)
 	})
 
@@ -303,7 +303,7 @@ func TestAnOperatorQuestionIsGuardedOnBothTransports(t *testing.T) {
 	// shape this can take.
 	a := seededApp(t, nil)
 	ran := make(chan struct{}, 1)
-	a.Queries().RegisterOperator("secrets", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("secrets", iam.GrantSecretRead, func(context.Context, queries.Params) (any, error) {
 		ran <- struct{}{}
 		return map[string]any{"ok": true}, nil
 	})
@@ -348,12 +348,11 @@ func TestAnOperatorTokenReachesTheQuestionOverREST(t *testing.T) {
 	t.Parallel()
 	// The counterfactual: the guard attaches the operator, and the route
 	// reads it from the same place every other route does.
-	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	b := closedPosture()
 	a := seededApp(t, func(o *api.Options) { o.Bootstrap = &b })
 
 	seen := make(chan string, 1)
-	a.Queries().RegisterOperator("secrets", func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("secrets", iam.GrantSecretRead, func(context.Context, queries.Params) (any, error) {
 		seen <- "ran"
 		return map[string]any{"ok": true}, nil
 	})

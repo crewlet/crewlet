@@ -14,9 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/iam"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
@@ -85,11 +88,25 @@ func answer(t *testing.T, s queries.Sources, what string, params map[string]any)
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	data, err := r.Answer(t.Context(), what, params, "operator")
+	data, err := r.Answer(everyGrant(t), what, params, "operator")
 	if err != nil {
 		t.Fatalf("%s: %v", what, err)
 	}
 	return data
+}
+
+// everyGrant is a context carrying a credential that may ask anything.
+//
+// EVERY CASE HERE IS ABOUT AN ANSWER rather than about authority, so they all
+// ask as a credential holding the ten and this says it once. The cases that
+// ARE about authority build their own principal and name the grant they hold,
+// which is the only place a test should be spelling one out.
+func everyGrant(t *testing.T) context.Context {
+	t.Helper()
+	return iam.WithPrincipal(t.Context(), iam.Principal{
+		ID: uuid.New(), Login: "token:test", Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: iam.AllGrants,
+	})
 }
 
 // asMap round-trips an answer through JSON, which is what a client sees.
@@ -470,14 +487,26 @@ func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
 			t.Errorf("%s is not registered, so this case asserts nothing about it", what)
 			continue
 		}
-		if !r.RequiresOperator(what) {
-			t.Errorf("%s is an Admin answer the rail locks, but the registry "+
-				"serves it to any caller", what)
+		// AND IT NEEDS MORE THAN THE ORDINARY READ. Both describe the
+		// DEPLOYMENT rather than the company's work, so a credential
+		// cut down to `state:read` — the reader that replaced the
+		// anonymous posture — must not reach either.
+		if got := r.Needs(what); got == iam.GrantStateRead || !got.Valid() {
+			t.Errorf("%s is an Admin answer the rail locks and needs %q, which "+
+				"the ordinary dashboard reader carries", what, got)
 		}
-		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(
+		// AND THE ORDINARY READER IS ACTUALLY REFUSED, which is what
+		// the declaration above is worth: asserting the grant alone
+		// would pass on a registry that declared one and enforced
+		// nothing.
+		narrow := iam.WithPrincipal(t.Context(), iam.Principal{
+			ID: uuid.New(), Login: "token:reader", Kind: iam.KindMachine,
+			Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead},
+		})
+		if _, err := r.Answer(narrow, what, nil, "reader"); !errors.Is(
 			err, queries.ErrUnauthorized) {
 
-			t.Errorf("%s answered %v without a credential, want an "+
+			t.Errorf("%s answered %v to the ordinary dashboard reader, want an "+
 				"authorization refusal", what, err)
 		}
 	}
@@ -498,7 +527,7 @@ func TestAnUnreachableLeaseTableIsUnavailableRatherThanFailed(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Coord: faulty, NodeID: "node-a"})
 
-	_, err := r.Answer(t.Context(), "fleet", nil, "op-1")
+	_, err := r.Answer(everyGrant(t), "fleet", nil, "op-1")
 	if !errors.Is(err, queries.ErrUnavailable) {
 		t.Fatalf("an unreachable lease table answered %v, want ErrUnavailable", err)
 	}
@@ -518,7 +547,7 @@ func TestACoordinationFailureThatIsNotAnOutageIsNotRetried(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Coord: faulty})
 
-	_, err := r.Answer(t.Context(), "fleet", nil, "op-1")
+	_, err := r.Answer(everyGrant(t), "fleet", nil, "op-1")
 	if err == nil {
 		t.Fatal("a failed read answered successfully")
 	}
@@ -538,7 +567,7 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 		"fleet", "schedules", "integrations", "conversations",
 		"agent_memory", "config", "config_audit", "config_diff",
 	} {
-		if _, err := r.Answer(t.Context(), what, nil, "operator"); err == nil {
+		if _, err := r.Answer(everyGrant(t), what, nil, "operator"); err == nil {
 			t.Errorf("%s answered from a registry with no source for it", what)
 		}
 	}
@@ -607,7 +636,7 @@ func TestAgentMemoryNeedsASeat(t *testing.T) {
 	db := openStore(t)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Diary: learning.NewDiary(db)})
-	if _, err := r.Answer(t.Context(), "agent_memory", nil, "operator"); err == nil {
+	if _, err := r.Answer(everyGrant(t), "agent_memory", nil, "operator"); err == nil {
 		t.Fatal("an agent_memory query with no id was answered")
 	}
 }
@@ -697,7 +726,7 @@ func TestAnUnreadableLeaseTableFailsTheFleetQuery(t *testing.T) {
 		Coord:  brokenCoord(errors.New("store down")),
 		NodeID: "node-a",
 	})
-	if _, err := r.Answer(t.Context(), "fleet", nil, "operator"); err == nil {
+	if _, err := r.Answer(everyGrant(t), "fleet", nil, "operator"); err == nil {
 		t.Fatal("an unreadable lease table answered a fleet")
 	}
 }

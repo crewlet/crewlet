@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -217,10 +218,20 @@ type Answer func(ctx context.Context, p Params) (any, error)
 type entry struct {
 	answer Answer
 
-	// operator marks a question only an authenticated operator may ask.
-	// The config surface is all of them: reading it exposes the whole
-	// company document, including every ${VAR} reference by name.
-	operator bool
+	// needs is the grant a caller must carry to ask it.
+	//
+	// A GRANT RATHER THAN A BOOL, which is what makes a narrow reader
+	// possible at all. It was `operator bool` — is there a credential,
+	// yes or no — and under that a token that could read the board could
+	// also read the company document and every ${VAR} reference in it by
+	// name. A deliberately public read surface is now a credential
+	// holding `state:read` and nothing else, and this is the field that
+	// makes that mean something.
+	//
+	// THE ZERO IS REFUSED AT REGISTRATION, not at the first request: an
+	// unstated grant would make a question this build ships ungated,
+	// looking exactly like one somebody decided to leave open.
+	needs iam.Grant
 }
 
 // Registry is the set of questions this process can answer.
@@ -232,19 +243,28 @@ type Registry struct {
 // NewRegistry builds an empty registry.
 func NewRegistry() *Registry { return &Registry{entries: map[string]entry{}} }
 
-// Register adds a question.
+// Register adds a question and DECLARES the grant it needs.
 //
-// Registering a name twice is a programming error and panics, rather than
-// silently taking one of them: two answers to one question is exactly the
-// divergence this package exists to prevent, and a wiring mistake that
-// resolved to whichever ran last would be invisible.
-func (r *Registry) Register(name string, answer Answer) {
-	r.register(name, entry{answer: answer})
-}
-
-// RegisterOperator adds a question only an authenticated operator may ask.
-func (r *Registry) RegisterOperator(name string, answer Answer) {
-	r.register(name, entry{answer: answer, operator: true})
+// # Why the grant is at the registration
+//
+// It is the only place that knows. A question's authority is a property of
+// what it discloses — `config` serves the whole company document, `events`
+// serves LLM transcripts, `work_items` serves the board — and none of that is
+// visible from the name, the route or the caller. Stated anywhere else it
+// would be a second list somebody has to keep in step with this one.
+//
+// A ZERO OR UNKNOWN GRANT PANICS, at wiring time, on every build. A question
+// registered without one would answer to any credential at all, which is the
+// exact shape of an ungated surface that looks deliberate — and the panic is
+// at start-up rather than at the first request because a company finding out
+// on the first request has already served it.
+//
+// Registering a name twice panics too, rather than silently taking one of
+// them: two answers to one question is exactly the divergence this package
+// exists to prevent, and a wiring mistake that resolved to whichever ran last
+// would be invisible.
+func (r *Registry) Register(name string, needs iam.Grant, answer Answer) {
+	r.register(name, entry{answer: answer, needs: needs})
 }
 
 func (r *Registry) register(name string, e entry) {
@@ -253,6 +273,12 @@ func (r *Registry) register(name string, e entry) {
 	}
 	if e.answer == nil {
 		panic(fmt.Sprintf("queries: %q registered with no answer", name))
+	}
+	if !e.needs.Valid() {
+		panic(fmt.Sprintf("queries: %q registered needing grant %q, which is "+
+			"not one this build knows — a question with no grant answers to "+
+			"any credential at all, and looks exactly like one somebody "+
+			"decided to leave open", name, e.needs))
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -293,8 +319,26 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 	if !known {
 		return nil, fmt.Errorf("%w: %q", ErrUnknown, what)
 	}
-	if e.operator && operatorID == "" {
-		return nil, fmt.Errorf("%w: %q", ErrUnauthorized, what)
+	// THE GRANT THE CALLER ACTUALLY CARRIES, from the principal the guard
+	// resolved. The operator id beside it is attribution and nothing more:
+	// it names who a per-viewer answer is scoped to, and it decided
+	// authority until this build — under which any credential could ask
+	// any question that was not on the config surface.
+	//
+	// AND THE REFUSAL IS THREE-VALUED, which is why the resolution is read
+	// rather than dropped. A principal with no grants is the same zero
+	// value whether nobody presented a credential or this node could not
+	// CHECK the one presented, and those want opposite answers: the first
+	// is about the caller, who has to present something else, and the
+	// second is about the node. Reported as the first, an outage tells
+	// everybody holding a perfectly good credential that theirs is no
+	// good — which is how a company gets taught to reset working passwords
+	// while the identity estate is down.
+	switch principal, resolution := iam.From(ctx); {
+	case resolution == iam.Unknown:
+		return nil, unresolved(ctx, what)
+	case !principal.Can(e.needs):
+		return nil, fmt.Errorf("%w: %q needs %s", ErrUnauthorized, what, e.needs)
 	}
 	// WHO IS ASKING, for the questions that answer differently per person.
 	// Set here rather than at each transport, because this is the one
@@ -328,6 +372,35 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 // A refusal about the REQUEST is never reclassified, even when it wraps one of
 // those: the caller has to change what it asks, and "come back" would send the
 // identical request round a loop.
+// unresolved is the refusal for a question asked on a context whose principal
+// nobody could establish, classified into the two things that actually cause
+// it — because this package already reports three kinds of failure and these
+// are two of them.
+//
+//   - THE IDENTITY ESTATE COULD NOT BE READ. A resolver ran, said so, and left
+//     its reason behind. That is "not yet": the same [ErrUnavailable] a
+//     state-log read refusal gets, carrying a Retry-After rather than advice
+//     to go and fix a credential that was never wrong.
+//   - NO RESOLVER EVER TOUCHED THIS CONTEXT ([iam.ErrUnresolved]). That is a
+//     wiring bug — a handler reached by a path nobody put through the guard,
+//     or a context somebody forgot to thread — and it never clears by waiting.
+//     So it is a plain failure, which this surface renders as the third thing:
+//     a bug to report. A Retry-After here would send a client round a loop
+//     that can only ever end when somebody edits the routing.
+//
+// Neither is [ErrUnauthorized], and that is the whole point of reading the
+// resolution: the caller's credential is not what is wrong in either case.
+func unresolved(ctx context.Context, what string) error {
+	why := iam.Reason(ctx)
+	if errors.Is(why, iam.ErrUnresolved) {
+		return fmt.Errorf("query %q reached the registry on a context no "+
+			"resolver has answered for: the route is not wired through the "+
+			"guard, or the request context was not threaded: %w", what, why)
+	}
+	return fmt.Errorf("%w: %q cannot be authorized while this node cannot "+
+		"read identity: %w", ErrUnavailable, what, why)
+}
+
 func unavailableIfTransient(err error) error {
 	switch {
 	case err == nil,
@@ -349,7 +422,7 @@ func unavailableIfTransient(err error) error {
 	return err
 }
 
-// RequiresOperator reports whether a question needs one.
+// Needs reports the grant a question is registered as needing.
 //
 // THE REGISTRY'S DECLARED POSTURE, readable without running the answer —
 // which is what a gate asserting the posture needs and the only caller there
@@ -359,8 +432,12 @@ func unavailableIfTransient(err error) error {
 // was "for a REST route that has to make the same decision before it calls the
 // answer"; no route does, and a second enforcement point is exactly what
 // AnswerWith's own comment says must not exist.
-func (r *Registry) RequiresOperator(what string) bool {
+//
+// An unregistered name answers the zero grant, which is invalid — so a caller
+// asserting about one is told it is not a question rather than being handed a
+// plausible-looking answer about nothing.
+func (r *Registry) Needs(what string) iam.Grant {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.entries[what].operator
+	return r.entries[what].needs
 }

@@ -7,7 +7,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 func answersWith(v any) queries.Answer {
@@ -19,9 +22,9 @@ func answersWith(v any) queries.Answer {
 func TestARegisteredQuestionIsAnswered(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	r.Register("events", answersWith("rows"))
+	r.Register("events", iam.GrantStateRead, answersWith("rows"))
 
-	got, err := r.Answer(t.Context(), "events", nil, "")
+	got, err := r.Answer(everyGrant(t), "events", nil, "")
 	if err != nil {
 		t.Fatalf("Answer: %v", err)
 	}
@@ -33,7 +36,7 @@ func TestARegisteredQuestionIsAnswered(t *testing.T) {
 func TestAnUnregisteredQuestionIsUnknown(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	_, err := r.Answer(t.Context(), "nope", nil, "")
+	_, err := r.Answer(everyGrant(t), "nope", nil, "")
 	if !errors.Is(err, queries.ErrUnknown) {
 		t.Errorf("err = %v, want ErrUnknown", err)
 	}
@@ -44,56 +47,173 @@ func TestAnUnregisteredQuestionIsUnknown(t *testing.T) {
 	}
 }
 
-func TestAnOperatorQuestionRefusesAnAnonymousCaller(t *testing.T) {
+// A QUESTION IS ANSWERED TO THE GRANT IT DECLARES, and to nothing narrower.
+//
+// This used to be a bool — is there a credential, yes or no — and under that a
+// token that could read the board could also read the company document and
+// every ${VAR} reference in it by name. What the grant buys is the reader that
+// replaced `allow_anonymous_read`: a credential holding `state:read` and
+// nothing else.
+func TestAQuestionIsAnsweredOnlyToTheGrantItDeclares(t *testing.T) {
 	t.Parallel()
-	// The config surface is all of them: reading it exposes the whole
-	// company document, including every ${VAR} reference by name.
 	r := queries.NewRegistry()
-	r.RegisterOperator("config", answersWith("the company"))
+	r.Register("config", iam.GrantConfigRead, answersWith("the company"))
+	r.Register("events", iam.GrantTranscriptRead, answersWith("rows"))
 
-	if _, err := r.Answer(t.Context(), "config", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
-		t.Errorf("err = %v, want ErrUnauthorized", err)
+	narrow := asking(t, iam.GrantStateRead)
+	if _, err := r.Answer(narrow, "config", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
+		t.Errorf("a state:read credential read the company document: %v", err)
 	}
-	got, err := r.Answer(t.Context(), "config", nil, "founder")
+	if _, err := r.Answer(narrow, "events", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
+		t.Errorf("a state:read credential read the transcripts: %v", err)
+	}
+	// The counterfactual: the grant it DOES declare is answered, or the
+	// assertions above would pass on a registry that refused everything.
+	got, err := r.Answer(asking(t, iam.GrantConfigRead), "config", nil, "founder")
 	if err != nil {
-		t.Fatalf("an operator was refused: %v", err)
+		t.Fatalf("the declared grant was refused: %v", err)
 	}
 	if got != "the company" {
 		t.Errorf("answer = %v", got)
 	}
 }
 
-func TestAPublicQuestionServesAnAnonymousCaller(t *testing.T) {
+// A CALLER WITH NO PRINCIPAL AT ALL IS REFUSED, which is the direction
+// [iam.From] takes everywhere: silence is not permission. There is no question
+// left that answers to nobody — the read posture that made one possible is
+// gone.
+//
+// AND IT IS REFUSED AS A FAULT RATHER THAN AS AN AUTHORIZATION FAILURE. A
+// context no resolver ever touched is a route nobody wired through the guard,
+// which is a bug in this build and not a caller presenting the wrong thing.
+// Answered `unauthorized`, the one symptom of that bug is a client being told
+// its credential is bad — so the operator goes and rotates a perfectly good
+// token, and the routing hole stays open.
+func TestAQuestionIsRefusedToACallerNobodyResolved(t *testing.T) {
 	t.Parallel()
-	// The counterfactual: requiring an operator everywhere would satisfy
-	// the case above and close the dashboard to the read posture that is
-	// the default.
 	r := queries.NewRegistry()
-	r.Register("events", answersWith("rows"))
-	if _, err := r.Answer(t.Context(), "events", nil, ""); err != nil {
-		t.Errorf("a public question refused an anonymous caller: %v", err)
+	r.Register("events", iam.GrantStateRead, answersWith("rows"))
+	// DELIBERATELY t.Context(): a context no resolver ever touched, which
+	// is what a handler nobody wired through the guard hands down.
+	data, err := r.Answer(t.Context(), "events", nil, "")
+	if err == nil {
+		t.Fatalf("a context nobody resolved was answered: %v", data)
+	}
+	if errors.Is(err, queries.ErrUnauthorized) {
+		t.Errorf("a wiring bug was reported as the caller's credential: %v", err)
+	}
+	// NOR AS A RETRY, which is the other half: this never clears by
+	// waiting, and a Retry-After sends a client round a loop that can only
+	// end when somebody edits the routing.
+	if errors.Is(err, queries.ErrUnavailable) {
+		t.Errorf("a wiring bug was reported as transient: %v", err)
+	}
+	// And it says which of the two it is, or the log carries a refusal
+	// nobody can act on.
+	if !errors.Is(err, iam.ErrUnresolved) {
+		t.Errorf("the refusal does not carry iam.ErrUnresolved: %v", err)
 	}
 }
 
-func TestRequiresOperatorMatchesWhatAnswerEnforces(t *testing.T) {
+// BUT AN IDENTITY ESTATE THIS NODE CANNOT READ IS A RETRY, not a refusal about
+// the caller — and this is the arm the walk in internal/api/auth exists for.
+//
+// The principal is the same zero value both times, so a registry that dropped
+// [iam.From]'s resolution would answer `unauthorized` here: every credential in
+// the company reported invalid, at once, for as long as the estate is
+// unreachable. That is the failure that teaches a company to reset working
+// passwords during an outage.
+func TestAQuestionIsRetriedRatherThanRefusedWhenIdentityIsUnreadable(t *testing.T) {
 	t.Parallel()
-	// A REST route makes the same decision before it calls the answer, so
-	// the two must not be able to disagree.
 	r := queries.NewRegistry()
-	r.Register("events", answersWith(nil))
-	r.RegisterOperator("config", answersWith(nil))
+	r.Register("events", iam.GrantStateRead, answersWith("rows"))
 
-	for what, want := range map[string]bool{"events": false, "config": true, "nope": false} {
-		if got := r.RequiresOperator(what); got != want {
-			t.Errorf("%s: requires operator = %v, want %v", what, got, want)
+	down := errors.New("the identity estate is behind")
+	ctx := iam.WithUnresolved(t.Context(), down)
+	data, err := r.Answer(ctx, "events", nil, "")
+	if err == nil {
+		t.Fatalf("a question was answered while identity was unreadable: %v", data)
+	}
+	if !errors.Is(err, queries.ErrUnavailable) {
+		t.Errorf("an unreadable identity estate is not reported as transient: %v", err)
+	}
+	if errors.Is(err, queries.ErrUnauthorized) {
+		t.Errorf("an outage was reported as the caller's credential: %v", err)
+	}
+	// THE REASON SURVIVES, because "the store timed out" and "this session
+	// decodes to nothing" send an operator to opposite places, and the
+	// registry is not what chooses between them.
+	if !errors.Is(err, down) {
+		t.Errorf("the resolver's own reason was dropped: %v", err)
+	}
+}
+
+// AND THE DECLARED GRANT IS READABLE WITHOUT RUNNING THE ANSWER, which is what
+// a gate asserting the posture needs. An unregistered name answers the zero
+// grant, which is invalid — so a caller asking about one is told it is not a
+// question rather than handed a plausible answer about nothing.
+func TestTheDeclaredGrantIsWhatAnswerEnforces(t *testing.T) {
+	t.Parallel()
+	r := queries.NewRegistry()
+	r.Register("events", iam.GrantTranscriptRead, answersWith(nil))
+	r.Register("config", iam.GrantConfigRead, answersWith(nil))
+
+	for what, want := range map[string]iam.Grant{
+		"events": iam.GrantTranscriptRead,
+		"config": iam.GrantConfigRead,
+		"nope":   "",
+	} {
+		if got := r.Needs(what); got != want {
+			t.Errorf("%s needs %q, want %q", what, got, want)
 		}
-		if !want {
+		if want == "" {
 			continue
 		}
-		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
-			t.Errorf("%s: RequiresOperator says yes but Answer let it through", what)
+		// Holding every OTHER grant is still a refusal, which is what
+		// makes the declaration the thing being enforced rather than
+		// "is there anybody".
+		others := make([]iam.Grant, 0, len(iam.AllGrants))
+		for _, g := range iam.AllGrants {
+			if g != want {
+				others = append(others, g)
+			}
+		}
+		if _, err := r.Answer(asking(t, others...), what, nil, "somebody"); !errors.Is(err, queries.ErrUnauthorized) {
+			t.Errorf("%s answered a caller holding every grant but %s: %v", what, want, err)
 		}
 	}
+}
+
+// A QUESTION REGISTERED WITH NO GRANT PANICS, at wiring time, on every build.
+//
+// It would answer to any credential at all — the exact shape of an ungated
+// surface that looks deliberate — and a company finding that out on the first
+// request has already served it.
+func TestAQuestionWithNoGrantPanicsAtRegistration(t *testing.T) {
+	t.Parallel()
+	for name, grant := range map[string]iam.Grant{
+		"the zero grant":                   "",
+		"a grant this build does not know": "secrets:exfiltrate",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			defer func() {
+				if recover() == nil {
+					t.Error("a question was registered with no usable grant")
+				}
+			}()
+			queries.NewRegistry().Register("events", grant, answersWith(nil))
+		})
+	}
+}
+
+// asking is a context carrying a principal with the given grants.
+func asking(t *testing.T, grants ...iam.Grant) context.Context {
+	t.Helper()
+	return iam.WithPrincipal(t.Context(), iam.Principal{
+		ID: uuid.New(), Login: "token:test", Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: grants,
+	})
 }
 
 func TestRegisteringAQuestionTwicePanics(t *testing.T) {
@@ -107,8 +227,8 @@ func TestRegisteringAQuestionTwicePanics(t *testing.T) {
 		}
 	}()
 	r := queries.NewRegistry()
-	r.Register("events", answersWith(nil))
-	r.Register("events", answersWith(nil))
+	r.Register("events", iam.GrantStateRead, answersWith(nil))
+	r.Register("events", iam.GrantStateRead, answersWith(nil))
 }
 
 func TestRegisteringNothingUsefulPanics(t *testing.T) {
@@ -118,8 +238,12 @@ func TestRegisteringNothingUsefulPanics(t *testing.T) {
 		run    func(*queries.Registry)
 		reason string
 	}{
-		{"no name", func(r *queries.Registry) { r.Register("", answersWith(nil)) }, "an unnamed question"},
-		{"no answer", func(r *queries.Registry) { r.Register("events", nil) }, "a question with no answer"},
+		{"no name", func(r *queries.Registry) {
+			r.Register("", iam.GrantStateRead, answersWith(nil))
+		}, "an unnamed question"},
+		{"no answer", func(r *queries.Registry) {
+			r.Register("events", iam.GrantStateRead, nil)
+		}, "a question with no answer"},
 	} {
 		func() {
 			defer func() {
@@ -135,9 +259,9 @@ func TestRegisteringNothingUsefulPanics(t *testing.T) {
 func TestTheRegistryListsWhatItAnswers(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	r.Register("events", answersWith(nil))
-	r.RegisterOperator("config", answersWith(nil))
-	r.Register("agent", answersWith(nil))
+	r.Register("events", iam.GrantStateRead, answersWith(nil))
+	r.Register("config", iam.GrantConfigRead, answersWith(nil))
+	r.Register("agent", iam.GrantStateRead, answersWith(nil))
 
 	if got := r.Names(); !slices.Equal(got, []string{"agent", "config", "events"}) {
 		t.Errorf("names = %v, want them sorted", got)
@@ -148,10 +272,10 @@ func TestAFailingAnswerReachesTheCaller(t *testing.T) {
 	t.Parallel()
 	sentinel := errors.New("the store fell over")
 	r := queries.NewRegistry()
-	r.Register("events", func(context.Context, queries.Params) (any, error) {
+	r.Register("events", iam.GrantStateRead, func(context.Context, queries.Params) (any, error) {
 		return nil, sentinel
 	})
-	if _, err := r.Answer(t.Context(), "events", nil, ""); !errors.Is(err, sentinel) {
+	if _, err := r.Answer(asking(t, iam.GrantStateRead), "events", nil, ""); !errors.Is(err, sentinel) {
 		t.Errorf("err = %v, want the answer's own", err)
 	}
 }

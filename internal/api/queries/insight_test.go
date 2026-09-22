@@ -377,7 +377,7 @@ func TestAHalfCursorIsRefused(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	r := registryOver(t, queries.Sources{Events: db.Events()})
-	if _, err := r.Answer(t.Context(), "phases", map[string]any{"before_id": "x"}, ""); err == nil {
+	if _, err := r.Answer(everyGrant(t), "phases", map[string]any{"before_id": "x"}, ""); err == nil {
 		t.Fatal("a before_id with no before_time was accepted")
 	}
 }
@@ -653,7 +653,7 @@ func TestTheEventListTakesATurnAndAWindow(t *testing.T) {
 func TestAnInvertedWindowIsRefusedRatherThanAnsweredEmpty(t *testing.T) {
 	t.Parallel()
 	src := queries.Sources{Events: openStore(t).Events()}
-	_, err := askNative(t, src, "events", map[string]any{
+	_, err := askTranscripts(t, src, "events", map[string]any{
 		"since": "2026-04-16T12:00:00Z",
 		"until": "2026-04-16T11:00:00Z",
 	})
@@ -663,7 +663,7 @@ func TestAnInvertedWindowIsRefusedRatherThanAnsweredEmpty(t *testing.T) {
 	// AND AN UNPARSEABLE BOUND NAMES THE PARAMETER, because a silently
 	// dropped one is a read that answers a different question than the one
 	// asked.
-	if _, err := askNative(t, src, "events", map[string]any{
+	if _, err := askTranscripts(t, src, "events", map[string]any{
 		"since": "last tuesday",
 	}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("an unparseable since answered %v, want bad params", err)
@@ -721,7 +721,7 @@ func TestTheTurnListsFailedFilterIsThreeValued(t *testing.T) {
 		t.Errorf("failed=false gave %v", got)
 	}
 	// A VALUE THAT IS NEITHER is refused rather than read as one of them.
-	if _, err := askNative(t, src, "turns", map[string]any{"failed": "maybe"}); !errors.Is(
+	if _, err := askTranscripts(t, src, "turns", map[string]any{"failed": "maybe"}); !errors.Is(
 		err, queries.ErrBadParams) {
 
 		t.Errorf("failed=maybe answered %v, want bad params", err)

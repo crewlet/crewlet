@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
@@ -129,7 +130,7 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 		// posture is — including a Tier A carrying no token at all,
 		// which is the shape the guard-is-always-mounted case needs.
 		b := config.DefaultBootstrap()
-		b.API.Auth.Tokens = []config.APIToken{{ID: "fixture", Token: fixtureToken}}
+		authorize(&b, config.APIToken{ID: "fixture", Token: fixtureToken})
 		opts.Bootstrap = &b
 	}
 	if opts.Now == nil {
@@ -699,8 +700,30 @@ func TestTheNodeIDNamesTheProcessThatAnswered(t *testing.T) {
 // which credential exists.
 func closedPosture() config.Bootstrap {
 	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	authorize(&b, config.APIToken{ID: "founder", Token: "secret"})
 	return b
+}
+
+// authorize gives a bootstrap its credentials AND the authority behind them.
+//
+// BOTH HALVES, because a principal's grants are the INTERSECTION of what its
+// token declares with the deployment's ceiling, and a fixture that set only
+// one carries none: `api.auth.max_grants` unset is an empty ceiling, which
+// grants nothing whatever a token asks for, and a token declaring nothing
+// carries nothing however wide the ceiling is. Either way every question
+// refuses for want of a grant, and a case about the drain, the socket or a
+// route's shape fails on an authority it never meant to be about.
+//
+// A token passed with grants of its own keeps them — that is how a case
+// narrows itself to the authority it IS about.
+func authorize(b *config.Bootstrap, tokens ...config.APIToken) {
+	b.API.Auth.MaxGrants = iam.AllGrants
+	for i := range tokens {
+		if tokens[i].Grants == nil {
+			tokens[i].Grants = iam.AllGrants
+		}
+	}
+	b.API.Auth.Tokens = tokens
 }
 
 // THE APP ANSWERS A PREFLIGHT WITHOUT A CREDENTIAL.
@@ -716,7 +739,7 @@ func TestAPreflightToAGuardedRouteIsAnswered(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
 	b.API.Auth.AllowedOrigins = []string{"https://ops.example.com"}
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "s3cret"}}
+	authorize(&b, config.APIToken{ID: "founder", Token: "s3cret"})
 	a := newApp(t, api.Options{Bootstrap: &b})
 
 	// `/config` is guarded on every method, so it is exactly the route
