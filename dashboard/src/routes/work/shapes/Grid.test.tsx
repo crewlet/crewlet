@@ -15,7 +15,7 @@
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 
 import { WorkGrid } from "./Grid.tsx";
 import { Router } from "~/app/router.tsx";
@@ -90,6 +90,7 @@ function mount(
   shape: "list" | "table",
   rows: WorkSummary[],
   removals?: Map<string, WorkActivityRecord>,
+  onOpen: (row: WorkSummary) => void = () => {},
 ) {
   return render(
     <Router>
@@ -102,7 +103,7 @@ function mount(
         now={NOW}
         workspace={false}
         hrefOf={(r) => `#/work/${r.key}`}
-        onOpen={() => {}}
+        onOpen={onOpen}
         onOverflow={() => {}}
         overflowHref={() => "#/work"}
         removals={removals}
@@ -212,6 +213,38 @@ test("a handle the chart does not hold falls back to the neutral disc", () => {
   for (const shape of ["list", "table"] as const) {
     const { container } = mount(shape, [row({ assignee: "departed" })]);
     expect(badge(container).className).not.toContain("dashed");
+    cleanup();
+  }
+});
+
+// A ROW IS A REAL ANCHOR, so ⌘-click and middle-click open the item's own
+// page. A plain click opens the PEEK instead, because the list is the place
+// the reader is — and it is the one gesture that has to call
+// `preventDefault`, or the click pushes `peek=` and then follows the href,
+// destroying the panel it just opened. The board card and the Projects
+// directory both went through `peekRow` for exactly that; this grid passed a
+// bare handler beside its `rowHref` and navigated away on every plain click,
+// on BOTH column sets.
+test("a plain click on a row peeks and a modified click follows the link", () => {
+  for (const shape of ["list", "table"] as const) {
+    const onOpen = vi.fn();
+    const { container } = mount(shape, [row({})], undefined, onOpen);
+    const anchor = container.querySelector("a.row-link") as HTMLAnchorElement;
+    expect(anchor).toBeTruthy();
+    expect(anchor.getAttribute("href")).toBe("#/work/ENG-9");
+
+    const plain = new MouseEvent("click", { bubbles: true, cancelable: true });
+    anchor.dispatchEvent(plain);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(plain.defaultPrevented).toBe(true);
+
+    // AND A MODIFIED CLICK IS LEFT ALONE, or the affordance is a lie: the row
+    // looks like a link, so every way a browser opens one elsewhere has to
+    // keep working.
+    const meta = new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true });
+    anchor.dispatchEvent(meta);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(meta.defaultPrevented).toBe(false);
     cleanup();
   }
 });

@@ -91,6 +91,7 @@ import { ContentCopyGlyph } from "@crewlethq/icons/glyphs";
 
 import { DataGrid, type GridBand, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, SeatCell } from "~/app/frame/cells.tsx";
+import { peekRow } from "~/app/frame/DetailRail.tsx";
 import {
   Assignee,
   DueMark,
@@ -686,7 +687,15 @@ export function WorkGrid({
       columns={columns}
       rowKey={(row) => row.key}
       rowHref={hrefOf}
-      onRowActivate={(row) => onOpen(row)}
+      // THROUGH `peekRow`, which is the one thing that calls `preventDefault`.
+      // A bare handler beside a `rowHref` opened the peek and then let the
+      // browser follow the anchor, so one plain click pushed the rail and
+      // navigated away from it — the reader landed on the item page every
+      // time, on both column sets, and the panel this list opens for was
+      // unreachable by the gesture that opens it everywhere else. The board
+      // card, the embedded compact row and the Projects directory all go
+      // through it; the collapsed grid was the one that did not.
+      onRowActivate={peekRow<WorkSummary>((row) => onOpen(row))}
       isSelected={(row) => row.key === selected}
       // THE ORDER IS THE QUERY'S. See the header: the grid writes `sort=`,
       // the screen sends it, and the engine orders the whole set.
