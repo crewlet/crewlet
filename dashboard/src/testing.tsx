@@ -531,8 +531,20 @@ export function installMedia(initial: boolean): {
  * is two fakes that disagree about what a box reports the day one of them is
  * tuned. The pair is restored in a `finally`, so a case cannot leave every
  * later one measuring a box jsdom never laid out.
+ *
+ * `act` IS FOR A BLOCK THAT IS NOT RENDERED YET. A `lazy` disclosure mounts
+ * its children when a reader opens it, which is after this function would
+ * otherwise have put the real dimensions back — so the block measures a box
+ * jsdom reports as zero and the branch under test never runs. Anything the
+ * callback does happens while the fake is still installed, which is the only
+ * arrangement where the open and the measurement are the same moment they are
+ * in a browser.
  */
-export function overflowing(ui: ReactElement, axis: "height" | "width" = "height"): HTMLElement {
+export function overflowing(
+  ui: ReactElement,
+  axis: "height" | "width" = "height",
+  act?: (container: HTMLElement) => void,
+): HTMLElement {
   const scroll = axis === "height" ? "scrollHeight" : "scrollWidth";
   const client = axis === "height" ? "clientHeight" : "clientWidth";
   const had = {
@@ -542,7 +554,9 @@ export function overflowing(ui: ReactElement, axis: "height" | "width" = "height
   Object.defineProperty(HTMLElement.prototype, scroll, { configurable: true, value: 4000 });
   Object.defineProperty(HTMLElement.prototype, client, { configurable: true, value: 460 });
   try {
-    return render(ui).container;
+    const { container } = render(ui);
+    act?.(container);
+    return container;
   } finally {
     if (had.scroll) Object.defineProperty(HTMLElement.prototype, scroll, had.scroll);
     if (had.client) Object.defineProperty(HTMLElement.prototype, client, had.client);

@@ -79,12 +79,14 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, req Request, r
 		// in the one direction nobody meant to — see a2a.Service.Reply.
 		DelegationDepth: req.Depth,
 		DelegationChain: ask.DelegationChain,
-		// The ANSWERING turn is what produced this, so it is the parent
-		// of whatever the reply wakes — and it is the RUN, matching what
+		// The ANSWERING turn is what produced this, so it is both what
+		// the reply's audit record is attributed to and the parent of
+		// whatever that reply wakes — and it is the RUN, matching what
 		// the asking side stamps (internal/agent/builtin/a2a.go): a
 		// parent pointer that named the unit of work could not say which
 		// attempt at it actually answered. See ADR-0017.
-		ParentTurnID: req.RunID,
+		TurnID:  req.RunID,
+		WorkKey: req.WorkKey,
 	}
 	if c.Org != nil {
 		if seat := c.Org.AgentSeatByHandle(req.Handle); seat != nil {
@@ -112,7 +114,15 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, req Request, r
 	// to the idle sweep, because the answer wake is documented to land on
 	// a channel that is already closed. Closing after the reply, never
 	// before: Reply refuses a closed channel.
-	if err := svc.Close(ctx, channelID); err != nil {
+	if err := svc.Close(ctx, a2a.Closure{
+		ChannelID: channelID,
+		// THIS SEAT closed it, which is the one thing the close record
+		// could never say: ClosedBy went unset on every path, so every
+		// close this engine has ever published read as "system" — the
+		// wording reserved for the sweep.
+		ClosedBy: req.Handle,
+		TurnID:   req.RunID, WorkKey: req.WorkKey,
+	}); err != nil {
 		log.WarnContext(ctx, "a2a_channel_close_failed", "seat", req.Handle,
 			"channel_id", channelID, "error", err.Error(),
 			"detail", "the exchange was answered; the idle sweep closes it later")

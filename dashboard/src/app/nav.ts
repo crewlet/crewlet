@@ -93,8 +93,8 @@ export const RAIL: RailRow[] = [
     label: "Work",
     icon: "check",
     path: ["work"],
-    owns: ["work", "goals"],
-    hint: "Projects, items and goals",
+    owns: ["work"],
+    hint: "Projects and items",
     chord: "w",
   },
   {
@@ -273,14 +273,6 @@ export const DESTINATIONS: Destination[] = [
     icon: "dashboard",
     path: ["work", "views"],
     hint: "Every saved view, who owns it and which are pinned",
-  },
-  {
-    key: "goals",
-    workspace: "work",
-    label: "Goals",
-    icon: "target",
-    path: ["goals"],
-    hint: "The tier above projects, and what its targets say right now",
   },
   {
     key: "company",

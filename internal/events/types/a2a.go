@@ -10,6 +10,32 @@ import (
 // Agent-to-agent channels: one ask, one answer, then closed. These events are
 // the audit trail of that exchange — the delivery itself rides the target
 // seat's durable inbox, never a second in-process path.
+//
+// # The three audit records name the turn that published them
+//
+// [A2AChannelOpened], [A2AMessageSent] and [A2AChannelClosed] each declare a
+// `turn_id`, and that key is the whole of what puts them on the Turn screen:
+// EventLog.Turn is `WHERE turn_id = ?` over a column store.ExtractTags fills
+// from the payload's own top-level field, so a record without it writes an
+// empty column and can never be in a turn's answer however the client bands
+// it. All three went without one for as long as they have existed, which is
+// why the "What else it did" panel advertised colleagues and had never once
+// drawn an ask — and why it failed EMPTY, reading as a turn that talked to
+// nobody rather than as a broken panel.
+//
+// IT IS NOT THE ENVELOPE'S ParentTurnID, which the two WAKE types above carry
+// instead. That one points BACKWARDS, from a wake to the turn that asked for
+// it, and is read by whoever answers. This one is the publisher's own
+// identity, on a record that wakes nobody. A single field on a2a.Ask and
+// a2a.Answer supplies both, because the frame calling the service is both the
+// turn writing the record and the parent of the wake it triggers; they stay
+// two names where they land because two different readers ask two different
+// questions of them — "what else happened on this turn" and "what asked for
+// this".
+//
+// EMPTY IS A REAL ANSWER for exactly one producer: the maintenance sweep
+// closing a channel nobody answered belongs to no turn, publishes no wake, and
+// says so by naming neither a turn nor a closer. See [A2AChannelClosed].
 
 // The two WAKE types an A2A exchange puts on a seat's inbox.
 //
@@ -128,6 +154,14 @@ type A2AChannelOpened struct {
 	Requester    string   `json:"requester"`
 	Target       string   `json:"target"`
 	Participants []string `json:"participants,omitempty"`
+	// TurnID is the run that PUBLISHED this record; see the package note
+	// above for why it is not the envelope's ParentTurnID.
+	TurnID string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey string `json:"work_key,omitempty"`
 }
 
 // EventType is the "a2a_channel_opened" wire type.
@@ -140,9 +174,16 @@ func (e A2AChannelOpened) Summary() string {
 	return lead(e.Requester, "opened A2A channel with "+e.Target)
 }
 
-// A2AMessageSent marks a message put on an A2A channel. It is also a trigger
-// the learning subsystem normalizes into an inbound interaction, which is why
-// Sender and Content are the fields that matter downstream.
+// A2AMessageSent marks a message put on an A2A channel — the brief on the way
+// out, and the answer on the way back.
+//
+// AN AUDIT RECORD AND NOTHING ELSE, which this comment used to deny: it said
+// the learning subsystem normalizes it into an inbound interaction. Nothing
+// does. Interactions are built by Engine.interactionsOf out of
+// [ExternalNotification] alone, and internal/learning's own profiler states
+// the opposite in as many words — "an internal trigger (a schedule, a sandbox
+// completion, an A2A ask) carries no interactions". What a turn is woken by is
+// [A2AMessage]; this is the row an operator reads afterwards.
 type A2AMessageSent struct {
 	ChannelID  string `json:"channel_id"`
 	Sender     string `json:"sender"`
@@ -150,6 +191,14 @@ type A2AMessageSent struct {
 	Recipient  string `json:"recipient"`
 	MessageID  string `json:"message_id"`
 	Content    string `json:"content"`
+	// TurnID is the run that PUBLISHED this record; see the package note
+	// above for why it is not the envelope's ParentTurnID.
+	TurnID string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey string `json:"work_key,omitempty"`
 }
 
 // EventType is the "a2a_message_sent" wire type. Distinct from A2AMessageType,
@@ -172,12 +221,34 @@ func (e A2AMessageSent) SummaryFor(actor string) string {
 
 // A2AChannelClosed marks a channel closing — the exchange is over, and a
 // re-open is a new ask rather than a continued volley.
+//
+// TWO PRODUCERS, and they answer the turn question differently: the answering
+// turn closes the channel it just replied on and stamps its own id, while the
+// maintenance sweep closes one nobody answered and carries neither a turn nor
+// a closer. That is not a gap in the record — a swept close is the statement
+// that no turn finished — and it is why this type is banded on the Turn screen
+// all the same: a row with an empty turn id is simply not in any turn's
+// answer.
 type A2AChannelClosed struct {
-	ChannelID    string   `json:"channel_id"`
+	ChannelID string `json:"channel_id"`
+	// ClosedBy is the participant whose turn closed the channel, and EMPTY
+	// for the maintenance sweep — which is what [A2AChannelClosed.Summary]
+	// reads as "system". It went unset on every path until the sweep gained
+	// a producer, so the one branch that says a participant closed it was
+	// dead code and every close in the engine's history was attributed to
+	// the engine itself.
 	ClosedBy     string   `json:"closed_by"`
 	Participants []string `json:"participants,omitempty"`
 	MessageCount int      `json:"message_count"`
 	DurationMS   float64  `json:"duration_ms"`
+	// TurnID is the run that PUBLISHED this record; see the package note
+	// above for why it is not the envelope's ParentTurnID.
+	TurnID string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey string `json:"work_key,omitempty"`
 }
 
 // EventType is the "a2a_channel_closed" wire type.

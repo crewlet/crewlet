@@ -61,18 +61,24 @@
 }
 
 /* AND THE BLOCK THEY ARE COLUMNS OF SCROLLS, because the widest of these
-   blocks is the prompt-weights table, and its FIVE columns at 5.5rem plus a
-   phase tag come to about 570px against the 332px of room a 390px phone has
-   once the card's padding is taken out — so it overflows by a wide margin, and
+   blocks is the prompt-weights table, and its FIVE columns at 7rem plus a
+   phase tag come to 746px against the 332px of room a 390px phone has once
+   the card's padding is taken out — so it overflows by a wide margin, and
    `.num-col` exists precisely to make those five line up while it does. (It
    already overflowed at three, at 370px, which is what this was measured on
    before a term the engine had never counted — the tool-definition array —
    and a resumed phase's own conversation each earned a column.)
 
+   AND 746px IS A DATA ROW'S, NOT THE HEADER'S, which is the fact every
+   number invented for this block has foundered on: the header measures
+   683.9px, a plain `execute` row 680.1px, and a phase that self-iterated and
+   was re-delivered — `review`, `iter 2` and a `×3` count together — measures
+   746.1. How wide the widest row is depends on what the turn did.
+
    SIDEWAYS HERE, where a grid gets a card instead (see frame.css). The two
    shapes take opposite answers for a reason: a grid's flexible tracks resolve
    to ZERO the moment its wrap becomes a scroller, and its cells are prose. A
-   fixed 5.5rem figure column has no such collapse and no prose in it, and the
+   fixed 7rem figure column has no such collapse and no prose in it, and the
    whole value of the block is that the figures sit under their own headings —
    which wrapping them would destroy, since the header row and each value row
    would break at different points.
@@ -105,9 +111,52 @@
    still holds them in columns, and the rows narrower than the widest still
    right-align to the same edge through their own spacer.
 
-   The `max-width` is a ceiling rather than the layout: 100% so a phone still
-   scrolls the block instead of the page, and 38rem so a block whose labels
-   grow prose-long cannot quietly restore the gap this removed.
+   AND THE ONLY CEILING IS THE BOX IT SITS IN, which is that same paragraph
+   finally applied to the `max-width`. It read `min(100%, 38rem)`, and the rem
+   half was the invented cap surviving under a second property name: 38rem
+   cleared five columns at the 5.5rem `.num-col` then had — about 570px — by
+   38px. `.num-col` went to 7rem so APPROX. TOKENS would stop wrapping, which
+   moved five columns by 120px, and nobody re-derived 608. The ceiling stopped
+   being a ceiling and became the layout: at a 1570px viewport, where the rail
+   and the workspace sidebar leave the card 1163px of room, the weights block
+   clamped to 608 and scrolled 138px of itself out of sight, cutting the very
+   heading the 7rem was bought for down to `APPR…` — and the prefetch block
+   did the same, 104px of it, on every turn whose thread was handed over
+   stopped short.
+
+   RE-DERIVING IT IS THE TRAP, not the fix, and it is measurably the trap: a
+   43rem taken from the 684px a single-row turn shows still clips that same
+   heading, because the table it was derived from is 746px on a turn that ran
+   twice. The width such a number has to clear is the column COUNT
+   (`Turn.tsx`), `.num-col` above, the gap (a token), WHICH ROW this turn
+   produced, and the rendered width of a heading at `--fs-3xs` with
+   `--track-wide` — font metrics, which live in no file at all. Any literal
+   here is a sixth quantity nothing can hold in step with five it cannot see,
+   and it fails SILENTLY: a `max-width` narrower than its content is not an
+   error, not a warning, and in a diff it is a file nobody touched.
+
+   AND `100%` IS NOT WHAT `fit-content` ALREADY DOES, which is why it stays
+   rather than leaving with the rem. `fit-content` is `min(max-content,
+   max(min-content, available))`, and `.num-rows` below is `width:
+   max-content` — so this box's min-content EQUALS its max-content, the floor
+   swallows the available term, and the block resolves to its own content at
+   every width. And what a block that never clamps loses is the SCROLLER
+   above, because `overflow-x: auto` only ever scrolls a box narrower than its
+   own content: measured with the ceiling removed outright, on a 390px phone
+   the weights block draws 746px out of a card whose content box is 332px,
+   from x=29 to x=775. Nothing scrolls it — `.app` and `.screen` are both
+   `overflow-x: hidden` (frame.css, shell.css), so the page does not take the
+   overflow either — and three of the five figure columns, APPROX. TOKENS
+   among them, sit past x=390 with no way to reach them at all. The same box
+   with wrappable content does clamp, which is exactly why deleting this line
+   would look safe.
+
+   SO THE CLAMP MOVED ONTO THE HALF OF THE ROW THAT CAN ABSORB ONE, below.
+   The figures are fixed, finite, and the entire reason `.num-col` exists; the
+   label and its note are prose that already carry `.truncate`. A clamp on the
+   BLOCK fell wholly on the figures at the far end of the row and never
+   reached the sentence at the near end — the one arrangement that throws away
+   the alignment and spares the thing that has an ellipsis ready.
 
    ON THE BLOCK rather than on the card, because the card also carries prose
    and a callout, and those have a measure of their own that is not this
@@ -115,12 +164,48 @@
 .num-block {
   overflow-x: auto;
   width: fit-content;
-  max-width: min(100%, 38rem);
+  max-width: 100%;
 }
 
 .num-rows {
   width: max-content;
   min-width: 100%;
+}
+
+/* AND THE PROSE INSIDE A FIGURE ROW HAS A MEASURE — which is what the block's
+   invented ceiling was reaching for, on the one box that could not carry it.
+   A note that runs prose-long sizes the whole `max-content` row, and every
+   shorter row's spacer then has that much nothing to push its own figure
+   across: the x=37/x=645 gap above, restored from the other end. Measured
+   with the ceiling gone and this rule absent, one `12 messages handed over,
+   but not the newest — the thread was too long to read` at 455px put the
+   prefetch block at 696px and opened every other row's label-to-figure gap
+   from 352px to 502px.
+
+   INSIDE A `max-content` BOX `.truncate` NEVER FIRES BY ITSELF: every item is
+   drawn at its full intrinsic width, so the class was decoration here and the
+   block grew in its place. A bound is what makes it mean its own name.
+
+   20rem BECAUSE OF THE NOTES, measured at `--fs-2xs`. Three of the four the
+   thread block can say are whole diagnostic sentences that have to arrive
+   intact, because telling them apart is the entire reason the engine puts
+   `thread_context_read` on the wire: `the thread could not be read from that
+   node` is the widest at 248px, beside `read, and there was nothing earlier`
+   at 198px and the knowledge block's `the search ran and selected nothing` at
+   204px. 320px carries every one of them with 72px to spare. The fourth is
+   the one this exists to cut — a thread handed over stopped short measures
+   455px and GROWS with the message count's digits (470px at four of them),
+   so it is unbounded in the only sense that matters. At 20rem it comes out as
+   `12 messages handed over, but not the newest — the t…`, which keeps the
+   clause carrying the FACT and loses only the explanation of it.
+
+   THE CUT IS A PIXEL, so a cell this can reach carries a `title` with the
+   whole string (`Turn.tsx`) — without one the tail is unrecoverable. And it
+   is the labels' bound too, though none of the seven comes near it: a bound
+   on the cells is a bound on whatever is added to them, where a bound on the
+   four notes this happens to have is a rule that has to be found again. */
+.num-rows .truncate {
+  max-width: 20rem;
 }
 
 /* A SECOND LEDGER UNDER THE FIRST needs a line between them, which a gap
@@ -129,7 +214,17 @@
    first. It is a hairline rather than a bigger gap because the two ARE one
    panel — they answer the same question from opposite ends — and spacing them
    apart far enough to separate them would have read as two. Only when
-   something precedes it: first in the card, there is nothing to divide. */
+   something precedes it: first in the card, there is nothing to divide.
+
+   ON A WRAPPER, NEVER ON THE `.num-block` ITSELF, which is where it sat: a
+   `fit-content` box draws its border at its own content width, so the rule
+   measured the LOWER table instead of the card — 608px of hairline inside a
+   1163px card, which only ever looked deliberate because the ceiling above
+   was pinning both blocks to that same 608. With the ceiling gone it would
+   draw 746px of line under a 562px block, a divider wider than the thing
+   above it, which reads as the lower table's own top border rather than as a
+   line between two. A divider is a fact about the card, so it spans the
+   card. */
 .ledger-follows:not(:first-child) {
   border-top: 1px solid var(--border-subtle);
   padding-top: var(--space-3);

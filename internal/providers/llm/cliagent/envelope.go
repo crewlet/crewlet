@@ -2,7 +2,9 @@ package cliagent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -55,8 +57,8 @@ var nameKeys = []string{"name", "tool", "tool_name", "function"}
 // the end; taking the first would return its worked example.
 func ParseEnvelope(reply string) Envelope {
 	for _, candidate := range envelopeCandidates(reply) {
-		var doc map[string]any
-		if err := json.Unmarshal([]byte(candidate), &doc); err != nil {
+		doc, ok := decodeEnvelopeObject(candidate)
+		if !ok {
 			continue
 		}
 		env, ok := fromDocument(doc)
@@ -65,6 +67,45 @@ func ParseEnvelope(reply string) Envelope {
 		}
 	}
 	return Envelope{Message: reply}
+}
+
+// decodeEnvelopeObject reads one candidate document, THROUGH json.Number.
+//
+// The number rule is the same one [httpapi.DecodeArgs] states for the HTTP
+// providers, and it is not a display concern here: these arguments are
+// EXECUTED. Decoded into an `any` a number becomes a float64, so a call naming
+// a 19-digit id — a Jira issue id, a Slack timestamp, a GitHub node id — is
+// re-encoded as 1234567890123456800 and runs against a DIFFERENT row, with
+// nothing anywhere reporting an error. A seat on a subscription CLI backend
+// was the one seat in this engine still doing that.
+//
+// Nothing else read out of the envelope is a number — [fromDocument] and
+// [readCall] take strings and lists — so the whole document can be decoded
+// this way rather than the arguments alone, which is what the object form of
+// an argument list needs: it is already inside this map by the time
+// [readArguments] sees it.
+//
+// NOT exec.go's `decodeObject`, which reads a CLI's own STREAM events — a
+// different document, with a leading-brace guard this one must not have and
+// numbers nobody executes against. Sharing one would give the envelope that
+// guard and give the stream a rule it has no use for.
+func decodeEnvelopeObject(text string) (map[string]any, bool) {
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		return nil, false
+	}
+	// EXACTLY ONE DOCUMENT. A Decoder reads one value and stops, so
+	// `{"message":"hi"}and then some prose` would decode clean where the
+	// `json.Unmarshal` this replaced refused it — and refusing it is what
+	// makes the candidate order mean anything: a prefix that happens to
+	// parse must not win over the fenced block further down that IS the
+	// answer. Trailing whitespace is not a tail.
+	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	return doc, doc != nil
 }
 
 // envelopeCandidates yields the JSON documents in a reply, most likely first:
@@ -240,8 +281,7 @@ func readArguments(v any) (map[string]any, bool) {
 		if trimmed == "" {
 			return map[string]any{}, true
 		}
-		var args map[string]any
-		if err := json.Unmarshal([]byte(trimmed), &args); err == nil {
+		if args, ok := decodeEnvelopeObject(trimmed); ok {
 			return args, true
 		}
 		return nil, false

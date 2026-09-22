@@ -2054,74 +2054,6 @@ export interface WorkProjectDetail extends WorkProjectRow {
   incomplete?: WorkIncomplete;
 }
 
-/** One measurable outcome under a goal. */
-export interface WorkGoalTarget {
-  id: string;
-  name: string;
-  type: "tasks" | "number" | "percent" | "binary";
-  start?: number;
-  goal?: number;
-  current?: number;
-  unit?: string;
-  tasks?: string[];
-  projects?: string[];
-  done?: boolean;
-  /** 0..1, ABSENT when the target measures nothing — a `tasks` target whose
-   *  tasks were all purged, or a numeric one that starts where it ends.
-   *  Rendering that as 0% is a goal somebody escalates. */
-  progress?: number;
-  finished_tasks?: number;
-  total_tasks?: number;
-}
-
-/** A goal, with what its targets say.
- *
- *  THE PROGRESS IS COMPUTED ON EVERY READ and stored nowhere. A goal is at
- *  what its targets are at; a stored number would be a second answer that
- *  drifts the moment a task closes without anybody editing the goal. */
-export interface WorkGoal {
-  id: string;
-  name: string;
-  description?: string;
-  owners: string[];
-  members?: string[];
-  group?: string;
-  health?: "on_track" | "at_risk" | "off_track" | "done" | "";
-  start_at?: string;
-  due_at?: string;
-  archived?: boolean;
-  targets?: WorkGoalTarget[];
-  /** ABSENT when the goal has no targets — "nothing has happened" and "there
-   *  is nothing to measure" are different facts. */
-  progress?: number;
-  version: number;
-  created_by?: string;
-  created_at: string;
-  updated_at: string;
-  /** The health check-in history, newest LAST as it was written. The only part
-   *  of a goal a person writes in prose, served by `work_goals` since it
-   *  existed and declared by nothing until now. */
-  updates?: WorkGoalUpdate[];
-}
-
-/** One check-in on a goal: who, when, the health they declared, and why. */
-export interface WorkGoalUpdate {
-  at: string;
-  author: string;
-  health?: "on_track" | "at_risk" | "off_track" | "done" | "";
-  text?: string;
-}
-
-export interface WorkGoalsAnswer {
-  goals: WorkGoal[];
-  read_level?: ReadLevel;
-  log_seq?: number;
-  applied_through?: number;
-  log_lag?: number;
-  complete: boolean;
-  incomplete?: WorkIncomplete;
-}
-
 /** One task type a company may file under — the DECLARATION, where
  *  [WorkType] is the slug a task carries. */
 export interface WorkTypeDef {
@@ -3656,7 +3588,7 @@ export interface WorkMyWork {
 /** One notice in a person's inbox, as `tracker.InboxNotice` serialises it.
  *
  *  THE ONE FACT NO COMMERCIAL TRACKER RECORDS is `reason`: the applier writes
- *  WHY this change found this person, as one of nineteen, in the precedence
+ *  WHY this change found this person, as one of eighteen, in the precedence
  *  order that decided it. A notice also says whether it ASKS something of them
  *  (`addressed`) or merely informs, and whether it arrived only because nobody
  *  better was found (`fallback`). */
@@ -3749,7 +3681,7 @@ export interface WorkSearchAnswer {
 
 /** One person a change reached, and why.
  *
- *  `reason` is the ONE of nineteen that named them — the resolution is ordered
+ *  `reason` is the ONE of eighteen that named them — the resolution is ordered
  *  and a handle appears once — and `addressed` is whether the notice ASKS
  *  something of them rather than informing them. */
 export interface RoutingRecipient {
@@ -3901,7 +3833,6 @@ export interface QueryMap {
   work_workload: WorkloadAnswer;
   work_activity: WorkActivityAnswer;
   work_my_work: WorkMyWork;
-  work_goals: WorkGoalsAnswer;
   work_catalogue: WorkCatalogueAnswer;
   work_person: WorkPersonState;
   work_search: WorkSearchAnswer;

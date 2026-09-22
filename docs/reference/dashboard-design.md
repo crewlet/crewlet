@@ -256,9 +256,9 @@ what they did, what it cost, the machine.
 
 | Row | Route prefix | Badge |
 |---|---|---|
-| **Inbox** | `#/inbox` | unread notices on the first page under a reason the person's record counts as PRIMARY, `caution` hue — the only badge in the chrome allowed a status colour. Not every unread notice: most of a busy company's are things it merely told you (a task you watch moved, a goal you own was updated), nobody answers those, and a count that never reaches zero however diligent the reader is reads as a broken counter. The primary half is small by construction and goes down by answering |
+| **Inbox** | `#/inbox` | unread notices on the first page under a reason the person's record counts as PRIMARY, `caution` hue — the only badge in the chrome allowed a status colour. Not every unread notice: most of a busy company's are things it merely told you (a task you watch moved, a comment you were cc'd on landed), nobody answers those, and a count that never reaches zero however diligent the reader is reads as a broken counter. The primary half is small by construction and goes down by answering |
 | **My work** | `#/me` | — |
-| **Work** | `#/work`, `#/goals` | — |
+| **Work** | `#/work` | — |
 | **Company** | `#/company` | — |
 | **Knowledge** | `#/knowledge` | — |
 | **Activity** | `#/activity` | seats working now, neutral |
@@ -308,6 +308,31 @@ is where the collapsed rail and the phone's bottom bar send a reader — they ar
 kept in the chrome because a theme switch you can SEE is the reason either is
 there, and what was wrong was a rail too narrow to draw what it was drawing.
 
+**The brand mark is bounded, never sized.** `crewlet-icon.svg` is 1467×978 —
+a 3:2 mark — and it *meets* its box rather than filling it, so any box whose
+own ratio is not 3:2 draws the mark smaller than the box and pads the rest. It
+was given a 24px SQUARE, which drew 24px of mark across 16px of art and
+letterboxed the other 8: a cell 96px wide held a 24×16 speck. Neither axis is
+given a size now. Both are given a MAXIMUM over the file's intrinsic size —
+`max-height` at `--control-h`, the step every control in the same
+`--page-bar-h` band takes, and `max-width` at the column less the inset
+`.rail-rows` already takes — so whichever binds decides the box and the other
+derives from the ratio. Open, the height binds and the mark is 48×32; in the
+48px column the width binds and it is 39×26.
+
+A maximum on *both* axes rather than a size on one and a clamp on the other,
+because a clamp does not carry through a definite size: `height:
+var(--control-h)` with a `max-width` gave a 39×32 box at ratio 1.219 in the
+narrow column and letterboxed the mark inside it exactly as the square had.
+CSS 2.1 § 10.4's table rescales the other axis only where that axis was itself
+derived; a height the author stated is a used value the clamp never revisits.
+And a maximum rather than a rule keyed on the collapsed rail, because the 48px
+column is React state AND a breakpoint — under 960 the grid hands the rail
+`--rail-w-collapsed` with `collapsed` still false, which is how
+`.rail-engine > .truncate` once rendered 61px of word inside 48px of column.
+`styles/frame.test.ts` holds the shape: no definite width, no definite height,
+a maximum on both.
+
 `g` then a letter jumps to a workspace (`g i`, `g m`, `g w`, `g c`, `g h`,
 `g k`, `g a`, `g o`, `g d`); `[` collapses the rail. A chord rather than a modifier,
 because every single-modifier combination worth having is already the browser's.
@@ -323,7 +348,6 @@ because every single-modifier combination worth having is already the browser's.
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
 | `#/work/{KEY}` | **Project** | the same view strip, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` (which change's routing) |
-| `#/goals` · `#/goals/{id}` | **Goals** | |
 | `#/company` | **Company** — the charter, the chart, and editing them | `lens=chart\|charter\|builder` (builder is *(operator)*) · `unit=` · `seat=` |
 | `#/company/people` | **People** — the one directory, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/people/{handle}` | **Seat** — agent or human | agent: overview · work · turns · conversations · memory · cost · access · schedules; human: overview · work · access. `conversation=` opens one thread |
@@ -364,7 +388,7 @@ been able to answer.** Search is the ranking a seat gets from `search_work` —
 BM25 over the engine's own index — which the operator reading the same company
 had no access to at all; the board's `q=` is an escaped substring over an
 excerpt and answers something else. The item's **Woke** tab is who one change
-actually reached and under which of nineteen reasons, which is the fact no
+actually reached and under which of eighteen reasons, which is the fact no
 commercial tracker records: all of them can say you were notified and none can
 say why. And a seat's **Conversations** tab is its own thread ledger — the only
 account of what a seat said on a surface this engine does not own. Every one of
@@ -448,7 +472,7 @@ content box is the viewport, the content-sized columns alone exceed it, and
 every flexible track resolves to zero — the title column vanishing to make room
 for a due date.
 
-So the head goes and each cell draws its own name beside its value. Three
+So the head goes and each cell draws its own name beside its value. Four
 things follow from that, and each is a rule a new column has to keep:
 
 - **A column with no word in its head declares one.** `header` is what the head
@@ -463,6 +487,18 @@ things follow from that, and each is a rule a new column has to keep:
   cut the one field the reader opened the list for and left the rest of the
   card empty underneath it. What bounds the value instead is the engine — a
   title is at most `tracker.MaxTitle`.
+- **A head longer than the label column wraps inside it.** The label is a
+  fixed 7rem — 112px — so every value in a card starts at the same place with
+  no track to line them up with, and 7rem is what the heads measure: the widest
+  that fits on one line is CONVERSATION at 93.09px. A basis on a line that
+  cannot break is a request rather than a width, though: `min-width` on a flex
+  item is `auto`, which floors it at its own content, so the one head over the
+  basis grew its label box to 128.03px and started only ITS value 16.03px right
+  of every other value in the card — measured at 390px on the provisioning
+  passes, five values 136px from the card's edge and WHAT IT CONCLUDED's at
+  152.03px. The label wraps instead, and breaks mid-word where it has nowhere
+  else to break, which is the trade `.num-col` takes one layout over: a heading
+  longer than its column wraps, visibly, and the column holds.
 - **The sort control goes with the head.** That is the real cost of the shape
   and it is the right trade: a column head a reader cannot see is not an
   affordance, and `sort=` is in the URL — so a sorted list still arrives sorted
@@ -644,8 +680,8 @@ the kind, in `app/frame/peeks.tsx`, and the shell dispatches on the `peek=`
 token — so a list opens a peek by naming what it points at and needs to know
 nothing about it. The rail took its body as `children` once, which meant the
 screen that opened a peek had to know how to render one, and so exactly one
-screen ever did: nineteen kinds were addressable and only a work item could
-appear in the rail. A kind with no entry in that table is not an error — a
+screen ever did: every addressable kind — seventeen of them — could be named
+and only a work item could appear in the rail. A kind with no entry in that table is not an error — a
 notice is read in its own inbox and a model has no page at all — and the rail
 closes rather than opening empty.
 
@@ -676,7 +712,7 @@ none of it:
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
 | `ObjectHeader` | an object's eyebrow, title, state marks and up to six facts, in the same order on the page and in the peek. A fact may carry a `note` saying where its value came from — whether a duration was measured by the engine or derived from the events a page holds, what a token figure covers — for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has eight — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `@crewlethq/ui`'s `Tabs`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
-| `DetailRail` | the peek's chrome — resizable, a drawer under 1180 px |
+| `DetailRail` | the peek's chrome — resizable, a drawer under 1200 px |
 | `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
 | `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells; a row becomes a labelled card under 860 |
 | `PropertiesRail` | an object's own facts, in sections, with who set each |
@@ -729,11 +765,26 @@ So the bar does not wrap, and three rules make that safe:
 
 - **The trail is what gives way**, and it takes the free space too, which
   retired the `.spacer` that used to sit between it and the controls. It stops
-  at a floor: with `min-width: 0` the trail is clipped as a BOX — no ellipsis,
-  because the clip is outside the text — and what is clipped is its right-hand
-  end, so a 1200 px bar rendered the way back out as "Activit". The floor is
-  the deepest fixed ancestry the route table can produce plus the stub the last
-  crumb already floors at.
+  at a floor of 20ch, and then it SCROLLS. The floor is what the narrowest line
+  the trail ever sits on can give it — 178.8 px, 20.25ch, so 21ch is already
+  over it, measured at a 310 px and a 350 px viewport where the trail shares a
+  line with the drawer toggle, the viewer chip and the search trigger — which
+  is a different number from what the deepest address needs, and deliberately
+  the smaller of the two: a floor a line cannot honour does not widen the
+  trail, it pushes the search trigger onto a row of its own. So the floor is
+  not the guarantee, and past it the overflow is reachable rather than lost.
+  Under `overflow: hidden` the cut was a BOX — no ellipsis, because the clip is
+  outside the text, and the ancestors do not shrink, so once they alone are too
+  wide there is nothing left to ellipsise. `crumbs.ts` builds three fixed
+  ancestors on three admin routes, the widest being `Admin / Configuration /
+  Revisions /` at 26.53ch — 31.53ch beside the 5ch stub the last crumb floors
+  at — against a line that hands the trail 218.8 px at a 390 px viewport, where
+  it drew "Admin / Configuration / Revisions" with the last letter shaved, no
+  separator after it, and the object's own crumb laid out past the edge at zero
+  visible pixels. `overflow-x: auto` is what `.page-controls` already takes one
+  breakpoint down, for the same reason: past the edge is unreachable, out of
+  sight is not. The scrollbar is not drawn — on a 52 px bar it would sit on the
+  baseline the trail is drawn on — and the block axis still clips.
 - **The control group may not shrink at all.** It wraps, so a shrink does not
   shave a label off a button, it drops the last control onto a row of its own —
   and a flex container distributes shrinkage proportionally in one pass, with
@@ -854,7 +905,7 @@ that has re-decided what counts as primary gets its own badge without the
 client knowing anything about it.
 
 **The wake reason opens every row.** The applier records, per change and per
-recipient, the ONE reason of nineteen under which that person heard about it.
+recipient, the ONE reason of eighteen under which that person heard about it.
 Nothing drew it before, and it is the fact no commercial tracker keeps: Linear,
 Jira and ClickUp can all tell you that you were notified, and none can tell you
 why. The client carries no copy of the split — that is a property of the person,
@@ -1170,9 +1221,71 @@ rules fix it, and each one names a specific mechanism:
    and all. The engine now sends the split it already knows, at the point
    the round's assistant message is appended. A phase recorded before that
    has only the joined string and is shown whole rather than guessed apart.
-3. **The model's words are prose; JSON is monospace.** Reasoning and speech
-   get a proportional face, real leading and a bounded measure. Monospace
-   stays where it carries meaning — tool arguments and tool results.
+3. **The model's words are prose; JSON is monospace, and INDENTED.**
+   Reasoning and speech get a proportional face, real leading and a bounded
+   measure. Monospace stays where it carries meaning — tool arguments and tool
+   results.
+
+   Those arrive as the engine encoded them, which is the whole call on ONE
+   line however many arguments it had, with the one a reader came for — the
+   channel, the page id, the item key — somewhere in the middle of it. Every
+   other JSON block in this product is written at two spaces, and these were
+   the exception rather than a decision: the screen indents them now, and the
+   same rule covers a tool's result, which is a JSON document as often as the
+   call was. What that buys is a key per line, so a call is read down rather
+   than scanned across.
+
+   **It does not shorten a long VALUE, and must not.** A `create_page` body is
+   four thousand characters whether or not the document around it is indented,
+   because `\n` inside a JSON string is two characters. Resolving those would
+   produce text that is no longer JSON, no longer idempotent and no longer
+   paste-able into `jq`. What handles a long value is the block WRAPPING —
+   which is why both blocks stopped turning wrapping off at the same time as
+   they started indenting, and why the pair is one change rather than two.
+
+   **Indented by walking the text, never by decoding it.** The obvious
+   `JSON.stringify(JSON.parse(text), null, 2)` is the move both of these
+   screens had refused in a comment, and the reason is a display bug rather
+   than a purity argument. Two of the things that round trip loses are live on
+   this path: an id wider than 2^53 comes back a *different* id, and a
+   number's spelling (`1.0`, `1e3`) stops being what the model sent. Both are
+   there to lose only because the engine went to the trouble — every decoder
+   between a model and the record reads through Go's `json.Number` so a
+   19-digit Jira id or Slack timestamp stays exact — and a screen whose job is
+   to say which object a tool was called on must not show one that is off by
+   one. (It also keeps a duplicate key, an unresolved escape and the wire's
+   key order, none of which the engine's own encoder can produce: those are
+   what it costs nothing to be right about.) So `lib/jsontext.ts` scans the
+   text: structural characters get the newlines and the indent, and every
+   literal is copied across byte for byte. `JSON.parse` is still called, for
+   its verdict and nothing else — text that is not a JSON document at all
+   comes back exactly as it arrived, because a provider that answered with
+   something else is a reading the transcript has to be able to show.
+
+   With the structure now carried by newlines, nothing is aligned in columns
+   any more and both blocks wrap: the only thing left that can overrun one is
+   a single long string value, which is the case wrapping exists for.
+
+   Two bounds travel with it, and both are visible rather than magic. The
+   indent STOPS GROWING at 32 levels — 64 leading spaces is most of the width
+   one of these blocks has in a 420px detail rail, so past it a deeper
+   document keeps its newlines and gains no margin. That reading is also what keeps the
+   output linear: indentation is quadratic in nesting depth, and the depth
+   here belongs to whichever MCP server answered, with Go's decoder accepting
+   ten thousand levels. And a LIVE result over four thousand characters is
+   sent with a leading ellipsis, which is not a JSON document — so a long
+   result renders flat while the phase runs and indented once it completes.
+   The text already changes at that moment; the shape changing with it is the
+   same fact, not a second one.
+
+   The engine stopped writing the other half of the unreadability at the same
+   time. `json.Marshal` escapes `<`, `>` and `&` for embedding in HTML, so
+   every URL argument recorded before that read `?a=1\u0026b=2` and every
+   markdown body `\u003ch1\u003e` — on a screen that renders into a `pre` and
+   needs none of it. `tools.RecordArgs` is the one encoder both the phase
+   event and the bridged-run row use now, and it writes the characters the
+   model actually sent. Records taken by an older build still carry the
+   escapes, and are shown as what that build published.
 4. **Grouping is structural; colour is semantic.** A round is BRACKETED by a
    rail running from its numbered node down its own content, and adjacent
    rounds are told apart by a two-step alternating tint — not by a hue
@@ -1601,7 +1714,7 @@ not, which is the class of defect that never shows up in a screenshot:
   else. Measured rather than assumed, and on both axes since `wrap={false}`
   scrolls a block sideways in a box that is nowhere near tall enough to scroll
   down: a stop on every block would put one in front of each of a round's tool
-  arguments, most of them three lines. `label` is what such a block takes
+  arguments, most of them a handful of lines. `label` is what such a block takes
   focus under, from either door — taking focus without a name is the other
   half of the same trade.
 
@@ -1677,6 +1790,19 @@ Four rules replace it, and each one names what it fixes.
    a coding CLI's own loop in another process, and that run's wall clock is on
    `sandbox_run_started` / `sandbox_run_completed` instead.
 
+   **And the page says where each one went.** *Relocated* is only better than
+   *dropped* if the page says so: a row that reaches the browser and is drawn
+   by no panel is indistinguishable from a row the store never returned, and
+   the reader most likely to meet that is the one checking a **cut** turn's
+   stated event total against the panels below it. So every absorbed type
+   names its destination — "the phase card it opens", "the turn's header and
+   record" — and the page prints those under the bands as a folded **Already
+   on this page** note: how many of the turn's rows are not listed, what they
+   were, and where each kind is drawn instead. Absent when nothing was
+   absorbed, like every other section here. Until that note existed the count
+   was assembled on every frame and read by no screen, and the destinations
+   were prose written for a reader who was never shown them.
+
 2. **Weight is meaning.** `reflection_completed` is a sentinel whose own
    payload doc says it deliberately carries no outcome; a guard breach is a
    turn the engine stopped. As two identical feed rows an operator scanning
@@ -1686,6 +1812,44 @@ Four rules replace it, and each one names what it fixes.
    — and anything this build has no opinion about falls through to a residual
    list rather than being dropped. The event registry is additive-only; a type
    a newer node publishes has to still render.
+
+   **A band entry is a query predicate, not a wish.** Every row these panels
+   sort came from one read — "this turn's events", which is `WHERE turn_id = ?`
+   — and that column is filled from the event's own `turn_id` *field*. So an
+   event type whose payload does not carry one can never be in the answer, and
+   naming it in a band is a promise the wire cannot keep. It fails **empty**,
+   which is the one way a panel cannot say it is broken: a turn that asked
+   three colleagues renders exactly like a turn that spoke to nobody. Eight
+   types were banded that way, and they split two ways once each was read
+   against its publisher.
+
+   **Four were the engine's omission, and were fixed there.** The loudest were
+   the three A2A audit records — *What else it did* advertised "colleagues" on
+   their behalf, and an ask had never once been drawn under that heading —
+   published from inside the asking turn's own tool loop by code already
+   holding its id. The fourth was a reflection worker stamping the turn id
+   onto every sibling record but not that one. All four carry `turn_id` and
+   `work_key` now and are back in their bands, so an ask finally appears on
+   the turn that made it.
+
+   **Four are facts about the event and stay out.** The scheduler's cron fire
+   is the *trigger* of a turn rather than work a turn did — it precedes every
+   turn id there could be, and the screen already renders it as the brief. Two
+   more are the records that say **no** turn ran at all. The last is the
+   curator promoting a skill off a cluster of many seats' turns, which names
+   none because there is no single right one to name.
+
+   The engine holds the line either way:
+   `internal/events/types/turnbands_client_test.go` reads the dashboard's own
+   declarations and fails the build both ways — on a band entry that can never
+   fill, and on a kept-out type that has since *gained* a `turn_id` and is
+   therefore ready to come back, which is how the four repairs above announced
+   themselves. It covers the **absorbed** map too, on the same terms and for
+   the same reason: those rows are drawn, in the inventory below, so a type
+   there that the query cannot return is a line that never appears. The one
+   exception is declared rather than assumed — the live progress event is
+   stream-only and in no table, which is a different fact from a repair
+   somebody owes, and is kept on a roster of its own that says so.
 
    A band is not a rendering, though, and *What the turn was given* was
    rendering half of its own. `prompt.size` — a row of integers per phase,
@@ -1712,19 +1876,33 @@ Four rules replace it, and each one names what it fixes.
    its own. Five fixed columns overflow a phone, which is what the sideways
    scroll on `.num-block` is for.
 
-   And then that half grew rule 1's own failure back. `turn_id|phase|iteration`
-   is the phase key, and the turn id **is** the work key, so a dispatch that is
-   re-delivered and re-run publishes a second measurement under a key that
-   already has one. Listed flat, a turn that ran five times drew ten
-   byte-identical rows — ONBOARDING, EXECUTE, ONBOARDING, EXECUTE — for two
-   facts and a count, and a repeated row with nothing to explain it reads as a
-   rendering fault rather than as news about the turn. One row per phase key
-   now, carrying the **last** run's figures with an `×N` beside the phase: a
-   mean is a prompt that was never sent, and the run that stands is the one
-   whose frame the phase actually reasoned in. The count's title names the
-   token range when the runs disagreed, because "they all measured the same"
-   and "the first four were bigger" are different facts about one turn, and
-   the range is the only thing the collapsed rows still had to say.
+   **One row per measurement**, and the phase key is deliberately not the
+   row's identity. This half used to collapse a repeated
+   `turn_id|phase|iteration` into one row with an `×N` chip, on the reading
+   that the turn id *was* the work key so a repeat meant the dispatch had been
+   re-delivered and that phase had run again. That has not been true since
+   [ADR-0017](https://github.com/crewlet/crewlet/blob/main/adr/0017-a-turn-id-names-one-run.md):
+   a run id is minted per dispatch, a redelivered trigger therefore runs under
+   a *different* turn id, and the turn query is `WHERE turn_id = ?` — so two
+   attempts land on two Turn screens, which is what the attempt banner at the
+   top of the page is for. A re-run cannot put two rows in this table at all.
+
+   What can is a **suspend**, which that ADR excludes by name: a detached
+   coding run re-enters the run that parked it. The executor publishes its
+   opening frame, parks mid-loop, and the resume re-enters the *same* phase at
+   the *same* iteration and publishes the parked conversation it sends
+   instead. Measured on a real suspend and resume, that pair is
+   `system=3,166 user=31 message=0 ~1,753 tokens` and
+   `system=0 user=0 message=3,329 ~1,814 tokens`. Collapsed it drew one row
+   reading `EXECUTE ×2`, System 0 B, User 0 B, over a tooltip saying the phase
+   "ran 2 times" and "ranged ~1,753–1,814 tokens" — and every clause of that
+   is false. The phase ran once; its opening carried 3,166 bytes of system
+   prompt, not zero; and the two figures are not a range of one quantity but
+   two different prompts, both sent and both billed, which is the whole of
+   what this panel is for. So both are drawn, in publish order, and the second
+   is marked **resumed** — which is also what makes its empty System and User
+   columns read as a fact about a re-entered phase rather than as a failed
+   render.
 
    The figures are **bytes**, and they said characters while carrying `len()`
    of a Go string. Nothing rounded it back — a byte formatter printed `24 KB`
@@ -1935,9 +2113,9 @@ thing somebody scans.
 `Meter` derived its tone from the fill alone — 75% caution, 100% critical —
 which is exactly right for a budget and exactly backwards for progress. A bar
 at 100% is two opposite pieces of news: a budget at 100% is refused charges, a
-goal at 100% is the goal reached. So a goal three-quarters of the way there
-rendered as a **warning**, and one fully achieved would have rendered as a
-**crisis**, on the one screen a founder reads to see how a quarter is going.
+completion bar at 100% is the thing finished. So progress three-quarters of the
+way there rendered as a **warning**, and fully achieved would have rendered as
+a **crisis**.
 
 `fullMeans` is therefore **required**, not defaulted. A default is the wrong
 answer half the time, silently — and the one call site that had noticed was
@@ -1947,7 +2125,10 @@ the shape a wrong default always leaves behind.
 - `spent` — a budget, a capacity, a quota. Full is bad and the bar warns
   before it gets there.
 - `achieved` — progress towards something wanted. Full is GOOD and says so;
-  nothing below it is a fault the bar can diagnose.
+  nothing below it is a fault the bar can diagnose. Nothing in the product
+  measures this today — the goals screen did, and it left with goals — which
+  is exactly why the prop stays required: the next progress bar has to state
+  its direction rather than inherit the budget ramp in silence.
 
 An explicit `tone` still wins, for what a caller knows and a ratio does not: a
 budget already refusing charges is critical at any fill.
@@ -2799,7 +2980,7 @@ to.
    structural fact and therefore an edge rather than a hue. A hand-rolled mark
    holding a robot glyph drew the KIND, which the roster gives at a glance, in
    the slot that should have been saying WHO: the same engineer was "FE" on the
-   board and an identical generic robot on Search and on a goal's Owners panel.
+   board and an identical generic robot on Search and on a project's Lead panel.
    `tone="brand"` is for the one badge that IS the reader, in the rail's own
    account row, and for nothing else.
 2. **No new colour, size, radius or spacing literal.** If a component needs

@@ -784,7 +784,27 @@ describe("every class the dashboard names", () => {
     const body = block![1]!;
     expect(body).toMatch(/display:\s*flex/);
     expect(body).toMatch(/flex-direction:\s*column/);
-    expect(body).toMatch(/gap:\s*var\(--space-\d+\)/);
+    // THE GAP IS THE COLUMN'S OWN, not merely a rung of the scale. What this
+    // test claims is that the panel KEEPS the rhythm its children lost, and
+    // `var(--space-\d+)` accepts every rung there is: set to `--space-1` the
+    // cards on every tabbed screen sit 4px apart instead of 24 and the shape
+    // assertion stays green, which is the butted-together failure the rule
+    // exists to prevent, just less obviously.
+    //
+    // So it is read off `.screen-inner` — the column these panels were lifted
+    // out of — rather than written here as a literal. Self-maintaining in both
+    // directions: change the page column's rhythm and the panel must follow,
+    // which is exactly and only what this test says.
+    // Anchored at the start of its own rule: `.screen[data-fill] > .screen-inner`
+    // is declared first and carries no gap, so an unanchored match reads the
+    // wrong box.
+    const column = /(?:^|\n)\.screen-inner\s*\{([^}]*)\}/.exec(stylesheets());
+    expect(column, ".screen-inner is not declared at all").not.toBeNull();
+    const rhythm = /gap:\s*(var\(--space-\d+\))/.exec(column![1]!);
+    expect(rhythm, ".screen-inner declares no gap to inherit the rhythm from").not.toBeNull();
+    expect(body, "the panel's rhythm must be the column's").toMatch(
+      new RegExp(`gap:\\s*${rhythm![1]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+    );
   });
 });
 

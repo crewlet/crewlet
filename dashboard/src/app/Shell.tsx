@@ -323,7 +323,7 @@ export function Shell({ children }: { children: ReactNode }) {
   // badge is not `answer.unread`.
   //
   // `unread` counts every notice on the page, and most of a busy company's
-  // notices are things it merely told you: a task you watch moved, a goal
+  // notices are things it merely told you: a task you watch moved, a project
   // you own was updated. Nobody answers those, so a badge built on them never
   // reaches zero however diligent the reader is — and a number that cannot go
   // down is read, correctly, as a broken counter. The PRIMARY half is the set

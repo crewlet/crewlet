@@ -5,7 +5,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
@@ -261,6 +260,25 @@ func CounterpartyJobs(c CounterpartyStore) []Job {
 	return []Job{Purge("counterparty_profiles", NodeLocal, CounterpartyRetention, c.Purge)}
 }
 
+// Channels is the half of the agent-to-agent surface this sweep drives.
+//
+// DECLARED HERE, by the caller, and narrowed to two methods — which is what
+// changed the shape of this job rather than only its type. It used to take
+// a2a.Store and call CloseIdle on it directly, and that method returns the
+// channels it closed precisely so its caller can announce them; this one threw
+// the list away, so a swept close was the one channel ending that published no
+// event at all. Closing is now asked of the SERVICE, which owns what a close
+// means on the wire, and internal/maintenance stays a scheduler of jobs rather
+// than a second author of event payloads. a2a.Service is the implementation.
+type Channels interface {
+	// SweepIdle closes every channel idle since before cutoff, announces
+	// each one, and reports how many it closed.
+	SweepIdle(ctx context.Context, cutoff time.Time) (int, error)
+
+	// Purge deletes channels closed before cutoff.
+	Purge(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
 // ChannelJobs is the sweep for agent-to-agent channels: close what nobody
 // answered, then delete what has been closed long enough.
 //
@@ -276,19 +294,23 @@ func CounterpartyJobs(c CounterpartyStore) []Job {
 // authorization record of an ask still waiting for its answer. Both halves are
 // therefore decisions, taken under the same singleton duty as every local
 // sweep. See coord.Channels and internal/store/schema/0012.
-func ChannelJobs(s a2a.Store) []Job {
-	if s == nil {
+func ChannelJobs(c Channels) []Job {
+	if c == nil {
 		return nil
 	}
 	return []Job{
 		{
+			// The CUTOFF is what this job acts on and the tick's `now` is
+			// not: the service reads its own clock for the close instant,
+			// so a channel's closed_at and the event's duration come from
+			// one reading rather than two.
 			Name: "a2a_channels_idle", Scope: Fleet, Horizon: ChannelIdleTimeout,
-			Run: func(ctx context.Context, now, cutoff time.Time) (int64, error) {
-				closed, err := s.CloseIdle(ctx, cutoff, now)
-				return int64(len(closed)), err
+			Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
+				closed, err := c.SweepIdle(ctx, cutoff)
+				return int64(closed), err
 			},
 		},
-		Purge("a2a_channels", Fleet, ChannelRetention, s.Purge),
+		Purge("a2a_channels", Fleet, ChannelRetention, c.Purge),
 	}
 }
 

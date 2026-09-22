@@ -226,7 +226,7 @@ describe("the Inbox rail badge", () => {
   //
   // It counted `answer.unread`, which is every notice on the page — and most of
   // a busy company's notices are things it merely told you: a task you watch
-  // moved, a goal you own was updated. Nobody answers those, so the number
+  // moved, a comment you were cc'd on landed. Nobody answers those, so the number
   // never reached zero however diligent the reader was, and a count that only
   // ever grows is the first thing that makes a read-only inbox read as broken.
   // The primary half is small by construction and goes down by answering.
@@ -235,7 +235,7 @@ describe("the Inbox rail badge", () => {
       [
         notice("assignee", false, 1), // unread AND primary — the one that counts
         notice("watcher", false, 2), // unread, not primary
-        notice("goal_owner", false, 3), // unread, not primary
+        notice("collaborator", false, 3), // unread, not primary
         notice("assignee", true, 4), // primary, already read
       ],
       ["assignee", "mention"],

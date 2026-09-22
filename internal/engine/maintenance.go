@@ -61,7 +61,27 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// channel from a closed one. Closing an idle ask and deleting a
 		// closed one are decisions, so they are taken under the same
 		// singleton duty as every other sweep rather than by a clock.
-		jobs = append(jobs, maintenance.ChannelJobs(a2a.NewCoordStore(fleet))...)
+		//
+		// The SERVICE rather than the store, because closing an idle
+		// channel publishes a2a_channel_closed and the publisher belongs
+		// to internal/a2a. Built here rather than taken from
+		// [Engine.a2aService], which needs a Company for its directory:
+		// the directory answers "is this handle an agent seat" and only
+		// [a2a.Service.Open] asks, so a sweep that never opens anything
+		// needs no epoch — and demanding one would tie the retention of a
+		// fleet-wide record to whether this node has applied a config.
+		if queue := e.backends.Queue; queue != nil {
+			svc, err := a2a.New(a2a.NewCoordStore(fleet), queue, a2a.Options{})
+			if err != nil {
+				// Logged rather than fatal, matching a2aService: a
+				// company whose channels are not swept is degraded,
+				// not down.
+				log.Warn("a2a_sweep_unavailable", "error", err,
+					"hint", "idle agent-to-agent channels will stay open")
+			} else {
+				jobs = append(jobs, maintenance.ChannelJobs(svc)...)
+			}
+		}
 		// The NATIVE backends' own records, on the same edge and for a
 		// related reason: their family holds several classes under one
 		// grammar, and only some of them age out — so no bucket age can

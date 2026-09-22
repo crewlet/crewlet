@@ -37,7 +37,7 @@ creates the project, on every node, with no gesture from anybody.
 
 What it does carry is what an agent company actually uses — a key, a type from
 a per-project catalogue, a status from a closed set of six in four groups, an
-assignee, a thread, a history, subtasks, tags, typed custom fields, goals,
+assignee, a thread, a history, subtasks, tags, typed custom fields,
 and saved views in three shapes. The line is between **structure a
 company records** and **process a tool enforces**: the first is here, the
 second is not. There is no gate that refuses a transition, no scheme that
@@ -79,7 +79,7 @@ which is why the field is not called `jira_project`.
 
 On the native backend a write does not go to a node's database. It is
 **published as a record** onto the domain's own log, on the subject of the
-object it changes — one task, one project, one goal — and the broker
+object it changes — one task, one project, one saved view — and the broker
 arbitrates: two writers racing on one task contend there and exactly one wins,
 while two writers on different tasks never contend at all. Every node then
 consumes that log in order and applies the same records into its own SQL

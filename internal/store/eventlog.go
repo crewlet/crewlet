@@ -336,9 +336,24 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	// completions [SpendFor] is scoped to. That function's subject is
 	// SPEND, so it reads one event type and returns nil for the rest — which
 	// is right for the rollup and wrong for identity: reading one turn means
-	// every row it touched, and a delivery, a tool call or an A2A ask carries
-	// a turn id without carrying a token count. Scoped to the column that is
-	// an identifier so a non-phase row cannot acquire a phase's numbers.
+	// every row it touched, and a tool skill loaded, a refused call, a
+	// prompt measurement or a coding run carries a turn id without carrying a
+	// token count. Scoped to the column that is an identifier so a non-phase
+	// row cannot acquire a phase's numbers.
+	//
+	// WHAT THIS CANNOT DO is give a turn id to an event that does not carry
+	// one. This reads the promoted TAG, which internal/store's own extractor
+	// pulls off the event's `turn_id` FIELD — so the scheduler's cron fire,
+	// a trigger the dispatcher declined to work, and every other payload
+	// with no such field write an empty column and cannot be read back by
+	// turn at all. The Turn screen's bands are held against exactly that in
+	// internal/events/types/turnbands_client_test.go.
+	//
+	// The A2A audit records used to be this comment's example and are no
+	// longer: internal/a2a stamps the publishing turn on all three, so an
+	// ask is now readable on the turn that made it. What replaced them as
+	// the example is the shape that cannot be repaired — an event published
+	// where no single turn is the right one to name.
 	if spend.TurnID == "" {
 		spend.TurnID = tags["turn_id"]
 	}

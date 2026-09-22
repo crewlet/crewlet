@@ -259,10 +259,6 @@ func (emptyWork) ExpandedQuery(_ context.Context, params map[string]any,
 	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
 }
 
-func (emptyWork) Goals(context.Context, tracker.GoalQuery) (tracker.GoalListing, error) {
-	return tracker.GoalListing{}, nil
-}
-
 func (emptyWork) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
 	return tracker.CatalogueAnswer{}, nil
 }

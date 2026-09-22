@@ -96,7 +96,6 @@ func operatorCatalogue() map[string]servedTool {
 			ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return &projectSpy{} },
 			PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return &personSpy{} },
 			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
-			GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
 			Inbox:           work,

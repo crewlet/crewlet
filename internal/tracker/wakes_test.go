@@ -27,9 +27,8 @@ func TestEveryChangeKindIsClassifiedAsTaskOrNot(t *testing.T) {
 	// The kinds that are NOT about a task's own routing. Everything else
 	// must be a task commit.
 	notTasks := map[tracker.ChangeKind]bool{
-		// The two object wakes, each routed off its own snapshot
-		// field rather than off a task's assignee or watchers.
-		tracker.ChangeGoalUpdated: true,
+		// The object wake, routed off its own snapshot field rather
+		// than off a task's assignee or watchers.
 		tracker.ChangePrioritised: true,
 
 		// Bookkeeping and surfaces of their own: a project's settings,
@@ -78,7 +77,7 @@ func TestEveryRoutableObjectRendersAPrompt(t *testing.T) {
 
 // A NON-TASK WAKE NEVER CALLS ITSELF A TASK, which is the failure lifting the
 // parser's gate alone would have produced: a fully rendered, non-empty,
-// actively wrong prompt — "**Task:** a task: goal_updated" with four steps
+// actively wrong prompt — "**Task:** a task: prioritised" with four steps
 // about moving the task to an active status — delivered to a real seat with no
 // error anywhere on the path.
 func TestANonTaskWakeIsNotRenderedAsATask(t *testing.T) {
@@ -88,7 +87,6 @@ func TestANonTaskWakeIsNotRenderedAsATask(t *testing.T) {
 		kind   tracker.ChangeKind
 		want   string
 	}{
-		"a goal":          {tracker.KindGoal, tracker.ChangeGoalUpdated, "**Goal:**"},
 		"a priority list": {tracker.KindPerson, tracker.ChangePrioritised, "**Your priorities:**"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -99,23 +97,13 @@ func TestANonTaskWakeIsNotRenderedAsATask(t *testing.T) {
 			if strings.Contains(body, "**Task:**") {
 				t.Errorf("%s rendered as a TASK:\n%s", name, body)
 			}
-			// AND IT NEVER SENDS THE SEAT TO get_work_item FOR ITSELF.
-			// A goal's uuid is not a task key, and a pointer at one
-			// costs the seat a round and a failed tool call to
-			// discover.
-			if tc.object != tracker.KindPerson &&
-				strings.Contains(body, tracker.GetWorkItemTool) {
-
-				t.Errorf("%s points at %s, which cannot resolve it:\n%s",
-					name, tracker.GetWorkItemTool, body)
-			}
 		})
 	}
 }
 
 // THE PRIORITISED WAKE NAMES THE TASK AND ASKS FOR AN ANSWER.
 //
-// It is the one Addressed wake of the three — the spec's "a seat starts it, or
+// It is the one Addressed non-task wake — the spec's "a seat starts it, or
 // says why not" — and Addressed is ENFORCED: the turn is sent back for more
 // rounds until a tool call delivered. A seat obliged to deliver on a task it
 // was never told the identity of is the worst shape this change could take.
@@ -145,9 +133,9 @@ func TestThePrioritisedWakeIsActionable(t *testing.T) {
 
 // A WAKE ABOUT A NON-TASK OBJECT KEYS ITS CONVERSATION ON THAT OBJECT.
 //
-// Falling through to an empty key would put every goal update in the company
-// into ONE ledger with every priorities write — a conversation key is what
-// separates threads, and a shared empty one merges them all.
+// Falling through to an empty key would put every priorities write in the
+// company into ONE ledger — a conversation key is what separates threads, and
+// a shared empty one merges them all.
 func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 	t.Parallel()
 	seen := map[string]string{}
@@ -187,12 +175,9 @@ func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 // task. A fixture that cannot represent the failure cannot catch it.
 func objectWake(object tracker.ObjectKind, kind tracker.ChangeKind) notify.Inbound {
 	if kind == "" {
-		switch object {
-		case tracker.KindGoal:
-			kind = tracker.ChangeGoalUpdated
-		case tracker.KindPerson:
+		if object == tracker.KindPerson {
 			kind = tracker.ChangePrioritised
-		default:
+		} else {
 			kind = tracker.ChangeStatus
 		}
 	}
@@ -215,10 +200,7 @@ func objectWake(object tracker.ObjectKind, kind tracker.ChangeKind) notify.Inbou
 }
 
 func reasonFor(kind tracker.ChangeKind) tracker.Reason {
-	switch kind {
-	case tracker.ChangeGoalUpdated:
-		return tracker.ReasonGoalOwner
-	case tracker.ChangePrioritised:
+	if kind == tracker.ChangePrioritised {
 		return tracker.ReasonPrioritised
 	}
 	return tracker.ReasonWatcher
@@ -227,7 +209,7 @@ func reasonFor(kind tracker.ChangeKind) tracker.Reason {
 // A ROUTABLE KIND AND A PROMPT FRAME ARE THE SAME SET, stated from the other
 // side: a kind the prompt can render and the parser drops is a wake nobody
 // receives, which is the state all of these were in.
-func TestTheRoutableSetIsExactlyTheThreeKinds(t *testing.T) {
+func TestTheRoutableSetIsExactlyTheTwoKinds(t *testing.T) {
 	t.Parallel()
 	var routable []tracker.ObjectKind
 	for _, kind := range tracker.ObjectKinds {
@@ -236,8 +218,7 @@ func TestTheRoutableSetIsExactlyTheThreeKinds(t *testing.T) {
 		}
 	}
 	want := []tracker.ObjectKind{
-		tracker.KindTask, tracker.KindProject,
-		tracker.KindGoal, tracker.KindPerson,
+		tracker.KindTask, tracker.KindProject, tracker.KindPerson,
 	}
 	want = slices.DeleteFunc(want, func(k tracker.ObjectKind) bool {
 		// A project's settings are read from describe_project rather
@@ -254,87 +235,6 @@ func TestTheRoutableSetIsExactlyTheThreeKinds(t *testing.T) {
 }
 
 // ---- what the writers actually publish ---------------------------------- //
-
-// A GOAL SAVE WAKES ITS OWNERS AND ITS MEMBERS — D11's rule, and the wake the
-// writer published as a literal nil for as long as the routing arm existed.
-func TestAGoalSaveWakesItsOwnersAndMembers(t *testing.T) {
-	r := newRoundTrip(t)
-	goal := tracker.Goal{
-		ID: "g-1", Name: "Ship the thing", Health: "on_track",
-		Owners: []string{"alice"}, Members: []string{"bob", "carol"},
-	}
-	if _, err := r.writer.WriteGoal(t.Context(), "op-goal", goal); err != nil {
-		t.Fatalf("write the goal: %v", err)
-	}
-	wake := r.lastWake()
-	if wake == nil {
-		t.Fatal("a goal save published no notification, so nobody who owns " +
-			"the outcome is ever told it moved")
-	}
-	if wake.Kind != tracker.ChangeGoalUpdated {
-		t.Fatalf("kind = %q, want %q", wake.Kind, tracker.ChangeGoalUpdated)
-	}
-	handles := candidateHandles(wake)
-	for _, who := range []string{"alice", "bob", "carol"} {
-		if !slices.Contains(handles, who) {
-			t.Errorf("%s is named on the goal and hears nothing: %v", who, handles)
-		}
-	}
-	if wake.Snapshot.GoalName != goal.Name {
-		t.Errorf("the wake does not carry the goal's name: %+v", wake.Snapshot)
-	}
-}
-
-// AND A SAVE THAT CHANGES NOTHING WAKES NOBODY. This verb is a whole
-// post-state replace, so a form that submits every control saves on every
-// submit — and eight owners paged for a no-op is how a company learns to
-// ignore the one that mattered.
-func TestARepeatedGoalSaveWakesNobody(t *testing.T) {
-	r := newRoundTrip(t)
-	goal := tracker.Goal{
-		ID: "g-1", Name: "Ship the thing", Health: "on_track",
-		Owners: []string{"alice"},
-	}
-	if _, err := r.writer.WriteGoal(t.Context(), "op-first", goal); err != nil {
-		t.Fatalf("first save: %v", err)
-	}
-	r.drain()
-	if _, err := r.writer.WriteGoal(t.Context(), "op-second", goal); err != nil {
-		t.Fatalf("second save: %v", err)
-	}
-	if wake := r.lastWake(); wake != nil {
-		t.Fatalf("a save that changed nothing woke %v", candidateHandles(wake))
-	}
-}
-
-// A HEALTH UPDATE IS THE ONE A GOAL'S OWNERS ACTUALLY NEED, and it can arrive
-// with no other field moving at all — so it has to count as a change on its
-// own, and its prose is what the card carries.
-func TestAGoalHealthUpdateCarriesItsProse(t *testing.T) {
-	r := newRoundTrip(t)
-	goal := tracker.Goal{
-		ID: "g-1", Name: "Ship the thing", Health: "on_track",
-		Owners: []string{"alice"},
-	}
-	if _, err := r.writer.WriteGoal(t.Context(), "op-first", goal); err != nil {
-		t.Fatalf("first save: %v", err)
-	}
-	r.drain()
-
-	goal.Updates = []tracker.GoalUpdate{{
-		Health: "at_risk", Text: "the vendor slipped a fortnight",
-	}}
-	if _, err := r.writer.WriteGoal(t.Context(), "op-update", goal); err != nil {
-		t.Fatalf("post an update: %v", err)
-	}
-	wake := r.lastWake()
-	if wake == nil {
-		t.Fatal("a health update woke nobody")
-	}
-	if !strings.Contains(wake.Excerpt, "vendor slipped") {
-		t.Errorf("the card does not carry what somebody wrote: %q", wake.Excerpt)
-	}
-}
 
 // WRITING SOMEBODY ELSE'S PRIORITIES WAKES THEM, and it is ADDRESSED: being
 // told what to do next by somebody above you is an instruction.
@@ -480,79 +380,6 @@ func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 	}
 }
 
-// A GOAL SAVE DOES NOT DESTROY ITS HEALTH HISTORY.
-//
-// A save is a whole post-state replace and `write_work_goal` builds its Goal
-// from the tool's own arguments, which carry no updates — so every save
-// through the only shipped surface wiped the entire history, silently, and
-// reported `outcome: applied`. The updates are the one part of a goal somebody
-// wrote in their own words, and the part the wake is about.
-func TestAGoalSaveKeepsItsUpdateHistory(t *testing.T) {
-	r := newRoundTrip(t)
-	goal := tracker.Goal{
-		ID: "g-1", Name: "Ship it", Health: "on_track", Owners: []string{"alice"},
-		Updates: []tracker.GoalUpdate{{Health: "on_track", Text: "week one fine"}},
-	}
-	if _, err := r.writer.WriteGoal(t.Context(), "op-1", goal); err != nil {
-		t.Fatalf("first save: %v", err)
-	}
-	r.drain()
-
-	// A LATER SAVE CARRYING NO UPDATES — which is every save the tool
-	// makes — must leave the history alone.
-	goal.Updates = nil
-	goal.Health = "at_risk"
-	if _, err := r.writer.WriteGoal(t.Context(), "op-2", goal); err != nil {
-		t.Fatalf("second save: %v", err)
-	}
-	r.drain()
-
-	got := r.goals(tracker.GoalQuery{ID: "g-1"})
-	if len(got.Goals) != 1 {
-		t.Fatalf("read back %d goals", len(got.Goals))
-	}
-	if len(got.Goals[0].Updates) != 1 {
-		t.Fatalf("the history is %v — a save with no updates destroyed what "+
-			"somebody wrote", got.Goals[0].Updates)
-	}
-	// AND THE READER SURFACES IT, which is what the wake tells a seat to
-	// go and read.
-	if got.Goals[0].Updates[0].Text != "week one fine" {
-		t.Errorf("the update's prose is %q", got.Goals[0].Updates[0].Text)
-	}
-	// AND THE AUTHOR AND INSTANT ARE THE WRITER'S, never the caller's.
-	if got.Goals[0].Updates[0].Author == "" {
-		t.Error("the update names no author, so a health assessment cannot " +
-			"be attributed to anybody")
-	}
-}
-
-// AND A NEW UPDATE APPENDS RATHER THAN REPLACING.
-func TestAGoalUpdateAppends(t *testing.T) {
-	r := newRoundTrip(t)
-	goal := tracker.Goal{
-		ID: "g-1", Name: "Ship it", Health: "on_track", Owners: []string{"alice"},
-		Updates: []tracker.GoalUpdate{{Health: "on_track", Text: "week one"}},
-	}
-	if _, err := r.writer.WriteGoal(t.Context(), "op-1", goal); err != nil {
-		t.Fatalf("first save: %v", err)
-	}
-	r.drain()
-	goal.Updates = []tracker.GoalUpdate{{Health: "at_risk", Text: "week two"}}
-	if _, err := r.writer.WriteGoal(t.Context(), "op-2", goal); err != nil {
-		t.Fatalf("second save: %v", err)
-	}
-	r.drain()
-
-	got := r.goals(tracker.GoalQuery{ID: "g-1"})
-	if len(got.Goals[0].Updates) != 2 {
-		t.Fatalf("the history is %v, want both updates", got.Goals[0].Updates)
-	}
-	if got.Goals[0].Updates[1].Text != "week two" {
-		t.Errorf("the newest update is %q", got.Goals[0].Updates[1].Text)
-	}
-}
-
 // AN EXCERPT SAYS WHEN IT WAS CUT, and the marker fits inside the cap.
 //
 // A card is the whole of what most recipients read, so a comment cut at
@@ -599,28 +426,6 @@ func TestALongExcerptIsMarkedAndStillFits(t *testing.T) {
 	}
 }
 
-// A GOAL UPDATE PAST ITS CAP IS REFUSED RATHER THAN CUT.
-//
-// The updates are the STORED value rather than a preview of one — there is
-// nowhere to go and read the rest — so cutting would silently discard the end
-// of somebody's assessment and leave them believing they had filed it.
-func TestAnOversizedGoalUpdateIsRefused(t *testing.T) {
-	r := newRoundTrip(t)
-	_, err := r.writer.WriteGoal(t.Context(), "op-goal", tracker.Goal{
-		ID: "g-1", Name: "Ship it", Owners: []string{"alice"},
-		Updates: []tracker.GoalUpdate{{
-			Health: "at_risk",
-			Text:   strings.Repeat("y", tracker.MaxGoalUpdateText+1),
-		}},
-	})
-	if err == nil {
-		t.Fatal("an oversized goal update was silently cut and stored")
-	}
-	if !strings.Contains(err.Error(), "at most") {
-		t.Errorf("the refusal does not name the cap: %v", err)
-	}
-}
-
 func clipForTest(s string) string {
 	if len(s) <= 80 {
 		return s
@@ -662,10 +467,9 @@ func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
 
 	moved := tracker.TaskDeltas(before, after)
 	for field, want := range map[string]tracker.Delta{
-		// THE WHOLE INSTANT, as a goal's own due and start deltas
-		// already carry: a day compares equal to itself whenever a
-		// move stays inside one, and it names the wrong day for any
-		// company that is not on UTC.
+		// THE WHOLE INSTANT: a day compares equal to itself
+		// whenever a move stays inside one, and it names the wrong
+		// day for any company that is not on UTC.
 		"due":      {From: "2031-04-16T00:00:00Z", To: "2031-04-23T00:00:00Z"},
 		"start":    {From: "", To: "2031-04-17T00:00:00Z"},
 		"estimate": {From: "90m", To: "120m"},

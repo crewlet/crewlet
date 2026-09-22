@@ -184,8 +184,7 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return a.applyCounter(ctx, tx, at)
 	case KindTask:
 		return a.applyTask(ctx, tx, at)
-	case KindProject, KindTags, KindCatalogue, KindView,
-		KindGoal, KindPerson:
+	case KindProject, KindTags, KindCatalogue, KindView, KindPerson:
 		return a.applyDocument(ctx, tx, at)
 	}
 	// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY BY WAY OF A RECORD

@@ -116,7 +116,7 @@ export function DateCell({ at, now }: { at?: string | null; now: number }) {
  * holding a robot or a person glyph — while the board, the list, the roster
  * and every chip drew `@crewlethq/ui`'s `Avatar`, a rounded square of
  * initials. So the same engineer was "FE" on the board and an identical
- * generic robot on Search and on a goal's Owners panel, and a reader scanning
+ * generic robot on Search and on a project's Lead panel, and a reader scanning
  * two surfaces for one person had nothing to scan FOR: every agent's mark was
  * the same drawing.
  *

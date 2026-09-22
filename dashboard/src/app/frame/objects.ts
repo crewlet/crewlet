@@ -22,7 +22,6 @@
 export type ObjectKind =
   | "item"
   | "project"
-  | "goal"
   | "seat"
   | "unit"
   | "page"
@@ -87,7 +86,6 @@ export interface KindSpec {
 export const KINDS: Record<ObjectKind, KindSpec> = {
   item: { label: "Item", pathOf: (id) => ["work", id], mono: true },
   project: { label: "Project", pathOf: (id) => ["work", id], mono: true },
-  goal: { label: "Goal", pathOf: (id) => ["goals", id] },
   seat: { label: "Seat", pathOf: (id) => ["company", "people", id], mono: true },
   unit: { label: "Unit", pathOf: (id) => ["company", "units", id] },
   page: {

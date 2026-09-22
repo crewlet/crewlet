@@ -299,17 +299,25 @@ const change = (over: Partial<WorkChange> = {}): WorkChange => ({
   ...over,
 });
 
-// A HISTORY ENTRY'S FIELDS ARE TWO SHAPES, and a renderer that assumed one
-// printed `[object Object]` on the other: the applier writes a from/to pair
-// where it can compare two documents, and the notification's own values —
-// plain scalars — where it cannot, which is every comment, mention and ask.
+// A HISTORY ENTRY'S FIELDS ARRIVE TYPED `Record<string, unknown>`, and a
+// renderer that assumed the shape printed `[object Object]` on the other one.
+//
+// THE BARE-VALUE ARM IS DEFENSIVE rather than a shape the engine writes —
+// `fields_json` is a `map[string]Delta` whose `From`/`To` carry no `omitempty`,
+// so every value this engine has ever written takes the PAIR arm. The case
+// that stood here asserted the bare arm with `mentions`, a key no build has
+// ever produced, AND with an empty context — under which `people()` and the
+// `default` passthrough return byte-identical strings. It could not fail: it
+// went on passing after `case "mentions"` was deleted. A real field name is
+// what makes the two arms distinguishable, because only then does the
+// translated value differ from the raw one.
 test("a history entry renders a delta pair and a bare value alike", () => {
   expect(describeHistory(change({ fields: { status: { from: "todo", to: "done" } } }), {})).toBe(
     "Status: To do → Done",
   );
-  expect(
-    describeHistory(change({ kind: "comment", fields: { mentions: ["ada", "bo"] } }), {}),
-  ).toBe("Mentions: ada, bo");
+  // The bare arm, exercised so it can FAIL: `status` is translated, so this
+  // reads "Done" where the passthrough default would read "done".
+  expect(describeHistory(change({ fields: { status: "done" } }), {})).toBe("Status: Done");
 });
 
 // ---------------------------------------------------------------------------

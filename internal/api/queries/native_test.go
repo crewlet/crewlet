@@ -32,8 +32,6 @@ type stubWork struct {
 	detail       tracker.TaskDetail
 	views        tracker.ViewQuery
 	listing      tracker.ViewListing
-	goalQuery    tracker.GoalQuery
-	goals        tracker.GoalListing
 	personQuery  tracker.PersonQuery
 	person       tracker.PersonState
 
@@ -106,11 +104,6 @@ func (s *stubWork) ExpandedQuery(_ context.Context, params map[string]any,
 	// than a filter, so a handler that dropped it would still return rows.
 	s.expandViewer = viewer
 	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
-}
-
-func (s *stubWork) Goals(_ context.Context, q tracker.GoalQuery) (tracker.GoalListing, error) {
-	s.goalQuery = q
-	return s.goals, s.err
 }
 
 func (s *stubWork) Catalogue(_ context.Context,
@@ -688,8 +681,6 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }},
 		{"work_views", map[string]any{"container": "workspace"},
 			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.views.Level }},
-		{"work_goals", map[string]any{},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.goalQuery.Level }},
 		{"work_catalogue", map[string]any{},
 			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.catalogueQuery.Level }},
 		{"work_person", map[string]any{"handle": "ana"},
@@ -849,9 +840,6 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.views.MaxLag, w.views.MaxLagSeq)
 			}},
-		{"work_goals", nil, func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-			return bounds(w.goalQuery.MaxLag, w.goalQuery.MaxLagSeq)
-		}},
 		{"work_catalogue", nil, func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 			return bounds(w.catalogueQuery.MaxLag, w.catalogueQuery.MaxLagSeq)
 		}},
@@ -931,7 +919,6 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
 		{"work_views", map[string]any{"container": "workspace"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.views.MinPosition }},
-		{"work_goals", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.goalQuery.MinPosition }},
 		{"work_catalogue", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.catalogueQuery.MinPosition }},
 		{"work_person", map[string]any{"handle": "ana"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.personQuery.MinPosition }},

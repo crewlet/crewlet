@@ -32,11 +32,58 @@
  * build has no opinion about falls through to REST rather than being dropped:
  * the event registry is additive-only and a type published by a newer node
  * must still render.
+ *
+ * # A BAND ENTRY IS A QUERY PREDICATE, NOT A WISH
+ *
+ * Every row these sets sort came from ONE read: `EventLog.Turn` in
+ * `internal/store/eventlog.go`, which is `WHERE turn_id = ?`. That column is
+ * filled from the event's own top-level `turn_id` FIELD — `store.ExtractTags`
+ * pulls it out of the marshalled envelope and `EventLog.Append` copies it
+ * across — so a payload that declares no `turn_id` key writes an empty column,
+ * never matches the predicate, and cannot reach this file however it is
+ * banded. Naming one here is not a rule about where it goes: it is a promise
+ * the wire cannot keep, and it fails EMPTY, which is the one way a panel
+ * cannot say it is broken.
+ *
+ * Eight types were named here that way. The three A2A audit records were the
+ * loudest, because the "What else it did" band advertised "colleagues" on
+ * their behalf and an A2A ask had never once appeared under it. The rest
+ * carried the same defect quietly: `task_assigned` is the SCHEDULER's cron
+ * fire, published before the turn it wakes exists; `turn_trigger_skipped` and
+ * `notification_skipped` are both records that NO turn ran; `skill_promoted`
+ * is the curator duty promoting a unit's skill across many turns; and
+ * `skill_telemetry_write_failed` was a reflection worker that held the turn id
+ * and did not stamp it.
+ *
+ * FOUR OF THE EIGHT WERE FIXED IN THE ENGINE rather than written off here, and
+ * they are back: `internal/a2a/service.go` now stamps the publishing turn on
+ * all three A2A records, and `internal/learning/skilluse.go` stamps the turn
+ * whose reflection attempted the counter write. The four still absent are the
+ * ones that describe no single turn, which no change to a payload can alter.
+ *
+ * `internal/events/types/turnbands_client_test.go` holds these sets against the
+ * frozen wire contract, in both directions — so a band entry that can never
+ * fill fails the build, and so does a kept-out type that GAINS a `turn_id` and
+ * is therefore ready to come back. The second direction is what made this
+ * repair land in one change instead of being noticed a release later.
  */
 
 import type { EventRecord } from "~/protocol/index.ts";
 
-export type Band = "went_wrong" | "given" | "did" | "left_behind" | "rest";
+/**
+ * Which question a row answers — the WHOLE taxonomy, `absorbed` inside it
+ * rather than beside it.
+ *
+ * This union was missing that member and the rule was therefore written
+ * twice. [bandOf] answered `rest` for every type in [ABSORBED] and [tellStory]
+ * short-circuited those same types into `Story.absorbed` before bandOf ever
+ * ran, so the two exported readers of one rule disagreed on all five of them:
+ * the screen filed a phase start as absorbed while the function called it
+ * residual, and nothing compared the two answers. A band a row can land in is
+ * a member of this union, or it is a second rule waiting to drift from the
+ * first.
+ */
+export type Band = "went_wrong" | "given" | "did" | "left_behind" | "absorbed" | "rest";
 
 /**
  * Types that are ALREADY on the screen in a better form, and are therefore not
@@ -58,12 +105,35 @@ export const ABSORBED: Record<string, string> = {
 };
 
 /**
+ * Where this row already is, in the words [ABSORBED] names it with — and the
+ * empty string for a row that is a row.
+ *
+ * ONE READER OF THE MAP, because there are two callers now and the second is a
+ * screen: [bandOf] asks whether a row is absorbed and the Turn screen asks
+ * where each absorbed row went. Written out at each site, the `in` check and
+ * the lookup are the same rule stated twice over a map whose own values are
+ * the answer.
+ */
+export function absorbedInto(event: EventRecord): string {
+  return Object.hasOwn(ABSORBED, event.type) ? (ABSORBED[event.type] ?? "") : "";
+}
+
+/**
  * The engine talking about something going wrong — a turn the engine stopped,
  * a chain that fell through, a guard that fired, a refusal.
  *
  * These are the rows the old panel's subtitle promised ("fallbacks, guard
  * breaches") and — until the events behind them were given a producer and a
- * turn id — could never actually contain.
+ * turn id — could never actually contain. Seven of the nine that claim carry:
+ * every one below publishes `turn_id`, which is what puts it in the answer
+ * this file sorts. `skill_telemetry_write_failed` is the seventh and the most
+ * recent, and it is here rather than on the roster because the engine stopped
+ * dropping the id rather than because the panel lowered its bar — the counter
+ * write that failed happened inside a turn's reflection, so the turn that used
+ * the skill is exactly where an operator goes looking for it. The two still
+ * absent are on the kept-out roster in
+ * `internal/events/types/turnbands_client_test.go`: a skipped trigger and a
+ * skipped notification are both records that NO turn ran.
  */
 const WENT_WRONG = new Set([
   "turn.guard_breach",
@@ -72,8 +142,6 @@ const WENT_WRONG = new Set([
   "provider_fallback",
   "phase.tool_skill_blocked",
   "sandbox_run_failed",
-  "turn_trigger_skipped",
-  "notification_skipped",
   "skill_telemetry_write_failed",
 ]);
 
@@ -94,7 +162,23 @@ export const TURN_STOP = new Set(["turn.guard_breach", "budget_exhausted", "llm_
 /** What the turn's prompt was assembled from, before the first phase ran. */
 const GIVEN = new Set(["prefetch_summary", "prompt.size"]);
 
-/** What the turn changed about the company, after its last phase. */
+/**
+ * What the turn changed about the company, after its last phase.
+ *
+ * `skill_promoted` is NOT here, although it is the reflection estate's own
+ * event and reads like one of these: the curator duty promotes a unit's skill
+ * off a cluster of many seats' turns, so it names no turn and there is no
+ * single right one to name. That is the same reason `skill_synthesized`
+ * carries an agent id and an empty turn id on its clustered path.
+ *
+ * `skill_revived` IS here, and it has the same two-producer shape as
+ * `skill_synthesized` rather than `skill_promoted`'s: the reflection worker
+ * revives a skill this turn was offered and stamps the turn, while the curator
+ * revives one an operator restored by hand and stamps nothing. Only the first
+ * can be in a turn's answer, which is the correct half — a skill coming back
+ * into use because this seat used it is something this turn changed about the
+ * company.
+ */
 const LEFT_BEHIND = new Set([
   "episode_written",
   "persist_decider_completed",
@@ -102,10 +186,32 @@ const LEFT_BEHIND = new Set([
   "reflection_completed",
   "skill_synthesized",
   "skill_refined",
-  "skill_promoted",
+  "skill_revived",
 ]);
 
-/** Work the turn did that is not a phase: a coding run, a delegation, a tool. */
+/**
+ * Work the turn did that is not a phase: a coding run, a delegation, a tool,
+ * and asking a colleague.
+ *
+ * THE COLLEAGUE ROWS ARE BACK, and what changed is the wire rather than this
+ * set. The three A2A audit records were named here for as long as this file
+ * has existed while carrying no `turn_id`, so an ask was never once drawn
+ * under this heading; they now carry the turn that published them
+ * (`internal/a2a/service.go`), which is what puts them in `EventLog.Turn`'s
+ * answer. One ask draws three rows — the channel, the brief, and the close —
+ * and that is the exchange rather than noise: the brief is the question this
+ * turn asked, and the close is the answer having arrived.
+ *
+ * A CLOSE WITH NO TURN BEHIND IT IS NOT ONE OF THESE. `a2a_channel_closed` has
+ * a second producer — the maintenance sweep reaping a channel nobody answered
+ * — which carries an empty turn id and therefore cannot be in any turn's
+ * answer. That is the band working rather than a hole in it: a swept close is
+ * precisely the statement that no turn finished.
+ *
+ * `task_assigned` was named here too and is a different mistake: it is the
+ * SCHEDULER's cron fire — the wake that starts a turn — rather than work a
+ * turn did. The trigger is already on this screen, as the brief.
+ */
 const DID = new Set([
   "sandbox_run_started",
   "sandbox_clarification_requested",
@@ -115,19 +221,34 @@ const DID = new Set([
   "a2a_channel_opened",
   "a2a_message_sent",
   "a2a_channel_closed",
-  "task_assigned",
 ]);
 
 /**
- * Which band a row belongs in.
+ * Which band a row belongs in — the ONE rule, and [tellStory] is a filing
+ * clerk over it rather than a second copy of it.
  *
- * A FAILED row is `went_wrong` whatever its type says. The failure taxonomy is
+ * A FAILED row is `went_wrong` whatever its SET says. The failure taxonomy is
  * the engine's (`events.Failed` — the type, the payload's own flag, or the
  * store's tag), and a sandbox run that came back failed is something that went
  * wrong on this turn even though `sandbox_run_completed` is ordinary work.
+ *
+ * ABSORPTION OUTRANKS EVEN THAT, which is the one precedence worth stating
+ * because it looks like an exception and is not: the destination draws the
+ * failure itself. A failed `agent_phase_completed` is a phase card carrying
+ * the engine's own error kind and its error text (`PhaseCard`), so banding it
+ * `went_wrong` as well would put a red row above the card that already says
+ * so, and add one to a count of problems that has not gained a problem.
+ *
+ * `Object.hasOwn`, NEVER `in`. Every key of `Object.prototype` answers `in` on
+ * an object literal — `"toString" in ABSORBED` is true — so an event type
+ * colliding with one would be absorbed to a destination that does not exist
+ * and vanish off the screen, which is exactly the silent drop this file's
+ * residual band exists to prevent. No type in `internal/events/types` collides
+ * today, so this is a hazard rather than an incident; it costs one call to
+ * make it neither.
  */
 export function bandOf(event: EventRecord): Band {
-  if (event.type in ABSORBED) return "rest";
+  if (absorbedInto(event)) return "absorbed";
   if (isFailed(event)) return "went_wrong";
   if (WENT_WRONG.has(event.type)) return "went_wrong";
   if (GIVEN.has(event.type)) return "given";
@@ -156,14 +277,39 @@ export interface Story {
   given: EventRecord[];
   did: EventRecord[];
   leftBehind: EventRecord[];
-  /** Everything this build has no opinion about, plus absorbed duplicates. */
+  /**
+   * Everything this build has no opinion about — and NOTHING absorbed.
+   *
+   * The two used to be one sentence here ("plus absorbed duplicates"), which
+   * no row has ever satisfied: [tellStory] has always filed an absorbed row
+   * under `absorbed`, so a reader of this doc looking for a phase start in
+   * the residual list was looking in the one band it can never be in.
+   */
   rest: EventRecord[];
-  /** The absorbed rows alone — counted, so the screen can say where they went
-      rather than leaving a reader to wonder why the numbers do not add up. */
+  /**
+   * The absorbed rows alone, so the screen can say where each went rather
+   * than leaving a reader to wonder why the numbers do not add up.
+   *
+   * Rendered by the Turn screen through [absorbedGroups] — which is what this
+   * field says and, until that panel existed, was not true: the value was
+   * built on every frame, asserted by this file's own test and read by no
+   * screen, so a turn's answer quietly lost twelve of its rows between the
+   * query and the page. A count nothing prints is indistinguishable from a
+   * row the store never returned.
+   */
   absorbed: EventRecord[];
 }
 
-/** Sort one turn's non-phase events into the story it tells. */
+/**
+ * Sort one turn's non-phase events into the story it tells.
+ *
+ * EVERY ROW GOES THROUGH [bandOf], including an absorbed one. This loop used
+ * to test [ABSORBED] itself and `continue` before the call, which made it a
+ * second implementation of the first line of that function — and the two
+ * answered differently, because bandOf called the same rows `rest`. One
+ * switch over one rule is what stops a band existing in one reader and not in
+ * the other.
+ */
 export function tellStory(events: readonly EventRecord[]): Story {
   const story: Story = {
     wentWrong: [],
@@ -174,11 +320,10 @@ export function tellStory(events: readonly EventRecord[]): Story {
     absorbed: [],
   };
   for (const event of events) {
-    if (event.type in ABSORBED) {
-      story.absorbed.push(event);
-      continue;
-    }
     switch (bandOf(event)) {
+      case "absorbed":
+        story.absorbed.push(event);
+        break;
       case "went_wrong":
         story.wentWrong.push(event);
         break;
@@ -198,8 +343,62 @@ export function tellStory(events: readonly EventRecord[]): Story {
   return story;
 }
 
+/** One absorbed TYPE, and how many rows of it this turn published. */
+export interface AbsorbedGroup {
+  type: string;
+  /** Where those rows already are, in [ABSORBED]'s own words. */
+  destination: string;
+  count: number;
+}
+
+/**
+ * What the absorbed rows were, and where each kind went — the inventory the
+ * Turn screen prints so a reader can check the claim this file makes.
+ *
+ * BY TYPE, NOT BY DESTINATION, because the destination is the claim and the
+ * type is what makes it checkable: two types share "the turn's header and
+ * record", and merged into one line a reader cannot tell which pair of
+ * records that stands for. It is also the only key [ABSORBED] is written in.
+ *
+ * ACROSS THE WHOLE TURN, which is the opposite of [collapseRuns] and for the
+ * reason that rule gives for its own shape: the axis of a BAND is time, so a
+ * repeat there may only merge with its neighbour. Nothing here prints an
+ * instant. A turn's phase starts and phase records interleave one for one, so
+ * a consecutive-only rule would report twelve groups of one and say nothing
+ * at all.
+ *
+ * A PURE FUNCTION OVER VALUES, like the rest of this file: handed a whole
+ * turn or handed `Story.absorbed`, it answers the same, because it files on
+ * [absorbedInto] rather than on where the caller got the rows.
+ */
+export function absorbedGroups(events: readonly EventRecord[]): AbsorbedGroup[] {
+  const out: AbsorbedGroup[] = [];
+  const seen = new Map<string, AbsorbedGroup>();
+  for (const event of events) {
+    const destination = absorbedInto(event);
+    if (!destination) continue;
+    const already = seen.get(event.type);
+    if (already) {
+      already.count += 1;
+      continue;
+    }
+    const group: AbsorbedGroup = { type: event.type, destination, count: 1 };
+    seen.set(event.type, group);
+    out.push(group);
+  }
+  return out;
+}
+
 /** One phase's final prompt, as the engine measured it. */
 export interface PromptWeight {
+  /**
+   * The measuring event's own id, because the phase key does NOT identify a
+   * row here — see [promptWeights]. A resumed executor publishes a second
+   * measurement under its own `phase|iteration`, so a list keyed on that pair
+   * has duplicate React keys and reconciles two different prompts onto one
+   * row.
+   */
+  id: string;
   phase: string;
   iteration: number;
   /** The engine's own approximation, over every character term below. */
@@ -227,13 +426,21 @@ export interface PromptWeight {
   toolBytes: number;
   toolCount: number;
   /**
-   * How many times this phase key was measured in this turn — 1 for every
-   * phase of a turn that ran once. See [promptWeights].
+   * This measurement is a phase RE-ENTERED rather than opened — the second
+   * half of an executor that parked on a detached coding run.
+   *
+   * Read off [messageBytes] rather than off a flag of its own, because the
+   * engine ships no flag and needs none: `PromptSize.MessageBytes` in
+   * internal/events/types/turn.go is "the conversation a RESUMED phase
+   * re-enters … and zero for a phase that opens one of its own", and the
+   * producer is the one call that passes a seed
+   * (internal/agent/runner/resume.go's `seed: state.Answer(answer)`).
+   *
+   * An older engine's row reads false, which is the safe direction: before
+   * the message term existed a resumed phase published nothing but zeros, so
+   * there is no measurement to label either way.
    */
-  runs: number;
-  /** The smallest and largest approximation across those runs. */
-  minTokens: number;
-  maxTokens: number;
+  resumed: boolean;
 }
 
 /**
@@ -254,73 +461,73 @@ export interface PromptWeight {
  * renders as a permanent zero instead of raising, which is why the tests
  * behind these fields assert a value only the engine could have produced.
  *
- * ONE ROW PER PHASE KEY, because `turn_id|phase|iteration` IS the phase key —
- * the same identity `agent_phase_started` and `agent_phase_completed` share,
- * and the one this screen was rebuilt around. A measurement is published once
- * per phase RUN, so a second row under one key does not mean a second phase:
- * it means that phase ran again, which happens when a turn's whole dispatch is
- * re-delivered and re-run under its work key (the turn id IS the work key —
- * see `runnerTurn` in internal/engine/telemetry.go).
+ * ONE ROW PER MEASUREMENT, and the phase key is NOT the row's identity —
+ * which is the opposite of what this function used to do, on a premise the Go
+ * source contradicts twice over.
  *
- * Listed flat, those re-runs were the screen's own worst habit back again. A
- * turn that ran five times drew ten rows — ONBOARDING, EXECUTE, ONBOARDING,
- * EXECUTE, five times over, byte-identical — for two facts and a count, and
- * an identical row repeated with nothing to explain it reads as a rendering
- * fault rather than as news about the turn. The count is the news, so the
- * count is what is drawn.
+ * The premise was that `turn_id|phase|iteration` is unique per measurement, so
+ * a second row under one key had to be that phase RUNNING AGAIN after the
+ * turn's dispatch was re-delivered — "the turn id IS the work key". It is not,
+ * and has not been since `adr/0017`: `runnerTurn` in
+ * internal/engine/telemetry.go opens with "TWO IDENTITIES, NEVER ONE", the run
+ * id is minted per dispatch (`newRunID()` in internal/engine/turn.go) and the
+ * work key is the trigger's digest. So a re-delivered trigger runs under a
+ * DIFFERENT turn id, `EventLog.Turn` is `WHERE turn_id = ?`, and the two
+ * attempts land on two Turn screens — which is exactly what `TurnView.attempt`
+ * is for. A re-run cannot reach this function at all.
  *
- * THE LAST RUN'S FIGURES, not the first and not a mean. A mean is a prompt
- * that was never sent, and the run that stands is the one whose frame the
- * phase actually reasoned in — the four that preceded it measured a prompt
- * the turn then threw away. The range rides along so a reader can see that
- * the earlier ones differed at all, which is the only thing the discarded
- * rows still had to say.
+ * What CAN put two measurements under one key is a SUSPEND, which is not a
+ * re-run and is explicitly excluded from that ADR ("a detached coding run
+ * re-enters the run that parked it, keeping the id from its own row"). The
+ * executor parks mid-loop on `run_sandbox`, having already published its
+ * opening measurement from `emit.started`; minutes or days later
+ * `Runner.Resume` re-enters the SAME phase at the SAME iteration
+ * (internal/agent/runner/resume.go: `phase: phase.Execute, iteration:
+ * state.Round`) and publishes a second one. Measured on a real suspend and
+ * resume, the pair is:
  *
- * Keys come back in the order they were first published, so a self-iterating
- * turn's rounds read down the page beside the phases they belong to.
+ *     execute|1  system=3166 user=31 message=0     tool=3815  ~1753 tokens
+ *     execute|1  system=0    user=0  message=3329  tool=3929  ~1814 tokens
+ *
+ * Collapsed, that drew ONE row reading `×2`, System 0 B, User 0 B and a
+ * tooltip saying the phase "ran 2 times" and "ranged ~1,753–1,814 tokens".
+ * Every clause of it is false. The phase ran once. Its opening frame was
+ * 3,166 bytes of system prompt, not zero. And the two figures are not a range
+ * of one quantity — they are two different prompts, both actually sent and
+ * both actually billed, which is precisely what this panel exists to show.
+ *
+ * So both are drawn, in publish order, and the re-entry is marked rather than
+ * merged — see [PromptWeight.resumed]. The old shape's own justification (a
+ * turn that "ran five times" drawing ten byte-identical rows) was a
+ * screenshot from before the identity split, and the split is what fixed it,
+ * at the source. Collapsing here was the band-aid left behind.
  */
 export function promptWeights(events: readonly EventRecord[]): PromptWeight[] {
-  const byKey = new Map<string, PromptWeight>();
+  const out: PromptWeight[] = [];
   for (const event of events) {
     if (event.type !== "prompt.size") continue;
     const p = event.payload as Record<string, unknown> | undefined;
     if (!p) continue;
-    const tokens = Number(p.approximate_tokens ?? 0);
-    const row: PromptWeight = {
+    // ONE KEY EACH, never a both-spellings chain. The wire key never moved,
+    // so there is no second spelling to accept — and a `??` would not have
+    // rescued one anyway: scalars in the catalogue carry no omitempty, so a
+    // relayed event asserts `0` rather than omitting the key, and `??` does
+    // not fall through on 0.
+    const messageBytes = Number(p.message_chars ?? 0);
+    out.push({
+      id: event.id,
       phase: String(p.phase ?? ""),
       iteration: Number(p.iteration ?? 0),
-      approximateTokens: tokens,
-      // ONE KEY EACH, never a both-spellings chain. The wire key never
-      // moved, so there is no second spelling to accept — and a `??` would
-      // not have rescued one anyway: scalars in the catalogue carry no
-      // omitempty, so a relayed event asserts `0` rather than omitting the
-      // key, and `??` does not fall through on 0.
+      approximateTokens: Number(p.approximate_tokens ?? 0),
       systemBytes: Number(p.system_chars ?? 0),
       userBytes: Number(p.user_chars ?? 0),
-      messageBytes: Number(p.message_chars ?? 0),
+      messageBytes,
       toolBytes: Number(p.tool_chars ?? 0),
       toolCount: Number(p.tool_count ?? 0),
-      runs: 1,
-      minTokens: tokens,
-      maxTokens: tokens,
-    };
-    const key = `${row.phase}|${row.iteration}`;
-    const seen = byKey.get(key);
-    if (!seen) {
-      byKey.set(key, row);
-      continue;
-    }
-    // REPLACED, not merged: every figure on the row is the last run's, and
-    // only the count and the range carry what the earlier ones said. Set
-    // rather than deleted-and-set, so the key keeps its first-seen position.
-    byKey.set(key, {
-      ...row,
-      runs: seen.runs + 1,
-      minTokens: Math.min(seen.minTokens, tokens),
-      maxTokens: Math.max(seen.maxTokens, tokens),
+      resumed: messageBytes > 0,
     });
   }
-  return [...byKey.values()];
+  return out;
 }
 
 /** One prefetch block: what it is called, whether it hit, and how big it was. */

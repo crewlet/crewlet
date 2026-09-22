@@ -43,28 +43,17 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     : { label: head };
 
   const rest = path.slice(1);
-  if (rest.length === 0) {
-    // A WORKSPACE OWNS MORE THAN ONE FIRST SEGMENT in one case — Work owns
-    // `goals` as well as `work` — and the trail has to name which of them the
-    // reader is on. Without this `#/goals` read "Work", so the goals list and
-    // the board were indistinguishable in the page bar and in the tab title.
-    const own = DESTINATIONS.find(
-      (d) => d.path.length === 1 && d.path[0] === head && d.workspace === workspace,
-    );
-    return own && head !== row?.path[0]
-      ? [{ ...root, path: row?.path }, { label: own.label }]
-      : [root];
-  }
+  // EVERY WORKSPACE OWNS EXACTLY ONE FIRST SEGMENT, so a landing page is one
+  // crumb. Work owned a second — `goals` — until goals left the tracker, and
+  // the trail had to name which of them the reader was on: without that
+  // `#/goals` read "Work", and the goals list and the board were
+  // indistinguishable in the page bar and in the tab title. A workspace given
+  // a second segment again needs that branch back.
+  if (rest.length === 0) return [root];
 
   switch (head) {
     case "work":
       return [root, ...workCrumbs(rest, labels)];
-    case "goals":
-      return [
-        { label: "Work", path: ["work"] },
-        { label: "Goals", path: ["goals"] },
-        { label: named(labels, rest[0] ?? "") },
-      ];
     case "company":
       return [root, ...companyCrumbs(rest, labels)];
     case "chat":

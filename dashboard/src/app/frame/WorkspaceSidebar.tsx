@@ -153,8 +153,8 @@ function compatible(row: SidebarRow, route: { path: string[]; query: URLSearchPa
  * about itself cannot make it: every compatible row answers yes, and the frame
  * spends the accent and writes `aria-current="page"` once per yes. More than one
  * section holds the same destination BY DESIGN — a project the reader starred is
- * under Starred and under Projects, a goal they opened is under Recent and under
- * Goals, and Activity's `Turns` row sits above eight seat rows that are the same
+ * under Starred and under Projects, a view they opened is under Recent and under
+ * Saved views, and Activity's `Turns` row sits above eight seat rows that are the same
  * path with a query.
  *
  * DEDUPING THE SECTIONS IS THE OBVIOUS ALTERNATIVE AND IT IS WRONG. A star is a

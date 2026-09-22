@@ -221,8 +221,6 @@ const MaxRoutingRows = MaxWatchers + // watchers
 	MaxDependents + // dependents
 	MaxThreadParticipants +
 	MaxChecklists + // checklist_assignees
-	MaxGoalOwners +
-	MaxGoalMembers +
 	MaxMentions +
 	16 // the role handles, which have no cap of their own
 

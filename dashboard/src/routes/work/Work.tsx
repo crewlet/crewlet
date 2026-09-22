@@ -436,14 +436,9 @@ export function Work({ project = "" }: { project?: string }) {
           // tracker, so they are middle-clickable like every other way out of
           // a screen, and they go through the router's own history rules
           // instead of around them.
-          <>
-            <a className="t-link" href={href(["me"])}>
-              My work →
-            </a>
-            <a className="t-link" href={href(["goals"])}>
-              Goals →
-            </a>
-          </>
+          <a className="t-link" href={href(["me"])}>
+            My work →
+          </a>
         }
       </PageActions>
       <PageNote>

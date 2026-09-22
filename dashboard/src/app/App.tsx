@@ -30,7 +30,6 @@ import { useRoute } from "./router.tsx";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { Chat } from "~/routes/chat/Chat.tsx";
 import { MyWork } from "~/routes/me/MyWork.tsx";
-import { Goal, Goals } from "~/routes/work/Goals.tsx";
 import { People } from "~/routes/company/People.tsx";
 import { SeatScreen } from "~/routes/company/Seat.tsx";
 import { CompanyScreen, UnitScreen } from "~/routes/company/Company.tsx";
@@ -213,8 +212,6 @@ function Screen() {
       return <Chat channel={rest[0] ?? ""} />;
     case "work":
       return <WorkRoutes rest={rest} />;
-    case "goals":
-      return rest[0] ? <Goal key={rest[0]} id={rest[0]} /> : <Goals />;
     case "company":
       return <CompanyRoutes rest={rest} />;
     case "knowledge":

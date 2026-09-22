@@ -20,7 +20,7 @@ import "slices"
 // Reason is why one handle hears about a change.
 type Reason string
 
-// The nineteen reasons, as they are written onto the log and into
+// The eighteen reasons, as they are written onto the log and into
 // `tracker_notifications`.
 //
 // THIS ORDER IS NOT THE PRECEDENCE — [Reasons] is, and it deliberately differs.
@@ -41,14 +41,13 @@ const (
 	ReasonParentAssignee Reason = "parent_assignee"
 	ReasonChecklist      Reason = "checklist"
 	ReasonCollaborator   Reason = "collaborator"
-	ReasonGoalOwner      Reason = "goal_owner"
 	ReasonWatcher        Reason = "watcher"
 	ReasonUnwatched      Reason = "unwatched"
 	ReasonPurged         Reason = "purged"
 	ReasonLeadFallback   Reason = "lead_fallback"
 )
 
-// Reasons are the nineteen, IN PRECEDENCE ORDER.
+// Reasons are the eighteen, IN PRECEDENCE ORDER.
 //
 // THE ORDER IS THE RULE: the first reason that names a handle is the one that
 // handle hears under, and every later one for the same handle is dropped. A
@@ -65,7 +64,7 @@ var Reasons = []Reason{
 	ReasonMention, ReasonPrioritised, ReasonBlocking, ReasonAsked,
 	ReasonAnswered, ReasonAssignee, ReasonUnassigned, ReasonReporter,
 	ReasonThread, ReasonUnblocked, ReasonRoutedTo, ReasonParentAssignee,
-	ReasonChecklist, ReasonCollaborator, ReasonGoalOwner,
+	ReasonChecklist, ReasonCollaborator,
 	ReasonWatcher, ReasonUnwatched, ReasonPurged, ReasonLeadFallback,
 }
 
@@ -237,10 +236,6 @@ func Candidates(n *Notify, batched bool) []Candidate {
 	}
 	if task {
 		addAll(n.Snapshot.Collaborators, ReasonCollaborator, false)
-	}
-	if n.Kind == ChangeGoalUpdated {
-		addAll(n.Snapshot.GoalOwners, ReasonGoalOwner, false)
-		addAll(n.Snapshot.GoalMembers, ReasonGoalOwner, false)
 	}
 	if task {
 		addAll(n.Snapshot.Watchers, ReasonWatcher, false)

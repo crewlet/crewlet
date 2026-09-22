@@ -38,7 +38,7 @@
  *
  * # The reason is the opening fact of every notice
  *
- * The applier records, per change and per recipient, the ONE reason of twenty
+ * The applier records, per change and per recipient, the ONE reason of eighteen
  * under which that person heard about it. Nothing has ever drawn it, and it is
  * the fact no commercial tracker keeps: Linear, Jira and ClickUp can all tell
  * you that you were notified, and none can tell you why.
@@ -201,7 +201,7 @@ export function Inbox() {
   );
 
   // EVERY REASON THAT IS ACTUALLY ON THE PAGE, so the filter offers what the
-  // person has rather than the whole vocabulary of twenty.
+  // person has rather than the whole vocabulary of eighteen.
   //
   // TWO RULES, AND BOTH ARE ABOUT THE CHIPS NOT MOVING:
   //
@@ -300,7 +300,7 @@ export function Inbox() {
             <Band
               title="Notices"
               count={inbox.data ? notices.length : null}
-              note="What reached you, and the one reason of nineteen it reached you under."
+              note="What reached you, and the one reason of eighteen it reached you under."
               controls={
                 /* THREE SCOPES, EXACTLY ONE CHOSEN. As a facet rail this could
                    carry no count on any data — "All" and "Snoozed" are rows this
