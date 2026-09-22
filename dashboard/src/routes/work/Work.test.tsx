@@ -1054,3 +1054,50 @@ test("a container with no default view opens on the list", async () => {
   expect(container.querySelector(".work-board")).toBeNull();
 });
 
+// A BOARD IS THE WORKFLOW, NOT THE OCCUPIED PART OF IT. The engine's grouping
+// is a plain GROUP BY — one entry per value PRESENT — so the one-item company
+// drew a single lane and the comparison a board exists for had no denominator.
+// The declared lanes are the screen's, narrowed to what the scope admits.
+test("a board draws every declared lane the scope admits, and says which are empty", async () => {
+  location.hash = "#/work?shape=board";
+  serving({
+    work_items: {
+      items: [],
+      groups: [{ key: "todo", count: 1, rows: [row("1")] }],
+      total_hint: 1,
+      complete: true,
+    },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-board")).toBeTruthy());
+  const heads = [...container.querySelectorAll(".work-col-head")].map((el) => el.textContent ?? "");
+  expect(heads.length).toBe(3);
+  expect(heads[0]).toContain("To do");
+  expect(heads[1]).toContain("In progress");
+  expect(heads[2]).toContain("In review");
+  // A ZERO LANE CARRIES ITS OWN COUNT and says it is empty, rather than being a
+  // heading over nothing.
+  expect(heads[1]).toContain("0");
+  expect(container.querySelectorAll(".work-col-empty").length).toBe(2);
+  // AND NO DEAD DONE LANE: the Open segment's query cannot return one, so
+  // drawing it would be a column the reader can never fill from here.
+  expect(heads.some((head) => head.includes("Done"))).toBe(false);
+});
+
+// AN OPEN SET IS NOT A BOARD. A lane per possible assignee is every handle the
+// company could ever hold, so an assignee board is still the answer's own.
+test("an assignee board draws only the columns the answer carried", async () => {
+  location.hash = "#/work?shape=board&group_by=assignee";
+  serving({
+    work_items: {
+      items: [],
+      groups: [{ key: "ada", count: 1, rows: [row("1", { assignee: "ada" })] }],
+      total_hint: 1,
+      complete: true,
+    },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-board")).toBeTruthy());
+  expect(container.querySelectorAll(".work-col-head").length).toBe(1);
+});
+

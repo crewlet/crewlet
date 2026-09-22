@@ -681,10 +681,14 @@ screens rather than one:
   is one press away. Two menus decide what is on the list and how it is drawn —
   **Filter** adds a narrowing, and each one is a removable chip under the bar;
   **Display** holds the shape (list, board, table, calendar, timeline), the
-  grouping, the order and, on a table, the columns. The trash is a filter here
-  rather than a tab, which is what the engine says it is: a listing carrying
-  `removed=true`. The strip above the bar holds the views somebody SAVED, never
-  the five shapes.
+  grouping, the order and, on a table, the columns. Grouped on a status, a
+  status group or a priority, the board and the list draw every value the
+  company declares and say which of them are empty, because those three are
+  closed sets whose order means something; grouped on an assignee, a tag or a
+  label they draw only the values work is actually in. The trash is a filter
+  here rather than a tab, which is what the engine says it is: a listing
+  carrying `removed=true`. The strip above the bar holds the views somebody
+  SAVED, never the five shapes.
 - **Projects** (`#/work/projects`) is the directory: every project with its
   lead, the unit that owns it, its three maintained counts, how far along it is
   and when its work last changed.

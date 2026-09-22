@@ -120,6 +120,15 @@ export function List({
                 selected={selected}
               />
             )}
+            {/* AN EMPTY BAND IS STILL A BAND, and it says it is empty. On a
+                closed-set axis the answer is padded to every declared value
+                (`lib/work.ts`'s `padGroups`), so a band with no rows is a real
+                state of this shape rather than an impossible one — and a
+                heading over nothing at all reads as rows that failed to
+                arrive. The same sentence the board's own lanes carry. */}
+            {group.rows.length === 0 && !group.subgroups?.length && (
+              <div className="work-band-empty">Nothing here</div>
+            )}
             {group.count > group.rows.length && !group.subgroups?.length && (
               <div className="work-band-foot">
                 <a

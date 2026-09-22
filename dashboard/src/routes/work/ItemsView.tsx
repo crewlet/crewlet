@@ -64,6 +64,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import {
   anyFilter,
+  asScope,
   buildItemsParams,
   calendarWeeks,
   countedLabel,
@@ -75,6 +76,7 @@ import {
   filterPatchForGroup,
   gridRange,
   monthOrNow,
+  padGroups,
   seededScope,
   shapeOf,
   shownRows,
@@ -186,7 +188,11 @@ export function ItemsView({ project = "" }: { project?: string }) {
   // from the view is what makes the two agree.
   const viewOwn = useMemo(() => viewParams(chosenView, views), [chosenView, views]);
   const viewScope = seededScope(viewOwn);
-  const [scope, setScope] = useParam("scope", viewScope);
+  // ONE READING OF THE SEGMENT for the control, the query, the lanes and the
+  // empty state — see [asScope] for what a hand-edited value did to the four of
+  // them separately.
+  const [scopeKey, setScope] = useParam("scope", viewScope);
+  const scope = asScope(scopeKey);
 
   // WHAT THE ARRANGEMENT ACTUALLY IS, which is not what the address holds: a
   // saved view carries its own `group_by`, `group_by2` and `sort`, and the URL
@@ -266,14 +272,41 @@ export function ItemsView({ project = "" }: { project?: string }) {
   const removals = useMemo(() => removalsOf(tombRecords), [tombRecords]);
   const purges = useMemo(() => tombRecords.filter((r) => r.kind === "purged"), [tombRecords]);
 
-  const groups = useMemo(() => data?.groups ?? [], [data]);
+  // THE ANSWER'S OWN COLUMNS, before anything is added to them. Everything
+  // that asks "did this question return work?" reads these: a padded lane is a
+  // drawing, and an emptiness derived from one would report a company with no
+  // work at all as a populated board.
+  const answered = useMemo(() => data?.groups ?? [], [data]);
   const rows = useMemo(() => data?.items ?? [], [data]);
   // WHAT `[` AND `]` WALK: the rows this list actually loaded, sorted and
   // filtered as the reader left them. Published rather than handed to the
   // rail, because only the list knows that order — see `PeekHost`.
   const neighbours = useMemo(() => rows.map((r) => ({ kind: "item" as const, id: r.key })), [rows]);
   usePeekNeighbours(neighbours);
-  const shown = useMemo(() => shownRows(rows, groups), [rows, groups]);
+  const shown = useMemo(() => shownRows(rows, answered), [rows, answered]);
+
+  // THE DECLARED LANES, ADDED ONCE AND BEFORE ANY SHAPE SEES THEM — so the
+  // board and whichever renderer draws bands get the same columns rather than
+  // each deciding for itself what a missing status means. See [padGroups] for
+  // why a board is the workflow rather than the occupied part of it; the axis
+  // and the narrowing are read off the params that were actually SENT, for the
+  // reason every other derivation here is (a saved view carries its own
+  // `group_by`, which `buildItemsParams` resolves).
+  const groups = useMemo(
+    () =>
+      padGroups({
+        axis: String(params.group_by ?? ""),
+        groups: answered,
+        scope,
+        // PRESENCE, NOT TRUTH, and read off the params that were SENT: `""` is
+        // the unset column, and a query narrowed to it has one lane exactly as
+        // a named one does. Spelled `String(params.group ?? "")` this suppressed
+        // every board's padding, because an absent key read as the unset column.
+        group: "group" in params ? String(params.group ?? "") : undefined,
+        statuses: detail?.statuses,
+      }),
+    [answered, params, scope, detail?.statuses],
+  );
 
   const chrome: RowChrome = {
     seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,

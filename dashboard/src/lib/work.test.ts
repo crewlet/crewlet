@@ -13,6 +13,8 @@ import { expect, test } from "vitest";
 // carrying its own copy of the glyph goes green on whatever is written.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  SCOPES,
+  STATUSES,
   TYPE_ICON,
   totalHint,
   anyFilter,
@@ -51,6 +53,7 @@ import {
   typeIcon,
   typeName,
   type LabelContext,
+  type Scope,
   countedLabel,
   dayLabel,
   monthOrNow,
@@ -1168,6 +1171,147 @@ test("an axis names its own empty key", () => {
   expect(axisLabel("assignee", "")).toBe("Unassigned");
   expect(axisLabel("tag", "")).toBe("Untagged");
   expect(axisLabel("status", "")).toBe("No status");
+});
+
+// ---------------------------------------------------------------------------
+// The declared lanes
+// ---------------------------------------------------------------------------
+
+/** What a padded answer looks like from the outside: the keys and the counts. */
+const lanes = (groups: WorkGroup[]) => groups.map((g) => `${g.key}:${g.count}`);
+
+// A BOARD IS THE WORKFLOW, NOT THE OCCUPIED PART OF IT. The engine's grouping
+// is a plain GROUP BY — one entry per distinct value PRESENT — so a one-item
+// company drew one lane in a 1500px field, and the comparison a board exists
+// for had no denominator.
+test("a closed-set axis draws every declared value the scope admits, in order", () => {
+  const cases: {
+    axis: string;
+    scope: Scope;
+    groups: WorkGroup[];
+    want: string[];
+  }[] = [
+    // OPEN DRAWS NO DEAD DONE LANE: the query it describes cannot return one.
+    {
+      axis: "status",
+      scope: "open",
+      groups: [group("todo", { count: 1, rows: [row("1")] })],
+      want: ["todo:1", "in_progress:0", "in_review:0"],
+    },
+    // AND CLOSED DRAWS THE THREE FINISHED ONES, which is the other half of the
+    // same mapping — `done` and `cancelled` are both the `done` group.
+    {
+      axis: "status",
+      scope: "closed",
+      groups: [],
+      want: ["done:0", "cancelled:0", "closed:0"],
+    },
+    { axis: "status", scope: "all", groups: [], want: STATUSES.map((s) => `${s.value}:0`) },
+    // THE GROUP AXIS IS NARROWED BY THE SAME KEY it is drawn from.
+    { axis: "status_group", scope: "open", groups: [], want: ["not_started:0", "active:0"] },
+    { axis: "status_group", scope: "closed", groups: [], want: ["done:0", "closed:0"] },
+    { axis: "status_group", scope: "all", groups: [], want: STATUS_GROUPS.map((g) => `${g}:0`) },
+    // A PRIORITY IS ORTHOGONAL TO A STATUS, so no scope narrows it.
+    {
+      axis: "priority",
+      scope: "open",
+      groups: [group("urgent", { count: 3 })],
+      want: ["none:0", "low:0", "normal:0", "high:0", "urgent:3"],
+    },
+  ];
+  for (const c of cases) {
+    expect(lanes(padGroups({ axis: c.axis, groups: c.groups, scope: c.scope })), c.axis).toEqual(
+      c.want,
+    );
+  }
+});
+
+// THE ENGINE'S OWN ANSWER SURVIVES THE MERGE. A pad that rebuilt a lane would
+// draw a heading over rows it had thrown away — the one thing this must never
+// do — so a declared value the answer carries is the answer's own object.
+test("padding keeps the engine's counts, rows and subgroups on the lanes it has", () => {
+  const answered = group("in_progress", {
+    count: 400,
+    rows: [row("1"), row("2")],
+    subgroups: [group("ada", { count: 2 })],
+  });
+  const padded = padGroups({ axis: "status", groups: [answered], scope: "open" });
+  const found = padded.find((g) => g.key === "in_progress");
+  expect(found).toBe(answered);
+  expect(found?.count).toBe(400);
+  expect(found?.rows.map((r) => r.key)).toEqual(["ENG-1", "ENG-2"]);
+  expect(found?.subgroups?.length).toBe(1);
+});
+
+// A KEY THE DECLARATION DOES NOT NAME IS KEPT, at the end. The empty key is a
+// real column ("No status"), and a newer peer may write a status this build has
+// never heard of — dropping either would hide rows.
+test("a lane the declaration does not name survives, after the declared ones", () => {
+  const padded = padGroups({
+    axis: "status",
+    scope: "open",
+    groups: [group("", { count: 2 }), group("triaging", { count: 5 })],
+  });
+  expect(lanes(padded)).toEqual(["todo:0", "in_progress:0", "in_review:0", ":2", "triaging:5"]);
+});
+
+// AN OPEN SET IS NOT A BOARD. A lane per possible assignee, tag, type or
+// project is a column of every value the company could ever hold.
+test("an open-set axis passes through untouched", () => {
+  const answered = [group("ada", { count: 2 })];
+  for (const axis of ["assignee", "tag", "type", "project", "unit", "parent", "f.severity"]) {
+    expect(padGroups({ axis, groups: answered, scope: "open" }), axis).toBe(answered);
+  }
+});
+
+// A `group=` NARROWING ASKED FOR ONE LANE AND GOT ONE. Padding it back to the
+// declared set would redraw the columns the reader just narrowed away.
+test("a board narrowed to one column stays one column", () => {
+  const answered = [group("in_review", { count: 2 })];
+  expect(padGroups({ axis: "status", groups: answered, scope: "open", group: "in_review" })).toBe(
+    answered,
+  );
+  // INCLUDING THE UNSET ONE, which is read on the key's presence: `""` is a
+  // column here and a truth test padded it back to the whole declared set,
+  // redrawing exactly the columns the reader had narrowed away.
+  const unset = [group("", { count: 2 })];
+  expect(padGroups({ axis: "status", groups: unset, scope: "open", group: "" })).toBe(unset);
+  expect(padGroups({ axis: "status", groups: unset, scope: "open" })).not.toBe(unset);
+});
+
+// THE CONTAINER'S OWN DECLARATION DECIDES THE SET where it has one, so the
+// status→group mapping the scope narrowing turns on is the ENGINE's rather than
+// this build's shipped copy.
+test("a project's own status declaration is what the scope narrows", () => {
+  const statuses = [
+    { status: "todo" as const, label: "Backlog", group: "not_started", description: "" },
+    { status: "in_progress" as const, label: "Doing", group: "active", description: "" },
+    { status: "done" as const, label: "Shipped", group: "done", description: "" },
+  ];
+  expect(lanes(padGroups({ axis: "status", groups: [], scope: "open", statuses }))).toEqual([
+    "todo:0",
+    "in_progress:0",
+  ]);
+  expect(lanes(padGroups({ axis: "status", groups: [], scope: "closed", statuses }))).toEqual([
+    "done:0",
+  ]);
+});
+
+// ONE SPELLING OF THE SCOPE MAPPING, because three readers turn on it: the
+// query builder writes the key, `scopeOf` reads it back off a saved view, and
+// the padding narrows the lanes with it. Written twice it drifts silently — a
+// segment whose group nothing reads back snaps the control to the wrong value.
+test("the scope segment, the query and the lanes read one mapping", () => {
+  for (const scope of SCOPES) {
+    const params = buildItemsParams({
+      container: "workspace",
+      shape: "board",
+      view: {},
+      filters: { ...NO_FILTERS, scope },
+    });
+    expect(scopeOf(params.status_group as string | undefined), scope).toBe(scope);
+    expect(params.status_group ?? "", scope).toBe(SCOPE_GROUPS[scope]);
+  }
 });
 
 // ---------------------------------------------------------------------------

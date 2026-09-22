@@ -287,6 +287,15 @@ each the answer to one thing that went missing at one item:
   opens as a list and the board is one press away in **Display** — and the
   landing shape is never conditional on how much work exists, because a screen
   that redraws itself as a company fills up is a screen nobody can learn.
+- **A closed-set axis draws every declared value; an open one draws what
+  exists.** The engine's grouping is a plain `GROUP BY`, so a status nobody has
+  used is not a group and a one-item company got a one-lane board. A board is
+  the WORKFLOW rather than the occupied part of it, so `status`, `status_group`
+  and `priority` — the three axes the engine gives a declared ORDER — are drawn
+  whole, narrowed to what the scope segment admits (Open draws no Done lane),
+  and an empty lane says "Nothing here". `assignee`, `tag`, `type`, `project`
+  and a custom field's options are not: a lane per possible assignee is not a
+  board.
 
 **Reserved segments cannot collide with keys.** Project and container keys are
 uppercase (`ENG`), item keys are `KEY-n`, everything else the engine mints is a
