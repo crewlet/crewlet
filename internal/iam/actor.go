@@ -39,11 +39,12 @@ func (a ActorKind) Valid() bool { return slices.Contains(ActorKinds, a) }
 
 // AnonymousActor is the name recorded for an actor this build cannot name.
 //
-// The same string internal/config reserves as an operator id and refuses to
-// anybody else, so a write made with nobody identified can never be confused
-// in an audit row with a real operator's. It is spelled out here rather than
-// imported for the leaf property's sake, and the two must stay the same
-// string: config's reservation is what makes this name unclaimable.
+// internal/config REFUSES IT AS A TOKEN ID, which is what makes it
+// unclaimable: a write made with nobody identified can then never be confused
+// in an audit row with a real credential's, and a reader filtering on the name
+// gets one of the two rather than both. It is spelled out here rather than
+// imported, for the leaf property's sake — config imports this package, not
+// the other way round — and the two must stay the same string.
 const AnonymousActor = "anonymous"
 
 // Actor is how a principal is recorded on a row it authors.

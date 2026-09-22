@@ -226,6 +226,17 @@ func TestATokenMustStateWhatItMayDo(t *testing.T) {
 		b.API.Auth.Tokens[0].Grants = []iam.Grant{iam.GrantSecretWrite}
 		refuses(t, b, "outside `api.auth.max_grants`")
 	})
+	t.Run("the unattributable name", func(t *testing.T) {
+		t.Parallel()
+		// [iam.AnonymousActor] is what an audit row records for a write
+		// nobody could be identified for. A real credential under that
+		// name is indistinguishable from one in the single trail that
+		// exists to tell them apart, and a reader filtering on it gets
+		// both.
+		b := serving()
+		b.API.Auth.Tokens[0].ID = iam.AnonymousActor
+		refuses(t, b, "reserved")
+	})
 	t.Run("a colleague level that is not one", func(t *testing.T) {
 		t.Parallel()
 		b := serving()

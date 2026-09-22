@@ -1091,6 +1091,21 @@ func (a *APIAuth) validateTokens(path Path, api API) error {
 			// reason the label exists.
 			p.add(at(tp, "id"), ErrConflict, "duplicate token id %q", t.ID)
 		}
+		// THE UNATTRIBUTABLE NAME IS RESERVED, and it is a config rule
+		// because config is the only place a token id is chosen.
+		// [iam.AnonymousActor] is what an audit row records for an
+		// actor this build cannot name — a write made with nobody
+		// identified — so a real credential carrying it would put two
+		// different things under one name in the one trail that exists
+		// to tell them apart, and a reader filtering on it would get
+		// both.
+		if t.ID == iam.AnonymousActor {
+			p.add(at(tp, "id"), ErrConflict,
+				"token id %q is reserved: it is what an audit row records for "+
+					"a write nobody could be identified for, so a real "+
+					"credential under that name is indistinguishable from one. "+
+					"Pick a different id", iam.AnonymousActor)
+		}
 		seen[t.ID] = struct{}{}
 
 		// THE FLOOR IS CHECKED ON THE RESOLVED VALUE, which is the only
