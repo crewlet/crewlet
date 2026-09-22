@@ -65,11 +65,36 @@ export interface GridColumn<T> {
 export interface GridBand<T> {
   key: string;
   label: ReactNode;
+  /**
+   * The axis value's own mark, drawn before the label.
+   *
+   * A SIBLING OF THE LABEL RATHER THAN PART OF IT, because the head is a flex
+   * row with a gap: folded into `label` the mark sits inside the truncating
+   * span, where the gap never reaches it and an ellipsis eventually eats it.
+   * An axis with no mark passes nothing rather than a placeholder.
+   */
+  mark?: ReactNode;
   /** The engine's count over the whole group, where it gave one. */
   total?: number;
   rows: T[];
+  /**
+   * The bands INSIDE this one, where the answer was grouped twice.
+   *
+   * ONE LEVEL, and a band carries rows OR sub-bands, never both — which is the
+   * shape the answer arrives in: sub-groups REPLACE a group's rows exactly as
+   * groups replace the ungrouped ones, because an answer carrying both would be
+   * the same rows twice. A grid that knew only `rows` drew a run of EMPTY bands
+   * over a twice-grouped answer with the rows nowhere at all, which is what the
+   * work table did for as long as its Display menu offered a second axis.
+   */
+  bands?: GridBand<T>[];
   /** A per-band aggregate line. */
   footer?: ReactNode;
+}
+
+/** Every row a band holds, its sub-bands' included, in the order they draw. */
+function bandRows<T>(band: GridBand<T>): T[] {
+  return band.bands ? band.bands.flatMap(bandRows) : band.rows;
 }
 
 /**
@@ -186,6 +211,7 @@ export function DataGrid<T>({
   onLoadMore,
   loadedNote,
   name,
+  colsName,
 }: {
   rows?: T[];
   bands?: GridBand<T>[];
@@ -217,9 +243,26 @@ export function DataGrid<T>({
    * order: inserting a grid above would move every link's meaning by one.
    */
   name?: string;
+  /**
+   * WHICH COLUMN SET this grid's `cols=` names, where that is not `name`.
+   *
+   * The two keys answer two different questions and only usually have one
+   * answer. `sort=` is a fact about the QUESTION — on a server-sorted list the
+   * key goes to the engine, which orders the whole set the same way whatever
+   * draws it — and `cols=` is a fact about the DRAWING. The work screen is
+   * where they come apart: its list and its table are one grid with two column
+   * sets, so the order is shared between them and the column arrangement is
+   * not. A `cols=` carries an ORDER as well as a selection and that order is
+   * the set's own declaration order, so one key read against both sets draws
+   * the list's columns in the table's order — a row nobody arranged.
+   *
+   * Defaults to `name`, which is what every grid with one column set wants.
+   */
+  colsName?: string;
 }) {
   const [sortRaw, setSort] = useParam(name ? `sort.${name}` : "sort", defaultSort);
-  const [colsRaw, setCols] = useParam(name ? `cols.${name}` : "cols", "");
+  const columnSet = colsName ?? name;
+  const [colsRaw, setCols] = useParam(columnSet ? `cols.${columnSet}` : "cols", "");
   const sort = parseSort(sortRaw);
   const body = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState(-1);
@@ -267,7 +310,13 @@ export function DataGrid<T>({
   );
 
   const flat = useMemo(() => {
-    if (bands) return bands.flatMap((b) => sortRows(b.rows));
+    // THROUGH THE SUB-BANDS TOO, and in the order they draw: this is the list
+    // `j`, `k` and `enter` walk, so a row the grid renders and this misses is a
+    // row the cursor steps over — and a row counted here that is not rendered
+    // puts every later `data-row-index` one place out.
+    const walk = (band: GridBand<T>): T[] =>
+      band.bands ? band.bands.flatMap(walk) : sortRows(band.rows);
+    if (bands) return bands.flatMap(walk);
     return sortRows(rows ?? []);
   }, [bands, rows, sortRows]);
 
@@ -368,7 +417,14 @@ export function DataGrid<T>({
     .map((c) => c.width ?? (c.shrink ? `fit-content(${SHRINK_CAP})` : "minmax(0, 1fr)"))
     .join(" ");
 
-  if (flat.length === 0 && empty) {
+  // A GROUPED ANSWER WITH NO ROWS ON THIS PAGE IS NOT AN EMPTY ANSWER.
+  //
+  // A band carries the engine's count over its WHOLE group and a bounded slice
+  // of rows, so a band whose slice is empty still says how many are in it —
+  // "Ada Okonkwo · 0 of 3" is an answer, and "Nothing matches" drawn over it is
+  // a different and false one. The empty state is for a grid with nothing to
+  // draw at all, which with bands means no band either.
+  if (flat.length === 0 && !bands?.length && empty) {
     return (
       <div className="grid-wrap">
         {/* `compact` IS OUR `inline`: an empty state inside a panel rather
@@ -467,6 +523,42 @@ export function DataGrid<T>({
     );
   }
 
+  /**
+   * One band, and the bands inside it.
+   *
+   * RECURSIVE BECAUSE THE ANSWER IS. A second axis comes back as sub-groups
+   * under each group, and nesting a heading under a heading is what a second
+   * axis MEANS where every row is a line — the alternative, one flat band per
+   * pair, throws away which of the two axes a heading belongs to.
+   *
+   * NO `depth` CLASS: a sub-band's head is inset and quieter so that a band at
+   * its parent's inset does not read as its sibling, and the sheet says that
+   * with `.grid-band .grid-band > .grid-band-head` — the nesting IS the fact,
+   * and a class spelling it out is a second copy of what the DOM already says.
+   */
+  function renderBand(band: GridBand<T>): ReactNode {
+    // THE LOADED COUNT IS THIS BAND'S OWN ROWS, its sub-bands' included — a
+    // band that carries sub-bands carries no rows of its own, so counting
+    // `rows` alone reported every twice-grouped band as holding nothing.
+    const loaded = bandRows(band).length;
+    return (
+      <div key={band.key} className="grid-band">
+        <div className="grid-band-head">
+          {band.mark}
+          <span className="truncate">{band.label}</span>
+          {/* THE ENGINE'S COUNT AND THE LOADED COUNT, apart. A band head
+              reading 12 over 12 of 300 rows is the number a person plans
+              against. */}
+          <span className="grid-band-count t-num">
+            {band.total != null && band.total !== loaded ? `${loaded} of ${band.total}` : loaded}
+          </span>
+        </div>
+        {band.bands ? band.bands.map((sub) => renderBand(sub)) : sortRows(band.rows).map(renderRow)}
+        {band.footer && <div className="grid-band-foot">{band.footer}</div>}
+      </div>
+    );
+  }
+
   return (
     // THE POINTER IS WHAT SAYS WHICH GRID THE READER IS IN — see the registry
     // above. `pointerdown` rather than `click`, so a drag on a header or a
@@ -540,25 +632,7 @@ export function DataGrid<T>({
       </div>
 
       <div className="grid-body" ref={body}>
-        {bands
-          ? bands.map((band) => (
-              <div key={band.key} className="grid-band">
-                <div className="grid-band-head">
-                  <span className="truncate">{band.label}</span>
-                  {/* THE ENGINE'S COUNT AND THE LOADED COUNT, apart. A band
-                      head reading 12 over 12 of 300 rows is the number a
-                      person plans against. */}
-                  <span className="grid-band-count t-num">
-                    {band.total != null && band.total !== band.rows.length
-                      ? `${band.rows.length} of ${band.total}`
-                      : band.rows.length}
-                  </span>
-                </div>
-                {sortRows(band.rows).map(renderRow)}
-                {band.footer && <div className="grid-band-foot">{band.footer}</div>}
-              </div>
-            ))
-          : sortRows(rows ?? []).map(renderRow)}
+        {bands ? bands.map((band) => renderBand(band)) : sortRows(rows ?? []).map(renderRow)}
       </div>
 
       {(footer || onLoadMore || loadedNote) && (

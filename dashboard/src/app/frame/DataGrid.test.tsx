@@ -362,3 +362,89 @@ test("a sortable glyph head takes its name from the column's label", () => {
   );
   expect(screen.getByRole("button", { name: "Priority" })).toBeTruthy();
 });
+
+// A BAND INSIDE A BAND, because a second grouping is a heading under a
+// heading. A grid that knew only `rows` drew one EMPTY band per group over a
+// twice-grouped answer, with every row of it nowhere on the screen — which is
+// what the work table did for as long as its Display menu offered a second
+// axis.
+test("a band's own bands are drawn, and it counts what is under them", () => {
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        bands={[
+          {
+            key: "todo",
+            label: "To do",
+            total: 5,
+            rows: [],
+            bands: [{ key: "ada", label: "Ada", total: 2, rows: ROWS }],
+          },
+        ]}
+        rowKey={(r) => r.id}
+        columns={[{ key: "id", header: "Id", cell: (r) => r.id }]}
+      />
+    </Router>,
+  );
+  const heads = [...container.querySelectorAll(".grid-band-head")].map((el) => el.textContent);
+  expect(heads).toEqual(["To do2 of 5", "Ada2"]);
+  // THE ROWS ARE UNDER THE SUB-BAND, and they are the grid's rows: a cursor
+  // that could not reach them would step over half a screen.
+  expect(container.querySelectorAll(".grid-row").length).toBe(2);
+  expect(
+    [...container.querySelectorAll(".grid-row")].map((el) => el.getAttribute("data-row-index")),
+  ).toEqual(["0", "1"]);
+});
+
+// AND A GROUPED ANSWER WITH NO ROWS ON THIS PAGE IS NOT AN EMPTY ANSWER. A
+// band carries the engine's count over its whole group and a bounded slice of
+// rows, so "Nothing matches" drawn over a band that says three exist is a
+// second and false answer on the same screen.
+test("a band with no rows on this page still draws its heading", () => {
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        bands={[{ key: "ada", label: "Ada", total: 3, rows: [] }]}
+        rowKey={(r) => r.id}
+        columns={[{ key: "id", header: "Id", cell: (r) => r.id }]}
+        empty={{ title: "Nothing matches" }}
+      />
+    </Router>,
+  );
+  expect(container.querySelector(".grid-band-head")?.textContent).toBe("Ada0 of 3");
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+});
+
+// THE SORT KEY AND THE COLUMN KEY ARE TWO QUESTIONS.
+//
+// `sort=` is a fact about the QUESTION — on a server-sorted list the key goes
+// to the engine, which orders the whole set the same way whatever draws it —
+// and `cols=` is a fact about the DRAWING. The work screen is where they come
+// apart: its list and its table are one grid with two column sets, so the
+// order is shared between them and the column arrangement is not. `name` alone
+// could not say that, because it keys both.
+test("colsName keys the columns without moving the sort key", () => {
+  location.hash = "#/x?cols.list=who";
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        colsName="list"
+        rowKey={(r) => r.id}
+        columns={[
+          { key: "id", header: "Id", sortValue: (r) => r.id, cell: (r) => r.id },
+          { key: "who", header: "Who", sortValue: (r) => r.who, cell: (r) => r.who },
+        ]}
+      />
+    </Router>,
+  );
+  // THE COLUMN NARROWING CAME OFF `cols.list=`, which a bare `cols=` would not
+  // have answered.
+  expect([...container.querySelectorAll(".grid-th")].map((el) => el.textContent)).toEqual(["Who"]);
+  // AND THE SORT IS STILL THE BARE KEY, which is the half `name` would have
+  // moved with it.
+  fireEvent.click(screen.getByRole("button", { name: "Who" }));
+  expect(location.hash).toContain("sort=who");
+  expect(location.hash).not.toContain("sort.list=");
+  location.hash = "#/";
+});
