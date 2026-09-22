@@ -190,19 +190,51 @@ test("closed work is a column of the grid, not a hidden one", async () => {
   await waitFor(() =>
     expect(
       [...container.querySelectorAll(".grid-head .grid-th")].map((h) => h.textContent),
-    ).toEqual([
-      "Key",
-      "Project",
-      "Lead",
-      "Unit",
-      "Open",
-      "Done",
-      "Closed",
-      "Progress",
-      "Last change",
-    ]),
+    ).toEqual(["Key", "Project", "Lead", "Open", "Done", "Closed", "Progress", "Last change"]),
   );
   expect(within(rowFor("ENG")).getByText("7")).toBeTruthy();
+});
+
+// AND UNIT IS THE ONE THAT IS OPTIONAL, because on a chart-owned company it is
+// the Project column again.
+//
+// The engine mints a project the moment a unit declares its `project` key and
+// names it after the unit, so every row of such a company read `Core` / `Core`
+// and `Executives` / `Executives` — two of nine columns spending their width
+// on one fact. It is a column rather than a deletion because the two names do
+// differ where a project is a SEAT's, and that company asks for it by address.
+test("the unit column is off until cols asks for it", async () => {
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  expect(
+    [...container.querySelectorAll(".grid-head .grid-th")].map((h) => h.textContent),
+  ).not.toContain("Unit");
+  // AND THE PROJECT'S OWN UNIT IS NOT ON SCREEN EITHER, which is the point:
+  // the head going without the cell would leave a value under no name.
+  expect(screen.queryByText("Platform")).toBeNull();
+  cleanup();
+
+  // `cols=` CARRIES THE ORDER AS WELL AS THE SELECTION, so an address that
+  // wants Unit names the whole set it wants.
+  location.hash = "#/work/projects?cols=key,name,lead,unit,open,done,closed,progress,last_change";
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const withUnit = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  expect(
+    [...withUnit.container.querySelectorAll(".grid-head .grid-th")].map((h) => h.textContent),
+  ).toEqual([
+    "Key",
+    "Project",
+    "Lead",
+    "Unit",
+    "Open",
+    "Done",
+    "Closed",
+    "Progress",
+    "Last change",
+  ]);
+  expect(screen.getByText("Platform")).toBeTruthy();
 });
 
 // A PROJECT WITH NO LEAD ROUTES ITS UNASSIGNED WORK TO NOBODY, which is a
@@ -217,6 +249,10 @@ test("a project nobody leads says so rather than drawing a blank", async () => {
 });
 
 test("a unit the chart no longer has is marked rather than printed plainly", async () => {
+  // WITH THE COLUMN ASKED FOR, since Unit is `optional`: this is a case about
+  // what the CELL claims, and the company that turns the column on is exactly
+  // the one whose units and project names can disagree.
+  location.hash = "#/work/projects?cols=key,name,lead,unit,open,done,closed,progress,last_change";
   serving({
     work_projects: {
       projects: [project({ unit: { key: "gone", resolved: false } })],
@@ -503,6 +539,13 @@ test("the grid draws the engine's order rather than re-sorting it", async () => 
 // reach. The engine half of this pair is a Go gate over `PROJECT_SORT_KEYS`
 // (`internal/tracker/client_gate_test.go`).
 test("the sortable heads are exactly the orderings the engine takes", async () => {
+  // THE WHOLE COLUMN SET, because Unit is `optional` and off by default: the
+  // pairing this holds is between the engine's seven keys and the heads the
+  // screen CAN draw, and a head the reader has to ask for is still a head.
+  // Read against the default set alone, the gate would report `sort=unit` as
+  // an ordering nobody can reach — which is the opposite of true, since the
+  // address that turns the column on is the address that sorts by it.
+  location.hash = "#/work/projects?cols=key,name,lead,unit,open,done,closed,progress,last_change";
   serving({ work_projects: { projects: [project()], total: 1, complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
