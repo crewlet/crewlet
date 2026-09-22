@@ -339,7 +339,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		// it would be a parser that could fail on a store — and a list
 		// read outside this snapshot could name a task the rows below
 		// were never filtered against.
-		if q.PriorityListOf != "" {
+		if q.PriorityListOf.Named() {
 			q.PriorityList, err = readPriorityList(ctx, tx, q.PriorityListOf)
 			if err != nil {
 				return err
@@ -514,7 +514,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	if len(q.Keys) > 0 {
 		add("t.key IN ("+placeholders(len(q.Keys))+")", anyOf(q.Keys)...)
 	}
-	if q.PriorityListOf != "" {
+	if q.PriorityListOf.Named() {
 		if len(q.PriorityList) == 0 {
 			// AN EMPTY LIST IS AN EMPTY ANSWER, stated rather than
 			// omitted: dropping the clause would answer every task in
@@ -1845,8 +1845,14 @@ func joinAnd(clauses []string) string {
 // row, so "no row" is the ordinary state of every human on their first day and
 // every seat for ever — and refusing would make a turn-start read fail on a
 // seat that had simply never been given a priority.
-func readPriorityList(ctx context.Context, tx *sql.Tx, handle string) ([]string, error) {
-	person, held, err := readPerson(ctx, tx, handle)
+//
+// THROUGH [readPartyRecord] LIKE EVERY OTHER PERSONAL READ. It read the handle
+// alone, so `preset=priorities` and `my_work` answered from DIFFERENT records
+// for the one person who can have two — a founder whose list was written
+// before their token was keyed on their seat saw it on My work's own block and
+// an empty board on the tab beside it.
+func readPriorityList(ctx context.Context, tx *sql.Tx, who Party) ([]string, error) {
+	person, held, err := readPartyRecord(ctx, tx, who)
 	if err != nil {
 		return nil, err
 	}
@@ -1868,7 +1874,7 @@ func readPriorityList(ctx context.Context, tx *sql.Tx, handle string) ([]string,
 // A ROW THE LIST DOES NOT NAME KEEPS ITS PLACE at the end, because a caller
 // that combined `priorities=` with another filter still asked for those rows.
 func orderByList(rows []TaskRow, q Query) []TaskRow {
-	if q.PriorityListOf == "" || len(q.PriorityList) == 0 || len(rows) == 0 {
+	if !q.PriorityListOf.Named() || len(q.PriorityList) == 0 || len(rows) == 0 {
 		return rows
 	}
 	at := make(map[string]int, len(q.PriorityList))

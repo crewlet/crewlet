@@ -1061,6 +1061,24 @@ Two consequences worth knowing:
 An operator reading somebody *else's* day gets **that person's** two names,
 resolved from the org chart — never the credential in their own hand.
 
+**And your own marks and pins are written under your seat, not your token.**
+Whose state a record holds and who wrote it are two different questions, and
+they have two different answers. `mark_inbox`, `set_pins` and `set_priorities`
+write **your** record — the seat your token is bound to — while the history row
+they leave still names the **token** with author kind `operator`. That is not
+an inconsistency: attribution answers *who did this*, and it stays the
+credential because a tracker whose author field is chosen by the writer is not
+an audit trail. The record's subject answers *whose inbox is this*, and the
+answer there is the person.
+
+Keyed on the credential instead, a bound founder grew a second record called
+`founder`: the marks their assistant made were invisible on the screen that
+asks under their seat, and their queue came back empty on the one tab that is
+entirely about it. Leaving a token **unbound** is unchanged and ordinary — an
+operator outside the org chart, a pipeline — and it writes its own record under
+its own id. Records written before a company bound the token are still read,
+because the seat's record is preferred and the credential's is the fallback.
+
 The marks are the ASSISTANT'S. The dashboard is read-only, because every write
 here is attributed to somebody and a button in a browser would write as "the
 dashboard", which is nobody — so `mark_inbox` is what an assistant calls when

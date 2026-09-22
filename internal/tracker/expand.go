@@ -107,10 +107,29 @@ var expansionRefused = []string{
 type Viewer struct {
 	Handle string
 
+	// OperatorID is the `api.auth.tokens[].id` bound to that seat with
+	// `contact.crewlet_operator_id`, and empty for every seat that has
+	// none — which is every agent, and every human whose company never
+	// gave them a credential.
+	//
+	// IT IS AN ALIAS AND NEVER AN ADDRESS. Nothing expands to it and
+	// nothing renders it: what it reaches is the person's OWN STATE
+	// written before their credential was keyed on their seat, which is
+	// the one thing in this grammar a person can hold under two names.
+	// See [Party] and [Query.PriorityListOf].
+	OperatorID string
+
 	// Project is the viewer's home container, empty where their unit owns
 	// none — which narrows `my_queue` to their own assignments rather than
 	// widening it to everybody's backlog.
 	Project string
+}
+
+// Party is the viewer as the two identities their own records may be filed
+// under. A viewer with no credential bound is a party of one, which is every
+// seat.
+func (v Viewer) Party() Party {
+	return Party{Handle: v.Handle, OperatorID: v.OperatorID}
 }
 
 // Expand resolves `view=` and `preset=` into the parameters they stand for.
@@ -333,7 +352,21 @@ func (r *Reader) ExpandedQuery(ctx context.Context, params map[string]any,
 	if err != nil {
 		return Query{}, err
 	}
-	return ParseQuery(merged, now, loc)
+	q, err := ParseQuery(merged, now, loc)
+	if err != nil {
+		return Query{}, err
+	}
+	// AND THE PRIORITY LIST'S OWNER GETS THEIR SECOND NAME, which the
+	// parser could not give them: `priorities=` names a PERSON, a person
+	// bound to an operator token may hold a record under the credential
+	// they wrote it with, and the only such person this read knows the
+	// two names of is the VIEWER. A surface that lets somebody filter by
+	// another person's list passes the handle alone, which is the record
+	// every write makes now — see [Writer.Record].
+	if q.PriorityListOf.Named() && q.PriorityListOf.Handle == viewer.Handle {
+		q.PriorityListOf = viewer.Party()
+	}
+	return q, nil
 }
 
 // stringOf renders a parameter value the way [MapParams] does.

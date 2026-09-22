@@ -2004,6 +2004,17 @@ worked. A comment's `@handle` is resolved here too, against the company chart
 current when the comment is written, so mentioning somebody from your own
 assistant wakes them exactly as it does from a seat.
 
+That identity is **two facts, not one**. A write is attributed to the token,
+with author kind `operator`, always — there is deliberately no way to ask this
+surface to act as a seat. But if the chart binds that token to a human seat
+with `contact.crewlet_operator_id`, the surface also knows *who the caller is*,
+and that is what the person tools key on: `mark_inbox`, `set_pins` and
+`set_priorities` write **that person's** record and sign it with the token,
+while `get_my_work`, `get_person` and `work_inbox` answer for both of that
+person's names. An unbound token is an operator outside the chart and writes
+its own record under its own id, which is ordinary. See
+[Humans in the org](../concepts/humans-in-the-org.md).
+
 Plus **ten no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,

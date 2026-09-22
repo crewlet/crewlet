@@ -234,6 +234,59 @@ func TestAProtectedViewRefusesEveryoneButItsOwner(t *testing.T) {
 	}
 }
 
+// AND ITS OWNER IS THE PERSON, UNDER EITHER OF THEIR NAMES.
+//
+// A view is saved through somebody's own credential, so `owner` is the seat
+// where the company bound the token to one and the CREDENTIAL on every row
+// written before that was keyed on the seat. Compared against the actor alone,
+// a founder opening their own protected board was told it belonged to somebody
+// else and offered to ask them — and the somebody else was their own token.
+func TestAProtectedViewIsItsOwnersUnderEitherName(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// THE PERSON, as the operator surface builds them: the credential in
+	// the author field and the seat it is bound to behind it.
+	bound := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
+		OperatorID: "founder", Seat: "jane-founder",
+	})
+	// BOTH SPELLINGS OF ONE OWNER. `jane-founder` is what a person's own
+	// state is keyed on now; `founder` is what every row written before
+	// that carries. One of them refused is a founder locked out of their
+	// own board, and it was the first.
+	for id, owner := range map[string]string{
+		"v-seat":  "jane-founder",
+		"v-token": "founder",
+	} {
+		if _, err := r.writer.WriteView(t.Context(), "op-save-"+id,
+			aView(id, func(v *tracker.View) {
+				v.Owner, v.Protected = owner, true
+			})); err != nil {
+			t.Fatalf("save the view owned by %s: %v", owner, err)
+		}
+		r.drain()
+		if _, err := bound.WriteView(t.Context(), "op-edit-"+id,
+			aView(id, func(v *tracker.View) {
+				v.Owner, v.Protected, v.Name = owner, true, "still mine"
+			})); err != nil {
+			t.Errorf("the person was refused their own protected view, "+
+				"owned as %q: %v", owner, err)
+		}
+		r.drain()
+
+		// AND SOMEBODY ELSE IS STILL SOMEBODY ELSE, or the widening
+		// would have cost the guard rather than fixed it.
+		bob := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
+		if _, err := bob.WriteView(t.Context(), "op-bob-"+id,
+			aView(id, func(v *tracker.View) {
+				v.Owner, v.Protected, v.Name = owner, true, "bob was here"
+			})); err == nil {
+			t.Errorf("bob edited a view protected for %q", owner)
+		}
+		r.drain()
+	}
+}
+
 // EVERY CONTAINER HAS ITS VIEWS WITHOUT ANYBODY SAVING ONE.
 //
 // That is what makes "required views" moot: a fresh project needs no setup

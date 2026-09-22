@@ -92,6 +92,13 @@ type fakeTracker struct {
 	myWorkQuery   tracker.MyWorkQuery
 	myWork        tracker.MyWork
 
+	// personQuery and inboxQuery are the last personal reads this fake was
+	// asked, so a case can assert WHO a tool resolved the question to —
+	// which is the half of these two verbs that decides whether a founder
+	// is shown their own day or a credential's.
+	personQuery tracker.PersonQuery
+	inboxQuery  tracker.InboxQuery
+
 	readErr  error
 	writeErr error
 }
@@ -179,8 +186,11 @@ func (f *fakeTracker) Catalogue(context.Context, tracker.CatalogueQuery) (tracke
 	return tracker.CatalogueAnswer{}, nil
 }
 
-func (f *fakeTracker) Person(context.Context, tracker.PersonQuery, time.Time) (tracker.PersonState, error) {
-	return tracker.PersonState{}, nil
+func (f *fakeTracker) Person(_ context.Context, q tracker.PersonQuery,
+	_ time.Time) (tracker.PersonState, error) {
+
+	f.personQuery = q
+	return tracker.PersonState{Handle: q.Who.Handle}, nil
 }
 
 // Thread answers what the fake was TOLD to answer, and records the query.
@@ -1090,6 +1100,7 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 	_ time.Time) (tracker.InboxAnswer, error) {
 
+	f.inboxQuery = q
 	return tracker.InboxAnswer{
 		Handle:         q.Who.Handle,
 		PrimaryReasons: tracker.DefaultPrimaryReasons,

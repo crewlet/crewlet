@@ -1,5 +1,11 @@
 // A person bound to an operator token is one party with two identities, and
 // every personal read has to answer for both.
+//
+// The WRITE is the other half, and it is what stops the two names growing
+// apart: a person's own state is keyed on who they ARE — the seat the
+// credential is bound to — while the record's author stays the credential,
+// because that is the audit trail. The read's fallback is what still reaches
+// the records written before that was true.
 
 package tracker_test
 
@@ -540,6 +546,192 @@ func TestAnUnnamedPartyGetsTheSharedStrip(t *testing.T) {
 		t.Fatalf("the shared strip is %v and holds no shared view",
 			stripKeys(got))
 	}
+}
+
+// AND THE WRITE PUTS THE STATE UNDER THE PERSON, WHICH IS WHAT ENDS IT.
+//
+// The read above is the recovery; this is the cause. A person write used to be
+// keyed on the ACTOR, and through the operator tool server the actor is the
+// token — so a bound founder's marks and pins grew a second record named after
+// their credential. Keyed on [tracker.Provenance.Seat] there is one record per
+// person, and the seat's own read finds it with no alias to fall back on.
+//
+// THE AUTHOR IS ASSERTED IN THE SAME CASE, because the one wrong fix is to let
+// the seat take the author field over: that is a write attributed to a person
+// the caller named, and a tracker whose author field is chosen by the writer
+// is not an audit trail.
+func TestABoundCredentialWritesThePersonsOwnRecord(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	assign(t, r, "t-1", "jane-founder")
+
+	// THE WRITER THE OPERATOR SURFACE BUILDS for a bound token: the
+	// credential in the author field, the seat in the provenance.
+	token := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
+		OperatorID: "founder", Seat: "jane-founder",
+	})
+	if _, err := token.WritePins(t.Context(), "op-pins", "jane-founder",
+		[]string{"v-mine"}, nil); err != nil {
+		t.Fatalf("WritePins: %v", err)
+	}
+	r.drain()
+
+	// ASKED ABOUT THE SEAT ALONE, so the fallback loop cannot be what
+	// answers: there is no alias on this party to fall back to.
+	state, err := r.reader.Person(t.Context(), tracker.PersonQuery{
+		Who: tracker.PartyOf("jane-founder"), Level: statelog.ReadStale,
+	}, wednesday)
+	if err != nil {
+		t.Fatalf("Person: %v", err)
+	}
+	if !state.Held || len(state.PinnedViews) != 1 {
+		t.Fatalf("the seat's own record is %+v, want the pin this person's "+
+			"assistant set", state)
+	}
+
+	// AND THERE IS EXACTLY ONE RECORD. A second under the credential is
+	// invisible to every screen that asks under the seat, which is the
+	// whole defect — and it reads as a working write because the call
+	// answers `applied` either way.
+	if got := r.strings(
+		`SELECT handle FROM tracker_persons ORDER BY handle`,
+	); len(got) != 1 || got[0] != "jane-founder" {
+		t.Fatalf("the person rows are %v, want one under the seat", got)
+	}
+
+	// AND THE HISTORY STILL NAMES THE TOKEN.
+	if got := r.strings(
+		`SELECT actor || '/' || actor_kind FROM tracker_history ORDER BY rowid DESC LIMIT 1`,
+	); len(got) != 1 || got[0] != "founder/operator" {
+		t.Fatalf("the record is authored %v, want the credential and the "+
+			"kind that says it is not a seat", got)
+	}
+}
+
+// AND IT IS STILL ONLY THAT PERSON'S RECORD.
+//
+// The rule an inbox rests on is that nobody else's hand is ever in it, and
+// widening the subject is exactly the move that could lose it: a writer that
+// matched on either of its two names, or on none, would let a bound founder
+// write a colleague's marks. The gate moved from the actor to the PERSON, and
+// it is still one name.
+func TestABoundCredentialStillWritesNobodyElsesRecord(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	token := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
+		OperatorID: "founder", Seat: "jane-founder",
+	})
+
+	for name, write := range map[string]func(handle string) error{
+		"the inbox": func(handle string) error {
+			_, err := token.WriteInbox(t.Context(), "op-inbox-"+handle, handle,
+				nil, nil, nil, nil, tracker.Position{})
+			return err
+		},
+		"the pins": func(handle string) error {
+			_, err := token.WritePins(t.Context(), "op-pins-"+handle, handle,
+				[]string{"v-1"}, nil)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := write("ana"); err == nil {
+				t.Fatal("a bound credential wrote somebody else's record")
+			}
+			// AND THE CREDENTIAL'S OWN NAME IS NOT THE PERSON EITHER,
+			// which is the other direction of the same gate: once the
+			// token names a seat, the seat is who it is.
+			if err := write("founder"); err == nil {
+				t.Error("a bound credential wrote a record under its own " +
+					"name — that is the second record this change removes")
+			}
+			if err := write("jane-founder"); err != nil {
+				t.Errorf("a bound credential was refused its own person's "+
+					"record: %v", err)
+			}
+			// DRAINED, because both subtests write the one person
+			// subject and the second decides from a snapshot that has
+			// to carry the first.
+			r.drain()
+		})
+	}
+}
+
+// AND AN UNBOUND CREDENTIAL IS UNCHANGED: it writes its own record, under its
+// own id, which is an operator outside the org chart and an ordinary state.
+func TestAnUnboundCredentialWritesItsOwnRecord(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	token := r.writer.As("ci", tracker.AuthorOperator, tracker.Provenance{
+		OperatorID: "ci",
+	})
+	if _, err := token.WritePins(t.Context(), "op-pins", "ci",
+		[]string{"v-1"}, nil); err != nil {
+		t.Fatalf("WritePins: %v", err)
+	}
+	r.drain()
+	if got := r.strings(
+		`SELECT handle FROM tracker_persons`,
+	); len(got) != 1 || got[0] != "ci" {
+		t.Fatalf("the person rows are %v, want the token's own", got)
+	}
+}
+
+// THE PRIORITIES FILTER READS THE SAME RECORD EVERY OTHER PERSONAL READ DOES.
+//
+// `priorities=` and the `preset=priorities` it expands into went through the
+// handle alone while `my_work` went through the party — so the one person who
+// can hold two records saw their list on My work's own block and an empty
+// board on the tab beside it, from one read of one company.
+func TestThePrioritiesFilterAnswersForEitherIdentity(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	assign(t, r, "t-1", "jane-founder")
+
+	// A LIST WRITTEN BEFORE THE BINDING KEYED THE WRITE ON THE SEAT, which
+	// is the state every company that ran an earlier build is in and the
+	// only thing the alias is still for.
+	token := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
+		OperatorID: "founder",
+	})
+	if _, err := token.WritePriorities(t.Context(), "op-prio", "founder",
+		[]string{"t-1"}, tracker.PersonAuthority{}); err != nil {
+		t.Fatalf("WritePriorities: %v", err)
+	}
+	r.drain()
+
+	// THE SEAT ALONE SEES NOTHING, which is the defect and the proof that
+	// the assertion below is not passing for another reason.
+	if got := r.priorityBoard(tracker.Viewer{Handle: "jane-founder"}); len(got.Rows) != 0 {
+		t.Fatalf("the seat alone already answers %d rows, so this case proves "+
+			"nothing", len(got.Rows))
+	}
+	got := r.priorityBoard(tracker.Viewer{
+		Handle: "jane-founder", OperatorID: "founder",
+	})
+	if len(got.Rows) != 1 || got.Rows[0].ID != "t-1" {
+		t.Fatalf("preset=priorities answers %+v, want the list this person's "+
+			"own credential wrote", got.Rows)
+	}
+}
+
+// priorityBoard is `preset=priorities` as a surface asks it: expanded from the
+// viewer, then parsed, which is the one entry point that can add the alias a
+// parameter cannot carry.
+func (r *roundTrip) priorityBoard(viewer tracker.Viewer) tracker.Answer {
+	r.t.Helper()
+	q, err := r.reader.ExpandedQuery(r.t.Context(),
+		map[string]any{"preset": tracker.PresetPriorities}, viewer,
+		wednesday, berlin)
+	if err != nil {
+		r.t.Fatalf("ExpandedQuery: %v", err)
+	}
+	q.Level = statelog.ReadStale
+	answer, err := r.reader.Tasks(r.t.Context(), q, wednesday)
+	if err != nil {
+		r.t.Fatalf("Tasks: %v", err)
+	}
+	return answer
 }
 
 // A PARTY NAMES SOMEBODY, always — the same rule as before, over the new
