@@ -271,9 +271,10 @@ func (p *Profiler) patch(ctx context.Context, t Turn, s subjectMessages,
 	if !ok {
 		// Logged rather than returned: a model writing prose has still
 		// told us nothing new, and failing the observation would stop the
-		// interaction counter as well.
-		log.WarnContext(ctx, "counterparty_patch_unparseable", "turn_id", t.Event.TurnID,
-			"subject", s.subject.ExternalID, "response", preview(text, 200))
+		// interaction counter as well. Both lines, because this answer has
+		// no other copy anywhere — see [answerLogFields].
+		logUnusableAnswer(ctx, "counterparty_patch_unparseable", text,
+			"turn_id", t.Event.TurnID, "subject", s.subject.ExternalID)
 		return nil, nil
 	}
 	return scalarTraits(obj), nil
@@ -396,7 +397,7 @@ func scalarTraits(obj map[string]any) map[string]any {
 				// would render as a bare bullet.
 			case len(trimmed) > maxTraitValue:
 				log.Warn("counterparty_trait_oversized", "trait", key,
-					"chars", len(trimmed), "max", maxTraitValue,
+					"bytes", len(trimmed), "max", maxTraitValue,
 					"detail", "the trait was dropped rather than stored half-written")
 			default:
 				out[key] = trimmed
@@ -420,6 +421,14 @@ func scalarTraits(obj map[string]any) map[string]any {
 // paragraph under a snake_case key has not produced a preference, so the key
 // is dropped and logged rather than stored truncated: this value is written
 // once and read in every later prompt about that person.
+//
+// BYTES, the unit the guard above counts in — a preference is a phrase in any
+// language and the ceiling is an order of magnitude above one, so the unit
+// only decides which paragraph gets refused, never which phrase. Nothing is
+// cut here, which is why there is no marker and no recoverability route to
+// name: the model's answer is either stored whole or refused whole, and what
+// it said is on the `counterparty_patch_unparseable` pair's debug line when it
+// was unusable at all.
 const maxTraitValue = 200
 
 // subjectLine renders who a party is, for the profiler's prompt.

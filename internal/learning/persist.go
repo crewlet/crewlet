@@ -192,6 +192,32 @@ type Directive struct {
 	Rationale string
 }
 
+// directiveLogDetail is how much of a directive's rule reaches the
+// `persist_decider_doc_observed` line.
+//
+// ONE SENTENCE IS WHAT WAS ASKED FOR. [PersistSystemPrompt] tells the model to
+// write `content` as the standing rule itself and shows it two examples the
+// length of "always commit in semantic style", so 120 bytes — around twenty
+// English words — cuts nothing in the ordinary case and bounds the answer that
+// pasted a policy document into the field. The line exists so an operator
+// scanning a pass can tell WHICH rule was surfaced, beside the turn and the
+// target hint on the same line, and a document there buries both.
+//
+// THE SAME NUMBER AS [patternLogDetail] AND DELIBERATELY NOT THE SAME
+// CONSTANT, which is the opposite of the call [modelAnswerDetail] makes about
+// its five sites. Those five all bound one value — an answer that failed
+// [modelJSONCandidates] — so there was no honest reason for them to differ.
+// These two bound two different fields written by two different prompts: if
+// the compactor's instruction to be "declarative and short" is ever relaxed,
+// that budget should move and this one should not. Equal today because both
+// prompts ask for a sentence, which is a coincidence worth stating rather than
+// collapsing.
+//
+// BYTES, because [textcut.Ellipsis] counts bytes — see [perTurnDetail] for why
+// that is the unit this layer can honestly bound, and what it costs on prose
+// that is not ASCII.
+const directiveLogDetail = 120
+
 // Decision is one classification and whatever it produced.
 type Decision struct {
 	// Tier is the classification. It is reported even when nothing was
@@ -317,12 +343,14 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 
 	parsed, ok := extractJSONObject(text)
 	if !ok {
-		// The preview is the only diagnosis available for a model that
+		// The answer is the only diagnosis available for a model that
 		// has stopped honouring the contract — a bare tier count would
-		// say classification collapsed to NOOP without saying why.
-		// Capped because the response can carry the turn's own content.
-		log.WarnContext(ctx, "persist_decider_unparseable",
-			"turn_id", t.Event.TurnID, "response", preview(text, 200))
+		// say classification collapsed to NOOP without saying why. Both
+		// lines, because the visible one is bounded (the response can
+		// carry the turn's own content) and this answer has no other copy
+		// anywhere: see [answerLogFields].
+		logUnusableAnswer(ctx, "persist_decider_unparseable", text,
+			"turn_id", t.Event.TurnID)
 		return Decision{Tier: types.PersistNOOP}, nil
 	}
 
@@ -347,9 +375,22 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 			TargetHint: strings.TrimSpace(stringField(parsed, "target_hint")),
 			Rationale:  strings.TrimSpace(stringField(parsed, "rationale")),
 		}
+		// THE DIRECTIVE'S ONLY COPY IS THIS PAIR OF LINES. Nothing stores
+		// it: the DOC tier writes no row by definition, [Decision] hands
+		// the directive to [PersistDecider.Reflect], and the
+		// `PersistDeciderCompleted` payload it builds carries the tier and
+		// the written row's id — never the directive's prose. So the
+		// visible line quotes [directiveLogDetail] and the debug twin
+		// carries the rule WHOLE, exactly as an undecodable answer is
+		// reported, and for the same reason: a bounded quote is a
+		// shortening only when the rest is somewhere.
 		log.InfoContext(ctx, "persist_decider_doc_observed", "turn_id", t.Event.TurnID,
 			"agent_handle", t.Event.AgentHandle, "target_hint", dir.TargetHint,
-			"content", preview(dir.Content, 120))
+			"content", textcut.Ellipsis(dir.Content, directiveLogDetail))
+		log.DebugContext(ctx, "persist_decider_doc_observed_content",
+			"turn_id", t.Event.TurnID, "agent_handle", t.Event.AgentHandle,
+			"target_hint", dir.TargetHint, "rationale", dir.Rationale,
+			"content", dir.Content)
 		return Decision{Tier: types.PersistDoc, Directive: dir}, nil
 
 	case types.PersistLong:
@@ -406,7 +447,11 @@ func (d *PersistDecider) write(
 		// classifier that keeps producing documents is a prompt to fix.
 		log.WarnContext(ctx, "persist_decider_note_oversized",
 			"turn_id", t.Event.TurnID, "agent_handle", t.Event.AgentHandle,
-			"chars", len(content), "max", MaxContentChars,
+			// BYTES, named as bytes: the guard is len() on a Go string,
+			// and a field called `chars` beside a CJK note would put a
+			// number in the log that nobody can reproduce by counting
+			// what the model wrote. [MaxContentChars] states the unit.
+			"bytes", len(content), "max", MaxContentChars,
 			"detail", "the note was dropped rather than stored half-written")
 		return DiaryEntry{}, nil
 	}
@@ -710,12 +755,3 @@ func orElse(s, fallback string) string {
 	}
 	return s
 }
-
-// preview shortens a model's answer for a log line.
-//
-// BYTES, through [textcut.Ellipsis], which is the unit a log field wants — and
-// it walks back to a rune boundary rather than materialising the whole string
-// as runes to cut it, which is what this did when it counted them. Every
-// caller is a diagnostic preview of a model response, so nothing here depends
-// on an exact character count.
-func preview(s string, limit int) string { return textcut.Ellipsis(s, limit) }

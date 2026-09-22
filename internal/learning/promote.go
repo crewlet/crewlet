@@ -302,7 +302,7 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 	if err != nil {
 		return nil, fmt.Errorf("drafting a promotion for %s: %w", unit.ID, err)
 	}
-	draft, ok := parseSkillDraft(completion)
+	draft, ok := parseSkillDraft(ctx, completion)
 	if !ok {
 		// The model looked at four seats' near-identical procedures and
 		// could not name a shared one. Rare and still not an error.

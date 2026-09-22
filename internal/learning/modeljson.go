@@ -1,6 +1,12 @@
 package learning
 
-import "strings"
+import (
+	"context"
+	"slices"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/textcut"
+)
 
 // How this package reads JSON out of a model's answer.
 //
@@ -93,4 +99,78 @@ func stripFence(s string) string {
 		rest = strings.TrimPrefix(rest, "json")
 	}
 	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rest), "```"))
+}
+
+// # What a worker may print when the ladder fails
+
+// modelAnswerDetail is how much of a model's answer reaches the log line an
+// operator actually SEES.
+//
+// 400 BYTES, which is the answer
+// [github.com/crewlet/crewlet/internal/httpx.RefusalDetail] reached for the
+// same question — what a refusal may paste into a log line or an error
+// message — and its reasoning transfers whole: the useful content of a
+// refusal is a sentence, and past a few hundred bytes the text has stopped
+// explaining the failure and become one.
+//
+// ONE CONSTANT FOR THE WHOLE PACKAGE, which is what it was not: four bare
+// 200s typed into log calls — the persistence classifier, the counterparty
+// profiler, the skill refiner and the skill synthesizer — beside the
+// compaction error's named 400, which already carried the paragraph above and
+// a line saying to HOIST IT rather than spell it a third time. All five answer
+// the identical question, how much of an answer that failed
+// [modelJSONCandidates] goes somewhere a person reads, and there is no honest
+// reason for the classifier's ceiling to differ from the synthesizer's. The
+// four that were literals had no reason attached to them at all, which is the
+// other half of why they could differ from each other without anyone noticing.
+//
+// Spelled here rather than imported because this package deliberately depends
+// on nothing but the store and the small shared grammars — but httpx's own doc
+// records this exact number drifting into six spellings, each of whose
+// comments claimed to match the other five, so if a package outside this one
+// ever needs it, hoist it again rather than writing a sixth.
+const modelAnswerDetail = 400
+
+// answerLogFields renders the TWO log lines one unusable model answer is
+// reported on: `seen` for the line an operator reads, whose quote is bounded
+// and MARKED, and `whole` for the debug twin that carries the answer entire.
+//
+// A FUNCTION BECAUSE THE TWO LINES ARE A PAIR, the same reason
+// [compactedLogFields] is one: a bounded quote is only a shortening if the
+// rest is somewhere, and a model answer that failed to decode has NO other
+// copy anywhere in this system — no row is written, no event carries a
+// completion's content, and the provider keeps nothing this process can ask
+// for. Written as two hand-rolled log calls the debug half is what gets
+// forgotten, and then the quote in the visible line is the value being
+// destroyed rather than shortened. Returned as values rather than logged here
+// so the pairing is exercisable by a test that needs no log sink:
+// TestTheVisibleAnswerLineIsBoundedAndTheDebugTwinIsWhole.
+//
+// The debug half is bounded by the CALL's own max_tokens (the per-worker
+// `*_budget_tokens`, a few thousand — on the order of 16 KB), which is far too
+// much for a line an operator has to see and exactly right for the one they
+// turn on once they have seen it.
+func answerLogFields(answer string, fields ...any) (seen, whole []any) {
+	// CLONED, not appended in place: both results extend the same caller's
+	// slice, and appending twice to one backing array lets the second write
+	// overwrite the first result's last pair.
+	seen = append(slices.Clone(fields), "response", textcut.Ellipsis(answer, modelAnswerDetail))
+	whole = append(slices.Clone(fields), "response", answer)
+	return seen, whole
+}
+
+// logUnusableAnswer reports an answer no worker could use, on both lines.
+//
+// The visible line keeps the caller's own event name, because what an operator
+// greps for is the pass that stopped producing; the debug twin is that name
+// plus `_answer`, so the two are found together and neither has to be
+// remembered separately.
+//
+// WARN for the visible line: a worker that has stopped decoding is
+// indistinguishable, in every count it reports, from a model with nothing to
+// say — the second needs no attention and the first needs it now.
+func logUnusableAnswer(ctx context.Context, event, answer string, fields ...any) {
+	seen, whole := answerLogFields(answer, fields...)
+	log.WarnContext(ctx, event, seen...)
+	log.DebugContext(ctx, event+"_answer", whole...)
 }

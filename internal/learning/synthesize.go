@@ -286,7 +286,7 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 	if err != nil {
 		return nil, fmt.Errorf("learning: drafting a skill for %s: %w", handle, err)
 	}
-	draft, ok := parseSkillDraft(completion)
+	draft, ok := parseSkillDraft(ctx, completion)
 	if !ok {
 		// The model declined, which is the expected answer for a turn whose
 		// tool run had no reusable shape. Not an error: asking is cheap and
@@ -349,7 +349,7 @@ type skillDraft struct {
 // A draft missing any of its three parts is DROPPED rather than written with
 // the gap: a skill with no body is a catalogue entry that costs prompt budget
 // and teaches nothing, and one with no name cannot be addressed by `use_skill`.
-func parseSkillDraft(c *llm.Completion) (skillDraft, bool) {
+func parseSkillDraft(ctx context.Context, c *llm.Completion) (skillDraft, bool) {
 	if c == nil {
 		return skillDraft{}, false
 	}
@@ -369,8 +369,10 @@ func parseSkillDraft(c *llm.Completion) (skillDraft, bool) {
 	if !decoded {
 		// WARN, not debug: a synthesizer that has stopped decoding is
 		// indistinguishable from a model with nothing to draft, and the
-		// second needs no attention while the first does.
-		log.Warn("skill_draft_undecodable", "response", preview(body, 200))
+		// second needs no attention while the first does. Both lines,
+		// because this answer has no other copy anywhere — see
+		// [answerLogFields].
+		logUnusableAnswer(ctx, "skill_draft_undecodable", body)
 		return skillDraft{}, false
 	}
 	draft.Name = strings.TrimSpace(draft.Name)

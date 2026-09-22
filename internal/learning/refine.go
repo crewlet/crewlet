@@ -77,6 +77,12 @@ type RefinerOptions struct {
 	// MaxBodyChars is the ceiling on the refined body; zero takes
 	// DefaultRefinementBodyMax. A refinement that would breach it is
 	// skipped, not truncated.
+	//
+	// BYTES, despite the name it inherits from the `max_body_chars` config
+	// field: the check is len() on the assembled body. A procedure is
+	// prose, so on a company writing CJK the ceiling lands at roughly a
+	// third of the characters — which costs a skipped refinement and never
+	// a clipped procedure, because the answer to breaching it is to skip.
 	MaxBodyChars int
 
 	// KeepVersions bounds the archived history; zero lets the store apply
@@ -206,7 +212,7 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 	if err != nil {
 		return nil, fmt.Errorf("learning: refining a skill for %s: %w", handle, err)
 	}
-	choice, ok := parseRefinement(completion)
+	choice, ok := parseRefinement(ctx, completion)
 	if !ok {
 		// The model declined, which is the expected answer for a turn that
 		// taught its skills nothing. Not an error: asking is cheap and
@@ -237,7 +243,7 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 		// manual tool refuses instead, because there a person can retry.
 		log.InfoContext(ctx, "skill_refinement_skipped", "reason", "body_cap",
 			"agent_handle", handle, "skill", target.Name,
-			"chars", len(body), "cap", r.bodyMax)
+			"bytes", len(body), "cap", r.bodyMax)
 		return nil, nil
 	}
 
@@ -332,7 +338,7 @@ type refinementChoice struct {
 }
 
 // parseRefinement reads the model's answer, reporting false for a decline.
-func parseRefinement(completion *llm.Completion) (refinementChoice, bool) {
+func parseRefinement(ctx context.Context, completion *llm.Completion) (refinementChoice, bool) {
 	if completion == nil {
 		return refinementChoice{}, false
 	}
@@ -352,7 +358,17 @@ func parseRefinement(completion *llm.Completion) (refinementChoice, bool) {
 		// UNPARSEABLE IS A DECLINE, not an error. The pass must not fail
 		// over a model that answered in prose, and there is nothing to
 		// write either way.
-		log.Debug("skill_refinement_unparseable", "response", preview(raw, 200))
+		//
+		// THE ANSWER WHOLE, uncut: this line is already the debug half —
+		// the one an operator turns on after seeing a refiner that never
+		// refines — and a quote at that level would shorten the one copy
+		// of the answer in existence to save bytes in a line nobody reads
+		// by default. Its size is the call's own max_tokens
+		// (`skill_refinement.budget_tokens`). The bound-and-mark rule
+		// applies to the line an operator SEES, which is what
+		// [logUnusableAnswer] is for; here there is no such line, because
+		// a decline needs no attention.
+		log.DebugContext(ctx, "skill_refinement_unparseable", "response", raw)
 		return refinementChoice{}, false
 	}
 	if strings.TrimSpace(choice.SkillName) == "" || strings.TrimSpace(choice.Bullet) == "" {

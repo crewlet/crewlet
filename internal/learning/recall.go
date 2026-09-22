@@ -74,6 +74,11 @@ const (
 // during an embeddings outage, and treating a missing vector as a zero vector
 // would score them as maximally dissimilar to everything and rank them
 // consistently last — which reads as a judgment about their content.
+//
+// An episode scores as its NEAREST window — its summary is embedded whole in
+// windows rather than cut, so a long turn is reachable by a query matching any
+// part of what it did. [EpisodeWindowBytes] is why, and the statement below is
+// how.
 func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	if q.Handle == "" {
 		return nil, fmt.Errorf("learning: recall needs a seat")
@@ -97,6 +102,10 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	if err != nil {
 		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)
 	}
+	widest, err := e.widestWindowSet(ctx, q.Handle, width)
+	if err != nil {
+		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)
+	}
 
 	// RANK IDS, THEN FETCH THE WINNERS BY PRIMARY KEY.
 	//
@@ -114,25 +123,99 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	// at rank — and this shape is what makes it load-bearing rather than
 	// belt-and-braces.
 	//
+	// AN EPISODE SCORES AS ITS NEAREST WINDOW. A summary is embedded whole,
+	// in windows (see [EpisodeWindowBytes]), packed end to end into the one
+	// blob the row has with `embedding_windows` saying how many — so the
+	// distance is a MIN over the windows rather than one call on the column.
+	// MIN rather than a mean for the same reason internal/search gives: a
+	// turn is worth recalling because part of what it did matches the query,
+	// and averaging would rank a one-line summary that is entirely on topic
+	// above a long one with a perfect paragraph, which is the opposite of
+	// what windowing is for.
+	//
+	// ONE BRANCH PER ROW SHAPE, UNION ALL. A row with one window is scored
+	// by one call on its whole blob and never reads `ord` at all; only a
+	// multi-window row takes the ordinal path. That is not a tidiness split,
+	// it is the only shape in which one long episode does not tax every
+	// other recall the seat ever runs:
+	//
+	//   - `ord` has as many rows as the seat's WIDEST episode, and the
+	//     correlated subquery over it is re-entered for every candidate row
+	//     — so in a single branch the scan costs (rows × widest) whatever
+	//     the rows themselves hold. [BenchmarkRecallOneLongEpisode], 2 000
+	//     one-window rows plus ONE long episode, single branch: 12.2 ms with
+	//     no long row, 17.5 ms with one of 20 windows, 61.8 ms with one of
+	//     150. The long row is not what costs that — 20 vectors is 20 more
+	//     distances — the 2 000 rows owning ONE window are, each re-scanning
+	//     a 20- or 150-row ordinal list to rediscover that `ord.k < 1`.
+	//   - Split, the same three cells are 10.3 ms, 10.5 ms and 24.9 ms: a
+	//     seat's ordinary episodes stop paying for its longest one, and the
+	//     first cell is the single-vector statement's own number, so the
+	//     common row's plan is what it was before windowing existed.
+	//   - There is NO CEILING on an episode's window count (see
+	//     [EpisodeWindowBytes]), so the taxed case is one the design admits
+	//     on purpose rather than a pathology — 20 windows is a ~70 KB
+	//     summary, which a coalesced trigger reaches. A cap here would be
+	//     the silent cut this replaced, moved into the read path.
+	//
+	// Both branches SEEK. The left one takes episodes_agent_ended_at_idx
+	// (agent_handle=?), the seat scoping schema/node/0002 exists for; the
+	// right one takes episodes_agent_windows_idx (agent_handle=? AND
+	// embedding_windows>?), the partial index node migration 0030 ships —
+	// which is why that index earns its place twice, once for the ordinal
+	// count and once to find the rare rows that need it. Neither is a SCAN,
+	// and TestRecallScansOneSeatRatherThanTheTable is the guard.
+	//
+	// The residue is a multi-window row's own cost, and it is quadratic in
+	// its windows: `substr` over a packed blob loads the row's whole blob
+	// per call, so 150 windows is 150 reads of ~900 KB — the whole of the
+	// 24.9 ms cell above, for that ONE row. It stays because the alternative is a side table keyed
+	// by (episode, window), which node migration 0030 rejects for a reason
+	// that has not changed: an episode row rides the memsync compacted
+	// changelog, and a second subject family for its windows could never
+	// shrink. What the split buys is that this cost is confined to the rows
+	// that caused it.
+	//
+	// `ord` is the window ordinals and the MIN over them is a CORRELATED
+	// SCALAR SUBQUERY. Both halves of that are plan decisions, both are
+	// load-bearing, and both were measured on the fixture above (2 000
+	// episodes, 1 536 dimensions) against the single-vector statement's
+	// 11 ms:
+	//
+	//   - A SCALAR SUBQUERY RATHER THAN A JOIN WITH A GROUP BY. Written as
+	//     `JOIN ord … GROUP BY e.id`, the planner takes the PRIMARY KEY
+	//     index to satisfy the grouping and walks the WHOLE episodes table
+	//     in id order — throwing away exactly what
+	//     episodes_agent_ended_at_idx is for (schema/node/0002: the
+	//     agent-scoping is "what keeps that scan over one seat's thousands
+	//     of rows rather than the whole table"), which on a node running
+	//     twenty seats is a twentyfold regression nothing would report.
+	//     As a scalar subquery the outer shape is the single-vector
+	//     statement's, so EXPLAIN QUERY PLAN still says SEARCH e USING
+	//     INDEX episodes_agent_ended_at_idx (agent_handle=?).
+	//   - MATERIALIZED, AND THE COUNT IS A BOUND PARAMETER. A recursive CTE
+	//     read from a correlated subquery is re-run PER OUTER ROW, and the
+	//     re-run is not cheap even when it yields one row: 296 ms with the
+	//     count bound, and 8.5 seconds when the CTE also had to re-derive
+	//     the count from a per-seat MAX. MATERIALIZED pins it to one
+	//     evaluation — a VALUES list built in Go measures the same and was
+	//     rejected for it, because it makes the statement text vary with
+	//     the count and buys nothing.
+	//
+	// So the count arrives from [Episodes.widestWindowSet], one cheap read
+	// before this one.
+	//
+	// THE WIDTH FILTER IS NOW PER WINDOW — `embedding_windows * ?` — and
+	// that multiplication is the whole reason migration 0030 stores a count
+	// rather than deriving one: it makes the guard exact again, where
+	// dividing the length by a width would accept a row embedded in another
+	// model's space whenever the two divide.
+	//
 	// The kind filter is a bound list of short literals rather than
 	// placeholders because it comes from a typed enum this package owns —
 	// see kindList.
-	rows, err := e.db.SQL().QueryContext(ctx,
-		`SELECT `+episodeColumns+` FROM episodes WHERE id IN (
-		    SELECT id FROM (
-		        SELECT id, ended_at,
-		               vector_distance_cos(embedding, ?) AS distance
-		        FROM episodes
-		        WHERE agent_handle = ?
-		          AND embedding IS NOT NULL
-		          AND length(embedding) = ?
-		          AND kind IN (`+kindList(kinds)+`)
-		    )
-		    WHERE distance <= ?
-		    ORDER BY distance ASC, ended_at DESC, id DESC
-		    LIMIT ?
-		 )`,
-		probe, q.Handle, width, 1-floor, limit)
+	rows, err := e.db.SQL().QueryContext(ctx, recallStatement(kinds),
+		widest, probe, q.Handle, width, width, width, probe, q.Handle, width, 1-floor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)
 	}
@@ -154,10 +237,12 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	// infinity, so a single poisoned embedding would sort itself to the top
 	// of every recall this seat ever ran. [cosine] rejects those, and the
 	// rows it rejects are dropped here. That costs at most `limit`
-	// computations, against the thousands the loop used to do.
+	// computations times the row's window count, against the thousands the
+	// loop used to do — and a poisoned WINDOW now costs its window rather
+	// than its episode, which is [nearestWindow]'s own note.
 	var hits []Hit
 	for _, ep := range candidates {
-		sim, ok := cosine(q.Embedding, ep.Embedding)
+		sim, ok := nearestWindow(q.Embedding, ep.Embeddings)
 		if !ok || sim < floor {
 			continue
 		}
@@ -166,6 +251,137 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	rank(hits)
 	return hits, nil
 }
+
+// widestWindowSet is how many window ordinals a recall over this seat needs.
+//
+// A SEPARATE READ, because inside the recall statement this question cost the
+// recall: a per-seat MAX derived inside the ordinal CTE was re-evaluated for
+// every row the scan visited, and turned an 11 ms recall into 8.5 seconds on
+// 2 000 episodes (measured). Asked here it is one seek — 0.14 ms on the same
+// fixture — against the partial index node migration 0030 ships for it.
+//
+// PARTIAL ON `embedding_windows > 1`, which is what makes the index nearly
+// empty and the seek nearly free: a summary short enough to be one window is
+// almost every summary. It answers exactly anyway, because a seat with no row
+// above one HAS a maximum of one — COALESCE supplies it — and one ordinal is
+// all a single-window row can use.
+//
+// SCOPED TO THE PROBE'S WIDTH, the same predicate the recall's own filter
+// applies, so the ordinal count is exactly as long as the rows it will score:
+// a row from another embedding space, or one whose count and blob disagree,
+// is excluded from both rather than lengthening the list for a row that is
+// never scored.
+//
+// WHAT A CONCURRENT WRITE COSTS IS BOUNDED AND SELF-CORRECTING. A row written
+// between this read and the recall's own can hold MORE windows than this
+// answers, and it is then scored on its first `widest` of them for that one
+// query — never excluded, and never a loss of anything stored: every window
+// is on the row, [nearestWindow] re-scores whatever the statement returns over
+// ALL of them, and the next recall generates enough ordinals. Closing that gap
+// would mean holding both reads in one transaction, and this store's
+// transactions take the file's single write lock at BEGIN (see
+// internal/store/begin.go) — so an exact answer here would serialise every
+// seat's turn-start recall against every writer in the process.
+func (e *Episodes) widestWindowSet(ctx context.Context, handle string, width int) (int, error) {
+	var widest int
+	err := e.db.SQL().QueryRowContext(ctx, widestWindowStatement,
+		handle, width).Scan(&widest)
+	if err != nil {
+		return 0, err
+	}
+	// A seat with no comparable multi-window row still needs ordinal 0, and
+	// a stored count below one names no window at all — both answer one.
+	return max(widest, 1), nil
+}
+
+// nearestWindow is the similarity of the query to the CLOSEST of an episode's
+// window vectors, and false when none of them can be scored.
+//
+// THE SAME ARITHMETIC THE SQL DID, in the direction Hit.Similarity is read in:
+// the statement above minimises a cosine DISTANCE and this maximises a cosine
+// SIMILARITY over the same set, so the window it picks is the same one. Written
+// out rather than inferred from the distance the statement computed, because
+// that distance is not carried back — see the comment at the call site for the
+// two things this pass exists to do that the SQL cannot.
+//
+// A window [cosine] refuses does not disqualify the episode: refusal means that
+// ONE vector is unusable (a poisoned component, a width that does not match),
+// and the row is still worth ranking on the windows that are fine. It is only
+// when no window scores at all that the episode drops out, which is the same
+// answer the single-vector shape gave for its one unusable vector.
+func nearestWindow(query []float32, windows [][]float32) (float64, bool) {
+	best, scored := 0.0, false
+	for _, window := range windows {
+		sim, ok := cosine(query, window)
+		if !ok {
+			continue
+		}
+		if !scored || sim > best {
+			best, scored = sim, true
+		}
+	}
+	return best, scored
+}
+
+// recallStatement is the seat-similarity scan, for one kind filter.
+//
+// TWO BRANCHES OVER ONE SEAT, and the predicates partition the rows rather
+// than overlapping: `embedding_windows = 1` and `embedding_windows > 1`, each
+// guarded by the width check its own shape needs, so no episode can be scored
+// twice and none of them falls between the two. A row with a count of zero is
+// a row with no vector — the writer stores NULL and 0 together — and it is
+// excluded by the same `embedding IS NOT NULL` both branches carry, which the
+// right-hand one states although its length check already implies it: an
+// asymmetry there reads as an omission, and the next reader has to redo this
+// paragraph to find out it is not one.
+//
+// A FUNCTION rather than a literal at the call site, because the plan this
+// statement gets is an invariant with a test —
+// TestRecallScansOneSeatRatherThanTheTable runs EXPLAIN QUERY PLAN over
+// exactly this text — and a statement a test has to retype is a statement the
+// test stops describing.
+func recallStatement(kinds []Kind) string {
+	return `WITH RECURSIVE ord(k) AS MATERIALIZED (
+	     SELECT 0
+	     UNION ALL
+	     SELECT ord.k + 1 FROM ord WHERE ord.k + 1 < ?
+	 )
+	 SELECT ` + episodeColumns + ` FROM episodes WHERE id IN (
+	    SELECT id FROM (
+	        SELECT e.id AS id, e.ended_at AS ended_at,
+	               vector_distance_cos(e.embedding, ?) AS distance
+	        FROM episodes e
+	        WHERE e.agent_handle = ?
+	          AND e.embedding IS NOT NULL
+	          AND e.embedding_windows = 1
+	          AND length(e.embedding) = ?
+	          AND e.kind IN (` + kindList(kinds) + `)
+	        UNION ALL
+	        SELECT e.id AS id, e.ended_at AS ended_at,
+	               (SELECT MIN(vector_distance_cos(
+	                    substr(e.embedding, 1 + ord.k * ?, ?), ?))
+	                  FROM ord WHERE ord.k < e.embedding_windows) AS distance
+	        FROM episodes e
+	        WHERE e.agent_handle = ?
+	          AND e.embedding IS NOT NULL
+	          AND e.embedding_windows > 1
+	          AND length(e.embedding) = e.embedding_windows * ?
+	          AND e.kind IN (` + kindList(kinds) + `)
+	    )
+	    WHERE distance <= ?
+	    ORDER BY distance ASC, ended_at DESC, id DESC
+	    LIMIT ?
+	 )`
+}
+
+// widestWindowStatement is the ordinal-count read, and it is named for the
+// same reason recallStatement is: its plan is the whole point of the partial
+// index node migration 0030 adds, and the test that asserts it must read the
+// statement rather than a copy of it.
+const widestWindowStatement = `SELECT COALESCE(MAX(embedding_windows), 1) FROM episodes
+	 WHERE agent_handle = ?
+	   AND embedding_windows > 1
+	   AND length(embedding) = embedding_windows * ?`
 
 // kindList renders a kind filter as SQL literals.
 //
@@ -193,8 +409,15 @@ func kindList(kinds []Kind) string {
 // raised during iteration, after the query has already succeeded — and a
 // company that changes its embedding model leaves exactly those rows behind.
 // The Go loop skipped them silently (cosine returns false on a shape
-// mismatch); without `length(embedding) = ?` the SQL would turn that same
-// history into a recall that errors instead of one that returns what it can.
+// mismatch); without the length filter the SQL would turn that same history
+// into a recall that errors instead of one that returns what it can.
+//
+// The filter its callers build is `length(embedding) = embedding_windows * W`
+// rather than `= W`, because a row's blob holds one vector per window of its
+// text. The count is what keeps the comparison EXACT: dividing the length by W
+// instead would admit a row from another model's space whenever the two widths
+// happen to divide, and that row sorts on nonsense and spends a slot of the
+// LIMIT before the Go pass can refuse it.
 func vectorProbe(db *store.DB, embedding []float32) ([]byte, int, error) {
 	blob, err := db.EncodeVector(embedding)
 	if err != nil {

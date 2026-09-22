@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The learning WRITE side, wired.
@@ -32,6 +33,26 @@ import (
 // skill blocks — was wired first and looked healthy: it queried, found
 // nothing, and rendered nothing, which is indistinguishable from a young
 // company. Nothing wrote, so nothing was ever going to be found.
+
+// diary opens this node's seat diary, with the company's embedder attached.
+//
+// ONE CONSTRUCTOR FOR THE NODE, and every diary in this package goes through
+// it: the two write paths (the `reflect_and_persist` tool's deps and the
+// persist decider below) and the two read paths (the turn-start prefetch and
+// the retention sweep). The reason is the shape of the failure it prevents —
+// a diary built without an embedder still accepts every write, and the notes
+// it stores are simply never returned by [learning.Diary.Recall]. There is no
+// error, no log line and nothing to tell such a seat from one that learned
+// nothing, so "which construction site did this row come from" is a question
+// that must not be answerable.
+//
+// The embedder is read HERE, at each construction, rather than held: an apply
+// can add or replace one, and equip, the workers and the prefetch are each
+// rebuilt on the epoch they belong to. The retention sweep's diary is built
+// once at boot and may therefore carry none — it only deletes.
+func (e *Engine) diary(db *store.DB) *learning.Diary {
+	return learning.NewDiary(db, learning.WithEmbedding(e.embedder()))
+}
 
 // buildReflectionWorkers assembles this epoch's learning passes.
 //
@@ -77,7 +98,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 
 	var workers []learning.Worker
 	if models != nil && cfg.Reflect.Enabled.Or(true) && cfg.Reflect.PersistDecider.Or(true) {
-		decider, err := learning.NewPersistDecider(models, learning.NewDiary(db),
+		decider, err := learning.NewPersistDecider(models, e.diary(db),
 			learning.PersistOptions{MaxTokens: cfg.Reflect.BudgetTokens})
 		if err != nil {
 			log.Warn("persist_decider_unavailable", "error", err,

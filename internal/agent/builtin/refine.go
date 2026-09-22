@@ -77,7 +77,7 @@ func (t *refineSkill) Parameters() map[string]any {
 				"type": "string",
 				"description": fmt.Sprintf(
 					"Why it needed correcting — read by a person later. At most "+
-						"%d characters — longer is refused, not shortened.", diaryNoteMax),
+						"%d bytes — longer is refused, not shortened.", diaryNoteMax),
 			},
 		},
 		"required": []any{"skill_name", "content"},
@@ -113,7 +113,7 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		// after the skill has been loaded costs a round for an argument
 		// the model could have fixed up front.
 		return failed(fmt.Sprintf(
-			"That `reason` is %d characters and is capped at %d. Say what "+
+			"That `reason` is %d bytes and is capped at %d. Say what "+
 				"practice superseded the old text, in a sentence.",
 			len(reason), diaryNoteMax)), nil
 	case t.bodyMax > 0 && len(content) > t.bodyMax:
@@ -124,7 +124,7 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		// annotation per turn grows without bound, so the answer is to
 		// tighten the text, which is something the model can do.
 		return failed(fmt.Sprintf(
-			"That body is %d characters and this company caps a skill at %d "+
+			"That body is %d bytes and this company caps a skill at %d "+
 				"(learning.skill_refinement.max_body_chars). Tighten it: drop "+
 				"what practice has superseded rather than appending to it.",
 			len(content), t.bodyMax)), nil

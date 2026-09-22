@@ -54,6 +54,13 @@ type (
 	}
 
 	// DiaryStore is the durable-notes half.
+	//
+	// WRITE TAKES THE NOTE AND NOTHING ELSE. The vector a later recall
+	// ranks on is made by the store as it writes (see
+	// [learning.DiaryEntry.Embedding]); a tool that embedded its own note
+	// would be a second answer to where a diary row's vector comes from,
+	// free to differ from the post-turn writer's — and what it costs when
+	// they differ is a note that is stored and never recalled.
 	DiaryStore interface {
 		Write(ctx context.Context, e learning.DiaryEntry) error
 		Recent(ctx context.Context, agentID string, now time.Time, limit int) ([]learning.DiaryEntry, error)
@@ -78,12 +85,18 @@ const noteLimit = 5
 // "limit: 500" would let one call spend a phase's whole context on history.
 const maxEpisodeLimit = 25
 
-// diaryNoteMax bounds one written note.
+// diaryNoteMax bounds one written note, in BYTES.
 //
 // The store's own rule, not a second opinion about it: [learning.MaxContentChars]
 // is where it is stated, because the post-turn PersistDecider writes into the
 // same table and the two used to disagree — this path refused an over-long note
 // while that one stored it whole.
+//
+// BYTES is not what the name says and is what every guard on it counts: each
+// one is len() over a Go string. So the refusals below say bytes, because a
+// model told it wrote 3 000 characters of CJK when it wrote 1 000 has been
+// handed a number it cannot reproduce by counting what it typed, and the
+// refusal's whole job is to let it aim.
 const diaryNoteMax = learning.MaxContentChars
 
 // --- use_skill ------------------------------------------------------------ //
@@ -551,7 +564,7 @@ func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed("reflect_and_persist needs `content`: the fact to keep."), nil
 	case len(content) > diaryNoteMax:
 		return failed(fmt.Sprintf(
-			"That note is %d characters and the limit is %d. A note is re-read "+
+			"That note is %d bytes and the limit is %d. A note is re-read "+
 				"in later prompts, so its cost is paid every time — keep the "+
 				"fact and drop the narrative, or publish the long version to "+
 				"the knowledge base where colleagues can read it too.",
@@ -599,7 +612,7 @@ func (t *markOnboarded) Parameters() map[string]any {
 				"type": "string",
 				"description": fmt.Sprintf(
 					"Optional: what you learned while orienting. At most %d "+
-						"characters — longer is refused, not shortened.", diaryNoteMax),
+						"bytes — longer is refused, not shortened.", diaryNoteMax),
 			},
 		},
 	}
@@ -625,7 +638,7 @@ func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	notes := strings.TrimSpace(argString(args, "notes"))
 	if len(notes) > diaryNoteMax {
 		return failed(fmt.Sprintf(
-			"Those notes are %d characters and a diary note is capped at %d. "+
+			"Those notes are %d bytes and a diary note is capped at %d. "+
 				"Tighten them — what you keep is what you will read back.",
 			len(notes), diaryNoteMax)), nil
 	}

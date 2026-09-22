@@ -1,6 +1,7 @@
 package memsync
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"path/filepath"
@@ -113,6 +114,50 @@ func carry(t *testing.T, from, to *store.DB) int {
 		}
 	}
 	return carried
+}
+
+// A MULTI-WINDOW EPISODE'S WINDOW COUNT TRAVELS WITH ITS BLOB.
+//
+// `episodes.embedding` holds one vector per window of the task summary, packed
+// end to end, and `embedding_windows` is the only thing that says where one
+// ends — so the two are one fact and carrying half of it is worse than
+// carrying neither. Left out of the registry, a three-window row arrives
+// labelled with the column's default of 1, recall reads the blob as a single
+// vector three times too wide, its width check refuses it, and the seat's
+// recall of that turn is gone. Silently, and only on the seats that moved.
+func TestAnEpisodesWindowCountCrossesWithItsBlob(t *testing.T) {
+	t.Parallel()
+	oldOwner, newOwner := openStore(t), openStore(t)
+	at := time.Now().UTC().Add(-time.Hour).UnixMicro()
+	// Three 4-byte windows end to end: 12 bytes that mean one thing read as
+	// three vectors and another read as one.
+	blob := []byte{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0}
+	if _, err := oldOwner.SQL().ExecContext(t.Context(),
+		`INSERT INTO episodes (id, agent_handle, agent_role, turn_id, started_at,
+		 ended_at, plan_summary, task_summary, tool_sequence, review_outcome,
+		 duration_ms, embedding, embedding_windows, kind)
+		 VALUES (?, ?, 'Engineer', 't1', ?, ?, 'plan', 'a long task', '[]',
+		 'done', 1200, ?, 3, 'raw')`,
+		"e-windows", seat.Handle, at, at, blob); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	carry(t, oldOwner, newOwner)
+
+	var windows int
+	var carried []byte
+	if err := newOwner.SQL().QueryRowContext(t.Context(),
+		`SELECT embedding_windows, embedding FROM episodes WHERE id = ?`,
+		"e-windows").Scan(&windows, &carried); err != nil {
+		t.Fatalf("read the carried row: %v", err)
+	}
+	if windows != 3 {
+		t.Errorf("the carried row says %d window(s), want 3 — recall will read "+
+			"its %d-byte blob as one vector and skip the row", windows, len(carried))
+	}
+	if !bytes.Equal(carried, blob) {
+		t.Errorf("embedding = %v, want the packed windows unchanged", carried)
+	}
 }
 
 // THE BUG, stated as a test: a seat's memory has to survive moving to a node
@@ -362,6 +407,130 @@ func TestEveryAgentKeyedTableTravels(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read the schema: %v", err)
 	}
+}
+
+// notCarried names every column of a carried table that deliberately does NOT
+// travel, with the reason, keyed "table.column".
+//
+// A map rather than a count, for the reason internal/skipgate gives about
+// skips: a count goes green when one entry is fixed and another appears. It is
+// read in BOTH directions by the test below — an entry naming a column that no
+// longer exists, or one that the registry has since started carrying, is as
+// much of a lie as a missing entry.
+var notCarried = map[string]string{
+	"conversation_sessions.id": "an AUTOINCREMENT that starts at 1 on every " +
+		"node, so carrying it would collide two unrelated entries the moment " +
+		"two nodes had both written one — entry_id is the natural key instead",
+}
+
+// EVERY COLUMN OF A CARRIED TABLE TRAVELS, OR IS DECLARED NOT TO.
+//
+// TestEveryAgentKeyedTableTravels above holds the same rule one level up: a
+// new memory TABLE that nothing carries fails the build. This is the level it
+// could not reach. The registry lists columns explicitly — which is right,
+// because `SELECT *` would carry a node-local column the day somebody adds one
+// — and the cost of explicit is that a column added to a table ALREADY in the
+// registry travels nowhere, with nothing to say so.
+//
+// That is not hypothetical. `episodes.embedding_windows` (node migration 0030)
+// is the count of vectors packed into the row's `embedding` blob, and a row
+// carried without it arrives labelled with the column's default of one: recall
+// then reads a three-window blob as a vector three times too wide, skips the
+// row, and the seat's memory of that turn is gone. Visibly only on the seats
+// that moved node, which is the hardest place in this system to look.
+//
+// So the guard is on the SHAPE and not on any one column: whatever the schema
+// grows next, either the registry carries it or somebody writes down here why
+// it stays behind.
+func TestEveryColumnOfACarriedTableTravels(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+
+	for _, spec := range tables {
+		rows, err := db.SQL().QueryContext(t.Context(),
+			`SELECT name FROM pragma_table_info(?)`, spec.name)
+		if err != nil {
+			t.Fatalf("read the columns of %s: %v", spec.name, err)
+		}
+		inSchema := map[string]bool{}
+		for rows.Next() {
+			var column string
+			if err := rows.Scan(&column); err != nil {
+				t.Fatalf("scan a column of %s: %v", spec.name, err)
+			}
+			inSchema[column] = true
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("read the columns of %s: %v", spec.name, err)
+		}
+		_ = rows.Close()
+		if len(inSchema) == 0 {
+			t.Fatalf("%s is in the registry and not in the schema", spec.name)
+		}
+
+		carried := map[string]bool{}
+		for _, column := range spec.columns {
+			carried[column] = true
+			if !inSchema[column] {
+				t.Errorf("memsync carries %s.%s, which this schema has no "+
+					"column for — every replication cycle will fail on it",
+					spec.name, column)
+			}
+		}
+		for column := range inSchema {
+			if carried[column] {
+				continue
+			}
+			if _, deliberate := notCarried[spec.name+"."+column]; deliberate {
+				continue
+			}
+			t.Errorf("%s.%s is in the schema and not in memsync's column list, "+
+				"so it does not travel: a seat that moves node arrives with "+
+				"this column at its default and nothing reports it. Carry it, "+
+				"or add it to notCarried with the reason",
+				spec.name, column)
+		}
+	}
+
+	// THE OTHER DIRECTION. An exemption that has stopped applying — because
+	// the column went, or because the registry started carrying it — is a
+	// reason nobody will re-examine, sitting where the next reader looks for
+	// one.
+	for entry, reason := range notCarried {
+		table, column, ok := strings.Cut(entry, ".")
+		if !ok || reason == "" {
+			t.Errorf("notCarried[%q] is not a table.column with a reason", entry)
+			continue
+		}
+		spec, found := specFor(table)
+		if !found {
+			t.Errorf("notCarried names %s, which memsync does not carry at all", table)
+			continue
+		}
+		if slices.Contains(spec.columns, column) {
+			t.Errorf("notCarried says %s stays behind and the registry carries "+
+				"it; one of the two is out of date", entry)
+		}
+		var exists bool
+		if err := db.SQL().QueryRowContext(t.Context(),
+			`SELECT COUNT(*) > 0 FROM pragma_table_info(?) WHERE name = ?`,
+			table, column).Scan(&exists); err != nil {
+			t.Fatalf("look up %s: %v", entry, err)
+		}
+		if !exists {
+			t.Errorf("notCarried names %s, which this schema has no column for", entry)
+		}
+	}
+}
+
+// specFor finds a registry entry by table name.
+func specFor(name string) (table, bool) {
+	for _, spec := range tables {
+		if spec.name == name {
+			return spec, true
+		}
+	}
+	return table{}, false
 }
 
 // A node that held a seat, lost it while a peer kept learning, and took it

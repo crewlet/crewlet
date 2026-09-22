@@ -66,7 +66,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 			deps.Refinable = skills
 		}
 		deps.Episodes = learning.NewEpisodes(db)
-		deps.Diary = learning.NewDiary(db)
+		deps.Diary = e.diary(db)
 		deps.Onboarding = learning.NewOnboarding(db)
 	}
 	// THE REGISTRY, NOT ITS CONTENT. load_tool_skill is registered

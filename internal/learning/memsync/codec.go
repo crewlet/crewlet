@@ -181,6 +181,24 @@ func decodeCell(cell any) (any, error) {
 	return raw, nil
 }
 
+// subjectKeyBytes is how much of the key digest the subject token carries.
+//
+// SIXTEEN BYTES, 128 bits, which is a COLLISION bound and not a display one:
+// this stream is COMPACTED, so one retained message per subject, and two keys
+// that hashed alike would be one row silently overwriting the other on every
+// node that hydrates from it. Over a seat's own rows in one table — a diary
+// capped at 500 entries, a profile per correspondent, a skill per procedure —
+// 2^64 distinct keys before an even chance of one pair colliding is not a
+// margin this deployment can consume. The full 32 bytes would double the
+// token with nothing bought; a bare number here would be a choice nobody
+// could check.
+//
+// NOT A CUT OF A VALUE, which is why nothing marks it: the digest is an
+// ADDRESS derived from the key, never a shortened copy of it, and the row
+// carries every key column in its own payload — [upsert] writes them
+// back from there, so no reader ever has to invert this.
+const subjectKeyBytes = 16
+
 // subject is the row's address on the changelog.
 //
 // The seat and the table are readable; the key is HASHED. A natural key can
@@ -194,7 +212,7 @@ func (t table) subject(handle string, values map[string]any) string {
 		parts = append(parts, fmt.Sprint(values[column]))
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return fmt.Sprintf("%s%s.%s.%x", topics.MemoryPrefix, handle, t.name, sum[:16])
+	return fmt.Sprintf("%s%s.%s.%x", topics.MemoryPrefix, handle, t.name, sum[:subjectKeyBytes])
 }
 
 // upsert writes one carried row into this node's store.
