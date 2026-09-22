@@ -9,7 +9,7 @@
 --   * It answered the wrong question. The guard exists so that a node holding
 --     an OLDER chart cannot walk back what a node holding a newer one wrote,
 --     and a clock says which node wrote LAST — which during a rollout is
---     routinely the node with the older view. 0015's `chart_position` answers
+--     routinely the node with the older view. 0016's `chart_position` answers
 --     it directly: both numbers are packed positions on the org chart's own
 --     log, so the higher one IS the later chart, on every node, with no
 --     agreement about time required.
@@ -25,6 +25,6 @@
 -- The DATA is not migrated, and there is nothing to migrate: the value is a
 -- comparison input the next reconcile re-establishes. Every project's
 -- `chart_position` is 0 until the first reconcile after this lands, which is
--- the state 0015 shipped it in, and a 0 loses to every real position — so the
+-- the state 0016 shipped it in, and a 0 loses to every real position — so the
 -- first pass writes each project once and every pass after it writes nothing.
 ALTER TABLE tracker_projects DROP COLUMN chart_epoch;

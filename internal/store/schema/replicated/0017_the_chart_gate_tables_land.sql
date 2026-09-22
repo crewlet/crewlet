@@ -1,11 +1,11 @@
 -- The chart domain's three GATE tables.
 --
--- 0015 created the objects, the edges, the history and the import ledger —
+-- 0016 created the objects, the edges, the history and the import ledger —
 -- everything a record's payload rebuilds. These three are the other half: what
 -- the applier reads BEFORE it writes anything, and what stays true after the
 -- record that wrote it has been trimmed away.
 --
--- THEY ARE A SECOND MIGRATION RATHER THAN AN EDIT TO 0015, which is the rule
+-- THEY ARE A SECOND MIGRATION RATHER THAN AN EDIT TO 0016, which is the rule
 -- `schema_migrations` forces and not a preference: it keys on the FILENAME, so
 -- a table added by editing a file that has already run never runs on any
 -- database that applied it — and that database then serves a build whose
