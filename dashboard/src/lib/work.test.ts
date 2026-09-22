@@ -13,12 +13,17 @@ import { expect, test } from "vitest";
 // carrying its own copy of the glyph goes green on whatever is written.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  SCOPES,
+  STATUSES,
   TYPE_ICON,
   totalHint,
   anyFilter,
   axisLabel,
   bandsByDue,
+  bandsOf,
   dueBucket,
+  groupAxisOptions,
+  secondAxisOptions,
   filterChips,
   bucketByDay,
   buildItemsParams,
@@ -26,6 +31,9 @@ import {
   dayKey,
   defaultView,
   describeChange,
+  endNote,
+  LANDING_SHAPE,
+  SCOPE_GROUPS,
   effectiveArrangement,
   EXPLICIT_NONE,
   describeHistory,
@@ -46,6 +54,7 @@ import {
   typeIcon,
   typeName,
   type LabelContext,
+  type Scope,
   countedLabel,
   dayLabel,
   monthOrNow,
@@ -326,6 +335,119 @@ test("a history entry renders a delta pair and a bare value alike", () => {
   expect(describeHistory(change({ fields: { status: "done" } }), {})).toBe("Status: Done");
 });
 
+// ONE SENTENCE, TWO SURFACES. The feed read `fields` as a from/to map and the
+// item's history read it as either shape, so the two worded one commit two ways
+// — and the feed printed `[object Object]` for the half it could not read. Both
+// go through one function now and differ on the excerpt rung alone, which is
+// what these two halves assert together.
+test("the feed and a history entry word one commit identically", () => {
+  const fields = { status: { from: "todo", to: "done" }, assignee: { from: "", to: "ada" } };
+  const said = `Status: To do → Done, Assignee: ${EMPTY_VALUE} → ada`;
+  expect(describeChange(record({ kind: "comment", fields, excerpt: "ignore me" }), {})).toBe(said);
+  expect(describeHistory(change({ kind: "comment", fields }), {})).toBe(said);
+});
+
+// AND THE WORDING IS GENERIC OVER THE KIND. Nothing below the entry point
+// switches on it: `fields_json` carries no tag saying what its entries are
+// about, so a renderer that branched on the kind would be guessing at a shape
+// it can read. The consequence is what this case pins — a kind this build has
+// never heard of renders its deltas exactly as a `status` commit does, which is
+// also what will happen the day the engine starts recording deltas for the
+// kinds that carry none today (`relations`, `project_updated`, `view_saved`,
+// `person_updated`), with nothing here to change.
+test("a delta renders the same whatever kind of change carried it", () => {
+  const fields = { purpose: { from: "Ship it", to: "Ship it well" } };
+  for (const kind of ["project_updated", "view_saved", "person_updated", "a_kind_from_2030"]) {
+    expect(describeHistory(change({ kind, fields }), {})).toBe("Purpose: Ship it → Ship it well");
+  }
+  // A COLLECTION THE NOTIFICATION CARRIED WHOLE, which is the other shape and
+  // takes no second rule either.
+  expect(
+    describeHistory(change({ kind: "relations", fields: { waiting_on: ["ENG-1"] } }), {}),
+  ).toBe("Waiting on: ENG-1");
+});
+
+// AND A KIND THAT MOVED NOTHING IS STILL THE KIND. The engine records no deltas
+// at all for several of these today, and inventing a sentence for them would be
+// this screen making something up about somebody's company.
+test("a change with nothing recorded against it names its kind", () => {
+  expect(describeHistory(change({ kind: "project_updated" }), {})).toBe("changed the project");
+  expect(describeChange(record({ kind: "project_updated" }), {})).toBe("project updated");
+});
+
+// A RELATION NAMES ANOTHER TASK BY ID, and for the reason a due date travels as
+// an instant: the record is the state log's, written identically by N nodes, and
+// a key belongs to the other task's own row — so a node that had not applied
+// that task would store a different string for ever. The answer resolves what it
+// can and the surface renders it, which is the same division every other value
+// in this file takes.
+test("a relation delta reads as the other task's key where the answer knew it", () => {
+  const ctx: LabelContext = { taskKey: (id) => (id === "t-2" ? "ENG-2" : "") };
+  expect(
+    describeHistory(
+      change({ kind: "relations", fields: { waiting_on: { from: "", to: "t-2" } } }),
+      ctx,
+    ),
+  ).toBe(`Waiting on: ${EMPTY_VALUE} → ENG-2`);
+  // EVERY FIELD WHOSE VALUE IS TASKS, so one added to the engine's set and
+  // missed here is a column of uuids rather than a silent omission.
+  for (const field of ["waiting_on", "linked", "duplicates", "blocking", "priorities"]) {
+    expect(describeHistory(change({ fields: { [field]: ["t-2"] } }), ctx)).toContain("ENG-2");
+  }
+  // AND `page` IS NOT ONE OF THEM. It is the fourth relation kind and it names
+  // a wiki page, so the answer leaves its ids out of the map entirely and
+  // resolving it here would be claiming a page is a task.
+  expect(describeHistory(change({ fields: { page: ["t-2"] } }), ctx)).toBe("Page: t-2");
+  // AN ID THE ANSWER DID NOT RESOLVE RENDERS AS ITSELF. The commonest reason is
+  // a counterparty this node has not applied, and a value nobody can explain is
+  // still a value somebody set — a blank would read as a task with no name.
+  expect(describeHistory(change({ fields: { waiting_on: ["t-9"] } }), ctx)).toBe("Waiting on: t-9");
+  // AND A LIST IS RESOLVED MEMBER BY MEMBER, including the `+N more` tail the
+  // engine appends when it cuts a long collection at a whole member.
+  expect(describeHistory(change({ fields: { blocking: ["t-2", "t-9", "+12 more"] } }), ctx)).toBe(
+    "Blocking: ENG-2, t-9, +12 more",
+  );
+});
+
+// A NOTIFICATION IS ADDRESSED AND A LOG IS NOT. `tracker.prioritisedWake` writes
+// the card the woken seat reads — "…of your priorities" — which is correct for
+// that seat and second person to every other reader of the company-wide log.
+// The record names whose it is (a person subject's id IS the handle), so the
+// owner is always nameable.
+test("a sentence written for one seat is re-addressed to whoever is reading it", () => {
+  const woken = record({
+    kind: "prioritised",
+    subject_kind: "person",
+    subject_id: "agent-swe",
+    excerpt: "founder put ENG-1 at position 1 of your priorities",
+  });
+  expect(describeChange(woken, { viewer: "ada" })).toBe(
+    "founder put ENG-1 at position 1 of agent-swe's priorities",
+  );
+  // THE COMPANY'S OWN WORD FOR THEM, like every other handle on the screen.
+  expect(describeChange(woken, { viewer: "ada", seatName: () => "Sam Wu" })).toContain(
+    "Sam Wu's priorities",
+  );
+  // AND SECOND PERSON SURVIVES FOR THE ONE READER IT IS TRUE OF.
+  expect(describeChange(woken, { viewer: "agent-swe" })).toContain("your priorities");
+  // NOBODY IN PARTICULAR IS NOT THE OWNER: an anonymous reader is told whose
+  // queue it is rather than being addressed as them.
+  expect(describeChange(woken, {})).toContain("agent-swe's priorities");
+});
+
+// SCOPED TO A PERSON SUBJECT, because that is the only kind of record the engine
+// addresses to somebody. A task's excerpt is a comment body or a description,
+// and its "you" belongs to whoever wrote it — rewriting that would put the
+// task's own owner into a sentence somebody else typed.
+test("an excerpt on a task is left exactly as it was written", () => {
+  expect(
+    describeChange(
+      record({ kind: "comment", subject_key: "ENG-1", excerpt: "can you take this one?" }),
+      { viewer: "ada" },
+    ),
+  ).toBe("can you take this one?");
+});
+
 // ---------------------------------------------------------------------------
 // Custom fields
 // ---------------------------------------------------------------------------
@@ -389,7 +511,7 @@ test("a people field resolves each handle to a name", () => {
 // Views and the query
 // ---------------------------------------------------------------------------
 
-test("a builtin view's shape is its own, and an unknown key draws the board", () => {
+test("a builtin view's shape is its own, and an unknown key draws the landing shape", () => {
   const views = [
     view({ key: "list", type: "list" }),
     view({ key: "calendar", type: "calendar" }),
@@ -400,12 +522,17 @@ test("a builtin view's shape is its own, and an unknown key draws the board", ()
   expect(shapeOf("saved", views)).toBe("calendar");
   // A STRIP THAT HAS NOT ARRIVED is the ordinary state of the first paint,
   // and a body that waited for it would flash empty on every navigation.
-  expect(shapeOf("board", [])).toBe("board");
+  expect(shapeOf("board", [])).toBe(LANDING_SHAPE);
 });
 
-test("the landing tab is the one the container marks, else the board", () => {
+// A CONTAINER NOBODY HAS SAVED A DEFAULT FOR OPENS ON THE LIST. A board's
+// information is the comparison across its lanes, so it is the worst shape at
+// low N — one card 292px wide in a 1500px field — where a list degrades to one
+// full-width row and keeps being a list. The board stays one press away.
+test("the landing tab is the one the container marks, else the list", () => {
   expect(defaultView([view({ key: "list" }), view({ key: "mine", default: true })])).toBe("mine");
-  expect(defaultView([view({ key: "list" })])).toBe("board");
+  expect(defaultView([view({ key: "board" })])).toBe("list");
+  expect(LANDING_SHAPE).toBe("list");
 });
 
 const build = (over: Partial<Parameters<typeof buildItemsParams>[0]> = {}) =>
@@ -654,6 +781,36 @@ test("a column's overflow lands on the list, narrowed to that column", () => {
     group_by: "assignee",
     group: "ada",
   });
+  // AND THE UNSET COLUMN'S KEY IS THE EMPTY STRING, which the patch carries as
+  // a VALUE. Dropped, the "Unassigned" column's own "N more →" narrowed to
+  // nothing and loaded the whole board — the one column whose overflow a lead
+  // actually follows.
+  expect(filterPatchForGroup("assignee", "").group).toBe("");
+});
+
+// THE NARROWING IS THREE-VALUED, and the middle value is the one the engine
+// distinguishes with `Params.Has`: absent is the whole board, `""` is the
+// column holding the rows with NO value on this axis, and anything else is that
+// value. Spelled as one string, the empty column could not be asked for at all.
+test("an absent column narrowing and an empty one are different questions", () => {
+  const narrowed = (group: string | undefined) =>
+    build({ shape: "list", view: {}, filters: { ...NO_FILTERS, groupBy: "assignee", group } });
+  // ABSENT: no key on the wire, so the answer is every column.
+  expect("group" in narrowed(undefined)).toBe(false);
+  // PRESENT AND EMPTY: the key is sent, holding nothing, which is the
+  // unassigned column.
+  expect(narrowed("")).toMatchObject({ group: "" });
+  expect("group" in narrowed("")).toBe(true);
+  expect(narrowed("ada")).toMatchObject({ group: "ada" });
+  // AND A VIEW'S OWN `group` STANDS where the reader asked for nothing — a
+  // view is a set of defaults, and absence is what inherits them.
+  expect(
+    build({
+      shape: "list",
+      view: { group_by: "assignee", group: "ada" },
+      filters: { ...NO_FILTERS, group: undefined },
+    }),
+  ).toMatchObject({ group: "ada" });
 });
 
 test("a clear control appears only once something is narrowing the rows", () => {
@@ -671,8 +828,12 @@ test("a clear control appears only once something is narrowing the rows", () => 
   expect(anyFilter({ ...NO_FILTERS, groupBy2: "type" })).toBe(false);
   expect(anyFilter({ ...NO_FILTERS, sort: "due" })).toBe(false);
   // Narrowing a board to ONE of its columns narrows the whole query, totals
-  // included, so that one stays.
+  // included, so that one stays — READ ON ITS PRESENCE, because the unset
+  // column's own key is the empty string and a truth test called that no
+  // narrowing at all.
   expect(anyFilter({ ...NO_FILTERS, group: "ada" })).toBe(true);
+  expect(anyFilter({ ...NO_FILTERS, group: "" })).toBe(true);
+  expect(anyFilter({ ...NO_FILTERS, group: undefined })).toBe(false);
 });
 
 test("a view's status groups map back onto the three segments", () => {
@@ -977,6 +1138,40 @@ test("a count over a windowed question says which window it counted", () => {
   expect(countedLabel(6, windowed)).toBe("6 items due in this window");
 });
 
+// A LIST THAT ENDED AND A LIST THAT WAS CUT OFF END THE SAME WAY without this:
+// rows, then page ground. `totalHint` is silent once everything matching is on
+// screen and a cursor is invisible, so the reader of a hundred rows cannot tell
+// whether the hundred-and-first exists.
+test("a complete list says it is complete and an incomplete one says nothing", () => {
+  const cases: { note: string; want: string }[] = [
+    // Complete: the hint counted the same set the rows came from.
+    { note: endNote({ shown: 2, hint: 2, narrowed: false }), want: "That is all of it · 2 items" },
+    { note: endNote({ shown: 1, hint: 1, narrowed: false }), want: "That is all of it · 1 item" },
+    // A NARROWING CHANGES THE NOUN AND NOTHING ELSE. It never says how many the
+    // filter hides: `total_hint` counts what MATCHED, over the same predicate
+    // as the rows, so the unfiltered total is not in this answer at all.
+    {
+      note: endNote({ shown: 2, hint: 2, narrowed: true }),
+      want: "That is all of it · 2 items match",
+    },
+    {
+      note: endNote({ shown: 1, hint: 1, narrowed: true }),
+      want: "That is all of it · 1 item matches",
+    },
+    // A page with a cursor is not the end of anything.
+    { note: endNote({ shown: 100, hint: 100, cursor: "c1", narrowed: false }), want: "" },
+    // More matches than rows: the count in the bar already says there is more.
+    { note: endNote({ shown: 100, hint: 240, narrowed: false }), want: "" },
+    // A COUNT THAT STOPPED AT THE CEILING is not a count that finished.
+    { note: endNote({ shown: 100, hint: 100, capped: true, narrowed: false }), want: "" },
+    // AND AN EMPTY LIST GETS THE EMPTY STATE, never "that is all of it" over
+    // nothing at all.
+    { note: endNote({ shown: 0, hint: 0, narrowed: false }), want: "" },
+    { note: endNote({ shown: 0, hint: 0, narrowed: true }), want: "" },
+  ];
+  for (const c of cases) expect(c.note).toBe(c.want);
+});
+
 // THE GRAMMAR HAS ONE `due` KEY, and the calendar's own axis is already spending
 // it — so a due filter set on another shape could survive into this one and
 // narrow nothing at all, which is how a reader concludes their filter matched
@@ -1157,6 +1352,12 @@ test("a board narrowed to one column is chipped by that column's axis", () => {
   )[0];
   expect(chip?.label).toBe("Assignee");
   expect(chip?.value).toBe("Ada Okonkwo");
+  // AND THE UNSET COLUMN IS NAMED BY ITS AXIS, not left unchipped: a board
+  // narrowed to Unassigned is a narrowed board, and a chip is the only thing
+  // that says so and the only way off it.
+  const unset = filterChips({ ...NO_FILTERS, groupBy: "assignee", group: "" })[0];
+  expect(unset?.label).toBe("Assignee");
+  expect(unset?.value).toBe("Unassigned");
 });
 
 // ONE VALUE OF ONE AXIS, split out of `groupLabel` because two surfaces ask it
@@ -1166,6 +1367,29 @@ test("an axis names its own empty key", () => {
   expect(axisLabel("assignee", "")).toBe("Unassigned");
   expect(axisLabel("tag", "")).toBe("Untagged");
   expect(axisLabel("status", "")).toBe("No status");
+});
+
+// ---------------------------------------------------------------------------
+// The scope segment
+// ---------------------------------------------------------------------------
+
+// ONE SPELLING OF THE SCOPE MAPPING, because two readers turn on it: the query
+// builder writes the key and `scopeOf` reads it back off a saved view. Written
+// twice it drifts silently — a segment whose group nothing reads back snaps the
+// control to the wrong value over a query that is narrowing correctly. The
+// lanes a board draws were a third reader until the engine started deriving
+// them from its own predicate.
+test("the scope segment and the query read one mapping", () => {
+  for (const scope of SCOPES) {
+    const params = buildItemsParams({
+      container: "workspace",
+      shape: "board",
+      view: {},
+      filters: { ...NO_FILTERS, scope },
+    });
+    expect(scopeOf(params.status_group as string | undefined), scope).toBe(scope);
+    expect(params.status_group ?? "", scope).toBe(SCOPE_GROUPS[scope]);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -1244,4 +1468,43 @@ test("the bands are the ones that hold something, in the day's own order", () =>
   );
   expect(bands.map((b) => b.key)).toEqual(["overdue", "today", "later", "none"]);
   expect(bands.map((b) => b.rows.map((r) => r.key))).toEqual([["B"], ["C"], ["A"], ["D"]]);
+});
+
+// ---------------------------------------------------------------------------
+// The lanes a board draws and the bands a list draws
+// ---------------------------------------------------------------------------
+
+// A BOARD DRAWS EVERY LANE AND A LIST DRAWS ONLY THE BANDS THAT HOLD SOMETHING.
+// The engine mints the empty lanes on a closed axis so a board is the shape of
+// the process; a list is runs of rows under headings, and a heading over
+// nothing separates nothing from nothing. Two drawings of one answer.
+test("a list keeps only the bands that hold rows, or lanes of their own", () => {
+  const groups = [
+    group("todo", { count: 1, rows: [row("1")] }),
+    group("in_progress", { count: 0, rows: [] }),
+    group("in_review", { count: 0, rows: [], subgroups: [group("high", { count: 0, rows: [] })] }),
+  ];
+  expect(bandsOf(groups).map((g) => g.key)).toEqual(["todo", "in_review"]);
+  expect(bandsOf([])).toEqual([]);
+});
+
+// "NOTHING MATCHES" IS THE FILTER-MISS SENTENCE, and it was drawn over an
+// unfiltered board. An empty scope is a different fact with a different
+// remedy, and the scope segment — always set to something — decides WHICH of
+// the three, never whether the filter sentence is due.
+
+// A BOARD LISTS "STATUS" ONCE. The menu used to list a `""` row labelled
+// "Status" ahead of the status axis itself — two rows reading one word with
+// different URL effects — and a project axis only where the engine takes it.
+test("the grouping picker offers each axis once, and project at workspace scope only", () => {
+  const board = groupAxisOptions("board", true);
+  expect(board.filter((o) => o.label === "Status")).toHaveLength(1);
+  expect(board.some((o) => o.value === "")).toBe(false);
+  expect(board.some((o) => o.value === "project")).toBe(true);
+  expect(groupAxisOptions("board", false).some((o) => o.value === "project")).toBe(false);
+  // EVERY OTHER SHAPE CAN BE UNGROUPED, so it leads with that.
+  expect(groupAxisOptions("list", true)[0]).toEqual({ value: "", label: "No grouping" });
+  // AND THE SECOND AXIS NEVER OFFERS THE FIRST, which the engine refuses.
+  expect(secondAxisOptions("status", true).some((o) => o.value === "status")).toBe(false);
+  expect(secondAxisOptions("status", true)[0]?.value).toBe("");
 });

@@ -10,7 +10,7 @@
  * to shape, and that each lens answers its own question.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Project, ProjectPeek } from "./Project.tsx";
@@ -189,8 +189,12 @@ test("a project whose work was all removed still opens its trash", async () => {
 test("the Items lens carries the open count, and the other two carry none", async () => {
   serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
   mount();
-  await waitFor(() => expect(screen.getAllByRole("tab").length).toBe(3));
-  const tabs = screen.getAllByRole("tab");
+  // THE LENS ROW BY NAME. The Items lens draws the list's own view strip
+  // whether or not anybody has saved a view, so "every tab on the screen" is
+  // more than these three and is not what this case is about.
+  await waitFor(() => expect(screen.getByRole("tablist", { name: "Lens" })).toBeTruthy());
+  const tabs = within(screen.getByRole("tablist", { name: "Lens" })).getAllByRole("tab");
+  expect(tabs.length).toBe(3);
   expect(tabs[0]?.textContent).toBe("Items12");
   expect(tabs[1]?.textContent).toBe("Overview");
   expect(tabs[2]?.textContent).toBe("History");
@@ -224,11 +228,18 @@ test("the work is the lens a project opens on, scoped to this project", async ()
   });
   mount();
   await waitFor(() => expect(asked(query).container).toBe("project:ENG"));
-  expect(screen.getAllByRole("tab").map((el) => el.textContent)).toEqual([
-    "Items12",
-    "Overview",
-    "History",
-  ]);
+  // THE LENS ROW BY NAME, because the Items lens brings a tab row of its own:
+  // the list's view strip is drawn whether or not anybody has saved a view, and
+  // its first tab is this container's own list. Read as "every tab on the
+  // screen" this case would fail the day either row gains a member, which is
+  // not what it is about.
+  const lenses = screen.getByRole("tablist", { name: "Lens" });
+  expect(
+    within(lenses)
+      .getAllByRole("tab")
+      .map((el) => el.textContent),
+  ).toEqual(["Items12", "Overview", "History"]);
+  expect(screen.getByRole("tab", { name: "All in this project" })).toBeTruthy();
 });
 
 // A LENS IS A SECTION, so it is in the URL: a reader who walked to the

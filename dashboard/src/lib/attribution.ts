@@ -83,7 +83,7 @@ export function attribution(history: readonly WorkChange[] | undefined): Map<str
     // A change with no actor attributes nothing: the line's whole content is
     // who, and "set by" with nobody after it is worse than silence.
     if (!change.actor) continue;
-    for (const field of Object.keys(change.fields ?? {})) {
+    for (const [field, delta] of Object.entries(change.fields ?? {})) {
       if (out.has(field)) continue;
       out.set(field, {
         actor: change.actor,
@@ -92,8 +92,31 @@ export function attribution(history: readonly WorkChange[] | undefined): Map<str
           : undefined,
         turnId: change.turn_id || undefined,
         at: change.at,
+        cleared: emptied(delta),
       });
     }
   }
   return out;
+}
+
+/**
+ * Whether this change took the field's value AWAY.
+ *
+ * THE ONE THING THAT LICENSES PROVENANCE UNDER A BLANK. A rail draws no "set
+ * by" under a value that is not there — it would claim a record of somebody
+ * setting nothing — but a change that EMPTIED the field is a record the log
+ * genuinely holds, and it reads "cleared by". Without this the two are
+ * indistinguishable here and the honest rail has to drop both.
+ *
+ * `tracker.Delta` carries `From` and `To` with no `omitempty`
+ * (`internal/tracker/mutation.go`), so every delta this engine has written has
+ * both keys and an emptied field is `to: ""`. The defensive arm below is for a
+ * payload this build cannot type-check, which is a smaller claim: a delta
+ * whose shape is unreadable says nothing about a clearing either way.
+ */
+function emptied(delta: unknown): boolean {
+  if (!delta || typeof delta !== "object") return false;
+  if (!("to" in delta)) return false;
+  const to = (delta as { to?: unknown }).to;
+  return to === "" || to === null || to === undefined;
 }

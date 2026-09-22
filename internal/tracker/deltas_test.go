@@ -205,6 +205,50 @@ func TestAPersonsInboxIsCountedAndTheirQueueIsOrdered(t *testing.T) {
 	}
 }
 
+// ONLY THE DELTA FIELDS WHOSE MEMBERS ARE TASK IDS ARE RESOLVED.
+//
+// [counterpartyDeltaFields] is what an activity answer's key map is built
+// from, and it is DERIVED from [RelationKinds] so a fifth kind of edge is
+// resolved with no second edit. [RelationPage] is the one exclusion, and it is
+// a fact about the type rather than about any row: a `page` edge names a
+// knowledge-base page, so asking `tracker_tasks` about one is asking whether a
+// page is a task.
+//
+// A DECLARATION HELD AGAINST THE RULE, in the `internal/solo` roster
+// tradition, because the runtime cannot show it: a page id resolves to nothing
+// whether or not it is excluded, so a round-trip case built on one passes with
+// the exclusion gone. This fails in BOTH directions — a kind that stopped
+// being derived, and `page` creeping in.
+func TestOnlyTheDeltaFieldsThatNameTasksAreResolved(t *testing.T) {
+	t.Parallel()
+	named := make(map[string]bool, len(counterpartyDeltaFields))
+	for _, field := range counterpartyDeltaFields {
+		named[field] = true
+	}
+	for _, kind := range RelationKinds {
+		want := kind != RelationPage
+		if named[string(kind)] != want {
+			t.Errorf("the key map %s the %s edges; a relation names a task "+
+				"unless it is a %s, and the field list is derived from "+
+				"RelationKinds so that a kind added later needs no second edit",
+				map[bool]string{true: "resolves", false: "does not resolve"}[named[string(kind)]],
+				kind, RelationPage)
+		}
+	}
+	// AND THE TWO BEYOND THE EDGES: the mirror a blocker carries, and a
+	// person's own queue, which is an ordered list of task ids and renders
+	// on the same page.
+	for _, field := range []string{"blocking", "priorities"} {
+		if !named[field] {
+			t.Errorf("the key map does not resolve %q, so that column renders "+
+				"uuids", field)
+		}
+	}
+	if len(counterpartyDeltaFields) != len(named) {
+		t.Errorf("the field list carries a duplicate: %v", counterpartyDeltaFields)
+	}
+}
+
 // A DOCUMENT THAT DID NOT MOVE RECORDS NOTHING, AS NIL.
 //
 // [Applier.writeHistory] reads the length of what it is handed and falls

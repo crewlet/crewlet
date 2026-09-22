@@ -300,13 +300,19 @@ A **view** is a saved query with a shape. Five shapes:
 
 - **`list`** — rows, sorted and grouped, which is what you want when the
   question is "what is there".
-- **`board`** — columns by status group (or by any field), which is what you
-  want when the question is "what is moving". A board is `group_by=`, and what
-  comes back is **columns**: each one's count is over the whole set, never over
-  the rows it carries, so a column of four hundred says four hundred and hands
-  you twenty. Loading one further is `group=<value>`, which narrows the whole
-  query — including its totals — and the column holding everything nobody
-  filled in is loaded the same way, by naming `group` and leaving it empty.
+- **`board`** — columns by status (or by status group, priority, when the work
+  is due, or any field), which is what you want when the question is "what is
+  moving". A board is `group_by=`, and what comes back is **columns**: each
+  one's count is over the whole set, never over the rows it carries, so a
+  column of four hundred says four hundred and hands you twenty. Loading one
+  further is `group=<value>`, which narrows the whole query — including its
+  totals — and the column holding everything nobody filled in is loaded the
+  same way, by naming `group` and leaving it empty. On a closed axis — status,
+  status group, priority and the due bands — **every column the query admits
+  is drawn, empty ones included**: a board is the shape of the process, so a
+  young company's open work is three lanes with one card rather than one lane,
+  and a Done lane appears only when finished work was asked for. An open axis
+  — an assignee, a tag — draws only the values present.
 - **`calendar`** — by date, which is what you want when the question is "what
   is due". Its axis IS the `due` key, so the grid's own window spends the one
   key the grammar has for it: the fetch is bounded to the days on screen, the
@@ -638,6 +644,14 @@ the history row says which one and what it became. Everything else — a watcher
 added, a checklist ticked off, a description rewritten — reads the same on
 both.
 
+A dependency is where the stored form would otherwise show: an edge records the
+other item by its **id**, because its key belongs to that item's own row and a
+history row is written once and corrected by nothing. So the **answer** carries
+a `keys` map naming the items its deltas point at, resolved when the question is
+asked rather than when the change was made — which is what lets a screen draw
+"Waiting on: — → ENG-2" from a row that stored a uuid. An item this node has not
+applied is simply missing from the map, and a reader falls back to the id.
+
 The three project reads are a seat's for the same reason the catalogue read
 is: a create refuses a project the company does not have, a type it has not
 declared and a required field left empty, and a model that cannot **read** any
@@ -747,13 +761,24 @@ work sits in projects that unit owns.
 node's own copy, and every answer says how far behind that copy is. It is four
 screens rather than one:
 
-- **All work** (`#/work`) is the list. Two menus decide what is on it and how
-  it is drawn — **Filter** adds a narrowing, and each one is a removable chip
-  under the bar; **Display** holds the shape (list, board, table, calendar,
-  timeline), the grouping, the order and, on a table, the columns. The trash is
-  a filter here rather than a tab, which is what the engine says it is: a
-  listing carrying `removed=true`. The strip above the bar holds the views
-  somebody SAVED, never the five shapes.
+- **All work** (`#/work`) is the list, and it opens as one: a container nobody
+  has saved a default view for lands on the list shape, because a board's
+  information is the comparison across its lanes — the best shape once work is
+  moving and the worst on a company with three items in one status. The board
+  is one press away. Two menus decide what is on the list and how it is drawn —
+  **Filter** adds a narrowing, and each one is a removable chip under the bar;
+  **Display** holds the shape (list, board, table, calendar, timeline), the
+  grouping, the order and, on a table, the columns. Grouped on a status, a
+  status group or a priority, the board and the list draw every value the
+  company declares and say which of them are empty, because those three are
+  closed sets whose order means something; grouped on an assignee, a tag or a
+  label they draw only the values work is actually in. The trash is a filter
+  here rather than a tab, which is what the engine says it is: a listing
+  carrying `removed=true`. The strip above the bar holds the views somebody
+  SAVED, never the five shapes, and it ends in a link to the whole inventory.
+  A list with nothing on it says which of three things emptied it — a narrowing
+  that matched nothing, a scope with nothing in it, or a tracker nothing has
+  been filed into — and a complete one closes by saying so.
 - **Projects** (`#/work/projects`) is the directory: every project with its
   lead, the unit that owns it, its three maintained counts, how far along its
   filed work is and when that work last changed. A row opens the project
@@ -763,7 +788,14 @@ screens rather than one:
   answered fewer projects than the company has it says so rather than quoting
   the page as the company.
 - **History** (`#/work/history`) is the change log over a window you choose,
-  with the kinds and the authors on this page as facets.
+  with the kinds, the authors and the projects on the pages loaded as facets.
+  The window bounds what the engine is asked for and a page bounds what one ask
+  answers, so the two are different limits: **Load older changes** fetches the
+  next page back rather than asking you to move the window, and the pages you
+  have loaded are held still while you page through them — change the window or
+  a facet to pick up what has landed since. A project facet narrows to one
+  project's changes, which is the same narrowing a project's own History lens
+  is.
 - **A project** (`#/work/{KEY}`) opens on its work — the **Items** lens, which
   says how many are open — with an **Overview** lens for what the container
   itself declares (its statuses, its types, its labels and its fields) and a
@@ -1053,6 +1085,24 @@ Two consequences worth knowing:
 
 An operator reading somebody *else's* day gets **that person's** two names,
 resolved from the org chart — never the credential in their own hand.
+
+**And your own marks and pins are written under your seat, not your token.**
+Whose state a record holds and who wrote it are two different questions, and
+they have two different answers. `mark_inbox`, `set_pins` and `set_priorities`
+write **your** record — the seat your token is bound to — while the history row
+they leave still names the **token** with author kind `operator`. That is not
+an inconsistency: attribution answers *who did this*, and it stays the
+credential because a tracker whose author field is chosen by the writer is not
+an audit trail. The record's subject answers *whose inbox is this*, and the
+answer there is the person.
+
+Keyed on the credential instead, a bound founder grew a second record called
+`founder`: the marks their assistant made were invisible on the screen that
+asks under their seat, and their queue came back empty on the one tab that is
+entirely about it. Leaving a token **unbound** is unchanged and ordinary — an
+operator outside the org chart, a pipeline — and it writes its own record under
+its own id. Records written before a company bound the token are still read,
+because the seat's record is preferred and the credential's is the fallback.
 
 The marks are the ASSISTANT'S. The dashboard is read-only, because every write
 here is attributed to somebody and a button in a browser would write as "the

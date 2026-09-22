@@ -34,7 +34,7 @@
  * deciding a team's order.
  */
 
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { buildHash, href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -64,12 +64,15 @@ import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import {
   anyFilter,
+  asScope,
+  bandsOf,
   buildItemsParams,
   calendarWeeks,
   countedLabel,
   dayKey,
   defaultView,
   effectiveArrangement,
+  endNote,
   EXPLICIT_NONE,
   filterChips,
   filterPatchForGroup,
@@ -80,10 +83,12 @@ import {
   shownRows,
   totalHint,
   viewParams,
+  type Scope,
   type Shape,
   type TrackerFilters,
 } from "~/lib/work.ts";
-import type { WorkProjectDetail, WorkSummary, WorkView } from "~/protocol/index.ts";
+import { plural } from "~/lib/format.ts";
+import type { WorkProjectDetail, WorkSummary, WorkTaskCounts, WorkView } from "~/protocol/index.ts";
 
 /**
  * Every custom-field narrowing on the address, as the grammar spells them.
@@ -131,7 +136,14 @@ export function ItemsView({ project = "" }: { project?: string }) {
   const [tag, setTag] = useParam("tag", "");
   const [groupBy, setGroupBy] = useParam("group_by", "");
   const [groupBy2, setGroupBy2] = useParam("group_by2", "");
-  const [group, setGroup] = useParam("group", "");
+  // THE COLUMN NARROWING IS THREE-VALUED and `useParam` cannot say so: its
+  // value is "the key, or the fallback", which reads an ABSENT key and a
+  // PRESENT EMPTY one as the same string — and the empty one is a real column,
+  // the one holding the rows with no value on this axis. So the value is read
+  // off the whole query, the way [useFieldFilters] reads the custom fields, and
+  // the setter is kept for the one gesture that CLEARS it. See
+  // [TrackerFilters.group].
+  const [, setGroup] = useParam("group", "");
   const [sort, setSort] = useParam("sort", "");
   const [blocked, setBlocked] = useParam("blocked", "");
   const [due, setDue] = useParam("due", "");
@@ -150,6 +162,7 @@ export function ItemsView({ project = "" }: { project?: string }) {
   // see [patchedHref]. `useParam` answers one key at a time and none of them
   // is the project, which is a path segment.
   const route = useRoute();
+  const group = route.query.has("group") ? (route.query.get("group") ?? "") : undefined;
 
   // THE CHOSEN PROJECT'S OWN VOCABULARY: its statuses, its types, its tags.
   // ENABLED ON THE SELECTION, not just parameterised by it — the engine
@@ -186,7 +199,11 @@ export function ItemsView({ project = "" }: { project?: string }) {
   // from the view is what makes the two agree.
   const viewOwn = useMemo(() => viewParams(chosenView, views), [chosenView, views]);
   const viewScope = seededScope(viewOwn);
-  const [scope, setScope] = useParam("scope", viewScope);
+  // ONE READING OF THE SEGMENT for the control, the query, the lanes and the
+  // empty state — see [asScope] for what a hand-edited value did to the four of
+  // them separately.
+  const [scopeKey, setScope] = useParam("scope", viewScope);
+  const scope = asScope(scopeKey);
 
   // WHAT THE ARRANGEMENT ACTUALLY IS, which is not what the address holds: a
   // saved view carries its own `group_by`, `group_by2` and `sort`, and the URL
@@ -266,6 +283,10 @@ export function ItemsView({ project = "" }: { project?: string }) {
   const removals = useMemo(() => removalsOf(tombRecords), [tombRecords]);
   const purges = useMemo(() => tombRecords.filter((r) => r.kind === "purged"), [tombRecords]);
 
+  // THE ANSWER'S OWN COLUMNS, before anything is added to them. Everything
+  // that asks "did this question return work?" reads these: a padded lane is a
+  // drawing, and an emptiness derived from one would report a company with no
+  // work at all as a populated board.
   const groups = useMemo(() => data?.groups ?? [], [data]);
   const rows = useMemo(() => data?.items ?? [], [data]);
   // WHAT `[` AND `]` WALK: the rows this list actually loaded, sorted and
@@ -274,6 +295,10 @@ export function ItemsView({ project = "" }: { project?: string }) {
   const neighbours = useMemo(() => rows.map((r) => ({ kind: "item" as const, id: r.key })), [rows]);
   usePeekNeighbours(neighbours);
   const shown = useMemo(() => shownRows(rows, groups), [rows, groups]);
+  // THE BANDS A LIST DRAWS, which are not the lanes a board draws — see
+  // [bandsOf]: the engine mints every lane a closed axis admits, and a band
+  // over nothing is a rule separating nothing from nothing.
+  const bands = useMemo(() => bandsOf(groups), [groups]);
 
   const chrome: RowChrome = {
     seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
@@ -349,15 +374,85 @@ export function ItemsView({ project = "" }: { project?: string }) {
       patchedHref(route.path, route.query, { group_by: axis, group: key }),
     [route.path, route.query],
   );
+  /**
+   * AND THE CLICK GOES TO THE ADDRESS THE ANCHOR NAMES, through the same patch.
+   *
+   * It was three `useParam` setters in a row — a section and two filters — so
+   * one gesture wrote three history entries and three renders, and neither
+   * setter could write the one value that matters here: `nav.filter` deletes a
+   * key set to `""`, which is the UNSET column's own key, so following
+   * "3 more →" out of Unassigned narrowed to nothing and loaded the whole
+   * board. `patchedQuery` is what the href is built from, so the two cannot
+   * name different places.
+   *
+   * A BOARD'S OVERFLOW PUSHES and a list's REPLACES, which is the router's own
+   * rule rather than a choice: the board's patch carries `shape=list`, a screen
+   * the reader called, where the list's narrows the screen they are on.
+   */
+  const openOverflow = useCallback(
+    (patch: Record<string, string | null>, how: "push" | "replace") => {
+      const query = patchedQuery(route.query, patch);
+      if (how === "push") nav.to(route.path, query);
+      else nav.replace(route.path, query);
+    },
+    [nav, route.path, route.query],
+  );
 
   // THE EFFECTIVE AXIS, for the same reason the pickers take it: a column
   // narrowing is named by the axis it was cut on, and a view supplying that
   // axis left the chip labelled "Column" over a board grouped by assignee.
   const chips = filterChips({ ...filters, groupBy: axis }, labels);
 
+  // WHETHER THE READER NARROWED THIS, which decides both what an empty list
+  // says and what the foot of a full one calls its rows. `anyFilter` counts a
+  // scope off `open`, so the segment is compared against the VIEW's own rather
+  // than against the default: a saved view whose author asked for finished work
+  // is not a reader who narrowed anything.
+  const narrowed = anyFilter(filters) || scope !== viewScope;
+  // AND THE SCOPE IS NOT A NARROWING TO THE EMPTY PANEL, though it is one to
+  // the foot above. "Nothing matches" blames a filter and carries the control
+  // that removes it, and a reader who only pressed Closed has no chip to take
+  // off — so the segment decides WHICH of the other three sentences is due,
+  // never whether the filter one is.
+  const filtered = anyFilter({ ...filters, scope: "open" });
+  // A TRASH WITH NOTHING IN IT IS NOT A FILTER THAT MATCHED NOTHING, and it is
+  // not empty either: a purge leaves no row, and its history entry below is the
+  // only trace the work ever existed.
+  //
+  // AND A PADDED BOARD IS NEVER SHORT OF LANES, so "did the answer carry any
+  // group" stopped meaning "is there any work": the engine mints every column
+  // its predicate admits, so an empty board is one whose every lane COUNTS
+  // nothing. The other shapes draw only the bands that hold rows, so for them
+  // it is the rows that decide.
+  const nothingShown =
+    !inTrash &&
+    (shape === "board"
+      ? groups.every((group) => group.count === 0)
+      : shown.length === 0 && bands.length === 0);
+  const foot = endNote({
+    shown: shown.length,
+    hint: data?.total_hint ?? 0,
+    capped: data?.total_capped,
+    cursor: data?.next_cursor,
+    narrowed,
+  });
+
   return (
     <>
-      {saved.length > 0 && (
+      {/* THE STRIP IS ALWAYS DRAWN, and the gate it lost was `saved.length > 0`.
+          The first tab is the container's OWN list — a real destination, not
+          decoration — so gating the strip on somebody else having saved a query
+          threw away the one thing that names this page inside its own content
+          column, and left the toolbar as the top edge of a screen whose title
+          is in the shell. A company that has saved nothing is the only state
+          every company starts in.
+
+          IT IS ALSO THE ONLY WAY INTO THE INVENTORY from here, which is why
+          the trailing link is part of the strip rather than the page actions:
+          saved views are undiscoverable until somebody has used them, and a
+          strip with nothing after the container tab says nothing about what
+          else the strip is for. */}
+      <div className="work-strip">
         <Tabs
           ariaLabel="Saved views"
           value={saved.some((v) => v.key === chosenView) ? chosenView : ""}
@@ -366,6 +461,12 @@ export function ItemsView({ project = "" }: { project?: string }) {
             // THE CONTAINER'S OWN DEFAULT IS A TAB, because a strip of saved
             // views with no way back to the unsaved list is a strip a reader
             // gets stuck in.
+            //
+            // AND IT CARRIES NO COUNT. The engine's total is over the FILTER,
+            // not over the container, so a number here would say "All work 2"
+            // on a company with two hundred items and one chip on — a number
+            // the answer does not give is not drawn. The count belongs where
+            // the filters are, which is the bar.
             { value: "", label: project ? "All in this project" : "All work" },
             ...saved.map((v) => ({
               value: v.key,
@@ -373,7 +474,16 @@ export function ItemsView({ project = "" }: { project?: string }) {
             })),
           ]}
         />
-      )}
+        {/* A REAL ANCHOR rather than a button that navigates, for the reason
+            `Work.tsx` gives at its own two: it leaves the list, so it is
+            middle-clickable and goes through the router's history rules
+            instead of around them. Beside the tabs rather than among them — a
+            link is not a tab, and one inside the set would be selectable and
+            would break the roving focus. */}
+        <a className="t-link work-strip-more" href={href(["work", "views"])}>
+          All views →
+        </a>
+      </div>
 
       {/* `toolbar` FIRST, and it is not decoration: `.screen:has(.toolbar)` is
           what publishes `--sticky-top`, and every other thing that sticks in
@@ -421,7 +531,11 @@ export function ItemsView({ project = "" }: { project?: string }) {
           cols={cols}
           onShape={(next) => setShapeKey(next === viewShape ? "" : next)}
           onGroupBy={(next) => {
-            setGroupBy(next || off(viewOwn.group_by));
+            // A BOARD'S OWN DEFAULT IS STATUS, so choosing it is choosing
+            // nothing: it is written as the absence of the key, unless a view
+            // supplies another axis, which the choice then has to override.
+            const chosen = shape === "board" && next === "status" && !viewOwn.group_by ? "" : next;
+            setGroupBy(chosen || off(viewOwn.group_by));
             // A COLUMN FILTER BELONGS TO ITS AXIS. Left behind when the axis
             // changes it narrows the list to a key the new axis has never
             // heard of, which answers nothing.
@@ -471,22 +585,28 @@ export function ItemsView({ project = "" }: { project?: string }) {
         <div className="col gap-4" style={{ minWidth: 0 }}>
           {loading && !data && <Skeleton variant="text" rows={6} label="Loading the work" />}
 
-          <QueryState
-            error={error}
-            loading={loading}
-            empty={
-              // A TRASH WITH NOTHING IN IT IS NOT A FILTER THAT MATCHED
-              // NOTHING, and it is not empty either: a purge leaves no row and
-              // its history entry is the only trace the work ever existed.
-              shown.length || groups.length || inTrash
-                ? undefined
-                : {
-                    title: "Nothing matches",
-                    hint: "No item on this node's copy of the tracker matches these filters. Widen them, or check that work is being filed at all.",
-                  }
-            }
-          >
-            {shape === "board" && (
+          {/* THE EMPTY STATE IS RENDERED HERE rather than through
+              `QueryState`'s own `empty`, because one of its three cases carries
+              an ACTION — a control that clears the filters, where the sentence
+              used to describe one — and that prop takes a title and a hint. A
+              refusal and a pending read still come first: they are the two
+              states an empty list must never be confused with. */}
+          <QueryState error={error} loading={loading}>
+            {nothingShown ? (
+              <EmptyList
+                narrowed={filtered}
+                scope={scope}
+                project={project}
+                counts={detail?.task_counts}
+                onClear={clearFilters}
+              />
+            ) : null}
+            {/* A SHAPE IS NOT DRAWN OVER NOTHING. The sentence above is the
+                answer to an empty question; a board's declared lanes drawn
+                under it would be a workflow and an empty state stacked, each
+                saying the other is wrong. They come back the moment one row
+                does. */}
+            {!nothingShown && shape === "board" && (
               <Board
                 now={now}
                 groups={groups}
@@ -496,19 +616,14 @@ export function ItemsView({ project = "" }: { project?: string }) {
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
                 onOpen={(row) => openPeek({ kind: "item", id: row.key })}
-                onOverflow={(axis, key) => {
-                  const patch = filterPatchForGroup(axis, key);
-                  setShapeKey(patch.shape ?? "list");
-                  setGroupBy(patch.group_by ?? "");
-                  setGroup(patch.group ?? "");
-                }}
+                onOverflow={(axis, key) => openOverflow(filterPatchForGroup(axis, key), "push")}
                 overflowHref={boardOverflowHref}
               />
             )}
-            {shape === "list" && (
+            {!nothingShown && shape === "list" && (
               <List
                 rows={rows}
-                groups={groups}
+                groups={bands}
                 // THE AXIS THE QUERY WAS SENT ON, not the one in the URL: a
                 // saved view may carry `group_by`, which [buildItemsParams]
                 // resolves through [effectiveArrangement].
@@ -520,17 +635,20 @@ export function ItemsView({ project = "" }: { project?: string }) {
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
                 onOpen={(row) => openPeek({ kind: "item", id: row.key })}
-                onOverflow={(axis, key) => {
-                  setGroupBy(axis);
-                  setGroup(key);
-                }}
+                onOverflow={(axis, key) => openOverflow({ group_by: axis, group: key }, "replace")}
                 overflowHref={listOverflowHref}
+                // THE SHAPE DRAWS IT, so the sentence sits inside the list's own
+                // panel as the last thing under the rows — where a foot rendered
+                // by this screen would be a detached line under a bordered box.
+                // The words are `endNote`'s, once, for every shape that takes
+                // one.
+                foot={foot}
               />
             )}
-            {shape === "table" && (
+            {!nothingShown && shape === "table" && (
               <TableView
                 rows={rows}
-                groups={groups}
+                groups={bands}
                 axis={String(params.group_by ?? "")}
                 chrome={chrome}
                 detail={detail}
@@ -542,10 +660,10 @@ export function ItemsView({ project = "" }: { project?: string }) {
                 removals={inTrash ? removals : undefined}
               />
             )}
-            {shape === "timeline" && (
+            {!nothingShown && shape === "timeline" && (
               <TimelineView
                 rows={rows}
-                groups={groups}
+                groups={bands}
                 chrome={chrome}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 now={now}
@@ -553,7 +671,7 @@ export function ItemsView({ project = "" }: { project?: string }) {
                 onOpen={(row) => openPeek({ kind: "item", id: row.key })}
               />
             )}
-            {shape === "calendar" && (
+            {!nothingShown && shape === "calendar" && (
               <CalendarView
                 weeks={weeks}
                 rows={rows}
@@ -615,28 +733,178 @@ function applyView(key: string, saved: WorkView[], setViewKey: (key: string) => 
 export function patchedHref(
   path: string[],
   query: URLSearchParams,
-  patch: Record<string, string>,
+  patch: Record<string, string | null>,
 ): string {
-  const next = new URLSearchParams(query);
-  for (const [key, value] of Object.entries(patch)) {
-    // An empty value is the key's ABSENCE on this screen — `useParam` drops it
-    // rather than writing `group_by=` — so clearing one here must drop it too.
-    if (value === "") next.delete(key);
-    else next.set(key, value);
-  }
-  return buildHash(path, next);
+  return buildHash(path, patchedQuery(query, patch));
 }
 
-/** The panel a company with no projects at all sees, in place of a list. */
-export function NoWorkYet({ children }: { children?: ReactNode }) {
+/**
+ * The same patch as the QUERY it produces, so the click and the link are one
+ * address rather than two spellings of one.
+ *
+ * `null` CLEARS AND `""` WRITES AN EMPTY VALUE, which is the whole of the rule.
+ * It used to be that an empty value cleared — "`useParam` drops it rather than
+ * writing `group_by=`" — and that made the one narrowing whose value IS the
+ * empty string unreachable: the "Unassigned" column's own "N more →" dropped
+ * `group` and loaded the whole board. The engine tells the two apart with
+ * `Params.Has`, and `URLSearchParams` round-trips `group=`, so presence is
+ * expressible on the address; `null` is what a control that clears a key now
+ * says, which is what `nav.filter`'s own patch type has always meant.
+ *
+ * PURE, over the route's two halves rather than over the hook, so the rule is
+ * testable beside the list it serves.
+ */
+export function patchedQuery(
+  query: URLSearchParams,
+  patch: Record<string, string | null>,
+): URLSearchParams {
+  const next = new URLSearchParams(query);
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) next.delete(key);
+    else next.set(key, value);
+  }
+  return next;
+}
+
+/**
+ * WHAT AN EMPTY LIST SAYS, AND IT IS A FUNCTION OF WHAT WAS ASKED.
+ *
+ * There was one sentence for every empty answer — "Nothing matches … Widen
+ * them" — and it was drawn over a list with no filter on it, on the company
+ * that has just been created and has not filed anything. `docs/reference/
+ * dashboard-design.md` §"Honest empty states" says every empty state names what
+ * would fill it, and "widen them" names a control that is not on the screen:
+ * the chip row does not exist when nothing is narrowing, so there is nothing to
+ * widen and nothing to clear.
+ *
+ * Three questions were being answered with one sentence, and they send a reader
+ * to three different places:
+ *
+ *  (a) something IS narrowing and nothing matched — the filters are the cause,
+ *      so the panel carries the control that removes them rather than a
+ *      description of one;
+ *  (b) nothing is narrowing and this container has nothing in THIS scope —
+ *      the scope switch is the cause, so the panel names it;
+ *  (c) nothing is narrowing and there is nothing at all — the cause is that no
+ *      work has been filed, so the panel says how work arrives.
+ *
+ * WHY (c) IS MOSTLY SOMEBODY ELSE'S SENTENCE. At workspace scope a company
+ * that has no PROJECTS gets [NoWorkYet] from `Work.tsx` INSTEAD of this list —
+ * that panel is gated on the project list rather than on this answer, because
+ * a read that failed must never be rendered as a company that has filed
+ * nothing, and it replaces the list rather than stacking under it, so there is
+ * no second sentence to suppress. At project scope the project's own screen
+ * carries the container's empty state above this list, so (c) draws nothing
+ * here at all.
+ *
+ * AND (b) CARRIES A NUMBER ONLY WHERE ONE EXISTS. A project detail carries the
+ * three maintained `task_counts`, so the sentence can say how much finished
+ * work the other segment holds. The workspace has no such counts — `work_items`
+ * counts what MATCHED and nothing else — so it names the switch and claims
+ * nothing about what is behind it.
+ */
+function EmptyList({
+  narrowed,
+  scope,
+  project,
+  counts,
+  onClear,
+}: {
+  narrowed: boolean;
+  scope: Scope;
+  /** Empty at workspace scope. */
+  project: string;
+  /** The container's own maintained counts, where the container has them. */
+  counts?: WorkTaskCounts;
+  onClear: () => void;
+}) {
+  // WHERE, NOT "HERE". A project's own list says which project has nothing in
+  // it, which is the fact a reader scanning three screens is actually after;
+  // at workspace scope there is nothing to name and the sentence closes early.
+  const where = project ? ` in ${project}` : "";
+  if (narrowed) {
+    return (
+      <EmptyState
+        size="compact"
+        title="Nothing matches"
+        description="No item on this node's copy of the tracker matches the filters you have set. Take one off above, or clear the whole narrowing."
+        action={
+          <Button size="small" variant="secondary" onClick={onClear}>
+            Clear filters
+          </Button>
+        }
+      />
+    );
+  }
+
+  // NOTHING AT ALL. The All segment has every scope on screen already, so an
+  // empty answer under it is the container's whole tracker; a container with
+  // its own counts can say the same thing sooner and exactly.
+  const total = counts ? counts.open + counts.done + counts.closed : undefined;
+  if (scope === "all" || total === 0) {
+    // THE PROJECT'S OWN EMPTY STATE IS ABOVE THIS LIST, and two panels saying
+    // one thing is one too many — the same rule the page keeps at workspace
+    // scope by drawing [NoWorkYet] in place of this list.
+    if (project) return null;
+    return (
+      <EmptyState
+        size="compact"
+        title="Nothing has been filed yet"
+        description="Seats file work with create_work_item, and an inbound webhook or a schedule is usually what starts them."
+      />
+    );
+  }
+
+  // NOTHING IN THIS SCOPE. A number is drawn only where the container's own
+  // counts give one AND it is not zero: "0 items under Closed" beside "nothing
+  // open" is a contradiction a reader has to work out, where the numberless
+  // sentence is true in both states.
+  const elsewhere = scope === "open" ? (counts && counts.done + counts.closed) || 0 : counts?.open;
+  if (scope === "open") {
+    return (
+      <EmptyState
+        size="compact"
+        title={`Nothing is open${where}`}
+        description={
+          elsewhere
+            ? `Every item here is finished — ${plural(elsewhere, "item")} under Closed. The scope switch in the bar is what shows them.`
+            : "No open item is on this node's copy of the tracker. Finished work is under Closed and All shows both — and if none has been filed at all, seats file it with create_work_item."
+        }
+      />
+    );
+  }
+  return (
+    <EmptyState
+      size="compact"
+      title={`Nothing has been finished${where} yet`}
+      description={
+        elsewhere
+          ? `Nothing here has been finished — ${plural(elsewhere, "item")} still open. The scope switch in the bar is what shows them.`
+          : "No finished item is on this node's copy of the tracker. Open shows what is still in flight, and All shows both."
+      }
+    />
+  );
+}
+
+/**
+ * The panel a company with no projects at all sees, in place of a list.
+ *
+ * NO `children`, AND THAT IS NOT A SIMPLIFICATION. It took some and dropped
+ * them on the floor: `EmptyState` has no children slot — what it offers is
+ * `action`, for the one control that would fill the screen — and its own
+ * explicit `children:` key overrode whatever was spread in. A prop that
+ * compiles, is passed, and renders nothing is worse than one that does not
+ * exist, because the caller has no symptom to chase. Nothing passed any; the
+ * three-case panel above uses `action` for exactly what this slot looked like
+ * it was for.
+ */
+export function NoWorkYet() {
   return (
     <EmptyState
       icon={<DashboardGlyph size={32} />}
       title="No work has been filed yet"
-      description="Seats file work with create_work_item, and an inbound webhook or a schedule is usually what starts them. A project appears here the moment a unit in the company config declares its `project` key."
-    >
-      {children}
-    </EmptyState>
+      description="Nothing can be filed until a unit in the company config declares a `project` key, and this company has none. Once one does, seats file work with create_work_item — an inbound webhook or a schedule is usually what starts them."
+    />
   );
 }
 

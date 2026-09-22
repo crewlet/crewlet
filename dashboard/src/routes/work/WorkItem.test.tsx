@@ -24,6 +24,7 @@ import {
 } from "./WorkItem.tsx";
 import { Router, href } from "~/app/router.tsx";
 import { pathOf, refToken } from "~/app/frame/objects.ts";
+import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkItem, WorkItemDetail, WorkProjectDetail } from "~/protocol/index.ts";
 
@@ -131,11 +132,104 @@ test("a value whose declaration was archived is marked as such", () => {
 });
 
 // AN ABSENT VALUE IS A MARKED ABSENCE, never a zero: zero is a measurement,
-// and an unestimated task is one nobody has sized.
+// and an unestimated task is one nobody has sized. The task carries a due date
+// so the Plan group draws its rows at all — with nothing scheduled the group
+// says so in one line instead, which is the case below.
 test("an unestimated task shows a marked absence rather than a zero", () => {
+  render(
+    <ItemProps
+      detail={detail({ task: task({ due_at: "2031-04-20T00:00:00Z" }) })}
+      chrome={{}}
+      project={project()}
+    />,
+  );
+  const estimate = screen.getByText("Estimate").nextElementSibling!;
+  expect(estimate.textContent).toBe(`${EMPTY_VALUE}Not set`);
+  expect(estimate.textContent).not.toContain("0m");
+});
+
+// NOTHING SCHEDULED IS ONE FACT, NOT FOUR. Every Plan row dashes when unset —
+// a task HAS a due date, unset — so a fresh task spent a heading, a hairline
+// and four lines saying one thing four times, which in a 420px peek is most
+// of the space between the header and the description. The heading stays: the
+// group exists and is empty, which is not the same claim as a task that has no
+// plan at all.
+test("a task with no dates, estimate or size says so in one line", () => {
   const { container } = render(<ItemProps detail={detail()} chrome={{}} project={project()} />);
-  expect(container.textContent).toContain(EMPTY_VALUE);
-  expect(container.textContent).not.toContain("0m");
+  expect(screen.getByText("Plan")).toBeTruthy();
+  expect(screen.getByText("Nothing scheduled: no dates, no estimate, no size.")).toBeTruthy();
+  for (const row of ["Start", "Due", "Estimate", "Points"]) {
+    expect(screen.queryByText(row)).toBeNull();
+  }
+  expect(container.querySelectorAll(".props-empty")).toHaveLength(1);
+});
+
+// `none` IS A VALUE THE ENGINE MINTS. A create defaults the field to it
+// (`internal/tracker/policy.go`: "a real value rather than an absent one") and
+// the applier records the delta, so the change log names somebody as having
+// set it — and the rail rendered a dash with that attribution underneath, the
+// dashboard contradicting the engine about one row on one screen. A rail
+// answers what the field is SET TO, which is the same reasoning it already
+// applied to `normal`.
+test("a priority of none is the word, with the change that set it", () => {
+  render(
+    <ItemProps
+      detail={detail({
+        task: task({ priority: "none" }),
+        history: [
+          {
+            id: "h-1",
+            kind: "created",
+            actor: "agent-ceo",
+            at: "2031-04-16T09:00:00Z",
+            log_seq: 1,
+            fields: { priority: { from: "", to: "none" } },
+          },
+        ],
+      })}
+      chrome={{}}
+      project={project()}
+    />,
+  );
+  const value = screen.getByText("Priority").nextElementSibling!;
+  expect(value.textContent).toContain("none");
+  expect(value.textContent).not.toContain(EMPTY_VALUE);
+  expect(value.querySelector(".props-setby")!.textContent).toContain("set by agent-ceo");
+});
+
+// AN ABSENT PRIORITY IS STILL A DASH. No value reached this build at all,
+// which is a different fact from one the engine minted, and the row carries no
+// attribution because there is nothing for it to be about.
+test("a task carrying no priority at all still dashes", () => {
+  const { container } = render(<ItemProps detail={detail()} chrome={{}} project={project()} />);
+  expect(screen.getByText("Priority").nextElementSibling!.textContent).toBe(
+    `${EMPTY_VALUE}Not set`,
+  );
+  expect(container.querySelectorAll(".props-setby")).toHaveLength(0);
+});
+
+// THE PROJECT IS THE TASK'S ADDRESS, and the peek had no trace of it but the
+// prefix inside the key — a reader who does not know the key grammar could
+// neither tell which project LEAD-1 is in nor reach it, because the page's own
+// way there is in the page bar and the peek renders none. The name is what a
+// person calls it and the key is what everything is addressed by, so the row
+// carries both.
+test("the rail names the project and its key, and links to its board", () => {
+  const { container } = render(
+    <ItemProps detail={detail()} chrome={{}} project={project({ name: "Engineering" })} />,
+  );
+  const value = screen.getByText("Project").nextElementSibling!;
+  expect(value.textContent).toContain("Engineering");
+  expect(value.textContent).toContain("ENG");
+  expect(value.querySelector("a")!.getAttribute("href")).toBe(href(["work", "ENG"]));
+});
+
+// A PANEL STILL LOADING ITS PROJECT SHOWS THE KEY rather than waiting: the
+// `work_project` read is what supplies this rail's vocabulary and it answers
+// after the item does, so the row would otherwise be blank on every open.
+test("the project row falls back to the key alone", () => {
+  render(<ItemProps detail={detail()} chrome={{}} project={null} />);
+  expect(screen.getByText("Project").nextElementSibling!.textContent).toBe("ENG");
 });
 
 // A HAND-OFF COUNT IS A BUDGET, not trivia: an item handed on too many times
@@ -444,18 +538,112 @@ test("the way out to the board names the project and opens the task", async () =
 // One person under two names, depending on which frame you opened.
 test("the rail names a person, exactly as the page does", async () => {
   serving({
-    work_item: { task: task({ assignee: "ada" }), complete: true },
+    work_item: {
+      task: task({ assignee: "ada" }),
+      // A CHANGE TOO, because the set-by line under a property is the one
+      // place the rail used to print the raw handle — and without a history
+      // entry the line is never drawn, so this case passed with the bug in.
+      history: [
+        {
+          id: "h-1",
+          kind: "status",
+          actor: "ada",
+          actor_kind: "agent",
+          at: "2031-04-16T09:00:00Z",
+          log_seq: 1,
+          fields: { status: { from: "todo", to: "in_progress" } },
+        },
+      ],
+      complete: true,
+    },
     work_project: { key: "ENG", name: "Engineering", complete: true },
   });
-  render(
+  const { container } = render(
     <Router>
       <ItemPeek itemKey="ENG-42" />
     </Router>,
   );
-  // NAMED IN BOTH FRAMES OF THE RAIL — the header fact and the properties
-  // block — which is why this counts rather than asking for the one node.
   await waitFor(() => expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0));
   expect(screen.queryByText("ada")).toBeNull();
+  // AND ON THE SET-BY LINE, read off its own element: the line is one span
+  // holding the actor, the age and the turn link, so an exact-text query
+  // for the bare handle matched nothing whether or not the handle was there.
+  const setBy = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent ?? "");
+  expect(setBy.length).toBeGreaterThan(0);
+  expect(setBy.every((line) => line.includes("Ada Okonkwo"))).toBe(true);
+  expect(setBy.some((line) => /\bada\b/.test(line))).toBe(false);
+});
+
+// THE RAIL'S BODY IS KEYED ON ITS SUBJECT. `[` and `]` move the peek from
+// task A to task B by changing one query key, so React reconciles one body
+// rather than mounting another — and everything that body remembers, an open
+// disclosure or a chosen tab, described A until something cleared it. Rule 14
+// for a route, kept for the rail: a different object is a different mount,
+// asserted on DOM identity because that is the only thing that tells a
+// remount from a re-render.
+test("moving the rail to another task mounts a new body", async () => {
+  serving({
+    work_item: { task: task({ assignee: "ada" }), complete: true },
+    work_project: { key: "ENG", name: "Engineering", complete: true },
+  });
+  location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
+  const { container } = render(
+    <Router>
+      <PeekNeighbours>
+        <PeekHost />
+      </PeekNeighbours>
+    </Router>,
+  );
+  await waitFor(() => expect(container.querySelector(".object-head")).toBeTruthy());
+  const before = container.querySelector(".object-head");
+  location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-43" })}`;
+  await waitFor(() => expect(container.querySelector(".object-head")).not.toBe(before));
+});
+
+// A HEADER AND A RAIL STACKED IN ONE COLUMN ARE ONE READING. The peek's header
+// carried the same five facts the rail states below it, so Status, Type and
+// Assignee were each on screen twice within about a hundred pixels — a third
+// of the panel above the fold spent saying the same thing again, with the
+// description under it. The header keeps the identity and the state marks;
+// every property is the rail's, once.
+test("the peek states each property once", async () => {
+  serving({
+    work_item: { task: task({ type: "task" }), complete: true },
+    work_project: { key: "ENG", name: "Engineering", complete: true },
+  });
+  const { container } = render(
+    <Router>
+      <ItemPeek itemKey="ENG-42" />
+    </Router>,
+  );
+  await waitFor(() => expect(screen.getByText("Fix the login race")).toBeTruthy());
+  expect(container.querySelector(".fact-line")).toBeNull();
+  // The rail's row, and no second copy of it above.
+  expect(screen.getAllByText("Unassigned")).toHaveLength(1);
+  expect(screen.getAllByText("Status")).toHaveLength(1);
+  // The identity and the state marks stay: they are what a reader lands on.
+  expect(screen.getByText("ENG-42")).toBeTruthy();
+});
+
+// THE PAGE KEEPS ITS FACT LINE, which is the whole of the difference between
+// the two frames. There the rail is a sticky side COLUMN beside the body
+// rather than a block under the header, so the line and the rows are read
+// across a gap — two readings of one object, the line to scan and the rows to
+// study.
+test("the page heads itself with the facts the peek leaves to the rail", async () => {
+  serving({
+    work_item: { task: task({ assignee: "ada" }), complete: true },
+    work_project: { key: "ENG", name: "Engineering", complete: true },
+  });
+  const { container } = render(
+    <Router>
+      <WorkItemPage id="ENG-42" />
+    </Router>,
+  );
+  await waitFor(() => expect(container.querySelector(".fact-line")).not.toBeNull());
+  const line = container.querySelector(".fact-line")!;
+  expect(line.textContent).toContain("Status");
+  expect(line.textContent).toContain("Assignee");
 });
 
 // THE BODY IS NOT REBUILT ON EVERY TICK OF THE SCREEN'S CLOCK. Both frames of

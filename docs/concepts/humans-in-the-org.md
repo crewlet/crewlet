@@ -108,6 +108,24 @@ and your own work is on your own screen; leave it unbound and you are an
 operator outside the chart, acting as `operator:<id>`, which is an ordinary
 state and not an error.
 
+**Your own marks and pins are the person's, and the record still names the
+token.** *Whose* state a document holds and *who wrote it* are two different
+questions with two different answers, and the person tools answer both. When
+Sarah's assistant marks her inbox read, pins a view or re-orders her queue, the
+record it writes is **`sarah-chen`'s** — the seat her token is bound to — while
+the history row it leaves names **`sarah`** with author kind `operator`. The
+attribution rule above is untouched: it answers *who did this*, and it stays
+the credential. The subject answers *whose inbox is this*, and that is the
+person.
+
+Keyed on the credential, as it was, a bound founder accumulated a second record
+called `founder`: everything their assistant marked was invisible on `#/inbox`,
+which asks under the seat, and `#/me`'s queue tab came back empty. An **unbound
+token is unchanged** — it writes its own record under its own id, which is the
+ordinary state of an operator outside the chart — and records written before a
+company bound its token are still read, the seat's being preferred and the
+credential's the fallback.
+
 One change that concerned you under both names is **one** notice, under the
 stronger of the two reasons — the same rule that already gives one handle one
 reason. And an operator reading somebody else's day is handed *that* person's

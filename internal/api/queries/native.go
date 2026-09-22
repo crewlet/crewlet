@@ -157,9 +157,17 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	values := p.Values()
 	viewer := strings.TrimSpace(p.String("viewer"))
 	delete(values, "viewer")
+	// AND BOTH OF THE VIEWER'S NAMES, for the one key in this grammar
+	// that names a PERSON rather than filtering rows: `priorities=` reads
+	// somebody's own record, and a record written before their credential
+	// was keyed on their seat is filed under the credential. Without the
+	// alias, `preset=priorities` was the one tab of My work's seven that
+	// stayed empty for exactly the person the preset is for.
+	party := s.partyOf(viewer)
 	q, err := s.Work.ExpandedQuery(ctx, values, tracker.Viewer{
-		Handle:  viewer,
-		Project: s.projectOf(viewer),
+		Handle:     party.Handle,
+		OperatorID: party.OperatorID,
+		Project:    s.projectOf(viewer),
 	}, now, time.UTC)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)

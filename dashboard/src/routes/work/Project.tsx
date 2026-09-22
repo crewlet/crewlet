@@ -142,7 +142,7 @@ export function Project({ projectKey }: { projectKey: string }) {
                 <ItemsView project={projectKey} />
               ))}
             {lens === "overview" && <ProjectOverview detail={detail} chrome={chrome} />}
-            {lens === "history" && <HistoryView container={`project:${projectKey}`} />}
+            {lens === "history" && <HistoryView container={`project:${projectKey}`} embedded />}
           </div>
         )}
       </QueryState>

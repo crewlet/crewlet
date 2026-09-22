@@ -146,3 +146,63 @@ func TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase(t *testing.T) {
 		}
 	}
 }
+
+// AND EVERY GROUPING THE DISPLAY MENU OFFERS IS ONE THE GRAMMAR TAKES — and
+// every grouping the grammar takes is offered, or left out on the record.
+//
+// `GROUP_AXES` is the dashboard's copy of the engine's grouping keys. A value
+// there the parser refuses does not mis-draw a board, it refuses the read and
+// takes the board down with it; a key the engine takes that the menu never
+// lists is an arrangement only a hand-edited URL can reach, which is what
+// `project` was until this gate named it. The keys the menu deliberately does
+// not offer are listed HERE with their reasons, so a grouping added to the
+// grammar has to land in the menu or in this list — and an entry here for a
+// key the grammar no longer takes is stale and fails too.
+func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
+	t.Parallel()
+
+	body, err := clientsource.Declaration(clientsource.Tree,
+		`(?s)export const GROUP_AXES[^=]*= \[(.*?)\];`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := clientsource.Field(body, "value")
+	if len(client) == 0 {
+		t.Fatal("the Display menu offers no grouping at all, so this gate certifies nothing")
+	}
+
+	for _, key := range client {
+		// THROUGH THE PARSER, for the reason the sort gate gives: what
+		// decides whether a row works is ParseQuery's own answer.
+		if _, err := tracker.ParseQuery(tracker.MapParams(map[string]any{
+			"container": "workspace", "group_by": key,
+		}), wednesday, time.UTC); err != nil {
+			t.Errorf("the Display menu offers group_by=%q and the grammar refuses "+
+				"it: %v — the board is not mis-drawn, the read is refused", key, err)
+		}
+	}
+
+	// WHAT THE MENU LEAVES OUT, each on the record.
+	unlisted := map[string]string{
+		"routing_unit": "a routing move is the exception the item's own rail names; a board of it is a board of exceptions",
+		"parent":       "a tree is what the subtasks panel draws, not a set of columns",
+		"due:day":      "a day is the calendar's axis, and that shape is where a due date is read",
+		"due:week":     "a week is the timeline's axis",
+		"start:week":   "likewise the timeline's",
+	}
+	for _, key := range tracker.GroupKeys() {
+		if slices.Contains(client, key) {
+			continue
+		}
+		if _, ok := unlisted[key]; !ok {
+			t.Errorf("the grammar takes group_by=%q and the Display menu neither "+
+				"offers it nor records why not — an arrangement only a hand-edited "+
+				"URL can reach", key)
+		}
+	}
+	for key := range unlisted {
+		if !slices.Contains(tracker.GroupKeys(), key) {
+			t.Errorf("this gate excuses group_by=%q, which the grammar no longer takes", key)
+		}
+	}
+}

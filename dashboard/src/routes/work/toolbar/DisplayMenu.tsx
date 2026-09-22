@@ -38,7 +38,7 @@ import {
   ViewColumnGlyph,
   VisibilityGlyph,
 } from "@crewlethq/icons/glyphs";
-import { GROUP_AXES, SORTS, type Shape } from "~/lib/work.ts";
+import { GROUP_AXES, SORTS, groupAxisOptions, secondAxisOptions, type Shape } from "~/lib/work.ts";
 import { tableColumnChoices } from "../shapes/Table.tsx";
 
 /** The five shapes, each with the mark it is drawn as in the strip. */
@@ -136,7 +136,9 @@ function DisplayPanel({
   onCols,
 }: DisplayMenuProps) {
   // THE BOARD IS ALWAYS GROUPED — it is what a board IS — so its picker offers
-  // no "none" and defaults to the status axis, exactly as the query does.
+  // no "none" and shows the status axis where nothing chose one, exactly as
+  // the query does; see [groupAxisOptions] for the row it no longer lists
+  // twice.
   const grouped = shape !== "calendar";
   const nested = shape === "list" || shape === "table";
   const chosen = new Set(cols ? cols.split(",").filter(Boolean) : []);
@@ -164,14 +166,11 @@ function DisplayPanel({
           <span>Group by</span>
           <Select
             width="auto"
-            value={groupBy}
+            value={shape === "board" ? groupBy || "status" : groupBy}
             onChange={(value) => onGroupBy(String(value))}
             ariaLabel="Group by"
             active={groupBy !== ""}
-            options={[
-              { value: "", label: shape === "board" ? "Status" : "No grouping" },
-              ...GROUP_AXES.map((a) => ({ value: a.value, label: a.label })),
-            ]}
+            options={groupAxisOptions(shape, workspace)}
           />
         </label>
       )}
@@ -185,15 +184,9 @@ function DisplayPanel({
             onChange={(value) => onGroupBy2(String(value))}
             ariaLabel="Then by"
             active={groupBy2 !== ""}
-            options={[
-              { value: "", label: "No second grouping" },
-              // NEVER THE AXIS ALREADY CHOSEN: the engine refuses that pair,
-              // because every row would be alone in its own band.
-              ...GROUP_AXES.filter((a) => a.value !== groupBy).map((a) => ({
-                value: a.value,
-                label: a.label,
-              })),
-            ]}
+            // NEVER THE AXIS ALREADY CHOSEN: the engine refuses that pair,
+            // because every row would be alone in its own band.
+            options={secondAxisOptions(groupBy, workspace)}
           />
         </label>
       )}

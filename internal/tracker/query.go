@@ -226,7 +226,14 @@ type Query struct {
 	// `Person.Priorities` and `update_priorities` are what a person calls
 	// their list, and renaming it here would leave one word meaning two
 	// things across the API.
-	PriorityListOf string
+	//
+	// A [Party] RATHER THAN A HANDLE, for the reason [MyWorkQuery.Who] is
+	// one: this names a PERSON, and the one person who can have two names
+	// is the one whose list is most likely to have been written through
+	// their own credential. [ParseQuery] fills the handle from the
+	// parameter and only a surface with the chart can add the alias, which
+	// is what [Reader.ExpandedQuery] does from its viewer.
+	PriorityListOf Party
 
 	// PriorityList is that list, RESOLVED — filled inside the read's own
 	// transaction, because it lives on another object and a parser that
@@ -516,8 +523,10 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 		References: ProjectKey(p.String("references")),
 		Batch:      p.String("batch"),
 		AskedOf:    p.String("asked_of"),
-		// THE LIST, not the enum. See [Query.PriorityListOf].
-		PriorityListOf: strings.TrimSpace(p.String("priorities")),
+		// THE LIST, not the enum — and the SEAT alone, because a parser
+		// has no chart to resolve a second identity from. See
+		// [Query.PriorityListOf].
+		PriorityListOf: PartyOf(strings.TrimSpace(p.String("priorities"))),
 		AskedBy:        p.String("asked_by"),
 		Parent:         p.String("parent"),
 		Root:           p.String("root"),
@@ -929,6 +938,11 @@ var groupKeys = []string{
 	"project", "unit", "routing_unit", "parent",
 	"due:day", "due:week", groupByDueBucket, "start:week",
 }
+
+// GroupKeys is every grouping the grammar takes, for the one caller that
+// carries its own copy of the list — the dashboard's Display menu — to be held
+// against; see client_gate_test.go.
+func GroupKeys() []string { return slices.Clone(groupKeys) }
 
 func (q *Query) parseGrouping(p Params) error {
 	q.GroupLimit = p.Int("group_limit", 0)

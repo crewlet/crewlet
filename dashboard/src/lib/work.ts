@@ -137,9 +137,9 @@ export function typeName(slug: string | undefined, types?: WorkTypeDef[]): strin
  *
  * AND A PHRASE, because `kind.replaceAll("_", " ")` after an actor's name reads
  * "ada watchers". Only the kinds an apply can compare two documents for produce
- * deltas — `tracker.TaskDeltas` covers eleven task fields and nothing else — so
- * `watchers`, `relations`, `checklist`, `archived`, `reparented` and the whole
- * comment family reach the reader through this column alone.
+ * deltas — `tracker.TaskDeltas` covers sixteen task fields and nothing else —
+ * so `watchers`, `checklist`, `archived`, `reparented` and the whole comment
+ * family reach the reader through this column alone.
  *
  * ONE DECLARATION, held against `tracker.ChangeKinds` by
  * `internal/tracker/client_gate_test.go`: this is a closed set the engine owns
@@ -223,6 +223,30 @@ export interface LabelContext {
   seatName?: (handle: string) => string;
   /** The company's own fields, so a chip over one can say what it is called. */
   fields?: WorkFieldDef[];
+  /**
+   * WHO IS READING, as the seat handle a wake would have been delivered to.
+   *
+   * A change record is written ONCE and read by everybody, so a sentence the
+   * engine addressed to the seat it woke — "…of your priorities" — is second
+   * person to whoever happens to open the log. Only a surface knows who that
+   * is, which is the same division `deltaValue` states for the reader's zone:
+   * the state log's N nodes write one identical row, and anything that depends
+   * on who is looking at it belongs here. Empty is the honest default and means
+   * "nobody in particular", which renders the owner's name rather than "you".
+   */
+  viewer?: string;
+  /**
+   * What a task id is CALLED, for the fields whose value is another task.
+   *
+   * A relation delta carries the other task's id rather than its key, and for
+   * the same reason `deltaValue` renders an instant rather than a day: the
+   * record is the state log's, written identically by N nodes, and a key
+   * belongs to the other task's own row — so a node that had not applied that
+   * task would store a different string, for ever, in a table nothing repairs.
+   * The answer resolves what it can (`WorkActivityAnswer.keys`) and this is how
+   * it reaches the sentence.
+   */
+  taskKey?: (id: string) => string;
 }
 
 /**
@@ -266,9 +290,39 @@ export function axisLabel(axis: string, key: string, ctx: LabelContext = {}): st
       return key ? (ctx.tags?.find((t) => t.slug === key)?.label ?? key) : "Untagged";
     case "parent":
       return key || "No parent";
+    case "project":
+      return key || "No project";
+    case "unit":
+    case "routing_unit":
+      return key || "No unit";
+    case "due:bucket":
+      // THE ENGINE NAMES THESE and a column head takes that name — the answer
+      // carries a `label` per band, so [groupLabel] returns before it reaches
+      // here. What reaches here is a CHIP, which holds the key out of the URL
+      // and no answer, and the words are the engine's own list: copied here
+      // they would be a second declaration nothing holds against `dueBands`,
+      // which is the drift `clientsource` exists to catch. Humanised, the key
+      // IS the word — `this_week` reads "This week" — so the chip and the
+      // heading it came from say the same thing without a second table.
+      return key ? humanize(key) : "No due date";
     default:
       return key || EMPTY_VALUE;
   }
+}
+
+/**
+ * The groups a LIST draws: only the bands that hold something.
+ *
+ * A BOARD DRAWS EVERY LANE the scope admits — the engine mints the empty ones
+ * on a closed axis, so a board is the shape of the process rather than of this
+ * week's rows — and a list does not: a band is a heading between runs of
+ * rows, and a heading over nothing is a rule across the page separating
+ * nothing from nothing. Two drawings of one answer, which is what a shape is;
+ * the fetch is the same, as the rule that a shape never fetches differently
+ * requires.
+ */
+export function bandsOf(groups: WorkGroup[]): WorkGroup[] {
+  return groups.filter((group) => group.count > 0 || (group.subgroups?.length ?? 0) > 0);
 }
 
 /**
@@ -305,15 +359,71 @@ export function effectiveArrangement(asked: string, inherited: unknown): string 
   return typeof inherited === "string" ? inherited : "";
 }
 
-/** The axes a board may be cut on, with what each is called in the picker. */
-export const GROUP_AXES: { value: string; label: string }[] = [
+/**
+ * The axes a board may be cut on, with what each is called in the picker.
+ *
+ * A COPY OF THE ENGINE'S `groupKeys`, held against it by
+ * `internal/tracker/client_gate_test.go` in both directions: a value here the
+ * grammar refuses takes the whole board down with a refusal, and a key the
+ * engine takes that this list never names is an arrangement only a hand-edited
+ * URL can reach — which is what `project` was until the gate named it. The
+ * keys the menu deliberately leaves out are listed THERE, each with its
+ * reason, so a grouping added to the grammar lands here or in that list.
+ *
+ * `workspace` marks an axis the engine takes only at workspace scope: inside a
+ * project every row is in one project, and the grammar refuses the question.
+ */
+export const GROUP_AXES: { value: string; label: string; workspace?: boolean }[] = [
   { value: "status", label: "Status" },
   { value: "status_group", label: "Status group" },
   { value: "assignee", label: "Assignee" },
   { value: "priority", label: "Priority" },
   { value: "type", label: "Type" },
   { value: "tag", label: "Tag" },
+  { value: "project", label: "Project", workspace: true },
+  { value: "unit", label: "Unit" },
+  // WHEN THE WORK IS DUE, which is the one axis that is not a stored value:
+  // the engine cuts it against the COMPANY's day rather than the reader's, so
+  // the bands, a row's overdue flag and every `due=` filter agree about a
+  // task. Offered on every shape — "what is late, what is today" is a
+  // question somebody asks of a list as readily as of a board.
+  { value: "due:bucket", label: "Due" },
 ];
+
+/**
+ * The axes the Display menu's Group by offers, for one shape at one scope.
+ *
+ * A BOARD IS ALWAYS GROUPED — it is what a board is — and its default axis is
+ * status, so on a board there is no "No grouping" row and "Status" is the
+ * axis's own entry. The menu used to list both: a `""` row LABELLED "Status"
+ * ahead of the `status` axis, two rows reading the same word with different
+ * URL effects, one of which marked the control active and one of which did
+ * not. Every other shape can be ungrouped, so it leads with that.
+ */
+export function groupAxisOptions(
+  shape: Shape,
+  workspace: boolean,
+): { value: string; label: string }[] {
+  const axes = GROUP_AXES.filter((a) => !a.workspace || workspace).map(({ value, label }) => ({
+    value,
+    label,
+  }));
+  return shape === "board" ? axes : [{ value: "", label: "No grouping" }, ...axes];
+}
+
+/**
+ * The second axis's options: never the first, which the engine refuses because
+ * every row would be alone in its own band.
+ */
+export function secondAxisOptions(
+  first: string,
+  workspace: boolean,
+): { value: string; label: string }[] {
+  return [
+    { value: "", label: "No second grouping" },
+    ...groupAxisOptions("board", workspace).filter((a) => a.value !== first),
+  ];
+}
 
 /** What an axis is CALLED, or "" for one this build does not offer. */
 export function axisName(axis: string): string {
@@ -344,16 +454,57 @@ export const SORTS: { value: string; label: string }[] = [
  * like a rendering bug.
  */
 export function describeChange(record: WorkActivityRecord, ctx: LabelContext): string {
-  const moved = Object.entries(record.fields ?? {});
-  if (moved.length > 0) {
-    return moved.map(([field, d]) => deltaClause(field, d.from, d.to, ctx)).join(", ");
-  }
+  const moved = deltaSentence(record.fields, ctx);
+  if (moved) return moved;
   // THE PROSE THE BODY RENDERS TO, not its source. The excerpt is a cut of a
-  // comment or a description, both markdown by contract, and this string is
-  // drawn in a one-line cell — so an unflattened one printed `## Understanding
-  // the work` with the hashes in it.
-  if (record.excerpt) return plainText(record.excerpt);
+  // comment or a description, both markdown by contract, so an unflattened one
+  // printed `## Understanding the work` with the hashes in it.
+  //
+  // RE-ADDRESSED, because a cross-item log is read by everybody and an excerpt
+  // was written for one recipient. See [readdress].
+  if (record.excerpt) return readdress(plainText(record.excerpt), record, ctx);
   return record.kind.replaceAll("_", " ");
+}
+
+/**
+ * A sentence the engine addressed to ONE seat, re-addressed to whoever is
+ * reading it.
+ *
+ * `tracker.Writer.prioritisedWake` writes "<actor> put ENG-1 at position 1 of
+ * your priorities" — a notification CARD's text, correct for the seat the wake
+ * was delivered to and second person to everybody else. The company-wide log
+ * draws the same record for a founder, a lead and every other agent, so there
+ * it says "your" to a reader whose queue it is not.
+ *
+ * ONLY A SURFACE CAN FIX THIS, which is the division `deltaValue` states for
+ * the reader's zone one function below: the record is the state log's, written
+ * identically by N nodes, so it cannot carry a rendering that depends on who
+ * opens it. What the record DOES carry is whose record it is — a person
+ * subject's id is the handle itself (`tracker.PersonSubject`) — so the owner is
+ * always nameable, and second person survives exactly when the reader is that
+ * owner.
+ *
+ * SCOPED TO A PERSON SUBJECT, because that is the only kind whose records are
+ * addressed to somebody: a task's excerpt is a comment body or a description
+ * and its "you" belongs to whoever wrote it.
+ */
+function readdress(text: string, record: WorkActivityRecord, ctx: LabelContext): string {
+  if (record.subject_kind !== "person" || !text) return text;
+  const owner = record.subject_id;
+  // THE HANDLE IS THE ONLY IDENTITY THAT CAN MATCH HERE, and the other one is
+  // named rather than compared. A viewer has two — `/viewer` returns the
+  // operator id a token maps to AND the seat handle bound to it
+  // (`lib/viewer.ts`) — but a person subject's id is the SEAT HANDLE
+  // (`tracker.PersonSubject`), so a comparison against the operator id could
+  // never be true and would be a branch with no reachable case. An operator
+  // with no seat bound to them owns no queue for this to be about.
+  if (!owner || owner === ctx.viewer) return text;
+  const name = ctx.seatName?.(owner) ?? owner;
+  // THE POSSESSIVE FIRST, so "your priorities" does not become "<name> s
+  // priorities" by way of the bare pronoun. Case-insensitive because the
+  // engine's sentences are prose and a rule that only matched one casing would
+  // be one that silently stopped matching.
+  return text.replace(/\byour\b/gi, `${name}'s`).replace(/\byou\b/gi, name);
 }
 
 /**
@@ -390,9 +541,39 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
  * glance rather than only on a careful read.
  */
 export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
-  const moved = Object.entries(entry.fields ?? {});
+  return deltaSentence(entry.fields, ctx) || changePhrase(entry.kind);
+}
+
+/**
+ * EVERY FIELD A RECORD SAYS IT MOVED, as one sentence — and "" where it moved
+ * none.
+ *
+ * ONE FUNCTION FOR BOTH SURFACES, because the feed and an item's own history
+ * are the same claim about the same column: a delta worded two ways on two
+ * screens is the drift this module exists to end, and it had already started —
+ * the feed read `fields` as a from/to map and the history read it as either
+ * shape, so the two disagreed about what a comment's `mentions` said. They
+ * differ on ONE rung and only one, the excerpt, which each states for itself.
+ *
+ * GENERIC OVER THE KIND, deliberately, and there is no per-kind sentence
+ * anywhere below. `fields_json` is written by two producers — the applier's own
+ * document comparison, and the notification's fields where no comparison was
+ * possible — and neither tags its entries with what they are about, so a
+ * renderer that switched on the kind would be guessing at the shape rather than
+ * reading it. Which kinds carry fields at all is the ENGINE's answer and it
+ * grows: a `relations`, `project_updated`, `view_saved` or `person_updated`
+ * record that starts carrying deltas is rendered by this function on the day it
+ * does, with nothing here to change.
+ *
+ * TWO SHAPES, because a history entry's `fields` is sometimes a from/to pair
+ * and sometimes the state the change produced — the applier writes the deltas
+ * where it can compare two documents and the notification's own fields where it
+ * cannot (a comment, a mention, an ask). A renderer that assumed one printed
+ * `[object Object]` on the other.
+ */
+function deltaSentence(fields: Record<string, unknown> | undefined, ctx: LabelContext): string {
   const said: string[] = [];
-  for (const [field, raw] of moved) {
+  for (const [field, raw] of Object.entries(fields ?? {})) {
     const delta = raw as { from?: unknown; to?: unknown } | null;
     if (delta && typeof delta === "object" && ("from" in delta || "to" in delta)) {
       said.push(deltaClause(field, scalar(delta.from), scalar(delta.to), ctx));
@@ -401,8 +582,7 @@ export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
     const value = deltaValue(field, scalar(raw), ctx);
     said.push(value ? `${humanize(field)}: ${value}` : humanize(field));
   }
-  if (said.length > 0) return said.join(", ");
-  return changePhrase(entry.kind);
+  return said.join(", ");
 }
 
 /**
@@ -457,6 +637,26 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
     // this build does not recognise passes through rather than being guessed at.
     case "estimate":
       return /^\d+m$/.test(value) ? fmtMinutes(Number(value.slice(0, -1))) : value;
+    // A FIELD WHOSE VALUE IS OTHER TASKS, which travels as their IDS: three of
+    // `tracker.RelationKinds`, the `blocking` mirror, and the ordered queue a
+    // person record carries. NOT `page`, which is the fourth relation kind and
+    // names a wiki page — resolving it here would be claiming a page is a task,
+    // and the answer deliberately leaves those ids out of its map.
+    //
+    // AN ID THE ANSWER DID NOT RESOLVE RENDERS AS THE ID. The map omits what
+    // the answering node holds no row for — a record naming a counterparty it
+    // has not applied, or anything past the answer's own cap — and a value
+    // nobody can explain is still a value somebody set, where a blank reads as
+    // a task with no name.
+    case "waiting_on":
+    case "linked":
+    case "duplicates":
+    case "blocking":
+    case "priorities":
+      return value
+        .split(", ")
+        .map((id) => ctx.taskKey?.(id) || id)
+        .join(", ");
     default:
       return value;
   }
@@ -569,14 +769,36 @@ export function fieldValueState(field: WorkFieldValue): string {
  */
 export type Shape = WorkViewShape;
 
+/**
+ * WHAT A CONTAINER OPENS ON when nothing else decides it.
+ *
+ * THE LIST, BECAUSE A BOARD'S INFORMATION IS THE COMPARISON ACROSS ITS LANES.
+ * That makes it the worst shape at low N and the best at high N: four lanes
+ * holding one card between them say nothing a lane could not say alone, and
+ * the one card is a 292px object in a 1500px field. A list degrades to one
+ * full-width row, which is still a list — the same drawing at one item and at
+ * four hundred. So the landing shape is the one that never stops working, and
+ * the board is one press away in the Display menu, named by what it is for.
+ *
+ * NOT CONDITIONAL ON HOW MUCH WORK EXISTS. A landing screen whose shape
+ * changes as a company fills up is a screen nobody can learn, and the first
+ * item somebody files would silently redraw the page.
+ *
+ * AND IT IS THE CLIENT'S FALLBACK, not a builtin marked `default` in the
+ * engine: one view row may carry `default` and the applier settles that in the
+ * same transaction as the write, so a builtin claiming it would collide with
+ * whatever a company saved. This is what holds when nothing claims it.
+ */
+export const LANDING_SHAPE: Shape = "list";
+
 /** The shape a view is drawn in. */
 export function shapeOf(viewKey: string, views: WorkView[]): Shape {
   const view = views.find((v) => v.key === viewKey);
   if (view) return view.type;
-  // A KEY NOTHING RESOLVES DRAWS THE BOARD rather than nothing: a strip that
-  // has not arrived yet is the ordinary state of the first paint, and a body
-  // that waited for it would flash empty on every navigation.
-  return "board";
+  // A KEY NOTHING RESOLVES DRAWS [LANDING_SHAPE] rather than nothing: a strip
+  // that has not arrived yet is the ordinary state of the first paint, and a
+  // body that waited for it would flash empty on every navigation.
+  return LANDING_SHAPE;
 }
 
 /**
@@ -584,11 +806,11 @@ export function shapeOf(viewKey: string, views: WorkView[]): Shape {
  *
  * ONE ROW MAY CARRY `default` and the applier settles that in the same
  * transaction as the write, so there is never a second claim to fall back
- * from. Absent, the board: it is the shape that answers "what is moving",
- * which is the question somebody opening a tracker has.
+ * from. Absent, the key of the shape every container has without anybody
+ * saving one — see [LANDING_SHAPE] for why that is the list.
  */
 export function defaultView(views: WorkView[]): string {
-  return views.find((v) => v.default)?.key ?? "board";
+  return views.find((v) => v.default)?.key ?? LANDING_SHAPE;
 }
 
 /** A view's saved query, or an empty set of defaults. */
@@ -614,7 +836,29 @@ export interface TrackerFilters {
   groupBy: string;
   /** The SECOND axis, drawn as bands inside the first — see [buildItemsParams]. */
   groupBy2: string;
-  group: string;
+  /**
+   * WHICH COLUMN THE WHOLE QUERY IS NARROWED TO, and it is THREE-VALUED.
+   *
+   * `undefined` is the whole board. `""` is the column holding the rows with
+   * NO value on this axis — "Unassigned", "Untagged", "No parent" — and
+   * anything else is that value. The engine reads the key's PRESENCE
+   * (`Params.Has`) for exactly this reason: ITS key for the unset column IS
+   * the empty string, on every axis, so "" cannot also mean "no narrowing".
+   *
+   * This is the same defect `EXPLICIT_NONE` records one field above, with the
+   * opposite resolution. An ARRANGEMENT needed a NAME for "off", because its
+   * empty string already meant "inherit the view's" and a word is the only way
+   * to tell a choice from an absence. A column narrowing needs PRESENCE,
+   * because its empty string already means a real column and no word could be
+   * spelled that some axis will not one day hold as a value. So the URL carries
+   * `group=` with nothing after it, which `URLSearchParams` round-trips, and
+   * every reader asks whether the key is there rather than what it says.
+   *
+   * Spelled as a plain string it was unreachable end to end: the query builder
+   * dropped an empty one on the way to the wire, the address writer deleted the
+   * key, and the unset column's own "N more →" link loaded the whole board.
+   */
+  group: string | undefined;
   sort: string;
   blocked: boolean;
   /**
@@ -663,7 +907,9 @@ export const NO_FILTERS: TrackerFilters = {
   scope: "open",
   groupBy: "",
   groupBy2: "",
-  group: "",
+  // ABSENT, which is the whole board — see [TrackerFilters.group] for why the
+  // empty string is a column rather than the lack of one.
+  group: undefined,
   sort: "",
   blocked: false,
   due: "",
@@ -689,7 +935,9 @@ export function anyFilter(f: TrackerFilters): boolean {
     f.priority ||
     f.assignee ||
     f.tag ||
-    f.group ||
+    // PRESENCE, NEVER TRUTH: `group=` with nothing after it is the unset
+    // column, which narrows the query exactly as a named one does.
+    f.group !== undefined ||
     f.blocked ||
     f.due ||
     f.removed ||
@@ -732,6 +980,14 @@ export function buildItemsParams(args: {
   const set = (key: string, value: string) => {
     if (value) params[key] = value;
   };
+  // THE COLUMN NARROWING IS SENT ON ITS PRESENCE, never on its truth: `""` is
+  // the unset column and the engine reads the key with `Params.Has`, so an
+  // empty value has to reach the wire as `group: ""` rather than be dropped by
+  // the writer above. Absent, the key is left exactly as it was — which is how
+  // a saved view's own `group` keeps supplying the default nobody overrode.
+  const setGroup = () => {
+    if (filters.group !== undefined) params.group = filters.group;
+  };
   set("q", filters.q);
   set("status", filters.status);
   set("type", filters.type);
@@ -766,9 +1022,9 @@ export function buildItemsParams(args: {
   // that switch either adds nothing or adds a predicate the group already
   // implies. Measured, all three answer identically.
   if (filters.scope === "open") {
-    params.status_group = "not_started,active";
+    params.status_group = SCOPE_GROUPS.open;
   } else if (filters.scope === "closed") {
-    params.status_group = "done,closed";
+    params.status_group = SCOPE_GROUPS.closed;
     if (!params.show_closed) params.show_closed = "true";
   } else {
     delete params.status_group;
@@ -872,7 +1128,7 @@ export function buildItemsParams(args: {
     if (axis) {
       params.group_by = axis;
       params.group_limit = 100;
-      set("group", filters.group);
+      setGroup();
     } else {
       delete params.group_by;
       delete params.group;
@@ -900,7 +1156,7 @@ export function buildItemsParams(args: {
     if (axis) {
       params.group_by = axis;
       params.group_limit = 100;
-      set("group", filters.group);
+      setGroup();
     } else {
       delete params.group_by;
       delete params.group;
@@ -932,6 +1188,10 @@ export function buildItemsParams(args: {
  * narrowing applied to the wrong set.
  */
 export function filterPatchForGroup(axis: string, key: string): Record<string, string> {
+  // AND THE UNSET COLUMN'S KEY IS `""`, which the patch carries as a value
+  // rather than as a deletion — see [TrackerFilters.group]. `patchedHref`
+  // deletes on `null` for exactly this: written as "clears the key", the
+  // "Unassigned" column's own overflow link loaded the whole board.
   return { shape: "list", group_by: axis, group: key };
 }
 
@@ -1015,10 +1275,12 @@ export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterCh
     });
   }
   if (f.due) out.push({ param: "due", label: "Due", verb: "is", value: dueFilterLabel(f.due) });
-  if (f.group) {
+  if (f.group !== undefined) {
     // THE COLUMN A BOARD WAS NARROWED TO, named by its own axis — the same
     // resolver the column head uses, so the chip and the heading it came from
-    // say the same word.
+    // say the same word. Including the UNSET one: `axisLabel` names an empty
+    // key per axis ("Unassigned", "Untagged"), which is the whole reason it
+    // takes the key rather than the group.
     out.push({
       param: "group",
       label: axisName(f.groupBy) || "Column",
@@ -1273,6 +1535,57 @@ export function countedLabel(shown: number, params: Record<string, unknown>): st
 }
 
 /**
+ * THE END OF A LIST, SAID — and "" where it would be a reassurance.
+ *
+ * # What it separates
+ *
+ * A list that has reached its end and a list that was cut off end the same
+ * way: rows, then page ground. [totalHint] is deliberately silent once
+ * everything matching is on screen, and a page's own cursor is invisible — so
+ * the reader of a hundred rows cannot tell whether the hundred-and-first
+ * exists. This is the sentence that says it does not.
+ *
+ * # Why it is not the reassurance [pageNote] refuses
+ *
+ * `pageNote`'s rule — "a note that always drew would put 'and that is all of
+ * them' under every healthy card in the product" — is about a CARD in a
+ * column of cards, where the note is one of twenty and nobody reads the
+ * twentieth. This is the foot of the page's own subject, drawn once, where the
+ * question "is that everything?" is the reason somebody scrolled. It is silent
+ * on an empty list (the empty state is the answer there) and on an incomplete
+ * one (the count in the bar already says there is more).
+ *
+ * # It never says what a filter hides
+ *
+ * The design's own sentence was "Two items match. Widen the filters, or clear
+ * them, to see the other six" — and "the other six" is a count over the
+ * UNFILTERED set, which no answer carries: `total_hint` is `countHint` over
+ * the SAME predicate as the rows (`internal/tracker/read.go`), so it counts
+ * what matched and never what was excluded. Stating it would mean a second
+ * query at a second instant, printing a difference nobody wrote. So the
+ * narrowed form says only that these are the ones that match.
+ */
+export function endNote(args: {
+  shown: number;
+  /** The answer's `total_hint`. */
+  hint: number;
+  /** The answer's `total_capped` — a count that stopped rather than finished. */
+  capped?: boolean;
+  /** The answer's `next_cursor`: a page with one is not the end of anything. */
+  cursor?: string;
+  /** Whether a narrowing is on, which is the only thing that changes the noun. */
+  narrowed: boolean;
+}): string {
+  if (args.shown <= 0 || args.cursor || args.capped || args.hint > args.shown) return "";
+  const count = plural(args.shown, "item");
+  // "1 item matches" / "2 items match": the verb agrees with the count, which
+  // a single spelling gets wrong at exactly the number a sparse company has.
+  return args.narrowed
+    ? `That is all of it · ${count} match${args.shown === 1 ? "es" : ""}`
+    : `That is all of it · ${count}`;
+}
+
+/**
  * The month the calendar draws, and a fallback for anything that is not one.
  *
  * `month=` is a URL parameter, so it is whatever the address bar holds — and
@@ -1339,10 +1652,48 @@ export function pageNote(shown: number, more: boolean, one: string, many?: strin
 export const SCOPES = ["open", "closed", "all"] as const;
 export type Scope = (typeof SCOPES)[number];
 
+/**
+ * WHICH STATUS GROUPS EACH SEGMENT ADMITS, as the wire spells it.
+ *
+ * ONE SPELLING FOR BOTH READERS OF IT. [buildItemsParams] writes this key and
+ * [scopeOf] reads it back off a saved view — two places that must agree about
+ * exactly the same fact, and they already held two copies of the two strings.
+ * A mismatch is silent: a segment that writes a group nothing reads back snaps
+ * the control to the wrong value over a query that is narrowing correctly.
+ *
+ * The lanes a board draws were a third reader until the ENGINE started padding
+ * a closed axis to what its own predicate admits — the same narrowing, derived
+ * from the predicate itself rather than from a copy of it.
+ *
+ * `all` IS THE EMPTY STRING here and only here: it is the absence of the key
+ * rather than a fourth value, which is what [buildItemsParams] deletes and what
+ * makes every group admitted.
+ */
+export const SCOPE_GROUPS: Record<Scope, string> = {
+  open: "not_started,active",
+  closed: "done,closed",
+  all: "",
+};
+
+/**
+ * WHICH SEGMENT A `scope=` OFF THE ADDRESS ACTUALLY IS.
+ *
+ * A URL key is whatever the address bar holds, and [buildItemsParams] already
+ * reads anything the three do not name as `all` — it is the else-branch of one
+ * switch. Every other reader of the segment needs the same answer: the control
+ * that draws it, the padding that narrows a board's lanes with it, and the
+ * empty state that names it. Spelled per reader, a hand-edited `?scope=opne`
+ * drew an unset switch over a query showing every closed task, which is the one
+ * combination this segment exists to make impossible.
+ */
+export function asScope(value: string): Scope {
+  return SCOPES.includes(value as Scope) ? (value as Scope) : "all";
+}
+
 /** A view's `status_group` mapped back onto the three segments. */
 export function scopeOf(group: string | undefined): Scope {
-  if (group === "not_started,active") return "open";
-  if (group === "done,closed") return "closed";
+  if (group === SCOPE_GROUPS.open) return "open";
+  if (group === SCOPE_GROUPS.closed) return "closed";
   return "all";
 }
 

@@ -143,8 +143,15 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 				// which is a thing that happens rather than a
 				// permission scheme this tracker deliberately does
 				// not have.
+				//
+				// AGAINST EITHER OF THIS WRITER'S NAMES, because a
+				// view is saved through a person's own credential:
+				// the owner is the seat where the token is bound to
+				// one and the token where it is not, and comparing
+				// the actor alone told a founder their own protected
+				// board belonged to somebody else.
 				if current.Protected && current.Owner != "" &&
-					current.Owner != w.Actor {
+					!slices.Contains(w.Party().Handles(), current.Owner) {
 					return statelog.Decision{}, fmt.Errorf("tracker: view %s "+
 						"is protected and belongs to %s — ask them to change "+
 						"it, or save your own copy: %w",

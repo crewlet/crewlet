@@ -2,8 +2,10 @@ package tracker_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -310,6 +312,108 @@ func TestTheQuietDocumentsRecordWhatMoved(t *testing.T) {
 		`"policy_version":{"from":"0","to":"1"}}` {
 
 		t.Errorf("a field declaration recorded %s", got)
+	}
+}
+
+// THE ANSWER NAMES THE TASKS ITS DELTAS POINT AT, so a page of edges is
+// readable.
+//
+// A delta names the other end of a relation by its ID, because a key is a fact
+// about another task's row and a history row is inside this domain's identity
+// claim and is repaired by nothing. That leaves "Waiting on: — → 0f3c…" on
+// screen, and neither side could fix it alone: the engine may not put a key on
+// the record, and a surface holds no map to resolve one with. So the READ
+// resolves it, on the answer, where it binds nothing and two nodes may
+// legitimately differ.
+func TestAnActivityAnswerNamesTheTasksItsDeltasPointAt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
+
+	if _, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
+		Task: "dep", Project: "ENG", WaitingOnAdd: []string{"blk"},
+	}, fixedLeads{project: "eng-lead"}); err != nil {
+		t.Fatalf("Depend: %v", err)
+	}
+	r.drain()
+
+	answer, err := r.reader.Activity(t.Context(), tracker.ActivityQuery{
+		Project: "ENG", Level: statelog.ReadStale,
+	}, wednesday)
+	if err != nil {
+		t.Fatalf("Activity: %v", err)
+	}
+	// BOTH ENDS, because both rows name the other by id: the dependent's
+	// `waiting_on` names the blocker and the blocker's `blocking` names
+	// the dependent.
+	//
+	// THE KEY IS READ OFF THE ROW rather than written into this case, and
+	// that is the property: a key is MINTED by the create from the
+	// project's own counter, so what a fixture asked to call a task is not
+	// what it is called — which is the whole reason a writer cannot state
+	// one and the read has to resolve it.
+	for _, id := range []string{"dep", "blk"} {
+		want := r.task(t, id).Task.Key
+		if want == "" {
+			t.Fatalf("task %s has no key, so this case asserts nothing", id)
+		}
+		if got := answer.Keys[id]; got != want {
+			t.Errorf("the answer resolves %s to %q, want %q — the page shows "+
+				"a uuid without it", id, got, want)
+		}
+	}
+
+	// AND AN ID THIS NODE HOLDS NO ROW FOR IS ABSENT, never an empty
+	// string: a renderer falls back to the id, which is the honest
+	// degradation and the same one it takes past the cap.
+	//
+	// (Which delta fields are ASKED about is a property of the
+	// declaration rather than of any page, and it is asserted as one —
+	// see TestOnlyTheDeltaFieldsThatNameTasksAreResolved. A `page` edge's
+	// id resolves to nothing here whether or not it is excluded, so a
+	// case built on one would pass with the exclusion gone.)
+	if _, err := r.writer.UpdateTask(t.Context(), "op-ghost", "dep", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Relate: &tracker.RelationIntent{
+			Add: []tracker.Relation{
+				{Kind: tracker.RelationLinked, Other: "no-such-task"},
+			},
+		}}, tracker.ChangeRelations, nil); err != nil {
+		t.Fatalf("write the edge: %v", err)
+	}
+	r.drain()
+
+	answer, err = r.reader.Activity(t.Context(), tracker.ActivityQuery{
+		Project: "ENG", Level: statelog.ReadStale,
+	}, wednesday)
+	if err != nil {
+		t.Fatalf("Activity after the edge: %v", err)
+	}
+	if got, named := answer.Keys["no-such-task"]; named {
+		t.Errorf("the answer resolves no-such-task to %q, and this node holds "+
+			"no row for it", got)
+	}
+	// THE EDGE STILL REACHED THE ROW, or the assertion above passes
+	// because nothing recorded it at all.
+	if got := r.fieldsForSubject("dep"); !strings.Contains(got, "no-such-task") {
+		t.Fatalf("the edge recorded %s, so the assertion above asserts "+
+			"nothing", got)
+	}
+
+	// AND A PAGE THAT POINTS AT NOTHING CARRIES NO MAP, so the field is
+	// omitted rather than sent as an empty object.
+	plain, err := r.reader.Activity(t.Context(), tracker.ActivityQuery{
+		Project: "ENG", Kinds: []tracker.ChangeKind{tracker.ChangeCreated},
+		Level: statelog.ReadStale,
+	}, wednesday)
+	if err != nil {
+		t.Fatalf("Activity over the creates: %v", err)
+	}
+	if len(plain.Records) == 0 {
+		t.Fatal("no create rows came back, so this half asserts nothing")
+	}
+	if plain.Keys != nil {
+		t.Errorf("a page whose deltas name no task carries %v", plain.Keys)
 	}
 }
 

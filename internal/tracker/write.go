@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -101,6 +102,11 @@ type Writer struct {
 	OperatorID string
 	TurnID     string
 	Chain      []string
+
+	// Seat is the chart seat this writer's credential is bound to, empty
+	// for every writer that is already a seat and for a token nobody
+	// bound. See [Provenance.Seat] and [Writer.Record].
+	Seat string
 
 	// metrics is where the counters this package owns are recorded. Nil
 	// records nothing, which is what a writer built for a test gets: the
@@ -214,7 +220,48 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 	clone.OperatorID = provenance.OperatorID
 	clone.TurnID = provenance.TurnID
 	clone.Chain = provenance.Chain
+	clone.Seat = provenance.Seat
 	return &clone
+}
+
+// Record is whose OWN STATE this writer's person writes belong to: the seat
+// the credential is bound to, or the actor itself where nothing is bound.
+//
+// # It is deliberately not the author
+//
+// [Writer.Actor] is who WROTE the record and it stays the token, because a
+// tracker whose author field is chosen by the writer is not an audit trail
+// (see internal/api/opsmcp). This answers the other question — whose inbox,
+// whose pins, whose queue — and the answer there is the PERSON. A founder
+// whose assistant marks their inbox read is marking `jane-founder`'s inbox and
+// signing it `founder`: one gesture with two different correct answers, rather
+// than one answer used for both.
+//
+// The actor answered both, so a bound founder grew a SECOND person record
+// under their credential's name — reachable only through [readPartyRecord]'s
+// fallback, and invisible to somebody who also had a record under their seat.
+func (w *Writer) Record() string {
+	if w == nil {
+		return ""
+	}
+	if seat := strings.TrimSpace(w.Seat); seat != "" {
+		return seat
+	}
+	return w.Actor
+}
+
+// Party is every identity a record this writer OWNS may be filed under — the
+// person first, the credential behind them.
+//
+// FOR AN OWNERSHIP TEST AND NEVER FOR AN AUTHOR FIELD. A row written before a
+// company bound the token carries the credential's name and the same person is
+// behind both, so a check that admitted only [Writer.Record] would lock a
+// founder out of what their own assistant saved.
+func (w *Writer) Party() Party {
+	if w == nil {
+		return Party{}
+	}
+	return Party{Handle: w.Record(), OperatorID: w.OperatorID}
 }
 
 // After is this writer carrying one of its own earlier writes, and it is how a
@@ -295,6 +342,17 @@ type Provenance struct {
 	// OperatorID is the credential a person's own write was made under,
 	// recorded beside the actor rather than instead of it.
 	OperatorID string
+
+	// Seat is the chart seat that credential is BOUND to with
+	// `contact.crewlet_operator_id`, resolved by the surface because this
+	// package holds no org. Empty for a token nobody bound, and for every
+	// writer that is already a seat.
+	//
+	// IT NAMES NOTHING ON A RECORD, which is why it sits here with the
+	// rest of the provenance: the author stays the token and the kind
+	// stays `operator`, because that is the audit trail. What it decides
+	// is WHOSE STATE a person write lands on — see [Writer.Record].
+	Seat string
 
 	// TurnID is the turn that produced this write, and Chain the
 	// delegation path that reached it.

@@ -43,6 +43,7 @@ export function List({
   onOpen,
   onOverflow,
   overflowHref,
+  foot,
 }: {
   rows: WorkSummary[];
   groups: WorkGroup[];
@@ -58,6 +59,18 @@ export function List({
   onOverflow: (axis: string, key: string) => void;
   /** As [Board]'s — the screen owns the address. */
   overflowHref: (axis: string, key: string) => string;
+  /**
+   * THE END OF THE LIST, said — `lib/work.ts`'s `endNote`, and "" where the
+   * answer is not complete.
+   *
+   * THE WORDS ARE THE SCREEN'S because they are a fact about the ANSWER — how
+   * many matched, whether a cursor is outstanding, whether the count stopped at
+   * its ceiling — and this shape holds none of that. What the shape owns is
+   * WHERE it goes: the last thing inside the list's own panel, under the rows
+   * and under every band foot, so a list that reached its end and one that was
+   * cut off stop looking identical.
+   */
+  foot?: string;
 }) {
   const ctx = {
     statuses: detail?.statuses,
@@ -135,6 +148,7 @@ export function List({
             )}
           </section>
         ))}
+        {foot ? <div className="work-foot">{foot}</div> : null}
       </div>
     );
   }
@@ -149,6 +163,7 @@ export function List({
         onOpen={onOpen}
         selected={selected}
       />
+      {foot ? <div className="work-foot">{foot}</div> : null}
     </div>
   );
 }

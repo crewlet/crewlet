@@ -80,9 +80,16 @@ type Options struct {
 	Knowledge builtin.KnowledgeSearcher
 
 	// Org is the company chart, resolved per call because a config apply
-	// replaces it. Search needs it and an operator has no turn to carry
-	// it: without this the search tool is registered and refuses every
-	// call, so it is registered only when both are present.
+	// replaces it. An operator has no turn to carry one.
+	//
+	// TWO THINGS NEED IT, which is why it is wired unconditionally.
+	// `search_knowledge` is scoped against it and is registered only when
+	// both it and a knowledge backend are present — that is the gate
+	// [builtin.OperatorTools] makes. WHO THE CALLER IS needs it too, on
+	// every call: the same chart says which seat a token is bound to, and
+	// a surface that wired this only where the company had a wiki wrote a
+	// founder's own inbox marks under their credential's name. See
+	// [WorkActor] and [builtin.Parties].
 	Org func() *org.Organization
 
 	// Leads answers whether one handle leads another — the one authority
@@ -259,18 +266,63 @@ func (s *Server) Handler() http.Handler {
 // The alternative — asking the caller to name a seat to act as — was rejected:
 // it lets anybody with the token write as anybody, and a tracker whose author
 // field can be chosen by the writer is not an audit trail.
-func WorkActor(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
-	id, ok := auth.OperatorFrom(ctx)
-	if !ok || id == "" {
-		return builtin.Actor{}, fmt.Errorf("opsmcp: no operator on this request")
+//
+// # A BOUND token also says who it IS, and that is a different field
+//
+// `contact.crewlet_operator_id` binds a token to a human seat, and that
+// binding is an ATTRIBUTION rather than an address — so it changes nothing
+// above. What it answers is the question the rule above does not: whose inbox,
+// whose pins, whose queue, whose day. Those are the PERSON's, and the person
+// is the seat. So the seat travels in [builtin.Actor.Seat], beside an author
+// that is still the token and a kind that is still `operator`.
+//
+// Left unresolved, the person tools wrote a second person record named after
+// the credential and `get_my_work` answered for a party of one that no
+// colleague had ever filed anything against.
+//
+// A CONSTRUCTOR because the resolution needs the chart, which is a Tier B
+// value a config apply replaces — so it is read per call rather than captured.
+// A nil chart, or a build with none loaded, resolves no seat, which is exactly
+// an unbound token and an ordinary state.
+func WorkActor(chart func() *org.Organization) func(
+	context.Context, *turnctx.Turn) (builtin.Actor, error) {
+
+	return func(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
+		id, ok := auth.OperatorFrom(ctx)
+		if !ok || id == "" {
+			return builtin.Actor{}, fmt.Errorf("opsmcp: no operator on this request")
+		}
+		// THE OPERATOR'S OWN NAME IS THE HANDLE, and the kind says it
+		// is not a seat. A tracker whose author field is chosen by the
+		// writer is not an audit trail, so there is deliberately no way
+		// for a caller to name a seat to act as.
+		actor := builtin.Actor{
+			Handle: id, Kind: tracker.AuthorOperator, OperatorID: id,
+		}
+		actor.Seat = seatFor(chart, id)
+		return actor, nil
 	}
-	// THE OPERATOR'S OWN NAME IS THE HANDLE, and the kind says it is not a
-	// seat. A tracker whose author field is chosen by the writer is not an
-	// audit trail, so there is deliberately no way for a caller to name a
-	// seat to act as.
-	return builtin.Actor{
-		Handle: id, Kind: tracker.AuthorOperator, OperatorID: id,
-	}, nil
+}
+
+// seatFor is the chart seat a token id is bound to, or "".
+//
+// NIL LOOKUP, so a `crewlet_operator_id: ${FOUNDER_ID}` resolves against this
+// process's own environment — which is where every other consumer of `contact`
+// resolves one, and what stops a company being bound for one direction and
+// unbound for the other. The other direction is [builtin.Parties].
+func seatFor(chart func() *org.Organization, id string) string {
+	if chart == nil {
+		return ""
+	}
+	o := chart()
+	if o == nil {
+		return ""
+	}
+	seat := o.SeatByOperatorID(id, nil)
+	if seat == nil {
+		return ""
+	}
+	return seat.Handle()
 }
 
 // PageActor is [WorkActor] for the knowledge base, and records the SAME
