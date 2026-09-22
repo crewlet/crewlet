@@ -44,40 +44,6 @@ import (
 // project's tasks is not tractable and a narrower term would certify an answer
 // complete that a deferred task record was holding.
 
-// UnitRef is a project's chart-owned unit as a reader renders it.
-//
-// RESOLVED IS A FIELD rather than an absence, because "this project names a
-// unit the chart no longer has" is the finding `work_projects_report` exists to
-// surface, and a nil unit would be indistinguishable from a project that names
-// none.
-type UnitRef struct {
-	Key      string `json:"key,omitempty"`
-	Name     string `json:"name,omitempty"`
-	Resolved bool   `json:"resolved"`
-}
-
-// LeadRef is who leads the unit a project belongs to.
-type LeadRef struct {
-	Handle string     `json:"handle,omitempty"`
-	Kind   AuthorKind `json:"kind,omitempty"`
-}
-
-// Units is what a CHART can answer about a project's owning unit.
-//
-// Defined here and satisfied by the caller, because the tracker holds no org:
-// the chart-owned `Unit` is a string on the project record and only the epoch's
-// organization can say whether it still names anything — which is why the
-// applier may not read one and this resolution happens at read time.
-//
-// A NIL RESOLVER IS MEANINGFUL and is what a process with no loaded chart has:
-// every row then renders its raw unit with `resolved: false`, which is honest,
-// rather than an empty unit, which is a claim the project names none.
-type Units interface {
-	// ResolveUnit answers the unit's display name and whether the chart
-	// still has it, plus its effective lead.
-	ResolveUnit(name string) (display string, lead LeadRef, found bool)
-}
-
 // TaskCounts is a project's maintained task census.
 type TaskCounts struct {
 	Open   int `json:"open"`
@@ -195,7 +161,8 @@ type ProjectQuery struct {
 	// the purpose — what a person types into a filter box.
 	Q string
 
-	// Unit narrows to the projects one chart unit owns.
+	// Unit narrows to the projects one chart unit owns, named by either of
+	// its spellings — its id or its name, in any case.
 	Unit string
 
 	// Archived includes the archived ones; absent excludes them.
@@ -204,8 +171,9 @@ type ProjectQuery struct {
 	// Limit bounds the rows, clamped to [MaxProjectsPerAnswer].
 	Limit int
 
-	// Units resolves the chart-owned unit. Nil renders every row
-	// unresolved — see [Units].
+	// Units resolves the chart-owned unit — both for rendering each row
+	// and for the filter above. Nil renders every row unresolved and
+	// matches the filter literally — see [Units].
 	Units Units
 
 	Level       statelog.ReadLevel
@@ -289,9 +257,14 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 	if !q.Archived {
 		where = append(where, "p.archived = 0")
 	}
-	if unit := strings.TrimSpace(q.Unit); unit != "" {
-		where = append(where, "p.unit = ?")
-		args = append(args, unit)
+	// EITHER SPELLING OF THE UNIT, through the chart — see [unitSpellings].
+	// A project row is chart-owned and rewritten by the next epoch apply,
+	// so it holds the current key within a beat of one being added; the
+	// set is what keeps the filter answering in the beat before that, and
+	// what lets a caller filter by the name a screen showed them.
+	if spellings := unitSpellings(q.Units, []string{q.Unit}); len(spellings) > 0 {
+		where = append(where, "p.unit IN ("+placeholders(len(spellings))+")")
+		args = append(args, anyOf(spellings)...)
 	}
 	if term := strings.TrimSpace(q.Q); term != "" {
 		// THE KEY, THE NAME AND THE PURPOSE, because a filter box is
@@ -373,23 +346,6 @@ func (c lastChangeColumns) value() *LastChange {
 		Actor:     c.Actor,
 		ActorKind: AuthorKind(c.ActorKind),
 	}
-}
-
-// resolveUnit renders a project's chart-owned unit against the chart.
-//
-// A PROJECT THAT NAMES NO UNIT IS RESOLVED, because naming none is a valid
-// state — the finding is a project naming one the chart does not have, and
-// conflating the two would report every unfiled project as orphaned.
-func resolveUnit(units Units, name string) (UnitRef, LeadRef) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return UnitRef{Resolved: true}, LeadRef{}
-	}
-	if units == nil {
-		return UnitRef{Key: name}, LeadRef{}
-	}
-	display, lead, found := units.ResolveUnit(name)
-	return UnitRef{Key: name, Name: display, Resolved: found}, lead
 }
 
 // ---- one project, in full ---------------------------------------------- //

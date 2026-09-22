@@ -30,8 +30,13 @@ import (
 // WorkloadQuery asks who is carrying how much.
 type WorkloadQuery struct {
 	// Unit narrows to the people whose open work sits in projects owned by
-	// this unit. Empty is the whole company.
+	// this unit, named by either of its spellings — its id or its name.
+	// Empty is the whole company.
 	Unit string
+
+	// Units resolves that reference — see [Units]. Nil matches it
+	// literally, which is the honest answer for a surface with no chart.
+	Units Units
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position
@@ -139,10 +144,14 @@ func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
 	where := "t.removed_at IS NULL AND t.archived = 0 AND t.assignee <> '' " +
 		"AND t.status_group IN (" + openGroupsSQL + ")"
 	args := []any{dayStart}
-	if q.Unit != "" {
+	// EITHER SPELLING, through the chart — see [unitSpellings]. A workload
+	// narrowed to a team is read from a screen that got the unit from
+	// somewhere else, so whichever of the two names it holds has to work.
+	if spellings := unitSpellings(q.Units, []string{q.Unit}); len(spellings) > 0 {
 		where += " AND EXISTS (SELECT 1 FROM tracker_projects p " +
-			"WHERE p.key = t.project_key AND p.unit = ?)"
-		args = append(args, q.Unit)
+			"WHERE p.key = t.project_key AND p.unit IN (" +
+			placeholders(len(spellings)) + "))"
+		args = append(args, anyOf(spellings)...)
 	}
 	args = append(args, MaxWorkloadHandles+1)
 

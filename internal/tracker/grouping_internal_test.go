@@ -27,7 +27,7 @@ func TestEveryClosedAxisAdmitsItsWholeSetWhenNothingNarrowsIt(t *testing.T) {
 	}
 	closed := 0
 	for _, key := range groupKeys {
-		axis, err := compileGroup(key, nil, window)
+		axis, err := compileGroup(key, nil, window, nil)
 		if err != nil {
 			t.Fatalf("compile %s: %v", key, err)
 		}
@@ -180,7 +180,7 @@ func TestWhichDueBandsAQueryAdmits(t *testing.T) {
 			q := tc.q
 			q.GroupBy = groupByDueBucket
 			q.DayStart, q.DayEnd, q.WeekEnd = start, dayEnd, weekEnd
-			axis, err := compileGroup(groupByDueBucket, nil, q.dayWindow())
+			axis, err := compileGroup(groupByDueBucket, nil, q.dayWindow(), nil)
 			if err != nil {
 				t.Fatalf("compile the due axis: %v", err)
 			}
@@ -201,7 +201,7 @@ func TestAPresentEmptyGroupAdmitsNothingWhereTheAxisHasNoUnsetColumn(t *testing.
 	t.Parallel()
 	empty := ""
 	for _, key := range []string{"status", "status_group", "priority"} {
-		axis, err := compileGroup(key, nil, dayWindow{})
+		axis, err := compileGroup(key, nil, dayWindow{}, nil)
 		if err != nil {
 			t.Fatalf("compile %s: %v", key, err)
 		}

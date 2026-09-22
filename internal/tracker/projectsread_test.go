@@ -141,9 +141,10 @@ func TestAProjectsUnitIsResolvedAgainstTheChart(t *testing.T) {
 		Unit: "platform"})
 	seedProject(t, r, tracker.Project{Key: "GON", Name: "Gone", Unit: "dissolved"})
 
-	rows := byKey(r.projects(tracker.ProjectQuery{Units: chart{
-		"platform": {"Platform", tracker.LeadRef{Handle: "ada", Kind: tracker.AuthorAgent}},
-	}}))
+	rows := byKey(r.projects(tracker.ProjectQuery{Units: chart{{
+		Key: "platform", Name: "Platform",
+		Lead: tracker.LeadRef{Handle: "ada", Kind: tracker.AuthorAgent},
+	}}}))
 	if got := rows["OPS"].Unit; !got.Resolved || got.Name != "Platform" {
 		t.Fatalf("OPS's unit is %+v, want the chart's own name and resolved", got)
 	}
@@ -304,14 +305,20 @@ func TestADescriptionGroupsFieldsAndNamesTheShadowed(t *testing.T) {
 }
 
 // chart is a test Units: the org this reader deliberately does not hold.
-type chart map[string]struct {
-	name string
-	lead tracker.LeadRef
-}
+//
+// IT ANSWERS EITHER SPELLING, folded, because that is the seam's contract —
+// a fake matching only the key would certify readers against a chart the
+// engine does not have.
+type chart []tracker.ChartUnit
 
-func (c chart) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
-	unit, found := c[name]
-	return unit.name, unit.lead, found
+func (c chart) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	for _, unit := range c {
+		if strings.ToLower(unit.Key) == ref || strings.ToLower(unit.Name) == ref {
+			return unit, true
+		}
+	}
+	return tracker.ChartUnit{}, false
 }
 
 func keys(l tracker.ProjectListing) []string {

@@ -171,11 +171,17 @@ type groupAxis struct {
 	Order []string
 
 	// Labels is what a person reads where the stored value is not the
-	// word: a custom field's option ids, and the relative due bands'
-	// slugs. Absent on every axis that stores the word already, because a
-	// label derived where none is needed would be a second name for one
-	// value.
-	Labels map[string]string
+	// word: a custom field's option ids, the relative due bands' slugs,
+	// and a unit key that is an id the chart chose to survive a rename.
+	// Absent on every axis that stores the word already, because a label
+	// derived where none is needed would be a second name for one value.
+	//
+	// A FUNCTION rather than a table, because the newest of the three is
+	// not one: a unit's name comes from the CHART, which this package
+	// deliberately does not hold, and the stored keys a board will group
+	// by are not knowable before the read. A static table renders through
+	// [labelsOf].
+	Labels func(key string) string
 
 	// Exists is the JOIN-FREE form of this axis as a predicate, used when
 	// `group=<value>` narrows the whole query. It has to be join-free
@@ -205,9 +211,10 @@ func (a groupAxis) filter(key string) (string, []any) {
 // compileGroup turns a grouping key into its axis.
 //
 // `window` is the query's own calendar, which only the relative due bands
-// read — see [dayWindow].
+// read — see [dayWindow]; `units` is the chart the two unit axes label their
+// columns from, and nil leaves each column reading as the key the rows hold.
 func compileGroup(key string, fields map[string]resolvedField,
-	window dayWindow) (groupAxis, error) {
+	window dayWindow, units Units) (groupAxis, error) {
 	if ref, ok := strings.CutPrefix(key, FieldKeyPrefix); ok && ref != "" {
 		field, held := fields[ref]
 		if !held {
@@ -243,7 +250,7 @@ func compileGroup(key string, fields map[string]resolvedField,
 			// option, so an inversion picks the slug or the name by
 			// Go's randomised map iteration and a column heading
 			// would differ between two requests to one node.
-			Labels: field.Labels,
+			Labels: labelsOf(field.Labels),
 			Exists: func(key string) (string, []any) {
 				inner := "SELECT 1 FROM tracker_field_values v " +
 					"WHERE v.task_id = t.id AND v.field_id = ? AND " +
@@ -276,9 +283,15 @@ func compileGroup(key string, fields map[string]resolvedField,
 	case "project":
 		return groupAxis{Expr: "t.project_key"}, nil
 	case "unit":
-		return groupAxis{Expr: "t.filed_unit", Unset: "(no unit)"}, nil
+		return groupAxis{
+			Expr: "t.filed_unit", Unset: "(no unit)",
+			Labels: unitLabels(units),
+		}, nil
 	case "routing_unit":
-		return groupAxis{Expr: "t.routing_unit", Unset: "(no unit)"}, nil
+		return groupAxis{
+			Expr: "t.routing_unit", Unset: "(no unit)",
+			Labels: unitLabels(units),
+		}, nil
 	case "parent":
 		return groupAxis{Expr: "COALESCE(t.parent_id, '')", Unset: "(no parent)"}, nil
 	case "tag":
@@ -426,7 +439,7 @@ func dueBucketAxis(window dayWindow) (groupAxis, error) {
 		// THE UNSET COLUMN'S LABEL COMES FROM THE SAME TABLE as the
 		// other five, so the six headings are declared once.
 		Unset:  dueBandLabels[string(dueNone)],
-		Labels: dueBandLabels,
+		Labels: labelsOf(dueBandLabels),
 	}, nil
 }
 
@@ -601,13 +614,51 @@ func (a groupAxis) joinedFilter(key string) (string, []any) {
 // fills a label that is still empty: that one comes from [groupAxis.Unset] on
 // every axis in the grammar.
 func groupLabels(groups []Group, axis groupAxis) {
-	if len(axis.Labels) == 0 {
+	if axis.Labels == nil {
 		return
 	}
 	for i := range groups {
 		if groups[i].Label == "" {
-			groups[i].Label = axis.Labels[groups[i].Key]
+			groups[i].Label = axis.Labels(groups[i].Key)
 		}
+	}
+}
+
+// labelsOf renders a static table as an axis lookup, and nil for an empty
+// one — which is what [groupLabels] reads as "this axis stores the word".
+func labelsOf(table map[string]string) func(string) string {
+	if len(table) == 0 {
+		return nil
+	}
+	return func(key string) string { return table[key] }
+}
+
+// unitLabels is what a person reads on a unit column.
+//
+// A COLUMN HEADING IS READ BY A PERSON and what these rows hold is the unit's
+// KEY, which is an id on any company that gave its units one — a word chosen
+// to survive a rename precisely because nobody reads it. Without this, giving
+// a unit an id silently re-headed every board in the company with a slug.
+//
+// THE CHART IS ASKED PER KEY rather than enumerated, because the keys are
+// whatever the rows hold: a column may name a team the chart no longer has,
+// or a spelling it no longer uses, and both are legitimate on a record of
+// what was true.
+//
+// AN EMPTY LABEL IS THE ANSWER FOR AN UNRESOLVED KEY, never a stand-in like
+// "(unknown)": a client renders the label or falls back to the key, so a
+// column whose unit has left the chart keeps reading as the value that is
+// still in the rows — which is also what a filter on that column takes.
+func unitLabels(units Units) func(string) string {
+	if units == nil {
+		return nil
+	}
+	return func(key string) string {
+		unit, found := units.ResolveUnit(key)
+		if !found {
+			return ""
+		}
+		return unit.Name
 	}
 }
 
@@ -700,7 +751,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	if err := checkGroupBreadth(ctx, tx, q, where, args); err != nil {
 		return grouped{}, err
 	}
-	axis, err := compileGroup(q.GroupBy, fields, q.dayWindow())
+	axis, err := compileGroup(q.GroupBy, fields, q.dayWindow(), q.Units)
 	if err != nil {
 		return grouped{}, err
 	}
@@ -775,7 +826,7 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, outer groupAxis, key string,
 	where string, args []any, terms []sortTerm, rowsPer int) ([]Group, int, error) {
 
-	inner, err := compileGroup(q.GroupBy2, fields, q.dayWindow())
+	inner, err := compileGroup(q.GroupBy2, fields, q.dayWindow(), q.Units)
 	if err != nil {
 		return nil, 0, err
 	}

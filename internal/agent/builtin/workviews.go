@@ -76,6 +76,9 @@ func (t *listWorkViews) Call(ctx context.Context, args map[string]any) (tools.Re
 	}
 	listing, err := t.deps.Reader.Views(ctx, tracker.ViewQuery{
 		Container: container,
+		// THE CHART, so `unit:engineering` and `unit:eng` are one
+		// strip rather than two — see [tracker.Units].
+		Units: t.deps.Units,
 		// ONE IDENTITY, because that is all a tool argument carries —
 		// see the same note on `get_my_work`. Resolving a credential to
 		// the seat it is bound to is the CHART's answer and this
@@ -194,6 +197,11 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(refusal), nil
 	}
+	// AND A UNIT CONTAINER IS STORED UNDER THE TEAM'S OWN KEY, exactly as
+	// a project container is stored upper-cased: a model writes the
+	// spelling it remembers, and a view saved under one spelling of a team
+	// is a view the strip asked for under the other never shows.
+	container = tracker.CanonicalContainer(t.deps.Units, container)
 	// THE CALLER'S ID WHEN IT HAS ONE, a fresh one when it does not. A
 	// verb that always minted would write a second view on every retry of
 	// an `unknown` outcome; one that always required an id could not

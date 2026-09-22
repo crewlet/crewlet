@@ -70,7 +70,8 @@ Every item carries two units, and they answer different questions.
 - **Filed into** — the team the work belongs to. It is set once, at the
   create, and nothing rewrites it: it is a record of what was true, so it may
   name a team the chart has since renamed or dropped. It is what `unit=`
-  filters on and what a board's `unit` axis groups by.
+  filters on and what a board's `unit` axis groups by, and a board heads that
+  column with the team's current name.
 - **Routes to** — whose lead hears about the item *now*. It starts equal to
   the filed unit and moves when somebody re-routes the item
   (`update_work_item` with `routing_unit`).
@@ -86,6 +87,38 @@ different team than the project it sits in.
 A project the chart gave no unit files work into no unit, which is honest
 rather than a default: the project's lead is then the only lead fallback the
 item has.
+
+### Naming a team: its id or its name
+
+A unit is named by its `id` if the org chart gave it one, and by its name
+otherwise — see
+[the org chart's unit ids](../concepts/organization-model.md#a-units-id-is-what-survives-a-rename).
+**Both spellings work everywhere a unit is named**, in any case: the `unit`
+argument on `create_work_item`, `routing_unit` on `update_work_item`, the
+`unit=` and `routing_unit=` filters, the `unit` a project listing is narrowed
+by, and `GET /work/workload?unit=`. `unit: engineering` reaches the team
+called `Engineering`.
+
+What the engine **stores** is always the unit's id where it has one, so that
+renaming a team does not move the work filed into it. What a screen **shows**
+is always the team's current name, resolved back through the chart when the
+answer is built.
+
+**Adding an id to a team that already has work does not rewrite that work,
+and does not need to.** A task's filed unit is a record of what was true and
+nothing in the engine rewrites one — these rows are derived from the ordered
+log every node replays, so a repair would have to publish a record per task
+claiming the team was called something it was not. Instead, every filter
+matches **the set** of a team's spellings: work filed under `Engineering`
+before the id was added and work filed under `eng` after it are both found by
+`unit=eng` and by `unit=Engineering`. Project rows carry the unit too, and
+those are chart-owned — the next config apply rewrites each of them to the
+current id on its own.
+
+A unit reference that names no team in the chart is **refused at a write**
+(naming the team, so a typo is visible) and **matches nothing at a read**,
+never an error: a filter naming a team nobody has is answerable, and the
+answer is that there is no such work.
 
 ## Tasks
 
@@ -407,7 +440,12 @@ question with no good answer, and the tracker's own edit surfaces already say
 those things properly. A bar is a link.
 
 Views belong to a **container** — the workspace, a project, a unit, a person —
-and a personal view is private to its owner. One per container can be the
+written the query grammar's own way (`workspace`, `project:ENG`,
+`unit:engineering`, `person:ana`). A container is an address, so each is
+stored the way the engine keys it: a project key upper-cased, and a unit under
+[its id where it has one](#naming-a-team-its-id-or-its-name) — a team's strip
+is one strip whichever of its two spellings you ask for it by. A personal view
+is private to its owner. One per container can be the
 default, and the applier settles that in the same transaction as the write, so
 two views can never both claim it. A protected view cannot be edited by anyone
 but its owner, which is what stops a shared board being rearranged under

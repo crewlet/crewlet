@@ -648,9 +648,9 @@ func (t *listWorkItems) Parameters() map[string]any {
 			},
 			"unit": map[string]any{
 				"type": "string",
-				"description": "A team's key: the work FILED into that team, " +
-					"whoever holds it. Where it routes NOW is `routing_unit`, " +
-					"which a re-route moves and this does not.",
+				"description": "A team, by its id or its name: the work FILED " +
+					"into that team, whoever holds it. Where it routes NOW is " +
+					"`routing_unit`, which a re-route moves and this does not.",
 			},
 			"field_filters": map[string]any{
 				"type": "object",
@@ -810,6 +810,11 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// A guard that only filled an empty field would enforce nothing the
 	// day something populated it; see [statelog.LevelFor].
 	q.Level = statelog.LevelFor(statelog.SurfaceSeat, q.Level)
+	// AND THE CHART THE UNIT FILTERS RESOLVE THROUGH, set here for the
+	// reason the level is: it belongs to this surface rather than to the
+	// grammar. A model types the team name it remembers, and the rows hold
+	// the key the chart chose — see [tracker.Units].
+	q.Units = t.deps.Units
 	// AND THE ROWS ARE THE ROWS THAT MATCH, which is the one promise this
 	// tool makes and the default took away.
 	//
@@ -1174,10 +1179,11 @@ func (t *createWorkItem) Parameters() map[string]any {
 			},
 			"unit": map[string]any{
 				"type": "string",
-				"description": "The team this work belongs to. Defaults to " +
-					"the team that owns `project`, which is almost always " +
-					"right — name another only when the work belongs to a " +
-					"different team than the project it sits in.",
+				"description": "The team this work belongs to, by its id or " +
+					"its name. Defaults to the team that owns `project`, " +
+					"which is almost always right — name another only when " +
+					"the work belongs to a different team than the project " +
+					"it sits in.",
 			},
 			"waiting_on": map[string]any{
 				"type": "array",
@@ -1312,12 +1318,21 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// an operator holds no seat and a root-level seat holds no unit, so
 	// both filed work into no unit at all, whatever the project said the
 	// work belonged to.
+	//
+	// WHAT IS STORED IS THE CHART'S OWN KEY, not the string the model
+	// typed: a unit is named by its id or by its name, in whatever case
+	// the model remembered, and `filed_unit` is written once and never
+	// rewritten — so storing the argument verbatim would leave one team's
+	// work under as many spellings as its colleagues have ways of writing
+	// it, each of them a filter the others miss.
 	if unit := strings.TrimSpace(argString(args, "unit")); unit != "" {
 		if t.deps.Units != nil {
-			if _, _, found := t.deps.Units.ResolveUnit(unit); !found {
+			resolved, found := t.deps.Units.ResolveUnit(unit)
+			if !found {
 				return failed(fmt.Sprintf("This company has no team %q.",
 					clip(unit))), nil
 			}
+			unit = resolved.Key
 		}
 		task.FiledUnit, task.RoutingUnit = unit, unit
 	}
@@ -1607,10 +1622,11 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			},
 			"routing_unit": map[string]any{
 				"type": "string",
-				"description": "Point this item at a different team: its " +
-					"lead hears that work routes to them now. The project " +
-					"lead's to set — filing your own work into your own team " +
-					"is what `unit` on create_work_item does.",
+				"description": "Point this item at a different team, by its " +
+					"id or its name: that team's lead hears that work routes " +
+					"to them now. The project lead's to set — filing your own " +
+					"work into your own team is what `unit` on " +
+					"create_work_item does.",
 			},
 			"waiting_on":   setArgSchema("The items this one is blocked BY. Each is a key or an id."),
 			"blocking":     setArgSchema("The items blocked BY this one. Each is a key or an id."),
@@ -1731,12 +1747,18 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				"comment why it belongs elsewhere.",
 				before.Task.Key, before.Task.Project)), nil
 		}
+		// AND THE CHART'S OWN KEY IS WHAT LANDS, for the reason the
+		// filed unit above takes it: the wake resolves the stored value
+		// back to a lead, and a spelling the chart did not choose is one
+		// a rename walks away from.
 		if unit != "" && t.deps.Units != nil {
-			if _, _, found := t.deps.Units.ResolveUnit(unit); !found {
+			resolved, found := t.deps.Units.ResolveUnit(unit)
+			if !found {
 				return failed(fmt.Sprintf("This company has no team %q. A task "+
 					"routed at a team nobody has reaches nobody at all.",
 					clip(unit))), nil
 			}
+			unit = resolved.Key
 		}
 		patch.RoutingUnit = &unit
 		if kind == tracker.ChangeFields {

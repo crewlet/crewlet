@@ -19,6 +19,11 @@ Organization
 ├── Roles []*Role                          (root-level org-wide seats)
 └── Units []*Unit
     ├── Name string; Type UnitType; Purpose, Lead string; Goals []string
+    ├── ID string                          (units[].id: OPTIONAL stable identity.
+    │                                       Everything durable keys on it, so a
+    │                                       rename does not move what is filed
+    │                                       under the team. Absent, the name is
+    │                                       that key. See "A unit's id" below)
     ├── KnowledgeRefs []string
     ├── Channel string                     (team channel on the company's chat
     │                                       surface, inherited by children)
@@ -301,9 +306,11 @@ Three identities must each name exactly one thing in the whole company:
 |---|---|---|
 | Seat **handle** | Every seat, agent and human | It names the seat's inbox, its derived agent id and its external accounts. Two seats on one handle share an inbox, or an agent absorbs a person's activity. |
 | Seat **name** | Every seat, at any depth | A unit's `lead` and every `manages` entry name a seat and resolve to the first seat of that name. A second seat called the same is unreachable through either, even when its handle differs. |
-| Unit **name** | Every unit in the tree, not only siblings | A `manages` entry naming a unit and a root seat's `unit:` reference search the whole tree and resolve to the first match. Two teams called `Platform` under different departments read as distinct on every screen while each reference reaches only one of them. |
+| Unit **key** — its `id`, or its name where it declares none | Every unit in the tree, not only siblings | The key is what work, routing and pages are filed under, and what every `manages` entry and root seat `unit:` reference resolves against. Two teams called `Platform` under different departments read as distinct on every screen while one of them quietly receives the other's work. |
 
-Names are compared as the exact string, the same way a reference resolves them: `Platform` and `platform` are two different units. A seat or unit with no name (or a name that derives no handle) is refused by its own rule and is never reported as a duplicate of another. A refusal names every entity that shares the key, in one message per key, and where each one sits:
+A seat name is compared as the **exact string**, the same way a `lead:` or a `manages:` entry resolves one — and a seat's key is its handle, which is unique by its own rule, so nothing is ever filed under a seat's name.
+
+A unit key is compared **folded**, and an `id` is measured against other units' **names** as well: a name is prose, `Platform` and `platform` are one team to every reader, and a unit's name *is* its key wherever it declares no `id` — so `id: platform` beside a unit named `Platform` is the same collision arriving by a door nobody watches. A seat or unit with no name (or a name that derives no handle) is refused by its own rule and is never reported as a duplicate of another. A refusal names every entity that shares the key, in one message per key, and where each one sits:
 
 ```
 duplicate unit name "Platform": 2 units carry it (under unit "Engineering"; under unit "Product"). ...
@@ -316,6 +323,47 @@ Handle uniqueness has always been enforced. Seat name and unit name uniqueness a
 - **Refused on every write.** `PUT /config`, `PATCH /config`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) all refuse a document with a duplicate seat or unit name, including a write to a company whose stored revision already carries one and a write that does not touch the duplicates. The write that corrects them is accepted.
 - **Applied with a warning.** A stored revision carrying a duplicate name (written by an earlier build, or activated by an older peer during a rolling upgrade) is applied by every node, a node boots on it (including one started with `-company` or `-import-company` naming a file that is that revision, or a `-company` file the store's own company outranks), and `POST /config/reload`, a `/setup` credential rotation (which reloads) and a revert to it still work. The vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`) read such a file too. Each node logs `org_admission_warning` once for every violation when it applies the epoch, naming the revision and the entities, with the document path of each under `paths`.
 - **Always readable.** `GET /config`, the revision reads, diffs, `crewlet config show` and `crewlet config export` serve the stored document as it is, so the duplicates can be seen and corrected.
+
+### A unit's id is what survives a rename
+
+A unit's **name** is what people read — in a prompt, on a board, in a channel
+topic — so it is renamed for the reasons prose is renamed. An **id** is chosen
+once and read by nobody, so what is keyed on it survives that rename:
+
+```yaml
+units:
+  - name: Engineering
+    id: eng            # optional; lowercase, starts with a letter
+    project: ENG
+```
+
+`id` is optional, and leaving it out changes nothing: a unit that declares
+none is keyed by its name, which is what every company runs as until somebody
+opts in. Everything durable — which team a work item is filed into, which
+team's lead hears about it — is keyed on the **id where there is one and the
+name where there is not**.
+
+**Both spellings name the team, in any case, everywhere a stored reference is
+resolved** — a `unit` on `create_work_item`, a `routing_unit`, every `unit=`
+filter, a project listing, a workload, a view strip's container. So
+`unit: engineering` reaches `Engineering`, and so does `unit: eng`. Where a
+reference is one unit's id and another unit's name, the **id wins**; that pair
+is refused as a duplicate key on any document you submit, so it can only reach
+a running company through a revision stored before the rule.
+
+The references *inside the org chart itself* — a unit's `lead`, a `manages`
+entry, a root seat's `unit:` — are the exception: each names a unit by its
+**name**, as the exact string, because they are resolved against the document
+they are written in. One naming an id resolves to nothing and is reported as a
+[dangling reference](#dangling-references) rather than silently ignored.
+
+**Adding an id to a team that already has work does not rewrite that work.**
+Work filed before the id carries the name and work filed after it carries the
+id, and every filter matches the set of both — see
+[Naming a team](../guides/work-tracker.md#naming-a-team-its-id-or-its-name).
+What an id does **not** change is onboarding: that turns on the unit's NAME,
+which is what an agent reads as its team, so renaming a unit still re-onboards
+the seats beneath it.
 
 ### Management Hierarchy
 
