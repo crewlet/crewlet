@@ -238,7 +238,7 @@ function itemFacts({
       label: "Type",
       value: item.type ? (
         <span className="row gap-1">
-          <TypeIcon type={item.type} types={chrome.types} />
+          <TypeIcon type={item.type} types={chrome.types} decorative />
           {typeName(item.type, chrome.types)}
         </span>
       ) : undefined,
@@ -1098,9 +1098,16 @@ export function ItemProps({
   // than borrowing the oldest one still visible.
   const now = useNow();
   const setBy = useMemo(() => attribution(detail.history), [detail.history]);
+  // NAMED THE WAY THE ROWS BESIDE IT NAME PEOPLE. The change log carries a
+  // handle, and the line rendered it raw — `agent-ceo · 21h ago` under a
+  // value whose Reporter row said "Agent CEO" — while the History tab one
+  // card down resolved the same actor through the chart. One person, two
+  // names, on one screen.
   const by = (field: ChangeField): SetBy | undefined => {
     const who = setBy.get(field);
-    return who ? { ...who, ago: who.at ? relTime(who.at, now) : undefined } : undefined;
+    return who
+      ? { ...who, actor: seatName(who.actor), ago: who.at ? relTime(who.at, now) : undefined }
+      : undefined;
   };
 
   // EVERY ROW SAYS WHICH KIND OF ABSENCE IT HAS. A property left out of the
@@ -1128,7 +1135,7 @@ export function ItemProps({
           label: "Type",
           value: item.type ? (
             <span className="row gap-1">
-              <TypeIcon type={item.type} types={chrome.types} />
+              <TypeIcon type={item.type} types={chrome.types} decorative />
               {typeName(item.type, chrome.types)}
             </span>
           ) : undefined,

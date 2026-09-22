@@ -24,6 +24,7 @@ import {
 } from "./WorkItem.tsx";
 import { Router, href } from "~/app/router.tsx";
 import { pathOf, refToken } from "~/app/frame/objects.ts";
+import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkItem, WorkItemDetail, WorkProjectDetail } from "~/protocol/index.ts";
 
@@ -444,10 +445,27 @@ test("the way out to the board names the project and opens the task", async () =
 // One person under two names, depending on which frame you opened.
 test("the rail names a person, exactly as the page does", async () => {
   serving({
-    work_item: { task: task({ assignee: "ada" }), complete: true },
+    work_item: {
+      task: task({ assignee: "ada" }),
+      // A CHANGE TOO, because the set-by line under a property is the one
+      // place the rail used to print the raw handle — and without a history
+      // entry the line is never drawn, so this case passed with the bug in.
+      history: [
+        {
+          id: "h-1",
+          kind: "status",
+          actor: "ada",
+          actor_kind: "agent",
+          at: "2031-04-16T09:00:00Z",
+          log_seq: 1,
+          fields: { status: { from: "todo", to: "in_progress" } },
+        },
+      ],
+      complete: true,
+    },
     work_project: { key: "ENG", name: "Engineering", complete: true },
   });
-  render(
+  const { container } = render(
     <Router>
       <ItemPeek itemKey="ENG-42" />
     </Router>,
@@ -456,6 +474,39 @@ test("the rail names a person, exactly as the page does", async () => {
   // block — which is why this counts rather than asking for the one node.
   await waitFor(() => expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0));
   expect(screen.queryByText("ada")).toBeNull();
+  // AND ON THE SET-BY LINE, read off its own element: the line is one span
+  // holding the actor, the age and the turn link, so an exact-text query
+  // for the bare handle matched nothing whether or not the handle was there.
+  const setBy = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent ?? "");
+  expect(setBy.length).toBeGreaterThan(0);
+  expect(setBy.every((line) => line.includes("Ada Okonkwo"))).toBe(true);
+  expect(setBy.some((line) => /\bada\b/.test(line))).toBe(false);
+});
+
+// THE RAIL'S BODY IS KEYED ON ITS SUBJECT. `[` and `]` move the peek from
+// task A to task B by changing one query key, so React reconciles one body
+// rather than mounting another — and everything that body remembers, an open
+// disclosure or a chosen tab, described A until something cleared it. Rule 14
+// for a route, kept for the rail: a different object is a different mount,
+// asserted on DOM identity because that is the only thing that tells a
+// remount from a re-render.
+test("moving the rail to another task mounts a new body", async () => {
+  serving({
+    work_item: { task: task({ assignee: "ada" }), complete: true },
+    work_project: { key: "ENG", name: "Engineering", complete: true },
+  });
+  location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
+  const { container } = render(
+    <Router>
+      <PeekNeighbours>
+        <PeekHost />
+      </PeekNeighbours>
+    </Router>,
+  );
+  await waitFor(() => expect(container.querySelector(".object-head")).toBeTruthy());
+  const before = container.querySelector(".object-head");
+  location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-43" })}`;
+  await waitFor(() => expect(container.querySelector(".object-head")).not.toBe(before));
 });
 
 // THE BODY IS NOT REBUILT ON EVERY TICK OF THE SCREEN'S CLOCK. Both frames of

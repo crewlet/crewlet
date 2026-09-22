@@ -261,7 +261,10 @@ test("an overflow link hands the axis and the column back to the screen", () => 
 });
 
 // AN EMPTY COLUMN IS STILL A COLUMN, and it says it is empty: a heading over
-// nothing at all reads as a column whose rows failed to arrive.
+// nothing at all reads as a column whose rows failed to arrive. This is the
+// engine's own shape now — a closed axis carries every lane the scope admits
+// at `count: 0` with no rows (`internal/tracker/grouping.go`), so a young
+// company's open work is three lanes with one card rather than one lane.
 test("a column with no rows says so rather than rendering nothing", () => {
   board([group("in_review", { count: 0, rows: [] })]);
   expect(screen.getByText("Nothing here")).toBeTruthy();
@@ -500,6 +503,60 @@ test("a refused project list is said to be a refusal, not an empty company", asy
   expect(screen.queryByText("No work has been filed yet")).toBeNull();
 });
 
+// AND THE EMPTY STATE REPLACES THE LIST rather than following it: drawn under
+// it, a company with no projects read two sentences about one blank — the
+// list's "nothing matches" and this — and the first was wrong.
+test("a company with no projects gets one empty state, not two", async () => {
+  serving({
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: { projects: [], total: 0, complete: true },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+  expect(screen.queryByText(/Nothing is open/)).toBeNull();
+  expect(container.querySelector(".work-bar")).toBeNull();
+});
+
+// AN UNFILTERED EMPTY SCOPE SAYS WHAT WOULD FILL IT. "Nothing matches" is the
+// filter-miss sentence, and it was drawn over an unfiltered board — blaming a
+// narrowing that did not exist, with no chip on screen to take off.
+test("an empty scope says why, and only a filter says nothing matched", async () => {
+  const company = {
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: {
+      projects: [
+        {
+          key: "ENG",
+          name: "Engineering",
+          unit: { resolved: true },
+          lead: {},
+          task_counts: { open: 0, done: 0, closed: 0 },
+          version: 1,
+        },
+      ],
+      total: 1,
+      complete: true,
+    },
+  };
+  serving(company);
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Nothing is open")).toBeTruthy());
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+  cleanup();
+
+  location.hash = "#/work?scope=closed";
+  serving(company);
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Nothing has been finished yet")).toBeTruthy());
+  cleanup();
+
+  location.hash = "#/work?assignee=ada";
+  serving(company);
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Nothing matches")).toBeTruthy());
+});
+
 // AND A READ THAT ANSWERED IS ALLOWED TO CONCLUDE IT.
 test("a project list that answered with nothing says the company has filed nothing", async () => {
   serving({
@@ -558,6 +615,24 @@ test("a saved view's grouping heads the list's columns by name", async () => {
   expect(container.querySelector(".work-band")?.textContent).not.toContain("ada");
 });
 
+/** A company with one project — the listing every list-screen case needs,
+ *  because a listing that answered with NONE replaces the list with the
+ *  "nothing filed" state. */
+const oneProject = {
+  projects: [
+    {
+      key: "ENG",
+      name: "Engineering",
+      unit: { resolved: true },
+      lead: {},
+      task_counts: { open: 1, done: 0, closed: 0 },
+      version: 1,
+    },
+  ],
+  total: 1,
+  complete: true,
+};
+
 /** A strip of one saved view carrying its own arrangement. */
 function savedWith(params: Record<string, string>) {
   return {
@@ -594,7 +669,7 @@ test("a view's own arrangement is what the display controls show", async () => {
   serving({
     work_views: savedWith({ group_by: "assignee", group_by2: "priority", sort: "due" }),
     work_items: { items: [], groups: [], complete: true },
-    work_projects: { projects: [], total: 0, complete: true },
+    work_projects: oneProject,
   });
   mountWork();
   // THE BUTTON SAYS IT FIRST, because the arrangement has to be readable
@@ -614,7 +689,7 @@ test("turning a view's grouping off says so on the address and on the wire", asy
   const query = serving({
     work_views: savedWith({ group_by: "assignee", sort: "due" }),
     work_items: { items: [], groups: [], complete: true },
-    work_projects: { projects: [], total: 0, complete: true },
+    work_projects: oneProject,
   });
   mountWork();
   await waitFor(() => expect(asked(query).group_by).toBe("assignee"));
@@ -635,7 +710,7 @@ test("turning off an arrangement nobody set leaves the address clean", async () 
   serving({
     work_views: savedWith({}),
     work_items: { items: [], groups: [], complete: true },
-    work_projects: { projects: [], total: 0, complete: true },
+    work_projects: oneProject,
   });
   mountWork();
   await openDisplay();
@@ -653,7 +728,7 @@ test("a column chip takes its name from the effective axis", async () => {
   serving({
     work_views: savedWith({ group_by: "assignee" }),
     work_items: { items: [], groups: [], complete: true },
-    work_projects: { projects: [], total: 0, complete: true },
+    work_projects: oneProject,
   });
   const { container } = mountWork();
   await waitFor(() => expect(container.querySelector(".work-chips")).toBeTruthy());

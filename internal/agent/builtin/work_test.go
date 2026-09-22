@@ -1008,6 +1008,33 @@ func TestAGroupedAnswerIsNotReportedAsEmpty(t *testing.T) {
 	}
 }
 
+// AND A BOARD OF EMPTY COLUMNS IS EMPTY.
+//
+// A closed axis carries every column the query admits whether or not anything
+// is in it, so "the answer has groups" stopped meaning "the answer has work":
+// a seat handed three columns at zero and told nothing would read them as a
+// board and go looking for the rows.
+func TestABoardWhoseEveryColumnIsEmptyIsReportedEmpty(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.answer = &tracker.Answer{
+		Groups: []tracker.Group{
+			{Key: "todo", Rows: []tracker.TaskRow{}},
+			{Key: "in_progress", Rows: []tracker.TaskRow{}},
+			{Key: "in_review", Rows: []tracker.TaskRow{}},
+		},
+		Complete: true,
+	}
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.ListWorkItemsTool, map[string]any{
+		"project": "eng",
+	})
+	if !strings.Contains(got.Output, "No work items match") {
+		t.Fatalf("three columns at zero were reported as a board: %s", got.Output)
+	}
+}
+
 // EVERY OPERATOR TOOL ANSWERS WITHOUT A TURN.
 //
 // The operator surface calls through Callable.Call, which passes a nil turn,

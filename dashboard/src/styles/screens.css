@@ -2155,15 +2155,18 @@ details > summary.int-summary::-webkit-details-marker {
 
 /* ---- The body, and the peek beside it ----------------------------------- */
 
+/* ONE COLUMN. The peek is the FRAME's — a fourth track of `.app` while the
+   rail is open, a drawer under `--peek-drawer-max` (frame.css) — so nothing
+   here sizes a column for it. A `[data-peek]` rule used to, keyed on an
+   attribute nothing set on this element, with a 1500px step of its own under
+   it: dead CSS whose comment measured a threshold the running product never
+   had. */
 .work-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   align-items: start;
   min-width: 0;
-}
-.work-body[data-peek="true"] {
-  grid-template-columns: minmax(0, 1fr) 420px;
 }
 
 /* ---- The board ---------------------------------------------------------- */
@@ -2996,28 +2999,11 @@ a.work-cal-chip {
 }
 
 /* ---- Responsive ---------------------------------------------------------
-   Two steps, and each is where one of the layout's own promises stops being
-   keepable: the peek stops fitting beside the body before the rail stops
-   fitting beside the main column.
-
-   THE FIRST STEP IS MEASURED FROM THE BOARD, not guessed. Three panes are
-   the sidebar, the project rail and the peek, and what is left over is the
-   board. A column is 292px and the gap is 12, so two columns need 596 and
-   three need 900 — and at 1280, a perfectly ordinary laptop, what was left
-   was 316. One column beside a detail panel is not a board. The threshold is
-   therefore where TWO columns still fit beside everything else, which is
-   around 1500, rather than the 1180 this was first written at: below it the
-   peek overlays, which costs nothing, because the board underneath is
-   exactly what the reader came back to. */
-
-@media (max-width: 1500px) {
-  .work-body[data-peek="true"] {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  /* The peek becomes a drawer over the body rather than a column beside it,
-     on the shell's own veil — a panel squeezed to 200px is a panel nobody
-     can read, and hiding it would lose the reader's selection. */
-}
+   Where the peek stops fitting beside the body is the FRAME's threshold,
+   `--peek-drawer-max` in frame.css, not one of this sheet's: the rail is a
+   track of `.app`, and under that width it is a drawer over whatever screen
+   is open. This sheet keeps the two steps that are the work screens' own —
+   the item page's rail, and the phone. */
 
 /* THE ITEM PAGE KEEPS ITS OWN THRESHOLD. It is a page rather than a pane
    beside a board — there is no third column competing with it — so its

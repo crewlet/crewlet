@@ -18,7 +18,11 @@ import {
   anyFilter,
   axisLabel,
   bandsByDue,
+  bandsOf,
   dueBucket,
+  emptyReason,
+  groupAxisOptions,
+  secondAxisOptions,
   filterChips,
   bucketByDay,
   buildItemsParams,
@@ -1244,4 +1248,55 @@ test("the bands are the ones that hold something, in the day's own order", () =>
   );
   expect(bands.map((b) => b.key)).toEqual(["overdue", "today", "later", "none"]);
   expect(bands.map((b) => b.rows.map((r) => r.key))).toEqual([["B"], ["C"], ["A"], ["D"]]);
+});
+
+// ---------------------------------------------------------------------------
+// The lanes a board draws and the bands a list draws
+// ---------------------------------------------------------------------------
+
+// A BOARD DRAWS EVERY LANE AND A LIST DRAWS ONLY THE BANDS THAT HOLD SOMETHING.
+// The engine mints the empty lanes on a closed axis so a board is the shape of
+// the process; a list is runs of rows under headings, and a heading over
+// nothing separates nothing from nothing. Two drawings of one answer.
+test("a list keeps only the bands that hold rows, or lanes of their own", () => {
+  const groups = [
+    group("todo", { count: 1, rows: [row("1")] }),
+    group("in_progress", { count: 0, rows: [] }),
+    group("in_review", { count: 0, rows: [], subgroups: [group("high", { count: 0, rows: [] })] }),
+  ];
+  expect(bandsOf(groups).map((g) => g.key)).toEqual(["todo", "in_review"]);
+  expect(bandsOf([])).toEqual([]);
+});
+
+// "NOTHING MATCHES" IS THE FILTER-MISS SENTENCE, and it was drawn over an
+// unfiltered board. An empty scope is a different fact with a different
+// remedy, and the scope segment — always set to something — decides WHICH of
+// the three, never whether the filter sentence is due.
+test("an empty list says why it is empty, by scope, unless a filter narrowed it", () => {
+  expect(emptyReason(NO_FILTERS, "").title).toBe("Nothing is open");
+  expect(emptyReason({ ...NO_FILTERS, scope: "closed" }, "ENG").title).toBe(
+    "Nothing has been finished in ENG yet",
+  );
+  expect(emptyReason({ ...NO_FILTERS, scope: "all" }, "").title).toBe("Nothing has been filed yet");
+  // THE SCOPE ALONE IS NOT A FILTER, but any narrowing beside it is.
+  expect(emptyReason({ ...NO_FILTERS, scope: "closed", assignee: "ada" }, "").title).toBe(
+    "Nothing matches",
+  );
+  expect(emptyReason({ ...NO_FILTERS, q: "login" }, "").hint).toContain("Take one off");
+});
+
+// A BOARD LISTS "STATUS" ONCE. The menu used to list a `""` row labelled
+// "Status" ahead of the status axis itself — two rows reading one word with
+// different URL effects — and a project axis only where the engine takes it.
+test("the grouping picker offers each axis once, and project at workspace scope only", () => {
+  const board = groupAxisOptions("board", true);
+  expect(board.filter((o) => o.label === "Status")).toHaveLength(1);
+  expect(board.some((o) => o.value === "")).toBe(false);
+  expect(board.some((o) => o.value === "project")).toBe(true);
+  expect(groupAxisOptions("board", false).some((o) => o.value === "project")).toBe(false);
+  // EVERY OTHER SHAPE CAN BE UNGROUPED, so it leads with that.
+  expect(groupAxisOptions("list", true)[0]).toEqual({ value: "", label: "No grouping" });
+  // AND THE SECOND AXIS NEVER OFFERS THE FIRST, which the engine refuses.
+  expect(secondAxisOptions("status", true).some((o) => o.value === "status")).toBe(false);
+  expect(secondAxisOptions("status", true)[0]?.value).toBe("");
 });

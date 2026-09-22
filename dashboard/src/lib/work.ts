@@ -266,9 +266,72 @@ export function axisLabel(axis: string, key: string, ctx: LabelContext = {}): st
       return key ? (ctx.tags?.find((t) => t.slug === key)?.label ?? key) : "Untagged";
     case "parent":
       return key || "No parent";
+    case "project":
+      return key || "No project";
+    case "unit":
+    case "routing_unit":
+      return key || "No unit";
+    case "due:bucket":
+      // THE ENGINE NAMES THESE and a column head takes that name — the answer
+      // carries a `label` per band, so [groupLabel] returns before it reaches
+      // here. What reaches here is a CHIP, which holds the key out of the URL
+      // and no answer, and the words are the engine's own list: copied here
+      // they would be a second declaration nothing holds against `dueBands`,
+      // which is the drift `clientsource` exists to catch. Humanised, the key
+      // IS the word — `this_week` reads "This week" — so the chip and the
+      // heading it came from say the same thing without a second table.
+      return key ? humanize(key) : "No due date";
     default:
       return key || EMPTY_VALUE;
   }
+}
+
+/**
+ * The groups a LIST draws: only the bands that hold something.
+ *
+ * A BOARD DRAWS EVERY LANE the scope admits — the engine mints the empty ones
+ * on a closed axis, so a board is the shape of the process rather than of this
+ * week's rows — and a list does not: a band is a heading between runs of
+ * rows, and a heading over nothing is a rule across the page separating
+ * nothing from nothing. Two drawings of one answer, which is what a shape is;
+ * the fetch is the same, as the rule that a shape never fetches differently
+ * requires.
+ */
+export function bandsOf(groups: WorkGroup[]): WorkGroup[] {
+  return groups.filter((group) => group.count > 0 || (group.subgroups?.length ?? 0) > 0);
+}
+
+/**
+ * Why a list has nothing on it, and what would put something there.
+ *
+ * "NOTHING MATCHES" IS THE FILTER-MISS SENTENCE, and it was drawn over an
+ * unfiltered board — blaming a narrowing that did not exist, with no chip on
+ * screen to take off. An empty scope is a different fact with a different
+ * remedy: nothing is open yet, nothing has been finished yet, or nothing has
+ * been filed at all, each naming what fills it. The scope segment is not a
+ * filter here, because it is always set to something: it decides WHICH of the
+ * three sentences, never whether the filter one is due.
+ */
+export function emptyReason(f: TrackerFilters, project: string): { title: string; hint: string } {
+  const where = project ? ` in ${project}` : "";
+  if (anyFilter({ ...f, scope: "open" })) {
+    return {
+      title: "Nothing matches",
+      hint: `No item${where} matches these filters. Take one off, or widen the scope.`,
+    };
+  }
+  const filing =
+    "Seats file work with create_work_item — an inbound webhook or a schedule is usually what starts them.";
+  if (f.scope === "closed") {
+    return {
+      title: `Nothing has been finished${where} yet`,
+      hint: "A task lands here when a seat moves it to done, cancelled or closed. What is still open is under Open.",
+    };
+  }
+  if (f.scope === "all") {
+    return { title: `Nothing has been filed${where} yet`, hint: filing };
+  }
+  return { title: `Nothing is open${where}`, hint: `${filing} Finished work is under Closed.` };
 }
 
 /**
@@ -305,15 +368,71 @@ export function effectiveArrangement(asked: string, inherited: unknown): string 
   return typeof inherited === "string" ? inherited : "";
 }
 
-/** The axes a board may be cut on, with what each is called in the picker. */
-export const GROUP_AXES: { value: string; label: string }[] = [
+/**
+ * The axes a board may be cut on, with what each is called in the picker.
+ *
+ * A COPY OF THE ENGINE'S `groupKeys`, held against it by
+ * `internal/tracker/client_gate_test.go` in both directions: a value here the
+ * grammar refuses takes the whole board down with a refusal, and a key the
+ * engine takes that this list never names is an arrangement only a hand-edited
+ * URL can reach — which is what `project` was until the gate named it. The
+ * keys the menu deliberately leaves out are listed THERE, each with its
+ * reason, so a grouping added to the grammar lands here or in that list.
+ *
+ * `workspace` marks an axis the engine takes only at workspace scope: inside a
+ * project every row is in one project, and the grammar refuses the question.
+ */
+export const GROUP_AXES: { value: string; label: string; workspace?: boolean }[] = [
   { value: "status", label: "Status" },
   { value: "status_group", label: "Status group" },
   { value: "assignee", label: "Assignee" },
   { value: "priority", label: "Priority" },
   { value: "type", label: "Type" },
   { value: "tag", label: "Tag" },
+  { value: "project", label: "Project", workspace: true },
+  { value: "unit", label: "Unit" },
+  // WHEN THE WORK IS DUE, which is the one axis that is not a stored value:
+  // the engine cuts it against the COMPANY's day rather than the reader's, so
+  // the bands, a row's overdue flag and every `due=` filter agree about a
+  // task. Offered on every shape — "what is late, what is today" is a
+  // question somebody asks of a list as readily as of a board.
+  { value: "due:bucket", label: "Due" },
 ];
+
+/**
+ * The axes the Display menu's Group by offers, for one shape at one scope.
+ *
+ * A BOARD IS ALWAYS GROUPED — it is what a board is — and its default axis is
+ * status, so on a board there is no "No grouping" row and "Status" is the
+ * axis's own entry. The menu used to list both: a `""` row LABELLED "Status"
+ * ahead of the `status` axis, two rows reading the same word with different
+ * URL effects, one of which marked the control active and one of which did
+ * not. Every other shape can be ungrouped, so it leads with that.
+ */
+export function groupAxisOptions(
+  shape: Shape,
+  workspace: boolean,
+): { value: string; label: string }[] {
+  const axes = GROUP_AXES.filter((a) => !a.workspace || workspace).map(({ value, label }) => ({
+    value,
+    label,
+  }));
+  return shape === "board" ? axes : [{ value: "", label: "No grouping" }, ...axes];
+}
+
+/**
+ * The second axis's options: never the first, which the engine refuses because
+ * every row would be alone in its own band.
+ */
+export function secondAxisOptions(
+  first: string,
+  workspace: boolean,
+): { value: string; label: string }[] {
+  return [
+    { value: "", label: "No second grouping" },
+    ...groupAxisOptions("board", workspace).filter((a) => a.value !== first),
+  ];
+}
 
 /** What an axis is CALLED, or "" for one this build does not offer. */
 export function axisName(axis: string): string {

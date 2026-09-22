@@ -367,16 +367,23 @@ func TestAClosedSetsColumnsAreInItsDeclaredOrder(t *testing.T) {
 		r.drain()
 	}
 
+	// EVERY STATUS IS A COLUMN under show_closed, the four nothing was
+	// filed under at count 0 — see TestAClosedAxisDrawsEveryColumnTheQueryAdmits
+	// — and the order is the declared one, which puts the smaller todo
+	// column ahead of the larger in_progress one.
 	answer := r.ask(map[string]any{
 		"container": "project:ENG", "group_by": "status", "show_closed": "true",
 	})
-	if len(answer.Groups) != 2 {
-		t.Fatalf("the board has %d columns, want 2", len(answer.Groups))
+	if got, want := columnKeys(answer), declared(tracker.Statuses); !equalKeys(got, want) {
+		t.Fatalf("the board has columns %v, want %v", got, want)
 	}
 	if answer.Groups[0].Key != string(tracker.StatusTodo) {
 		t.Fatalf("the first column is %q, want todo — the columns are in the "+
 			"order the status set DECLARES, not the order the counts happen "+
 			"to fall in", answer.Groups[0].Key)
+	}
+	if got, want := columnCounts(answer), []int{1, 3, 0, 0, 0, 0}; !equalCounts(got, want) {
+		t.Fatalf("the board counts %v, want %v", got, want)
 	}
 
 	// AND A PRIORITY BOARD TOO, whose order is the one a person reads it
@@ -396,18 +403,144 @@ func TestAClosedSetsColumnsAreInItsDeclaredOrder(t *testing.T) {
 	for _, group := range byPriority.Groups {
 		order = append(order, group.Key)
 	}
-	// LOW BEFORE NORMAL, which is the declared order — and the OPPOSITE
-	// of the size order, since four tasks are normal and three are low.
-	want := []string{string(tracker.PriorityLow), string(tracker.PriorityNormal)}
-	if len(order) != len(want) {
-		t.Fatalf("the priority columns are %v, want %v", order, want)
+	// ALL FIVE, LOW BEFORE NORMAL, which is the declared order — and the
+	// OPPOSITE of the size order, since four tasks are normal and three are
+	// low. The three priorities nothing was filed under are columns at zero,
+	// because a priority board is the shape of the scale rather than of this
+	// week's rows.
+	want := declared(tracker.Priorities)
+	if !equalKeys(order, want) {
+		t.Fatalf("the priority columns are %v, want %v — the declared "+
+			"order, not the one this week's work produced", order, want)
 	}
-	for i, key := range want {
-		if order[i] != key {
-			t.Fatalf("the priority columns are %v, want %v — the declared "+
-				"order, not the one this week's work produced", order, want)
+	if got, wantCounts := columnCounts(byPriority), []int{0, 3, 4, 0, 0}; !equalCounts(got, wantCounts) {
+		t.Fatalf("the priority counts are %v, want %v", got, wantCounts)
+	}
+}
+
+// A BOARD IS THE SHAPE OF THE PROCESS, NOT OF THIS WEEK'S ROWS.
+//
+// A GROUP BY emits a column per value present, so a company with one task got
+// a board with one lane, and nothing on it said whether In review was empty or
+// missing. The columns are the values the query itself admits, in the declared
+// order, empty ones included — and ONLY those: an open-work board must not
+// draw a Done lane the query excluded, because "nothing is done" said about a
+// set that was never asked is a claim rather than an absence.
+func TestAClosedAxisDrawsEveryColumnTheQueryAdmits(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	ask := func(kv map[string]any) tracker.Answer {
+		kv["container"] = "project:ENG"
+		return r.ask(kv)
+	}
+	expect := func(what string, answer tracker.Answer, keys []string, counts []int) {
+		t.Helper()
+		if got := columnKeys(answer); !equalKeys(got, keys) {
+			t.Fatalf("%s: the columns are %v, want %v", what, got, keys)
+		}
+		if got := columnCounts(answer); !equalCounts(got, counts) {
+			t.Fatalf("%s: the counts are %v, want %v", what, got, counts)
 		}
 	}
+
+	// THE DEFAULT SCOPE IS OPEN WORK, so the three open statuses are the
+	// board and the three finished ones are not on it.
+	open := ask(map[string]any{"group_by": "status"})
+	expect("open work", open, []string{"todo", "in_progress", "in_review"}, []int{1, 0, 0})
+	// AN EMPTY COLUMN CARRIES AN EMPTY LIST ON THE WIRE, never null: every
+	// renderer maps a column's rows.
+	raw, err := json.Marshal(open.Groups[1])
+	if err != nil {
+		t.Fatalf("marshal a column: %v", err)
+	}
+	if !strings.Contains(string(raw), `"rows":[]`) {
+		t.Fatalf("an empty column reached the wire as %s, want \"rows\":[]", raw)
+	}
+
+	// THE FILTERS THAT NARROW THE PREDICATE NARROW THE BOARD, in the same
+	// terms: a group, a negated status, a named status.
+	expect("active only", ask(map[string]any{"group_by": "status", "status_group": "active"}),
+		[]string{"in_progress", "in_review"}, []int{0, 0})
+	expect("not todo", ask(map[string]any{"group_by": "status", "status": "!todo"}),
+		[]string{"in_progress", "in_review"}, []int{0, 0})
+	expect("todo named", ask(map[string]any{"group_by": "status", "status": "todo"}),
+		[]string{"todo"}, []int{1})
+	// ASKING FOR FINISHED WORK ADMITS ITS THREE STATUSES.
+	expect("everything", ask(map[string]any{"group_by": "status", "show_closed": "true"}),
+		declared(tracker.Statuses), []int{1, 0, 0, 0, 0, 0})
+	// AND THE OVERDUE ALIAS TAKES THEM OFF AGAIN, whatever show_closed said.
+	expect("overdue", ask(map[string]any{
+		"group_by": "status", "show_closed": "true", "due": "overdue",
+	}), []string{"todo", "in_progress", "in_review"}, []int{0, 0, 0})
+	// ONE COLUMN ASKED FOR IS ONE COLUMN ANSWERED, even an empty one: the
+	// reader who followed "N more →" into it is looking at that column.
+	expect("one column", ask(map[string]any{"group_by": "status", "group": "in_review"}),
+		[]string{"in_review"}, []int{0})
+	// THE GROUP AXIS FOLLOWS THE SAME ADMISSION.
+	expect("by group", ask(map[string]any{"group_by": "status_group"}),
+		[]string{"not_started", "active"}, []int{1, 0})
+	// A PRIORITY BOARD CARRIES THE WHOLE SCALE, and a priority filter
+	// narrows it.
+	expect("by priority", ask(map[string]any{"group_by": "priority"}),
+		declared(tracker.Priorities), []int{0, 0, 1, 0, 0})
+	expect("two priorities", ask(map[string]any{"group_by": "priority", "priority": "high,urgent"}),
+		[]string{"high", "urgent"}, []int{0, 0})
+	// AN OPEN AXIS IS LEFT AS IT WAS — the values present and no more —
+	// because every seat in the company as an empty column is a roster
+	// rather than a board.
+	expect("by assignee", ask(map[string]any{"group_by": "assignee"}), []string{""}, []int{1})
+}
+
+func declared[T ~string](values []T) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, string(value))
+	}
+	return out
+}
+
+func columnKeys(answer tracker.Answer) []string {
+	out := make([]string, 0, len(answer.Groups))
+	for _, group := range answer.Groups {
+		out = append(out, group.Key)
+	}
+	return out
+}
+
+func columnCounts(answer tracker.Answer) []int {
+	out := make([]int, 0, len(answer.Groups))
+	for _, group := range answer.Groups {
+		out = append(out, group.Count)
+	}
+	return out
+}
+
+func equalKeys(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalCounts(got, want []int) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // A MULTI-VALUED CUSTOM FIELD IS A LABEL BOARD, and says so.
@@ -860,12 +993,20 @@ func TestADueBandNarrowsTheWholeQuery(t *testing.T) {
 	}
 }
 
-// THE BANDS HOLD THEIR DECLARED ORDER, however few of them are drawn.
+// THE BANDS HOLD THEIR DECLARED ORDER, and the empty ones are drawn too.
 //
 // A day is read Overdue, Earlier, Today, This week, Later, No due date. Order
 // the columns by size instead and the headings re-shuffle every time work
 // moves between them, which is a board nobody can learn the shape of — so the
-// fixture makes the LAST band the biggest, and a size-ordered axis fails here.
+// fixture makes the LAST drawn band the biggest, and a size-ordered axis fails
+// here.
+//
+// AND THE AXIS IS A CLOSED SET, so it pads: nothing is due this week in the
+// fixture and the lane is drawn at nought anyway, because a day with nothing
+// in it is a fact about the week rather than a gap in the board. `earlier` is
+// the one band that is NOT drawn, and for the reason the admission rule gives
+// — it holds work that was finished late, and this answer carries open work
+// only, so nothing could have landed in it.
 func TestTheDueBandsKeepTheirDeclaredOrder(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -887,22 +1028,41 @@ func TestTheDueBandsKeepTheirDeclaredOrder(t *testing.T) {
 	for _, group := range answer.Groups {
 		drawn = append(drawn, group.Key)
 	}
-	// NO `earlier` AND NO `this_week`: a band nothing is in is not drawn,
-	// and the four that are keep their places.
-	want := []string{"overdue", "today", "later", ""}
-	if len(drawn) != len(want) {
-		t.Fatalf("the answer drew the bands %v, want %v", drawn, want)
+	// FIVE OF THE SIX, IN THE AXIS'S OWN ORDER — `this_week` empty among
+	// them, and `earlier` absent because no finished status is admitted.
+	want := []struct {
+		key   string
+		count int
+	}{
+		{"overdue", 1}, {"today", 1}, {"this_week", 0}, {"later", 3}, {"", 1},
 	}
-	for i := range want {
-		if drawn[i] != want[i] {
+	if len(drawn) != len(want) {
+		t.Fatalf("the answer drew the bands %v, want %d of them", drawn, len(want))
+	}
+	for i, band := range want {
+		if drawn[i] != band.key {
 			t.Fatalf("the answer drew the bands %v, want %v — the declared "+
 				"order is the axis's own, and the biggest column is last "+
-				"here precisely so a size-ordered one fails", drawn, want)
+				"among the ones holding work precisely so a size-ordered "+
+				"one fails", drawn, want)
+		}
+		got := answer.Groups[i]
+		if got.Count != band.count {
+			t.Errorf("the %q band counts %d, want %d", band.key, got.Count, band.count)
+		}
+		// AN EMPTY BAND CARRIES AN EMPTY LIST, never a null: a renderer
+		// mapping a column's rows would fall over on exactly the column
+		// the padding exists to draw.
+		if got.Rows == nil {
+			t.Errorf("the %q band carries no row list at all", band.key)
 		}
 	}
 	// AND EACH HEADING IS THE WORD A PERSON READS, not the stored slug.
 	for _, want := range []struct{ key, label string }{
 		{"overdue", "Overdue"}, {"today", "Today"},
+		// THE PADDED ONE TOO: a lane minted from a bare key is headed
+		// from the same table as the ones the count statement returned.
+		{"this_week", "This week"},
 		{"later", "Later"}, {"", "No due date"},
 	} {
 		if got := groupOf(t, answer, want.key).Label; got != want.label {

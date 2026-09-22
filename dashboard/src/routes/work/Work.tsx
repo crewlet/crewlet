@@ -42,7 +42,12 @@ export function Work() {
   // nothing, over a read that failed. A reader acts on that, by filing the
   // duplicate.
   const projects = useQuery("work_projects", { limit: 1 }, { pollMs: 120_000 });
-  const none = (projects.data?.projects ?? []).length === 0;
+  // AN ANSWER WITH NO LIST IN IT IS NOT A LIST OF NOTHING. Only a listing
+  // that actually carried its `projects` array and carried it empty is a
+  // company with no projects; an answer missing the field — a newer build's
+  // envelope, a stub — is not a count of zero, and reading it as one drew
+  // "no work has been filed" over a list that was never asked.
+  const none = projects.data?.projects?.length === 0;
 
   return (
     <>
@@ -64,13 +69,15 @@ export function Work() {
       </PageNote>
 
       <div className="work-main">
-        <ItemsView />
-        {/* ONLY ONCE THE LIST HAS ANSWERED. `QueryState` puts a refusal ahead
-            of the empty state, and this draws nothing at all while the read is
-            in flight or once a project exists. */}
-        <QueryState error={projects.error} loading={projects.loading}>
-          {none && projects.data ? <NoWorkYet /> : null}
-        </QueryState>
+        {/* THE EMPTY STATE REPLACES THE LIST rather than following it. Drawn
+            under it, a company with no projects read two sentences about one
+            blank — the list's own "nothing matches" and this one — and the
+            first was wrong. Only once the project list has ANSWERED with
+            nothing: while it is in flight or refused, the list is drawn, and a
+            refusal is said beside it, because "this is not an empty company"
+            is the fact a reader acts on. */}
+        {none && projects.data ? <NoWorkYet /> : <ItemsView />}
+        <QueryState error={projects.error} loading={false} />
       </div>
     </>
   );

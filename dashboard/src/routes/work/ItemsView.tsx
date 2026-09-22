@@ -64,12 +64,14 @@ import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import {
   anyFilter,
+  bandsOf,
   buildItemsParams,
   calendarWeeks,
   countedLabel,
   dayKey,
   defaultView,
   effectiveArrangement,
+  emptyReason,
   EXPLICIT_NONE,
   filterChips,
   filterPatchForGroup,
@@ -274,6 +276,10 @@ export function ItemsView({ project = "" }: { project?: string }) {
   const neighbours = useMemo(() => rows.map((r) => ({ kind: "item" as const, id: r.key })), [rows]);
   usePeekNeighbours(neighbours);
   const shown = useMemo(() => shownRows(rows, groups), [rows, groups]);
+  // THE BANDS A LIST DRAWS, which are not the lanes a board draws — see
+  // [bandsOf]: the engine mints every lane a closed axis admits, and a band
+  // over nothing is a rule separating nothing from nothing.
+  const bands = useMemo(() => bandsOf(groups), [groups]);
 
   const chrome: RowChrome = {
     seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
@@ -421,7 +427,11 @@ export function ItemsView({ project = "" }: { project?: string }) {
           cols={cols}
           onShape={(next) => setShapeKey(next === viewShape ? "" : next)}
           onGroupBy={(next) => {
-            setGroupBy(next || off(viewOwn.group_by));
+            // A BOARD'S OWN DEFAULT IS STATUS, so choosing it is choosing
+            // nothing: it is written as the absence of the key, unless a view
+            // supplies another axis, which the choice then has to override.
+            const chosen = shape === "board" && next === "status" && !viewOwn.group_by ? "" : next;
+            setGroupBy(chosen || off(viewOwn.group_by));
             // A COLUMN FILTER BELONGS TO ITS AXIS. Left behind when the axis
             // changes it narrows the list to a key the new axis has never
             // heard of, which answers nothing.
@@ -478,12 +488,17 @@ export function ItemsView({ project = "" }: { project?: string }) {
               // A TRASH WITH NOTHING IN IT IS NOT A FILTER THAT MATCHED
               // NOTHING, and it is not empty either: a purge leaves no row and
               // its history entry is the only trace the work ever existed.
-              shown.length || groups.length || inTrash
+              //
+              // A BOARD WITH LANES IS NOT EMPTY EITHER, however few cards are
+              // on them: the engine mints every lane the scope admits, and
+              // three empty lanes are the shape of the process. The other
+              // shapes draw only the bands that hold something, so for them
+              // the rows decide — and the sentence says WHY there are none,
+              // which "Nothing matches" over an unfiltered list did not.
+              inTrash ||
+              (shape === "board" ? groups.length > 0 : shown.length > 0 || bands.length > 0)
                 ? undefined
-                : {
-                    title: "Nothing matches",
-                    hint: "No item on this node's copy of the tracker matches these filters. Widen them, or check that work is being filed at all.",
-                  }
+                : emptyReason(filters, project)
             }
           >
             {shape === "board" && (
@@ -508,7 +523,7 @@ export function ItemsView({ project = "" }: { project?: string }) {
             {shape === "list" && (
               <List
                 rows={rows}
-                groups={groups}
+                groups={bands}
                 // THE AXIS THE QUERY WAS SENT ON, not the one in the URL: a
                 // saved view may carry `group_by`, which [buildItemsParams]
                 // resolves through [effectiveArrangement].
@@ -530,7 +545,7 @@ export function ItemsView({ project = "" }: { project?: string }) {
             {shape === "table" && (
               <TableView
                 rows={rows}
-                groups={groups}
+                groups={bands}
                 axis={String(params.group_by ?? "")}
                 chrome={chrome}
                 detail={detail}
@@ -545,7 +560,7 @@ export function ItemsView({ project = "" }: { project?: string }) {
             {shape === "timeline" && (
               <TimelineView
                 rows={rows}
-                groups={groups}
+                groups={bands}
                 chrome={chrome}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 now={now}
@@ -633,7 +648,7 @@ export function NoWorkYet({ children }: { children?: ReactNode }) {
     <EmptyState
       icon={<DashboardGlyph size={32} />}
       title="No work has been filed yet"
-      description="Seats file work with create_work_item, and an inbound webhook or a schedule is usually what starts them. A project appears here the moment a unit in the company config declares its `project` key."
+      description="Nothing can be filed until a unit in the company config declares a `project` key, and this company has none. Once one does, seats file work with create_work_item — an inbound webhook or a schedule is usually what starts them."
     >
       {children}
     </EmptyState>

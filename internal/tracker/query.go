@@ -930,6 +930,11 @@ var groupKeys = []string{
 	"due:day", "due:week", groupByDueBucket, "start:week",
 }
 
+// GroupKeys is every grouping the grammar takes, for the one caller that
+// carries its own copy of the list — the dashboard's Display menu — to be held
+// against; see client_gate_test.go.
+func GroupKeys() []string { return slices.Clone(groupKeys) }
+
 func (q *Query) parseGrouping(p Params) error {
 	q.GroupLimit = p.Int("group_limit", 0)
 	// NAMED, NOT NON-EMPTY — see [Query.Group]. `group=` is a request for

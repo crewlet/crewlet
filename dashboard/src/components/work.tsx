@@ -40,13 +40,29 @@ export interface RowChrome {
   statuses?: WorkStatusDef[];
 }
 
-/** The task type as its mark, with the company's own word for it on hover. */
-export function TypeIcon({ type, types }: { type?: string; types?: WorkTypeDef[] }) {
+/**
+ * The task type as its mark, with the company's own word for it on hover.
+ *
+ * `decorative` ONLY WHERE THE NAME IS PRINTED BESIDE IT — the rule [Assignee]
+ * keeps for the avatar, and for the same reason: the mark always read its
+ * name aloud, so a properties row that printed "Task" after it announced
+ * "Task Task". A card, a row and a column cell draw the mark alone and keep
+ * the hidden name; the two places that print the word say so.
+ */
+export function TypeIcon({
+  type,
+  types,
+  decorative,
+}: {
+  type?: string;
+  types?: WorkTypeDef[];
+  decorative?: boolean;
+}) {
   const name = typeName(type, types) || "Untyped";
   return (
-    <span className="work-type" title={name}>
+    <span className="work-type" title={name} aria-hidden={decorative || undefined}>
       <Mark name={typeIcon(type)} size="sm" />
-      <span className="sr-only">{name}</span>
+      {!decorative && <span className="sr-only">{name}</span>}
     </span>
   );
 }

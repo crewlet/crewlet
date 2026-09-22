@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,6 +45,22 @@ import (
 // statement run once per group. A single windowed query would rank every row
 // in the corpus to return a handful per column, which is the cost a board
 // pays on every poll.
+//
+// # A closed axis draws every column the query admits
+//
+// A `GROUP BY` emits one row per value PRESENT. On a company with one task
+// that answered one column, and a board with one lane reads as a board that
+// did not load: nothing on it says whether "In review" is empty or missing.
+// So the FIRST axis, where it is a closed set — status, status group and
+// priority, the three with a declared [groupAxis.Order] — carries every value
+// the query's own predicate admits, the absent ones at count 0 with no rows.
+// The rule is the histogram's (every bucket is drawn, empty ones included,
+// because a quiet hour is a fact about the company rather than a gap in the
+// chart), and the admission is the predicate's own: an open-work board draws
+// To do, In progress and In review and never Done, because the query excluded
+// finished work, and a Done lane on it would claim "nothing is done" about a
+// set that was never asked. [admittedColumns] names the filters that decide
+// it, and why an open axis and the second axis are left as they are.
 
 // MaxGroups bounds how many columns one answer draws.
 //
@@ -710,9 +727,26 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	if err != nil {
 		return grouped{}, err
 	}
+	// COUNTS, THEN FILL, THEN LABELS. The fill mints a column from a bare
+	// KEY, so it has to run before the labels or a band drawn at zero would
+	// be headed by its slug where the one beside it carries a word — and
+	// the unset column a closed axis declares is minted here rather than
+	// read out of [groupCounts], which only ever saw the values something
+	// was counted under. Its heading comes from the same table as its
+	// neighbours' ([dueBucketAxis] sets [groupAxis.Unset] and the `""` key
+	// of [groupAxis.Labels] from one list), so the two spellings of that
+	// one label cannot disagree.
+	groups = fillColumns(groups, admittedColumns(q, axis))
 	groupLabels(groups, axis)
 
 	for i := range groups {
+		if groups[i].Count == 0 {
+			// A COLUMN THE FILL ADDED HOLDS NOTHING BY CONSTRUCTION — see
+			// [admittedColumns] — so neither its rows nor its lanes are
+			// read: a statement per empty column would cost a board with
+			// one task as much as one with six.
+			continue
+		}
 		rows, err := groupRows(ctx, tx, axis, groups[i].Key, where, args,
 			terms, rowsPer, q.DayStart)
 		if err != nil {
@@ -794,6 +828,279 @@ func declaredOrder[T ~string](values []T) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
 		out = append(out, string(value))
+	}
+	return out
+}
+
+// admittedColumns is the closed axis's values THIS query could hold, in the
+// axis's declared order — the columns a board draws whether or not anything is
+// in them. Nil for an open axis, which keeps only the values present.
+//
+// ONLY THE COLUMNS THE PREDICATE ADMITS. An empty column is honest exactly
+// where a row could have landed in it, so the same filters that narrow the
+// predicate narrow this set, in the terms [compileWhere] writes them: the
+// `status` and `status!` keys, `status_group`, the finished-work default that
+// `show_closed` lifts, and the overdue alias that carries an open-status
+// condition of its own. The `group=` column filter narrows the whole query to
+// one value, so it narrows this to one column — an empty one is still that
+// column, which is what the reader who followed "N more →" into it is looking
+// at. A disjunction's arms can only narrow further, so the top-level keys
+// bound what any arm can produce.
+//
+// CLOSED AXES ONLY. An open axis — assignee, tag, type, a custom field — has no
+// set to fill from: every seat in the company as an empty column is a roster
+// rather than a board, and a field's option list is a catalogue read this
+// statement does not make. [groupAxis.Order] is what marks an axis closed, and
+// compileGroup sets it on exactly four — status, status group, priority and
+// the relative due bands; an axis that gains an order without gaining an arm
+// here is caught by the internal test that walks groupKeys.
+//
+// `group=` IS READ BY PRESENCE, not by emptiness — see [Query.Group]. A
+// request that NAMES the key narrows this to the one column it names, and the
+// empty string names the column holding the rows with no value: that is a
+// declared band on the due axis ("No due date") and is not a declared value on
+// the other three, where a status or a priority is never empty. So a
+// present-empty `group=` on those admits nothing and pads nothing, which is
+// the honest answer — the narrowed board has no declared column to draw.
+//
+// NOT THE SECOND AXIS. A swimlane is a split of one column's rows — the
+// grammar refuses `group_by2` without `group_by` for that reason — and an
+// empty lane inside every column would multiply exactly the cells
+// [MaxGroupsWithSubgroups] exists to bound.
+func admittedColumns(q Query, axis groupAxis) []string {
+	if len(axis.Order) == 0 {
+		return nil
+	}
+	var admitted []string
+	switch q.GroupBy {
+	case "status":
+		admitted = declaredOrder(admittedStatuses(q))
+	case "status_group":
+		held := map[StatusGroup]bool{}
+		for _, s := range admittedStatuses(q) {
+			held[s.Group()] = true
+		}
+		for _, group := range StatusGroups {
+			if held[group] {
+				admitted = append(admitted, string(group))
+			}
+		}
+	case "priority":
+		for _, p := range Priorities {
+			if len(q.Priorities) > 0 && !slices.Contains(q.Priorities, p) {
+				continue
+			}
+			admitted = append(admitted, string(p))
+		}
+	case groupByDueBucket:
+		admitted = admittedDueBands(q)
+	default:
+		return nil
+	}
+	if q.Group == nil {
+		return admitted
+	}
+	if slices.Contains(admitted, *q.Group) {
+		return []string{*q.Group}
+	}
+	return nil
+}
+
+// admittedDueBands is the relative due axis's own arm of [admittedColumns].
+//
+// THE BANDS ARE A CALENDAR AND A STATUS, so two different filters narrow them
+// and each narrows a different half:
+//
+//   - [dueOverdue] and [dueEarlier] share one interval — everything before the
+//     day start — and are told apart by the status: overdue is OPEN and past
+//     its date, earlier is what is left, which is work somebody finished late.
+//     So each is admitted only where [admittedStatuses] leaves a status of its
+//     own kind, which is the same computation the other three arms rest on
+//     rather than a second reading of `show_closed`. An open-work board draws
+//     Overdue and never Earlier; a board narrowed to `status=done` draws
+//     Earlier and never Overdue.
+//   - The `due=` filter narrows the INTERVAL, and only that filter: the other
+//     eight date keys bound a different column, so a `created=` bound says
+//     nothing about which due band a row can be in. A band is admitted where
+//     its own interval intersects the filter's, computed against the same
+//     three boundaries [dueBucketCase] cuts on, so the arm that could match a
+//     row and the column that draws it are the same arithmetic.
+//
+// THE OVERDUE ALIAS IS BOTH AT ONCE — `due=overdue` is "before the day start
+// AND open" — so it admits exactly [dueOverdue] rather than the two bands its
+// interval alone would give.
+//
+// AND `none` IS NEVER ADMITTED UNDER A `due=` FILTER. The band is the rows
+// whose `due_at` is NULL, and every comparison in this grammar is written
+// `due_at IS NOT NULL AND …` for the index's sake — so no `due=` value can
+// hold an undated task, and the grammar has no spelling that asks for one
+// (`due=none` is refused as a comparison). Drawing the column would claim
+// nothing is undated about a set undated work was never in.
+func admittedDueBands(q Query) []string {
+	open, finished := false, false
+	for _, s := range admittedStatuses(q) {
+		if s.Group().Open() {
+			open = true
+			continue
+		}
+		finished = true
+	}
+	filter, dated := q.Dates["due"]
+	window := q.dayWindow()
+	var out []string
+	for _, band := range dueBands {
+		switch {
+		// The STATUS half, which holds whether or not a date filter is on.
+		case band.Key == dueOverdue && !open:
+		case band.Key == dueEarlier && !finished:
+		// The CALENDAR half, which only a `due=` filter narrows.
+		case dated && band.Key == dueNone:
+		// THE ALIAS CARRIES THE OPEN CONDITION, so it admits the one
+		// band that is defined by it and no other — not even
+		// [dueEarlier], which shares its interval exactly.
+		case dated && filter.Overdue && band.Key != dueOverdue:
+		case dated && !filter.Overdue &&
+			!bandRange(band.Key, window).overlaps(dueFilterRange(filter)):
+		default:
+			out = append(out, string(band.Key))
+		}
+	}
+	return out
+}
+
+// dueRange is a half-open interval of instants, [Lo, Hi). A zero Lo is the
+// beginning of time and a zero Hi is for ever, which is the sentinel every
+// boundary here already uses — [dueBucketAxis] refuses a window whose
+// boundaries are zero, so a real one is never mistaken for an open end.
+type dueRange struct{ Lo, Hi time.Time }
+
+// overlaps reports whether two of these hold an instant in common.
+//
+// A DEGENERATE INTERVAL IS THE INSTANT IT SITS AT. `this_week` is [DayEnd,
+// WeekEnd) and on a Sunday the week ends exactly where the day does, so the
+// band is empty — and read as empty it would drop out of every filtered board
+// on one day in seven while an unfiltered board still drew it. Read as the
+// instant it collapsed to, a filter covering that boundary admits the lane and
+// the board keeps its shape all week.
+func (r dueRange) overlaps(o dueRange) bool {
+	hi := func(x dueRange) time.Time {
+		if !x.Lo.IsZero() && !x.Hi.IsZero() && !x.Hi.After(x.Lo) {
+			return x.Lo.Add(time.Microsecond)
+		}
+		return x.Hi
+	}
+	rHi, oHi := hi(r), hi(o)
+	if !r.Lo.IsZero() && !oHi.IsZero() && !r.Lo.Before(oHi) {
+		return false
+	}
+	if !o.Lo.IsZero() && !rHi.IsZero() && !o.Lo.Before(rHi) {
+		return false
+	}
+	return true
+}
+
+// bandRange is one band's own interval, which is [dueBucketCase]'s arms read
+// as bounds rather than as SQL. [dueNone] has none — it is a NULL rather than
+// an instant — and answers the empty interval nothing intersects.
+func bandRange(band dueBucket, window dayWindow) dueRange {
+	switch band {
+	case dueOverdue, dueEarlier:
+		return dueRange{Hi: window.Start}
+	case dueToday:
+		return dueRange{Lo: window.Start, Hi: window.DayEnd}
+	case dueThisWeek:
+		return dueRange{Lo: window.DayEnd, Hi: window.WeekEnd}
+	case dueLater:
+		return dueRange{Lo: window.WeekEnd}
+	}
+	return dueRange{}
+}
+
+// dueFilterRange is one `due=` filter read as the same kind of interval.
+//
+// AN INCLUSIVE BOUND IS BUMPED BY A MICROSECOND rather than carried as a flag,
+// because that is the unit the column is stored in — [store.EncodeTime] writes
+// microseconds — so `lte:X` and `< X+1µs` admit exactly the same rows. Written
+// as a flag the comparison below would have four cases where it has one.
+func dueFilterRange(filter DateFilter) dueRange {
+	switch filter.Op {
+	case DateLT:
+		return dueRange{Hi: filter.From.At}
+	case DateLTE:
+		return dueRange{Hi: filter.From.At.Add(time.Microsecond)}
+	case DateGT:
+		return dueRange{Lo: filter.From.At.Add(time.Microsecond)}
+	case DateGTE:
+		return dueRange{Lo: filter.From.At}
+	case DateRange:
+		return dueRange{Lo: filter.From.At, Hi: filter.To.At}
+	}
+	// A comparison this build does not know bounds nothing, which admits
+	// every band: a filter nobody could read must not silently remove a
+	// column somebody's rows are in.
+	return dueRange{}
+}
+
+// admittedStatuses is every status the query's own predicate could match.
+//
+// THE FINISHED-WORK RULE IS [compileWhere]'S, restated in the same three terms
+// so the two cannot disagree: finished work is excluded unless `show_closed`
+// asks for it, and the overdue alias ANDs the open condition back on whatever
+// `show_closed` said.
+func admittedStatuses(q Query) []Status {
+	finished := q.ShowClosed.All || q.ShowClosed.Recent > 0
+	for _, filter := range q.Dates {
+		if filter.Overdue {
+			finished = false
+		}
+	}
+	var out []Status
+	for _, s := range Statuses {
+		switch {
+		case len(q.Status) > 0 && !slices.Contains(q.Status, s):
+		case slices.Contains(q.StatusNot, s):
+		case len(q.StatusGroups) > 0 && !slices.Contains(q.StatusGroups, s.Group()):
+		case !finished && !s.Group().Open():
+		default:
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// fillColumns lays the present columns over the admitted set, in the admitted
+// order, minting an empty column for every admitted value nothing was counted
+// under.
+//
+// AN EMPTY COLUMN CARRIES AN EMPTY LIST, never nil: `rows` is not `omitempty`,
+// so nil would reach the wire as `null`, and a renderer that maps a column's
+// rows — every one of them — would fall over on exactly the column this
+// exists to draw. A present value the admitted set does not name — a status a
+// newer peer's record wrote — keeps its place at the end rather than
+// vanishing: the predicate admitted it, and a column with rows in it is never
+// the one to drop.
+func fillColumns(present []Group, admitted []string) []Group {
+	if len(admitted) == 0 {
+		return present
+	}
+	held := make(map[string]int, len(present))
+	for i, group := range present {
+		held[group.Key] = i
+	}
+	out := make([]Group, 0, len(admitted)+len(present))
+	used := make([]bool, len(present))
+	for _, key := range admitted {
+		if i, ok := held[key]; ok {
+			out = append(out, present[i])
+			used[i] = true
+			continue
+		}
+		out = append(out, Group{Key: key, Rows: []TaskRow{}})
+	}
+	for i, group := range present {
+		if !used[i] {
+			out = append(out, group)
+		}
 	}
 	return out
 }
