@@ -87,6 +87,20 @@ func TestAViewThatCouldNotBeRunIsRefusedAtTheSave(t *testing.T) {
 		{"a parameter nothing parses", func(v *tracker.View) {
 			v.Params = map[string]string{"asignee": "ana"}
 		}, "does not parse"},
+		// A VIEW'S PARAMS ARE QUERY KEYS AND NOTHING ELSE, which is
+		// what lets a client spread them straight onto the wire. The
+		// dashboard keeps its own DISPLAY keys on the same address —
+		// `cols`, and `cols.list` / `cols.table` for the two column
+		// sets the one grid has — and reads a saved view's params
+		// beside them; a view that could carry one would take the
+		// board down with a refusal the moment somebody opened it.
+		// Neither is in QueryKeys, so neither can be saved.
+		{"a display key, unqualified", func(v *tracker.View) {
+			v.Params = map[string]string{"cols": "key,title"}
+		}, "does not parse"},
+		{"a display key, per shape", func(v *tracker.View) {
+			v.Params = map[string]string{"cols.list": "key,title"}
+		}, "does not parse"},
 		{"a value the grammar refuses", func(v *tracker.View) {
 			v.Params = map[string]string{"status": "shipped"}
 		}, "does not parse"},
