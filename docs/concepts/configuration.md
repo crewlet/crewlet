@@ -710,9 +710,14 @@ the opposite posture from the one the file asks for.
 `api.auth.disabled` went with it. It authenticated the **empty** credential
 into full operator authority with no check on the bind address anywhere, which
 made one unset environment variable a total bypass. Local development uses
-`crewlet run -dev-principal <login>` instead: a flag rather than a field,
-because a field gets copied into an image, and refused unless
-`api.external_url` is a loopback address.
+[`crewlet run -dev-principal <login>`](../reference/cli.md#-dev-principal-and-why-it-is-a-flag)
+instead, which has the two guards that field never had: `api.host` must bind a
+loopback address — the *bind*, not `api.external_url`, because the bind is what
+physically stops another machine reaching this — and the binary must be a
+development build, so no copied setting can carry it into a deployment that
+pulled a tag. That is also why it is a flag: a field is the thing that gets
+copied into an image. It grants `api.auth.max_grants` and no more, where
+`disabled` granted everything regardless.
 
 ### What is served without a credential
 

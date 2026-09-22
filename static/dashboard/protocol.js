@@ -758,7 +758,18 @@ var RestError = class extends Error {
 		this.hint = typeof body.hint === "string" ? body.hint : "";
 		this.body = body;
 	}
-	/** Whether the engine refused the credential rather than the request. */
+	/**
+	* Whether the engine refused on AUTHORITY rather than on the request.
+	*
+	* Both statuses, because a screen locks the same way for either and the
+	* distinction is not one it can act on: 401 is "present a credential" and
+	* 403 is "the one you presented does not carry this grant". What neither
+	* is, any more, is a reason to throw the stored token away — a reader
+	* holding a perfectly good credential meets 403 the moment they open a
+	* screen outside their grants, which is the ordinary case rather than the
+	* exceptional one. Discarding it is the socket probe's decision alone, on
+	* a 401 to the handshake.
+	*/
 	get unauthorized() {
 		return this.status === 401 || this.status === 403;
 	}

@@ -791,7 +791,15 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 		return data, nil
 	case errors.Is(err, queries.ErrUnknown):
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnknownQuery, what)
-	case errors.Is(err, queries.ErrUnauthorized):
+	case errors.Is(err, queries.ErrUnauthenticated),
+		errors.Is(err, queries.ErrUnauthorized):
+		// BOTH ONTO ONE SOCKET CODE, deliberately. The vocabulary here is
+		// shared with the dashboard, and the distinction the REST mapping
+		// draws — present something, versus the thing you presented does
+		// not carry this — has no consumer over a socket: every one
+		// authenticates at its handshake, so the unauthenticated arm is
+		// unreachable and a second code would be a wire change with
+		// nothing to read it.
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
 	case errors.Is(err, queries.ErrNotFound):
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
@@ -849,8 +857,29 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 	switch {
 	case errors.Is(err, queries.ErrUnknown):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeUnknownQuery})
+	case errors.Is(err, queries.ErrUnauthenticated):
+		// 401: nobody is asking, so the remedy IS to present something.
+		// Unreachable through the wired guard, which answers this a layer
+		// up — stated because the mapping is this function's to get right
+		// whatever happens to run in front of it.
+		writeJSON(w, http.StatusUnauthorized,
+			map[string]string{"error": stream.CodeUnauthorized})
 	case errors.Is(err, queries.ErrUnauthorized):
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": stream.CodeUnauthorized})
+		// 403 AND NOT 401, because the caller has already been
+		// identified. This refusal is a GRANT one — the guard in front
+		// of this resolved somebody, and the question needs authority
+		// they do not carry — and 401 means "authenticate", which sends
+		// a reader holding a perfectly good credential to go and get a
+		// new one. It was 401 while authority here was "is there an
+		// operator", where the two answers genuinely coincided; with ten
+		// grants they do not, and a narrow reader asking a question
+		// outside their grants is the ordinary case rather than the
+		// exceptional one.
+		//
+		// The refusal a 401 is right for still happens, one layer up:
+		// the guard answers it for a credential that is absent or
+		// refused, before this function is reached at all.
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": stream.CodeUnauthorized})
 	case errors.Is(err, queries.ErrBadParams):
 		// 400 AND ITS OWN CODE. The status was already right; the code
 		// said `query_failed`, which names a fault of this node for a

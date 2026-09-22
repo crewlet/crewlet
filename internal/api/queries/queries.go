@@ -30,10 +30,30 @@ var (
 	// ErrUnknown is a name nothing answers.
 	ErrUnknown = errors.New("queries: unknown query")
 
-	// ErrUnauthorized is a query that needs an operator and did not get
-	// one. Returned rather than decided here, so the refusal reaches a
-	// client as a code it already handles.
-	ErrUnauthorized = errors.New("queries: query requires an operator")
+	// ErrUnauthorized is a question asked by somebody this node KNOWS,
+	// who does not carry the grant it declares. Returned rather than
+	// decided here, so the refusal reaches a client as a code it already
+	// handles.
+	ErrUnauthorized = errors.New("queries: principal does not carry the grant this query needs")
+
+	// ErrUnauthenticated is a question asked by nobody: a resolver ran and
+	// found no credential.
+	//
+	// DISTINCT FROM [ErrUnauthorized], because the two ask a client for
+	// opposite things — "present a credential" and "the one you presented
+	// does not carry this" — and a narrow reader meets the second the
+	// moment they open a screen outside their grants, which is the
+	// ordinary case rather than the exceptional one. Folded together, the
+	// surface tells that reader to go and get a new credential.
+	//
+	// UNREACHABLE THROUGH A WIRED SURFACE TODAY, because the guard answers
+	// an anonymous request before this function is called and every socket
+	// authenticates at its handshake. It is stated anyway: this package is
+	// reached by two transports and the middleware in front of one of them
+	// is not this package's to keep, so a refusal that is correct only
+	// because something upstream happens to answer first is one edit from
+	// being wrong. See [Registry.AnswerWith].
+	ErrUnauthenticated = errors.New("queries: no credential was presented")
 
 	// ErrBadParams is a request this surface understood and refused.
 	ErrBadParams = errors.New("queries: bad parameters")
@@ -337,6 +357,10 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 	switch principal, resolution := iam.From(ctx); {
 	case resolution == iam.Unknown:
 		return nil, unresolved(ctx, what)
+	case resolution == iam.Anonymous:
+		// NOBODY IS ASKING, which is a different refusal from a
+		// principal who lacks the grant — see [ErrUnauthenticated].
+		return nil, fmt.Errorf("%w: %q needs %s", ErrUnauthenticated, what, e.needs)
 	case !principal.Can(e.needs):
 		return nil, fmt.Errorf("%w: %q needs %s", ErrUnauthorized, what, e.needs)
 	}
@@ -407,6 +431,7 @@ func unavailableIfTransient(err error) error {
 		errors.Is(err, ErrUnavailable),
 		errors.Is(err, ErrBadParams),
 		errors.Is(err, ErrNotFound),
+		errors.Is(err, ErrUnauthenticated),
 		errors.Is(err, ErrUnauthorized):
 		return err
 	}

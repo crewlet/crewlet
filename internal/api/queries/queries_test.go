@@ -115,6 +115,45 @@ func TestAQuestionIsRefusedToACallerNobodyResolved(t *testing.T) {
 	}
 }
 
+// NOBODY ASKING AND SOMEBODY LACKING THE GRANT ARE TWO REFUSALS.
+//
+// They ask a client for opposite things — "present a credential" and "the one
+// you presented does not carry this" — and a narrow reader meets the second
+// the moment they open a screen outside their grants, which is the ordinary
+// case rather than the exceptional one. Folded together, the surface tells
+// that reader to go and get a new credential, which is how a company learns to
+// rotate working tokens over a permissions message.
+//
+// NEITHER IS REACHABLE THROUGH THE WIRED GUARD, which answers an anonymous
+// request a layer up, and every socket authenticates at its handshake. That is
+// exactly why it is asserted here: this package is reached by two transports
+// and the middleware in front of one of them is not this package's to keep, so
+// a refusal that is correct only because something upstream answers first is
+// one edit from being wrong.
+func TestNobodyAskingIsADifferentRefusalFromLackingTheGrant(t *testing.T) {
+	t.Parallel()
+	r := queries.NewRegistry()
+	r.Register("events", iam.GrantTranscriptRead, answersWith("rows"))
+
+	_, anonymous := r.Answer(iam.WithAnonymous(t.Context()), "events", nil, "")
+	if !errors.Is(anonymous, queries.ErrUnauthenticated) {
+		t.Errorf("a caller presenting nothing is not ErrUnauthenticated: %v", anonymous)
+	}
+	if errors.Is(anonymous, queries.ErrUnauthorized) {
+		t.Errorf("a caller presenting nothing was refused as one whose grants "+
+			"fall short: %v", anonymous)
+	}
+
+	_, narrow := r.Answer(asking(t, iam.GrantStateRead), "events", nil, "")
+	if !errors.Is(narrow, queries.ErrUnauthorized) {
+		t.Errorf("a principal lacking the grant is not ErrUnauthorized: %v", narrow)
+	}
+	if errors.Is(narrow, queries.ErrUnauthenticated) {
+		t.Errorf("a principal who presented a perfectly good credential was told "+
+			"to present one: %v", narrow)
+	}
+}
+
 // BUT AN IDENTITY ESTATE THIS NODE CANNOT READ IS A RETRY, not a refusal about
 // the caller — and this is the arm the walk in internal/api/auth exists for.
 //

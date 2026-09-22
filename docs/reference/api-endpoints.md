@@ -235,9 +235,15 @@ Plus the surfaces whose reads are as sensitive as their writes: [`/config/*`](#c
 Holding a credential is not the same as being allowed to use it here. Every
 route and every socket question declares one of the
 [ten grants](../concepts/identity-and-access.md#grants-the-ten-things-there-are-to-allow),
-and a principal that does not carry it is refused with `403` — including a
-Tier A token, whose declared grants are intersected with `api.auth.max_grants`
-on every request.
+and a principal that does not carry it is refused — including a Tier A token,
+whose declared grants are intersected with `api.auth.max_grants` on every
+request.
+
+**`403`, not `401`**, and the difference matters to a client: `401` means
+*present a credential* and `403` means *the one you presented does not carry
+this grant*. A narrow reader meets the second the moment they open a screen
+outside their grants, which is the ordinary case — so it must not be reported
+as the first, which tells them to go and get a new credential.
 
 | Grant | What it reaches |
 |---|---|
