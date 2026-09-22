@@ -45,15 +45,16 @@ func (s *Service) inbox(handle string) (uuid.UUID, bool) {
 
 // Service opens channels and carries asks and answers over the durable queue.
 type Service struct {
-	channels Store
-	queue    queue.Publisher
-	dir      Directory
+	// Sweeper is the half of a channel's life that addresses nobody —
+	// closing an idle ask and deleting a closed one. EMBEDDED rather than
+	// held beside a second copy of the store, the publisher and the clock,
+	// which is what those three are to both halves. See [Sweeper] for why
+	// the capability is split at all.
+	*Sweeper
 
-	// now is injectable so the suite can pin the clock. Nil takes
-	// time.Now, so the zero-value path is the real one.
-	now func() time.Time
+	dir Directory
 
-	// newID mints channel ids. Injectable for the same reason.
+	// newID mints channel ids. Injectable so the suite can pin them.
 	newID func() string
 }
 
@@ -66,25 +67,24 @@ type Options struct {
 
 // New builds a service.
 func New(channels Store, pub queue.Publisher, opts Options) (*Service, error) {
-	if channels == nil {
-		return nil, fmt.Errorf("a2a: no channel store")
-	}
-	if pub == nil {
-		return nil, fmt.Errorf("a2a: no publisher")
+	sweeper, err := NewSweeper(channels, pub, opts.Now)
+	if err != nil {
+		return nil, err
 	}
 	// REFUSED BY NAME rather than tolerated. The directory is what says
 	// where a wake goes, so a service without one can open channels and
 	// wake nobody — every ask succeeding and every answer never arriving,
 	// which reads as a slow colleague rather than as a wiring mistake.
+	//
+	// A CALLER THAT ONLY SWEEPS TAKES [NewSweeper] INSTEAD, which is the
+	// whole reason that constructor exists: this refusal used to be the
+	// one thing standing between the retention sweep and its two jobs.
 	if opts.Directory == nil {
 		return nil, fmt.Errorf("a2a: no directory, so no ask could be " +
-			"addressed — wire the running company's org")
+			"addressed — wire the running company's org, or take " +
+			"NewSweeper if this caller only closes and purges channels")
 	}
-	s := &Service{channels: channels, queue: pub, dir: opts.Directory,
-		now: opts.Now, newID: opts.NewID}
-	if s.now == nil {
-		s.now = func() time.Time { return time.Now().UTC() }
-	}
+	s := &Service{Sweeper: sweeper, dir: opts.Directory, newID: opts.NewID}
 	if s.newID == nil {
 		s.newID = func() string { return "a2a-" + uuid.New().String()[:12] }
 	}
@@ -345,74 +345,6 @@ func (s *Service) Close(ctx context.Context, c Closure) error {
 		return err
 	}
 	return s.announceClose(ctx, ch, c, now)
-}
-
-// SweepIdle closes every channel idle since before cutoff and announces each
-// one, reporting how many it closed.
-//
-// HERE RATHER THAN IN THE SWEEP JOB, because announcing is the reason
-// [Store.CloseIdle] returns the channels it closed rather than a count — and
-// the one caller discarded the list, so nothing was published at all. Three
-// separate places described a close event the sweep never emitted: that
-// method's own contract, the "system" fallback in
-// [types.A2AChannelClosed.Summary], and the event-system doc. What an operator
-// lost with it is the only signal that an ask went unanswered: the requester's
-// turn ended when it asked, so a channel reaching this sweep means some turn
-// never finished, and that is exactly the event worth seeing.
-//
-// The publisher lives in this package for the reason every other A2A publish
-// does: what a close means on the wire is this package's decision, and
-// internal/maintenance is a scheduler of jobs rather than a second author of
-// event payloads.
-//
-// A FAILED ANNOUNCEMENT DOES NOT UNDO THE CLOSE, and does not stop the rest:
-// the channel is already closed in the store, the sweep cannot roll that back,
-// and abandoning the remaining channels would leave a batch half-reported with
-// no record of where it stopped. The first error is returned once every
-// channel has been attempted.
-func (s *Service) SweepIdle(ctx context.Context, cutoff time.Time) (int, error) {
-	now := s.now()
-	closed, err := s.channels.CloseIdle(ctx, cutoff, now)
-	if err != nil {
-		return 0, err
-	}
-	var first error
-	for _, ch := range closed {
-		// No ClosedBy, no TurnID: a swept channel is one NO turn finished,
-		// and naming this node's sweep as the closer would read as a
-		// participant. See [Closure.ClosedBy].
-		if err := s.announceClose(ctx, ch, Closure{ChannelID: ch.ID}, now); err != nil && first == nil {
-			first = err
-		}
-	}
-	return len(closed), first
-}
-
-// Purge deletes channels closed before cutoff, returning the count.
-//
-// A passthrough, so the retention sweep drives ONE surface rather than holding
-// the store beside the service and choosing between them per job.
-func (s *Service) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
-	return s.channels.Purge(ctx, cutoff)
-}
-
-// announceClose publishes the close record for an already-closed channel.
-func (s *Service) announceClose(ctx context.Context, ch Channel, c Closure, now time.Time) error {
-	ev := events.New(types.A2AChannelClosed{
-		ChannelID: ch.ID, ClosedBy: c.ClosedBy,
-		Participants: ch.Participants(),
-		MessageCount: ch.Messages,
-		// THE RECORD'S OWN TWO INSTANTS, never two machines' clocks: a
-		// channel is opened on one node and closed on another as a matter
-		// of course, so a duration taken across them would be skew.
-		DurationMS: float64(ch.Duration(now).Milliseconds()),
-		TurnID:     c.TurnID, WorkKey: c.WorkKey,
-	}, tracing.TraceOf(ctx))
-	ev.Source = c.ClosedBy
-	if err := s.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		return fmt.Errorf("a2a: announce close of %s: %w", ch.ID, err)
-	}
-	return nil
 }
 
 // publishSent records one message on a channel.

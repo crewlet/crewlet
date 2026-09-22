@@ -69,16 +69,20 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// closed one are decisions, so they are taken under the same
 		// singleton duty as every other sweep rather than by a clock.
 		//
-		// The SERVICE rather than the store, because closing an idle
-		// channel publishes a2a_channel_closed and the publisher belongs
-		// to internal/a2a. Built here rather than taken from
-		// [Engine.a2aService], which needs a Company for its directory:
-		// the directory answers "is this handle an agent seat" and only
-		// [a2a.Service.Open] asks, so a sweep that never opens anything
-		// needs no epoch — and demanding one would tie the retention of a
-		// fleet-wide record to whether this node has applied a config.
+		// [a2a.NewSweeper] rather than the store, because closing an
+		// idle channel publishes a2a_channel_closed and what that means
+		// on the wire belongs to internal/a2a — and rather than the
+		// whole [a2a.Service], which needs a directory this caller
+		// deliberately has none of. A directory is built from the
+		// RUNNING COMPANY, so demanding one here would tie the retention
+		// of a fleet-wide record to whether this node has applied a
+		// configuration. Asking for the two verbs the sweep actually
+		// uses is also what stops the service's own requirements
+		// silently disarming it: built as a Service with an empty
+		// Options, this construction began failing the day the directory
+		// became mandatory, and both jobs vanished behind a warning.
 		if queue := e.backends.Queue; queue != nil {
-			svc, err := a2a.New(a2a.NewCoordStore(fleet), queue, a2a.Options{})
+			sweeper, err := a2a.NewSweeper(a2a.NewCoordStore(fleet), queue, nil)
 			if err != nil {
 				// Logged rather than fatal, matching a2aService: a
 				// company whose channels are not swept is degraded,
@@ -86,7 +90,7 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 				log.Warn("a2a_sweep_unavailable", "error", err,
 					"hint", "idle agent-to-agent channels will stay open")
 			} else {
-				jobs = append(jobs, maintenance.ChannelJobs(svc)...)
+				jobs = append(jobs, maintenance.ChannelJobs(sweeper)...)
 			}
 		}
 		// The NATIVE backends' own records, on the same edge and for a
