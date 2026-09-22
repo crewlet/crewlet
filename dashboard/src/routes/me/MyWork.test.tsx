@@ -22,7 +22,7 @@
  * with nothing in it still saying its own name.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { MyWork } from "./MyWork.tsx";
@@ -44,7 +44,9 @@ afterEach(() => {
 
 /** One socket answering each question with a fixture. */
 function serving(answers: Partial<Record<QueryName, unknown>>) {
-  const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
+  const query = vi.fn(
+    async (what: string, _params?: Record<string, unknown>) => answers[what as QueryName] ?? {},
+  );
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
   vi.mocked(useOrg).mockReturnValue({
@@ -286,32 +288,77 @@ test("the assigned tab claims no count until the tracker answers", async () => {
 // What a tab draws
 // ---------------------------------------------------------------------------
 
-// A DAY IS READ BY WHEN, not by status: every task somebody holds is in
-// progress or about to be, so a status grouping answers a question nobody
-// asked. The bands come from the ROW'S OWN overdue flag and its date.
-test("the assignments are banded by when they are due", async () => {
-  const today = new Date();
-  const later = new Date(today.getFullYear() + 1, 0, 15, 9, 0, 0);
-  serving({
+// THE ASSIGNED TAB IS THE WORK LIST, narrowed to one person — not a second
+// renderer. Written twice it had no Filter menu, no Display menu, no scope
+// switch, no chips, no count line and no way past its two hundredth row, and
+// each of those is a rule the work list already keeps.
+test("the assigned tab draws the work list's own toolbar", async () => {
+  serving({ viewer: ada, work_my_work: emptyDay, work_items: { ...noWork, items: [task()] } });
+  mount();
+  await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
+  expect(screen.getByRole("button", { name: "Filter" })).toBeTruthy();
+  expect(screen.getByText("Open")).toBeTruthy();
+  expect(screen.getByText("1 item")).toBeTruthy();
+});
+
+// AND THE BANDS ARE THE ENGINE'S. `due:bucket` is cut against the COMPANY's
+// day start, like the row's own overdue flag and every `due=` filter, so the
+// heading a task sits under and the flag beside it cannot disagree. Computed
+// here, from the browser's own midnight, they could and did.
+test("the assigned tab opens on the engine's due bands, soonest first", async () => {
+  const query = serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
+  mount();
+  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
+  const asked = await waitFor(() => {
+    const call = query.mock.calls.find(
+      (c) => c[0] === "work_items" && (c[1] as Record<string, unknown>)?.group_by,
+    );
+    if (!call) throw new Error("the list has not asked yet");
+    return call[1] as Record<string, unknown>;
+  });
+  expect(asked.group_by).toBe("due:bucket");
+  expect(asked.sort).toBe("due");
+  expect(asked.status_group).toBe("not_started,active");
+});
+
+// THE LOCK REACHES THE WIRE AND NOTHING ELSE. It is what the tab IS rather
+// than a narrowing somebody chose, so there is no chip to take off, no row in
+// the Filter menu and no key on the address — where a key would be a second,
+// silent answer to the one question the screen has already answered.
+test("the assignee is locked on the wire and absent from the URL and the chips", async () => {
+  location.hash = "#/me?handle=rui";
+  const query = serving({
     viewer: ada,
-    work_my_work: emptyDay,
-    work_items: {
-      ...noWork,
-      total_hint: 3,
-      items: [
-        task({ key: "ENG-1", overdue: true, due: "2020-01-01T09:00:00Z" }),
-        task({ key: "ENG-2", due: later.toISOString() }),
-        task({ key: "ENG-3" }),
-      ],
-    },
+    work_my_work: { ...emptyDay, handle: "rui" },
+    work_items: { ...noWork, items: [task()] },
   });
   mount();
-  await waitFor(() => expect(screen.getByText("Overdue")).toBeTruthy());
-  expect(screen.getByText("Later")).toBeTruthy();
-  expect(screen.getByText("No date")).toBeTruthy();
-  // AND A BAND NOTHING IS IN IS NOT DRAWN: five headings over a person holding
-  // three tasks is the page of empty panels this screen was rebuilt to stop.
-  expect(screen.queryByText("This week")).toBeNull();
+  await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
+  const items = query.mock.calls.filter((c) => c[0] === "work_items");
+  expect(items.length).toBeGreaterThan(0);
+  for (const call of items) {
+    expect((call[1] as Record<string, unknown>).assignee).toBe("rui");
+  }
+  expect(location.hash).not.toContain("assignee=");
+  // No chip names it — and the Filter menu does not offer the row, which is
+  // asserted on the KEY each row prints rather than on its label, because
+  // "Status" is also a column head and a Display option one bar over.
+  expect(screen.queryByText("Assignee")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+  await waitFor(() => expect(screen.getByText("priority=")).toBeTruthy());
+  expect(screen.queryByText("assignee=")).toBeNull();
+});
+
+// AND THE WORKSPACE'S SAVED VIEWS ARE NOT THIS PERSON'S CLAIMS. The strip's
+// first tab reads "All work", which over one person's list is false, and the
+// screen's own seven tabs already name the page inside its content column.
+test("the hosted list draws no saved-view strip and asks for none", async () => {
+  const query = serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
+  mount();
+  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
+  expect(screen.queryByText("All work")).toBeNull();
+  expect(screen.queryByText("All views →")).toBeNull();
+  expect(query.mock.calls.map((c) => c[0])).not.toContain("work_views");
 });
 
 // A TAB WITH NOTHING IN IT STILL SAYS ITS OWN NAME. A card that vanished took

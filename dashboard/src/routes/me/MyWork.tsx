@@ -30,14 +30,27 @@
  * is the landing screen of this product (`#/inbox`). The card that drew it
  * here was the inbox in a narrower column with a smaller bound.
  *
- * # Assigned is the tracker, not a bounded block
+ * # Assigned is the work list, narrowed to one person
  *
- * It runs `work_items` with the assignee set, so it pages, filters, sorts and
- * counts like every other list — where the bounded block it replaces said
- * "20" on a person holding a hundred and thirty. And it is banded by WHEN
- * rather than by status: "what have I missed, what is today, what is this
- * week" is the question somebody opens their own work to ask, and every task
- * they hold is in progress or about to be.
+ * It is `routes/work/ItemsView.tsx` — the same component `#/work` and a
+ * project's Items lens are — held here by an [ItemsHost] that fixes the one
+ * thing this tab IS (the assignee) and what it opens on, and leaves the shape,
+ * the grouping, the order, the columns and every other filter to the reader,
+ * in the URL, exactly as they are on the other two screens. Written as a
+ * second renderer it had no Filter menu, no Display menu, no scope switch, no
+ * chips, no count line and no way past its two hundredth row, and each of
+ * those was a rule the work list already kept.
+ *
+ * IT OPENS BANDED BY WHEN. "What have I missed, what is today, what is this
+ * week" is the question somebody opens their own work to ask, where a status
+ * grouping answers one nobody asked — every task they hold is in progress or
+ * about to be. The bands are the ENGINE's `due:bucket` axis, cut against the
+ * COMPANY's day start like the row's own overdue flag and every `due=` filter,
+ * so the heading a task is under and the flag beside it can never disagree.
+ * They were computed here, from the browser's own midnight and the browser's
+ * own week, and only the bands that held rows were drawn — so a reader west of
+ * the company saw a task banded Earlier that the same answer called due today,
+ * and nothing said which of the six bands a quiet day was missing.
  *
  * # Whose day it is decides the pronoun, everywhere
  *
@@ -66,7 +79,8 @@ import { indexOrg } from "~/lib/seats.ts";
 import { relTime } from "~/lib/format.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useNow } from "~/lib/clock.ts";
-import { bandsByDue, pageCount } from "~/lib/work.ts";
+import { pageCount, type Scope } from "~/lib/work.ts";
+import { ItemsView, type ItemsHost } from "~/routes/work/ItemsView.tsx";
 import type { WorkAskRow, WorkChecklistRow, WorkMyWork, WorkSummary } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -81,6 +95,32 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
  * tracker's own question instead.
  */
 const BLOCK_ROWS = 20;
+
+/**
+ * The scope the Assigned tab's own COUNT is taken over.
+ *
+ * The tracker's default — unfinished work — because a day is about what is
+ * still to do, and it is spelled here rather than read off the list's scope
+ * segment on purpose: the strip's number says how much is on this person, and
+ * a reader who presses Closed to check something finished has not emptied
+ * their day. `SCOPE_GROUPS.open` is the same two groups on the list's side.
+ */
+const ASSIGNED_SCOPE = "not_started,active";
+
+/**
+ * What the Assigned tab OPENS on, as the list's own parameters.
+ *
+ * A MODULE CONSTANT rather than a literal in the render, which
+ * [ItemsHost.opens] requires: the list memoises its question on this object,
+ * so a new one every render is a new question every render.
+ *
+ * `due:bucket` is the engine's relative due axis — Overdue, Earlier, Today,
+ * This week, Later, No due date — cut against the company's own day. `due`
+ * orders what is inside each band by the same date the band was cut on, so a
+ * band reads soonest first. Both are DEFAULTS: the Display menu overrides
+ * either, and the address keeps whichever the reader chose.
+ */
+const ASSIGNED_OPENS: Record<string, string> = { group_by: "due:bucket", sort: "due" };
 
 /** The tabs, in the order the strip draws them; the first is the default. */
 const TABS = [
@@ -139,22 +179,32 @@ export function MyWork() {
   // AND THE ASSIGNMENTS AS THE TRACKER'S OWN QUESTION, asked whichever tab is
   // open: its total is what the Assigned tab's count says, and a count that
   // appeared only once its tab was opened would be a strip that changes as you
-  // walk it. `status_group` is the tracker's own default scope — unfinished
-  // work — because a day is about what is still to do.
+  // walk it.
+  //
+  // THE SAME QUESTION THE TAB'S OWN LIST ASKS, and deliberately not the same
+  // READ: this one is the strip's count and carries no arrangement at all, so
+  // it stays put while the reader groups, sorts and narrows the list under it.
+  // A count that moved with the filters would answer "how much is on this
+  // person" with "how much is on screen", which is what the other six tabs'
+  // own bounded blocks would then disagree with.
   const assigned = useQuery(
     "work_items",
-    whose
-      ? {
-          container: "workspace",
-          assignee: whose,
-          status_group: "not_started,active",
-          sort: "due",
-          limit: 200,
-        }
-      : undefined,
+    whose ? { container: "workspace", assignee: whose, status_group: ASSIGNED_SCOPE } : undefined,
     { enabled: whose !== "", pollMs: 30_000 },
   );
-  const assignedRows = useMemo(() => assigned.data?.items ?? [], [assigned.data]);
+
+  // WHAT THE ASSIGNED TAB IS, handed to the list that draws it — see
+  // [ItemsHost]. Memoised on the two values it reads, because the list asks
+  // the engine again whenever the lock moves and a fresh object every render
+  // would be a fresh question every render.
+  const host = useMemo<ItemsHost>(
+    () => ({
+      assignee: whose,
+      opens: ASSIGNED_OPENS,
+      empty: (scope: Scope) => assignedEmpty(scope, they),
+    }),
+    [whose, they],
+  );
 
   return (
     <>
@@ -256,16 +306,12 @@ export function MyWork() {
                 }))}
               />
 
-              {tab === "assigned" && (
-                <Assigned
-                  rows={assignedRows}
-                  loading={assigned.loading}
-                  error={assigned.error}
-                  now={now}
-                  chrome={chrome}
-                  they={they}
-                />
-              )}
+              {/* THE WORK LIST, NARROWED TO ONE PERSON — not a second
+                  renderer. `ItemsView` brings its own Filter and Display
+                  menus, its chips, its scope switch, its count line and its
+                  five shapes; what this screen supplies is the one narrowing
+                  the tab IS and what it opens on. */}
+              {tab === "assigned" && <ItemsView host={host} />}
               {tab === "priorities" && (
                 <Priorities mine={mine} now={now} chrome={chrome} they={they} />
               )}
@@ -370,61 +416,40 @@ function countFor(tab: Tab, mine: WorkMyWork, assignedTotal: number | undefined)
 }
 
 /**
- * What this person holds, banded by when it is due.
+ * What the Assigned tab says when it holds nothing and nothing is narrowing it.
  *
- * THE BANDS ARE THE QUESTION. A day is read as "what have I missed, what is
- * today, what is this week" — where every task somebody holds is in progress or
- * about to be, so a status grouping answers a question nobody asked. The bands
- * come from `bandsByDue`, which takes the OVERDUE flag from the row rather than
- * re-deriving it against the browser's midnight.
+ * IN THIS PERSON'S VOICE, and one sentence per scope, because the list's own
+ * three container sentences cannot say either half: they are about what has
+ * been filed in a project or opened in a company, and this tab is about one
+ * desk inside both. "Nothing has been filed yet" over a company with four
+ * hundred tasks and one idle seat is false about the only subject the reader
+ * came for.
+ *
+ * THE SECOND PERSON IS NOT THE DEFAULT. `they` is "you" on somebody's own day
+ * and "them" on a report's, which is the same rule every other claim on this
+ * screen keeps — an operator reading a colleague's day must not be told their
+ * own queue is empty.
  */
-function Assigned({
-  rows,
-  loading,
-  error,
-  now,
-  chrome,
-  they,
-}: {
-  rows: WorkSummary[];
-  loading: boolean;
-  error: string | null;
-  now: number;
-  chrome: RowChrome;
-  they: string;
-}) {
-  const bands = useMemo(() => bandsByDue(rows, now), [rows, now]);
-  return (
-    <QueryState
-      error={error}
-      loading={loading}
-      empty={
-        rows.length
-          ? undefined
-          : {
-              title: `Nothing is assigned to ${they}`,
-              hint: "A lead assigns work with the tracker's own tools, and a webhook or a schedule is usually what starts them.",
-            }
-      }
-    >
-      <div className="work-list">
-        {bands.map((band) => (
-          <section className="work-band-group" key={band.key}>
-            <header className="work-band" data-band={band.key}>
-              <span className="truncate">{band.label}</span>
-              <span className="count-chip">{band.rows.length}</span>
-            </header>
-            <RowList
-              rows={band.rows}
-              now={now}
-              chrome={chrome}
-              hrefOf={(row) => href(["work", row.key])}
-            />
-          </section>
-        ))}
-      </div>
-    </QueryState>
-  );
+function assignedEmpty(scope: Scope, they: string): { title: string; description: string } {
+  if (scope === "closed") {
+    return {
+      title: `Nothing assigned to ${they} has been finished`,
+      description:
+        "Open is what is still to do, and All shows both. The scope switch in the bar is what moves between them.",
+    };
+  }
+  if (scope === "all") {
+    return {
+      title: `Nothing is assigned to ${they}`,
+      description:
+        "Not open, and nothing finished either. A lead assigns work with the tracker's own tools, and a webhook or a schedule is usually what starts them.",
+    };
+  }
+  return {
+    title: `Nothing is assigned to ${they}`,
+    description:
+      "A lead assigns work with the tracker's own tools, and a webhook or a schedule is usually what starts them. Finished work is under Closed.",
+  };
 }
 
 /**

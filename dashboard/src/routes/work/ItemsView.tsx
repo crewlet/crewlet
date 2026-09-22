@@ -1,13 +1,29 @@
 /**
- * The company's work, as a list you can arrange — the body of two screens.
+ * The company's work, as a list you can arrange — the body of three screens.
  *
- * # One machine, two frames
+ * # One machine, three frames
  *
- * `#/work` is this over the whole company and `#/work/{KEY}`'s Items lens is
- * this over one project. They ask the same question with one parameter
- * different, so they are one component: written twice, the project's copy is
- * the one that quietly falls behind, and a reader who narrowed a board and
- * then opened a project would find a different set of controls.
+ * `#/work` is this over the whole company, `#/work/{KEY}`'s Items lens is this
+ * over one project, and `#/me`'s Assigned tab is this over one person. They
+ * ask the same question with one parameter different, so they are one
+ * component: written twice, the second copy is the one that quietly falls
+ * behind, and a reader who narrowed a board and then opened a project — or
+ * their own day — would find a different set of controls.
+ *
+ * # A HOST fixes what its screen IS, and the reader keeps the rest
+ *
+ * A [ItemsHost] is the third frame's whole difference: one narrowing the
+ * screen cannot be without (the assignee on `#/me`), what the list OPENS on
+ * (grouped by due band, soonest first), and what an empty one says in that
+ * screen's own voice. Everything else — the shape, the grouping, the second
+ * axis, the order, the columns, every other filter — stays the reader's and
+ * stays in the URL, exactly as it is on the other two.
+ *
+ * THE LOCK IS NOT A CHIP AND NOT A KEY. It is not a narrowing somebody chose,
+ * so there is nothing to take off: it is not offered in the Filter menu, it
+ * draws no chip, it is never written to the address, and [buildItemsParams]
+ * applies it after everything else so no saved default and no hand-edited
+ * address can widen the list past the person it is about.
  *
  * # Three controls, not eleven
  *
@@ -111,7 +127,48 @@ function useFieldFilters(): Record<string, string> {
   return useMemo(() => raw, [identity]);
 }
 
-export function ItemsView({ project = "" }: { project?: string }) {
+/**
+ * What a HOST screen fixes about this list, where one is holding it.
+ *
+ * Absent, this IS the screen — `#/work` and the project's Items lens — and
+ * everything below is the reader's. Present, the list is a panel inside
+ * somebody else's tabs and three things belong to that screen rather than to
+ * the reader. The type has no optional field for that reason: a host that
+ * locked nothing, opened on nothing and had nothing to say when empty would be
+ * the screen again, spelled a second way.
+ */
+export interface ItemsHost {
+  /**
+   * The one assignee every read here is narrowed to.
+   *
+   * Handed to [buildItemsParams] as its lock rather than as a filter — see
+   * that function and this file's head for what the difference buys.
+   */
+  assignee: string;
+  /**
+   * What this list OPENS on, as `work_items` parameters.
+   *
+   * THE SAME SLOT A SAVED VIEW FILLS, which is what makes it a default rather
+   * than a setting: every one of these keys is overridden by the reader's own
+   * on the address, through the same [effectiveArrangement] the strip's views
+   * go through, so a host that opens grouped by due band does not stop anybody
+   * grouping by status. Declare it as a CONSTANT — a literal rebuilt every
+   * render would re-ask the engine on every render.
+   */
+  opens: Record<string, string>;
+  /**
+   * What an empty list says where nothing the reader set is narrowing it.
+   *
+   * THE HOST'S OWN VOICE, per scope, because only the host knows whose list
+   * this is: "Nothing is assigned to you" and "Nothing is assigned to them"
+   * are the same fact about two different readers, and the container sentences
+   * below can say neither. "Nothing matches" still outranks it — a filter that
+   * is actually on is the cause a reader can act on.
+   */
+  empty: (scope: Scope) => { title: string; description: string };
+}
+
+export function ItemsView({ project = "", host }: { project?: string; host?: ItemsHost }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   // ONE CLOCK for the screen, ticking on its own: a relative time computed
@@ -131,7 +188,14 @@ export function ItemsView({ project = "" }: { project?: string }) {
   const [status, setStatus] = useParam("status", "");
   const [type, setType] = useParam("type", "");
   const [priority, setPriority] = useParam("priority", "");
-  const [assignee, setAssignee] = useParam("assignee", "");
+  // THE LOCKED KEY IS READ AND THEN DROPPED, which is the only shape a hook
+  // allows: a conditional `useParam` would change the hook order the first
+  // time a host arrived. On a hosted list `assignee=` is not part of the
+  // grammar — nothing on the screen writes it, no chip draws it and the lock
+  // overwrites it on the way to the wire — so one left on the address by hand
+  // is inert rather than a second, silent narrowing under the person's name.
+  const [assigneeKey, setAssignee] = useParam("assignee", "");
+  const assignee = host ? "" : assigneeKey;
   const [tag, setTag] = useParam("tag", "");
   const [groupBy, setGroupBy] = useParam("group_by", "");
   const [groupBy2, setGroupBy2] = useParam("group_by2", "");
@@ -182,7 +246,18 @@ export function ItemsView({ project = "" }: { project?: string }) {
   // THE TAB STRIP is drawn once per container where the rows are redrawn on
   // every filter change, so it is a separate question with a slower poll: a
   // saved view is arranged by a person, not by the work.
-  const strip = useQuery("work_views", { container }, { pollMs: 120_000 });
+  //
+  // AND A HOSTED LIST HAS NO STRIP, so it does not ask. The strip is
+  // unconditional on the two screens that ARE this list, because its first tab
+  // is the only thing that names the page inside its own content column — and
+  // a host has already named it: `#/me`'s own tabs are the strip over this
+  // panel, and a second row of them under it would offer the WORKSPACE's saved
+  // queries as though they were claims on one person's attention, with the
+  // first tab reading "All work" over a list that is one person's. So `view=`
+  // is not part of a hosted list's grammar at all: no control writes it and
+  // nothing reads it, rather than a key that steers a screen with no tab
+  // showing which way.
+  const strip = useQuery("work_views", { container }, { pollMs: 120_000, enabled: !host });
   // THE TYPES AND THE COMPANY'S OWN FIELDS COME FROM THE CATALOGUE, never from
   // the rows: a filter built from the page can only offer what happens to be
   // on it, so a board showing no bugs would offer no way to ask for one.
@@ -193,9 +268,11 @@ export function ItemsView({ project = "" }: { project?: string }) {
   // answer and live in the Display menu; mixed into the strip they made a
   // saved view and a shape read as the same kind of thing.
   const saved = useMemo(() => views.filter((v) => !v.builtin), [views]);
-  const chosenView = viewKey || defaultView(views);
+  const chosenView = host ? "" : viewKey || defaultView(views);
   // THE VIEW'S OWN SHAPE IS THE DEFAULT and `shape=` overrides it, which is
-  // what lets a reader look at a saved board as a list without leaving it.
+  // what lets a reader look at a saved board as a list without leaving it. A
+  // hosted list has no view, so it opens on the landing shape like a container
+  // that has saved nothing.
   const viewShape: Shape = shapeOf(chosenView, views);
   const shape: Shape = isShape(shapeKey) ? shapeKey : viewShape;
   const detail = overview.data;
@@ -207,7 +284,16 @@ export function ItemsView({ project = "" }: { project?: string }) {
   // through the segment that expresses it. [buildItemsParams] spreads a view's
   // params and then OVERWRITES that key from the scope, so seeding the segment
   // from the view is what makes the two agree.
-  const viewOwn = useMemo(() => viewParams(chosenView, views), [chosenView, views]);
+  //
+  // A HOST FILLS THE SAME SLOT, which is the whole of what "opens on" means
+  // here: its defaults are overridden by the reader's own keys through the
+  // same [effectiveArrangement] and the same segment seeding, so `#/me` opens
+  // grouped by due band and soonest first and still lets anybody group by
+  // status, sort by priority or look at their week as a board.
+  const viewOwn = useMemo(
+    () => host?.opens ?? viewParams(chosenView, views),
+    [host, chosenView, views],
+  );
   const viewScope = seededScope(viewOwn);
   // ONE READING OF THE SEGMENT for the control, the query, the lanes and the
   // empty state — see [asScope] for what a hand-edited value did to the four of
@@ -262,11 +348,15 @@ export function ItemsView({ project = "" }: { project?: string }) {
         view: viewOwn,
         filters,
         range: weeks.length ? gridRange(weeks) : undefined,
+        lock: host ? { assignee: host.assignee } : undefined,
       }),
     // The filters object is a fresh literal on every render; its content is
-    // what the query depends on.
+    // what the query depends on. THE LOCK IS A DEPENDENCY IN ITS OWN RIGHT: it
+    // reaches the wire without passing through `filters`, so a memo that did
+    // not name it kept asking for the previous person's work when `#/me`'s
+    // whose-day picker moved.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [container, shape, chosenView, views, weeks, JSON.stringify(filters)],
+    [container, shape, chosenView, views, viewOwn, host?.assignee, weeks, JSON.stringify(filters)],
   );
 
   // A change to an item publishes onto the seat inbox rather than to the
@@ -449,7 +539,8 @@ export function ItemsView({ project = "" }: { project?: string }) {
 
   return (
     <>
-      {/* THE STRIP IS ALWAYS DRAWN, and the gate it lost was `saved.length > 0`.
+      {/* THE STRIP IS ALWAYS DRAWN ON THE SCREENS THAT ARE THIS LIST, and the
+          gate it lost was `saved.length > 0`.
           The first tab is the container's OWN list — a real destination, not
           decoration — so gating the strip on somebody else having saved a query
           threw away the one thing that names this page inside its own content
@@ -461,39 +552,45 @@ export function ItemsView({ project = "" }: { project?: string }) {
           the trailing link is part of the strip rather than the page actions:
           saved views are undiscoverable until somebody has used them, and a
           strip with nothing after the container tab says nothing about what
-          else the strip is for. */}
-      <div className="work-strip">
-        <Tabs
-          ariaLabel="Saved views"
-          value={saved.some((v) => v.key === chosenView) ? chosenView : ""}
-          onValueChange={(key) => applyView(key, saved, setViewKey)}
-          items={[
-            // THE CONTAINER'S OWN DEFAULT IS A TAB, because a strip of saved
-            // views with no way back to the unsaved list is a strip a reader
-            // gets stuck in.
-            //
-            // AND IT CARRIES NO COUNT. The engine's total is over the FILTER,
-            // not over the container, so a number here would say "All work 2"
-            // on a company with two hundred items and one chip on — a number
-            // the answer does not give is not drawn. The count belongs where
-            // the filters are, which is the bar.
-            { value: "", label: project ? "All in this project" : "All work" },
-            ...saved.map((v) => ({
-              value: v.key,
-              label: `${v.pinned ? "★ " : ""}${v.name}`,
-            })),
-          ]}
-        />
-        {/* A REAL ANCHOR rather than a button that navigates, for the reason
+          else the strip is for.
+
+          A HOSTED LIST HAS NEITHER, and both reasons above are why: the host's
+          own tabs already name the page, and the inventory is a link that
+          screen carries. See [ItemsHost]. */}
+      {!host && (
+        <div className="work-strip">
+          <Tabs
+            ariaLabel="Saved views"
+            value={saved.some((v) => v.key === chosenView) ? chosenView : ""}
+            onValueChange={(key) => applyView(key, saved, setViewKey)}
+            items={[
+              // THE CONTAINER'S OWN DEFAULT IS A TAB, because a strip of saved
+              // views with no way back to the unsaved list is a strip a reader
+              // gets stuck in.
+              //
+              // AND IT CARRIES NO COUNT. The engine's total is over the FILTER,
+              // not over the container, so a number here would say "All work 2"
+              // on a company with two hundred items and one chip on — a number
+              // the answer does not give is not drawn. The count belongs where
+              // the filters are, which is the bar.
+              { value: "", label: project ? "All in this project" : "All work" },
+              ...saved.map((v) => ({
+                value: v.key,
+                label: `${v.pinned ? "★ " : ""}${v.name}`,
+              })),
+            ]}
+          />
+          {/* A REAL ANCHOR rather than a button that navigates, for the reason
             `Work.tsx` gives at its own two: it leaves the list, so it is
             middle-clickable and goes through the router's history rules
             instead of around them. Beside the tabs rather than among them — a
             link is not a tab, and one inside the set would be selectable and
             would break the roving focus. */}
-        <a className="t-link work-strip-more" href={href(["work", "views"])}>
-          All views →
-        </a>
-      </div>
+          <a className="t-link work-strip-more" href={href(["work", "views"])}>
+            All views →
+          </a>
+        </div>
+      )}
 
       {/* `toolbar` FIRST, and it is not decoration: `.screen:has(.toolbar)` is
           what publishes `--sticky-top`, and every other thing that sticks in
@@ -504,6 +601,7 @@ export function ItemsView({ project = "" }: { project?: string }) {
           filters={filters}
           shape={shape}
           onSet={setFilter}
+          lockedAssignee={host?.assignee}
           types={catalogue.data?.types}
           statuses={detail?.statuses}
           tags={detail?.tags}
@@ -609,6 +707,7 @@ export function ItemsView({ project = "" }: { project?: string }) {
                 project={project}
                 counts={detail?.task_counts}
                 onClear={clearFilters}
+                host={host}
               />
             ) : null}
             {/* A SHAPE IS NOT DRAWN OVER NOTHING. The sentence above is the
@@ -812,6 +911,7 @@ function EmptyList({
   project,
   counts,
   onClear,
+  host,
 }: {
   narrowed: boolean;
   scope: Scope;
@@ -820,6 +920,8 @@ function EmptyList({
   /** The container's own maintained counts, where the container has them. */
   counts?: WorkTaskCounts;
   onClear: () => void;
+  /** The screen holding this list, where one is — see [ItemsHost.empty]. */
+  host?: ItemsHost;
 }) {
   // WHERE, NOT "HERE". A project's own list says which project has nothing in
   // it, which is the fact a reader scanning three screens is actually after;
@@ -838,6 +940,19 @@ function EmptyList({
         }
       />
     );
+  }
+
+  // AND A HOSTED LIST SPEAKS FOR ITSELF, once the filter case above is out of
+  // the way. Three of the sentences below are about a CONTAINER — what has
+  // been filed in this project, what is open in this company — and a host's
+  // list is neither: on `#/me` the answer is about a person, and "Nothing has
+  // been filed yet" over a company with four hundred tasks and one idle seat
+  // is false about the only subject the reader came for. `narrowed` still
+  // wins, because a filter that is actually on is the cause somebody can act
+  // on, which is the whole of [ItemsHost.empty]'s rule.
+  if (host) {
+    const said = host.empty(scope);
+    return <EmptyState size="compact" title={said.title} description={said.description} />;
   }
 
   // NOTHING AT ALL. The All segment has every scope on screen already, so an

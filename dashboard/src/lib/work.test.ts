@@ -19,9 +19,7 @@ import {
   totalHint,
   anyFilter,
   axisLabel,
-  bandsByDue,
   bandsOf,
-  dueBucket,
   groupAxisOptions,
   secondAxisOptions,
   filterChips,
@@ -55,6 +53,7 @@ import {
   typeName,
   type LabelContext,
   type Scope,
+  type Shape,
   countedLabel,
   dayLabel,
   monthOrNow,
@@ -1454,81 +1453,79 @@ test("the scope segment and the query read one mapping", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The due bands
+// The host's own lock
 // ---------------------------------------------------------------------------
 
-/** A row with just the fields a band is decided from. */
-function due(fields: Partial<WorkSummary>): WorkSummary {
-  return {
-    id: fields.key ?? "x",
-    key: fields.key ?? "ENG-1",
-    project: "ENG",
-    title: "t",
-    type: "task",
-    status: "todo",
-    updated: "2026-03-10T00:00:00Z",
-    version: 1,
-    ...fields,
-  } as WorkSummary;
-}
-
-// OVERDUE IS THE ROW'S OWN FLAG, never a comparison of ours: the engine derives
-// it against the COMPANY's day start, and a browser re-deriving it from its own
-// midnight is how one screen shows a task as overdue and another does not.
-test("the overdue band is the engine's flag, not a date comparison", () => {
-  const now = Date.parse("2026-03-10T12:00:00Z");
-  // Dated in the FUTURE and flagged overdue is not a state the engine produces;
-  // it is the test that the flag is what decides, rather than the date.
-  expect(dueBucket(due({ due: "2026-03-20T00:00:00Z", overdue: true }), now)).toBe("overdue");
+// A LOCKED NARROWING IS THE LAST WORD, on every branch and over every other
+// source of the same key. `#/me`'s Assigned tab IS one person's work, so a
+// saved default, a custom field or a hand-edited `?assignee=` must not widen
+// it past that person — and three of this builder's branches return early, so
+// a lock written inside one of them is a lock two shapes do not have.
+test("the host's lock outranks every other source of the key it names", () => {
+  const shapes: Shape[] = ["list", "table", "board", "calendar", "timeline"];
+  for (const shape of shapes) {
+    const params = buildItemsParams({
+      container: "workspace",
+      shape,
+      // A view that saved somebody ELSE's work, and a reader who typed a
+      // third handle on the address: neither may reach the wire.
+      view: { assignee: "rui" },
+      filters: { ...NO_FILTERS, assignee: "cto" },
+      range: shape === "calendar" ? { from: "2026-03-01", to: "2026-04-05" } : undefined,
+      lock: { assignee: "ada" },
+    });
+    expect(params.assignee, shape).toBe("ada");
+  }
 });
 
-// WHICH IS WHY THERE IS A SIXTH BAND. `overdue` means open AND past its date,
-// so a task finished late is past its date and not overdue — and calling it
-// Overdue would be a false claim about work somebody delivered, while calling
-// it Today would invent a date nobody set.
-test("a past date that is not overdue is its own band", () => {
-  const now = Date.parse("2026-03-10T12:00:00Z");
-  expect(dueBucket(due({ due: "2026-03-01T00:00:00Z" }), now)).toBe("earlier");
+// AND NO LOCK LEAVES THE KEY ALONE, which is what keeps `#/work` the screen it
+// was: the assignee filter there is a chip a reader added and can take off.
+test("without a lock the assignee is whatever the reader and the view said", () => {
+  expect(
+    buildItemsParams({
+      container: "workspace",
+      shape: "list",
+      view: { assignee: "rui" },
+      filters: { ...NO_FILTERS, assignee: "cto" },
+    }).assignee,
+  ).toBe("cto");
+  expect(
+    buildItemsParams({
+      container: "workspace",
+      shape: "list",
+      view: { assignee: "rui" },
+      filters: NO_FILTERS,
+    }).assignee,
+  ).toBe("rui");
 });
 
-test("a day with no date is not put on today", () => {
-  const now = Date.parse("2026-03-10T12:00:00Z");
-  expect(dueBucket(due({}), now)).toBe("none");
-});
+// A HOST OPENS THE LIST AND DOES NOT SET IT. Its parameters fill the same slot
+// a saved view's do, so the reader's own arrangement overrides them — a host
+// whose defaults could not be overridden would be a Display menu that lies.
+test("a host's defaults are overridden by the reader's own arrangement", () => {
+  const opens = { group_by: "due:bucket", sort: "due" };
+  const asOpened = buildItemsParams({
+    container: "workspace",
+    shape: "list",
+    view: opens,
+    filters: NO_FILTERS,
+    lock: { assignee: "ada" },
+  });
+  expect(asOpened.group_by).toBe("due:bucket");
+  expect(asOpened.sort).toBe("due");
 
-// THE WEEK IS THE COMPANY'S WEEK. `internal/tracker/dates.go` starts one on
-// Monday and the calendar draws it the same way, so "this week" here is the
-// week a saved view's `eow` means.
-test("today, this week and later are cut on the company's own week", () => {
-  // Tuesday 10 March 2026, local noon — built through the browser's own
-  // calendar because that is what the bands are read in.
-  const now = new Date(2026, 2, 10, 12, 0, 0).getTime();
-  const on = (y: number, m: number, d: number) =>
-    dueBucket(due({ due: new Date(y, m, d, 9, 0, 0).toISOString() }), now);
-  expect(on(2026, 2, 10)).toBe("today");
-  // Wednesday and Sunday are inside the same Monday-first week.
-  expect(on(2026, 2, 11)).toBe("week");
-  expect(on(2026, 2, 15)).toBe("week");
-  // Monday is the next one.
-  expect(on(2026, 2, 16)).toBe("later");
-});
-
-// EMPTY BANDS ARE DROPPED, in the order a day is read. A band per bucket
-// whether or not anything is in it would put five headings over a person
-// holding one task.
-test("the bands are the ones that hold something, in the day's own order", () => {
-  const now = new Date(2026, 2, 10, 12, 0, 0).getTime();
-  const bands = bandsByDue(
-    [
-      due({ key: "A", due: new Date(2026, 2, 20, 9).toISOString() }),
-      due({ key: "B", overdue: true, due: new Date(2026, 2, 2, 9).toISOString() }),
-      due({ key: "C", due: new Date(2026, 2, 10, 9).toISOString() }),
-      due({ key: "D" }),
-    ],
-    now,
-  );
-  expect(bands.map((b) => b.key)).toEqual(["overdue", "today", "later", "none"]);
-  expect(bands.map((b) => b.rows.map((r) => r.key))).toEqual([["B"], ["C"], ["A"], ["D"]]);
+  const rearranged = buildItemsParams({
+    container: "workspace",
+    shape: "list",
+    view: opens,
+    filters: { ...NO_FILTERS, groupBy: "status", sort: "-priority" },
+    lock: { assignee: "ada" },
+  });
+  expect(rearranged.group_by).toBe("status");
+  expect(rearranged.sort).toBe("-priority");
+  // AND THE LOCK SURVIVES THE REARRANGEMENT, which is the whole point of it
+  // being applied after the branch rather than inside it.
+  expect(rearranged.assignee).toBe("ada");
 });
 
 // ---------------------------------------------------------------------------
