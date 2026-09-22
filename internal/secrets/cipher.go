@@ -250,5 +250,25 @@ func EncodeKey(key []byte) string { return base64.StdEncoding.EncodeToString(key
 // variable name, so a ciphertext moved between rows fails to authenticate.
 func AADForVar(name string) string { return "secret_values/" + name }
 
+// AADForCredential binds a sealed credential value to the CREDENTIAL it
+// belongs to and to which field of it, so a ciphertext moved between rows
+// fails to authenticate.
+//
+// THE CREDENTIAL AND NOT THE PERSON, which is the one decision here and it is
+// not the obvious one: a person holds several credentials at once — a
+// password, an identity-provider binding, a machine token or two — and
+// binding to the person alone would let a second factor's sealed secret be
+// pasted over a first one's on the same row and still open. The field is the
+// second term for the same reason one level down: two values under one
+// credential must not be interchangeable either.
+//
+// It is here rather than in internal/iam/credential because the two callers
+// that must agree about it are the sealer and the reader, and a rule written
+// at each of them is the shape every other duplicated grammar in this tree
+// started as.
+func AADForCredential(credentialID, field string) string {
+	return "iam_credential/" + credentialID + "/" + field
+}
+
 // AADForDocument is the associated data for a whole-config document.
 const AADForDocument = "company_config/document"

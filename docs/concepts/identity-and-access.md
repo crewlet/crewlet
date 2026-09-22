@@ -206,6 +206,83 @@ seat does not exist.
 
 ---
 
+## What somebody proves themselves with
+
+Everything the engine stores for a credential is a **verifier** — something a
+presented secret is checked against, and which cannot be presented to
+anything. The identity estate is replicated to every node, snapshotted, backed
+up and donated to joining peers, so a value that could be replayed out of it
+would be a credential every operator with a backup holds.
+
+| Credential | What is stored | Why that and not something else |
+|---|---|---|
+| Password | argon2id, 64 MiB, t=3, p=1, as a PHC string | A person chose it, so the space it came from is small enough to grind — and memory is the cost a GPU cannot buy its way around |
+| Second factor | The TOTP shared secret, sealed under the credential's own key | Nothing is *presented* to the engine but a six-digit code; the secret is what generates it, so it is encrypted rather than hashed |
+| Recovery code | SHA-256 | Minted here from `crypto/rand`, so there is no dictionary to grind and no memory cost to buy |
+| Machine token | SHA-256 over the whole token, prefix included | The same, plus: this is presented on *every* request a pipeline makes, and a hundred milliseconds of argon2id on each is a different kind of outage |
+
+The rule is not "hash secrets with argon2id", it is **spend cost where an
+attacker has a shortcut** — and against a 32-byte value this engine minted,
+there is none.
+
+### Twelve characters, and no other rule
+
+No required digit, no required symbol, no forbidden repeat, no expiry.
+Composition rules are measurably counter-productive: they shrink the set people
+actually choose from (everybody appends `1!`), an attacker who knows the rule
+enumerates it, and they push people to write the result down. Length is the
+only property that buys entropy from a human at no cost to them.
+
+Behind that floor there is a small blocklist, and it is deliberately hundreds
+of entries rather than a published top-ten-thousand corpus: those lists are
+ranked by observed frequency and human-chosen passwords cluster at six to ten
+characters, so almost none of one is reachable behind a twelve-character rule.
+What *is* reachable is a handful of families — a word with padding after it, a
+walk along the keyboard, a repeated block — and a candidate is folded before it
+is compared (lower-cased, with `4`→`a`, `3`→`e`, `0`→`o` and the rest undone),
+so one entry stands for every spelling of its family. `password1234`,
+`P@ssw0rd1234` and `p4$$w0rd1234` are one string.
+
+### Raising the cost re-hashes on the next sign-in
+
+The parameters ride in the stored verifier, which is what makes a cost raise
+possible at all: the plaintext is not stored, so the only instant a stronger
+digest can be computed is the one where somebody presents their password. A
+verifier written under an older cost verifies under *its own* parameters and is
+reported stale, and the record that records the successful sign-in rewrites it.
+
+### A sign-in endpoint is not a roster
+
+The failure that shapes this whole surface is not a guessed password — it is an
+attacker learning **who works here**, in as many requests as they care to make,
+from nothing but which requests were throttled or how long each took. Three
+mechanisms close it and none is sufficient alone:
+
+1. **Admission is keyed on the source and happens before the subject is
+   resolved.** A throttle keyed on who you claim to be is one that only *real*
+   subjects can trigger, so the 429 becomes the oracle it was added to prevent.
+2. **A subject that does not exist is still verified against**, with a
+   fixed-cost decoy, so the two arms do the same shape of work rather than one
+   of them returning immediately. It is an HMAC and not a real argon2id
+   derivation: a decoy that ran the password cost would let a stranger spend
+   64 MiB and a hundred milliseconds of the node's budget per request against
+   names that do not exist.
+3. **Both arms answer at one deadline measured from arrival.** That is the
+   only one of the three that equalises the *timing*, because argon2id's cost
+   varies with load and a decoy's does not.
+
+Under enough load to push a real verification past the deadline the arms
+separate again. That is stated rather than hidden: at that point every request
+on the node is already slow, and the leak is one an attacker has to generate a
+load spike to open.
+
+The refusal itself is **one generic error for every arm** — no such login,
+wrong password, wrong code, code already spent. The one exception is choosing a
+*new* password, which is answered to somebody who has already proved who they
+are and must say what is wrong, or they will type variations until one sticks.
+
+---
+
 ## The session cookie
 
 A signed-in browser holds one cookie, and it is **signature-stateless and

@@ -136,3 +136,59 @@ func TestKeyringValidation(t *testing.T) {
 		})
 	}
 }
+
+// A SEALED CREDENTIAL VALUE IS UNREADABLE UNDER ANY OTHER CREDENTIAL ID.
+//
+// THE FAILURE THIS BINDING EXISTS FOR is not a stolen key — it is a ciphertext
+// MOVED. A person holds several credentials at once: a password, an
+// identity-provider binding, a machine token or two. With nothing binding a
+// sealed value to the credential it belongs to, anybody who can write a row
+// can paste one credential's sealed secret over another's and it opens
+// perfectly, under the same key, on every node.
+func TestASealedVerifierIsUnreadableUnderADifferentCredentialId(t *testing.T) {
+	t.Parallel()
+	c, err := NewCipher(testRing(t))
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+
+	sealed, err := c.Encrypt(secret, AADForCredential("cred-a", "totp"))
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	if got, err := c.Decrypt(sealed, AADForCredential("cred-a", "totp")); err != nil ||
+		got != secret {
+		t.Fatalf("the value did not open under its own binding: (%q, %v)", got, err)
+	}
+	for name, aad := range map[string]string{
+		"another credential":  AADForCredential("cred-b", "totp"),
+		"another field":       AADForCredential("cred-a", "verifier"),
+		"the variable form":   AADForVar("cred-a"),
+		"no binding at all":   "",
+		"the id concatenated": "iam_credential/cred-atotp",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got, err := c.Decrypt(sealed, aad); err == nil {
+				t.Errorf("the value opened as %q under %q", got, aad)
+			}
+		})
+	}
+}
+
+// AND THE TWO BINDINGS CANNOT COLLIDE BY CONCATENATION.
+//
+// A binding built by joining terms with no separator lets one pair of terms
+// spell another: `cred-a` + `totp` and `cred-at` + `otp` would be one string,
+// so two different credentials' values would be interchangeable.
+func TestTheCredentialBindingCannotBeSpelledTwoWays(t *testing.T) {
+	t.Parallel()
+	if AADForCredential("cred-a", "totp") == AADForCredential("cred-at", "otp") {
+		t.Error("two different (credential, field) pairs produce one binding")
+	}
+	if AADForCredential("a", "b") == AADForVar("a/b") {
+		t.Error("a credential binding collides with a secret-store one, so a " +
+			"value can be moved between the two estates")
+	}
+}

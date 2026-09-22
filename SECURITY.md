@@ -38,6 +38,27 @@ A few things worth knowing when deploying Crewlet:
   discloses nothing and authenticates nothing. **Dropping a keyring entry ends
   every session signed under it**; see the rotation runbook in
   `docs/concepts/secret-store.md`.
+- **A sign-in endpoint discloses nothing about who exists.** The refusal is
+  one generic error for every arm — no such login, wrong password, wrong
+  second-factor code, code already spent — because telling a caller which one
+  applies tells an attacker the same, and the first of them is the company's
+  roster. Three mechanisms keep the timing from saying it instead: admission
+  is keyed on the request's SOURCE and happens before the subject is resolved
+  (a throttle keyed on who you claim to be is one only real people can
+  trigger, so the 429 becomes the oracle); a subject that does not exist is
+  still verified against, with a fixed-cost decoy; and both arms answer at one
+  deadline measured from the instant the request arrived. Under enough load to
+  push a real verification past that deadline the arms separate again — stated
+  rather than hidden, and at that point every request on the node is slow.
+- **Passwords are argon2id at 64 MiB, t=3, p=1, with a twelve-character
+  minimum and no composition rules.** The parameters are in the stored
+  verifier, so raising the cost re-hashes each person's on their next
+  successful sign-in — the only instant a stronger digest can be computed,
+  because the plaintext is not stored. Machine tokens and recovery codes are
+  SHA-256 rather than argon2id, deliberately: both are minted by this engine
+  from `crypto/rand`, so there is no dictionary to grind and the memory cost
+  would buy nothing while adding a hundred milliseconds to every request a CI
+  job makes.
 - **The API's read surface is open by default.** Writes and every `/config`
   route require a token from `api.auth.tokens`; reads do not, so `/events`,
   `/agents/{id}/memory` and `/ws/stream` serve full LLM transcripts to anyone

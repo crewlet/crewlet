@@ -472,6 +472,20 @@ Security updates are separate: they come from published advisories rather than
 this file, are enabled in the repository's settings, and are held back by
 neither the weekly schedule nor Dependabot's default release cooldown.
 
+**Promoting an indirect dependency to a direct one is a change to the module's
+surface**, and `go mod tidy` is what records it — a `// indirect` marker that
+should have gone, or one that should have stayed, fails `go mod tidy -diff` in
+`make check`. `golang.org/x/crypto` is direct because `internal/iam/credential`
+calls `argon2` from it: a password hash is the one piece of cryptography in
+this tree that is not hand-written, because it is maintained by the same people
+who maintain the standard library's crypto and there is no second
+implementation of it to disagree with. Everything beside it in that package —
+TOTP, the recovery codes, the token digests — is `crypto/hmac`, `crypto/sha1`,
+`crypto/sha256` and `encoding/base32`, which is the dependency rule working
+rather than an inconsistency: a module earns its place against what `std`
+already does, and for forty lines of RFC 6238 arithmetic `std` does all of
+it.
+
 ### A bump merges itself
 
 [`.github/workflows/dependabot-merge.yml`](.github/workflows/dependabot-merge.yml)
