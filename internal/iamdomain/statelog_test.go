@@ -36,7 +36,7 @@ func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
 			// node with none deletes the rows and leaves the key to a
 			// peer. That is the documented behaviour of a nil one, so
 			// the suite exercises it rather than a stub that pretends.
-			Applier: iamdomain.NewApplier("suite-node", nil),
+			Applier: iamdomain.NewApplier("suite-node", nil, nil),
 			// Migrate is nil: these tables ship in the replicated
 			// estate's own migrations, so a fresh store already has
 			// them. A domain that created its tables from test code

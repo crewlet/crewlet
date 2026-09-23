@@ -103,6 +103,11 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 				kind, at.record.Subject.ID, err)
 		}
 		written, _ := result.RowsAffected()
+		if kind == KindSeat && written > 0 {
+			// AN UNBIND hands the seat back to the chart, which is a
+			// move in its standing — see [Reader.SeatHolders].
+			a.directoryMoved = true
+		}
 		return int(written), nil
 	}
 
@@ -184,6 +189,11 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	bound, _ := result.RowsAffected()
 	written += bound
+	if kind == KindSeat && written > 0 {
+		// A BIND puts a person — at whatever stage they are — between
+		// the seat and its contact routing.
+		a.directoryMoved = true
+	}
 
 	// AND THE SEALED FORM, for the one claim whose token is not readable.
 	// The blind is one-way by construction, so without this the company

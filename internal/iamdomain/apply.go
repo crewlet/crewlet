@@ -44,11 +44,18 @@ import (
 // this tree exists to avoid.
 //
 // A SHRED IS THE EXCEPTION AND IT IS POST-COMMIT. Destroying a removed
-// person's key is the one consequence of a record here that is not a row, so
-// it happens in [Applier.Committed], after the rows are durable — and if it
+// person's key is a consequence of a record here that is not a row, so it
+// happens in [Applier.Committed], after the rows are durable — and if it
 // fails, the row says removed while the key lives, which the identity duties
 // retry. The other order would be a key destroyed for a removal that then
 // rolled back.
+//
+// THE DIRECTORY SIGNAL IS THE OTHER, and it is post-commit for the same
+// reason. A suspension withdraws the seat's contact identities from this
+// node's notify registry with no org-chart record at all, and the apply is the
+// only thing that sees that happen on EVERY node — the change feed relays a
+// record to one. So a committed batch that moved a seat's standing tells the
+// engine, which re-reads the directory and rebuilds the registry whole.
 
 // Applier writes this node's copy of the identity estate.
 type Applier struct {
@@ -68,6 +75,25 @@ type Applier struct {
 	// writer, and Apply and Committed are called from the same goroutine
 	// with the commit in between.
 	shred []string
+
+	// directory is told, after a committed batch, that who holds which
+	// seat — or at what stage — may have moved. Nil is legal and means
+	// nobody is listening.
+	//
+	// IT CARRIES NOTHING, deliberately: its one listener is the notify
+	// registry, which is rebuilt WHOLE from a fresh read of the directory
+	// and swapped, because a diff applied to a fresh registry drops every
+	// identity it did not touch. So there is nothing a list of changed
+	// people could be used for except to be wrong about.
+	directory func()
+
+	// directoryMoved is set inside Apply when a record wrote a row the
+	// directory's standing is read from — a person's stage, a seat claim
+	// or its release, a removal — and drained by Committed, on shred's
+	// terms. A SIGN-IN SETS NOTHING: it is the bulk of this log's traffic
+	// and it moves no seat's standing, so a rebuild per session would be a
+	// registry rebuilt per login for nothing.
+	directoryMoved bool
 }
 
 // Shredder destroys a person's key, which is what removing them does.
@@ -80,12 +106,19 @@ type Shredder interface {
 }
 
 // NewApplier builds the identity estate's applier for one node.
-func NewApplier(nodeID string, shredder Shredder) *Applier {
-	return &Applier{NodeID: nodeID, shredder: shredder}
+//
+// directory is called after a committed batch that moved a seat's standing —
+// see the field. AFTER the commit and never inside the transaction, for the
+// reason internal/chart's view trigger gives: the store re-runs the body of an
+// attempt that failed transiently, and a listener told about rows that then
+// rolled back would rebuild from rows no node holds.
+func NewApplier(nodeID string, shredder Shredder, directory func()) *Applier {
+	return &Applier{NodeID: nodeID, shredder: shredder, directory: directory}
 }
 
-// Committed is the post-commit half: the one consequence of a record here that
-// is not a row.
+// Committed is the post-commit half: the two consequences of a record here
+// that are not rows — this node's contact routing hearing that a seat's
+// standing may have moved, and a removed person's key being destroyed.
 //
 // IT IS BEST EFFORT AND SAYS SO. A shred that fails leaves a person removed
 // from every node's rows with their key still live, which is a state the
@@ -93,6 +126,15 @@ func NewApplier(nodeID string, shredder Shredder) *Applier {
 // would stall the whole fleet's log on a coordination outage, for a deletion
 // that is already durable everywhere it matters.
 func (a *Applier) Committed(ctx context.Context) {
+	// THE DIRECTORY FIRST, and reset before the call: the listener is a
+	// non-blocking signal, and the shreds below are network round trips a
+	// suspension's contact withdrawal must not wait behind.
+	if a.directoryMoved {
+		a.directoryMoved = false
+		if a.directory != nil {
+			a.directory()
+		}
+	}
 	if len(a.shred) == 0 {
 		return
 	}

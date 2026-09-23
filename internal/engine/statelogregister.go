@@ -293,7 +293,7 @@ func register() []registration {
 				// the only thing that sees every removal on every node.
 				// Nil is legal and means a node with no keyring: it
 				// deletes the rows and the key is a peer's to destroy.
-				return iamdomain.NewApplier(s.nodeID, s.shredder), nil
+				return iamdomain.NewApplier(s.nodeID, s.shredder, nil), nil
 			},
 			NewSeams: func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
 				rows, err := iamdomain.NewRows(s.db)

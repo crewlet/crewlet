@@ -681,3 +681,116 @@ func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, handle string) (strin
 	}
 	return login, nil
 }
+
+// SeatHolder is one seat binding, as contact routing reads the directory.
+//
+// A FACT AND NOT A VERDICT. Which stages may be reached through a seat's
+// contact identities is internal/notify's rule, stated once beside the
+// registry it governs; this package says who holds the seat and at what stage,
+// and nothing about what that means for a Slack mention.
+type SeatHolder struct {
+	// Seat is the handle the binding names, which is the address every
+	// other subsystem uses for a seat — see the `seat_id` column.
+	Seat string
+
+	// Person is who holds it, or who last held it before a removal.
+	Person string
+
+	// Stage is the bound person's stage, from the COLUMN — the one every
+	// predicate here reads. Empty for a RESERVATION, the half of an
+	// enrolment a claim writes before the content record fills it in, and
+	// empty on a removal, which has no row left to have a stage.
+	Stage iam.Stage
+
+	// Removed marks a seat whose holder was REMOVED while holding it, and
+	// that nobody has been bound to since.
+	//
+	// A removal releases every claim the person held, the seat among them,
+	// so the row that bound them is gone and the seat reads as held by
+	// nobody — the same as a seat nobody ever held, which routes as the
+	// chart declares. Answered that way, removing somebody would route
+	// MORE than suspending them: the seat's contact map still names the
+	// leaver's own accounts. The tombstone is what still says who held it,
+	// and it outlives every horizon here, so this stays true until the
+	// seat is bound to somebody else.
+	Removed bool
+}
+
+// SeatHolders is every seat binding this node's directory holds, read in ONE
+// snapshot so a bind and a removal landing between two reads cannot produce a
+// set that never existed.
+//
+// # Three-valued, like everything here
+//
+// An error is the UNKNOWN arm — the replicated estate not open, a read that
+// failed — and must never be folded into an empty answer: an empty answer is
+// a real one ("nobody is bound to anything"), and a caller that read an
+// outage as it would hand every suspended person's seat back to the chart.
+//
+// # What it costs
+//
+// The current bindings are an index range over the partial seat-claim index;
+// the removals are one row per person the company has ever removed, because a
+// tombstone is permanent and records its seat inside the claims it released.
+// Both are read whole, because the one caller rebuilds a registry whole — see
+// [Applier]'s directory listener for why that is not a diff.
+func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
+	var out []SeatHolder
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		out = out[:0]
+		rows, err := tx.QueryContext(ctx, `
+			SELECT seat_id, id, stage FROM iam_people
+			 WHERE seat_id != '' AND shredded = 0
+			 ORDER BY seat_id, id`)
+		if err != nil {
+			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
+		}
+		for rows.Next() {
+			var holder SeatHolder
+			var stage string
+			if err := rows.Scan(&holder.Seat, &holder.Person, &stage); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("iamdomain: read a seat binding: %w", err)
+			}
+			holder.Stage = iam.Stage(stage)
+			out = append(out, holder)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
+		}
+
+		// A REMOVAL'S SEAT, WHILE NOBODY HOLDS IT. The NOT EXISTS is
+		// what hands a seat on: bind somebody new and the tombstone stops
+		// being the seat's last word.
+		removed, err := tx.QueryContext(ctx, `
+			SELECT json_extract(r.claims_json, '$.seat_id') AS seat, r.person_id
+			  FROM iam_removed r
+			 WHERE COALESCE(json_extract(r.claims_json, '$.seat_id'), '') != ''
+			   AND NOT EXISTS (
+			       SELECT 1 FROM iam_people p
+			        WHERE p.seat_id = json_extract(r.claims_json, '$.seat_id'))
+			 ORDER BY seat, r.person_id`)
+		if err != nil {
+			return fmt.Errorf("iamdomain: read the removed seat holders: %w", err)
+		}
+		for removed.Next() {
+			holder := SeatHolder{Removed: true}
+			if err := removed.Scan(&holder.Seat, &holder.Person); err != nil {
+				_ = removed.Close()
+				return fmt.Errorf("iamdomain: read a removed seat holder: %w", err)
+			}
+			out = append(out, holder)
+		}
+		if err := removed.Close(); err != nil {
+			return fmt.Errorf("iamdomain: read the removed seat holders: %w", err)
+		}
+		return removed.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}

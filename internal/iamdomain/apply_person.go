@@ -84,6 +84,12 @@ func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, fmt.Errorf("iamdomain: write person %s: %w", id, err)
 	}
 	written, _ := result.RowsAffected()
+	if written > 0 {
+		// A CONTENT RECORD STATES A STAGE, so a person's standing may
+		// have moved with it — an enrolment arriving on a reservation
+		// that already holds a seat is the ordinary case.
+		a.directoryMoved = true
+	}
 
 	// THE CLAIM COLUMNS ARE NOT TOUCHED HERE, and that is the one thing
 	// this statement deliberately leaves out. A claim arrives on its own
@@ -213,6 +219,9 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, fmt.Errorf("iamdomain: set person %s's stage: %w", id, err)
 	}
 	written, _ := result.RowsAffected()
+	if written > 0 {
+		a.directoryMoved = true
+	}
 	return int(written), nil
 }
 
@@ -343,6 +352,12 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 	// is not an audit trail. What makes the removal real is that their NAME
 	// and ADDRESS are unrecoverable — the key, destroyed after the commit.
 	a.shred = append(a.shred, id)
+	if written > 0 {
+		// A REMOVAL RELEASES THE SEAT with every other claim, and the
+		// tombstone is what the directory then reads as the seat's
+		// standing — see [Reader.SeatHolders].
+		a.directoryMoved = true
+	}
 	return int(written), nil
 }
 

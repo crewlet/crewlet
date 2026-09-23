@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,6 +41,9 @@ type writeRig struct {
 	verifier *statelog.Verifier
 	consumed uint64
 	events   *writerEvents
+
+	// directory counts the applier's post-commit directory signals.
+	directory atomic.Int64
 
 	drainMu sync.Mutex
 }
@@ -124,12 +128,16 @@ func newWriteRig(t *testing.T) *writeRig {
 	if err != nil {
 		t.Fatalf("build the writer: %v", err)
 	}
-	return &writeRig{
+	rig := &writeRig{
 		t: t, db: db, log: log, writer: writer, waiter: waiter,
 		events:   announced,
-		applier:  iamdomain.NewApplier("node-a", sealer),
 		verifier: testVerifier(t),
 	}
+	// THE DIRECTORY SIGNAL IS COUNTED, so a case can say which records
+	// told this node its seats' standing may have moved.
+	rig.applier = iamdomain.NewApplier("node-a", sealer,
+		func() { rig.directory.Add(1) })
+	return rig
 }
 
 // drain consumes every record the broker holds beyond what this node has
