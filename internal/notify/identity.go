@@ -260,16 +260,18 @@ type Reconciliation struct {
 // standing is one reading of the identity directory ([Standing]): a seat whose
 // holder is suspended, retired or removed has its declared identities left out
 // — so on this registry an inbound message from them resolves to an outside
-// party, and nothing attributes their word to the seat. The zero Standing is
-// chart-only and withholds nothing. The registry remembers which reading it
-// was built from ([Registry.Standing]), because that reading is half of what
-// it answers for.
+// party, and nothing attributes their word to the seat. The reading is applied
+// to o through [Standing.Seats], so a binding made before the seat was renamed
+// still finds it. The zero Standing is chart-only and withholds nothing. The
+// registry remembers which reading it was built from ([Registry.Standing]),
+// because that reading is half of what it answers for.
 func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLookup,
 	standing Standing) Reconciliation {
 
 	var rec Reconciliation
 	desired := make(map[identityKey]string)
 	withheld := make(map[string]Withholding)
+	seats := standing.Seats(o)
 	if o != nil {
 		for role := range o.AllRoles() {
 			if !role.IsHuman() || role.Contact == nil {
@@ -282,7 +284,7 @@ func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLoo
 			declared := len(role.Contact.Identities())
 			resolved := role.Contact.ResolvedIdentities(lookup)
 			rec.Unresolved += declared - len(resolved)
-			if why, ok := standing.Withholds(handle); ok {
+			if why, ok := seats[handle]; ok {
 				// NOT REGISTERED, which is the whole of a withdrawal:
 				// a pair the previous pass registered is withdrawn
 				// below exactly as an edited contact is, and a fresh

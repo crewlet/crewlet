@@ -62,6 +62,13 @@ import (
 type iamDirectory struct{ reader *iamdomain.Reader }
 
 // SeatHolders is the directory's bindings in notify's vocabulary.
+//
+// THE HANDLE EACH BINDING NAMES, passed through as the row stores it: the
+// handle the seat had when the person was bound. It is internal/notify that
+// resolves it against the organization a registry is built from — through the
+// seat's former handles, as the request path does — because that is where the
+// organization is, and a copy resolved here against some other company would be
+// a second answer about whose seat a binding is.
 func (d iamDirectory) SeatHolders(ctx context.Context) ([]notify.Holder, error) {
 	holders, err := d.reader.SeatHolders(ctx)
 	if err != nil {
@@ -118,13 +125,13 @@ func (e *Engine) readStandingLocked(ctx context.Context) notify.Standing {
 	}
 	standing, err := notify.ReadStanding(ctx, dir)
 	if err != nil {
-		carried := notify.Standing{}
+		carried, withheld := notify.Standing{}, 0
 		if live := e.Registry(); live != nil {
-			carried = live.Standing()
+			carried, withheld = live.Standing(), len(live.Withheld())
 		}
 		e.notify.directoryFailed = true
 		log.WarnContext(ctx, "party_directory_unreadable", "error", err,
-			"withheld_seats", len(carried.Withheld()),
+			"withheld_seats", withheld,
 			"detail", "this node could not read its identity directory, so its "+
 				"contact routing keeps the standing it last read; it retries "+
 				"every "+DirectoryRefresh.String())

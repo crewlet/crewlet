@@ -587,6 +587,15 @@ A seat with two holders — a duplicate only a restore can produce — is withhe
 if either may not be reached, because one contact map cannot say which of them
 it belongs to.
 
+**A binding follows its seat through a rename.** The directory keeps the handle
+a seat had when its person was bound, and nothing rewrites it when the chart
+renames the seat. Each reading is resolved through the seat's former handles
+exactly as a sign-in resolves the same binding — live handles first — so
+suspending somebody whose seat was renamed after they were bound still withdraws
+its contact identities. A former handle another seat has since taken as its own
+names that seat, which is also the seat that person's sign-in lands on: the
+chart's rule that a former handle resolves until something else claims it.
+
 **Two triggers rebuild the registry, and both rebuild it whole.** A published
 company is the first; the second is the identity applier, which signals after
 every committed batch that moved a seat's standing (a suspension, a

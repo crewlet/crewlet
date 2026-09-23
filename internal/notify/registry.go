@@ -3,6 +3,7 @@ package notify
 import (
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -223,6 +224,15 @@ func (r *Registry) Withholding(handle string) (Withholding, bool) {
 	defer r.mu.RUnlock()
 	why, ok := r.withheld[handle]
 	return why, ok
+}
+
+// Withheld is every seat [Registry.Withholding] answers for, by its current
+// handle, sorted — the count a log line reports, which is the number of SEATS
+// this registry withdrew rather than the number of bindings the reading named.
+func (r *Registry) Withheld() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return slices.Sorted(maps.Keys(r.withheld))
 }
 
 // ByHandle resolves a handle to a party.

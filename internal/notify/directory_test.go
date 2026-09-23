@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // A SEAT WHOSE HOLDER MAY NOT BE REACHED REGISTERS NO CONTACT IDENTITY — and
@@ -125,8 +126,10 @@ func TestTheStandingRuleRoutesOnlyWhatMayBeReached(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.holder.Seat = "dana-founder"
+			o := company()
+			o.Normalize()
 			why, withheld := notify.StandingOf([]notify.Holder{tc.holder}).
-				Withholds("dana-founder")
+				Seats(o)["dana-founder"]
 			if tc.want == "" {
 				if withheld {
 					t.Errorf("withheld as %q, want routed", why)
@@ -157,7 +160,9 @@ func TestADuplicateBindingIsWithheldIfEitherHolderMayNotBeReached(t *testing.T) 
 		{Seat: "dana-founder", Stage: iam.StageSuspended},
 		{Seat: "dana-founder", Stage: iam.StageRetired},
 	})
-	if why, ok := s.Withholds("dana-founder"); !ok || why != notify.WithheldRetired {
+	o := company()
+	o.Normalize()
+	if why, ok := s.Seats(o)["dana-founder"]; !ok || why != notify.WithheldRetired {
 		t.Errorf("got %q/%v, want retired — the harder one to undo", why, ok)
 	}
 }
@@ -193,6 +198,91 @@ func TestReadingTheDirectoryIsThreeValued(t *testing.T) {
 	if read.Equal(none) {
 		t.Error("a consulted empty reading equals the chart-only one")
 	}
+}
+
+// A SUSPENSION FINDS A SEAT THE CHART HAS RENAMED SINCE THE BIND.
+//
+// A binding names the handle the seat had when the person was bound, and
+// nothing rewrites it on a rename: the chart keeps the old handle as a FORMER
+// one, and the request path resolves the binding through it. The control is
+// the reading applied to the raw handle — what the registry did before — which
+// names a handle no seat answers to, so the suspended founder's Slack account
+// went on resolving to their renamed seat.
+func TestASuspensionAfterARenameStillWithholdsTheSeat(t *testing.T) {
+	t.Parallel()
+	o := renamedCompany()
+	suspended := notify.StandingOf([]notify.Holder{
+		{Seat: "dana-founder", Stage: iam.StageSuspended},
+	})
+
+	// THE CONTROL: no seat answers to the bound handle as its own.
+	for role := range o.AllRoles() {
+		if role.Handle() == "dana-founder" {
+			t.Fatal("the fixture's seat still answers to its old handle, so " +
+				"nothing below is about a rename")
+		}
+	}
+
+	r := notify.NewRegistry(o)
+	rec := r.ReconcileHumanContacts(o, env(nil), suspended)
+	if p, ok := r.ByExternalID("slack", "U0FOUNDER"); ok {
+		t.Errorf("a suspended holder's account still resolves to %q after the "+
+			"seat was renamed", p.Handle)
+	}
+	if why, ok := r.Withholding("dana"); !ok || why != notify.WithheldSuspended {
+		t.Errorf("the renamed seat reports %q/%v, want suspended", why, ok)
+	}
+	if rec.Withheld != 2 {
+		t.Errorf("withheld %d identities, want both of the founder's", rec.Withheld)
+	}
+	if got := r.Withheld(); len(got) != 1 || got[0] != "dana" {
+		t.Errorf("the registry withholds %v, want the seat by its current handle", got)
+	}
+}
+
+// A FORMER HANDLE ANOTHER SEAT HAS TAKEN RESOLVES TO THAT SEAT — which is the
+// chart's own stated residue, and the seat the request path gives the same
+// person, so contact routing and sign-in never disagree about whose seat a
+// binding is.
+//
+// Live handles are resolved FIRST, as [org.Organization.Role] resolves them:
+// the seat now called `dana-founder` is withheld for the suspension, and the
+// renamed seat that used to be called that routes. The other order would let a
+// retired handle outrank a live one.
+func TestAFormerHandleAnotherSeatTookResolvesToThatSeat(t *testing.T) {
+	t.Parallel()
+	o := renamedCompany()
+	o.Roles = append(o.Roles, &org.Role{
+		Name: "Dana Founder Two", Kind: org.KindHuman, DeclaredHandle: "dana-founder",
+		Contact: &org.HumanContact{SlackUserID: "U0SECOND"},
+	})
+	o.Normalize()
+
+	r := notify.NewRegistry(o)
+	r.ReconcileHumanContacts(o, env(nil), notify.StandingOf([]notify.Holder{
+		{Seat: "dana-founder", Stage: iam.StageSuspended},
+	}))
+	if _, ok := r.ByExternalID("slack", "U0SECOND"); ok {
+		t.Error("the seat that now answers to the bound handle still routes")
+	}
+	if p, ok := r.ByExternalID("slack", "U0FOUNDER"); !ok || p.Handle != "dana" {
+		t.Errorf("the renamed seat was withheld for a handle another seat holds "+
+			"live (%+v, %v)", p, ok)
+	}
+}
+
+// renamedCompany is the fixture company after the founder's seat was renamed
+// from `dana-founder` to `dana`.
+func renamedCompany() *org.Organization {
+	o := company()
+	for _, role := range o.Roles {
+		if role.Name == "Dana Founder" {
+			role.DeclaredHandle = "dana"
+			role.FormerHandles = []string{"dana-founder"}
+		}
+	}
+	o.Normalize()
+	return o
 }
 
 // directoryFunc adapts a function to the seam.

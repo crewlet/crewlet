@@ -343,7 +343,7 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 	e.notify.mu.Unlock()
 	log.Info("parties_indexed", "company", c.Config.Name, "parties", reg.Len(),
 		"human_contacts", rec.Registered, "unresolved", rec.Unresolved,
-		"withheld_seats", len(standing.Withheld()), "directory", standing.Consulted(),
+		"withheld_seats", len(reg.Withheld()), "directory", standing.Consulted(),
 		"conflicts", len(rec.Conflicts))
 }
 
