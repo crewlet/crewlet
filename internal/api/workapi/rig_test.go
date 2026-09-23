@@ -134,6 +134,7 @@ type writes struct {
 	edited  []string
 	inbox   []string
 	pins    []string
+	views   []tracker.View
 	authz   []tracker.PersonAuthority
 
 	// result and err are what the next write answers.
@@ -253,6 +254,19 @@ func (b *bound) WritePriorities(_ context.Context, opID, _ string, _ []string,
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
+	return b.w.answer(opID)
+}
+
+func (b *bound) ViewPrior(context.Context, string) (tracker.ViewPrior, error) {
+	return tracker.ViewPrior{}, nil
+}
+
+func (b *bound) WriteView(_ context.Context, opID string, view tracker.View,
+	_ tracker.ViewPrior) (tracker.WriteResult, error) {
+
+	b.w.mu.Lock()
+	defer b.w.mu.Unlock()
+	b.w.views = append(b.w.views, view)
 	return b.w.answer(opID)
 }
 
@@ -379,6 +393,9 @@ func (r *rig) options(c authz.Chart) workapi.Options {
 				return r.writes.as(a)
 			},
 			PersonWriter: func(a builtin.Actor) builtin.PersonWriter {
+				return r.writes.as(a)
+			},
+			ViewWriter: func(a builtin.Actor) builtin.ViewWriter {
 				return r.writes.as(a)
 			},
 		},

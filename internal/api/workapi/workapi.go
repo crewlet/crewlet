@@ -63,6 +63,14 @@
 //     applied, pending with the position to read at, or unknown carrying the
 //     operation id a retry must reuse.
 //
+// # An argument the tool does not read is refused, never dropped
+//
+// A route's body IS the tool's arguments, and the tool reads what its schema
+// declares and nothing else — so an argument it does not declare would be
+// dropped, and a request answered as though it had asked for less. Every
+// tool-backed route refuses one by name against the tool's own schema
+// ([declared]); a facet route narrows that list further ([only]).
+//
 // # A retry is idempotent under the caller's own key
 //
 // An `Idempotency-Key` header becomes the operation SEED every write the
@@ -86,7 +94,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -427,6 +437,9 @@ func (s *Service) call(w http.ResponseWriter, r *http.Request, verb string,
 		if tool.Name() != verb {
 			continue
 		}
+		if !declared(w, tool, args) {
+			return
+		}
 		result, err := tool.Call(r.Context(), args)
 		if err != nil {
 			// THE CALLER'S CONTEXT ENDED — internal/mcp's own meaning
@@ -444,6 +457,47 @@ func (s *Service) call(w http.ResponseWriter, r *http.Request, verb string,
 	// rather than a refusal: nothing here could ever make it succeed.
 	httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
 		map[string]string{"detail": verb + " is not served by this node"})
+}
+
+// declared refuses a body carrying an argument the tool behind the route does
+// not take, naming every one of them and the arguments it does.
+//
+// # Refused rather than ignored, because ignoring one does something else
+//
+// The tool reads the arguments its schema declares and nothing more, so an
+// undeclared one was DROPPED — and a dropped argument is not a no-op, it is a
+// request answered as though somebody had asked for less. `save_work_view`
+// lost its free `owner` when a personal view became the caller's own
+// (`personal: true`), and a client still sending the old shape had its
+// PERSONAL view saved as a SHARED tab on the container, visible to everybody
+// on the project, with a 200 saying it had worked. This surface already
+// refused a facet route's stray argument by name ([only]); a route that is the
+// whole tool refused nothing, which is the one place the rule had no reader.
+//
+// THE SCHEMA IS THE LIST, read off the tool rather than typed beside the route,
+// so an argument the tool gains is accepted the moment it can be read and one
+// it loses is refused the moment it cannot — a second list here would be the
+// copy that drifts.
+func declared(w http.ResponseWriter, tool tools.Callable, args map[string]any) bool {
+	properties, _ := tool.Parameters()["properties"].(map[string]any)
+	var unread []string
+	for field := range args {
+		if _, held := properties[field]; !held {
+			unread = append(unread, fmt.Sprintf("%q", field))
+		}
+	}
+	if len(unread) == 0 {
+		return true
+	}
+	slices.Sort(unread)
+	takes := slices.Sorted(maps.Keys(properties))
+	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+		map[string]string{"detail": fmt.Sprintf("%s takes no argument %s — "+
+			"it reads %s, and one it does not read is refused rather than "+
+			"ignored, because ignoring it answers a different request from the "+
+			"one you sent", tool.Name(), strings.Join(unread, ", "),
+			strings.Join(takes, ", "))})
+	return false
 }
 
 // answerTool renders one tool's receipt.

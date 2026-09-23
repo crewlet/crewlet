@@ -141,6 +141,60 @@ func TestARefusalWaitingCannotClearSaysNothingAboutComingBack(t *testing.T) {
 	}
 }
 
+// AN ARGUMENT THE TOOL DOES NOT READ IS REFUSED BY NAME, NEVER DROPPED.
+//
+// `save_work_view` lost its free `owner` when a personal view became the
+// caller's own (`personal: true`), and the route forwarded the whole body to
+// a tool that reads only what it declares — so a client still sending the old
+// shape had its PERSONAL view saved as a SHARED tab on the project, visible to
+// everybody on it, under a 200. Every tool-backed route is held to the tool's
+// own schema, and the facet routes' narrower lists stay narrower.
+func TestAnArgumentTheToolDoesNotReadIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		method string
+		target string
+		body   map[string]any
+		named  string
+	}{
+		{"the old personal-view shape", http.MethodPost, "/work/views",
+			map[string]any{"owner": "ana", "container": "project:ENG",
+				"name": "Mine", "type": "list"}, `"owner"`},
+		{"a stray field on a create", http.MethodPost, "/work/items",
+			map[string]any{"title": "rotate the key", "project": "ENG",
+				"assigne": "ana"}, `"assigne"`},
+		{"a stray field on an edit", http.MethodPatch, "/work/items/ENG-1",
+			map[string]any{"status": "done", "stauts": "done"}, `"stauts"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			got := r.do(as(admin("ana")), c.method, c.target, c.body)
+			if got.status != http.StatusBadRequest {
+				t.Fatalf("answered %d, want 400: %v", got.status, got.body)
+			}
+			if !strings.Contains(got.detail(), c.named) {
+				t.Errorf("the refusal does not name %s: %s", c.named, got.detail())
+			}
+			if len(r.writes.views)+len(r.writes.created)+len(r.writes.updates) != 0 {
+				t.Error("a request carrying an argument nothing reads was written")
+			}
+		})
+	}
+	// THE CONTROL: the declared shape is saved, and saved PERSONAL.
+	r := newRig(t, chart{})
+	got := r.do(as(admin("ana")), http.MethodPost, "/work/views",
+		map[string]any{"personal": true, "container": "project:ENG",
+			"name": "Mine", "type": "list"})
+	if got.status != http.StatusOK || len(r.writes.views) != 1 {
+		t.Fatalf("the declared shape answered %d: %v", got.status, got.body)
+	}
+	if owner := r.writes.views[0].Owner; owner != "ana" {
+		t.Errorf("the personal view is %q's, want the caller's own", owner)
+	}
+}
+
 // A WRITE THIS NODE CANNOT ACCOUNT FOR HANDS BACK THE KEY THAT MAKES A RETRY
 // SAFE, and the retry under it IS the same operation.
 //

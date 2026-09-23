@@ -3072,7 +3072,12 @@ ordinary comment. See [who may write where](../concepts/knowledge-system.md#who-
 naming a different object than the path is refused `400` rather than
 overwritten, and a route that is a narrower door onto a wider tool — `/depend`,
 `/relate`, `/tags`, a project's policy — refuses an argument that belongs to
-another. A body over 1 MiB (twice a page at its own cap, for JSON escaping) is
+another. **Every** route refuses, `400` naming it, an argument its tool does not
+take: the tool reads what its schema declares and nothing else, so an
+undeclared argument would be DROPPED — and a request answered as though it had
+asked for less is not a no-op. A client still sending `save_work_view`'s old
+`owner` had a personal view saved as a shared tab on the project, under a
+`200`. A body over 1 MiB (twice a page at its own cap, for JSON escaping) is
 refused `413` before it is read.
 
 **Not here, and deliberately:** sprints and goals. The tracker has neither —
