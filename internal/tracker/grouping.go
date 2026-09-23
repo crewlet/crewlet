@@ -31,11 +31,11 @@ import (
 // A keyset cursor is "after this row in this order", and across a set of
 // groups there is no single order to be after. What a board actually does is
 // load ONE column further, and that has a spelling already: `group=<value>`
-// narrows the query to that group, and it is an ordinary flat query with an
-// ordinary cursor ([Query.Pinned]) — `group=` and `subgroup=` together name
-// one lane the same way. So a grouped answer mints no cursor, refuses one
-// ([Query.Grouped]), and says how many rows each group holds — [Group.Count]
-// beside the rows it carries — rather than pretending to page.
+// narrows the query to that group — `group=` and `subgroup=` together name one
+// lane the same way — and a single cell has exactly one order, so its answer
+// pages with an ordinary cursor ([Query.Pinned]). A board of several cells
+// mints no cursor, refuses one, and says how many rows each group holds —
+// [Group.Count] beside the rows it carries — rather than pretending to page.
 //
 // # Why the counts come from their own statement
 //
@@ -54,7 +54,8 @@ import (
 // left out — [Answer.GroupsTruncated], a flag and not a count, for the reason
 // that field gives — rather than dropping them in silence. The columns past it
 // are reached by narrowing the query until they fit, or one at a time with
-// `group=<key>`, which is a list ([Query.Pinned]).
+// `group=<key>`, which answers that column alone and pages it
+// ([Query.Pinned]).
 const MaxGroups = 64
 
 // MaxGroupsWithSubgroups and MaxSubgroups bound a SWIMLANE board, which costs
@@ -92,6 +93,11 @@ const (
 // several at once — so the default is per COLUMN and the product is what the
 // answer costs. A hundred is the ceiling for a caller that means to render a
 // whole column at once.
+//
+// A larger `group_limit` is lowered to the ceiling rather than refused, as a
+// larger `limit` is to [PageMax]. Nothing past it is out of reach: every column
+// carries its [Group.Count] beside its rows, and a single cell's answer carries
+// the cursor that pages the rest of it ([Query.Pinned]).
 const (
 	GroupRowsDefault = 20
 	GroupRowsMax     = 100
@@ -366,23 +372,23 @@ func groupCounts(ctx context.Context, tx *sql.Tx, axis groupAxis,
 	return out, truncated, nil
 }
 
-// groupRows reads one group's own page.
+// groupRows reads one group's own page, and the cursor that resumes it.
 //
 // THE AXIS BECOMES A PREDICATE, which is what makes this the ordinary flat
 // statement: a column's rows are the answer's rows narrowed to one value, so
-// the same sort, the same joins and the same row shape serve both.
+// the same sort, the same joins, the same row shape and the same cursor serve
+// both. Only a single cell's caller keeps the cursor ([Query.Pinned]).
 func groupRows(ctx context.Context, tx *sql.Tx, axis groupAxis, key string,
 	where string, args []any, terms []sortTerm, limit int,
-	dayStart time.Time) ([]TaskRow, error) {
+	dayStart time.Time) ([]TaskRow, string, error) {
 
 	// THE JOINED FORM HERE, not the join-free one: this statement already
 	// carries the axis's join for the GROUP BY's sake, so comparing the
 	// joined column is one predicate rather than a second subquery.
 	clause, values := axis.joinedFilter(key)
-	rows, _, err := readTasksJoined(ctx, tx, axis.Join, axis.Args,
+	return readTasksJoined(ctx, tx, axis.Join, axis.Args,
 		"("+where+") AND "+clause,
 		append(append([]any{}, args...), values...), terms, limit, dayStart)
-	return rows, err
 }
 
 // joinedFilter is the axis as a predicate on the column its own join reached.
@@ -423,6 +429,10 @@ type grouped struct {
 	Groups    []Group
 	Truncated bool
 	Overlap   bool
+
+	// Cursor resumes a single cell's rows, and is empty for a board of
+	// several cells and for a cell whose rows all fit ([Query.Pinned]).
+	Cursor string
 }
 
 // ErrTooBroad refuses a read whose input is wider than the answer can be
@@ -497,9 +507,14 @@ func checkGroupBreadth(ctx context.Context, tx *sql.Tx, q Query,
 // statement narrowed to that column. A single window function would rank every
 // row in the corpus to return twenty per column, which is what a board would
 // pay on every poll.
+//
+// TWO PREDICATES, because a single cell pages: `where` is the whole matched
+// set, which every count is over, and `rowWhere` is that set after the page
+// boundary, which the rows are read from. They are the same predicate for a
+// board of several cells, which the parse refuses a cursor ([Query.Pinned]).
 func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, where string, args []any,
-	terms []sortTerm) (grouped, error) {
+	rowWhere string, rowArgs []any, terms []sortTerm) (grouped, error) {
 
 	// THE GATE BEFORE THE WORK, and before the axis is even compiled: what
 	// it refuses is the cost of the statements below, so paying any part of
@@ -513,8 +528,9 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	}
 	// THE GROUP FILTER IS ALREADY IN `where` — [compile] adds it, in its
 	// join-free form, so the count hint and the totals are narrowed by it
-	// too. Narrowing again here would double the predicate and, worse,
-	// would leave those two describing the whole board.
+	// too; applied here alone, those two would describe the whole board.
+	// The column count below adds the JOINED form beside it, for the
+	// reason given there.
 	rowsPer := q.GroupLimit
 	if rowsPer <= 0 {
 		rowsPer = GroupRowsDefault
@@ -530,12 +546,10 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	if q.GroupBy2 != "" {
 		columns = MaxGroupsWithSubgroups
 	}
-	// ONE COLUMN WITH ITS LANES is the one board that names a column, and
-	// the column has to be named in the JOINED form as well. `where`
-	// carries the join-free one, which says the task HAS that value — and
-	// on a label axis a task has several, so grouping what it admitted by
-	// the joined value drew a column for every other label those tasks
-	// carry.
+	// A NAMED COLUMN IS NAMED IN THE JOINED FORM AS WELL. `where` carries
+	// the join-free one, which says the task HAS that value — and on a
+	// label axis a task has several, so grouping what it admitted by the
+	// joined value drew a column for every other label those tasks carry.
 	counted, countArgs := where, args
 	if q.Group != "" {
 		clause, values := axis.joinedFilter(q.Group)
@@ -548,13 +562,22 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	}
 	groupLabels(groups, q.GroupBy, fields)
 
+	cursor := ""
 	for i := range groups {
-		rows, err := groupRows(ctx, tx, axis, groups[i].Key, where, args,
-			terms, rowsPer, q.DayStart)
+		rows, next, err := groupRows(ctx, tx, axis, groups[i].Key, rowWhere,
+			rowArgs, terms, rowsPer, q.DayStart)
 		if err != nil {
 			return grouped{}, err
 		}
 		groups[i].Rows = rows
+		// A SINGLE CELL IS THE ONE COLUMN THIS LOOP READS — the joined
+		// narrowing above leaves no other — so its cursor is the answer's.
+		// A pinned lane's column is narrowed to that lane by `where`
+		// ([compile]), so the column's rows and the lane's are one
+		// sequence, read below over the same page.
+		if q.Pinned() {
+			cursor = next
+		}
 		if q.GroupBy2 == "" {
 			continue
 		}
@@ -562,20 +585,25 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 		// One level and no more: a third would be a tree, and a board
 		// draws columns and swimlanes rather than a hierarchy.
 		inner, innerTruncated, err := readSubgroups(ctx, tx, q, fields, axis,
-			groups[i].Key, where, args, terms, rowsPer)
+			groups[i].Key, where, args, rowWhere, rowArgs, terms, rowsPer)
 		if err != nil {
 			return grouped{}, err
 		}
 		groups[i].Subgroups = inner
 		groups[i].SubgroupsTruncated = innerTruncated
 	}
-	return grouped{Groups: groups, Truncated: truncated, Overlap: axis.Multi}, nil
+	return grouped{Groups: groups, Truncated: truncated, Overlap: axis.Multi,
+		Cursor: cursor}, nil
 }
 
 // readSubgroups is the second axis within one column.
+//
+// Its counts are over `where` and its rows over `rowWhere`, for [readGroups]'
+// reason: a pinned lane pages, and its cursor is its column's.
 func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, outer groupAxis, key string,
-	where string, args []any, terms []sortTerm, rowsPer int) ([]Group, bool, error) {
+	where string, args []any, rowWhere string, rowArgs []any,
+	terms []sortTerm, rowsPer int) ([]Group, bool, error) {
 
 	inner, err := compileGroup(q.GroupBy2, fields)
 	if err != nil {
@@ -585,8 +613,6 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	// join rides with it — a subgroup of a tag column is still inside that
 	// tag.
 	outerClause, outerArgs := outer.joinedFilter(key)
-	scoped := "(" + where + ") AND " + outerClause
-	bound := append(append([]any{}, args...), outerArgs...)
 	joined := groupAxis{
 		Expr: inner.Expr, Join: outer.Join + inner.Join,
 		Args:  append(append([]any{}, outer.Args...), inner.Args...),
@@ -598,21 +624,26 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	// A NAMED SUBGROUP NARROWS THE INNER AXIS HERE in its JOINED form,
 	// beside the join-free one [compile] already put in `where`: on a label
 	// axis the join-free form says only that the task HAS the value, and
-	// grouping by the joined value would draw every other label too. Loading
-	// one lane further is `group=` with `subgroup=`, which is a list
-	// ([Query.Pinned]) rather than this.
-	if q.Subgroup != "" {
-		innerClause, innerArgs := inner.joinedFilter(q.Subgroup)
-		scoped += " AND " + innerClause
-		bound = append(append([]any{}, bound...), innerArgs...)
+	// grouping by the joined value would draw every other label too.
+	scope := func(where string, args []any) (string, []any) {
+		scoped := "(" + where + ") AND " + outerClause
+		bound := append(append([]any{}, args...), outerArgs...)
+		if q.Subgroup != "" {
+			innerClause, innerArgs := inner.joinedFilter(q.Subgroup)
+			scoped += " AND " + innerClause
+			bound = append(bound, innerArgs...)
+		}
+		return scoped, bound
 	}
-	counts, truncated, err := groupCounts(ctx, tx, joined, scoped, bound, MaxSubgroups)
+	counted, countArgs := scope(where, args)
+	paged, pageArgs := scope(rowWhere, rowArgs)
+	counts, truncated, err := groupCounts(ctx, tx, joined, counted, countArgs, MaxSubgroups)
 	if err != nil {
 		return nil, false, err
 	}
 	groupLabels(counts, q.GroupBy2, fields)
 	for i := range counts {
-		rows, err := groupRows(ctx, tx, joined, counts[i].Key, scoped, bound,
+		rows, _, err := groupRows(ctx, tx, joined, counts[i].Key, paged, pageArgs,
 			terms, rowsPer, q.DayStart)
 		if err != nil {
 			return nil, false, err

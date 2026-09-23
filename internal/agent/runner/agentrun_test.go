@@ -447,3 +447,69 @@ func TestAPhaseThatRanHereReportsTheNativeBackend(t *testing.T) {
 		t.Errorf("a native phase named a box: agent=%q id=%q", done.CodingAgent, done.SandboxID)
 	}
 }
+
+// A RESUMED RUN WHOSE LOG IS MISSING CALLS SAYS WHERE, on its record and to its
+// reviewer.
+//
+// A run an older build recorded kept only its first and newest calls, and the
+// ones between are kept nowhere. Handed over as though the calls that survived
+// were every call, a reviewer reads a post, a read and a submission as
+// consecutive when fifty-seven calls fell between them. The gap is said in the
+// place it fell — and only for the pass whose log it is: a later round's
+// review must not inherit it.
+func TestAResumedRunsDroppedCallsAreSaidWhereTheyFell(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	prov := &scriptedProvider{review: []llm.Completion{
+		submitCall(t, runner.SubmitReviewTool, `{"decision":"done","notes":"judged"}`),
+	}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+		agentRun: &recordingLauncher{},
+		pub:      pub,
+		resume: &runner.Resume{
+			State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
+			Answer: "posted the summary",
+			Bridged: []ledger.Call{
+				{Name: "read_page", Result: "a page"},
+				{Name: "read_issue", Result: "an issue"},
+				{Name: "slack_history", Result: "a thread"},
+			},
+			BridgedDropped: runner.DroppedCalls{Count: 57, After: 2},
+		},
+	})
+	ctx := context.Background()
+
+	w, _, err := r.Resume(ctx, nil)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if notes := completedPhase(t, pub, "execute").Notes; !strings.Contains(notes, "57 call(s)") {
+		t.Errorf("the pass's record does not say its log is missing calls: notes = %q", notes)
+	}
+
+	if _, err := r.Review(ctx, 1, w, nil); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	system := prov.requestsFor("review")[0].Messages[0].Content
+	issue, gap, history := strings.Index(system, "- read_issue("), strings.Index(system, "57 further call(s)"),
+		strings.Index(system, "- slack_history(")
+	if issue < 0 || gap < 0 || history < 0 {
+		t.Fatalf("the reviewer's tool log is missing a line (read_issue %d, gap %d, slack_history %d):\n%s",
+			issue, gap, history, system)
+	}
+	if issue >= gap || gap >= history {
+		t.Errorf("the gap is not where the calls fell, between the second call and the third:\n%s", system)
+	}
+
+	// A LATER PASS HOLDS ITS OWN CALLS, so its review says nothing about the
+	// earlier pass's gap.
+	if _, _, err := r.Execute(ctx, 2, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if _, err := r.Review(ctx, 2, turn.Work{Calls: []ledger.Call{{Name: "read_page"}}}, nil); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if later := prov.requestsFor("review")[1].Messages[0].Content; strings.Contains(later, "further call(s)") {
+		t.Errorf("a later round's review inherited the resumed pass's gap:\n%s", later)
+	}
+}

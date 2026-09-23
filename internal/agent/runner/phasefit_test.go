@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -166,5 +167,41 @@ func TestTheWaterLevelCutsOnlyTheLongest(t *testing.T) {
 	}
 	if _, ok := waterLevel([]*textSlot{{text: "…"}}, 10); ok {
 		t.Error("a tier holding nothing but marks reported room to shed")
+	}
+}
+
+// refusingPublisher refuses every event as too large, the way a NATS server
+// configured below the contract's ceiling refuses an event within it.
+type refusingPublisher struct {
+	mu       sync.Mutex
+	attempts int
+}
+
+func (p *refusingPublisher) Publish(context.Context, string, *events.Event) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.attempts++
+	return fmt.Errorf("publish: the server accepts less than this: %w", queue.ErrTooLarge)
+}
+
+// A RECORD REFUSED WITHIN THE CEILING IS NOT "FIT".
+//
+// A record that already fits the contract's ceiling and is refused anyway was
+// refused by a server configured below it. No cut answers that: the fit finds
+// nothing over the ceiling, cuts nothing, and publishing the same bytes again
+// is refused the same way — reported as a fit that cut no text, which is the
+// one account of the loss that points nowhere near its cause.
+func TestARecordRefusedWithinTheCeilingIsNotSentAgainAsFit(t *testing.T) {
+	t.Parallel()
+	pub := &refusingPublisher{}
+	var emu sync.Mutex
+	e := emitter{pub: pub, turn: Turn{RunID: "tn-1", AgentID: "agent-1"}, role: "Lead",
+		tally: &Spend{}, mu: &emu}
+	e.completed(t.Context(), phaseRecord{Phase: phase.Execute, Iteration: 1, Result: toolloop.Result{
+		RoundsUsed: 1, Executions: []toolloop.Execution{{Round: 1, Name: "read_page", Output: "a page"}},
+	}})
+	if pub.attempts != 1 {
+		t.Errorf("the record was published %d times, want once: a record within the ceiling has "+
+			"nothing a fit can cut", pub.attempts)
 	}
 }

@@ -949,50 +949,40 @@ func (q *Query) parseGrouping(p Params) error {
 		return fmt.Errorf("tracker: group_limit is %d — a column carries a "+
 			"number of rows, and a negative one is not a bound", q.GroupLimit)
 	}
-	// ONE CELL OF A BOARD IS A LIST, so the knob that bounds every column
-	// of a board has nothing to bound — `limit` is the page and `cursor`
-	// the next one. Accepting it silently would be a second spelling of
-	// `limit` that the answer ignored.
-	if q.Pinned() && q.GroupLimit != 0 {
-		return fmt.Errorf("tracker: group=%s names one column, and one column "+
-			"answers as a flat page — `limit` bounds it and `cursor` pages it; "+
-			"group_limit bounds each column of a board, and there is no board "+
-			"here", q.Group)
-	}
-	// AND A BOARD TAKES NO CURSOR, which it used to take and ignore: the
-	// grouped read never applied one, so a caller paging a board was handed
-	// its first page again, for ever, with nothing saying so.
-	if q.Grouped() && q.Cursor != "" {
-		return fmt.Errorf("tracker: group_by=%s answers a board, and a board "+
-			"has no cursor — across a set of columns there is no single order "+
-			"to resume after. Page one column with group=<its key>, which "+
-			"answers as a list", q.GroupBy)
+	// A BOARD OF SEVERAL CELLS TAKES NO CURSOR, and one is refused rather
+	// than applied or ignored. A keyset cursor resumes after one row in one
+	// order, and a board of several cells is several lists: applied to each,
+	// it would cut every column at a row from another; ignored, it hands a
+	// pager the first page again, for ever, with nothing saying so. The one
+	// board that pages is a single cell — see [Query.Pinned].
+	if q.GroupBy != "" && !q.Pinned() && q.Cursor != "" {
+		return fmt.Errorf("tracker: group_by=%s answers a board of several "+
+			"columns, and across a set of columns there is no single order to "+
+			"resume after — page one column with group=<its key> and the "+
+			"next_cursor that answer carries", q.GroupBy)
 	}
 	return nil
 }
 
 // Pinned reports a query that names ONE CELL of a board — a column with
-// `group=`, or a lane inside one with `group=` and `subgroup=` — and so
-// answers as an ordinary flat page with a cursor rather than as groups.
+// `group=`, or a lane inside one with `group=` and `subgroup=` — which is the
+// one grouped answer that pages.
 //
-// # Why a pinned column is not a one-column board
+// # Why one cell pages and a board does not
 //
-// A board carries a bounded slice of each column ([GroupRowsMax] at most) and
-// no cursor, so the rows past a column's slice are reached by asking for that
-// column on its own. If that question answered as a board too, it would stop
-// at the same slice. As a list, the column's rows page to the end and
-// [Answer.TotalHint] is the column's own count.
+// A board carries a bounded slice of each column (`group_limit`, at most
+// [GroupRowsMax]) and across its cells there is no single order to resume
+// after, so it mints no cursor. A single cell has exactly one order — the
+// query's own — so its answer is still that one cell, shaped like any other
+// column, and [Answer.NextCursor] resumes its rows after the last one it
+// carries. That is where the rows past a column's slice are reached, for
+// every axis, and each page is bounded by the same `group_limit` as the
+// board it came from.
 //
 // `group=` beside a SECOND axis and no `subgroup=` is still a board: the
 // lanes inside that one column.
 func (q Query) Pinned() bool {
 	return q.Group != "" && (q.GroupBy2 == "" || q.Subgroup != "")
-}
-
-// Grouped reports a query whose answer is a board's columns — [Answer.Groups]
-// — rather than rows.
-func (q Query) Grouped() bool {
-	return q.GroupBy != "" && !q.Pinned()
 }
 
 // sortKeys are the orderings a caller may ask for.

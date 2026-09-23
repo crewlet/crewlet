@@ -2,6 +2,7 @@ package queries_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -308,63 +309,157 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 	}
 }
 
-// A LONG RUN'S CALLS COME A PAGE AT A TIME, and every one of them is reachable.
-//
-// A bridged run can make thousands of calls, each carrying its output, so the
-// whole log in one answer is an answer of any size at all. The board carries
-// the first page and a cursor, and `turn_id` with `calls_after` reads on from
-// it — each call exactly once, in the order the run made them.
-func TestABridgedRunsCallsArePagedWithACursor(t *testing.T) {
-	t.Parallel()
-	store := seedRuns(t,
-		sandbox.PendingRun{TurnID: "t-long", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase},
-		sandbox.PendingRun{TurnID: "t-other", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase},
-	)
-	const total = 7
-	for i := range total {
-		if ok, err := store.AppendBridgeCall(t.Context(), "t-long", sandbox.BridgeCall{
+// appendCalls records n calls named c0… on a run, in order.
+func appendCalls(t *testing.T, store *sandbox.CoordStore, turnID string, n int) {
+	t.Helper()
+	for i := range n {
+		if ok, err := store.AppendBridgeCall(t.Context(), turnID, sandbox.BridgeCall{
 			Name: fmt.Sprintf("c%d", i),
 		}); err != nil || !ok {
 			t.Fatalf("AppendBridgeCall = %v, %v", ok, err)
 		}
 	}
+}
 
-	var seen []string
-	params := map[string]any{"turn_id": "t-long", "calls_limit": 3.0}
-	for pages := 0; ; pages++ {
+func callNames(t *testing.T, row map[string]any) []string {
+	t.Helper()
+	calls, ok := row["bridge_calls"].([]sandbox.BridgeCall)
+	if !ok {
+		t.Fatalf("bridge_calls = %#v, want the run's calls", row["bridge_calls"])
+	}
+	out := make([]string, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, call.Name)
+	}
+	return out
+}
+
+// THE BOARD SHOWS HOW A LONG RUN ENDED, and says what it leaves out and where.
+//
+// A bridged run ends by submitting, so a row carrying only the head of a long
+// log showed a run with no submission and named a call from its middle as its
+// last. Each row carries the log's first calls and then its newest, and counts
+// the calls between them at the place they fall — on the default page size,
+// the first and newest hundred of a run that made two hundred and fifty.
+func TestTheBoardShowsHowALongRunEnded(t *testing.T) {
+	t.Parallel()
+	store := seedRuns(t, sandbox.PendingRun{
+		TurnID: "t-long", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
+	})
+	const total = 250
+	appendCalls(t, store, "t-long", total-1)
+	if ok, err := store.AppendBridgeCall(t.Context(), "t-long", sandbox.BridgeCall{Name: "submit_work"}); err != nil || !ok {
+		t.Fatalf("AppendBridgeCall = %v, %v", ok, err)
+	}
+
+	row := askRuns(t, store)[0]
+	names := callNames(t, row)
+	page := queries.BridgeCallsPageDefault
+	if len(names) != 2*page {
+		t.Fatalf("the row carries %d calls, want the first %d and the newest %d", len(names), page, page)
+	}
+	if names[0] != "c0" || names[page-1] != fmt.Sprintf("c%d", page-1) {
+		t.Errorf("the row starts %q … %q, want the log's first %d calls", names[0], names[page-1], page)
+	}
+	if last := names[len(names)-1]; last != "submit_work" {
+		t.Errorf("the row's last call is %q, want the submission the run ended with", last)
+	}
+	if row["bridge_calls_total"] != total {
+		t.Errorf("bridge_calls_total = %v, want %d", row["bridge_calls_total"], total)
+	}
+	if row["bridge_calls_elided"] != total-2*page || row["bridge_calls_elided_after"] != page {
+		t.Errorf("elided = %v after %v, want the %d calls between the two ends, after the first %d",
+			row["bridge_calls_elided"], row["bridge_calls_elided_after"], total-2*page, page)
+	}
+	if _, ok := row["bridge_calls_next"].(uint64); !ok {
+		t.Errorf("bridge_calls_next = %#v, want the cursor the middle is read from", row["bridge_calls_next"])
+	}
+}
+
+// THE MIDDLE IS READ FROM THE CURSOR, every call of it exactly once.
+//
+// A bridged run can make thousands of calls, each carrying its output, so the
+// whole log in one answer is an answer of any size at all. `turn_id` with
+// `calls_after` reads on from the cursor a row hands out, and the calls it
+// reaches are the ones the row counted between its two ends — which, with the
+// row's own, are every call the run made, in order.
+func TestABridgedRunsMiddleIsPagedWithACursor(t *testing.T) {
+	t.Parallel()
+	store := seedRuns(t,
+		sandbox.PendingRun{TurnID: "t-long", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase},
+		sandbox.PendingRun{TurnID: "t-other", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase},
+	)
+	const total = 9
+	appendCalls(t, store, "t-long", total)
+
+	params := map[string]any{"turn_id": "t-long", "calls_limit": 2.0}
+	rows := askRunsWith(t, store, params)
+	if len(rows) != 1 || rows[0]["turn_id"] != "t-long" {
+		t.Fatalf("turn_id did not narrow the answer to the one run: %d rows", len(rows))
+	}
+	first := rows[0]
+	ends := callNames(t, first)
+	if want := []string{"c0", "c1", "c7", "c8"}; !slices.Equal(ends, want) {
+		t.Fatalf("the first answer carries %q, want the first two and the newest two", ends)
+	}
+	elided, _ := first["bridge_calls_elided"].(int)
+	if elided != 5 || first["bridge_calls_elided_after"] != 2 {
+		t.Fatalf("elided = %v after %v, want 5 after 2", first["bridge_calls_elided"], first["bridge_calls_elided_after"])
+	}
+
+	var middle []string
+	next, more := first["bridge_calls_next"]
+	for pages := 0; more && len(middle) < elided; pages++ {
 		if pages > total {
 			t.Fatal("the pages never ended")
 		}
-		rows := askRunsWith(t, store, params)
-		if len(rows) != 1 || rows[0]["turn_id"] != "t-long" {
-			t.Fatalf("turn_id did not narrow the answer to the one run: %d rows", len(rows))
-		}
-		row := rows[0]
+		params = map[string]any{"turn_id": "t-long", "calls_limit": 2.0,
+			"calls_after": float64(next.(uint64))}
+		row := askRunsWith(t, store, params)[0]
 		if row["bridge_calls_total"] != total {
 			t.Errorf("bridge_calls_total = %v, want %d on every page", row["bridge_calls_total"], total)
 		}
-		calls, _ := row["bridge_calls"].([]sandbox.BridgeCall)
-		if len(calls) > 3 {
-			t.Fatalf("a page of limit 3 carried %d calls", len(calls))
+		page := callNames(t, row)
+		if len(page) > 2 {
+			t.Fatalf("a page of limit 2 carried %d calls", len(page))
 		}
-		for _, call := range calls {
-			seen = append(seen, call.Name)
-		}
-		next, more := row["bridge_calls_next"]
-		if !more {
-			break
-		}
-		params = map[string]any{"turn_id": "t-long", "calls_limit": 3.0,
-			"calls_after": float64(next.(uint64))}
+		middle = append(middle, page...)
+		next, more = row["bridge_calls_next"]
 	}
-	if want := []string{"c0", "c1", "c2", "c3", "c4", "c5", "c6"}; !slices.Equal(seen, want) {
-		t.Errorf("paged %q, want %q", seen, want)
+	middle = middle[:min(len(middle), elided)]
+	whole := slices.Concat(ends[:2], middle, ends[2:])
+	if want := []string{"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"}; !slices.Equal(whole, want) {
+		t.Errorf("the row and its pages read %q, want %q", whole, want)
+	}
+}
+
+// A ROW THAT CARRIES THE WHOLE LOG HANDS OUT NO CURSOR. With the first calls
+// and the newest together reaching every call, a cursor would send a reader to
+// fetch the newest a second time.
+func TestARowHoldingTheWholeLogHasNoCursor(t *testing.T) {
+	t.Parallel()
+	store := seedRuns(t, sandbox.PendingRun{
+		TurnID: "t-short", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
+	})
+	appendCalls(t, store, "t-short", 4)
+	row := askRunsWith(t, store, map[string]any{"turn_id": "t-short", "calls_limit": 3.0})[0]
+	if got := callNames(t, row); !slices.Equal(got, []string{"c0", "c1", "c2", "c3"}) {
+		t.Errorf("the row carries %q, want all four calls", got)
+	}
+	if row["bridge_calls_elided"] != 0 {
+		t.Errorf("bridge_calls_elided = %v with every call on the row", row["bridge_calls_elided"])
+	}
+	for _, key := range []string{"bridge_calls_next", "bridge_calls_elided_after"} {
+		if v, present := row[key]; present {
+			t.Errorf("%s = %v with every call on the row", key, v)
+		}
 	}
 }
 
 // A CURSOR BELONGS TO ONE RUN'S LOG. Applied to the whole board it would start
 // every run's page at another run's place, so it is refused without a run to
-// belong to — as is a cursor no answer could have handed out.
+// belong to — as is a cursor no answer could have handed out, rather than read
+// as the start of the log.
 func TestACursorWithoutItsRunIsRefused(t *testing.T) {
 	t.Parallel()
 	store := seedRuns(t, sandbox.PendingRun{
@@ -375,6 +470,10 @@ func TestACursorWithoutItsRunIsRefused(t *testing.T) {
 	for _, params := range []map[string]any{
 		{"calls_after": 3.0},
 		{"turn_id": "t-1", "calls_after": -1.0},
+		// Read as zero, either would answer the first page to a reader
+		// asking for the one after it.
+		{"turn_id": "t-1", "calls_after": "next"},
+		{"turn_id": "t-1", "calls_after": 2.5},
 	} {
 		if _, err := r.Answer(t.Context(), "sandbox_runs", params, ""); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("params %v answered %v, want ErrBadParams", params, err)
@@ -383,24 +482,39 @@ func TestACursorWithoutItsRunIsRefused(t *testing.T) {
 }
 
 // A RUN AN OLDER BUILD RECORDED still shows the calls it kept, and says how
-// many of them its bounded list dropped. Its calls are on the run's row rather
-// than in records of their own, and the board reads them from there.
+// many of them its bounded list dropped and where. Its calls are on the run's
+// row rather than in records of their own, and the board reads them from
+// there — with no cursor, because nothing holds the calls it dropped.
 func TestARunAnOlderBuildRecordedShowsWhatItsRowDropped(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
-	raw := []byte(`{"turn_id":"t-older","status":"running","launch_id":"launch-older",` +
-		`"bridge_calls":[{"name":"get_work_item","at":"2026-06-01T10:00:00Z"}],` +
-		`"bridge_calls_elided":4}`)
+	// The row as an older build left a long run's: its first and newest
+	// halves kept, and the middle between them counted.
+	kept := make([]map[string]any, 0, sandbox.MaxBridgeCalls)
+	for i := range sandbox.MaxBridgeCalls {
+		kept = append(kept, map[string]any{"name": fmt.Sprintf("c%03d", i), "at": "2026-06-01T10:00:00Z"})
+	}
+	raw, err := json.Marshal(map[string]any{
+		"turn_id": "t-older", "status": "running", "launch_id": "launch-older",
+		"bridge_calls": kept, "bridge_calls_elided": 41,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := fleet.CreateSandboxRun(t.Context(), "t-older", raw); err != nil {
 		t.Fatalf("CreateSandboxRun: %v", err)
 	}
 	row := askRuns(t, sandbox.NewCoordStore(fleet))[0]
-	if row["bridge_calls_elided"] != 4 {
-		t.Errorf("bridge_calls_elided = %v — a log that silently skips is a "+
-			"log that lies about what the run did", row["bridge_calls_elided"])
+	if row["bridge_calls_elided"] != 41 || row["bridge_calls_elided_after"] != sandbox.MaxBridgeCalls/2 {
+		t.Errorf("bridge_calls_elided = %v after %v, want 41 after the first %d — a log that "+
+			"silently skips is a log that lies about what the run did",
+			row["bridge_calls_elided"], row["bridge_calls_elided_after"], sandbox.MaxBridgeCalls/2)
 	}
-	calls, ok := row["bridge_calls"].([]sandbox.BridgeCall)
-	if !ok || len(calls) != 1 || calls[0].Name != "get_work_item" {
-		t.Fatalf("bridge_calls = %#v, want the call the row kept", row["bridge_calls"])
+	if v, present := row["bridge_calls_next"]; present {
+		t.Errorf("bridge_calls_next = %v for calls no store holds", v)
+	}
+	if got := callNames(t, row); len(got) != sandbox.MaxBridgeCalls || got[0] != "c000" ||
+		got[len(got)-1] != fmt.Sprintf("c%03d", sandbox.MaxBridgeCalls-1) {
+		t.Fatalf("bridge_calls = %d calls, want every one of the %d the row kept", len(got), sandbox.MaxBridgeCalls)
 	}
 }

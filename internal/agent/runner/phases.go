@@ -3,7 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
-
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -168,14 +168,39 @@ type Resume struct {
 	// from the run's own durable log.
 	//
 	// It is the whole record for that shape — every call the run made, in
-	// order — and it has to come from the log rather than from memory: the
-	// process resuming may not be the one that launched, so its surface is
-	// fresh and has executed nothing. Ignored by a native resume, which
-	// replays the conversation instead.
+	// order — with ONE EXCEPTION, which BridgedDropped states: a launch
+	// recorded by an older build on the same coordination store, whose log
+	// kept only the ends of a long run. It has to come from the log rather
+	// than from memory: the process resuming may not be the one that
+	// launched, so its surface is fresh and has executed nothing. Ignored by
+	// a native resume, which replays the conversation instead.
 	Bridged []ledger.Call
+
+	// BridgedDropped is the stretch of the run's calls that Bridged does not
+	// hold because the build that recorded the run did not keep it. Zero on
+	// every launch this build recorded; see [DroppedCalls].
+	BridgedDropped DroppedCalls
 
 	// Run describes the detached run this resume is collecting.
 	Run RunRecord
+}
+
+// DroppedCalls is a stretch of a bridged run's calls that no log holds.
+//
+// An older build kept a run's calls only on the run's own row, in a list that
+// holds its first and newest calls and drops the ones between them. A run such
+// a build launched can be collected by this one during a rolling upgrade, and
+// the calls it dropped are then kept nowhere. They are carried as a count and
+// a place rather than passed over, so the resumed phase's record and the
+// reviewer both say where the log is missing calls.
+type DroppedCalls struct {
+	// Count is how many calls were dropped.
+	Count int
+
+	// After is how many of the calls that were kept come before them, which
+	// is never more than [Resume.Bridged] holds: both are read from the one
+	// list the older build kept.
+	After int
 }
 
 // RunRecord is what a phase event says about the box a phase ran in.
@@ -220,10 +245,20 @@ type Runner struct {
 
 	// mu guards suspension, which the Execute phase writes and the engine
 	// reads once the turn returns, onboardedThisTurn, which the onboarding
-	// pass writes and the executor reads, and guard, which surfaceWith
-	// writes and a suspend reads back.
+	// pass writes and the executor reads, guard, which surfaceWith writes
+	// and a suspend reads back, and dropped, which each executor pass writes
+	// and the review of that pass reads.
 	mu         sync.Mutex
 	suspension *Suspension
+
+	// dropped is the stretch of calls the record of the LAST executor pass
+	// does not hold, for the review that judges that pass. Only a resumed
+	// agent-mode run can have one ([Resume.BridgedDropped]); every executor
+	// pass sets it on entry, so a later round never inherits an earlier
+	// round's gap. A field for the reason guard is one: the review is the one
+	// reader, and [turn.Work] is the loop's vocabulary, which carries no such
+	// fact.
+	dropped DroppedCalls
 
 	// guard is the required-skill gate of the phase currently being built
 	// or run, or nil where this turn arms none.
@@ -285,6 +320,10 @@ func New(cfg Config) (*Runner, error) {
 // it was never shown — so it guessed, and the engine spent a whole subsystem
 // reconciling those guesses with reality.
 func (r *Runner) Execute(ctx context.Context, round int, notes string, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
+	// Nothing this pass hands a review is missing calls: a native pass is
+	// judged on its own surface's record, and an agent-mode launch suspends
+	// before any review.
+	r.setDropped(DroppedCalls{})
 	if r.cfg.AgentRun != nil {
 		// AGENT MODE. The executor is somebody else's loop, detached; see
 		// agentrun.go for what that does and does not change. The branch
@@ -397,6 +436,10 @@ type work struct {
 
 	// run names the box this pass ran in, where it was not this process.
 	run RunRecord
+
+	// notes is what the pass's record has to say about itself beyond what
+	// finishWork derives, or "".
+	notes string
 }
 
 // finishWork turns a finished executor pass into the turn's Work, publishing
@@ -435,7 +478,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		Phase: phase.Execute, Iteration: round, System: w.system, User: w.user,
 		Result: w.res.Result, Exhausted: w.res.Exhausted, Elapsed: w.res.Elapsed,
 		Decision: payload.Outcome, Rescued: !submitted,
-		Notes:     missingNote(missing),
+		Notes:     joinNotes(missingNote(missing), w.notes),
 		Run:       w.run,
 		Available: w.surface.Active(),
 		// The names the executor was shown as prose, with no schemas.
@@ -482,7 +525,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		Evidence:          w.Evidence,
 		OpenQuestions:     w.OpenQuestions,
 		Produced:          reviewArtifact(w),
-		ToolLog:           ledger.FormatCalls(w.Calls, ledger.FormatOptions{Skip: r.cfg.SkipNames}),
+		ToolLog:           reviewLog(w.Calls, r.lastDropped(), r.cfg.SkipNames),
 		EarlierIterations: ledger.RenderIterations(history, r.cfg.SkipNames),
 	})
 
@@ -585,6 +628,63 @@ func missingNote(missing []string) string {
 		return ""
 	}
 	return "missing tools: " + strings.Join(missing, ", ")
+}
+
+// joinNotes joins a record's notes, leaving out the empty ones.
+func joinNotes(notes ...string) string {
+	return strings.Join(slices.DeleteFunc(notes, func(n string) bool { return n == "" }), "; ")
+}
+
+// droppedNote is what a pass's record says about the calls its log does not
+// hold, or "" when it holds them all.
+func droppedNote(d DroppedCalls) string {
+	if d.Count == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d call(s) this run made after its first %d are not in its log: the build "+
+		"that recorded the run kept only its first and newest calls, and no copy of the rest exists",
+		d.Count, d.After)
+}
+
+// reviewLog is the reviewer's verbatim tool log of the pass under review,
+// saying in place where that pass's log is missing calls.
+//
+// IN PLACE rather than beside the log, because the order is the evidence: a
+// reviewer reading that a run posted, then read, then submitted has to be told
+// that calls it cannot see fall between the read and the submission, not that
+// some are missing somewhere.
+func reviewLog(calls []ledger.Call, dropped DroppedCalls, skip []string) string {
+	opts := ledger.FormatOptions{Skip: skip}
+	if dropped.Count == 0 {
+		return ledger.FormatCalls(calls, opts)
+	}
+	gap := fmt.Sprintf("- (%d further call(s) the run made here are not in its log: the build "+
+		"that recorded the run kept only its first and newest calls)", dropped.Count)
+	var parts []string
+	// FormatCalls answers "(none)" for a stretch with nothing to render,
+	// which beside the gap line would read as a log that is empty.
+	for _, stretch := range []string{
+		ledger.FormatCalls(calls[:dropped.After], opts), gap, ledger.FormatCalls(calls[dropped.After:], opts),
+	} {
+		if stretch != "(none)" {
+			parts = append(parts, stretch)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// setDropped records the gap in the log of the executor pass now running, and
+// lastDropped reads it back for the review of that pass. See [Runner.dropped].
+func (r *Runner) setDropped(d DroppedCalls) {
+	r.mu.Lock()
+	r.dropped = d
+	r.mu.Unlock()
+}
+
+func (r *Runner) lastDropped() DroppedCalls {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.dropped
 }
 
 // runPhase drives one phase's loop, extending it when the judge allows.

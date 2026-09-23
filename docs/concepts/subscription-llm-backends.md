@@ -255,21 +255,31 @@ a run may not be the one that launched it, and without it a restart
 mid-run would leave the reviewer judging a turn whose entire tool log is
 gone. Nothing drops a call from it however long the run goes, so the
 submission's citations and the delivery check see a delivery made in the
-middle of a long run as surely as one made at its end. A call whose
-output is too large for one record keeps the head of it, marked; see
+middle of a long run as surely as one made at its end. The one exception
+is a run an older build recorded during a rolling upgrade, whose log
+kept only the first and last 100 calls of a long run: the calls between
+are kept nowhere, so the resume is told how many are missing and where,
+and says so on the phase's record and in the reviewer's tool log — but a
+delivery among them is one the delivery check cannot see. A call too
+large for one record is fitted to it, and the cut is marked; see
 [Code Sandbox § The tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
 for that, for the bounded copy the run's row still keeps for older
-builds during a rolling upgrade, and for how the run board pages a long
-log.
+builds, and for how `sandbox_runs` serves a long log.
 
 The resumed phase's own record carries every one of those calls too. A
 phase record too large for one event (8 MiB) is not dropped: its longest
 texts are cut to a common level until it fits — the tool results first,
 then the tool arguments, then the prose — each ending in `…`, a cut tool
-call carrying its whole length as `result_bytes` (or `arguments_bytes`),
-and the record's notes say it was cut (`phase_record_fitted` in the log).
-Texts shorter than the level are left whole. What was cut is kept whole
-nowhere else: it was in the phase's own conversation when it ran.
+call carrying its whole length as `result_bytes`, `error_bytes` or
+`arguments_bytes`, and the record's notes say it was cut
+(`phase_record_fitted` in the log). Texts shorter than the level are left
+whole. What was cut is kept whole nowhere else: it was in the phase's own
+conversation when it ran. A record refused although it is *within* 8 MiB
+was refused by a NATS server configured below that ceiling, which no cut
+can answer: the node logs `phase_record_refused_within_ceiling`, naming
+`max_payload`, and the record is not published. A node does not boot
+against an external cluster whose server announces less, so this is a
+server it met later, after a reconnect.
 
 #### Code work inside the run
 

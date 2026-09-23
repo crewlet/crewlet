@@ -311,7 +311,17 @@ func TestAPurgeLeavesTheHistorysSkeletonAndNoneOfItsContent(t *testing.T) {
 		t.Fatalf("purge: %v", err)
 	}
 	r.drain()
-	line := historyExcerpt(t, r, "task", "t-1")
+	purgeLine := func() string {
+		t.Helper()
+		for _, record := range r.activity(tracker.ActivityQuery{Task: key}).Records {
+			if record.Kind == tracker.ChangePurged {
+				return record.Excerpt
+			}
+		}
+		t.Fatalf("the feed for %s holds no purge row", key)
+		return ""
+	}
+	line := purgeLine()
 	for _, want := range []string{key, "was purged by ana", "asked for by legal"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("the purge's own row reads %q and does not say %q — with "+
@@ -320,10 +330,10 @@ func TestAPurgeLeavesTheHistorysSkeletonAndNoneOfItsContent(t *testing.T) {
 		}
 	}
 	// AND A REDELIVERY OF THE PURGE ITSELF, which runs the scrub again when
-	// the purge's own rows already exist — the one row it must never empty.
+	// the purge's own rows already exist.
 	r.redeliver(r.consumed)
-	if again := historyExcerpt(t, r, "task", "t-1"); again != line {
-		t.Fatalf("a redelivered purge rewrote its own row from %q to %q", line, again)
+	if again := purgeLine(); again != line {
+		t.Fatalf("a redelivered purge changed its own line from %q to %q", line, again)
 	}
 
 	for _, secret := range secrets {
@@ -388,6 +398,90 @@ func TestAPurgeLeavesTheHistorysSkeletonAndNoneOfItsContent(t *testing.T) {
 	if marked == 0 {
 		t.Error("bob's notice about the purged task is gone — the purge " +
 			"empties what it said, not that he was told")
+	}
+}
+
+// A REDELIVERED PURGE LEAVES ITS OWN LINES WHOLE.
+//
+// The scrub empties every row about the purged task except the two the purge
+// itself wrote: its history row and the project lead's notice, which carry the
+// key, who purged it and why. On first apply the scrub runs before either
+// exists; a redelivery runs it again with both in place, and only the
+// exclusions by the purge's own id keep them. The notice's content flag has
+// the same exclusion, or the lead's line would be marked as emptied content.
+func TestARedeliveredPurgeLeavesItsOwnLinesWhole(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const remark = "the draft terms are attached"
+	task := newTask("t-1")
+	task.Assignee = "bob"
+	if _, err := r.writer.CreateTask(t.Context(), "op-create", task, nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	r.drain()
+	key := r.strings(`SELECT key FROM tracker_tasks WHERE id = 't-1'`)[0]
+	if _, err := r.writer.UpdateTask(t.Context(), "op-comment", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+			ID: "cm-1", Task: "t-1", Author: "ana",
+			AuthorKind: tracker.AuthorHuman, Body: remark, CreatedAt: wednesday,
+		}}, tracker.ChangeComment, &tracker.Notify{
+			Kind: tracker.ChangeComment, Excerpt: remark, CommentID: "cm-1",
+			Snapshot: tracker.Snapshot{
+				Key: key, Project: "ENG", Assignee: "bob",
+				CommentAuthorKind: tracker.AuthorHuman,
+			},
+		}); err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+
+	r.writer.Leads = fixedLeads{project: "eng-lead"}
+	operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+	if _, err := operator.PurgeTask(t.Context(), "op-purge", "t-1", "ENG",
+		"asked for by legal"); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	r.drain()
+	purgeAt := r.consumed
+
+	notice := func(handle string) tracker.InboxNotice {
+		t.Helper()
+		inbox, err := r.reader.Inbox(t.Context(), tracker.InboxQuery{
+			Handle: handle, IncludeSnoozed: true, Level: statelog.ReadStale,
+		}, wednesday)
+		if err != nil {
+			t.Fatalf("read %s's inbox: %v", handle, err)
+		}
+		for _, n := range inbox.Notices {
+			if n.SubjectID == "t-1" {
+				return n
+			}
+		}
+		t.Fatalf("%s holds no notice about t-1", handle)
+		return tracker.InboxNotice{}
+	}
+	stored := historyExcerpt(t, r, "task", "t-1")
+	if !strings.Contains(stored, "asked for by legal") {
+		t.Fatalf("the purge's history row reads %q, want the lead's line", stored)
+	}
+	for _, pass := range []string{"applied", "redelivered"} {
+		if pass == "redelivered" {
+			r.redeliver(purgeAt)
+		}
+		if got := historyExcerpt(t, r, "task", "t-1"); got != stored {
+			t.Errorf("%s, the purge's own history row reads %q, want %q",
+				pass, got, stored)
+		}
+		if lead := notice("eng-lead"); lead.Excerpt != stored || lead.ContentPurged {
+			t.Errorf("%s, the lead's notice reads %q with content_purged=%v — "+
+				"want the purge's line, not marked as emptied content",
+				pass, lead.Excerpt, lead.ContentPurged)
+		}
+		if bob := notice("bob"); bob.Excerpt != "" || !bob.ContentPurged {
+			t.Errorf("%s, bob's notice about the comment reads %q with "+
+				"content_purged=%v — want it emptied and marked", pass,
+				bob.Excerpt, bob.ContentPurged)
+		}
 	}
 }
 

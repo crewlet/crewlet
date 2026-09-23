@@ -952,15 +952,16 @@ const (
 	// MaxGoalOwners, MaxGoalMembers, MaxGoalTargets, MaxGoalUpdates and
 	// MaxTasksPerTarget bound a goal.
 	//
-	// MaxGoalUpdates is how many health updates a goal ever holds, and a
-	// save that would pass it is REFUSED ([ErrGoalUpdatesFull]) — none is
+	// MaxGoalUpdates is how many health updates a goal takes, and a save
+	// that would ADD one past it is REFUSED ([ErrGoalUpdatesFull]) — none is
 	// dropped to make room. It is DERIVED rather than chosen: a goal is saved
 	// whole, updates and all, in one record, so the cap is what
 	// [MaxCommitBytes] leaves once every other part of a goal is at its own
 	// cap, measured at the six-fold escaping the task patch's maximum is
-	// measured at. Seventy-three fit and seventy-four do not
-	// (TestAGoalAtEveryCapFitsOneRecord); sixty-four leaves nine updates of
-	// room for a field a goal gains later.
+	// measured at. Run with this cap raised, TestAGoalAtEveryCapFitsOneRecord
+	// passes at seventy-three and is refused as an oversized record at
+	// seventy-four; sixty-four leaves nine updates of room for a field a goal
+	// gains later.
 	MaxGoalOwners  = 8
 	MaxGoalMembers = 32
 	MaxGoalTargets = 32

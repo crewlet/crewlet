@@ -521,6 +521,79 @@ func TestAFullGoalRefusesAnUpdateAndDropsNone(t *testing.T) {
 	}
 }
 
+// A GOAL ALREADY PAST THE CAP STILL TAKES EVERY SAVE THAT ADDS NO UPDATE.
+//
+// The cap is enforced where an update is ADDED, and the applier takes a goal
+// whole from its record — so a goal written under a larger cap, by an earlier
+// build or by an older peer mid-upgrade, lands holding more updates than this
+// build stores. Refusing every save to it refused the health change, the rename
+// and the archive the refusal itself names as the way forward, and the goal
+// could never be edited again.
+func TestAGoalPastTheCapStillTakesEverySaveThatAddsNoUpdate(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	held := tracker.MaxGoalUpdates + 6
+	stored := aGoal("g-1", func(g *tracker.Goal) {
+		g.V = tracker.DocumentVersion
+		g.CreatedAt, g.UpdatedAt, g.CreatedBy = wednesday, wednesday, "ana"
+		for i := range held {
+			g.Updates = append(g.Updates, tracker.GoalUpdate{
+				At: wednesday, Author: "ana",
+				Health: string(tracker.HealthOnTrack), Text: fmt.Sprintf("week %d", i),
+			})
+		}
+	})
+	// THE RECORD AN EARLIER CAP LET THROUGH, published whole: the goal verb
+	// itself refuses to write it, which is the point.
+	if _, err := r.writer.WriteDocument(t.Context(), "op-earlier",
+		tracker.GoalSubject("g-1"), "", stored, tracker.ChangeGoalUpdated,
+		nil); err != nil {
+		t.Fatalf("seed a goal past the cap: %v", err)
+	}
+	r.drain()
+	if got := len(r.goals(tracker.GoalQuery{ID: "g-1"}).Goals[0].Updates); got != held {
+		t.Fatalf("the seeded goal holds %d updates, want %d, so this case is not "+
+			"the shape it names", got, held)
+	}
+
+	// EACH SAVE KEEPS WHAT THE ONE BEFORE IT SET, because a goal save is a
+	// whole post-state and a save built from scratch would undo it.
+	saved := aGoal("g-1", nil)
+	for _, save := range []struct {
+		name   string
+		mutate func(*tracker.Goal)
+	}{
+		{"a health change", func(g *tracker.Goal) { g.Health = string(tracker.HealthAtRisk) }},
+		{"a rename", func(g *tracker.Goal) { g.Name = "Ship the other thing" }},
+		{"an archive", func(g *tracker.Goal) { g.Archived = true }},
+	} {
+		save.mutate(&saved)
+		if _, err := r.writer.WriteGoal(t.Context(), "op-"+save.name, saved); err != nil {
+			t.Fatalf("%s adds no update and was refused on a goal past the "+
+				"cap: %v", save.name, err)
+		}
+		r.drain()
+	}
+	got := r.goals(tracker.GoalQuery{ID: "g-1", Archived: true}).Goals[0]
+	if got.Health != tracker.HealthAtRisk || got.Name != "Ship the other thing" ||
+		!got.Archived || len(got.Updates) != held {
+		t.Fatalf("the goal reads %q, health %q, archived %v and %d updates — "+
+			"want every save applied and all %d updates kept", got.Name,
+			got.Health, got.Archived, len(got.Updates), held)
+	}
+
+	// AND AN UPDATE IS STILL REFUSED, because that is the save that grows it.
+	saved.Updates = []tracker.GoalUpdate{{
+		Health: string(tracker.HealthAtRisk), Text: "one more",
+	}}
+	_, err := r.writer.WriteGoal(t.Context(), "op-one-more", saved)
+	if !errors.Is(err, tracker.ErrGoalUpdatesFull) {
+		t.Fatalf("an update on a goal past the cap answered %v, want "+
+			"ErrGoalUpdatesFull", err)
+	}
+}
+
 // A GOAL AT EVERY CAP FITS ONE RECORD.
 //
 // A goal is saved whole, updates and all, so [tracker.MaxGoalUpdates] is not a

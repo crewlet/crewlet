@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -24,31 +25,42 @@ import (
 // turn that acted on nothing.
 
 // resumeBridged reads what an agent-mode run called over the bridge, for the
-// phase its resume rebuilds.
+// phase its resume rebuilds: the calls, and the stretch of them no log holds.
 //
 // EVERY CALL, from the run's own log in the coordination store — the whole
 // record, since the process collecting a run may not be the one that launched
-// it and its surface has executed nothing. A native resume replays its own
-// conversation instead and reads nothing here, so a store it cannot reach does
-// not stop it.
+// it and its surface has executed nothing. The one log that can be missing
+// calls is a launch an older build recorded, which kept only the ends of a
+// long run; that stretch is carried to the resume as a count and a place (see
+// [runner.DroppedCalls]) and logged here, because it is missing for good. A
+// native resume replays its own conversation instead and reads nothing here,
+// so a store it cannot reach does not stop it.
 //
 // A READ THAT FAILS FAILS THE RESUME, which the coordinator hands back for a
 // retry. Resuming on an empty log instead would have the delivery check read a
 // turn that answered somebody as one that reached nobody, and send it round to
 // answer them again.
-func (e *Engine) resumeBridged(ctx context.Context, in resumeInput) ([]ledger.Call, error) {
+func (e *Engine) resumeBridged(ctx context.Context, in resumeInput) ([]ledger.Call, runner.DroppedCalls, error) {
 	if !in.State.AgentRun {
-		return nil, nil
+		return nil, runner.DroppedCalls{}, nil
 	}
 	if e.sandboxPending == nil {
-		return nil, fmt.Errorf("%w: run %s is an agent-mode run and this node holds no run "+
-			"store to read its bridged calls from", sandbox.ErrResumeUnavailable, in.Run.TurnID)
+		return nil, runner.DroppedCalls{}, fmt.Errorf("%w: run %s is an agent-mode run and this node "+
+			"holds no run store to read its bridged calls from", sandbox.ErrResumeUnavailable, in.Run.TurnID)
 	}
 	logged, err := e.sandboxPending.BridgeCalls(ctx, in.Run)
 	if err != nil {
-		return nil, err
+		return nil, runner.DroppedCalls{}, err
 	}
-	return bridgedCalls(logged), nil
+	dropped := runner.DroppedCalls{Count: logged.Dropped, After: logged.DroppedAfter}
+	if dropped.Count > 0 {
+		log.WarnContext(ctx, "sandbox_bridge_calls_not_kept",
+			"turn_id", in.Run.TurnID, "launch_id", in.Run.LaunchID,
+			"calls_kept", len(logged.Calls), "calls_not_kept", dropped.Count, "not_kept_after", dropped.After,
+			"detail", "an older build recorded this run and kept only the ends of its log; the "+
+				"resumed phase's record and its review say where calls are missing")
+	}
+	return bridgedCalls(logged.Calls), dropped, nil
 }
 
 // bridgedCalls turns a run's durable bridged-call log into the ledger shape
@@ -56,10 +68,11 @@ func (e *Engine) resumeBridged(ctx context.Context, in resumeInput) ([]ledger.Ca
 //
 // The delivery check, the submission's citations and the iteration ledger all
 // read the result, so it keeps every field they read. A call whose arguments
-// cannot be decoded — or that the store did not keep, see
-// [sandbox.BridgeCall.ArgsBytes] — keeps its name and loses its arguments,
-// which renders one ledger line worse; failing the resume over it would lose
-// the whole turn.
+// cannot be decoded keeps its name and loses its arguments, which renders one
+// ledger line worse; failing the resume over it would lose the whole turn.
+// Arguments the store could not keep are not that case: they are recorded as
+// [sandbox.ArgsNotKept], which decodes, so the marker is what every reader of
+// the call's arguments shows.
 func bridgedCalls(logged []sandbox.BridgeCall) []ledger.Call {
 	out := make([]ledger.Call, 0, len(logged))
 	for _, call := range logged {

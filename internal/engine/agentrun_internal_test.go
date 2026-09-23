@@ -2,12 +2,15 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -15,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue/memory"
@@ -576,14 +580,15 @@ func TestTheResumeSeesADeliveryInTheMiddleOfALongRun(t *testing.T) {
 	}
 
 	e := &Engine{sandboxPending: store}
-	calls, err := e.resumeBridged(ctx, resumeInput{
+	calls, dropped, err := e.resumeBridged(ctx, resumeInput{
 		Run: run, State: execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
 	})
 	if err != nil {
 		t.Fatalf("resumeBridged: %v", err)
 	}
-	if len(calls) != total {
-		t.Fatalf("the resume read %d calls, want all %d the run made", len(calls), total)
+	if len(calls) != total || dropped != (runner.DroppedCalls{}) {
+		t.Fatalf("the resume read %d calls and %+v dropped, want all %d the run made and none dropped",
+			len(calls), dropped, total)
 	}
 	surface := turn.Surface{Deliveries: map[string]string{"slack_post": "slack"}}
 	if !turn.DeliveredTo(calls, surface, turn.ToolReply("slack")) {
@@ -595,8 +600,8 @@ func TestTheResumeSeesADeliveryInTheMiddleOfALongRun(t *testing.T) {
 // failingCalls is a run store whose bridged-call log cannot be read.
 type failingCalls struct{ sandbox.PendingStore }
 
-func (failingCalls) BridgeCalls(context.Context, sandbox.PendingRun) ([]sandbox.BridgeCall, error) {
-	return nil, errors.New("coordination store unreachable")
+func (failingCalls) BridgeCalls(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
+	return sandbox.BridgeLog{}, errors.New("coordination store unreachable")
 }
 
 // A LOG THAT CANNOT BE READ FAILS THE RESUME, which the coordinator hands back
@@ -609,11 +614,167 @@ func TestAResumeWhoseLogCannotBeReadIsHandedBack(t *testing.T) {
 	in := resumeInput{Run: sandbox.PendingRun{TurnID: "t-1", LaunchID: "l-1"}}
 
 	in.State = execstate.State{Version: execstate.Version, AgentRun: true, Round: 1}
-	if _, err := e.resumeBridged(t.Context(), in); err == nil {
+	if _, _, err := e.resumeBridged(t.Context(), in); err == nil {
 		t.Error("an agent-mode resume went ahead on a log it could not read")
 	}
 	in.State = execstate.State{Version: execstate.Version, Round: 1}
-	if calls, err := e.resumeBridged(t.Context(), in); err != nil || calls != nil {
+	if calls, _, err := e.resumeBridged(t.Context(), in); err != nil || calls != nil {
 		t.Errorf("a native resume read the bridged log: %v, %v", calls, err)
+	}
+}
+
+// resumeAgentRunTurn drives [Engine.resumeTurn] — the path a completion takes —
+// over one agent-mode run on store, and returns the record the resumed
+// executor pass published.
+//
+// The run's log ends in a no_action submission and nobody is waiting on the
+// run, so the engine's own check ends the turn after that pass: nothing here
+// reaches a model, and what is observed is only what the resume handed the
+// pass.
+func resumeAgentRunTurn(t *testing.T, store *sandbox.CoordStore, turnID string) *types.AgentPhaseCompleted {
+	t.Helper()
+	ctx := t.Context()
+	admitted, seat := modeCompany(t, "claude-code", true, config.PlacementDirect)
+	admitted.Tools = tools.NewRegistry()
+	q := memory.New()
+	if err := q.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	e, _ := resumingEngine(t)
+	e.backends = &Backends{Queue: q}
+	e.sandboxPending = store
+	e.epoch.current.Store(admitted)
+
+	run, found, err := store.Get(ctx, turnID)
+	if err != nil || !found {
+		t.Fatalf("Get(%s) = %v, %v", turnID, found, err)
+	}
+	err = e.resumeTurn(ctx, resumeInput{
+		Company: admitted,
+		Run:     run,
+		State:   execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
+		Turn:    &turnctx.Turn{RunID: run.TurnID, Seat: seat, Org: admitted.Org},
+		Answer:  "nothing left to do",
+	})
+	if err != nil {
+		t.Fatalf("resumeTurn: %v", err)
+	}
+	for _, ev := range q.History() {
+		if rec, ok := ev.Data.(*types.AgentPhaseCompleted); ok && rec.Phase == types.PhaseExecute {
+			return rec
+		}
+	}
+	t.Fatal("the resumed executor pass published no record")
+	return nil
+}
+
+// noActionSubmission is the call a run that found nothing to do ends with.
+var noActionSubmission = sandbox.BridgeCall{
+	Name: runner.SubmitWorkTool, Args: `{"outcome":"no_action","summary":"nothing left to do"}`,
+}
+
+// THE RESUME A COMPLETION RUNS READS EVERY CALL FROM THE LOG — not the bounded
+// list on the run's row, which drops the middle of a long run.
+//
+// [Engine.resumeBridged] reading the log is not enough: resumeTurn is what
+// hands its answer to the resumed pass, and a resumeTurn that took the row's
+// list instead would pass every test of the helper while the pass it builds
+// missed a post made in the middle of the run.
+func TestAResumedTurnIsHandedEveryCallTheRunMade(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmemory.NewFleet())
+	if err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "t-long", AgentHandle: "swe"},
+		sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	total := sandbox.MaxBridgeCalls + 50
+	delivery := total / 2
+	for i := range total {
+		call := sandbox.BridgeCall{Name: "read_page", Output: "a page"}
+		switch i {
+		case delivery:
+			call = sandbox.BridgeCall{Name: "slack_post", Args: `{"channel":"C1"}`, Output: "posted"}
+		case total - 1:
+			call = noActionSubmission
+		}
+		if ok, err := store.AppendBridgeCall(ctx, "t-long", call); err != nil || !ok {
+			t.Fatalf("append %d = %v, %v", i, ok, err)
+		}
+	}
+	run, _, err := store.Get(ctx, "t-long")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	for _, kept := range run.BridgeCalls {
+		if kept.Name == "slack_post" {
+			t.Fatal("the row's bounded list kept the middle call, so this case proves nothing")
+		}
+	}
+
+	rec := resumeAgentRunTurn(t, store, "t-long")
+	if len(rec.ToolExecutions) != total {
+		t.Fatalf("the resumed pass records %d calls, want all %d the run made", len(rec.ToolExecutions), total)
+	}
+	if got := rec.ToolExecutions[delivery]["name"]; got != "slack_post" {
+		t.Errorf("call %d of the resumed pass is %v, want the post the run made there", delivery, got)
+	}
+}
+
+// A RUN AN OLDER BUILD RECORDED REACHES ITS RESUME WITH ITS GAP. The calls
+// that build dropped are kept nowhere, and the resumed pass's record is where
+// a reader of the turn is told so — which it can only be if resumeTurn hands
+// the count on rather than only the calls that survived.
+func TestAResumedTurnIsToldWhatAnOlderBuildDropped(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmemory.NewFleet()
+	kept := make([]sandbox.BridgeCall, 0, sandbox.MaxBridgeCalls)
+	for range sandbox.MaxBridgeCalls - 1 {
+		kept = append(kept, sandbox.BridgeCall{Name: "read_page"})
+	}
+	kept = append(kept, noActionSubmission)
+	raw, err := json.Marshal(sandbox.PendingRun{
+		TurnID: "t-older", AgentHandle: "swe", Status: sandbox.StatusResumed, LaunchID: "launch-older",
+		BridgeCalls: kept, BridgeCallsElided: 41,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fleet.CreateSandboxRun(ctx, "t-older", raw); err != nil {
+		t.Fatalf("CreateSandboxRun: %v", err)
+	}
+
+	rec := resumeAgentRunTurn(t, sandbox.NewCoordStore(fleet), "t-older")
+	if len(rec.ToolExecutions) != sandbox.MaxBridgeCalls {
+		t.Errorf("the resumed pass records %d calls, want the %d the row kept",
+			len(rec.ToolExecutions), sandbox.MaxBridgeCalls)
+	}
+	want := fmt.Sprintf("41 call(s) this run made after its first %d", sandbox.MaxBridgeCalls/2)
+	if !strings.Contains(rec.Notes, want) {
+		t.Errorf("the resumed pass's record does not say where the dropped calls fell: notes = %q", rec.Notes)
+	}
+}
+
+// ARGUMENTS THE STORE COULD NOT KEEP REACH THE RESUME AS THEIR MARKER.
+//
+// A call recorded with no arguments reads, to the resumed phase, the reviewer
+// and the iteration ledger, exactly like a call made with none. The marker the
+// store writes in their place decodes, so every one of those readers shows it
+// where the arguments would be, beside the call's output.
+func TestArgumentsTheStoreDidNotKeepReachTheResumeAsTheirMarker(t *testing.T) {
+	t.Parallel()
+	calls := bridgedCalls([]sandbox.BridgeCall{{
+		Name: "create_page", Args: sandbox.ArgsNotKept(9 << 20), Output: "created 123",
+	}})
+	if len(calls) != 1 || calls[0].Result != "created 123" {
+		t.Fatalf("calls = %+v, want the one call with its output", calls)
+	}
+	marker, _ := calls[0].Args["…"].(string)
+	if !strings.Contains(marker, fmt.Sprint(9<<20)) || !strings.Contains(marker, "not kept") {
+		t.Fatalf("the call's arguments = %v, want the marker saying %d bytes were not kept", calls[0].Args, 9<<20)
+	}
+	if log := ledger.FormatCalls(calls, ledger.FormatOptions{}); !strings.Contains(log, "not kept") {
+		t.Errorf("the reviewer's tool log does not show the marker: %s", log)
 	}
 }

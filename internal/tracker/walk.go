@@ -235,9 +235,22 @@ type RespreadReport struct {
 	// Batches is how many records it published, across every plan.
 	Batches int
 
-	// Plans is how many plans it minted: one more than the number of times
-	// the order moved under it. See [RespreadPlans].
+	// Plans is how many plans it minted. Every plan but a finished one was
+	// abandoned for one of the two causes below, so a walk that finished
+	// minted one more plan than it abandoned. See [RespreadPlans].
 	Plans int
+
+	// Moved is how many plans were abandoned because a batch was refused:
+	// the order moved under the plan, because something placed a card
+	// between two of its batches. Nothing is wrong when this is non-zero.
+	Moved int
+
+	// Unconfirmed is how many plans were abandoned because the broker could
+	// not say whether a batch had landed, which left no position to publish
+	// the next batch against. That is a fault in the path to the broker, and
+	// it is counted apart from Moved so it is never reported as a person
+	// arranging a board.
+	Unconfirmed int
 }
 
 // Respread runs a project's whole re-spread walk, paced.
@@ -249,11 +262,15 @@ type RespreadReport struct {
 // same way, which is what stops them interleaving batches into an order
 // neither intended.
 //
-// A REFUSED BATCH RE-PLANS rather than failing the walk: the order moved, and
-// the right keys are the ones minted from it as it now is. Every intermediate
-// state is still a correct board, because a batch either lands on the order
-// its plan was minted from or does not land at all. [RespreadPlans] bounds how
-// many times one call starts again before it leaves the rest to the next.
+// A PLAN IS ABANDONED FOR TWO CAUSES, and the walk answers both by planning
+// again: a batch REFUSED because the order moved, where the right keys are the
+// ones minted from the order as it now is; and a batch whose outcome the broker
+// could not CONFIRM, where there is no position to publish the next batch
+// against. Every intermediate state is still a correct board, because a batch
+// either lands on the order its plan was minted from or does not land at all.
+// [RespreadPlans] bounds how many plans one call mints before it stops, and the
+// error it stops with wraps [ErrRespreadYielded] or [ErrRespreadUnconfirmed]
+// by which cause abandoned its plans — see [RespreadReport].
 func (w *Writer) Respread(ctx context.Context, opID, project string) (RespreadReport, error) {
 	if w.db == nil {
 		return RespreadReport{}, fmt.Errorf("tracker: this writer has no " +
@@ -271,32 +288,66 @@ func (w *Writer) Respread(ctx context.Context, opID, project string) (RespreadRe
 		// resolve as the first plan's record having landed.
 		n, err := w.walk(ctx, stepID(opID, fmt.Sprintf("p%d", report.Plans)), plan)
 		report.Batches += n
-		if !errors.Is(err, errReplan) {
+		switch {
+		case errors.Is(err, ErrOrderMoved):
+			report.Moved++
+		case errors.Is(err, errBatchUnconfirmed):
+			report.Unconfirmed++
+		default:
 			return report, err
 		}
-		if report.Plans == RespreadPlans {
-			return report, fmt.Errorf("tracker: re-spread %s: the order moved "+
-				"under %d plans in a row, so this walk stops and the next sweep "+
-				"plans again from where it is: %w", project, RespreadPlans, err)
+		if report.Plans < RespreadPlans {
+			continue
 		}
+		// STOPPED, AND WHICH SENTINEL IT WRAPS SAYS WHY. A plan the broker
+		// could not confirm is a fault in the path to it, and one is
+		// enough to report the stop as that rather than as a board somebody
+		// is arranging.
+		stopped := ErrRespreadYielded
+		if report.Unconfirmed > 0 {
+			stopped = ErrRespreadUnconfirmed
+		}
+		return report, fmt.Errorf("%w: re-spread %s abandoned %d plans in a "+
+			"row — %d because the order moved under them, %d because the "+
+			"broker could not confirm a batch — and stops; the next sweep plans "+
+			"again from where it is. The last: %w", stopped, project,
+			report.Plans, report.Moved, report.Unconfirmed, err)
 	}
 }
 
+// ErrRespreadYielded and ErrRespreadUnconfirmed are a re-spread that stopped
+// after [RespreadPlans] abandoned plans, by cause.
+//
+// YIELDED is every plan abandoned because the order moved: somebody is
+// arranging that board right now, and the walk gives way to them. UNCONFIRMED
+// is at least one plan abandoned because the broker could not say whether a
+// batch landed, which is a fault in the path to the broker and is reported as
+// one. The project keeps its flag either way, so the next sweep plans again.
+var (
+	ErrRespreadYielded = errors.New("tracker: the re-spread gave way to " +
+		"somebody arranging the board")
+	ErrRespreadUnconfirmed = errors.New("tracker: the re-spread stopped because " +
+		"the broker could not confirm its batches")
+)
+
 // RespreadPlans bounds how many plans one re-spread mints before it stops.
 //
-// A plan is abandoned only when something else wrote the project's order
-// between two batches, and every new plan rewrites the whole project again —
-// so a walk that keeps losing is a walk beside somebody who is arranging that
-// board right now, re-publishing every row for each card they move. FOUR, so
-// a drop or two during a walk costs a re-plan each and a board being worked on
-// continuously costs four rewrites before the walk yields. It gives up nothing
-// by stopping: the applier keeps the project flagged while any of its keys is
-// still long, and the duty's next sweep plans again from the order as it then
-// is.
+// Every new plan rewrites the whole project again. A plan is abandoned when
+// something else wrote the project's order between two batches — so a walk
+// that keeps losing that way is a walk beside somebody arranging that board
+// right now, re-publishing every row for each card they move — or when the
+// broker could not confirm a batch. FOUR, so a drop or two during a walk costs
+// a re-plan each, and a board being worked on continuously, or a broker that
+// keeps failing to answer, costs four rewrites before the walk stops. It gives
+// up nothing by stopping: the applier keeps the project flagged while any of
+// its keys is still long, and the duty's next sweep plans again from the order
+// as it then is.
 const RespreadPlans = 4
 
-// errReplan is a walk whose plan no longer describes the order.
-var errReplan = errors.New("tracker: the re-spread plan no longer describes the order")
+// errBatchUnconfirmed is a batch whose outcome the broker could not
+// establish — the second of the two causes [Writer.Respread] re-plans for.
+var errBatchUnconfirmed = errors.New("tracker: the broker could not confirm " +
+	"whether a re-spread batch landed")
 
 // walk publishes one plan's batches, each against the version the last one
 // produced, and reports how many landed.
@@ -322,10 +373,9 @@ func (w *Writer) walk(ctx context.Context, opID string, plan RespreadPlan) (int,
 			stepID(opID, fmt.Sprintf("r%d", batch)), plan.Project, against,
 			placements)
 		switch {
-		case errors.Is(err, ErrOrderMoved):
-			return batch, fmt.Errorf("%w: batch %d of %d: %w", errReplan, batch,
-				plan.Batches(), err)
 		case err != nil:
+			// ErrOrderMoved travels wrapped, and [Writer.Respread] reads
+			// it as the first of its two causes to plan again.
 			return batch, fmt.Errorf("tracker: re-spread %s, batch %d of %d: %w",
 				plan.Project, batch, plan.Batches(), err)
 		case res.Outcome == statelog.OutcomeUnknown:
@@ -335,8 +385,8 @@ func (w *Writer) walk(ctx context.Context, opID string, plan RespreadPlan) (int,
 			// way — it reads whichever order exists, and if the batch
 			// lands after that read, the new plan's first batch is refused
 			// like any other write that came between.
-			return batch, fmt.Errorf("%w: batch %d of %d has an unknown "+
-				"outcome", errReplan, batch, plan.Batches())
+			return batch, fmt.Errorf("tracker: re-spread %s, batch %d of %d: %w",
+				plan.Project, batch, plan.Batches(), errBatchUnconfirmed)
 		}
 		// THE NEXT BATCH IS DECIDED AFTER THIS ONE IS APPLIED HERE, and
 		// against the version it produced: the position it landed at is

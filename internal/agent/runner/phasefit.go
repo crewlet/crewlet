@@ -44,6 +44,15 @@ import (
 // transport's own ceiling, measured on the encoded envelope exactly as the
 // publisher encodes it, because what a text costs on the wire is a property
 // of its bytes and not of its length (see [queue.ErrTooLarge]).
+//
+// The contract's number rather than the connection's, and true of every
+// connection a node publishes on: the embedded broker is configured at
+// exactly it, and a node whose stream is an external cluster announcing less
+// does not boot (internal/coord/kv's OpenFleet opens on that same connection
+// and refuses it). A server announcing less can still be met later, after a
+// reconnect, and there a record within this ceiling is refused — which no fit
+// can answer, so [emitter.publishPhase] reports it rather than cutting for a
+// number it does not know.
 const phaseRecordCeiling = queue.MaxPayloadBytes
 
 // phaseCutOverhead is what one text's first cut can add back to the record:
@@ -58,13 +67,13 @@ const phaseCutOverhead = 64
 func (e emitter) publishPhase(ctx context.Context, rec types.AgentPhaseCompleted) {
 	env := events.New(rec, e.traceFor(ctx))
 	env.Source = e.role
-	err := e.pub.Publish(ctx, topics.Event(env.Type), env)
-	if err == nil {
+	published := e.pub.Publish(ctx, topics.Event(env.Type), env)
+	if published == nil {
 		return
 	}
-	if !errors.Is(err, queue.ErrTooLarge) {
+	if !errors.Is(published, queue.ErrTooLarge) {
 		log.WarnContext(ctx, "phase_telemetry_publish_failed", "type", env.Type,
-			"role", e.role, "turn_id", e.turn.RunID, "error", err)
+			"role", e.role, "turn_id", e.turn.RunID, "error", published)
 		return
 	}
 	payload, ok := env.Data.(*types.AgentPhaseCompleted)
@@ -80,6 +89,20 @@ func (e emitter) publishPhase(ctx context.Context, rec types.AgentPhaseCompleted
 		log.ErrorContext(ctx, "phase_record_unfittable", "turn_id", e.turn.RunID,
 			"phase", payload.Phase, "iteration", payload.Iteration, "error", err.Error(),
 			"detail", "the phase record could not be cut to fit one event and was not published")
+		return
+	}
+	if before <= phaseRecordCeiling {
+		// REFUSED WITHIN THE CEILING, so there is nothing to fit: the
+		// server this node reached accepts less than the contract says every
+		// connection carries (see [phaseRecordCeiling]). Publishing the same
+		// bytes again would be refused the same way, and calling that a fit
+		// would report a cut that never happened.
+		log.ErrorContext(ctx, "phase_record_refused_within_ceiling", "turn_id", e.turn.RunID,
+			"phase", payload.Phase, "iteration", payload.Iteration,
+			"record_bytes", before, "ceiling_bytes", phaseRecordCeiling, "error", published.Error(),
+			"detail", "the NATS server this node is connected to refused a record the contract says "+
+				"it carries: set max_payload to at least the ceiling on every server of the "+
+				"cluster; the record was not published")
 		return
 	}
 	log.WarnContext(ctx, "phase_record_fitted", "turn_id", e.turn.RunID,
@@ -149,12 +172,9 @@ func fitPhaseRecord(env *events.Event, rec *types.AgentPhaseCompleted) (int, int
 			"past the %d-byte ceiling of one event", n, phaseRecordCeiling)
 	}
 	if cut > 0 {
-		note := fmt.Sprintf("record cut to fit one event: %d texts shortened, each ending in …; "+
-			"on a tool call or a round, <field>_bytes beside a cut text is its whole length", cut)
-		if rec.Notes != "" {
-			note = rec.Notes + "; " + note
-		}
-		rec.Notes = note
+		rec.Notes = joinNotes(rec.Notes, fmt.Sprintf("record cut to fit one event: %d texts shortened, "+
+			"each ending in …; on a tool call or a round, <field>_bytes beside a cut text is its "+
+			"whole length", cut))
 	}
 	return before, cut, nil
 }

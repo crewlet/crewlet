@@ -423,6 +423,14 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			if err != nil {
 				return err
 			}
+			// ITS LIVE EDGES, which is what its rows hold and what the cap
+			// below is about — see [withoutPurged].
+			if held {
+				if current, err = withoutPurged(ctx, tx, current,
+					w.maxVariables()); err != nil {
+					return err
+				}
+			}
 			adding := slices.Contains(required, id)
 			switch {
 			case !held && adding:

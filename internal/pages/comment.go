@@ -265,9 +265,22 @@ func subscribeMentions(page *Page, mentions []string) bool {
 	return moved
 }
 
-// readCommentTx reads one comment from inside a decision's own transaction.
+// readCommentTx reads one comment from inside a decision's own transaction,
+// refusing one that is not there.
 func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 	Comment, error) {
+
+	comment, held, err := readComment(ctx, tx, pageID, commentID)
+	if err == nil && !held {
+		err = fmt.Errorf("%w: comment %s on page %s", ErrNotFound, commentID, pageID)
+	}
+	return comment, err
+}
+
+// readComment reads one comment on one page out of this transaction, and
+// whether it is there — the decision's read and the applier's are this one.
+func readComment(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
+	Comment, bool, error) {
 
 	var document []byte
 	err := tx.QueryRowContext(ctx,
@@ -275,12 +288,15 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 		commentID, pageID).Scan(&document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Comment{}, fmt.Errorf("%w: comment %s on page %s",
-			ErrNotFound, commentID, pageID)
+		return Comment{}, false, nil
 	case err != nil:
-		return Comment{}, fmt.Errorf("pages: read comment %s: %w", commentID, err)
+		return Comment{}, false, fmt.Errorf("pages: read comment %s: %w", commentID, err)
 	}
-	return DecodeComment(document)
+	comment, err := DecodeComment(document)
+	if err != nil {
+		return Comment{}, false, err
+	}
+	return comment, true, nil
 }
 
 // commentOpID is the operation this comment belongs to.

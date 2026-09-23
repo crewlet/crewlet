@@ -276,11 +276,12 @@ in prose.
 **A goal holds at most 64 updates, and none is ever dropped.** Every update a
 goal holds comes back whole when the goal is read, and nothing else returns
 them — so an update pushed off the front to make room would be readable
-nowhere. A save that would take a goal past 64 is refused, naming the cap, and
-nothing in it is saved. The goal's **health is its own field**: a save that
-sets `health` with no `update` still moves it and still tells the owners and
-members. A commitment that has outlived 64 assessments is one whose next
-stretch is better filed as a goal of its own. The number is not a preference: a
+nowhere. A save that would add an update past 64 is refused, naming the cap,
+and nothing in it is saved; a save that adds none is never refused for the
+count. The goal's **health is its own field**: a save that sets `health` with
+no `update` still moves it and still tells the owners and members. A
+commitment that has outlived 64 assessments is one whose next stretch is
+better filed as a goal of its own. The number is not a preference: a
 goal is saved whole in one record, and 64 is sized so that a goal with every
 other part at its own limit still fits that record.
 
@@ -303,12 +304,13 @@ A **view** is a saved query with a shape. Five shapes:
   want when the question is "what is moving". A board is `group_by=`, and what
   comes back is **columns**: each one's count is over the whole set, never over
   the rows it carries, so a column of four hundred says four hundred and hands
-  you twenty. Loading one further is `group=<value>`, which answers that column
-  as an ordinary **list** — rows, a `next_cursor` to page to its end, and a
-  total that is the column's own — and narrows everything else in the query
-  with it, totals included. `group=` with `subgroup=` names one swimlane the
-  same way. A board itself takes no `cursor`, and one column takes no
-  `group_limit` (its page is `limit`); both are refused rather than ignored.
+  you twenty (`group_limit` asks for up to a hundred). Loading one further is
+  `group=<value>`, which answers that one column — its count, its first
+  `group_limit` rows, and a `next_cursor` that pages the rest of it to the end
+  — and narrows everything else in the query with it, totals included.
+  `group=` with `subgroup=` names one swimlane the same way. A board of several
+  columns has no single order to resume after, so it takes no `cursor`, and
+  one is refused rather than ignored.
 - **`calendar`** — by date, which is what you want when the question is "what
   is due". Its axis IS the `due` key, so the grid's own window spends the one
   key the grammar has for it: the fetch is bounded to the days on screen, the
@@ -488,7 +490,13 @@ stays where it was put.** Each batch is published against the order the batch
 before it left, so a placement in between refuses the next batch; the
 re-spread then plans again from the order as it now is, the placement included,
 and starts over. After four plans in a row it gives way to whoever is arranging
-the board and the next sweep tries again. A **removed** task is re-keyed with
+the board and the next sweep tries again. A batch the broker cannot confirm —
+one that may or may not have landed — also starts a new plan, because the next
+batch has no confirmed order to be published against; a re-spread that stops
+after four plans with one of those among them is reported as the fault it is,
+as a `tracker_respread_unconfirmed` warning and a failed maintenance sweep
+(`maintenance_tick_failed`), after the other projects waiting for a re-spread
+have had theirs. A **removed** task is re-keyed with
 the rest, so restoring it brings it back where it was, and a task **moved to
 another project** meanwhile is left where its new project put it.
 
@@ -496,7 +504,12 @@ Two concurrent drags into the same gap can mint the same key. That is repaired
 rather than refused: the engine gives all but one of the tasks sharing a key a
 fresh key just above it and below the next card up, in the order the board
 already showed them, so every one stays where it was dropped — including when
-more share a key than one repair pass moves and the rest wait for the next.
+more share a key than one repair pass moves and the rest wait for the next. A
+repair whose keys were minted from an order that moved before they landed — a
+card placed in between — lands none of them: it is logged as
+`tracker_rank_duplicates_raced`, the project stays marked for repair, and the
+next sweep mints from the order as it then is, while the same sweep goes on to
+repair the other projects.
 
 ## What a seat can do
 
@@ -514,7 +527,7 @@ CHANGE rather than about state:
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
-| `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them |
+| `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. A merge interrupted part-way is finished by the engine's own sweep — unless the item it was folding into has been purged meanwhile, when the duplicate is left open with its subtasks and a `tracker_merge_target_purged` warning says why |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 | `list_projects` | every project work is filed into, with how much open work each holds and who leads it |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
@@ -1081,7 +1094,10 @@ destroyed, rather than cut to fit.
   collaborators, and every key it was ever known by — and every row through
   which another task referred to it: relations, dependencies in both
   directions, references, and the ancestry of its subtree (its children move,
-  see above).
+  see above). They stay gone: the tasks on the other end of a relation still
+  list it in their own records, and a later change to one of them writes no
+  row naming the purged task — so a task that waited on it is no longer
+  blocked by it, and the next change to that list drops the entry.
 - **Kept, emptied:** its **history**. Every change it ever had is still in the
   activity feed — who made it, when, what kind of change it was and in which
   project — with its text and its field changes removed and the row marked
@@ -1093,8 +1109,9 @@ destroyed, rather than cut to fit.
   has a lead to tell; a **deletion marker** with the task's id and key, who
   purged it, when and why, which is what drops any record about the task that
   arrives later; any per-turn spend rows recorded against it (which turn,
-  which seat, what it cost); and a goal target that named it keeps its id and
-  no longer counts it.
+  which seat, what it cost); a goal target that named it keeps its id and no
+  longer counts it; and a person's priority list or favourites that named it
+  keep its id.
 
 What a purge does not reach at all is anything outside a node's live tables:
 the **log** keeps every record about the task — its title and body among them

@@ -74,8 +74,8 @@ func arbitratedKinds() []string {
 	return out
 }
 
-// RecordVersion is the record shape this build reads.
-func (Domain) RecordVersion() int { return RecordVersion }
+// RecordVersion is the highest record version this build reads.
+func (Domain) RecordVersion() int { return ReadableRecordVersion }
 
 // Envelope decodes the half every build can read.
 func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {

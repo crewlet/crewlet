@@ -170,7 +170,8 @@ type Answer struct {
 
 	// NextCursor resumes exactly after this page's last row, and is empty
 	// when the page reaches the end of the matched set — see [PageMax]. A
-	// grouped answer mints none.
+	// grouped answer mints one only when it is a single cell, for that
+	// cell's rows ([Query.Pinned]); a board of several cells mints none.
 	NextCursor string `json:"next_cursor,omitempty"`
 
 	// Totals are the aggregates the query asked for, over the WHOLE
@@ -396,22 +397,23 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			return err
 		}
 		rowWhere, rowArgs := andPage(where, args, page, pageArgs)
-		if q.Grouped() {
+		if q.GroupBy != "" {
 			// A GROUPED ANSWER IS A DIFFERENT SHAPE, and the flat
-			// rows stay empty — see [Answer.Groups].
-			// A GROUPED ANSWER MINTS NO CURSOR AND TAKES NONE — the
-			// grammar refuses one, see [Query.Grouped] — so it reads
-			// the unpaged predicate, which is also what its
-			// per-column counts are over. A PINNED column is not
-			// this branch: it is a list, see [Query.Pinned].
+			// rows stay empty — see [Answer.Groups]. Its counts are
+			// over the unpaged predicate and its rows over the paged
+			// one, and the two differ only for a single cell: a board
+			// of several is refused a cursor at the parse, so there
+			// the page boundary is empty ([Query.Pinned]).
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-			groups, err := readGroups(ctx, tx, q, fields, where, args, terms)
+			groups, err := readGroups(ctx, tx, q, fields, where, args,
+				rowWhere, rowArgs, terms)
 			if err != nil {
 				return err
 			}
 			answer.Groups = groups.Groups
 			answer.GroupsTruncated = groups.Truncated
 			answer.GroupsOverlap = groups.Overlap
+			answer.NextCursor = groups.Cursor
 		} else {
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			rows, cursor, err := readTasks(ctx, tx, rowWhere, rowArgs, terms,
@@ -935,9 +937,9 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		add(clause, values...)
 	}
 	// AND A LANE FILTER IS ONE TOO, for the same reason and in the same
-	// form: `subgroup=` names a cell on the second axis, and a pinned lane
-	// answers as a list ([Query.Pinned]) whose rows, hint and totals all
-	// have to be that lane's.
+	// form: `subgroup=` names a cell on the second axis, and the column it
+	// sits in — its count, its rows, the hint and the totals — has to be
+	// that lane's, or a header would add up lanes the answer does not show.
 	if q.Subgroup != "" && !branch {
 		axis, err := compileGroup(q.GroupBy2, fields)
 		if err != nil {

@@ -450,9 +450,9 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 // stream.store_dir.
 func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, conn *nats.Conn) error {
 	// ONE CEILING OVER THE WHOLE BRING-UP, because this is where the
-	// sequence actually is: eighteen replicated buckets across two calls,
-	// each of which would otherwise discover a wedged cluster on its own
-	// budget. Without it the real bound is the PRODUCT rather than the
+	// sequence actually is: every replicated bucket of the fleet store and
+	// of the lease store, across two calls, each of which would otherwise
+	// discover a wedged cluster on its own budget. Without it the real bound is the PRODUCT rather than the
 	// term — a number nobody declared, which is the shape of a limit that
 	// is not a decision. Each create below still takes the lesser of its
 	// own budget and what is left of this one, because WithTimeout only

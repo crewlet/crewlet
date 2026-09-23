@@ -1014,3 +1014,178 @@ func TestAnAbandonedMergeSweepSaysWhenItCutItsRead(t *testing.T) {
 			rest.attrs)
 	}
 }
+
+// A DUPLICATE REPAIR RACED BY A PLACEMENT LEAVES THAT PROJECT TO THE NEXT SWEEP.
+//
+// The repair mints its keys from one read of the order and publishes them
+// against that read's version. A card placed in between — here, on the log
+// but not yet applied when the repair reads, so the repair's own publish
+// loses the race and re-decides against the order as it now is — makes those
+// keys ones minted from an order that no longer exists. The repair is refused,
+// and the sweep has to treat that as a race rather than a failure: it logs it,
+// leaves the project flagged so the next sweep mints from the new order, and
+// goes on to the other flagged projects.
+func TestADuplicateRepairRacedByAPlacementLeavesItToTheNextSweep(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteDocument(t.Context(), "op-ops",
+		tracker.ProjectSubject("OPS"), "", tracker.Project{
+			V: 1, Key: "OPS", Name: "Operations",
+			CreatedAt: wednesday, UpdatedAt: wednesday,
+		}, tracker.ChangeProjectCreated, nil); err != nil {
+		t.Fatalf("seed OPS: %v", err)
+	}
+	r.drain()
+	for _, spec := range []struct{ id, project string }{
+		{"t-1", "ENG"}, {"t-2", "ENG"}, {"t-3", "ENG"},
+		{"o-1", "OPS"}, {"o-2", "OPS"},
+	} {
+		task := newTask(spec.id)
+		task.Project, task.Key = spec.project, ""
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+spec.id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", spec.id, err)
+		}
+		r.drain()
+	}
+	// TWO TASKS AT ONE KEY IN EACH PROJECT, which is what two concurrent
+	// drags into the same gap leave.
+	for project, pair := range map[string][2]string{
+		"ENG": {"t-1", "t-2"}, "OPS": {"o-1", "o-2"},
+	} {
+		if _, err := r.writer.MoveTasks(t.Context(), "op-collide-"+project,
+			project, r.order(project), []tracker.Placement{
+				{Task: pair[0], Rank: "a0V"}, {Task: pair[1], Rank: "a0V"},
+			}); err != nil {
+			t.Fatalf("collide in %s: %v", project, err)
+		}
+		r.drain()
+	}
+	duplicated := func(project string) bool {
+		return len(r.strings(`SELECT id FROM tracker_tasks
+			WHERE project_key = ? AND rank = 'a0V'`, project)) > 1
+	}
+	flaggedIn := func(project string) bool {
+		return r.strings(`SELECT CAST(rank_duplicate_pending AS TEXT)
+			FROM tracker_projects WHERE key = ?`, project)[0] == "1"
+	}
+	if !duplicated("ENG") || !duplicated("OPS") || !flaggedIn("ENG") || !flaggedIn("OPS") {
+		t.Fatal("the fixture does not leave both projects duplicated and flagged")
+	}
+
+	// THE PLACEMENT THE REPAIR WILL RACE: t-3 to the head of ENG, published
+	// and not yet applied here — so the repair reads the order without it.
+	if _, err := r.writer.MoveTask(t.Context(), "op-drop", "ENG", "t-3", "",
+		"t-1"); err != nil {
+		t.Fatalf("the drop: %v", err)
+	}
+	r.applyWhileWriting()
+
+	log := &capturedLog{}
+	holdTheAppliersPin(t, r)
+	worker := trackerWorkerLogging(t, r, slog.New(log))
+	if _, err := worker.Tick(t.Context()); err != nil {
+		t.Fatalf("a repair that lost a race failed the sweep: %v", err)
+	}
+	r.drain()
+	raced := log.only(t, "tracker_rank_duplicates_raced")
+	if raced.attrs["project"] != "ENG" {
+		t.Fatalf("the race is reported for %v, want ENG", raced.attrs["project"])
+	}
+	if cleared := log.only(t, "tracker_rank_duplicates_cleared"); cleared.attrs["project"] != "OPS" {
+		t.Fatalf("the sweep reports clearing %v, want OPS alone — nothing of "+
+			"the raced repair landed", cleared.attrs["project"])
+	}
+	if got := boardOrder(t, r); len(got) == 0 || got[0] != "t-3" {
+		t.Fatalf("ENG reads %v, want the placed card at its head", got)
+	}
+	if duplicated("OPS") || flaggedIn("OPS") {
+		t.Fatal("OPS was not repaired: the race on ENG stopped the sweep before " +
+			"it reached the rest")
+	}
+	if !duplicated("ENG") || !flaggedIn("ENG") {
+		t.Fatal("ENG lost its duplicates' flag or had keys minted from the order " +
+			"before the placement — the raced repair must land nothing")
+	}
+
+	// AND THE NEXT SWEEP MINTS FROM THE ORDER AS IT NOW IS.
+	if _, err := worker.Tick(t.Context()); err != nil {
+		t.Fatalf("the next sweep: %v", err)
+	}
+	r.drain()
+	if duplicated("ENG") || flaggedIn("ENG") {
+		t.Fatal("the sweep after the race did not repair ENG")
+	}
+	if got := boardOrder(t, r); got[0] != "t-3" {
+		t.Fatalf("the repair moved the placed card: ENG reads %v", got)
+	}
+}
+
+// AN ABANDONED MERGE INTO A TASK SINCE PURGED IS CLEARED, NOT COMPLETED.
+//
+// The duty finishes a merge whose holder died by doing what the merge would
+// have: re-parent the subtasks onto the target if the merge said to, and cancel
+// the duplicate. When the target has been purged in between, that gave each
+// subtask a parent no row holds and closed the duplicate as merged into
+// nothing. The merge did not happen and now cannot, so the repair is the one
+// the duty already makes for a marker with no target at all — the marker goes,
+// and the task stays open with its subtasks.
+func TestAnAbandonedMergeIntoAPurgedTaskIsClearedNotCompleted(t *testing.T) {
+	t.Parallel()
+	for _, reparent := range []bool{true, false} {
+		t.Run(fmt.Sprintf("reparent=%v", reparent), func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			for _, id := range []string{"keep", "dup"} {
+				if _, err := r.writer.CreateTask(t.Context(), "op-"+id,
+					newTask(id), nil); err != nil {
+					t.Fatalf("CreateTask %s: %v", id, err)
+				}
+				r.drain()
+			}
+			parent := "dup"
+			kid := newTask("kid")
+			kid.Parent, kid.Depth = &parent, 1
+			if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+				t.Fatalf("CreateTask kid: %v", err)
+			}
+			r.drain()
+			merging := true
+			if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "dup", "ENG",
+				tracker.NoIfMatch, tracker.TaskPatch{
+					Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
+						Kind: tracker.RelationDuplicates, Other: "keep",
+					}}},
+					Merging: &merging, MergeReparent: &reparent,
+				}, tracker.ChangeRelations, nil); err != nil {
+				t.Fatalf("UpdateTask mark: %v", err)
+			}
+			r.drain()
+			if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "keep", "ENG",
+				"filed twice"); err != nil {
+				t.Fatalf("purge the target: %v", err)
+			}
+			r.drain()
+
+			log := &capturedLog{}
+			holdTheAppliersPin(t, r)
+			r.applyWhileWriting()
+			if _, err := trackerWorkerLogging(t, r, slog.New(log)).Tick(t.Context()); err != nil {
+				t.Fatalf("Tick: %v", err)
+			}
+			r.drain()
+			if line := log.only(t, "tracker_merge_target_purged"); line.attrs["target"] != "keep" {
+				t.Fatalf("the warning names target %v, want keep", line.attrs["target"])
+			}
+			dup := r.task(t, "dup")
+			if dup.Task.Merging || dup.Task.Status == tracker.StatusCancelled {
+				t.Errorf("the duplicate reads merging=%v and status %q, want the "+
+					"marker cleared and the task left open", dup.Task.Merging,
+					dup.Task.Status)
+			}
+			if got := parentOf(r.task(t, "kid")); got != "dup" {
+				t.Errorf("the subtask's parent is %q, want it left under dup — "+
+					"the target it would move onto no longer exists", got)
+			}
+		})
+	}
+}

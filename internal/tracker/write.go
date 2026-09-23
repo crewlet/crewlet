@@ -475,6 +475,19 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			// A GESTURE ON AN EDGE COLLECTION REWRITES IT WHOLE, so it
+			// starts from the collection without its edges to purged
+			// tasks: the document still lists them and no row does
+			// ([withoutPurged]), and resolved from the document the cap
+			// would count an edge nobody can see and the record would carry
+			// it forward. Resolved from this, the record carries the
+			// collection clean and the document heals.
+			if charged.Relate != nil || charged.Depend != nil {
+				if current, err = withoutPurged(ctx, tx, current,
+					w.maxVariables()); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
 			charged, err = settleWatch(current, charged)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -974,7 +987,7 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
+			V: recordVersionOf(subject), OpID: opID, Subject: subject, Op: op,
 			CreatedAt: at, Scope: scope,
 		},
 		Kind:       kind,
@@ -1196,6 +1209,16 @@ func cardRank(ctx context.Context, tx *sql.Tx, project, id string) (Rank, error)
 		return "", fmt.Errorf("tracker: read %s's key in %s: %w", id, project, err)
 	}
 	return Rank(rank), nil
+}
+
+// maxVariables is the replicated estate's parameter limit, which
+// [withoutPurged] chunks its lookup to; zero, one id per statement, when this
+// writer has no estate.
+func (w *Writer) maxVariables() int {
+	if w.db == nil {
+		return 0
+	}
+	return w.db.Caps().MaxVariables
 }
 
 // count records one of this package's own counters.

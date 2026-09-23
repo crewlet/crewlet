@@ -681,20 +681,24 @@ func (s *Store) patchOf(actor Actor, head *Page, save Save, at time.Time) (
 // beneath it. Empty is the top of the container and always allowed.
 //
 // A PARENT THAT CLOSES A LOOP leaves the page and everything under it with a
-// parent chain that never reaches the top of its container — each breadcrumb
-// runs round the loop instead — and a parent nothing holds leaves a chain that
+// parent chain that never reaches the top of its container — a breadcrumb
+// ends at the loop instead — and a parent nothing holds leaves a chain that
 // ends at a page nobody can open. So both are refused naming the field rather
 // than stored.
 //
 // WHAT THIS CANNOT REFUSE is a loop two writes close between them — each on
 // its own page's subject, each decided before the other applied — because
 // neither snapshot holds the other's move and the broker orders the two
-// subjects independently. [Reader.ancestors] keeps its record of visited
+// subjects independently. [parentChains.above] keeps its record of visited
 // pages for that case.
 //
 // A PARENT ON ANOTHER CONTAINER IS NOT REFUSED: the detail read selects a
 // page's children by parent alone, whatever container each is in, so such a
 // child is still reachable from its parent.
+//
+// THE CHAIN IS [parentChains]'s, the walk a breadcrumb and a search's ancestor
+// exclusion read, so what this refuses as "beneath" is what every reader
+// renders above: a page this node does not hold ends a chain for all three.
 func checkParent(ctx context.Context, tx *sql.Tx, pageID, parentID string) error {
 	if parentID == "" {
 		return nil
@@ -702,31 +706,26 @@ func checkParent(ctx context.Context, tx *sql.Tx, pageID, parentID string) error
 	if parentID == pageID {
 		return invalid("parent_id", "a page cannot be its own parent")
 	}
-	seen := map[string]bool{}
-	for id := parentID; id != "" && !seen[id]; {
-		seen[id] = true
-		var above string
-		err := tx.QueryRowContext(ctx,
-			`SELECT parent_id FROM pages_heads WHERE id = ?`, id).Scan(&above)
-		switch {
-		case errors.Is(err, sql.ErrNoRows) && id == parentID:
-			return invalid("parent_id", "there is no page %s on this node — "+
-				"a parent is named by its page id", parentID)
-		case errors.Is(err, sql.ErrNoRows):
-			// AN ANCESTOR THAT IS GONE ends the chain: the parent
-			// exists, and nothing above a missing page can be this
-			// one.
-			return nil
-		case err != nil:
-			return fmt.Errorf("pages: read the parent chain of %s: %w",
-				parentID, err)
-		}
-		if above == pageID {
+	chains := newParentChains(tx)
+	parent, held, err := chains.page(ctx, parentID)
+	if err != nil {
+		return err
+	}
+	if !held {
+		return invalid("parent_id", "this node holds no page %s — a parent "+
+			"is named by its page id, and a page written moments ago may "+
+			"not have been applied here yet", parentID)
+	}
+	above, _, err := chains.above(ctx, parentID, parent.ParentID)
+	if err != nil {
+		return err
+	}
+	for _, ancestor := range above {
+		if ancestor.ID == pageID {
 			return invalid("parent_id", "page %s is beneath this page, so "+
 				"putting this page under it would close a loop — move %s "+
 				"out from under this page first", parentID, parentID)
 		}
-		id = above
 	}
 	return nil
 }

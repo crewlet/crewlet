@@ -70,8 +70,11 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		// one is collected as one however the company's providers have
 		// been applied in the days it was parked — see
 		// [execstate.State.AgentRun].
+		r.setDropped(r.cfg.Resume.BridgedDropped)
 		return r.resumeAgentRun(ctx, state, answer, r.cfg.Resume.Bridged)
 	}
+	// A native resume's record is its own surface's, which holds every call.
+	r.setDropped(DroppedCalls{})
 
 	snapshot := r.cfg.Registry.Snapshot()
 

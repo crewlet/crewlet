@@ -116,11 +116,12 @@ type Filter struct {
 	After string
 
 	// Offset skips that many matching pages, counted from After when it is
-	// set and from the start when it is not. Unlike After it counts rows
-	// rather than naming one, so a page that leaves the rows it skips
-	// between two reads — trashed out of a status filter, renamed past
-	// them, purged — moves every later page up by one, and a caller that
-	// pages by offset silently misses one.
+	// set and from the start when it is not. It shows a window at a
+	// numbered position — rows 201 to 250 as of this read — and WALKING a
+	// listing is After's job, not its: an offset counts rows rather than
+	// naming one, so a page that leaves the rows it skips between two reads
+	// (trashed out of a status filter, renamed past them, purged) moves
+	// every later page up by one, and a walk by offset misses one.
 	Offset int
 }
 
@@ -180,11 +181,11 @@ type Summary struct {
 type Listing struct {
 	Pages []Summary `json:"pages"`
 
-	// Truncated says more pages match the filter than this listing carries,
-	// and [Listing.NextCursor] is how a caller reaches them. It is read from
-	// one row past the limit, so a filter matching exactly the limit is not
-	// truncated. A RENDERER THAT DRAWS [Listing.Pages] MUST READ IT: the
-	// length of the list is the page, not the count of what matched.
+	// Truncated says more pages matching the filter follow this listing's
+	// last one, and [Listing.NextCursor] is how a caller reaches them. It is
+	// read from one row past the limit, so a filter matching exactly the
+	// limit is not truncated. A RENDERER THAT DRAWS [Listing.Pages] MUST READ
+	// IT: the length of the list is the page, not the count of what matched.
 	//
 	// DISTINCT FROM [Listing.Complete], which covers the OTHER kind of
 	// incompleteness — a deferred record's scope meeting this read — so a
@@ -394,9 +395,7 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
 
 	args = append(slices.Clip(args), limit+1, offset)
 	rows, err := tx.QueryContext(ctx, `
-		SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
-		       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
-		       p.updated_at, MAX(p.version, p.scoped_through)
+		SELECT `+summaryColumns+`
 		  FROM pages_heads p
 		  LEFT JOIN pages_skills k ON k.page_id = p.id
 		 WHERE `+strings.Join(where, " AND ")+`
@@ -409,18 +408,10 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
 
 	var out []Summary
 	for rows.Next() {
-		var (
-			s                 Summary
-			skill, onboarding int
-			updated, revision int64
-		)
-		if err := rows.Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status,
-			&s.Author, &s.Version, &skill, &onboarding, &updated, &revision); err != nil {
-			return nil, "", fmt.Errorf("pages: scan page: %w", err)
+		s, err := scanSummary(rows)
+		if err != nil {
+			return nil, "", err
 		}
-		s.Skill, s.Onboarding = skill != 0, onboarding != 0
-		s.Updated = store.DecodeTime(updated)
-		s.Revision = uint64(revision)
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
@@ -435,6 +426,30 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
 		next = listCursor{Container: last.Container, Title: last.Title, ID: last.ID}.encode()
 	}
 	return out, next, r.attachLabels(ctx, tx, out)
+}
+
+// summaryColumns is what a [Summary] is read from, over `pages_heads p` LEFT
+// JOINed to `pages_skills k`, in the order [scanSummary] takes them. A listing
+// and a parent chain read the same row, so they read it with one list.
+const summaryColumns = `p.id, p.container, p.parent_id, p.title, p.status,
+	p.author, p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
+	p.updated_at, MAX(p.version, p.scoped_through)`
+
+// scanSummary reads one row of [summaryColumns].
+func scanSummary(row interface{ Scan(...any) error }) (Summary, error) {
+	var (
+		s                 Summary
+		skill, onboarding int
+		updated, revision int64
+	)
+	if err := row.Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status,
+		&s.Author, &s.Version, &skill, &onboarding, &updated, &revision); err != nil {
+		return Summary{}, fmt.Errorf("pages: scan page: %w", err)
+	}
+	s.Skill, s.Onboarding = skill != 0, onboarding != 0
+	s.Updated = store.DecodeTime(updated)
+	s.Revision = uint64(revision)
+	return s, nil
 }
 
 func (r *Reader) attachLabels(ctx context.Context, tx *sql.Tx, items []Summary) error {
@@ -492,8 +507,9 @@ type Detail struct {
 	// ChildrenTruncated is.
 	ChildrenCursor string `json:"children_cursor,omitempty"`
 
-	// Ancestors are the parent chain, outermost first, and all of it —
-	// see [Reader.ancestors] for why the walk has no depth cap.
+	// Ancestors are the pages above this one, outermost first, and all of
+	// them — see [parentChains.above] for why the walk has no depth cap and
+	// what it returns when the chain loops.
 	Ancestors []Summary `json:"ancestors,omitempty"`
 
 	// Level is what the read was SERVED at, and Position the point on the
@@ -562,7 +578,17 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 			return err
 		}
 		detail.ChildrenTruncated = detail.ChildrenCursor != ""
-		detail.Ancestors, err = r.ancestors(ctx, tx, page.ParentID)
+		var looped bool
+		detail.Ancestors, looped, err = newParentChains(tx).above(ctx, id, page.ParentID)
+		if looped {
+			// REPORTED RATHER THAN WALKED: nothing is missing from the
+			// breadcrumb — every page the chain reaches is on it once —
+			// and walking on would only repeat them.
+			log.WarnContext(ctx, "pages_ancestor_cycle", "page", id,
+				"detail", "this page's parent chain runs into a loop; the "+
+					"breadcrumb lists every page the chain reaches once. Moving "+
+					"any page on the loop to the top of its container breaks it")
+		}
 		return err
 	})
 	if err != nil {
@@ -658,59 +684,85 @@ func (r *Reader) history(ctx context.Context, tx *sql.Tx, pageID string) ([]Revi
 	return out, rows.Err()
 }
 
-// ancestors walks the parent chain, one primary-key read per page.
+// parentChains walks parent chains inside one transaction, one primary-key read
+// per page and each page read at most once however many chains pass through
+// it. A page's breadcrumb ([Reader.Get]) and a search hit's ancestry
+// ([Searcher.Search]) are both this walk, so the two cannot disagree about what
+// is above a page.
+type parentChains struct {
+	tx   *sql.Tx
+	read map[string]Summary
+}
+
+func newParentChains(tx *sql.Tx) *parentChains {
+	return &parentChains{tx: tx, read: map[string]Summary{}}
+}
+
+// page reads one page as a listing renders it, and whether it is there.
+func (c *parentChains) page(ctx context.Context, id string) (Summary, bool, error) {
+	if s, ok := c.read[id]; ok {
+		return s, true, nil
+	}
+	s, err := scanSummary(c.tx.QueryRowContext(ctx, `
+		SELECT `+summaryColumns+`
+		  FROM pages_heads p
+		  LEFT JOIN pages_skills k ON k.page_id = p.id
+		 WHERE p.id = ?`, id))
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return Summary{}, false, nil
+	case err != nil:
+		return Summary{}, false, fmt.Errorf("pages: walk the parent chain: %w", err)
+	}
+	c.read[id] = s
+	return s, true, nil
+}
+
+// above is every page above one page, outermost first, and whether the chain
+// runs into a loop.
 //
 // NO DEPTH CAP, because nothing at write bounds a tree's depth and a cap here
 // would drop the outermost pages of a deep chain with nothing on the answer
-// saying so. What bounds the walk is `seen`: a write refuses a parent that
-// would close a loop ([checkParent]), but two saves on two different pages,
-// each decided before the other applied, can still close one between them —
-// and the walk stops at the first page it has already visited, so it reads
-// each distinct page on the chain once and the chain it returns is every one
-// of them.
-func (r *Reader) ancestors(ctx context.Context, tx *sql.Tx, parentID string) ([]Summary, error) {
+// saying so. What ends the walk is its record of the pages it has visited,
+// which starts with the page itself: a write refuses a parent that would close
+// a loop ([checkParent]), but two moves of two different pages, each decided
+// before the other applied, can still close one between them. On a loop the
+// walk stops at the first page it has already visited, so it returns every
+// page it reached once and never the page itself — for a page on the loop,
+// every other page on it.
+//
+// A parent this node holds no page for ends the chain, since nothing is known
+// above it.
+func (c *parentChains) above(ctx context.Context, pageID, parentID string) (
+	[]Summary, bool, error) {
+
 	var chain []Summary
-	seen := map[string]bool{}
+	looped := false
+	seen := map[string]bool{pageID: true}
 	for id := parentID; id != ""; {
 		if seen[id] {
-			// A CYCLE. Reported rather than looped, and nothing is
-			// missing from the chain: every page on it has been read
-			// once, and walking on would only repeat them.
-			log.WarnContext(ctx, "pages_ancestor_cycle", "page", id,
-				"detail", "a page's parent chain reaches itself; the breadcrumb "+
-					"lists each page on the loop once")
+			looped = true
 			break
 		}
 		seen[id] = true
-		var s Summary
-		var skill, onboarding int
-		var updated, revision int64
-		err := tx.QueryRowContext(ctx, `
-			SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
-			       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
-			       p.updated_at, MAX(p.version, p.scoped_through)
-			  FROM pages_heads p
-			  LEFT JOIN pages_skills k ON k.page_id = p.id
-			 WHERE p.id = ?`, id).
-			Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status, &s.Author,
-				&s.Version, &skill, &onboarding, &updated, &revision)
-		if errors.Is(err, sql.ErrNoRows) {
+		// A step through a page already read makes no call that would
+		// notice a cancelled read, so the walk asks itself.
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		s, held, err := c.page(ctx, id)
+		if err != nil {
+			return nil, false, err
+		}
+		if !held {
 			break
 		}
-		if err != nil {
-			return nil, fmt.Errorf("pages: walk the parent chain: %w", err)
-		}
-		s.Skill, s.Onboarding = skill != 0, onboarding != 0
-		s.Updated = store.DecodeTime(updated)
-		s.Revision = uint64(revision)
 		chain = append(chain, s)
 		id = s.ParentID
 	}
 	// Outermost first, which is breadcrumb order.
-	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
-		chain[i], chain[j] = chain[j], chain[i]
-	}
-	return chain, nil
+	slices.Reverse(chain)
+	return chain, looped, nil
 }
 
 // ContainerListing is one container plus the figure a browser needs beside it.
@@ -766,12 +818,12 @@ func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) (
 // would otherwise take forty round trips to draw one rail, and every one of
 // them inside the read transaction the containers were listed in.
 //
-// TRASHED PAGES ARE NOT COUNTED. A trashed page is invisible to every default
-// listing this reader serves, so counting it would put a number on the rail
-// that the list beside it cannot account for — a reader clicks "12" and finds
-// nine. The predicate restates the status rather than reading `trashed_at`,
-// because the container index is on `(container, status, title)` and this walk
-// is meant to use it.
+// TRASHED PAGES ARE NOT COUNTED: a trashed page is deleted as far as any
+// reader is concerned (see [Status]), and this is how many pages a container
+// holds. The predicate restates the status rather than reading `trashed_at`
+// because the container index is on `(container, status, title)`: the query
+// plan for this one is a scan of that index alone, where `trashed_at IS NULL`
+// plans as a scan of another index that reads every row back from the table.
 func (r *Reader) pageCounts(ctx context.Context, tx *sql.Tx) (map[string]int, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT container, COUNT(*) FROM pages_heads
