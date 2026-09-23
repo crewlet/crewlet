@@ -1358,9 +1358,20 @@ The proof is asked **after** the rule admits you. Somebody who could never make
 the gesture is told what they lack, rather than sent to confirm who they are
 only to be refused by a rule the confirmation never changes. A proof that is too
 old is `403 step_up_required` naming the window it needs, and the remedy is the
-caller's own: confirm who you are (`POST /auth/step-up` with your password and
-second factor, or signing in again through the identity provider) and send the
-same request again.
+caller's own: confirm who you are and send the same request again —
+`POST /auth/step-up` with your password and second factor, or, if you sign in
+through the identity provider, `/auth/oidc/start?step_up=true`, which asks the
+provider to authenticate you *now*.
+
+**A provider's proof is dated by the provider.** A provider answers a sign-in
+from its own session whenever it can, so the instant a token reaches this engine
+says nothing about when anybody typed anything: somebody who signed in at their
+provider last week arrives here in a second. A provider sign-in is therefore
+proved at the ID token's `auth_time`, and one whose token asserts none proved
+nothing this engine can date — stale in both windows. The provider step-up asks
+with `prompt=login` and `max_age` (which makes `auth_time` required) and is
+accepted only on an `auth_time` inside the `step_up` window; like the password
+step-up it replaces the session it was made from.
 
 What counts as having proved is a fact about the **credential**. A session
 proved when it signed in or stepped up, and each node composes the two

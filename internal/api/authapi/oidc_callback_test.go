@@ -63,6 +63,10 @@ type provider struct {
 
 	// groups is the groups claim every ID token carries, or none.
 	groups []string
+
+	// authTime is the auth_time every ID token asserts — when the person
+	// last authenticated AT THE PROVIDER — or none when zero.
+	authTime time.Time
 }
 
 const idpClientID = "crewlet"
@@ -106,6 +110,9 @@ func newProvider(t *testing.T) *provider {
 		}
 		if len(p.groups) > 0 {
 			claims["groups"] = p.groups
+		}
+		if !p.authTime.IsZero() {
+			claims["auth_time"] = p.authTime.Unix()
 		}
 		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 		token.Header["kid"] = "k1"

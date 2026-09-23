@@ -526,6 +526,22 @@ type signIn struct {
 	// with it, so it goes into custody beside the session it belongs to —
 	// see [Service.keep].
 	refresh string
+
+	// provedAt is when a PROVIDER sign-in's person authenticated at the
+	// provider ([oidc.Flight.ProvedAt]) — possibly long ago, and the zero
+	// time when the provider did not say. Every other way in was proved
+	// HERE, at this instant, and ignores it.
+	provedAt time.Time
+}
+
+// proofOf is the instant a sign-in proved who somebody is: the provider's own
+// for a provider sign-in, and this one for everything this surface verified
+// itself.
+func (s *Service) proofOf(how signIn) time.Time {
+	if how.method == types.SignInOIDC {
+		return how.provedAt
+	}
+	return s.now()
 }
 
 // completeSignIn opens the session and sets the cookie.
@@ -572,11 +588,14 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		AbsoluteExpiresAt: expires,
 		// EVERY PATH HERE IS A PROOF — a password and its second factor,
 		// an identity provider's token, an invitation, the bootstrap
-		// code, a step-up — so the session is fresh from this instant,
-		// and a step-up surface asks again once this node's window has
-		// passed. It is the one field that says so: without it every
-		// session was stale from its first request.
-		ProvedAt:    s.now(),
+		// code, a step-up — so the session is fresh from the instant it
+		// was proved, and a step-up surface asks again once this node's
+		// window has passed. It is the one field that says so: without it
+		// every session was stale from its first request. A PROVIDER'S
+		// proof is dated by the provider, because it answers from its own
+		// session and a token received now may carry an authentication
+		// from last week — see [Service.proofOf].
+		ProvedAt:    s.proofOf(how),
 		GroupGrants: how.groupGrants,
 		OpID:        "session:" + lineage.String(),
 		// THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT, because

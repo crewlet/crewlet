@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -401,6 +402,89 @@ func TestAFlightCarriesTheRedemptionAndMintsItsOwnSecrets(t *testing.T) {
 			t.Errorf("the %s is %q — a caller-supplied value, not one this "+
 				"package minted", name, value)
 		}
+	}
+}
+
+// A STEP-UP ASKS THE PROVIDER TO AUTHENTICATE THE PERSON NOW.
+//
+// `prompt=login` is the request and `max_age` is what makes `auth_time`
+// REQUIRED in the answer, so the callback has an instant to judge. A sign-in
+// asks for neither — forcing everybody to re-type a password at the provider
+// on every visit is not this engine's call — and a flight cannot be both a
+// confirmation and a redemption for somebody new.
+func TestAStepUpAsksTheProviderToAuthenticateNow(t *testing.T) {
+	t.Parallel()
+	idp := newIssuer(t)
+	query := func(want oidc.Flight) url.Values {
+		t.Helper()
+		redirect, _, err := idp.config().Start(testCipher(t),
+			idp.Server.URL+"/authorize", want, at)
+		if err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		parsed, err := url.Parse(redirect)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parsed.Query()
+	}
+	confirm := query(oidc.Flight{MaxAge: time.Hour})
+	if confirm.Get("prompt") != "login" || confirm.Get("max_age") != "3600" {
+		t.Errorf("a step-up asked prompt=%q max_age=%q, want login and 3600",
+			confirm.Get("prompt"), confirm.Get("max_age"))
+	}
+	plain := query(oidc.Flight{})
+	if plain.Has("prompt") || plain.Has("max_age") {
+		t.Errorf("a sign-in asked prompt=%q max_age=%q, want neither",
+			plain.Get("prompt"), plain.Get("max_age"))
+	}
+	if _, _, err := idp.config().Start(testCipher(t), idp.Server.URL+"/authorize",
+		oidc.Flight{MaxAge: time.Hour, Invite: "inv-1"}, at); err == nil {
+		t.Error("a flight both confirming somebody and redeeming an invitation " +
+			"was started")
+	}
+}
+
+// A PROOF IS DATED BY THE PROVIDER, AND A STEP-UP IS REFUSED RATHER THAN DATED.
+//
+// A provider answers from its own session whenever it can, so the proof is its
+// `auth_time` and never the instant the token arrived; a token asserting none
+// proved nothing this engine can date. A step-up asked for a fresh
+// authentication, so one the provider did not give is refused.
+func TestAProofIsDatedByTheProvider(t *testing.T) {
+	t.Parallel()
+	week := at.Add(-7 * 24 * time.Hour)
+	for _, tc := range []struct {
+		name     string
+		maxAge   time.Duration
+		authTime time.Time
+		want     time.Time
+		refused  bool
+	}{
+		{"a sign-in carries the provider's instant", 0, week, week, false},
+		{"a sign-in with no auth_time proved nothing datable", 0, time.Time{},
+			time.Time{}, false},
+		{"a provider clock ahead is read as now", 0, at.Add(time.Minute), at, false},
+		{"a step-up inside its window", time.Hour, at.Add(-time.Minute),
+			at.Add(-time.Minute), false},
+		{"a step-up with no auth_time", time.Hour, time.Time{}, time.Time{}, true},
+		{"a step-up outside its window", time.Hour, at.Add(-time.Hour - time.Second),
+			time.Time{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := oidc.Flight{MaxAge: tc.maxAge}.ProvedAt(
+				oidc.Claims{AuthTime: tc.authTime}, at)
+			if tc.refused {
+				if !errors.Is(err, oidc.ErrRefused) {
+					t.Errorf("answered (%s, %v), want ErrRefused", got, err)
+				}
+				return
+			}
+			if err != nil || !got.Equal(tc.want) {
+				t.Errorf("answered (%s, %v), want %s", got, err, tc.want)
+			}
+		})
 	}
 }
 

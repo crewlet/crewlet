@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,6 +61,17 @@ type Flight struct {
 	// address. Empty for an ordinary sign-in.
 	Login string `json:"login,omitempty"`
 
+	// MaxAge makes the round trip a STEP-UP: a signed-in person
+	// confirming who they are, at the provider, within this window. The
+	// authorization request carries `prompt=login` and `max_age`, and the
+	// callback accepts only an `auth_time` inside it ([Flight.ProvedAt]).
+	// Zero for a sign-in or a redemption.
+	//
+	// SEALED rather than read from configuration at the callback, so the
+	// window a confirmation is judged against is the one it was asked
+	// for, whichever node finishes it.
+	MaxAge time.Duration `json:"max_age,omitempty"`
+
 	// ExpiresAt is when the flight stops being redeemable, stamped by the
 	// node that minted it and enforced by whichever node finishes.
 	ExpiresAt time.Time `json:"expires_at"`
@@ -100,7 +112,12 @@ func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint string,
 		return "", "", fmt.Errorf("%w: %w", ErrNotConfigured, err)
 	}
 	flight := Flight{Return: want.Return, Invite: want.Invite, Login: want.Login,
-		ExpiresAt: now.Add(FlightTTL)}
+		MaxAge: want.MaxAge, ExpiresAt: now.Add(FlightTTL)}
+	if flight.MaxAge > 0 && flight.Invite != "" {
+		return "", "", fmt.Errorf("oidc: a round trip either confirms a " +
+			"signed-in person or redeems an invitation for somebody new, " +
+			"never both")
+	}
 	for _, into := range []*string{&flight.State, &flight.Nonce, &flight.Verifier} {
 		value, err := randomValue()
 		if err != nil {
@@ -146,6 +163,17 @@ func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint string,
 		// request and the validation is what enforces it.
 		query.Set("acr_values", c.RequireACR)
 	}
+	if flight.MaxAge > 0 {
+		// A STEP-UP ASKS THE PROVIDER TO AUTHENTICATE THE PERSON NOW:
+		// `prompt=login` is the request, and `max_age` is what makes
+		// `auth_time` REQUIRED in the answer (OpenID Connect Core
+		// 3.1.2.1), so the callback has an instant to judge rather than
+		// a provider's promise. Whole seconds, at least one — zero is a
+		// different request at some providers.
+		query.Set("prompt", "login")
+		query.Set("max_age", strconv.FormatInt(
+			max(1, int64(flight.MaxAge/time.Second)), 10))
+	}
 	endpoint.RawQuery = query.Encode()
 	return endpoint.String(), sealed, nil
 }
@@ -178,6 +206,51 @@ func Open(cipher secrets.Cipher, sealed string, now time.Time) (Flight, error) {
 			ErrRefused, FlightTTL)
 	}
 	return flight, nil
+}
+
+// ProvedAt is when the provider says the person proved who they are in this
+// round trip — the ID token's `auth_time`, never later than now — or the zero
+// time when it does not say.
+//
+// # The provider's instant and never this engine's
+//
+// A provider answers a sign-in from its OWN session whenever it can, so the
+// instant this engine received the token says nothing about when anybody typed
+// anything: a person signed in at their provider last week arrives here in a
+// second, and stamping that sign-in "proved now" handed every step-up window
+// to a week-old authentication. So the proof is the provider's `auth_time`,
+// and a sign-in whose token asserts none proved nothing this engine can date —
+// the zero time, which every step-up window reads as stale.
+//
+// # A step-up is refused rather than dated
+//
+// A flight with a [Flight.MaxAge] asked for a fresh authentication, and one
+// the provider did not give — no `auth_time`, which `max_age` makes required,
+// or one outside the window — is [ErrRefused]: the person asked to confirm who
+// they are, and nothing confirmed it.
+func (f Flight) ProvedAt(c Claims, now time.Time) (time.Time, error) {
+	at := c.AuthTime
+	if at.After(now) {
+		// A PROVIDER'S CLOCK AHEAD OF THIS ONE, by the amount no token
+		// validation here tolerates for anything else either: the
+		// authentication happened, and not later than the token that
+		// reports it arrived.
+		at = now
+	}
+	if f.MaxAge <= 0 {
+		return at, nil
+	}
+	switch {
+	case at.IsZero():
+		return time.Time{}, fmt.Errorf("%w: the provider asserted no "+
+			"auth_time, which it must when max_age is asked, so nothing says "+
+			"the person authenticated at all", ErrRefused)
+	case now.Sub(at) > f.MaxAge:
+		return time.Time{}, fmt.Errorf("%w: the provider says the person "+
+			"authenticated %s ago, outside the %s window this confirmation "+
+			"asked for", ErrRefused, now.Sub(at).Round(time.Second), f.MaxAge)
+	}
+	return at, nil
 }
 
 // randomValue is one unguessable URL-safe value.

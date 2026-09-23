@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -47,9 +48,21 @@ func (s *Service) OIDCStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	want := oidc.Flight{Return: s.returnTo(r)}
-	if invite := r.URL.Query().Get("invite"); invite != "" {
+	invite, stepUp := r.URL.Query().Get("invite"), r.URL.Query().Get("step_up")
+	switch {
+	case invite != "" && stepUp != "":
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			map[string]string{"detail": "a round trip redeems an invitation " +
+				"for somebody new or confirms who is signed in, never both"})
+		return
+	case invite != "":
 		var ok bool
 		if want, ok = s.redemptionFlight(w, r, want, invite); !ok {
+			return
+		}
+	case stepUp != "":
+		var ok bool
+		if want, ok = s.stepUpFlight(w, r, want); !ok {
 			return
 		}
 	}
@@ -155,9 +168,17 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	attempt.Subject = claims.Issuer + "|" + claims.Subject
+	// WHEN THE PERSON PROVED WHO THEY ARE, by the provider's own account,
+	// and a confirmation the provider did not give refused here.
+	provedAt, err := flight.ProvedAt(claims, s.now())
+	if err != nil {
+		log.WarnContext(r.Context(), "api_oidc_step_up_unconfirmed", "error", err)
+		s.refuseSignIn(w, r, arrived, attempt, "step-up: "+err.Error())
+		return
+	}
 	if flight.Invite != "" {
 		s.redeemThroughProvider(w, r, arrived, attempt, flight, claims,
-			tokens.Refresh)
+			tokens.Refresh, provedAt)
 		return
 	}
 	held, err := s.personForSubject(r, claims)
@@ -196,9 +217,9 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// that was meant to be this. The return path was checked at the start
 	// to be a path on this deployment and was sealed into the flight since,
 	// so it is not the caller's to change now.
-	s.completeSignIn(w, r, held, signIn{
+	how := signIn{
 		method: types.SignInOIDC, acr: claims.ACR, redirect: flight.Return,
-		refresh: tokens.Refresh,
+		refresh: tokens.Refresh, provedAt: provedAt,
 		// THE GROUP MAPPING RIDES INSIDE THE SESSION, never onto the
 		// person's own row: what a provider's groups confer is true for
 		// as long as that assertion is, and writing it to the estate
@@ -206,7 +227,55 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		// this sighting and then dropped, since nothing downstream reads
 		// a sighting's grants — so no mapping ever conferred anything.
 		groupGrants: s.boot.API.Auth.OIDC.GrantsFor(claims.Groups),
-	})
+	}
+	if flight.MaxAge > 0 {
+		// A CONFIRMATION REPLACES the session it was made from, as the
+		// password step-up does — see [Service.StepUp] — and keeps its
+		// absolute deadline. The groups are the ones the provider just
+		// asserted, which are newer than the session's.
+		replaced, ok := s.replacedSession(w, r, held)
+		if !ok {
+			return
+		}
+		how.stepUp = true
+		how.replaces = replaced.Bearer.Lineage.String()
+		how.absolute = replaced.Bearer.AbsoluteExpiresAt
+	}
+	s.completeSignIn(w, r, held, how)
+}
+
+// stepUpFlight is what a provider STEP-UP start seals: the window the provider
+// is asked to have authenticated the person inside. Answers false once it has
+// written the refusal.
+//
+// # Why this is the provider's own round trip and not the password route
+//
+// Somebody who signs in only through their provider holds no password here,
+// so `POST /auth/step-up` has nothing to verify — and once the surfaces that
+// change what a company is ask for a recent proof, such a person could
+// otherwise never make one of those changes at all. The confirmation is the
+// provider's: asked with `prompt=login` and `max_age`, and accepted only on an
+// `auth_time` inside the window ([oidc.Flight.ProvedAt]).
+//
+// A SIGNED-IN PERSON, and never a machine: a token proves nobody is present,
+// and the step-up exists to prove somebody is.
+func (s *Service) stepUpFlight(w http.ResponseWriter, r *http.Request,
+	want oidc.Flight) (oidc.Flight, bool) {
+
+	principal, how := iam.From(r.Context())
+	if how != iam.Resolved || principal.Kind != iam.KindPerson {
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
+		return oidc.Flight{}, false
+	}
+	if machineToken(w, r) {
+		return oidc.Flight{}, false
+	}
+	// THE ORDINARY WINDOW, which is the design's: the provider is asked
+	// to have authenticated the person within it, and `prompt=login`
+	// asks for now — so what comes back is fresh for the sensitive
+	// window too, and the deadlines the guard composes from it say so.
+	want.MaxAge = s.boot.API.Auth.Session.StepUp()
+	return want, true
 }
 
 // personForSubject resolves the provider's subject to somebody this estate

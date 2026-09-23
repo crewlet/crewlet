@@ -96,7 +96,7 @@ func (s *Service) redemptionFlight(w http.ResponseWriter, r *http.Request,
 // token has verified.
 func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
 	arrived time.Time, attempt authevents.Failure, flight oidc.Flight,
-	claims oidc.Claims, refresh string) {
+	claims oidc.Claims, refresh string, provedAt time.Time) {
 
 	held, ok := s.invitationByID(w, r, arrived, attempt.Client, flight.Invite)
 	if !ok {
@@ -199,6 +199,7 @@ func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
 	}, signIn{
 		method: types.SignInOIDC, acr: claims.ACR, redirect: flight.Return,
 		refresh: refresh, groupGrants: s.boot.API.Auth.OIDC.GrantsFor(claims.Groups),
+		provedAt: provedAt,
 	})
 }
 
