@@ -60,9 +60,8 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	var registered []statelog.Registered
 	for _, domain := range registeredDomains() {
 		registered = append(registered, statelog.Registered{
-			Domain:          domain,
-			Health:          func() statelog.Health { return statelog.Health{Drained: true, Lag: &lag} },
-			StreamCreatedAt: running.createdAt,
+			Domain: domain,
+			Health: func() statelog.Health { return statelog.Health{Drained: true, Lag: &lag} },
 		})
 	}
 	snapDir := filepath.Join(donorDir, "snapshots")
@@ -359,7 +358,7 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningDomain,
 			ON CONFLICT (stream) DO UPDATE SET
 				seq = excluded.seq, stream_created_at = excluded.stream_created_at`,
 			tracker.Domain{}.Stream().Name, int64(at.Generation), int64(last),
-			store.EncodeTime(running.createdAt), store.EncodeTime(time.Now().UTC()))
+			store.EncodeTime(running.runner.StreamCreatedAt()), store.EncodeTime(time.Now().UTC()))
 		return err
 	}); err != nil {
 		t.Fatalf("advance the copy's checkpoint: %v", err)

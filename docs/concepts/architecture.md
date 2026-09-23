@@ -542,14 +542,15 @@ order from the log, every node applies the same ones, and the rows plus this
 node's position on the log commit in a single transaction. There is no leader
 and no node whose copy is the real one.
 
-**Three writes in the engine are not records**, and each is a column or a row
-no record could own: the version reset after a log reanchor (the stream a
-record would go to is the one being replaced), the clear of a duplicate-rank
-probe flag each node's own applier sets, and the inbox sweep over rows whose
-class lets two nodes legitimately hold different ones. They are named with
-their reasons in one place, and a fourth fails the build — the rule and its
-exceptions are `adr/0002`, held by
-`internal/store.TestOnlyTheApplierWritesTheReplicatedEstate`.
+**Two writes in the engine are not records**, and each is a column or a row
+no record could own: the clear of a duplicate-rank probe flag each node's own
+applier sets, and the inbox sweep over rows whose class lets two nodes
+legitimately hold different ones. They are named with their reasons in one
+place, and a third fails the build — the rule and its exceptions are
+`adr/0002`, held by `internal/store.TestOnlyTheApplierWritesTheReplicatedEstate`.
+A log reanchor is not among them: it writes the framework's own checkpoint,
+and the audit row it leaves is applied from the generation record it appends
+to the adopted log.
 
 | Tables | What they hold |
 |---|---|

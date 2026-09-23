@@ -107,15 +107,15 @@ type runningDomain struct {
 	log       *jetstream.DomainLog
 	consumer  *jetstream.DomainConsumer
 
-	// createdAt is the broker's own creation instant for the stream, which
-	// is what DETECTS a recreated one — the generation is the response.
-	//
-	// WHETHER THE LIVE STREAM IS STILL THIS ONE is not held here. It is
-	// the runner's ([statelog.Runner.StreamIdentity]), because the write
-	// path refuses on it too, and a flag kept beside the runner was read by
-	// the health and by nothing that appends: a node refused every read of
-	// a rebuilt log while its writes went on landing there.
-	createdAt time.Time
+	// NO CREATION INSTANT IS HELD HERE. Which stream this domain's
+	// positions are keyed to is the runner's
+	// ([statelog.Runner.StreamCreatedAt]), and whether the live stream is
+	// still that one is the runner's too ([statelog.Runner.StreamIdentity]),
+	// because the write path refuses on it. A copy sampled here at boot
+	// went stale the moment a stream was rebuilt under a running node: the
+	// reanchor asked an operator to confirm it while every refusal named
+	// the live one, and once the runner was re-keyed it described a stream
+	// the checkpoint no longer named.
 
 	// evicted is this domain's own eviction gate, taken from the write
 	// fence so readiness reads the row the write path reads.
@@ -211,9 +211,26 @@ type stateLog struct {
 	// only happen while nothing holds a pinned connection on it, and the
 	// pins are the appliers'. applyStop ends them, applyDone joins them,
 	// and launchAppliers starts them again over whatever file is there.
+	//
+	// AND EACH LOOP UNDER A CONTEXT OF ITS OWN BENEATH THAT, because a
+	// reanchor ends and restarts ONE: it moves one domain's checkpoint,
+	// which only that domain's loop writes, and the other domains have no
+	// reason to pause. applying holds each running loop's own stop; the
+	// set's context is the parent of every one, so ending the set ends
+	// them all.
 	applyMu   sync.Mutex
+	applyCtx  context.Context
 	applyStop context.CancelFunc
+	applying  map[string]*applierRun
 	applyDone sync.WaitGroup
+
+	// recovering serialises the two operations that rewrite a domain's
+	// checkpoint under a running node: a runtime adoption, which replaces
+	// the replicated file whole, and a reanchor, which moves one domain's
+	// checkpoint to a stream it adopts. Either one interleaved with the
+	// other writes into a file the other is replacing, or relaunches a
+	// loop the other has just halted.
+	recovering sync.Mutex
 
 	// rejoin is what the heartbeat calls when it finds this node below
 	// the log's floor while running; the engine sets it, because the
@@ -464,6 +481,13 @@ func (s *stateLog) Stop() {
 	s.haltAppliers()
 }
 
+// applierRun is one domain's apply loop: what ends it, and what reports it
+// has ended.
+type applierRun struct {
+	stop context.CancelFunc
+	done chan struct{}
+}
+
 // launchAppliers starts every domain's apply loop under a fresh context
 // derived from base.
 //
@@ -483,28 +507,117 @@ func (s *stateLog) launchAppliers(base context.Context) {
 		return
 	}
 	ctx, cancel := context.WithCancel(base)
-	s.applyStop = cancel
+	s.applyCtx, s.applyStop = ctx, cancel
+	s.applying = make(map[string]*applierRun, len(s.order))
 	for _, name := range s.order {
-		running := s.domains[name]
-		s.applyDone.Add(1)
-		go func() {
-			defer s.applyDone.Done()
-			// A STOPPED APPLIER IS NOT A CRASHED NODE. Its rows are
-			// frozen and every read of them says so through the
-			// coverage it reports, so what this costs is that the
-			// node stops taking seats — which is what the readiness
-			// gate below already does with it, reading the stop off
-			// [statelog.Runner.Stopped] rather than this error.
-			//
-			// NO LINE OF ITS OWN: the runner writes
-			// `statelog_applier_stopped` as it stops, naming the
-			// stream, the position it froze at and what resumes it. A
-			// second line here made one stop read as two, and its
-			// `component=engine` is not the component the replication
-			// guide sends an operator to.
-			_ = running.runner.Run(ctx)
-		}()
+		s.startApplierLocked(ctx, name)
 	}
+}
+
+// startApplierLocked starts one domain's loop under set, which is the set's
+// own context. The caller holds applyMu and has checked the set is launched.
+func (s *stateLog) startApplierLocked(set context.Context, name string) {
+	running := s.domains[name]
+	ctx, cancel := context.WithCancel(set)
+	run := &applierRun{stop: cancel, done: make(chan struct{})}
+	s.applying[name] = run
+	s.applyDone.Add(1)
+	go func() {
+		defer s.applyDone.Done()
+		defer close(run.done)
+		defer cancel()
+		// A STOPPED APPLIER IS NOT A CRASHED NODE. Its rows are
+		// frozen and every read of them says so through the
+		// coverage it reports, so what this costs is that the
+		// node stops taking seats — which is what the readiness
+		// gate below already does with it, reading the stop off
+		// [statelog.Runner.Stopped] rather than this error.
+		//
+		// NO LINE OF ITS OWN: the runner writes
+		// `statelog_applier_stopped` as it stops, naming the
+		// stream, the position it froze at and what resumes it. A
+		// second line here made one stop read as two, and its
+		// `component=engine` is not the component the replication
+		// guide sends an operator to.
+		_ = running.runner.Run(ctx)
+	}()
+}
+
+// haltApplier ends ONE domain's loop and waits for it, reporting whether it
+// was still running — false for a loop that had already stopped on its own, or
+// a set that is not launched.
+//
+// It exists for a reanchor, which rewrites one domain's checkpoint: that
+// checkpoint's only other writer is this loop, and a batch it committed after
+// the reanchor's transaction would write the old generation and the old
+// stream's instant straight back over it.
+func (s *stateLog) haltApplier(name string) bool {
+	s.applyMu.Lock()
+	run := s.applying[name]
+	delete(s.applying, name)
+	s.applyMu.Unlock()
+	if run == nil {
+		return false
+	}
+	running := true
+	select {
+	case <-run.done:
+		running = false
+	default:
+	}
+	run.stop()
+	<-run.done
+	return running
+}
+
+// resumeApplier starts ONE domain's loop again after [stateLog.haltApplier],
+// with its consumer moved back to the checkpoint the rows keep first.
+//
+// THE CONSUMER IS RESET for the reason a rejoin resets every one: a loop ended
+// in the middle of a fetch leaves its pull request pending on the broker, which
+// hands the next record to a reader that is gone and redelivers it only once
+// the acknowledgement window has passed — so on a strict log the resumed loop
+// sat waiting thirty seconds for a record the broker believed delivered. A
+// reset that fails costs exactly that and no more, since the loop resumes from
+// the checkpoint whatever the consumer says, and it is said.
+func (s *stateLog) resumeApplier(ctx context.Context, name string) {
+	running := s.domains[name]
+	at, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), running.domain.Stream().Name)
+	if err == nil {
+		err = running.consumer.Reset(ctx, at.Seq)
+	}
+	if err != nil {
+		log.WarnContext(ctx, "statelog_consumer_not_reset",
+			"domain", name, "checkpoint", at.String(), "error", err.Error(),
+			"detail", "the loop resumes from its checkpoint regardless; a record "+
+				"handed to the fetch that was ended arrives once its "+
+				"acknowledgement window passes, so this costs a delay rather "+
+				"than correctness")
+	}
+	s.launchApplier(name)
+}
+
+// launchApplier starts ONE domain's loop again under the set's context. A
+// no-op while the set is halted — the launch that ends that halt starts every
+// domain — and while the domain already has a loop running.
+func (s *stateLog) launchApplier(name string) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	if s.applyStop == nil {
+		return
+	}
+	if run := s.applying[name]; run != nil {
+		select {
+		case <-run.done:
+		default:
+			return
+		}
+	}
+	//nolint:contextcheck // the SET's context, never a caller's: a loop
+	// outlives the reanchor or the resume that restarted it, and one started
+	// under that caller's context would stop the moment it returned — and
+	// ending the set is what must end it, as it ends every other domain's.
+	s.startApplierLocked(s.applyCtx, name)
 }
 
 // haltAppliers ends every apply loop and waits for them, releasing the pinned
@@ -513,7 +626,7 @@ func (s *stateLog) launchAppliers(base context.Context) {
 func (s *stateLog) haltAppliers() {
 	s.applyMu.Lock()
 	stop := s.applyStop
-	s.applyStop = nil
+	s.applyCtx, s.applyStop, s.applying = nil, nil, nil
 	s.applyMu.Unlock()
 	if stop == nil {
 		return
@@ -682,8 +795,7 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 
 	running := &runningDomain{
 		domain: domain, runner: runner, publisher: publisher,
-		log: appendTo, consumer: consumer, createdAt: created,
-		evicted: evicted,
+		log: appendTo, consumer: consumer, evicted: evicted,
 	}
 	// AFTER the struct exists, because the health closure the reader
 	// holds reads through it — a reader built first would capture a
@@ -1618,6 +1730,10 @@ const (
 //     donor leaves the node as it was, below the floor and refusing, and a
 //     node with no appliers at all would be worse than that.
 func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
+	// ONE RECOVERY AT A TIME: a reanchor moving a checkpoint in the file
+	// this is about to replace would be writing into a file with no name.
+	s.recovering.Lock()
+	defer s.recovering.Unlock()
 	log.WarnContext(ctx, "statelog_rejoin_started", "node", s.nodeID,
 		"detail", "this node is below the log's floor while running; its "+
 			"appliers pause while it asks the fleet for a snapshot")
@@ -2072,7 +2188,6 @@ func (s *stateLog) registered() map[string]statelog.Registered {
 		name := domain.Name()
 		entry := statelog.Registered{Domain: domain}
 		if running, held := s.domains[name]; held {
-			entry.StreamCreatedAt = running.createdAt
 			// THIS NODE'S OWN CONTEXT, for [stateLog.readerFor]'s
 			// reason: the snapshot loop and the adopter call this
 			// closure on their own cadence, long after whoever built

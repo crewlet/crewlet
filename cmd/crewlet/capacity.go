@@ -14,6 +14,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // `crewlet retention set-capacity`, `maintenance`, `reanchor` and
@@ -380,9 +382,11 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 				"the live stream's own created_at, which this verb prints when "+
 					"it is omitted")
 			force = fs.Bool("force", false,
-				"re-anchor even though a peer is hydrated on the live stream. "+
-					"Adopting that peer's snapshot is strictly better, so this "+
-					"is for the case where it cannot be reached")
+				"re-anchor although this node may not be the most caught-up "+
+					"on the old stream, or the positions register cannot be "+
+					"read. It never overrides a peer hydrated on the live "+
+					"stream: adopting that peer's snapshot recovers what a "+
+					"reanchor discards")
 		})
 	if err != nil {
 		return err
@@ -407,14 +411,18 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 		// at the thing I am re-anchoring", and a verb that read the
 		// value and fed it straight back would be confirming against
 		// its own output.
+		//
+		// IN THE ONE SPELLING THE NODE CHECKS ([statelog.ConfirmationOf]):
+		// this printed nanoseconds while the check compared whole
+		// seconds, so pasting back what it printed was refused.
+		instant := statelog.ConfirmationOf(status.CreatedAt)
 		fmt.Fprintf(stdout, "%s is at generation %d and was created at %s.\n\n"+
-			"A reanchor declares every position below the NEXT generation stale, "+
-			"and does NOT recover records that were on the old stream and were "+
-			"never applied here.\n\nRe-run with:\n  "+
-			"crewlet retention reanchor -stream %s -confirm %s\n",
-			status.Stream, status.Generation,
-			status.CreatedAt.UTC().Format(time.RFC3339Nano),
-			status.Stream, status.CreatedAt.UTC().Format(time.RFC3339Nano))
+			"A reanchor moves THIS log alone to its NEXT generation, declaring "+
+			"every position below it stale; its applier resumes on this node "+
+			"with no restart, and no other log moves. It does NOT recover "+
+			"records that were on the old stream and were never applied here."+
+			"\n\nRe-run with:\n  crewlet retention reanchor -stream %s -confirm %s\n",
+			status.Stream, status.Generation, instant, status.Stream, instant)
 		return errors.New("confirm the stream's own created_at")
 	}
 
@@ -431,7 +439,8 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "%s is re-anchored at generation %d. Every position "+
-		"below it is now comparable and safely stale.\n",
+		"below it is now comparable and safely stale, and its applier has "+
+		"resumed on this node; no other log moved.\n",
 		answer.Stream, answer.Generation)
 	return nil
 }

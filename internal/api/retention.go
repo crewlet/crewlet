@@ -107,7 +107,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	generation, err := a.generationOf(r.Context(), stream)
+	generation, err := a.generationOf(stream)
 	if err != nil {
 		// A BARE SEQUENCE NAMES A NUMBER SPACE. Publishing one at the
 		// wrong generation pins a position on a log that no longer
@@ -186,15 +186,12 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 // the register sources answered it confidently with some other log's number:
 // a mistyped stream name used to read back as a successful acknowledgement
 // that nothing would ever count.
-func (a *App) generationOf(ctx context.Context, stream string) (uint32, error) {
-	// The instant is the reanchor confirmation's business and not this
-	// route's; the generation beside it is this node's own answer for the
-	// stream, which is exactly what has to be stamped on the point.
-	_, generation, err := a.capacity.ReanchorStatus(ctx, stream)
-	if err != nil {
-		return 0, err
-	}
-	return generation, nil
+func (a *App) generationOf(stream string) (uint32, error) {
+	// FROM MEMORY, never through the reanchor's status read: that one reads
+	// the stream's creation instant LIVE from the broker, which this route
+	// has no use for — and a broker that did not answer would then have
+	// been reported as a stream name the operator mistyped.
+	return a.capacity.StreamGeneration(stream)
 }
 
 // mountRetention registers the write half of the retention surface.
@@ -483,6 +480,7 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 type capacityRunner interface {
 	Reanchor(ctx context.Context, req engine.ReanchorRequest) (uint32, error)
 	ReanchorStatus(ctx context.Context, stream string) (time.Time, uint32, error)
+	StreamGeneration(stream string) (uint32, error)
 	SetCapacity(ctx context.Context, req engine.CapacityRequest) (coord.MaintenanceOperation, error)
 	AbandonCapacity(ctx context.Context, stream string) (coord.MaintenanceOperation, error)
 	ExcludeParticipant(ctx context.Context, stream, node string) (coord.MaintenanceOperation, error)
@@ -524,9 +522,18 @@ func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	createdAt, generation, err := a.capacity.ReanchorStatus(r.Context(), stream)
-	if err != nil {
+	switch {
+	case errors.Is(err, engine.ErrUnknownStream):
 		writeJSON(w, http.StatusNotFound,
 			map[string]string{"error": "unknown_stream", "detail": err.Error()})
+		return
+	case err != nil:
+		// THE LOG EXISTS AND THE BROKER DID NOT ANSWER. The instant is read
+		// live, so this is the one failure here worth retrying — and
+		// reporting it as an unknown stream sent an operator looking for a
+		// typo in a name that was right.
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "stream_unreadable", "detail": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

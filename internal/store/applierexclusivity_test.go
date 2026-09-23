@@ -34,9 +34,12 @@ import (
 // only appears as two nodes answering one question differently — at which
 // point the write that caused it is months behind in the log.
 //
-// The tree already carried three such writes when this was added — a version
-// reset after a reanchor, a probe-flag clear and an inbox sweep. All three are
-// allowed below, and each had to state its case in terms of the rule.
+// The tree carried three such writes when this was added — a version reset
+// after a reanchor, a probe-flag clear and an inbox sweep — and each had to
+// state its case in terms of the rule. The version reset is gone: its case did
+// not survive the arbitration anchor moving off `version` (see
+// internal/tracker/reanchor.go), and a reanchor now writes nothing but the
+// framework's own checkpoint. The two that remain are allowed below.
 //
 // # What it walks, and what it cannot see
 //
@@ -88,7 +91,7 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 	for _, positive := range []string{
 		`db.Replicated().Writer(ctx)`,
 		`d.deps.DB.Replicated().Tx(ctx, fn)`,
-		`tracker.ResetVersions(ctx, e.backends.Store.Replicated(), gen)`,
+		`tracker.Rewrite(ctx, e.backends.Store.Replicated(), gen)`,
 		`peer := r.node.Replicated()`,
 		`statelog.Deps{DB: e.backends.Store.Replicated()}`,
 	} {
@@ -284,8 +287,8 @@ const (
 	mechanism allowanceKind = "mechanism"
 
 	// exception: a genuine write to the replicated estate that is not a
-	// record, because no record could own what it touches. Read all three
-	// before adding a fourth.
+	// record, because no record could own what it touches. Read both
+	// before adding a third.
 	exception allowanceKind = "exception"
 
 	// notReplicated: the walk flagged a statement whose table it could not
@@ -344,15 +347,6 @@ var allowedReplicatedWriter = []allowance{
 			"and serves the handle. A write here is the schema, not a row.",
 	},
 	{
-		Prefix: "internal/engine/reanchor.go", Kind: mechanism,
-		Why: "The wiring that hands the replicated handle to the framework " +
-			"for a log reanchor: the deps it builds and the version reset it " +
-			"drives. Every write it reaches is internal/statelog's or " +
-			"internal/tracker/reanchor.go's, each allowed on its own terms. " +
-			"Named by FILE rather than by package, so a new direct write " +
-			"elsewhere in internal/engine still fails.",
-	},
-	{
 		Prefix: "internal/engine/statelog.go", Kind: mechanism,
 		Why: "Holds the replicated handle to run the framework's own loops — " +
 			"the checkpoint reads, the snapshotter, the adoption. It passes " +
@@ -409,17 +403,9 @@ var allowedReplicatedWriter = []allowance{
 	},
 
 	// -----------------------------------------------------------------
-	// THE EXCEPTIONS. Three writes that are not a record, each because no
-	// record could own what it touches. Read these before adding a fourth.
+	// THE EXCEPTIONS. Two writes that are not a record, each because no
+	// record could own what it touches. Read these before adding a third.
 	// -----------------------------------------------------------------
-	{
-		Prefix: "internal/tracker/reanchor.go", Kind: exception,
-		Why: "ResetVersions puts every object row's version at a new " +
-			"generation's floor after a reanchor. It cannot be a record: the " +
-			"stream it would be published to is the one being replaced. " +
-			"Every node runs it against its own copy and computes the same " +
-			"floor, so it converges rather than diverges.",
-	},
 	{
 		Prefix: "internal/tracker/duty.go", Kind: exception,
 		Why: "clearProbe clears `rank_duplicate_pending`, a column written " +

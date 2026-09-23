@@ -64,7 +64,7 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 	if !ok {
 		t.Fatalf("the stream is %T, not the JetStream backend", back.Queue)
 	}
-	created := e.native.log.Domain(tracker.Domain{}.Name()).createdAt
+	created := e.native.log.Domain(tracker.Domain{}.Name()).runner.StreamCreatedAt()
 	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor

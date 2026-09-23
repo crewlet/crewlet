@@ -2,30 +2,44 @@ package engine
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // REANCHORING: the one recovery for a stream that was genuinely recreated.
 //
-// A recreated stream restarts its sequences at 1, so every position the fleet
-// holds names a number space that no longer exists — a stored version, a
+// A recreated stream restarts its sequences at 1, so every position the node
+// holds on it names a number space that no longer exists — a stored version, a
 // consumer's cursor, an arbitration anchor. The node's answer to that is to
-// refuse to serve, which is correct and is not the only outcome available.
+// refuse to serve that domain, which is correct and is not the only outcome
+// available.
 //
 // What a reanchor says is: THESE ROWS ARE WHAT THEY ARE; follow the new stream
 // from its head. The durable tables are the record of truth and the stream is
 // a replay window, so the rows survive and the window is replaced. What the
 // GENERATION adds over an earlier re-stamp is that an old position becomes
 // COMPARABLE and safely stale rather than indistinguishable from a current
-// one: a stored version at a lower generation forms `expect = 0` on its next
-// write, and a client's cursor at a lower one is refused by name.
+// one: an anchor at a lower generation forms `expect = 0` on its next write,
+// and a client's cursor at a lower one is refused by name.
+//
+// ONE DOMAIN, the one whose stream the operator named: every fact the verb is
+// decided from is a fact about that stream, and every other domain's
+// checkpoint, generation and instant are left exactly where they were — see
+// [statelog.Reanchor] for what moving all of them from one stream's facts did.
+//
+// AND NO RESTART. The domain's loop is halted before its checkpoint moves,
+// the runner is re-keyed to the stream it adopted once the checkpoint has
+// committed, and the loop is started again: the domain applies the new stream
+// from its head, its reads and writes are served again, and nothing else on
+// the node paused.
 //
 // It does NOT recover records that were on the old stream and never applied
 // here, and the refusal says so.
@@ -38,133 +52,297 @@ type ReanchorRequest struct {
 	Stream  string
 	Confirm string
 
-	// Force is the escape for a fleet whose peers cannot be established.
-	// It is refused unless the operator supplies it, because adopting a
-	// hydrated peer's snapshot is strictly better than re-anchoring.
+	// Force overrides the rule that only the most caught-up node may
+	// re-anchor, for a fleet whose register cannot say which that is. It
+	// never overrides a hydrated peer — adopting that peer's snapshot is
+	// strictly better than re-anchoring, and the divergence two
+	// independent reanchors produce is silent — see
+	// [statelog.PermitReanchor].
 	Force bool
 
-	// By names the operator, for the audit row.
+	// By names the operator, for the generation record.
 	By string
 }
 
-// Reanchor runs the generation transition.
+// Reanchor runs one domain's generation transition.
 //
 // # Why it refuses while any peer is hydrated on the live stream
 //
 // A peer that is caught up on the stream this node cannot read has the history
 // this node is about to declare unreachable. Adopting its snapshot recovers
 // that history; re-anchoring discards it. The refusal names the peer.
+//
+// # The loop is halted around it, and restarted whatever happened before
+//
+// The checkpoint the transition moves has exactly one other writer, the
+// domain's own apply loop, and a batch it committed after the transition's
+// transaction would write the old generation and the old stream's instant back
+// over it. So the loop is ended first. It is started again when the transition
+// completes — the runner is re-keyed by then, so the loop resumes from the new
+// checkpoint — and, when the transition did not complete, exactly when it was
+// running before: a mistyped confirmation must not leave a healthy domain
+// without its applier, and a loop that had stopped on a recreated stream stays
+// stopped rather than logging the same stop again.
 func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (uint32, error) {
-	if e.native == nil || e.native.log == nil || e.native.writer == nil {
-		return 0, errors.New("engine: this node runs no state log, so it has " +
-			"nothing to re-anchor")
+	running, err := e.runningStream(req.Stream)
+	if err != nil {
+		return 0, err
 	}
 	s := e.native.log
-	name := s.domainOf(req.Stream)
-	running := s.domains[name]
-	if running == nil {
-		return 0, fmt.Errorf("engine: %q is not a domain log this build runs — "+
-			"the streams a reanchor applies to are %v", req.Stream,
-			maintenanceStreams())
+	record, err := generationEncoder(running.domain)
+	if err != nil {
+		return 0, err
 	}
+	name := running.domain.Name()
 
-	in := e.reanchorInputs(ctx, running)
+	// ONE RECOVERY AT A TIME, with a runtime adoption: that replaces the
+	// replicated file whole, and this writes a checkpoint in it.
+	s.recovering.Lock()
+	defer s.recovering.Unlock()
+
+	wasRunning := s.haltApplier(name)
+	completed := false
+	defer func() {
+		switch {
+		case completed:
+			// The transition already moved the consumer to the
+			// checkpoint it committed, before committing it.
+			s.launchApplier(name)
+		case wasRunning:
+			// A TEARDOWN, so it outlives a caller that has gone: the
+			// loop it restores is the one this call ended.
+			s.resumeApplier(context.WithoutCancel(ctx), name)
+		}
+	}()
+
+	in, err := e.reanchorInputs(ctx, running)
+	if err != nil {
+		return 0, err
+	}
 	gen, err := statelog.Reanchor(ctx, statelog.ReanchorDeps{
-		Domains: s.registered(),
-		DB:      e.backends.Store.Replicated(),
-		ResetVersions: func(ctx context.Context, gen uint32) error {
-			return tracker.ResetVersions(ctx, e.backends.Store.Replicated(), gen)
-		},
-		PublishGeneration: e.native.writer.PublishGeneration,
-		RecordGeneration: func(ctx context.Context, tx *sql.Tx, gen uint32,
-			in statelog.ReanchorInputs) error {
-			return tracker.RecordGeneration(ctx, tx, gen, in, req.By)
-		},
-		Now: time.Now,
+		Domain:   running.domain,
+		Stream:   reanchorStream{log: running.log},
+		Record:   record,
+		Consumer: running.consumer,
+		Runner:   running.runner,
+		Evicted:  running.evicted,
+		DB:       replicatedEstate{node: s.db},
+		By:       req.By,
+		NodeID:   e.native.nodeID,
+		Now:      time.Now,
 	}, in, statelog.ReanchorGuard{Confirm: req.Confirm, Force: req.Force})
 	if err != nil {
-		if in.PeersHydrated > 0 {
+		if in.PeersHydrated > 0 && running.domain.ClaimsIdentity() {
 			rows, _ := e.backends.Fleet.Positions(ctx)
 			return 0, fmt.Errorf("%w (hydrated peers: %v)", err,
-				hydratedPeers(rows, running.domain.Name(), in.Generation, e.id))
+				hydratedPeers(rows, name, in.Generation, e.native.nodeID))
 		}
 		return 0, err
 	}
+	completed = true
 	// NO LINE OF ITS OWN: [statelog.Reanchor] writes `statelog_reanchored`
-	// with the generation, the stream named, the streams whose cursors moved
-	// and that stream's prior high-water mark, and a second line under that
-	// name here made one transition read as two.
+	// with the domain, the generation, the stream and its prior high-water
+	// mark, and a second line under that name here made one transition
+	// read as two.
 	return gen, nil
 }
 
-// reanchorInputs reads the seven facts the permission check is decided from.
+// generationEncoder is the domain's own record of a reanchor, or its
+// declaration that it keeps none.
+//
+// A SWITCH, like [barrierEncoder] and [stateLog.publisherFor], because what a
+// record on a domain's log looks like is the domain's, and the register is the
+// one place every domain this build runs is named. A registered domain with no
+// case here could never be re-anchored, which is refused by name rather than
+// discovered by an operator mid-incident.
+func generationEncoder(domain statelog.Domain) (statelog.GenerationEncoder, error) {
+	switch domain.Name() {
+	case tracker.Domain{}.Name():
+		return tracker.GenerationRecord{}, nil
+	case pages.Domain{}.Name():
+		return pages.GenerationRecord{}, nil
+	case search.Domain{}.Name():
+		return search.GenerationRecord{}, nil
+	}
+	return nil, fmt.Errorf("engine: domain %q is registered and has no "+
+		"generation record, so a recreated log of it could never be re-anchored",
+		domain.Name())
+}
+
+// reanchorStream is a domain log as [statelog.Reanchor] needs it: the append
+// and the per-subject probe the log already has, and its creation instant read
+// LIVE from the broker.
+type reanchorStream struct{ log *jetstream.DomainLog }
+
+func (r reanchorStream) Append(ctx context.Context, subject, msgID string,
+	expect *uint64, body []byte) (uint64, bool, error) {
+	return r.log.Append(ctx, subject, msgID, expect, body)
+}
+
+func (r reanchorStream) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
+	return r.log.LastSeq(ctx, subject)
+}
+
+func (r reanchorStream) CreatedAt(ctx context.Context) (time.Time, error) {
+	stats, err := r.log.Stats(ctx)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return stats.CreatedAt.UTC(), nil
+}
+
+// reanchorInputs reads the facts the permission check is decided from.
 //
 // EVERY ONE OF THEM IS READ HERE rather than inside the arithmetic, which is
 // what makes every refusal reachable in a table test: a permission that could
 // only be exercised against a recreated stream is one nobody re-checks.
 //
-// IT RETURNS NO ERROR, and that is the point of the shape rather than an
-// omission: every read that can fail here fails INTO a fact the permission
-// check already weighs — an unreadable stream leaves FirstSeq at zero, and an
+// # The stream is read LIVE, and an unreadable one refuses
+//
+// The creation instant and the first sequence come from ONE reading of the
+// stream as it is now, because they are what the checkpoint is about to be
+// keyed to and positioned at. The instant used to be the one sampled at boot,
+// which is a different stream once a log has been rebuilt under a running node:
+// the refusal every read and write gave named the live instant, this asked the
+// operator to confirm the old one, and confirming it keyed the checkpoint to a
+// stream that no longer existed — so the next boot found the domain recreated
+// all over again. And a reading that fails is an error rather than a zero: a
+// first sequence of zero puts the checkpoint at the stream's very beginning,
+// which is a claim about a stream nobody looked at.
+//
+// Everything ELSE fails into a fact the permission check already weighs: an
 // unreadable register leaves RegisterReadable false, which [statelog.Reanchor]
-// refuses on unless the operator forces it. A read error returned instead
+// refuses on unless the operator forces it. A read error returned there instead
 // would abort the call before the refusal that names what is actually wrong.
 func (e *Engine) reanchorInputs(ctx context.Context,
-	running *runningDomain) statelog.ReanchorInputs {
+	running *runningDomain) (statelog.ReanchorInputs, error) {
 
-	in := statelog.ReanchorInputs{
-		Stream:          running.domain.Stream().Name,
-		StreamCreatedAt: running.createdAt,
-		Generation:      running.runner.Committed().Generation,
-		Position:        running.runner.Committed().Seq,
-	}
-	if stats, err := running.log.Stats(ctx); err == nil {
-		in.FirstSeq = stats.FirstSeq
-	}
-
-	rows, err := e.backends.Fleet.Positions(ctx)
+	stream := running.domain.Stream().Name
+	stats, err := running.log.Stats(ctx)
 	if err != nil {
-		// UNREADABLE IS NOT "no peers". A register nobody could list is
-		// exactly the outage during which re-anchoring is most tempting
-		// and least justified, so the flag says so and the permission
-		// refuses on it.
-		return in
+		return statelog.ReanchorInputs{}, fmt.Errorf("%w: %s could not be read, so "+
+			"neither its creation instant nor its first sequence — what the "+
+			"checkpoint would be keyed to and positioned at — is known; check the "+
+			"broker and re-run: %w", statelog.ErrReanchorRefused, stream, err)
+	}
+	// THE CHECKPOINT ROW, not the runner's memory of it: the generation the
+	// transition derives from and the instant the rows are keyed to are the
+	// durable ones, and the loop that would move them is halted.
+	at, keyed, _, err := statelog.CursorFor(ctx, e.backends.Store.Replicated(), stream)
+	if err != nil {
+		return statelog.ReanchorInputs{}, err
+	}
+	in := statelog.ReanchorInputs{
+		Stream:          stream,
+		StreamCreatedAt: stats.CreatedAt.UTC(),
+		KeyedTo:         keyed,
+		FirstSeq:        stats.FirstSeq,
+		Generation:      at.Generation,
+		Position:        at.Seq,
+		ClaimsIdentity:  running.domain.ClaimsIdentity(),
+	}
+
+	// UNREADABLE IS NOT "no peers". A register nobody could list is exactly
+	// the outage during which re-anchoring is most tempting and least
+	// justified, so RegisterReadable stays false and the permission refuses
+	// on it — which is why the read's error goes no further than this.
+	rows, readErr := e.backends.Fleet.Positions(ctx)
+	if readErr != nil {
+		return in, nil //nolint:nilerr // an unreadable register is the refusal's input, not this read's failure
 	}
 	in.RegisterReadable = true
 	domain := running.domain.Name()
 	for _, row := range rows {
-		if at, runs := row.Domains[domain]; runs && at.Seq > in.Highest {
+		// THE SAME GENERATION ONLY: a sequence at another one is a number
+		// in another space — a peer that has already re-anchored reports
+		// the adopted stream's small sequences, and one behind a reanchor
+		// reports a dead stream's — and compared with this node's own it
+		// says nothing about who went further along the old stream.
+		if at, runs := row.Domains[domain]; runs && at.Generation == in.Generation &&
+			at.Seq > in.Highest {
 			in.Highest = at.Seq
 		}
 	}
-	in.PeersHydrated = len(hydratedPeers(rows, domain, in.Generation, e.id))
-	return in
+	in.PeersHydrated = len(hydratedPeers(rows, domain, in.Generation, e.native.nodeID))
+	return in, nil
 }
 
-// ReanchorStatus is what an operator reads before running it: the stream's own
-// creation instant, which is the value the confirmation has to echo.
+// ErrUnknownStream reports a stream that is not a domain log this node runs —
+// a name mistyped, or a node running no state log at all.
+//
+// A SENTINEL, because a caller answers it differently from every other failure
+// of the same calls: nothing about it is transient, while a stream that could
+// not be READ is the broker's to answer, and telling an operator who mistyped a
+// name to wait and retry is as wrong as telling one whose broker blinked that
+// the log does not exist.
+var ErrUnknownStream = errors.New("engine: not a domain log this node runs")
+
+// runningStream is the running domain whose log is stream, or
+// [ErrUnknownStream] naming the streams there are.
+func (e *Engine) runningStream(stream string) (*runningDomain, error) {
+	if e.native == nil || e.native.log == nil {
+		return nil, fmt.Errorf("%w: this node runs no state log, so %q is not "+
+			"one of its logs", ErrUnknownStream, stream)
+	}
+	running := e.native.log.Domain(e.native.log.domainOf(stream))
+	if running == nil {
+		return nil, fmt.Errorf("%w: %q — the streams this build runs are %v",
+			ErrUnknownStream, stream, maintenanceStreams())
+	}
+	return running, nil
+}
+
+// StreamGeneration is the generation the named stream's domain stands at on
+// this node: its applier's committed checkpoint, read from memory with no
+// broker round trip — the same number the trim, the publisher and the
+// positions heartbeat read.
+func (e *Engine) StreamGeneration(stream string) (uint32, error) {
+	running, err := e.runningStream(stream)
+	if err != nil {
+		return 0, err
+	}
+	return running.runner.Committed().Generation, nil
+}
+
+// ReanchorStatus is what an operator reads before running it: the LIVE
+// stream's own creation instant, which is the value the confirmation has to
+// echo, and the generation the domain stands at.
+//
+// LIVE, for the reason [Engine.reanchorInputs] gives: it is the same instant a
+// `wrong_stream` refusal names and the same one the permission check compares
+// against, and a value the node sampled at boot is neither once the stream has
+// been rebuilt under it. A stream that cannot be read is an error that is NOT
+// [ErrUnknownStream], because the log exists and the broker did not answer.
 func (e *Engine) ReanchorStatus(ctx context.Context, stream string) (
 	time.Time, uint32, error) {
 
-	if e.native == nil || e.native.log == nil {
-		return time.Time{}, 0, errors.New("engine: this node runs no state log")
+	running, err := e.runningStream(stream)
+	if err != nil {
+		return time.Time{}, 0, err
 	}
-	running := e.native.log.domains[e.native.log.domainOf(stream)]
-	if running == nil {
-		return time.Time{}, 0, fmt.Errorf("engine: %q is not a domain log this "+
-			"build runs", stream)
+	stats, err := running.log.Stats(ctx)
+	if err != nil {
+		return time.Time{}, 0, fmt.Errorf("engine: read %s's creation instant: %w",
+			stream, err)
 	}
-	_ = ctx
-	return running.createdAt, running.runner.Committed().Generation, nil
+	return stats.CreatedAt.UTC(), running.runner.Committed().Generation, nil
 }
 
 // hydratedPeers names every peer that is caught up on the LIVE stream.
 //
 // ONE DEFINITION of what "hydrated on the live stream" means, because two
 // places need it and they must agree: the permission check counts them, and
-// the refusal names them. A peer that stands at this generation and has
-// applied anything at all holds history a reanchor would declare unreachable,
-// and its snapshot is strictly the better recovery.
+// the refusal names them. A peer that has applied anything at all at this
+// domain's generation holds history a reanchor would declare unreachable, and
+// its snapshot is strictly the better recovery.
+//
+// AND A PEER AT A LATER GENERATION IS ONE TOO. A generation moves only by a
+// reanchor, onto the live stream, so a peer ahead of this node's generation is
+// a peer that has already re-anchored the stream this node is about to — and
+// counting only this node's own generation let a second node re-anchor the same
+// stream independently of the first, keeping a different prefix of the old
+// history under the same generation number, which is the silent divergence the
+// refusal exists for.
 func hydratedPeers(rows []coord.NodePositions, domain string, generation uint32,
 	self string) []string {
 
@@ -174,7 +352,7 @@ func hydratedPeers(rows []coord.NodePositions, domain string, generation uint32,
 			continue
 		}
 		if at, runs := row.Domains[domain]; runs &&
-			at.Generation == generation && at.AppliedThrough > 0 {
+			at.Generation >= generation && at.AppliedThrough > 0 {
 			hydrated = append(hydrated, row.NodeID)
 		}
 	}

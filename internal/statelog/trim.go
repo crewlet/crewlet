@@ -232,7 +232,7 @@ type Hold struct {
 // can only be exercised through a live fleet is one nobody checks. This struct
 // is what makes the six terms a pure function of what was read.
 type TrimInputs struct {
-	// Generation is the estate's current generation. A term reported at a
+	// Generation is this domain's current generation. A term reported at a
 	// LOWER one is unknown and blocks — its sequences name a dead number
 	// space, and comparing them would be comparing two different logs.
 	Generation uint32
@@ -310,7 +310,7 @@ func (in TrimInputs) applied() Term {
 			// comparing it with this generation's would be comparing
 			// two different logs.
 			return Term{Name: TermApplied, Detail: fmt.Sprintf(
-				"%s last reported at generation %d and this estate is on %d, so "+
+				"%s last reported at generation %d and this log is on %d, so "+
 					"its position names a sequence space that no longer exists",
 				n.NodeID, n.Generation, in.Generation)}
 		}
@@ -344,7 +344,7 @@ func (in TrimInputs) minHold() Term {
 		}
 		if h.Generation < in.Generation {
 			return Term{Name: TermMinHold, Detail: fmt.Sprintf(
-				"the hold held by %s is at generation %d and this estate is on %d",
+				"the hold held by %s is at generation %d and this log is on %d",
 				h.Owner, h.Generation, in.Generation)}
 		}
 		live++
@@ -374,7 +374,7 @@ func (in TrimInputs) backup() Term {
 	}
 	if in.BackupFloorGen < in.Generation {
 		return Term{Name: TermBackupFloor, Detail: fmt.Sprintf(
-			"the recorded backup is at generation %d and this estate is on %d",
+			"the recorded backup is at generation %d and this log is on %d",
 			in.BackupFloorGen, in.Generation)}
 	}
 	if in.BackupMaxAge > 0 && in.Now.Sub(in.BackupAt) > in.BackupMaxAge {

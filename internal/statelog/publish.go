@@ -379,9 +379,9 @@ type Publisher struct {
 	// the eviction gate has something to compare against.
 	nodeID string
 
-	// generation is the estate's current generation, read fresh on every
-	// publish rather than captured, because a reanchor moves it under a
-	// running process.
+	// generation is this domain's current generation, read fresh on every
+	// publish rather than captured, because a reanchor of this domain's
+	// stream moves it under a running process.
 	generation func() uint32
 
 	// resolveBudget bounds the wait a resolution spends before it

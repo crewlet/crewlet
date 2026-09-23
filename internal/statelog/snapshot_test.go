@@ -112,9 +112,8 @@ func (h *snapHarness) rebuild(interval time.Duration) {
 	h.t.Helper()
 	s, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain:          probeDomain{},
-			Health:          func() statelog.Health { return h.health },
-			StreamCreatedAt: liveStreamCreatedAt,
+			Domain: probeDomain{},
+			Health: func() statelog.Health { return h.health },
 		}},
 		DB:            h.db,
 		Dir:           h.dir,

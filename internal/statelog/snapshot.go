@@ -247,9 +247,12 @@ type Registered struct {
 	// and whether it holds anything it cannot decode.
 	Health func() Health
 
-	// StreamCreatedAt is the broker's own creation instant for the
-	// domain's stream, which is what detects a recreated one.
-	StreamCreatedAt time.Time
+	// NO CREATION INSTANT. One was carried here, read by nothing: a
+	// manifest names the instant the copied FILE's checkpoint was committed
+	// under ([CursorsInFile]), because an instant from the donor's live
+	// handle describes another stream the moment one is recreated — and a
+	// value nobody reads is one that goes stale without anybody noticing,
+	// which is exactly what a reanchor under a running node did to it.
 }
 
 // SnapshotDeps is everything the snapshot loop needs that it does not own.

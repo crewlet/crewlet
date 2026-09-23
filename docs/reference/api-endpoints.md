@@ -2341,15 +2341,17 @@ would drift.
 
 | Route | What it does |
 |---|---|
-| `GET /work/retention/reanchor?stream=NAME` | The stream's own `created_at` and the current generation. |
-| `POST /work/retention/reanchor?stream=NAME&confirm=<created_at>[&force=true]` | Runs the generation transition, answering with the new generation. |
+| `GET /work/retention/reanchor?stream=NAME` | The LIVE stream's own `created_at`, read from the broker on the call — the instant a `wrong_stream` refusal names — and the generation that stream's domain stands at. `404 unknown_stream` for a stream this node does not run; `503 stream_unreadable` when the broker did not answer the read, which is worth retrying. |
+| `POST /work/retention/reanchor?stream=NAME&confirm=<created_at>[&force=true]` | Runs that ONE domain's generation transition, answering with the new generation. No other domain's checkpoint moves, and the domain's applier resumes with no restart. |
 
 `confirm` is the value the `GET` returns, supplied by the caller: the
 confirmation means *I looked at the thing I am re-anchoring*, so the two are
 deliberately separate round trips rather than one route that reads and acts.
-`force=true` is refused-by-default's escape, for a fleet whose hydrated peer
-cannot be reached — adopting that peer's snapshot is strictly the better
-recovery, and the refusal names it.
+It is compared as an instant at microsecond precision, so the RFC 3339 value the
+`GET` answers is accepted as it came. `force=true` overrides the rule that only
+the most caught-up node may re-anchor, for a fleet whose register cannot say;
+it never overrides a hydrated peer, whose snapshot is strictly the better
+recovery and which the refusal names.
 
 ## Agent Memory
 

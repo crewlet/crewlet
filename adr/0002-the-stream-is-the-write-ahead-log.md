@@ -59,10 +59,12 @@ activation pointer, a counter — is not a record on any log and belongs in
 coordination, which is [ADR-0003](0003-fleet-agreement-state-lives-in-coordination.md).
 
 It does not make the applier the only thing that may ever touch a replicated
-row. Three writes in the tree are not records, each because no record could own
+row. Two writes in the tree are not records, each because no record could own
 what it touches, and each is named with its reason in
-`allowedReplicatedWriter`. Adding a fourth is a change to what this record
-means, not a line in a table.
+`allowedReplicatedWriter`. Adding a third is a change to what this record
+means, not a line in a table. (There were three; the version reset after a
+reanchor was the other, and it went when the arbitration anchor stopped being
+the row's `version` and the reset stopped buying anything.)
 
 It says nothing about the store's own `journal_mode=WAL`. That is Turso's local
 transaction journal, per file and invisible to any peer. The two share a word

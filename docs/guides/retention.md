@@ -601,8 +601,9 @@ stream comes back at generation 0 counting from 1, so once it has published
 past the node's checkpoint every sequence term reads healthy while the node
 applies a different history into rows keyed by the old one. The node logs
 `statelog_stream_recreated` with both instants, gives up its seats, and refuses
-every read and every write of that domain with `wrong_stream` for as long as
-the process runs against the rebuilt stream.
+every read and every write of that domain with `wrong_stream` until that stream
+is re-anchored, and it applies nothing from the rebuilt stream into rows keyed
+to the old one.
 
 **Writes refuse, not only reads**, and every kind of write rather than only the
 retry at zero. Every expectation a node forms is a sequence from the stream its
@@ -620,27 +621,62 @@ followed from its head. A refused write is an `unavailable` answer naming
 crewlet retention reanchor -stream CREWLET_TRACKER_LOG
 # prints the live stream's created_at, and refuses
 
-crewlet retention reanchor -stream CREWLET_TRACKER_LOG -confirm 2031-04-02T03:00:00Z
+crewlet retention reanchor -stream CREWLET_TRACKER_LOG -confirm 2031-04-02T03:00:00.418226517Z
 ```
 
-The confirmation is the stream's own `created_at`, and the verb **prints it and
-refuses** rather than reading it and feeding it straight back — otherwise it
-would be confirming against its own output.
+The confirmation is the **live** stream's own `created_at` — the instant the
+`wrong_stream` refusals name as the broker's — exactly as the verb prints it,
+nanoseconds and all. The verb **prints it and refuses** rather than reading it
+and feeding it straight back — otherwise it would be confirming against its own
+output. An instant that differs at the microsecond is another stream, and is
+refused.
 
 What a reanchor says is: *these rows are what they are; follow the new stream
 from its head.* The durable tables are the record of truth and the stream is a
 replay window, so the rows survive and the window is replaced. The generation
 is what makes an old position **comparable and safely stale** rather than
-indistinguishable from a current one — a stored version below it forms
+indistinguishable from a current one — an arbitration anchor below it forms
 `expect = 0` on its next write, and a client cursor below it is refused by name.
+
+**It moves one log.** Each domain — the tracker, the knowledge base, the
+vectors — has its own stream and its own generation, and a reanchor moves only
+the one you named: that domain's checkpoint goes to the next generation, one
+below the live stream's first surviving sequence, keyed to the live instant.
+Every other domain keeps its checkpoint, its generation and its stream exactly
+as they were. If more than one log was rebuilt, re-anchor each of them.
+
+**It needs no restart.** The domain's apply loop is paused for the length of
+the transition and resumed on the adopted stream when it completes: its reads
+and writes are served again, its seats can come back, and nothing else on the
+node pauses. A reanchor that is refused puts the loop back as it was.
+
+In order, it: checks the confirmation against the live stream; refuses while
+the fleet guards below say so, and on a node evicted from that domain; appends
+the domain's own generation record to the adopted stream (the tracker's and the
+knowledge base's each keep one, applied as `tracker_log_generations` and
+`pages_log_generations`; the vectors keep none); reads the stream's instant
+again, refusing if it was rebuilt again meanwhile; moves this node's consumer;
+and commits the checkpoint. Every step before the checkpoint can be repeated,
+so a reanchor that failed part-way is finished by running it again: it derives
+the same generation and finds its own record already there.
+
+It rewrites no row. Nothing needs it: a version or an anchor from before the
+reanchor sits below every position the adopted stream will produce, which is
+the order every comparison wants.
 
 It does **not** recover records that were on the old stream and were never
 applied here.
 
-It refuses while any peer is hydrated on the live stream, naming the peer:
-adopting that peer's snapshot recovers the history a reanchor discards, so it
-is strictly the better recovery. `-force` is for the case where the peer cannot
-be reached.
+For the tracker and the knowledge base it refuses while any peer is hydrated on
+the live stream — at this node's generation, or at a later one, which is a peer
+that has already re-anchored it — naming the peer: adopting that peer's
+snapshot recovers the history a reanchor discards, so it is strictly the better
+recovery, and two nodes re-anchoring the same stream independently would each
+keep a different prefix of the old history. Without a hydrated peer, only the
+most caught-up node on the old stream may re-anchor; `-force` overrides that
+rule for the case where the fleet cannot be asked, and never the first. The
+vectors are exempt from both: their coverage legitimately differs node to node,
+so every node re-anchors its own copy.
 
 ## Proving a restore
 

@@ -38,18 +38,33 @@ func (f *fakeBackupRegister) PutBackupPoint(_ context.Context, p coord.BackupPoi
 type fakeStateLog struct {
 	generations map[string]uint32
 	asked       string
+
+	// unreadable is the broker's answer to a LIVE read of a stream's
+	// instant, nil while it answers.
+	unreadable error
 }
 
 func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
 	time.Time, uint32, error) {
 
+	generation, err := f.StreamGeneration(stream)
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	if f.unreadable != nil {
+		return time.Time{}, 0, fmt.Errorf("engine: read %s's creation instant: %w",
+			stream, f.unreadable)
+	}
+	return time.Unix(1700000000, 0).UTC(), generation, nil
+}
+
+func (f *fakeStateLog) StreamGeneration(stream string) (uint32, error) {
 	f.asked = stream
 	generation, runs := f.generations[stream]
 	if !runs {
-		return time.Time{}, 0, fmt.Errorf(
-			"engine: %q is not a domain log this build runs", stream)
+		return 0, fmt.Errorf("%w: %q", engine.ErrUnknownStream, stream)
 	}
-	return time.Unix(1700000000, 0).UTC(), generation, nil
+	return generation, nil
 }
 
 func (f *fakeStateLog) Reanchor(context.Context, engine.ReanchorRequest) (uint32, error) {
@@ -396,5 +411,56 @@ func TestAGateOnANodeWithNoStateLogSaysSo(t *testing.T) {
 			t.Errorf("%s on a node with no state log answered %d %v, want 503 "+
 				"no_state_log", verb, code, body)
 		}
+	}
+}
+
+// THE REANCHOR STATUS TELLS A NAME NOBODY RUNS FROM A LOG NOBODY COULD READ.
+//
+// The instant it answers is read LIVE from the broker — it is the one the
+// confirmation is checked against — so a broker that did not answer is a
+// failure of its own: worth retrying, and nothing to do with the name. Folded
+// into `unknown_stream`, it sent an operator looking for a typo in a stream
+// name that was right. And the acknowledgement route, which only needs the
+// generation, must not depend on that broker read at all.
+func TestTheReanchorStatusTellsAnUnknownStreamFromAnUnreadableOne(t *testing.T) {
+	t.Parallel()
+	node := &fakeStateLog{generations: map[string]uint32{"CREWLET_PAGES_LOG": 1}}
+	register := &fakeBackupRegister{}
+	a := ackApp(t, register, node)
+	get := func(path string) (int, map[string]any) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, req)
+		var body map[string]any
+		_ = json.NewDecoder(rec.Result().Body).Decode(&body)
+		return rec.Code, body
+	}
+
+	if code, body := get("/work/retention/reanchor?stream=CREWLET_PAGES_LOG"); code != http.StatusOK ||
+		body["created_at"] == nil || body["generation"] != float64(1) {
+		t.Fatalf("a readable stream answered %d: %v", code, body)
+	}
+	if code, body := get("/work/retention/reanchor?stream=CREWLET_PAGSE_LOG"); code != http.StatusNotFound ||
+		body["error"] != "unknown_stream" {
+		t.Fatalf("a stream this node does not run answered %d: %v", code, body)
+	}
+
+	node.unreadable = errors.New("nats: timeout")
+	code, body := get("/work/retention/reanchor?stream=CREWLET_PAGES_LOG")
+	if code != http.StatusServiceUnavailable || body["error"] != "stream_unreadable" {
+		t.Fatalf("a stream the broker did not answer for answered %d: %v — "+
+			"reported as unknown, the operator goes looking for a typo", code, body)
+	}
+	// THE ACKNOWLEDGEMENT DOES NOT ASK THE BROKER FOR AN INSTANT IT DOES NOT
+	// USE: the generation is the node's own.
+	if code, body := postAck(t, a,
+		"/work/retention/ack?stream=CREWLET_PAGES_LOG&position=918100000"); code != http.StatusOK {
+		t.Fatalf("an acknowledgement while the broker could not answer a status "+
+			"read was refused %d: %v", code, body)
+	}
+	if register.calls != 1 {
+		t.Fatalf("%d point(s) written, want one", register.calls)
 	}
 }

@@ -119,8 +119,11 @@ type RunnerDeps struct {
 	// node.
 	DB Estate
 
-	// Generation is the estate's generation, read once per loop
-	// generation because only an operator's reanchor moves it.
+	// Generation is THIS DOMAIN's generation as its checkpoint row holds
+	// it — each domain's log has its own. It is where the runner stands
+	// until its loop loads the row, which then answers for it; the one
+	// thing that moves it under a running process is a reanchor of this
+	// domain's own stream ([Runner.Reanchored]).
 	Generation uint32
 
 	// StreamCreatedAt is the broker's own creation instant for this
@@ -136,6 +139,9 @@ type RunnerDeps struct {
 	// wiring was tested. The zero value declares no identity at all, which
 	// skips the comparison; the engine never passes it, and a caller that
 	// cannot say which stream it is on is one that should refuse to run.
+	//
+	// A reanchor re-keys it ([Runner.Reanchored]) to the instant the
+	// operator confirmed, which is the stream the checkpoint then names.
 	StreamCreatedAt time.Time
 
 	// Epoch is the per-epoch configuration the domain declared it reads.
@@ -177,12 +183,24 @@ type Runner struct {
 	logger  *slog.Logger
 	now     func() time.Time
 	opts    ApplyOptions
-	created time.Time
-	gen     uint32
 
 	waiters waiters
 
-	mu        sync.Mutex
+	mu sync.Mutex
+
+	// created is the creation instant of the stream this runner's positions
+	// are keyed to — the broker's own at construction, and the one a
+	// reanchor confirmed after it. UNDER mu, because a reanchor re-keys it
+	// while the heartbeat compares live readings against it.
+	created time.Time
+
+	// cursor is the committed checkpoint, and ITS GENERATION IS THE
+	// RUNNER'S: every record this loop decodes is placed at it and every
+	// anchor read with it. One field rather than a second copy of the
+	// number beside it, because the two were once allowed to differ — a
+	// generation fixed at construction and a checkpoint a reanchor had
+	// moved — and a loop resumed after a reanchor then placed the adopted
+	// stream's records in the generation it had just left.
 	cursor    Position
 	deferred  Deferral
 	hasDefer  bool
@@ -221,10 +239,12 @@ type Runner struct {
 	// the live instant, or by a live reading of the instant while the
 	// loop runs ([Runner.ObserveStream]). Nil until then.
 	//
-	// NEVER CLEARED, and not by a re-run either, unlike a stop or a
+	// CLEARED BY ONE THING ONLY, and not by a re-run, unlike a stop or a
 	// fault: those are verdicts about rows an adoption may replace, and
-	// this is a verdict about the positions this runner was built on,
-	// which nothing inside the process moves. See [Runner.StreamIdentity].
+	// this is a verdict about the positions this runner was built on. The
+	// one thing that moves those is an operator's reanchor of this
+	// domain's stream, which re-keys the runner to the stream it adopted
+	// ([Runner.Reanchored]). See [Runner.StreamIdentity].
 	foreign *foreignStream
 
 	// ahead is the verdict of the last reading that found this applier's
@@ -337,7 +357,6 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		logger:  logger,
 		now:     now,
 		created: d.StreamCreatedAt,
-		gen:     d.Generation,
 		opts: ApplyOptions{
 			ArbitratedKinds: spec.ArbitratedKinds,
 			Epoch:           d.Epoch,
@@ -351,6 +370,84 @@ func (r *Runner) Committed() Position {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.cursor
+}
+
+// StreamCreatedAt is the creation instant of the stream this runner's
+// positions are keyed to: the broker's own when the runner was built, and the
+// one a reanchor confirmed after that. It is what every live reading of the
+// stream is compared against ([Runner.ObserveStream]) and what the checkpoint
+// is loaded against.
+//
+// THE RUNNER'S, rather than a copy the engine sampled at boot, because a
+// reanchor re-keys it under a running process — and a copy kept elsewhere went
+// on naming the stream the node booted against after the checkpoint had moved
+// to another.
+func (r *Runner) StreamCreatedAt() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.created
+}
+
+// Reanchored re-keys this runner to the stream an operator's reanchor adopted:
+// the checkpoint the reanchor committed, and the creation instant the operator
+// confirmed.
+//
+// # What it clears, and why nothing else may
+//
+// The recreation verdict ([Runner.StreamIdentity]) is permanent for anything
+// the process can do on its own — a re-run, an adoption — because it is a
+// statement that the positions this runner was built on name a stream the
+// broker no longer serves. A reanchor is the one act that replaces those
+// positions: it committed a checkpoint in a new generation on the live stream,
+// keyed to the live instant. Re-keyed to both, the runner's positions are
+// sequences on that stream again, so the verdict no longer holds, and a
+// reading of where the log ENDS taken against the old checkpoint says nothing
+// about the new one.
+//
+// # Why it is called with the loop stopped, and what that buys
+//
+// The loop is the one writer of the checkpoint and of the cursor this sets. A
+// loop still running could commit a batch at the old generation after the
+// reanchor's transaction — writing back the generation and the instant the
+// reanchor had just left — so the engine halts this domain's loop before the
+// transition and starts it again after this. The next run loads the committed
+// row, which this has already agreed with, and resumes from it: one below the
+// stream's first surviving sequence, in the new generation.
+//
+// The readers that run beside the stopped loop are the heartbeat and the zero
+// fence, which hand this runner live readings. A reading of the instant taken
+// before the reanchor names the stream this re-keys to, which reads as the
+// same stream; a reading of the end paired with the old checkpoint is refused
+// by [Runner.ObserveEnd] because its generation is behind this one.
+func (r *Runner) Reanchored(at Position, created time.Time) error {
+	if at.Stream != r.spec.Name {
+		return fmt.Errorf("%w: a reanchor of %s named a checkpoint on %s",
+			ErrWrongStream, r.spec.Name, at.Stream)
+	}
+	if created.IsZero() {
+		return fmt.Errorf("statelog: a reanchor of %s named no creation instant, "+
+			"and a runner keyed to none detects no later rebuild", r.spec.Name)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if at.Generation <= r.cursor.Generation {
+		return fmt.Errorf("statelog: a reanchor of %s named generation %d and this "+
+			"runner already stands at %s — a reanchor moves a domain into a "+
+			"generation it has not been in", r.spec.Name, at.Generation, r.cursor)
+	}
+	r.created = created
+	r.cursor = at
+	r.foreign = nil
+	r.ahead = nil
+	// AND THE STOP THE RECREATION CAUSED, because the reanchor is what
+	// answers it — left in place until the loop's next run cleared it, the
+	// health would go on reporting a stopped applier for the moment in
+	// between. A stop for any other reason is a verdict about this build,
+	// which a reanchor does not change, and it stays.
+	if errors.Is(r.stopped, ErrStreamRecreated) {
+		r.stopped = nil
+	}
+	return nil
 }
 
 // Stopped is the error that halted this applier, or nil.
@@ -385,12 +482,9 @@ func (r *Runner) Stopped() error {
 // A zero instant is no reading ([StreamUnknown]), and a runner built with none
 // declared no identity to compare against; neither establishes anything.
 func (r *Runner) ObserveStream(live time.Time) bool {
-	if IdentityOf(r.created, live, true) != StreamRecreated {
-		return false
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.foreign != nil {
+	if r.foreign != nil || IdentityOf(r.created, live, true) != StreamRecreated {
 		return false
 	}
 	r.foreign = &foreignStream{keyed: r.created, live: live}
@@ -427,6 +521,15 @@ func (r *Runner) ObserveStream(live time.Time) bool {
 func (r *Runner) ObserveEnd(at Position, last uint64) (established, reached bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if at.Generation < r.cursor.Generation {
+		// A READING FROM BEFORE A REANCHOR, paired with a checkpoint in
+		// the generation this runner has since left. That checkpoint was
+		// a sequence on the old stream, so where the adopted one ends says
+		// nothing about it — and a verdict established on it would refuse
+		// every write until the log happened to reach a number the node
+		// will never stand at again.
+		return false, false
+	}
 	if pastEnd(at.Seq, last) {
 		established = r.ahead == nil
 		r.ahead = &aheadOfLog{at: at, last: last}
@@ -594,7 +697,7 @@ func (r *Runner) Anchor(ctx context.Context, subject string) (Position, error) {
 	var p Position
 	err := r.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
-		p, err = r.tables.anchor(ctx, tx, subject, r.gen)
+		p, err = r.tables.anchor(ctx, tx, subject, r.Committed().Generation)
 		return err
 	})
 	return p, err
@@ -943,6 +1046,17 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 					r.foreign.err(r.domain.Name(), r.spec.Name))
 			}
 		}
+		// AND A REBUILD ALREADY ESTABLISHED WHILE THE LOOP RAN STOPS A
+		// RE-RUN TOO. The row still names the instant this runner was
+		// built with, so the comparison above passes — but a live reading
+		// has since found the broker serving another stream under the
+		// name, and resuming would apply that stream's records into rows
+		// keyed to the one before it. Only a reanchor clears the verdict,
+		// and it re-keys the runner before the loop is started again.
+		if r.foreign != nil {
+			return fmt.Errorf("%w: %w", ErrStopped,
+				r.foreign.err(r.domain.Name(), r.spec.Name))
+		}
 		return nil
 	})
 }
@@ -1189,6 +1303,9 @@ func (r *Runner) budgetWouldBind(run []Record) bool {
 // always read.
 func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) {
 	out := make([]Record, 0, len(batch))
+	// THE CHECKPOINT'S GENERATION, read once per batch: the loop is the one
+	// writer of the cursor and nothing moves its generation while it runs.
+	gen := r.Committed().Generation
 	for _, m := range batch {
 		env, err := r.domain.Envelope(m.Payload)
 		if err != nil {
@@ -1210,7 +1327,7 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 		}
 		out = append(out, Record{
 			Envelope: env,
-			Position: Position{Stream: r.spec.Name, Generation: r.gen, Seq: m.Seq},
+			Position: Position{Stream: r.spec.Name, Generation: gen, Seq: m.Seq},
 			Payload:  m.Payload,
 			StoredAt: m.StoredAt,
 			ack:      m.Ack,
@@ -1393,7 +1510,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// because a run made ENTIRELY of redeliveries below the
 		// checkpoint has to be acknowledged without moving it at all.
 		committedAt = highest(consumed, r.Committed())
-		return r.tables.setCursor(ctx, tx, committedAt, r.created, r.now())
+		return r.tables.setCursor(ctx, tx, committedAt, r.StreamCreatedAt(), r.now())
 	})
 	if err != nil {
 		if errors.Is(err, ErrStopped) {
@@ -1614,8 +1731,9 @@ func (r *Runner) stop(ctx context.Context, err error) error {
 		"detail", "this node's rows for this domain are frozen here and every "+
 			"read of them refuses; for a domain that gates seat admission this "+
 			"node also stops claiming seats, and the ones it holds move; a build "+
-			"that can read what this one could not, or an operator's reanchor "+
-			"and a restart, is what resumes it")
+			"that can read what this one could not resumes it at its next boot, "+
+			"and for a recreated stream an operator's reanchor of this one "+
+			"stream resumes it in place, with no restart")
 	return err
 }
 

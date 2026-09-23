@@ -45,7 +45,7 @@ type Tombstone struct {
 	// By is the operator who ran it, which is what a refusal names.
 	By string
 
-	// Generation is the estate's generation at the time. One from a
+	// Generation is the domain's generation at the time. One from a
 	// previous generation is UNKNOWN rather than old, on the same rule
 	// every other position-bearing term uses.
 	Generation uint32

@@ -639,6 +639,11 @@ func TestOnlyAPeerOnTheLiveStreamHoldsHistoryAReanchorWouldDiscard(t *testing.T)
 		{NodeID: "on-the-old-stream", Domains: map[string]coord.DomainPosition{
 			"tracker": {Generation: 2, AppliedThrough: 900},
 		}},
+		// A PEER THAT HAS ALREADY RE-ANCHORED this stream is caught up on
+		// it: a generation only moves onto the live stream.
+		{NodeID: "already-reanchored", Domains: map[string]coord.DomainPosition{
+			"tracker": {Generation: 4, AppliedThrough: 12},
+		}},
 		{NodeID: "applied-nothing", Domains: map[string]coord.DomainPosition{
 			"tracker": {Generation: 3, AppliedThrough: 0},
 		}},
@@ -647,11 +652,13 @@ func TestOnlyAPeerOnTheLiveStreamHoldsHistoryAReanchorWouldDiscard(t *testing.T)
 		}},
 	}
 	got := hydratedPeers(rows, "tracker", 3, "self")
-	if len(got) != 1 || got[0] != "hydrated" {
-		t.Fatalf("hydrated peers = %v, want exactly [hydrated]: this node is "+
-			"not its own peer, a peer at another generation is on the stream "+
-			"being replaced, and one that has applied nothing holds no history",
-			got)
+	if len(got) != 2 || got[0] != "hydrated" || got[1] != "already-reanchored" {
+		t.Fatalf("hydrated peers = %v, want exactly [hydrated already-reanchored]: "+
+			"this node is not its own peer, a peer at an EARLIER generation is on "+
+			"the stream being replaced, one at a LATER generation has already "+
+			"re-anchored the live stream — a second independent reanchor of it "+
+			"would keep a different prefix under the same number — and one that "+
+			"has applied nothing holds no history", got)
 	}
 }
 

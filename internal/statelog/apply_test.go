@@ -1745,6 +1745,15 @@ func TestALiveReadingOfARebuiltLogIsTheRunnersVerdict(t *testing.T) {
 		t.Fatal("a re-run cleared the rebuild, so the writes would start " +
 			"landing on it again")
 	}
+	// NOR DOES IT APPLY FROM THE REBUILT STREAM. The checkpoint row still
+	// names the instant the runner was built with, so the boot comparison
+	// passes — and a loop that resumed would apply the rebuilt stream's
+	// records into rows keyed to the one before it. It stops instead, on
+	// the verdict it already holds, exactly as a boot on that stream does.
+	if stopped := h.runner.Stopped(); !errors.Is(stopped, statelog.ErrStreamRecreated) {
+		t.Fatalf("a re-run over an established rebuild reports %v, want the "+
+			"recreation stop", stopped)
+	}
 }
 
 // A CHECKPOINT PAST THE LOG'S END IS THE RUNNER'S VERDICT FOR AS LONG AS THE

@@ -137,7 +137,6 @@ func newJoinHarness(t *testing.T) *joinHarness {
 					Lag:      &lag,
 				}
 			},
-			StreamCreatedAt: time.Unix(1_700_000_000, 0).UTC(),
 		}},
 		DB:            donorDB,
 		Dir:           snapDir,

@@ -87,9 +87,12 @@ type TrimFloor struct {
 	// Domain is which log this is about, and the key.
 	Domain string `json:"domain"`
 
-	// Generation is the estate's generation at the tick that wrote this.
-	// A floor published at a LOWER one names a dead number space and is
-	// read as unknown rather than as a low floor.
+	// Generation is the domain's generation at the tick that wrote this —
+	// each log has its own. A floor at a generation the reader is not on
+	// names another number space: one BELOW the reader's is a dead space
+	// in which nothing the reader could name has been licensed for
+	// removal, and one ABOVE it is a space the reader has not reached and
+	// cannot compare against at all.
 	Generation uint32 `json:"generation"`
 
 	// TrimTo is the exclusive sequence THIS tick concluded may be removed
