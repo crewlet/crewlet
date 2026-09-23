@@ -135,7 +135,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	r.metrics = recorder
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: tracker.Domain{}, Log: log, Rows: rows, Fence: fence,
-		Gates: tracker.NewGates(db), Waiter: waiter, NodeID: "node-a",
+		Gates: tracker.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: "node-a",
 		Metrics:       recorder,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
@@ -401,6 +401,10 @@ func (w *testWaiter) Committed() statelog.Position {
 	defer w.mu.Unlock()
 	return w.at
 }
+
+// StreamIdentity is always the live stream: this harness never rebuilds its
+// log, so every position the waiter holds is a sequence on it.
+func (w *testWaiter) StreamIdentity() error { return nil }
 
 func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
 	for {

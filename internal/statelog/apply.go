@@ -208,6 +208,18 @@ type Runner struct {
 	// node drained before says nothing about the one it now applies.
 	drained bool
 
+	// foreign is the stream this applier's positions do NOT belong to,
+	// once it has been established that the broker serves one under this
+	// domain's name — by the boot's comparison of the checkpoint against
+	// the live instant, or by a live reading of the instant while the
+	// loop runs ([Runner.ObserveStream]). Nil until then.
+	//
+	// NEVER CLEARED, and not by a re-run either, unlike a stop or a
+	// fault: those are verdicts about rows an adoption may replace, and
+	// this is a verdict about the positions this runner was built on,
+	// which nothing inside the process moves. See [Runner.StreamIdentity].
+	foreign *foreignStream
+
 	// drain is this loop's measured records per second, smoothed.
 	//
 	// # Why it is measured rather than a constant
@@ -315,6 +327,63 @@ func (r *Runner) Stopped() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.stopped
+}
+
+// ObserveStream takes one LIVE reading of the broker's creation instant for
+// this applier's stream, and answers true the one time a reading establishes
+// that the stream is not the one this applier started against.
+//
+// # Why the applier is told rather than asking
+//
+// The boot compares the checkpoint against the instant once, and nothing the
+// loop reads afterwards can see a rebuild: a stream deleted and remade under a
+// running node comes back at the same generation counting from 1, so its
+// sequences are perfectly plausible and, once it has published past the
+// checkpoint, every sequence term reads healthy. What does see it is any read
+// of the stream's own state — the position heartbeat takes one every interval,
+// and the fence on an expectation of zero takes one within every such write —
+// and each hands the instant here, so the one verdict the read path and the
+// write path both consult has every observation behind it rather than
+// whichever loop happened to look.
+//
+// A zero instant is no reading ([StreamUnknown]), and a runner built with none
+// declared no identity to compare against; neither establishes anything.
+func (r *Runner) ObserveStream(live time.Time) bool {
+	if IdentityOf(r.created, live, true) != StreamRecreated {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.foreign != nil {
+		return false
+	}
+	r.foreign = &foreignStream{keyed: r.created, live: live}
+	return true
+}
+
+// StreamIdentity is nil while every position this applier holds — its
+// checkpoint, every anchor it wrote, every version — is a sequence on the
+// stream the broker serves under this domain's name, and an error wrapping
+// [ErrStreamRecreated] once that is known not to be so: at boot, where the
+// checkpoint names another stream, or while running, where
+// [Runner.ObserveStream] found the stream rebuilt.
+//
+// # One answer, for the reads and the writes alike
+//
+// Both paths turn on the same fact — that a position this node holds names the
+// record the broker holds at it — and two sources for it are how a node comes
+// to refuse its reads while its writes go on landing. The writes are the half
+// that cannot be repaired afterwards: a read served from the wrong history is
+// wrong once, and an append arbitrated against it is on the log for every
+// node to apply.
+func (r *Runner) StreamIdentity() error {
+	r.mu.Lock()
+	foreign := r.foreign
+	r.mu.Unlock()
+	if foreign == nil {
+		return nil
+	}
+	return foreign.err(r.domain.Name(), r.spec.Name)
 }
 
 // Fault is the transient failure this applier has been retrying for longer
@@ -714,20 +783,22 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		// arrives while reporting nothing pending. An operator reanchors;
 		// until then this node's rows are frozen and its health says so.
 		//
+		// AND ITS WRITES REFUSE, which is why the verdict is recorded as
+		// well as returned: the stop ends this loop, and the publisher
+		// beside it never reads a loop's error — it asks
+		// [Runner.StreamIdentity], which is this same finding.
+		//
 		// Compared through [IdentityOf], at the resolution the row keeps,
 		// because the broker reports nanoseconds and the row keeps
 		// microseconds — compared exactly, every boot after the first
 		// would read as a recreation.
 		if !r.created.IsZero() {
 			if state := IdentityOf(created, r.created, found); state == StreamRecreated {
-				return fmt.Errorf("%w: %w — %s's checkpoint was committed against a "+
-					"stream created at %s and the broker's %s was created at %s, so "+
-					"every position this node holds names a sequence space that no "+
-					"longer exists; `crewlet retention reanchor -stream %s` is what "+
-					"follows the new stream from its head",
-					ErrStopped, ErrStreamRecreated, r.domain.Name(),
-					created.UTC().Format(time.RFC3339Nano),
-					r.spec.Name, r.created.UTC().Format(time.RFC3339Nano), r.spec.Name)
+				if r.foreign == nil {
+					r.foreign = &foreignStream{keyed: created, live: r.created}
+				}
+				return fmt.Errorf("%w: %w", ErrStopped,
+					r.foreign.err(r.domain.Name(), r.spec.Name))
 			}
 		}
 		return nil

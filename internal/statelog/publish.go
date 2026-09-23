@@ -59,6 +59,50 @@ type Waiter interface {
 	WaitApplied(ctx context.Context, s ScopeSet, p Position) error
 }
 
+// Identity is whether this node's positions are sequences on the stream the
+// broker serves under the domain's name — [Runner.StreamIdentity], as the
+// publisher needs it.
+//
+// # Why a write asks this before anything else, and asks it EVERY time
+//
+// The write authority's safety argument is that the broker arbitrates, and
+// arbitration means something only while the expectation and the log are in
+// ONE sequence space. A stream deleted and rebuilt under the same name keeps
+// the generation and counts from 1 again, so every number this node holds is
+// still a plausible number there — and the broker, which cannot know which
+// history a number was read from, arbitrates it as one about ITSELF:
+//
+//   - An ordinary expectation is a claim that the subject's last record is the
+//     one at A. On the rebuilt log A is a different record or none, and where
+//     the subject's last sequence happens to be A the broker ACCEPTS a
+//     decision taken from rows that never saw that record.
+//   - An expectation of zero is cleared against this node's checkpoint and
+//     the floor, both from the old history, so the floor theorem — every term
+//     of which is a sequence on one stream — proves nothing about the new
+//     one, and a subject whose anchor sat above the rebuilt log's content
+//     is overwritten from nothing.
+//   - Even an additive write, which forms no expectation, is RESOLVED against
+//     this node's applier: a position on the rebuilt log compared with a
+//     checkpoint from the old one, so a record at a low sequence reads as
+//     already applied and the answer — applied, or a ledger contract
+//     violation — is false either way.
+//
+// And whatever lands is not a local mistake: the recovery that follows a
+// rebuild follows the new log from its head, so every node applies it as
+// though it continued a history it was never arbitrated in. So every pattern
+// refuses, not only the retry at zero the floor theorem names.
+//
+// The answer is what this node has ESTABLISHED, and a reading that could not
+// be taken establishes nothing in either direction — the next one decides. On
+// the zero branch that costs nothing, because it reads the log within the call
+// and its fence refuses on a log it cannot read; on every other branch it
+// widens the window [Publisher.clearForZero] states by one missed reading,
+// inside which harm still needs the rebuilt log's history on the subject to
+// end at exactly the sequence this node's row names.
+type Identity interface {
+	StreamIdentity() error
+}
+
 // Fence refuses a write this node must not make.
 //
 // TWO METHODS BECAUSE THERE ARE TWO PRICES. Evicted runs on EVERY append and
@@ -86,6 +130,15 @@ type Fence interface {
 	// departure from the fail-open rule a delivery claim uses. Failing
 	// open there is a duplicate delivery, which is recoverable; failing
 	// open here is a lost update, which is not.
+	//
+	// THE READ OF THE LOG IS ALSO THE IDENTITY CHECK, and the publisher
+	// relies on it: the answer that carries the first surviving sequence
+	// carries the stream's creation instant beside it, so an
+	// implementation that reads the live log hands that instant to this
+	// node's applier ([Runner.ObserveStream]) — and the publisher asks
+	// [Identity] again the moment this returns. That is what makes the
+	// zero branch's identity as fresh as its floor, within the call,
+	// rather than as fresh as the last heartbeat.
 	ClearForZero(ctx context.Context, cursor Position) error
 }
 
@@ -224,16 +277,17 @@ var ErrExists = errors.New("statelog: the object already exists")
 //   - Never guess: an unknown outcome is resolved, not retried blindly and not
 //     reported as a loss.
 type Publisher struct {
-	domain  Domain
-	stream  string
-	prefix  string
-	log     Appender
-	rows    Rows
-	fence   Fence
-	gates   Gates
-	waiter  Waiter
-	metrics *metrics.Recorder
-	logger  *slog.Logger
+	domain   Domain
+	stream   string
+	prefix   string
+	log      Appender
+	rows     Rows
+	fence    Fence
+	gates    Gates
+	waiter   Waiter
+	identity Identity
+	metrics  *metrics.Recorder
+	logger   *slog.Logger
 
 	// nodeID is this node's own identity, stamped on every record so the
 	// eviction gate has something to compare against.
@@ -262,12 +316,18 @@ const DefaultResolveBudget = 5 * time.Second
 
 // Deps is everything a publisher needs that it does not own.
 type Deps struct {
-	Domain     Domain
-	Log        Appender
-	Rows       Rows
-	Fence      Fence
-	Gates      Gates
-	Waiter     Waiter
+	Domain Domain
+	Log    Appender
+	Rows   Rows
+	Fence  Fence
+	Gates  Gates
+	Waiter Waiter
+
+	// Identity is the stream identity of the positions Waiter holds —
+	// in the engine the same runner, which is the one place both the
+	// boot's comparison and every live reading land.
+	Identity Identity
+
 	Metrics    *metrics.Recorder
 	Logger     *slog.Logger
 	NodeID     string
@@ -296,6 +356,11 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		return nil, fmt.Errorf("statelog: publisher has no gates")
 	case d.Waiter == nil:
 		return nil, fmt.Errorf("statelog: publisher has no waiter")
+	case d.Identity == nil:
+		return nil, fmt.Errorf("statelog: publisher has no stream identity — " +
+			"every expectation it forms is a sequence on the stream its rows " +
+			"came from, and one that cannot ask whether that is still the live " +
+			"stream is one whose writes a rebuilt log arbitrates as its own")
 	case d.Generation == nil:
 		return nil, fmt.Errorf("statelog: publisher has no generation source")
 	case d.NodeID == "":
@@ -324,6 +389,7 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		fence:         d.Fence,
 		gates:         d.Gates,
 		waiter:        d.Waiter,
+		identity:      d.Identity,
 		metrics:       d.Metrics,
 		logger:        logger,
 		nodeID:        d.NodeID,
@@ -355,12 +421,16 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 			"claim a record no build may be able to read cannot make", req.Subject)
 	}
 
-	// FENCE 0, BEFORE ANYTHING ELSE AND ON EVERY APPEND. It costs one
-	// indexed local read of a table that is empty in every healthy
-	// company, and what it removes is the shape where a node that KNOWS
-	// it has been removed from the fleet still collects acknowledgements
-	// for records every applier will drop.
-	if err := p.checkEvicted(ctx); err != nil {
+	// FENCE 0, BEFORE ANYTHING ELSE AND ON EVERY APPEND. Its identity
+	// half is a field read of what this node has already established, and
+	// its eviction half one indexed local read of a table that is empty in
+	// every healthy company. What they remove is the two shapes where a
+	// node KNOWS its writes are meaningless and publishes anyway: a node
+	// whose log was rebuilt under it, whose expectations the broker
+	// arbitrates against a history they were not read from, and a node
+	// removed from the fleet, which collects acknowledgements for records
+	// every applier will drop.
+	if err := p.fence0(ctx, req); err != nil {
 		return Result{}, err
 	}
 
@@ -470,7 +540,25 @@ const (
 
 // attempt publishes once and reads the answer.
 func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect *uint64, gen uint32, round int) (Result, disposition, error) {
-	seq, _, err := p.append(ctx, req, snap, expect)
+	// FENCE 0 AGAIN, because a round is not free of it: a write that has
+	// spent fifteen rounds losing races has been running for as long as
+	// those races took, and the eviction it must not publish under — or
+	// the heartbeat's reading of a rebuilt log — may have landed inside
+	// that window.
+	//
+	// AND ITS REFUSAL ENDS THE WRITE HERE, before [classify] ever sees it.
+	// It is this node's own decision, taken before anything reached the
+	// broker, so there is nothing ambiguous about it — but to the
+	// classifier every error that is not the broker's own is no answer at
+	// all. Handed over with the append's, it sent the write to ask the log
+	// what landed, find nothing, retake its snapshot and be refused again,
+	// until the round budget reported a conflict: a colleague editing the
+	// object, told to a caller this node had refused for a reason of its
+	// own.
+	if err := p.fence0(ctx, req); err != nil {
+		return Result{Rounds: round}, dispDone, err
+	}
+	seq, _, err := p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect, snap.Decision.Payload)
 	switch f, detail := classify(err); f {
 	case faultNone:
 		at := Position{Stream: p.stream, Generation: gen, Seq: seq}
@@ -609,7 +697,7 @@ func (p *Publisher) expectation(ctx context.Context, req Request, snap Snap, gen
 		// The subject genuinely holds nothing. Publishing at zero is
 		// correct — and fenced, because being wrong here is a lost
 		// update rather than a refused write.
-		if err := p.fence.ClearForZero(ctx, p.waiter.Committed()); err != nil {
+		if err := p.clearForZero(ctx, req); err != nil {
 			return nil, nil, err
 		}
 		zero := uint64(0)
@@ -653,7 +741,14 @@ func (p *Publisher) afterRejection(ctx context.Context, req Request, expect *uin
 		// decision rather than the same one repeated, and a subject
 		// somebody is genuinely racing on runs out of rounds and is
 		// told so.
-		if err := p.fence.ClearForZero(ctx, p.waiter.Committed()); err != nil {
+		//
+		// AN EMPTY SUBJECT IS ALSO WHAT A REBUILT LOG LOOKS LIKE, and
+		// nothing in this branch's own arithmetic can tell the two
+		// apart: the anchor, the checkpoint and the floor are all
+		// sequences on the stream this node's rows came from. That is
+		// why the clearance re-asks the identity after its own read of
+		// the log — see [Publisher.clearForZero].
+		if err := p.clearForZero(ctx, req); err != nil {
 			return nil, err
 		}
 		zero := uint64(0)
@@ -868,20 +963,66 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 	return Result{}, nil
 }
 
-// append publishes one record, stamping the framework's own fields onto the
-// envelope the domain decided.
-func (p *Publisher) append(ctx context.Context, req Request, snap Snap, expect *uint64) (uint64, bool, error) {
-	// FENCE 0 AGAIN, because a round is not free of it: a write that has
-	// spent fifteen rounds losing races has been running for as long as
-	// those races took, and the eviction it must not publish under may
-	// have landed inside that window.
-	if err := p.checkEvicted(ctx); err != nil {
-		return 0, false, err
+// fence0 is every refusal this node can make from what it already knows,
+// cheapest first: the stream identity is a field read, the eviction a local
+// row.
+func (p *Publisher) fence0(ctx context.Context, req Request) error {
+	if err := p.checkIdentity(req); err != nil {
+		return err
 	}
-	return p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect, snap.Decision.Payload)
+	return p.checkEvicted(ctx)
 }
 
-// checkEvicted is fence 0.
+// clearForZero is the fence on an expectation of zero, and the identity asked
+// again after it.
+//
+// # Why again, and why here
+//
+// Fence 0 answers from the last reading of the stream's instant, and the
+// reading that sets it on a running node is the position heartbeat — so a log
+// rebuilt since the last beat passes fence 0, and on this branch that window
+// is a lost update rather than a refused write: the rebuilt log holds nothing
+// on the subject, the expectation of zero is accepted, and the floor the fence
+// clears against is a number from the old history. The fence's own read of the
+// log is the one read on the write path that carries the stream's creation
+// instant (see [Fence.ClearForZero]), so asking after it costs nothing and
+// closes that window within the call, for exactly the branch where it is not
+// recoverable.
+//
+// The other branches keep the heartbeat's window, and the trade is stated
+// rather than hidden. An expectation above zero is accepted on a rebuilt log
+// only where the subject's last sequence there happens to equal it. An
+// additive record needs no such luck and does land — but it is the one kind
+// that commutes, so a history it was never arbitrated in is one it cannot
+// contradict; what is wrong about it is its resolution, and only for the
+// seconds until the next beat. Checking the instant on every append would put
+// a broker round trip on the hottest path the write authority has, to close a
+// window that bounded.
+func (p *Publisher) clearForZero(ctx context.Context, req Request) error {
+	if err := p.fence.ClearForZero(ctx, p.waiter.Committed()); err != nil {
+		return err
+	}
+	return p.checkIdentity(req)
+}
+
+// checkIdentity is fence 0's identity half: a node whose log is not the one
+// its positions are on refuses every write — see [Identity] for why every
+// pattern and not only the retry at zero.
+func (p *Publisher) checkIdentity(req Request) error {
+	err := p.identity.StreamIdentity()
+	if err == nil {
+		return nil
+	}
+	return &Unavailable{
+		Reason: ReasonWrongStream,
+		Detail: fmt.Sprintf("%v — a write here would be arbitrated against a "+
+			"history it was not decided from, so %s was not published", err, req.Subject),
+		OpID:  req.OpID,
+		Cause: err,
+	}
+}
+
+// checkEvicted is fence 0's eviction half.
 func (p *Publisher) checkEvicted(ctx context.Context) error {
 	evicted, err := p.fence.Evicted(ctx)
 	if err != nil {

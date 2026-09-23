@@ -110,6 +110,33 @@ func IdentityOf(recorded, current time.Time, known bool) StreamState {
 // answer.
 var ErrStreamRecreated = errors.New("statelog: the stream was recreated")
 
+// foreignStream is a stream an applier's positions do not belong to: the
+// instant of the one its rows were derived from, and the instant of the one the
+// broker now serves under the same name.
+type foreignStream struct {
+	keyed, live time.Time
+}
+
+// err is the one sentence every refusal over a foreign stream carries — the
+// applier's stop, a read's `wrong_stream` and a write's — so an operator reads
+// the same two instants and the same remedy wherever they meet it.
+//
+// THE REMEDY IS THE OPERATOR'S, and never a retry: what this node holds is
+// derived from a history the live log no longer carries, so a re-read reads the
+// same mismatch, and the decision to follow the rebuilt stream from its head —
+// declaring whatever the old one held and this node never applied lost — is
+// not one a node may take on its own.
+func (f foreignStream) err(domain, stream string) error {
+	return fmt.Errorf("%w: %s's rows are keyed to the stream created at %s and "+
+		"the broker's %s was created at %s, so every position this node holds — "+
+		"its checkpoint, every arbitration anchor, every version — names a "+
+		"sequence that stream counts differently, and neither a read nor a write "+
+		"can be answered from them; an operator re-anchors it with `crewlet "+
+		"retention reanchor -stream %s`",
+		ErrStreamRecreated, domain, f.keyed.UTC().Format(time.RFC3339Nano),
+		stream, f.live.UTC().Format(time.RFC3339Nano), stream)
+}
+
 // RecordedIdentity reads the creation instant this node last recorded for a
 // stream, from its OWN estate.
 //

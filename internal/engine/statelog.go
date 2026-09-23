@@ -109,12 +109,13 @@ type runningDomain struct {
 
 	// createdAt is the broker's own creation instant for the stream, which
 	// is what DETECTS a recreated one — the generation is the response.
+	//
+	// WHETHER THE LIVE STREAM IS STILL THIS ONE is not held here. It is
+	// the runner's ([statelog.Runner.StreamIdentity]), because the write
+	// path refuses on it too, and a flag kept beside the runner was read by
+	// the health and by nothing that appends: a node refused every read of
+	// a rebuilt log while its writes went on landing there.
 	createdAt time.Time
-
-	// recreated is set when the position heartbeat finds the LIVE stream
-	// is not the one this applier started against. It is atomic because
-	// the heartbeat writes it while every health read takes it.
-	recreated atomic.Bool
 
 	// evicted is this domain's own eviction gate, taken from the write
 	// fence so readiness reads the row the write path reads.
@@ -677,6 +678,13 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 
 	deps := statelog.Deps{
 		Domain: domain, Log: appendTo, Waiter: runner, NodeID: s.nodeID,
+		// THE RUNNER IS THE IDENTITY, for the reason it is the waiter:
+		// the positions a write forms its expectation from and resolves
+		// its record against are the runner's, so the answer to "are
+		// they on the live stream" has to be the runner's too — and it is
+		// the one both the boot's comparison and every live reading land
+		// in, so the health refuses on exactly what the writes refuse on.
+		Identity: runner,
 		// READ FRESH ON EVERY PUBLISH rather than captured: a reanchor
 		// moves the generation under a running process, and a publisher
 		// stamping the old one would write records every applier reads
@@ -692,7 +700,7 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 		}
 		fence := tracker.NewFence(s.db, s.nodeID)
 		fence.Floor = s.trimFloor(domain.Name(), func() uint32 { return runner.Committed().Generation })
-		fence.First = firstSeqOf(appendTo)
+		fence.First = s.firstSeqOf(domain.Name(), appendTo, runner)
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, tracker.NewGates(s.db)
 		evicted = fence.Evicted
 	case search.Domain{}.Name():
@@ -712,7 +720,7 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 		}
 		fence := pages.NewFence(s.db, s.nodeID)
 		fence.Floor = s.trimFloor(domain.Name(), func() uint32 { return runner.Committed().Generation })
-		fence.First = firstSeqOf(appendTo)
+		fence.First = s.firstSeqOf(domain.Name(), appendTo, runner)
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, pages.NewGates(s.db)
 		evicted = fence.Evicted
 	default:
@@ -911,13 +919,26 @@ func floorFor(floors []coord.TrimFloor, domain string, generation uint32) (uint6
 // stream's own answer has not caught up with — and why this is still read: it
 // covers what the floor cannot see. An unreadable stream is an error the fence
 // refuses on, for the reason every unreadable floor is.
-func firstSeqOf(l *jetstream.DomainLog) func(context.Context) (uint64, error) {
+//
+// AND IT REPORTS THE STREAM'S IDENTITY, because the one answer that carries the
+// first sequence carries the creation instant beside it. This read is the only
+// one an expectation of zero takes of the live log, and the publisher asks the
+// runner's identity again the moment the fence returns — so a log rebuilt since
+// the last heartbeat is refused here, within the write, on the one branch where
+// letting it through is a lost update rather than a refusal (see
+// [statelog.Fence.ClearForZero]). Thrown away, the zero branch's identity would
+// be only as fresh as the heartbeat, which is ten seconds of a rebuilt log
+// accepting records at zero from a node whose floor names the old one.
+func (s *stateLog) firstSeqOf(domain string, l *jetstream.DomainLog,
+	runner *statelog.Runner) func(context.Context) (uint64, error) {
+
 	return func(ctx context.Context) (uint64, error) {
-		first, _, err := l.Bounds(ctx)
+		stats, err := l.Stats(ctx)
 		if err != nil {
 			return 0, fmt.Errorf("engine: read the log's first surviving sequence: %w", err)
 		}
-		return first, nil
+		s.observeStream(ctx, domain, runner, stats.CreatedAt)
+		return stats.FirstSeq, nil
 	}
 }
 
@@ -977,6 +998,32 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
 		})
 	}
 	return statelog.PermitReadmission(nodeID, register, bounds)
+}
+
+// observeStream hands one live reading of a domain log's creation instant to
+// its runner, and names the rebuild the one time a reading establishes it.
+//
+// ONE PLACE FOR BOTH READERS, the position heartbeat and the zero fence,
+// because whichever reads the rebuilt log first is the one that establishes it
+// and the other then finds it established — so the line is written here, once,
+// by whoever got there, rather than by the heartbeat alone and never when the
+// fence was first.
+func (s *stateLog) observeStream(ctx context.Context, domain string,
+	runner *statelog.Runner, live time.Time) {
+
+	if !runner.ObserveStream(live) {
+		return
+	}
+	log.ErrorContext(ctx, "statelog_stream_recreated",
+		"node", s.nodeID, "domain", domain,
+		"live", live.UTC(),
+		"error", runner.StreamIdentity().Error(),
+		"detail", "this domain's log was deleted and rebuilt under a running "+
+			"node, so its sequences name a history this node's rows are not "+
+			"keyed to; this node refuses every read and every write of it — "+
+			"each refusal names `wrong_stream` — for as long as this process "+
+			"runs against it, and an operator re-anchors it: crewlet retention "+
+			"reanchor")
 }
 
 // Domain answers one running domain by name, or nil.
@@ -1147,10 +1194,11 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	// at zero, so a checkpoint PAST the end reads as caught up through
 	// it, and the end is what [statelog.Health.AheadOfLog] refuses on.
 	health.LastSeq = &end
-	// AND WHETHER THIS IS THE SAME STREAM AT ALL, as the heartbeat last
-	// saw it — the one term here that is OBSERVED rather than derived,
-	// because nothing this node holds can show a rebuilt log.
-	health.StreamRecreated = running.recreated.Load()
+	// AND WHETHER THIS IS THE SAME STREAM AT ALL — the one term here that
+	// is OBSERVED rather than derived, because nothing this node holds can
+	// show a rebuilt log. From the runner, which is where the write path
+	// asks it too: one answer, so the reads and the writes refuse together.
+	health.StreamRecreated = running.runner.StreamIdentity() != nil
 	lag := uint64(0)
 	if end > at.Seq {
 		lag = end - at.Seq
@@ -1804,6 +1852,15 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 			// which is the one state this count exists to surface.
 			row.Detail = "this node cannot read the domain's own position: " +
 				err.Error()
+		case health.StreamRecreated:
+			// A REBUILT LOG FIRST, ahead of the stop it may also have
+			// caused: the stop is a consequence (at boot it is this very
+			// finding; on a running node the consumer went with the old
+			// stream and its fetches fault), and this is the cause, with
+			// the remedy. Without the arm a node on a rebuilt log that
+			// had not yet faulted past its budget read as ready here,
+			// caught up on a sequence the new log had merely reached.
+			row.Detail = running.runner.StreamIdentity().Error()
 		case health.Err != "":
 			// A STOPPED APPLIER IS NOT READY, whatever its lag says: a
 			// loop halted on a recreated stream has a lag of zero and
@@ -2419,29 +2476,20 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			}
 			// AND WHETHER IT IS EVEN THE SAME LOG.
 			//
-			// This is the only place a running node sees the live
-			// stream's creation instant: it is sampled once at start
-			// and never re-read, so a stream deleted and rebuilt under
-			// a node was never named as one. The sequence terms above
-			// cannot see it — a rebuilt stream comes back at
+			// The live stream's creation instant is sampled once at
+			// start, so without this a stream deleted and rebuilt under
+			// a running node was never named as one. The sequence terms
+			// above cannot see it — a rebuilt stream comes back at
 			// generation 0 counting from 1, so once it has published
 			// past this node's checkpoint every one of them reads as
 			// healthy while the node applies a different history into
-			// rows keyed by the old one. The instant already arrives
-			// in this same answer; it was being thrown away.
-			if statelog.IdentityOf(running.createdAt, stats.CreatedAt, true) ==
-				statelog.StreamRecreated && !running.recreated.Swap(true) {
-
-				log.ErrorContext(ctx, "statelog_stream_recreated",
-					"node", s.nodeID, "domain", name,
-					"started_against", running.createdAt.UTC(),
-					"live", stats.CreatedAt.UTC(),
-					"detail", "this domain's log was deleted and rebuilt under "+
-						"a running node, so its sequences name a history this "+
-						"node's rows are not keyed to; reads and writes refuse "+
-						"until an operator re-anchors it — crewlet retention "+
-						"reanchor")
-			}
+			// rows keyed by the old one. The instant arrives in this
+			// same answer, and every beat hands it to the runner, whose
+			// verdict both the reads and the writes refuse on. It is
+			// not the only reader: an expectation of zero reads the
+			// log within the write and hands its instant over too, so
+			// that branch does not wait for this interval.
+			s.observeStream(ctx, name, running.runner, stats.CreatedAt)
 		}
 		running.progress.observe(row.At, pos.AppliedThrough, behind, held)
 		row.Domains[name] = pos

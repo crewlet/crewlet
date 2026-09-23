@@ -189,6 +189,24 @@
 // therefore LOAD-BEARING rather than defensive. None may be optimised away as
 // a rare case.
 //
+// # And the premise under all of it: ONE STREAM
+//
+// C, F, every anchor and every answer the broker gives are sequences, and the
+// proof above — like the ordinary arbitration before it — compares them as
+// numbers in one space. A stream deleted and rebuilt under the same name
+// breaks that without breaking any number: it keeps the generation and counts
+// from 1 again, so this node's C still clears F, an empty subject still reads
+// as a trimmed anchor, and an expectation still equals the rebuilt log's last
+// sequence wherever the two histories happen to meet. So the premise is
+// enforced like the clauses rather than assumed: every write asks the
+// applier's stream identity ([Identity]) before anything else and before every
+// append, and a write at an expectation of zero asks it AGAIN after its fence's
+// own read of the log, which is the read that carries the stream's creation
+// instant — so on the branch where a rebuild is a lost update, it is caught
+// within the call, as (ii) is. A node that knows its log is not the one its
+// rows are keyed to refuses every write, `wrong_stream`, and every read with
+// the same word.
+//
 // # The alarm table borrows every threshold it fires at
 //
 // It is in this package rather than beside any one subsystem because an alarm

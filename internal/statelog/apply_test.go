@@ -1645,6 +1645,9 @@ func TestARecreatedStreamStopsTheApplier(t *testing.T) {
 	if err := h.runner.Stopped(); err != nil {
 		t.Fatalf("the same stream stopped the applier: %v", err)
 	}
+	if err := h.runner.StreamIdentity(); err != nil {
+		t.Fatalf("the same stream reads as a foreign one: %v", err)
+	}
 
 	// A DIFFERENT STREAM WEARING THE SAME NAME.
 	h.rebuild(probeDomain{}, born.Add(time.Hour))
@@ -1659,11 +1662,88 @@ func TestARecreatedStreamStopsTheApplier(t *testing.T) {
 		t.Fatal("the applier does not report itself stopped, so its health would " +
 			"not refuse and its seats would not move")
 	}
+	// AND THE PUBLISHER BESIDE IT KNOWS: a stop ends this loop, and the
+	// write path never reads a loop's error — it asks the identity, which
+	// has to carry this same finding or every write goes on landing on a
+	// log this node's rows are not keyed to.
+	if identity := h.runner.StreamIdentity(); !errors.Is(identity, statelog.ErrStreamRecreated) {
+		t.Fatalf("StreamIdentity after the boot found a recreated stream = %v, "+
+			"want %v — the writes would not refuse", identity, statelog.ErrStreamRecreated)
+	}
 	if !strings.Contains(err.Error(), "reanchor") {
 		t.Fatalf("the stop does not name the verb that repairs it: %v", err)
 	}
 	if got := h.runner.Committed().Seq; got != 2 {
 		t.Fatalf("the checkpoint moved to %d on a stopped applier", got)
+	}
+}
+
+// A LIVE READING OF A REBUILT LOG IS THE RUNNER'S VERDICT, and it outlives the
+// loop that was running when it was taken.
+//
+// The boot compares the checkpoint once; a stream deleted and rebuilt under a
+// running node is seen only by a later read of the stream's state, and every
+// such read hands its instant here. Three properties make that the one answer
+// the reads and the writes can share: a reading of the SAME stream at the
+// broker's finer resolution establishes nothing, a reading that could not be
+// taken establishes nothing, and a rebuild, once established, is not cleared by
+// a run that starts again — a stop is a verdict about rows an adoption may
+// replace, and this is a verdict about the positions the runner was built on.
+func TestALiveReadingOfARebuiltLogIsTheRunnersVerdict(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	born := time.Date(2026, 9, 10, 12, 0, 0, 123_456_789, time.UTC)
+	h.rebuild(probeDomain{}, born)
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	if err := h.run(1); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	for name, live := range map[string]time.Time{
+		"the same stream at a finer resolution": born.Add(100 * time.Nanosecond),
+		"a reading that could not be taken":     {},
+	} {
+		if h.runner.ObserveStream(live) {
+			t.Fatalf("%s established a rebuild", name)
+		}
+		if err := h.runner.StreamIdentity(); err != nil {
+			t.Fatalf("after %s the identity is %v, want the live stream — a "+
+				"node that read its own stream as foreign would refuse every "+
+				"write it makes", name, err)
+		}
+	}
+
+	rebuiltAt := born.Add(time.Hour)
+	if !h.runner.ObserveStream(rebuiltAt) {
+		t.Fatal("a reading of a stream created an hour later did not establish " +
+			"a rebuild")
+	}
+	identity := h.runner.StreamIdentity()
+	if !errors.Is(identity, statelog.ErrStreamRecreated) {
+		t.Fatalf("StreamIdentity = %v, want %v", identity, statelog.ErrStreamRecreated)
+	}
+	for _, want := range []string{
+		born.Format(time.RFC3339Nano), rebuiltAt.Format(time.RFC3339Nano), "reanchor",
+	} {
+		if !strings.Contains(identity.Error(), want) {
+			t.Errorf("the refusal %q does not name %q — an operator needs both "+
+				"instants and the verb that follows the new stream", identity, want)
+		}
+	}
+
+	// ESTABLISHED ONCE: a second reading reports nothing new, so the
+	// line that names the rebuild is written once rather than per beat.
+	if h.runner.ObserveStream(rebuiltAt) {
+		t.Fatal("a second reading of the same rebuild reported it again")
+	}
+	// AND A RUN THAT STARTS AGAIN DOES NOT FORGET IT. The loop restarts
+	// after an adoption; the positions it was built on do not change.
+	if err := h.boot(0); err != nil {
+		t.Fatalf("run again: %v", err)
+	}
+	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrStreamRecreated) {
+		t.Fatal("a re-run cleared the rebuild, so the writes would start " +
+			"landing on it again")
 	}
 }
 

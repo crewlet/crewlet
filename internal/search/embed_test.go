@@ -442,7 +442,7 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: search.Domain{}, Log: log, Rows: rows,
 		Fence: search.NewFence(), Gates: search.NewGates(), Waiter: &embedWaiter{},
-		NodeID: "node-a", Generation: func() uint32 { return 0 },
+		NodeID: "node-a", Generation: func() uint32 { return 0 }, Identity: &embedWaiter{},
 		ResolveBudget: 2 * time.Second,
 	})
 	if err != nil {
@@ -706,6 +706,10 @@ func nan() float64 { var zero float64; return zero / zero }
 type embedWaiter struct{}
 
 func (embedWaiter) Committed() statelog.Position { return statelog.Position{} }
+
+// StreamIdentity is always the live stream: this harness never rebuilds its
+// log.
+func (embedWaiter) StreamIdentity() error { return nil }
 func (embedWaiter) WaitCommitted(context.Context, statelog.Position) error {
 	return nil
 }

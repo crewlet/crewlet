@@ -141,6 +141,16 @@ const (
 	// expectation this node formed, which cannot happen on a healthy
 	// stream and means a store or stream was restored out of step.
 	ReasonSkew Reason = "skew"
+
+	// ReasonWrongStream — the log under this domain's name is not the
+	// one this node's rows were derived from: it was deleted and rebuilt,
+	// so it counts from 1 again at the same generation. Every expectation
+	// this node could form is a sequence from the old history and the
+	// broker would arbitrate it against the new one. No retry and no other
+	// node clears it — every node on the rebuilt log refuses alike — and
+	// the remedy is an operator's re-anchor. The same word as the read
+	// refusal for the same fact, so a surface that meets both reads one.
+	ReasonWrongStream Reason = "wrong_stream"
 )
 
 // ErrUnavailable is what a refusal wraps, so a caller can tell a refusal from
@@ -162,6 +172,13 @@ type Unavailable struct {
 	Detail   string
 	Position Position
 	OpID     string
+
+	// Cause is the sentinel-bearing error a refusal was concluded from,
+	// when there is one a caller may want to recognise without switching
+	// on the reason — [ErrStreamRecreated] behind `wrong_stream`, which
+	// is the same sentence the applier's stop and a read's refusal carry.
+	// Nil for the reasons that are their own whole answer.
+	Cause error
 }
 
 func (u *Unavailable) Error() string {
@@ -171,5 +188,11 @@ func (u *Unavailable) Error() string {
 	return fmt.Sprintf("statelog: unavailable (%s): %s", u.Reason, u.Detail)
 }
 
-// Unwrap makes every refusal answer errors.Is(err, ErrUnavailable).
-func (u *Unavailable) Unwrap() error { return ErrUnavailable }
+// Unwrap makes every refusal answer errors.Is(err, ErrUnavailable), and one
+// with a cause answer for the cause too.
+func (u *Unavailable) Unwrap() []error {
+	if u.Cause == nil {
+		return []error{ErrUnavailable}
+	}
+	return []error{ErrUnavailable, u.Cause}
+}

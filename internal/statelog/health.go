@@ -284,8 +284,10 @@ type Health struct {
 	// reporting nothing pending.
 	LastSeq *uint64
 
-	// StreamRecreated is a live stream that is not the one this node's applier
-	// started against — a delete and a rebuild under the same name.
+	// StreamRecreated is a live stream that is not the one this node's rows
+	// are keyed to — a delete and a rebuild under the same name, found at boot
+	// against the checkpoint or while running against the instant the applier
+	// started on.
 	//
 	// # Why it is observed rather than derived
 	//
@@ -297,11 +299,13 @@ type Health struct {
 	// history into rows keyed by the old one, reporting itself caught up.
 	//
 	// The only thing that separates the two streams is the broker's own creation
-	// instant, and the only place that sees the live one while a node runs is the
-	// position heartbeat, which reads the stream's state every ten seconds anyway.
-	// So the heartbeat compares and sets this, and the refusal it produces is the
-	// same one the boot's own identity check produces — with the same remedy, an
-	// operator's re-anchor.
+	// instant. The boot compares it once, and a running node sees the live one
+	// wherever it reads the stream's state — the position heartbeat every ten
+	// seconds, and the write fence on every expectation of zero. Every one of
+	// those lands in [Runner.StreamIdentity], and this is that answer: the SAME
+	// one the write path refuses on, so a node can never refuse its reads over a
+	// rebuilt log while its writes go on landing there. The remedy is the same
+	// either way, an operator's re-anchor.
 	StreamRecreated bool
 
 	// Coverage is COMPACTED domains only: the fraction of rows present

@@ -82,6 +82,16 @@ const (
 // would be a parser against a message that is free to be reworded, for a
 // number the discriminator answers authoritatively — so the rejection is
 // treated as "stale, cause unknown" and LastSeq is asked.
+//
+// # And why only the append's own error is ever handed to it
+//
+// Everything that is not an APIError reads as NO ANSWER here, which is true
+// only of what the append itself returned. A refusal this node makes before
+// the append — fence 0's — is a decision, not an absence of one, and it ends
+// the write where it is made ([Publisher.attempt]): classified, it would send
+// a write that never reached the broker down the ambiguous path, which finds
+// nothing landed, retakes, is refused again, and reports a conflict once the
+// round budget is spent.
 func classify(err error) (fault, string) {
 	if err == nil {
 		return faultNone, ""

@@ -489,18 +489,31 @@ The engine detects this from the stream's own **creation instant**, which the
 broker reports and every applier compares at boot against the instant its
 checkpoint was committed under. On a difference the applier **stops** rather
 than resuming — the log line names both instants and this verb — the node's
-reads refuse `stalled` with that reason, its seats move to a peer, and
-`crewlet retention status` shows the domain as stopped. A checkpoint past the
-log's end is caught the same way, as `wrong_stream`, because a position the
-log has never reached is a position on another stream.
+reads and writes refuse `wrong_stream` with that reason, its seats move to a
+peer, and `crewlet retention status` shows the domain as not ready, naming the
+recreation. A checkpoint past the log's end is caught as `wrong_stream` too,
+because a position the log has never reached is a position on another stream.
 
-**A rebuild under a node that never restarts is caught too**, on the position
-heartbeat: it reads the stream's state every ten seconds anyway, and the
-creation instant arrives in that same answer. Nothing else can see it — a
-rebuilt stream comes back at generation 0 counting from 1, so once it has
-published past the node's checkpoint every sequence term reads healthy while
-the node applies a different history into rows keyed by the old one. The node
-refuses `wrong_stream`, gives up its seats, and logs both instants.
+**A rebuild under a node that never restarts is caught too**, wherever the node
+reads the stream's state: the position heartbeat does every ten seconds, and a
+write that would publish at an expectation of zero does within the write. The
+creation instant arrives in both answers. Nothing else can see it — a rebuilt
+stream comes back at generation 0 counting from 1, so once it has published
+past the node's checkpoint every sequence term reads healthy while the node
+applies a different history into rows keyed by the old one. The node logs
+`statelog_stream_recreated` with both instants, gives up its seats, and refuses
+every read and every write of that domain with `wrong_stream` for as long as
+the process runs against the rebuilt stream.
+
+**Writes refuse, not only reads**, and every kind of write rather than only the
+retry at zero. Every expectation a node forms is a sequence from the stream its
+rows came from, and the rebuilt stream — same name, same generation — would
+arbitrate it as a sequence about itself: an expectation of zero would land on a
+subject the old history had written, and an ordinary one would be accepted
+wherever the rebuilt stream's own history happened to end at the same number.
+Anything that landed would be applied by every node once the stream is
+followed from its head. A refused write is an `unavailable` answer naming
+`wrong_stream`, both creation instants and the `reanchor` command below.
 
 `reanchor` is the response:
 

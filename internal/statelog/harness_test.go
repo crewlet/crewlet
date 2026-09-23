@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -101,6 +102,25 @@ type applier struct {
 	// wait's own budget, and without it an unbounded wait there looks
 	// exactly like a fast one.
 	stalled bool
+
+	// foreign is what StreamIdentity answers: nil while this node's
+	// positions are on the live stream, and a recreation once a reading
+	// found them not to be.
+	foreign error
+}
+
+func (a *applier) StreamIdentity() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.foreign
+}
+
+// rebuilt is what a reading of a rebuilt log establishes about this node.
+func (a *applier) rebuilt() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.foreign = fmt.Errorf("%w: the probe log was rebuilt under this node",
+		statelog.ErrStreamRecreated)
 }
 
 func newApplier() *applier {
@@ -268,6 +288,12 @@ type fakeFence struct {
 	evictErr error
 	zeroErr  error
 	zeroes   atomic.Int64
+
+	// reads, when set, is what the fence's own read of the live log
+	// finds — which is where a real fence hands the stream's creation
+	// instant to the applier, and so where a rebuild since the last
+	// heartbeat is first seen.
+	reads func()
 }
 
 func (f *fakeFence) Evicted(context.Context) (bool, error) {
@@ -279,8 +305,12 @@ func (f *fakeFence) Evicted(context.Context) (bool, error) {
 func (f *fakeFence) ClearForZero(_ context.Context, _ statelog.Position) error {
 	f.zeroes.Add(1)
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.zeroErr
+	reads, err := f.reads, f.zeroErr
+	f.mu.Unlock()
+	if reads != nil {
+		reads()
+	}
+	return err
 }
 
 // fakeGates answers the two questions that make an absent operation mean
@@ -429,6 +459,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 		Fence:         h.fence,
 		Gates:         h.gates,
 		Waiter:        h.applier,
+		Identity:      h.applier,
 		NodeID:        "node-a",
 		Generation:    h.gen.Load,
 		ResolveBudget: 250 * time.Millisecond,
