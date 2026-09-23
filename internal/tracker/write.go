@@ -88,6 +88,12 @@ type Writer struct {
 	claims Claims
 	nodeID string
 
+	// local is the IN-PROCESS half of every claim this node's writers take,
+	// shared by every copy [Writer.As] and [Writer.After] make of the one
+	// writer the node builds — see [localHolds] for why the lease alone
+	// does not exclude a second walk on the same node.
+	local *localHolds
+
 	// Actor and ActorKind are who this writer acts as, and OperatorID,
 	// TurnID and Chain the provenance that travels with it.
 	//
@@ -321,6 +327,7 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	}
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
+		local:   &localHolds{held: map[string]bool{}},
 		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
 		Drain: d.Drain, Leads: d.Leads, World: d.World, Now: now,
 	}, nil

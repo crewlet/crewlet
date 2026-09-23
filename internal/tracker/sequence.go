@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -69,17 +70,14 @@ const (
 
 	// ClaimTTL is how long the durable claim a walking sequence holds
 	// survives unrenewed. FOUR HEARTBEATS, so three consecutive misses are
-	// survivable and the fourth hands the walk to the duty.
+	// survivable and the fourth hands the walk to the duty — which takes
+	// the same claim before it finishes anything, so a walk whose holder is
+	// alive is one it leaves alone.
 	ClaimTTL = 60 * time.Second
 
 	// ClaimHeartbeat is how often the holder renews that claim — a quarter
 	// of [ClaimTTL], which is the arithmetic its own comment rests on.
 	ClaimHeartbeat = 15 * time.Second
-
-	// ClaimStale is when a duty may complete somebody else's abandoned
-	// walk: half the TTL past its last heartbeat, which is the point at
-	// which a holder that is still alive would have renewed twice.
-	ClaimStale = 30 * time.Second
 )
 
 // Claims is the coordination a multi-append sequence takes its claim from.
@@ -696,9 +694,47 @@ func markPromoted(parent Task, itemID, subtaskID string) []Checklist {
 	return lists
 }
 
+// errWalkRunning is a walk somebody is already running: another node's lease,
+// or another goroutine on this one.
+var errWalkRunning = errors.New("tracker: this walk is already running")
+
+// localHolds is the IN-PROCESS half of a claim, and it exists because the
+// lease cannot be the whole of one.
+//
+// A lease names its holder by NODE, and a claim by an owner that already holds
+// it DOUBLES AS A RENEW (see [coord.Backend.TryAcquire]) — so two goroutines on
+// one node, two requests to fold one duplicate or the duty finishing a merge
+// this node is still walking, were both told yes. And the first of them to
+// finish RELEASED the lease the other was still walking under, admitting a
+// third walk from anywhere in the fleet. One map shared by every copy of the
+// node's writer closes both.
+type localHolds struct {
+	mu   sync.Mutex
+	held map[string]bool
+}
+
+// take claims a resource in this process, reporting whether it was free.
+func (l *localHolds) take(resource string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.held[resource] {
+		return false
+	}
+	l.held[resource] = true
+	return true
+}
+
+// give releases a resource this process took.
+func (l *localHolds) give(resource string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.held, resource)
+}
+
 // held is one durable claim, heartbeated for as long as a walk runs.
 type held struct {
 	claims   Claims
+	local    *localHolds
 	resource string
 	owner    string
 	epoch    int64
@@ -712,14 +748,23 @@ type held struct {
 // started here, stopped by [held.release], and cannot outlive the sequence
 // that took it. A heartbeat nobody stops is a claim nobody else can ever take.
 func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
-	if w.claims == nil {
+	if w.claims == nil || w.local == nil {
 		return nil, fmt.Errorf("tracker: this writer has no coordination, so "+
 			"it cannot take %s — a walking sequence without a claim is two "+
 			"nodes rewriting one subtree", resource)
 	}
+	// THIS PROCESS FIRST, because the lease cannot see a second walk here:
+	// the same owner's claim is a renew.
+	if !w.local.take(resource) {
+		return nil, fmt.Errorf("%w on this node (%s): %w", errWalkRunning,
+			resource, statelog.ErrUnavailable)
+	}
 	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
 		Owner: w.nodeID, TTL: ClaimTTL,
 	})
+	if err != nil || lease == nil {
+		w.local.give(resource)
+	}
 	switch {
 	case err != nil:
 		// UNKNOWN, AND THIS ONE FAILS CLOSED. A merge re-parents a
@@ -729,11 +774,11 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 		// which fold each child belonged to.
 		return nil, fmt.Errorf("tracker: take %s: %w", resource, err)
 	case lease == nil:
-		return nil, fmt.Errorf("tracker: %s is held by another node, so this "+
-			"walk is already running: %w", resource, statelog.ErrUnavailable)
+		return nil, fmt.Errorf("%w on another node (%s): %w", errWalkRunning,
+			resource, statelog.ErrUnavailable)
 	}
 	h := &held{
-		claims: w.claims, resource: resource, owner: w.nodeID,
+		claims: w.claims, local: w.local, resource: resource, owner: w.nodeID,
 		epoch: lease.Epoch, stop: make(chan struct{}), done: make(chan struct{}),
 	}
 	go h.beat(context.WithoutCancel(ctx))
@@ -769,6 +814,9 @@ func (h *held) release(ctx context.Context) {
 	close(h.stop)
 	<-h.done
 	_, _ = h.claims.Release(context.WithoutCancel(ctx), h.resource, h.owner, h.epoch)
+	// THE LEASE FIRST, so no other goroutine here takes the resource and
+	// claims a lease this release is about to drop.
+	h.local.give(h.resource)
 }
 
 // MergeDuplicates folds one task into another. SEQUENCE 13.
@@ -1032,10 +1080,18 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 // the caller's hint, and a coordination store that cannot be reached ADMITS —
 // see the sequence's own doc for why those last two must differ.
 func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
-	if w.claims == nil {
+	if w.claims == nil || w.local == nil {
 		return func() {}, nil
 	}
 	resource := bulkClaim(trackerStream)
+	// THIS PROCESS FIRST, for [localHolds]' reason: a second bulk from this
+	// node renews the lease the first holds rather than being refused by
+	// it, and the first to finish releases the lease the other is still
+	// applying under. Refused whatever the coordination store says, because
+	// this half is known locally and is never an unknown.
+	if !w.local.take(resource) {
+		return nil, w.bulkInFlight(ctx, resource)
+	}
 	// TWICE THE PROJECTED APPLY TIME, so the lease outlives the work it
 	// admits without outliving it by so much that a crashed holder blocks
 	// the company. The projection is rows over the applier's own measured
@@ -1060,21 +1116,31 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 		// FAIL OPEN. See the doc above: the log is correct with two
 		// bulks in flight and merely slow, and refusing here on an
 		// unknown is a seat told a colleague is editing when nobody is.
+		// The in-process half still holds until this bulk ends.
 		//nolint:nilerr // Deliberate fail-open: see the paragraph above.
-		return func() {}, nil
+		return func() { w.local.give(resource) }, nil
 	case lease == nil:
-		remaining := time.Duration(0)
-		if held, err := w.claims.Get(ctx, resource); err == nil && held != nil {
-			remaining = time.Until(held.ExpiresAt)
-		}
-		return nil, fmt.Errorf("%w; retry in about %d seconds: %w",
-			ErrBulkInFlight, int(max(remaining.Seconds(), 1)),
-			statelog.ErrUnavailable)
+		w.local.give(resource)
+		return nil, w.bulkInFlight(ctx, resource)
 	}
 	epoch := lease.Epoch
 	return func() {
 		_, _ = w.claims.Release(context.WithoutCancel(ctx), resource, w.nodeID, epoch)
+		w.local.give(resource)
 	}, nil
+}
+
+// bulkInFlight is the refusal of a bulk while another applies, with the
+// holder's remaining lease as the caller's hint — whichever node holds it,
+// this one included, since the lease is what bounds the other bulk's run.
+func (w *Writer) bulkInFlight(ctx context.Context, resource string) error {
+	remaining := time.Duration(0)
+	if held, err := w.claims.Get(ctx, resource); err == nil && held != nil {
+		remaining = time.Until(held.ExpiresAt)
+	}
+	return fmt.Errorf("%w; retry in about %d seconds: %w",
+		ErrBulkInFlight, int(max(remaining.Seconds(), 1)),
+		statelog.ErrUnavailable)
 }
 
 // drainRows is the applier's measured rows a second, and the divisor of every

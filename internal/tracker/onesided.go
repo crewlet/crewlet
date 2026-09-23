@@ -37,9 +37,10 @@ import (
 
 // OneSidedRepairAge is how old an edge must be before the duty repairs it.
 //
-// THIRTY SECONDS, which is [ClaimStale] and the same quantity: it is how long
-// a gesture that is still running may reasonably take to reach its own last
-// step. Shorter and the duty races live writers, publishing a mirror the
+// THIRTY SECONDS — half of [ClaimTTL], the point at which a walk's holder
+// that is still alive would have renewed its claim twice — because it is the
+// same quantity: how long a gesture that is still running may reasonably take
+// to reach its own last step. Shorter and the duty races live writers, publishing a mirror the
 // gesture was about to publish itself — two records on one subject where one
 // would do, and a second wake for the blocker's assignee. Longer and a
 // dependency written during a node's restart sits unannounced for no reason.

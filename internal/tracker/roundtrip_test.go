@@ -38,6 +38,10 @@ type roundTrip struct {
 	metrics  *metrics.Recorder
 	consumed uint64
 
+	// claims is the coordination the writer's walking sequences take their
+	// claims from, so a case can hold one as ANOTHER node would.
+	claims *memory.Backend
+
 	// verifier opens a record's frame, because this harness replays the
 	// log exactly as the framework's own loop does and that loop verifies
 	// before any domain decodes.
@@ -143,6 +147,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
+	claims := memory.New()
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
 		Publisher: publisher, DB: db, NodeID: "node-a",
 		// A REAL CLAIM BACKEND, because the WALKING sequences refuse
@@ -150,7 +155,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 		// merge with no test at all. In-memory is the whole of what a
 		// single-node harness needs: the claim is there to exclude a
 		// SECOND node.
-		Claims: memory.New(),
+		Claims: claims,
 		Actor:  "ana", ActorKind: tracker.AuthorHuman,
 		Now: func() time.Time { return r.at },
 	})
@@ -171,6 +176,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 		t.Fatalf("tracker reader: %v", err)
 	}
 	r.writer, r.applier = writer, tracker.NewApplier("node-a", nil)
+	r.claims = claims
 	r.reader, r.waiter = reader, waiter
 	r.verifier = testVerifier(t, tracker.Domain{})
 	return r
