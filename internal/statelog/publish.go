@@ -189,8 +189,10 @@ type Gates interface {
 	// destruction it asked for did not happen, when it did.
 	GatedAt(ctx context.Context, subj Subject, writer, opID string, p Position) (Reason, bool, error)
 
-	// AdoptedAt is when this node's adoption of a donated snapshot
-	// completed, reporting false when it never adopted one.
+	// AdoptedAt is the instant before which this node's ops table cannot
+	// vouch for an operation — when its latest adoption of a donated
+	// snapshot completed, or began where one did not complete — reporting
+	// false when it never began one. See [AdoptedAt] for the rule.
 	//
 	// The ops table is this node's own and is scrubbed from every
 	// donated snapshot, so an op id minted before this instant cannot be

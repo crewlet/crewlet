@@ -102,8 +102,32 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	waitUntil(t, 90*time.Second, "the node to adopt the donor's snapshot", func() bool {
 		return running.runner.Committed().Seq == last
 	})
-	if _, adopted, err := statelog.AdoptedAt(t.Context(), back.Store); err != nil || !adopted {
-		t.Fatalf("the adoption row says (%v, %v), want a completed adoption", adopted, err)
+	// THE ADOPTION IS RECORDED AS COMPLETE, in this node's own estate and
+	// naming this donor's artefact. Read off the row itself: [statelog.AdoptedAt]
+	// answers a bound for an incomplete row too, so "an adoption is on record"
+	// cannot tell a join that finished from one that stopped partway.
+	var recorded string
+	var completedAt sql.NullInt64
+	if err := back.Store.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `
+			SELECT manifest, completed_at FROM statelog_adoption
+			ORDER BY started_at DESC LIMIT 1`).Scan(&recorded, &completedAt)
+	}); err != nil {
+		t.Fatalf("read the newest adoption row: %v", err)
+	}
+	if !completedAt.Valid {
+		t.Fatal("the newest adoption row has no completed_at — the adoption " +
+			"happened and the node serves on it, and its own record says it " +
+			"stopped partway")
+	}
+	if recorded != manifest.SHA256 {
+		t.Fatalf("the newest adoption row names artefact %s, want the donor's %s",
+			recorded, manifest.SHA256)
+	}
+	if _, bounded, err := statelog.AdoptedAt(t.Context(), back.Store); err != nil || !bounded {
+		t.Fatalf("the ledger reads no adoption bound (%v, %v) — every operation "+
+			"minted before the adoption would be re-decided against a scrubbed "+
+			"ledger", bounded, err)
 	}
 	waitUntil(t, 30*time.Second, "the node to admit seats again", e.NativeHydrated)
 	if ok, domain := e.SeatsServiceable(); !ok {

@@ -71,21 +71,26 @@ type AdoptDeps struct {
 	Close  func(ctx context.Context) error
 	Reopen func(ctx context.Context) error
 
-	// Record writes this node's own adoption row, which must complete
-	// before it serves.
+	// Record writes this node's own adoption row at each phase, and the
+	// join fails if it cannot: the row is what bounds which operations
+	// this node's ledger can answer for — see [AdoptedAt].
 	Record func(ctx context.Context, donor string, m Manifest, phase AdoptionPhase) error
 
 	Logger *slog.Logger
 	Now    func() time.Time
 }
 
-// AdoptionPhase is how far a join has got, and it is PERSISTED rather than
-// held in memory.
+// AdoptionPhase is how far a join has got, as [AdoptDeps.Record] is told it.
 //
-// A node that crashed mid-adoption and came back looks, from its checkpoint
-// alone, exactly like a node that is caught up: the checkpoint came from the
-// artefact. The row is what tells them apart, and a row that has not completed
-// blocks serving whatever the checkpoint says.
+// THE ROW DOES NOT KEEP IT. [RecordAdoption] writes the same columns at every
+// phase and stamps completed_at only at [AdoptionComplete], so what survives a
+// crash is when the join began and whether it finished — not which side of
+// the install it stopped on. That is why [AdoptedAt] reads an incomplete row
+// at its start: a node that crashed between the rename and the complete looks,
+// from its checkpoint alone, exactly like a node that is caught up, and the
+// ledger it holds may be the donor's scrubbed one. Nothing refuses to serve on
+// an incomplete row; the phase names the step in the error a failed Record
+// returns.
 type AdoptionPhase string
 
 const (

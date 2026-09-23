@@ -228,8 +228,9 @@ func (d *DB) CloseReplicated() error {
 	case d.Replicated() == nil:
 		// ALREADY CLOSED IS NOT AN ERROR: a join that failed between
 		// the close and the rename unwinds by reopening, and an unwind
-		// that had to know how far it got would be a second state
-		// machine beside the phase the adoption row already records.
+		// that had to know how far it got would need a record of that
+		// which nothing keeps — the adoption row stamps when a join
+		// began and whether it completed, not the step it reached.
 		return nil
 	}
 	err := d.replicated.Swap(nil).Close()

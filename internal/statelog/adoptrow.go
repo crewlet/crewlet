@@ -3,7 +3,6 @@ package statelog
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -25,9 +24,9 @@ import (
 // Written in one place and read in another, that question gets two answers
 // eventually. It already had: the reader looked for a row keyed `id =
 // 'current'` on a table keyed on `started_at`, which fails on every call with
-// a missing column rather than reporting no adoption. The table's own rule —
-// rows ACCUMULATE, and the newest one is what counts — was written in the
-// migration and nowhere in the code.
+// a missing column rather than reporting no adoption. And the rule the
+// migration wrote down for reading it — "the newest completed one" — is not
+// the one [AdoptedAt] applies, for the reason its doc gives.
 
 // RecordAdoption writes or advances this node's adoption row.
 //
@@ -74,40 +73,59 @@ func RecordAdoption(ctx context.Context, db *store.DB, startedAt time.Time,
 	return nil
 }
 
-// AdoptedAt is when this node's most recent adoption COMPLETED.
+// AdoptedAt is the instant before which this node's operation ledger cannot
+// vouch for an operation, reporting false when there is none.
 //
-// THE NEWEST ROW, complete or not, and the difference is the whole point:
+// # What each row says
 //
-//   - No rows at all — this node has never adopted, so its ledger covers its
-//     whole life and every operation id can be answered for. (zero, false)
-//   - The newest row is incomplete — a join is running or one died partway.
-//     The ledger is scrubbed and there is no instant to compare against, so
-//     the honest answer is that nothing can be answered for. (zero, false)
-//   - The newest row is complete — operations minted after that instant are
-//     this node's own and the ones before it are not. (instant, true)
+// A COMPLETED adoption installed a donated file whose ledger was SCRUBBED, so
+// an operation minted before it completed is one this node cannot answer for.
+// An INCOMPLETE row is a join that is running or stopped partway, and the row
+// cannot say which side of the install it stopped on: the table has no phase
+// column — [RecordAdoption] writes the same columns at every phase and stamps
+// only completed_at — so a join that failed after its rename and before it
+// completed looks exactly like one that failed before it closed anything. Its
+// START is the honest bound. An operation minted after the join began is
+// published after it too — above any artefact the join could install, which
+// was taken before it asked — so this node's own applier writes its ledger row
+// into whichever file is live. One minted before it resolves `unknown` rather
+// than being re-decided, which a caller retries under the same operation id,
+// and which is safe whichever side of the install the join stopped on.
 //
-// The first two answer identically here and are read differently upstream: an
-// incomplete adoption also blocks serving, through the phase the row carries,
-// so a node in that state is not asking this question yet.
+// So the answer is the LATEST such instant over every row: completed_at where
+// the adoption finished, started_at where it did not. (zero, false) only when
+// this node has never begun an adoption, and its ledger covers its whole life.
+//
+// # Why not the newest completed row, or the newest row
+//
+// Migration 0022 says the reader takes the newest completed one. That answers
+// an incomplete adoption AFTER a completed one with the older instant, and
+// lets operations minted between the two be re-decided against a ledger the
+// second join may already have replaced. Reading the newest row, complete or
+// not, and answering (zero, false) when it is incomplete — which this did —
+// is worse in the same direction: it re-decides operations minted before even
+// the COMPLETED adoption. The migration is applied history and is not edited
+// (schema_migrations keys on its filename), so the rule is stated here, where
+// the query is.
 func AdoptedAt(ctx context.Context, db *store.DB) (time.Time, bool, error) {
 	if db == nil {
 		return time.Time{}, false, fmt.Errorf("statelog: no store to read an " +
 			"adoption record from")
 	}
-	var completed sql.NullInt64
+	// ONE AGGREGATE, which answers NULL over an empty table rather than no
+	// row: "never began an adoption" is the NULL, and there is no second
+	// shape of it to handle.
+	var bound sql.NullInt64
 	err := db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
-			SELECT completed_at FROM statelog_adoption
-			ORDER BY started_at DESC LIMIT 1`).Scan(&completed)
+			SELECT MAX(COALESCE(completed_at, started_at)) FROM statelog_adoption`).Scan(&bound)
 	})
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return time.Time{}, false, nil
 	case err != nil:
 		return time.Time{}, false, fmt.Errorf("statelog: read this node's "+
 			"adoption record: %w", err)
-	case !completed.Valid:
+	case !bound.Valid:
 		return time.Time{}, false, nil
 	}
-	return store.DecodeTime(completed.Int64), true, nil
+	return store.DecodeTime(bound.Int64), true, nil
 }

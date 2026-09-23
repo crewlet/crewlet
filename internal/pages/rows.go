@@ -309,7 +309,9 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	return reason, gated, nil
 }
 
-// AdoptedAt is when this node's adoption of a donated snapshot completed.
+// AdoptedAt is the instant before which this node's operation ledger cannot
+// vouch for an operation: when its latest adoption of a donated snapshot
+// completed, or began where one did not complete — see [statelog.AdoptedAt].
 //
 // It qualifies a read of the OPERATION LEDGER, which travels SCRUBBED inside a
 // snapshot: an op id minted before this instant cannot be answered for here at
