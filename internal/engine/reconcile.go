@@ -501,7 +501,11 @@ func (r *Reconciler) holdLocalCopy(ctx context.Context, target coord.Activation)
 //
 // The subsystem list is empty on every exit before [Engine.Apply] is reached:
 // nothing on this node has been mutated yet when the revision cannot be read,
-// opened or parsed, and an empty list says exactly that.
+// opened or parsed, and an empty list says exactly that. It is empty on ONE
+// exit from Apply as well — a revision that breaks a rule needing both tiers
+// ([config.CheckTiers]) is refused before the first stage — so an empty list
+// means "nothing changed here", and the error's own prefix says which of the
+// two it was.
 func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation) (configplane.ApplyStatus, []string, error) {
 	revision, found, err := r.configs.Get(ctx, target.RevisionID)
 	if err != nil {

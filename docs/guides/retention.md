@@ -530,7 +530,7 @@ offers no `-op-id`:
 - `evicted` — the node you ran it on is itself evicted and writes nothing: run
   the gesture from a node the fleet still counts.
 - `wrong_stream` — the log was rebuilt under this node:
-  [re-anchor it](#re-anchoring-a-recreated-stream) first.
+  [re-anchor it](#re-anchoring-a-recreated-or-restored-log) first.
 - `superseded` — the operation's record landed and a later gate record on the
   same node has undone it since (an eviction retried after a readmission took
   the node back). Run a new gesture, without `-op-id`, if the node should
