@@ -645,9 +645,20 @@ a re-run's tracker comment and work-item update land once. Everything that
 describes **one execution** keys on the run: the phase records, the live view,
 a [detached sandbox run](code-sandbox.md) and its MCP bridge session.
 
+Those derived ids name the **call** as well as the work: the unit of work, the
+verb, the item, and a digest of the tool call's own arguments. So a re-run that
+makes the same call writes once, while two different calls in one turn — an
+item moved to `in_progress` and later to `done`, two comments on one item —
+are two writes. Each id also carries **when the unit of work began** (the
+earliest trigger it was derived from), which a re-run reproduces exactly; that
+instant is what lets a node that adopted a peer's snapshot since answer a
+re-run `unknown` rather than apply it twice (see
+[Replication](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted)).
+
 A **resumed** turn is not a re-run. A detached coding job re-enters the run
-that parked it, carrying that run's id and work key on its own row, so a
-suspend/resume pair is one turn on every screen.
+that parked it, carrying that run's id, its work key and when that work began
+on its own row, so a suspend/resume pair is one turn on every screen and
+writes under the same ids in both halves.
 
 Where that shows on the screens:
 

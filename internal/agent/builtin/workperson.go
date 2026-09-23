@@ -221,7 +221,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		resolved = append(resolved, id)
 	}
 	result, err := writer.WritePriorities(ctx,
-		opIDFor(actor, "prio", handle), handle, resolved, authority)
+		opIDFor(actor, "prio", handle, args), handle, resolved, authority)
 	if err != nil {
 		return failed(writeFailure(tracker.SetPrioritiesTool, err)), nil
 	}
@@ -288,7 +288,7 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// belongs to them and not to whichever credential they were holding.
 	whose := actor.Record()
 	result, err := writer.WritePins(ctx,
-		opIDFor(actor, "pins", whose), whose,
+		opIDFor(actor, "pins", whose, args), whose,
 		argStrings(args, "views"), favorites)
 	if err != nil {
 		return failed(writeFailure(tracker.SetPinsTool, err)), nil
@@ -401,7 +401,7 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// founder's whichever credential their assistant holds.
 	whose := actor.Record()
 	result, err := writer.WriteInbox(ctx,
-		opIDFor(actor, "inbox", whose), whose,
+		opIDFor(actor, "inbox", whose, args), whose,
 		read, unread, snoozed, reasons, tracker.Position{
 			Stream: strings.TrimSpace(argString(args, "seen_through_stream")),
 			Seq:    uint64(argFloat(args, "seen_through")),

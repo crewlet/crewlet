@@ -2,6 +2,9 @@ package builtin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -1456,7 +1459,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if len(blockers) > 0 && t.deps.Dependencies == nil {
 		return failed(unconfiguredText(CreateWorkItemTool)), nil
 	}
-	got, err := writer.CreateTask(ctx, opIDFor(actor, "create", task.ID), task, notify)
+	got, err := writer.CreateTask(ctx, opIDFor(actor, "create", task.ID, args), task, notify)
 	if err != nil {
 		return failed(writeFailure(CreateWorkItemTool, err)), nil
 	}
@@ -1474,7 +1477,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// and writing it before the create would name a task no node holds.
 	if len(blockers) > 0 {
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
-			opIDFor(actor, "depend", task.ID), tracker.DependencyChange{
+			opIDFor(actor, "depend", task.ID, args), tracker.DependencyChange{
 				Task: task.ID, Project: task.Project, WaitingOnAdd: blockers,
 			}, t.deps.Leads)
 		if err != nil {
@@ -1629,13 +1632,47 @@ func handles(all ...string) []string {
 // vouch" is "minted before this node adopted a donated snapshot"; an id that
 // carried this CALL's instant instead read every re-run after an adoption as
 // minted after it, and published the operation again.
-func opIDFor(actor Actor, verb, object string) string {
+//
+// # And what the call ASKS FOR is part of it
+//
+// The unit of work, the verb and the object say which write this is — and
+// not which of two writes. A turn that moved a task to `in_progress` and later
+// to `done`, commented on it twice, or set a queue and then corrected it,
+// derived ONE id for both calls, and the second was the operation's
+// retry as far as anything downstream could tell: inside the log's duplicate
+// window the broker acknowledged it as the first record, the ledger answered
+// `applied` at the first position, and the change the model had just asked
+// for was dropped with a success. So the id also covers a digest of the
+// call's own arguments ([callDigest]): the same call repeated — a re-run, or
+// an executor that asks twice — is still one operation, and two different
+// calls are two.
+func opIDFor(actor Actor, verb, object string, args map[string]any) string {
 	seed := actor.OperationSeed()
 	if seed == "" {
 		return statelog.NewOpID(time.Now(), verb+"-"+object)
 	}
 	return statelog.DeriveOpID(actor.OperationSince(), verb+"-"+object,
-		opIDNamespace, seed, verb, object)
+		opIDNamespace, seed, verb, object, callDigest(args))
+}
+
+// callDigest is what one tool call asks for, as a digest of its arguments.
+//
+// CANONICAL, because a re-run must reproduce it: the arguments are JSON a
+// model wrote and a decoder read, and encoding/json writes a map's keys in
+// sorted order at every depth, so two decodes of the same call encode to the
+// same bytes whatever order the model emitted them in.
+//
+// A FRESH VALUE WHERE THE ARGUMENTS CANNOT BE ENCODED, which a decoded JSON
+// object never is — and the direction matters: a fresh digest makes a retry
+// write twice, which is visible and bounded, where a constant one would make
+// two different calls one operation and drop the second with a success.
+func callDigest(args map[string]any) string {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return uuid.NewString()
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // opIDNamespace keeps a derived operation id from colliding with one another
@@ -1906,7 +1943,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// fields.
 	if !patch.Empty() {
 		got, err := writer.UpdateTask(ctx,
-			opIDFor(actor, "update", before.Task.ID), before.Task.ID,
+			opIDFor(actor, "update", before.Task.ID, args), before.Task.ID,
 			before.Task.Project, ifMatch, patch, kind,
 			tracker.Wake{
 				Kind:   kind,
@@ -1935,7 +1972,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			return failed(unconfiguredText(UpdateWorkItemTool)), nil
 		}
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
-			opIDFor(actor, "depend", before.Task.ID), change, t.deps.Leads)
+			opIDFor(actor, "depend", before.Task.ID, args), change, t.deps.Leads)
 		if err != nil {
 			return failed(writeFailure(UpdateWorkItemTool, err)), nil
 		}
@@ -2250,7 +2287,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// re-run turn posts once rather than saying the same thing
 		// twice. The engine's redelivery guarantees make a re-run turn
 		// ordinary rather than exceptional.
-		ID:         commentID(actor, before.Task.ID),
+		ID:         commentID(actor, before.Task.ID, args),
 		Task:       before.Task.ID,
 		Author:     actor.Handle,
 		AuthorKind: actor.Kind,
@@ -2318,7 +2355,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		},
 	}
 	got, err := writer.UpdateTask(ctx,
-		opIDFor(actor, "comment", comment.ID), before.Task.ID, before.Task.Project,
+		opIDFor(actor, "comment", comment.ID, args), before.Task.ID, before.Task.Project,
 		// A COMMENT NEVER CONDITIONS ON A VERSION: it adds to the thread
 		// rather than replacing anybody's value, so there is nothing a
 		// concurrent edit could make it clobber.
@@ -2385,12 +2422,18 @@ func unansweredWarning(task tracker.Task, actor Actor, comment *tracker.Comment)
 // A UUIDv5 over the operation and the task, because the id is a PRIMARY KEY on
 // every node: two nodes applying one record must write one row, so an id
 // generated at apply time would produce two.
-func commentID(actor Actor, taskID string) string {
+//
+// AND OVER THE CALL'S OWN ARGUMENTS, for the reason [opIDFor] gives: without
+// them a seat's second remark on a task in one turn was the first one's id,
+// so it upserted the first comment's row — or, inside the log's duplicate
+// window, never landed at all while the tool answered that it had.
+func commentID(actor Actor, taskID string, args map[string]any) string {
 	seed := actor.OperationSeed()
 	if seed == "" {
 		seed = uuid.NewString()
 	}
-	return uuid.NewSHA1(commentNamespace, []byte(seed+"\x00"+taskID+"\x00"+actor.Handle)).String()
+	return uuid.NewSHA1(commentNamespace, []byte(seed+"\x00"+taskID+"\x00"+
+		actor.Handle+"\x00"+callDigest(args))).String()
 }
 
 // commentNamespace is the uuid namespace comment ids are derived under. Fixed

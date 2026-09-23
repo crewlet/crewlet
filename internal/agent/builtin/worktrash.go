@@ -114,7 +114,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		By: actor.Handle, Kind: actor.Kind, At: t.deps.now(),
 	}
 	got, err := t.deps.TrashWriter(actor).RemoveTask(ctx,
-		opIDFor(actor, "remove", before.Task.ID), before.Task.ID,
+		opIDFor(actor, "remove", before.Task.ID, args), before.Task.ID,
 		before.Task.Project, argBool(args, "subtree"),
 		tracker.Wake{
 			Kind: tracker.ChangeRemoved, Before: before.Task, After: after,
@@ -196,7 +196,7 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	after := before.Task
 	after.Removed = nil
 	got, err := t.deps.TrashWriter(actor).RestoreTask(ctx,
-		opIDFor(actor, "restore", before.Task.ID), before.Task.ID,
+		opIDFor(actor, "restore", before.Task.ID, args), before.Task.ID,
 		before.Task.Project,
 		tracker.Wake{
 			Kind: tracker.ChangeRestored, Before: before.Task, After: after,
