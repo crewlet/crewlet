@@ -25,13 +25,12 @@
  *     failing the build.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
-const SRC = fileURLToPath(new URL("..", import.meta.url));
-const CONTRACT = fileURLToPath(new URL(".", import.meta.url));
+import { SRC, modules } from "../test/source.ts";
+
+const CONTRACT = join(SRC, "contract");
 
 interface Source {
   /** Relative to `src/`, slash-separated. */
@@ -40,28 +39,18 @@ interface Source {
   text: string;
 }
 
-/** Every non-suite source file under `dir`. */
-function sources(dir: string): Source[] {
-  const out: Source[] = [];
-  (function walk(at: string): void {
-    for (const entry of readdirSync(at)) {
-      const full = join(at, entry);
-      if (statSync(full).isDirectory()) {
-        walk(full);
-        continue;
-      }
-      if (!/\.tsx?$/.test(entry) || entry.includes(".test.")) continue;
-      out.push({
-        path: relative(SRC, full).split("\\").join("/"),
-        full,
-        text: readFileSync(full, "utf8"),
-      });
-    }
-  })(dir);
-  return out;
+/**
+ * Every module under `dir` (relative to `src/`; all of it when omitted), from
+ * the tree's one walk — so what this suite calls a module is what every other
+ * source gate calls one.
+ */
+function sources(dir?: string): Source[] {
+  return modules()
+    .filter(({ path }) => dir === undefined || path.startsWith(`${dir}/`))
+    .map(({ path, text }) => ({ path, full: join(SRC, path), text }));
 }
 
-const MODULES = sources(CONTRACT);
+const MODULES = sources("contract");
 
 /**
  * The source with every comment, string and template blanked to spaces — its
@@ -289,8 +278,8 @@ describe("a contract module", () => {
 describe("the contract's readers", () => {
   test("import every name it exports", () => {
     const imported = new Set<string>();
-    for (const file of sources(SRC)) {
-      if (file.full.startsWith(resolve(CONTRACT))) continue;
+    for (const file of sources()) {
+      if (file.path.startsWith("contract/")) continue;
       for (const { spec, names } of specifiers(file.text)) {
         const module = contractModule(file, spec);
         if (module) for (const name of names) imported.add(`${module}:${name}`);
@@ -312,7 +301,7 @@ describe("the contract's readers", () => {
 
   test("in protocol/ reach it by a relative path", () => {
     const offenders: string[] = [];
-    for (const file of sources(join(SRC, "protocol"))) {
+    for (const file of sources("protocol")) {
       for (const { spec, line } of specifiers(file.text)) {
         if (spec.startsWith("~/")) offenders.push(`${file.path}:${line} imports ${spec}`);
       }

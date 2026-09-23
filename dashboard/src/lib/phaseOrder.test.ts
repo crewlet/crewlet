@@ -19,9 +19,11 @@
  * constant has no caller that exists only for a test.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "vitest";
+
+import { modules } from "../test/source.ts";
 
 /**
  * The screen file that declares `PHASE_ORDER`, found rather than addressed.
@@ -38,19 +40,10 @@ import { expect, test } from "vitest";
  * to the right place.
  */
 function screenSource(): string {
-  const routes = join(process.cwd(), "src/routes");
-  const found: string[] = [];
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) walk(path);
-      else if (entry.name.endsWith(".tsx") && !entry.name.includes(".test.")) {
-        const text = readFileSync(path, "utf8");
-        if (text.includes("const PHASE_ORDER")) found.push(text);
-      }
-    }
-  };
-  walk(routes);
+  const found = modules()
+    .filter(({ path }) => path.startsWith("routes/") && path.endsWith(".tsx"))
+    .filter(({ text }) => text.includes("const PHASE_ORDER"))
+    .map(({ text }) => text);
   if (found.length !== 1) {
     throw new Error(
       `${found.length} screens under src/routes declare PHASE_ORDER, want exactly one — ` +

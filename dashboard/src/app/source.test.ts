@@ -9,31 +9,24 @@
  * file and line.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
-import { expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 
+import {
+  type Lang,
+  type Node,
+  isLocalSource,
+  lineOf,
+  memberName,
+  modules,
+  parse,
+  stringValue,
+  walk,
+} from "../test/source.ts";
 import { RAIL } from "./nav.ts";
-
-const SRC = fileURLToPath(new URL("..", import.meta.url));
 
 /** Every source file of the given extensions, excluding the suites. */
 function sources(exts: string[] = [".tsx"]): { path: string; text: string }[] {
-  const out: { path: string; text: string }[] = [];
-  (function walk(dir: string): void {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
-        walk(full);
-        continue;
-      }
-      if (!exts.some((ext) => full.endsWith(ext))) continue;
-      if (full.includes(".test.")) continue;
-      out.push({ path: relative(SRC, full), text: readFileSync(full, "utf8") });
-    }
-  })(SRC);
-  return out;
+  return modules().filter(({ path }) => exts.some((ext) => path.endsWith(ext)));
 }
 
 /**
@@ -343,4 +336,272 @@ test("a column with no word in its head declares one", () => {
   // THE OTHER SIDE, as above: a renamed field or a broken scan makes the rule
   // vacuous and still green. Well over a hundred columns today.
   expect(seen, "nothing here declares a column head any more").toBeGreaterThan(80);
+});
+
+/**
+ * EVERY READ NAMES ITS QUESTION.
+ *
+ * The first argument of a call that asks the engine something — `useQuery(`
+ * and `query(`, bare or as a method — is a string literal: never a variable,
+ * an expression, or a template with something substituted into it.
+ *
+ * THE ENGINE'S GATES READ THESE CALLS BY NAME, and a call they cannot read is
+ * one they do not see. `internal/api/queries` holds this tree against the
+ * registry in both directions — `TestEveryQueryARoomMakesIsAnswered` and
+ * `TestEveryQueryThisServerAnswersHasAReader` — and takes the kinds it asks
+ * from `clientsource.Calls`, which reads a first argument only when it is a
+ * constant string. So a kind passed through a variable is a question neither
+ * gate knows about: the engine could stop answering it and the build would
+ * stay green, and a kind whose last literal reader became a variable would be
+ * reported unread and deleted from under the screen that still asks it. Held
+ * here, that blindness costs nothing, because there is nothing for it to miss.
+ *
+ * `useQuery` AND `query` ARE READ BY SPELLING, because that is how
+ * `clientsource.Calls` reads them: any call to either name, bare or as a
+ * method, whatever it is bound to. Reading less than that here would leave a
+ * call both sides skip — `const { query } = socket; query(kind)` is a bare
+ * call to the socket's method, and a rule that knew only `.query(` passed it
+ * while the Go reader, finding no literal, dropped it. Reading the same set is
+ * what makes "the Go gates can read every kind" a fact rather than a hope.
+ * And a method named by a computed key (`socket["query"](…)`) is refused even
+ * with a literal kind, because `Calls` reads a NAME, and a string in brackets
+ * is not one.
+ *
+ * `act` IS READ BY BINDING: the function imported from a module of this tree.
+ * React's own `act`, which the test kits call with a callback, is a different
+ * function that shares the spelling. `act` is the write surface's entry
+ * (`protocol/act.ts`), which names a tool the way a query names a kind; it has
+ * no caller yet, and is held here from its first. An ALIAS of any of the three
+ * is refused (`import { useQuery as ask }`), because every call behind it is
+ * invisible to a reader that looks for the name.
+ *
+ * TWO CALLS FORWARD A KIND, and each is named in `FORWARDS` with its reason
+ * rather than exempted by its shape. An entry that stops matching is stale and
+ * fails, because an exemption nobody checks is how a gate quietly stops
+ * covering what it was written for.
+ */
+
+/** Names the engine's gates read by spelling: `clientsource.Calls` is asked for exactly these. */
+const SPELLED = new Set(["useQuery", "query"]);
+/** Names held by binding, imported from this tree, because a package exports one of the same spelling. */
+const BOUND = new Set(["act"]);
+
+/** The sites that hand on a kind somebody else named, and why. */
+const FORWARDS: readonly { path: string; callee: string; argument: string; why: string }[] = [
+  {
+    path: "lib/useQuery.ts",
+    callee: "query",
+    argument: "what",
+    why: "useQuery's own body sends the socket the kind its caller named, and every caller is held to a literal here",
+  },
+  {
+    path: "routes/org/builder/testkit.tsx",
+    callee: "query",
+    argument: "what",
+    why: "the builder test kit's stub socket answers whatever kind a screen asks it, through the fixture the suite supplies; every screen asking is held to a literal here",
+  },
+];
+
+interface NamedCall {
+  line: number;
+  callee: string;
+  /** The kind the call names, or null when the engine's gates cannot read one. */
+  name: string | null;
+  /** The call as written, up to its first argument, for the report. */
+  written: string;
+  /** The first argument as written. */
+  argument: string;
+}
+
+interface Alias {
+  line: number;
+  imported: string;
+  local: string;
+}
+
+/**
+ * Every call in one module that names a question, and every import that
+ * renames one.
+ */
+function namedCalls(source: string, lang: Lang): { calls: NamedCall[]; aliases: Alias[] } {
+  const line = lineOf(source);
+  const program = parse(source, lang);
+  const bound = new Map<string, string>();
+  const namespaces = new Set<string>();
+  const aliases: Alias[] = [];
+  for (const statement of program.body as Node[]) {
+    if (statement.type !== "ImportDeclaration" || statement.importKind === "type") continue;
+    if (!isLocalSource(String((statement.source as Node).value))) continue;
+    for (const spec of statement.specifiers as Node[]) {
+      const local = String((spec.local as Node).name);
+      if (spec.type === "ImportNamespaceSpecifier") namespaces.add(local);
+      if (spec.type !== "ImportSpecifier" || spec.importKind === "type") continue;
+      const imported = spec.imported as Node;
+      const name = String(imported.type === "Identifier" ? imported.name : imported.value);
+      if (!SPELLED.has(name) && !BOUND.has(name)) continue;
+      bound.set(local, name);
+      if (local !== name) aliases.push({ line: line(spec.start), imported: name, local });
+    }
+  }
+  const calls: NamedCall[] = [];
+  walk(program, (node) => {
+    if (node.type !== "CallExpression") return;
+    const callee = node.callee as Node;
+    // What the call is to, and whether the engine's gates can read that NAME
+    // at all: a computed key names the method in a string they do not read.
+    let named: string | null = null;
+    let readable = true;
+    if (callee.type === "Identifier") {
+      const name = String(callee.name);
+      named = SPELLED.has(name) ? name : (bound.get(name) ?? null);
+    } else {
+      const member = memberName(callee);
+      const object = callee.object as Node | undefined;
+      if (member !== null && SPELLED.has(member)) {
+        named = member;
+        readable = !callee.computed;
+      } else if (
+        member !== null &&
+        BOUND.has(member) &&
+        object?.type === "Identifier" &&
+        namespaces.has(String(object.name))
+      ) {
+        named = member;
+      }
+    }
+    if (named === null) return;
+    const first = (node.arguments as Node[])[0];
+    calls.push({
+      line: line(node.start),
+      callee: named,
+      name: readable ? stringValue(first) : null,
+      written: source.slice(callee.start, first ? first.start : node.end).replace(/\s+/g, " "),
+      argument: first ? source.slice(first.start, first.end) : "",
+    });
+  });
+  return { calls, aliases };
+}
+
+/** Whether a call is the named forward in `FORWARDS`. */
+const forwarded = (path: string, call: NamedCall) =>
+  FORWARDS.some((f) => f.path === path && f.callee === call.callee && f.argument === call.argument);
+
+describe("every read names its question", () => {
+  const tree = modules().map((m) => ({ path: m.path, ...namedCalls(m.text, m.lang) }));
+
+  test("with a string literal, which is what the engine's gates can read", () => {
+    const offenders = tree.flatMap(({ path, calls }) =>
+      calls
+        .filter((call) => call.name === null && !forwarded(path, call))
+        .map((call) => `${path}:${call.line} — ${call.written}${call.argument}`),
+    );
+    expect(
+      offenders,
+      "write the kind as a string literal, to a call by its own name: internal/api/queries " +
+        "reads it there, and a kind it cannot read is one it cannot hold against the registry",
+    ).toEqual([]);
+  });
+
+  test("under its own name, never an alias", () => {
+    const renamed = tree.flatMap(({ path, aliases }) =>
+      aliases.map((a) => `${path}:${a.line} — ${a.imported} as ${a.local}`),
+    );
+    expect(renamed, "import it as itself: the engine's gates find these calls by name").toEqual([]);
+  });
+
+  test("and the rule reads the tree, so it cannot pass by reading nothing", () => {
+    // Over a hundred `useQuery` calls today and a pager's `socket.query` in three
+    // screens. A parser that stopped seeing calls, or a hook that was renamed,
+    // collapses both counts, and the rule above would pass over nothing.
+    const literal = (callee: string) =>
+      tree.flatMap(({ calls }) => calls).filter((c) => c.callee === callee && c.name !== null)
+        .length;
+    expect(literal("useQuery")).toBeGreaterThan(80);
+    expect(literal("query")).toBeGreaterThanOrEqual(2);
+  });
+
+  test("and every forward it names still forwards", () => {
+    const stale = FORWARDS.filter(
+      (f) =>
+        !tree.some(
+          ({ path, calls }) =>
+            path === f.path && calls.some((call) => call.name === null && forwarded(path, call)),
+        ),
+    ).map((f) => `${f.path} — ${f.callee}(${f.argument}`);
+    expect(stale, "this forward is gone: delete its FORWARDS entry").toEqual([]);
+  });
+
+  // THE RULE'S RED HALF: every way a kind stops being readable, each of which
+  // must come back as a call with no name.
+  const USE_QUERY = 'import { useQuery } from "~/lib/useQuery.ts";\n';
+  test.each([
+    ["a variable", `${USE_QUERY}const kind = "work_item";\nuseQuery(kind, { id });`],
+    ["a template", `${USE_QUERY}useQuery(\`work_\${shape}\`, {});`],
+    ["a concatenation", `${USE_QUERY}useQuery("work_" + shape, {});`],
+    ["a conditional", `${USE_QUERY}useQuery(mine ? "work_my_work" : "work_items");`],
+    ["no argument at all", `${USE_QUERY}useQuery();`],
+    ["a relative import", 'import { useQuery } from "./useQuery.ts";\nuseQuery(kind);'],
+    ["a namespace import", 'import * as q from "~/lib/useQuery.ts";\nq.useQuery(kind);'],
+    ["a socket's method", "socket.query(kind, params);"],
+    ["an optional call", "client?.socket.query(kind);"],
+    // The shape a rule that knew only `.query(` passed and the Go reader
+    // dropped: the socket's method, taken off it and called bare.
+    ["a method taken off the socket", "const { query } = socket;\nvoid query(kind);"],
+    ["a bare call of any binding", "function query(what: string) {}\nquery(what);"],
+    [
+      "a hook of the same name from a package",
+      'import { useQuery } from "@tanstack/react-query";\nuseQuery(key);',
+    ],
+    // A literal kind the engine still cannot read, because the method is named
+    // in a string rather than by a name.
+    ["a computed key", 'socket["query"]("events", params);'],
+    ["the write surface", 'import { act } from "~/protocol/act.ts";\nact(tool, { args });'],
+  ])("the rule catches %s", (_name, source) => {
+    const { calls } = namedCalls(source, "tsx");
+    expect(calls.length, `nothing read in ${source}`).toBe(1);
+    expect(calls[0]?.name).toBeNull();
+  });
+
+  test.each([
+    ["useQuery", 'import { useQuery as ask } from "~/lib/useQuery.ts";\nask("work_item");'],
+    ["act", 'import { act as write } from "~/protocol/act.ts";\nwrite("set_pins", {});'],
+  ])("the rule catches an alias of %s", (name, source) => {
+    const { aliases, calls } = namedCalls(source, "tsx");
+    expect(aliases.map((a) => a.imported)).toEqual([name]);
+    // And the call behind it is still held to a literal, under the name it renames.
+    expect(calls.map((c) => c.callee)).toEqual([name]);
+  });
+
+  // AND ITS GREEN HALF: the shapes the tree writes, which must read as named,
+  // and the calls that share a name without being one of these.
+  test.each([
+    ["a literal", `${USE_QUERY}useQuery("work_item", { id });`, "work_item"],
+    [
+      "a literal prettier broke over lines",
+      `${USE_QUERY}const a = useQuery(\n  "work_project",\n  key ? { key } : undefined,\n  { enabled: key !== "" },\n);`,
+      "work_project",
+    ],
+    ["a template with nothing in it", `${USE_QUERY}useQuery(\`fleet\`);`, "fleet"],
+    ["type arguments", `${USE_QUERY}useQuery<"fleet">("fleet");`, "fleet"],
+    ["a pager's own call", 'const page = await socket.query("events", params);', "events"],
+    ["a bare call", 'const { query } = socket;\nvoid query("events");', "events"],
+    ["an optional call", 'client?.socket.query?.("events");', "events"],
+    [
+      "the write surface",
+      'import { act } from "~/protocol/act.ts";\nact("set_pins", {});',
+      "set_pins",
+    ],
+  ])("the rule reads %s", (_name, source, name) => {
+    expect(namedCalls(source, "tsx").calls.map((c) => c.name)).toEqual([name]);
+  });
+
+  test.each([
+    ["React's own act", 'import { act } from "@testing-library/react";\nact(() => {});'],
+    ["a local function", "function ask(what: string) {}\nask(kind);"],
+    ["a type-only import", 'import type { act } from "~/protocol/act.ts";\nact(tool);'],
+    ["a namespace's own act", 'import * as rtl from "@testing-library/react";\nrtl.act(() => {});'],
+    ["a method of another name", "const hits = el.querySelector(selector);"],
+  ])("the rule leaves %s alone", (_name, source) => {
+    expect(namedCalls(source, "tsx").calls).toEqual([]);
+  });
 });

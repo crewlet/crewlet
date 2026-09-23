@@ -16,17 +16,17 @@
  * - no module names a browser or time global.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
-const MODEL = dirname(fileURLToPath(import.meta.url));
+import { modules } from "~/test/source.ts";
+
+/** This directory, relative to `src/`. */
+const MODEL = "routes/org/builder/model/";
 
 /** The modules of this directory, tests excluded: a test may use whatever it needs. */
-const sources = readdirSync(MODEL)
-  .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
-  .map((name) => ({ name, text: readFileSync(join(MODEL, name), "utf8") }));
+const sources = modules()
+  .map(({ path, text }) => ({ name: path.slice(MODEL.length), path, text }))
+  .filter(({ path, name }) => path.startsWith(MODEL) && !name.includes("/"));
 
 /** Source without block comments, line comments or string contents, so prose cannot match. */
 function code(text: string): string {

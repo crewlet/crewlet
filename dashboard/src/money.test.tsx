@@ -22,11 +22,8 @@
  *     which is what a browser actually runs.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { parseAst } from "vite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -38,6 +35,7 @@ import { SeatScreen } from "~/routes/company/Seat.tsx";
 import { Spend } from "~/routes/cost/Spend.tsx";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { WorkItem } from "~/routes/work/WorkItem.tsx";
+import { type Lang, type Node, childrenOf, isNode, lineOf, modules, parse } from "~/test/source.ts";
 
 // ---------------------------------------------------------------------------
 // 1. The source
@@ -71,35 +69,6 @@ const CURRENCY_SIGN = /[€£]/;
 const INTL_CURRENCY = new Set(["currency", "currencyDisplay", "currencySign"]);
 /** Text that ends in a dollar sign, which is what a price is written behind. */
 const ENDS_IN_DOLLAR = /\$\s*$/;
-
-interface Node {
-  type: string;
-  start: number;
-  end: number;
-  [key: string]: unknown;
-}
-
-function isNode(value: unknown): value is Node {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { type?: unknown }).type === "string"
-  );
-}
-
-/** A node's direct children, in source order. */
-function childrenOf(node: Node): Node[] {
-  const out: Node[] = [];
-  for (const [key, value] of Object.entries(node)) {
-    if (key === "type" || key === "start" || key === "end") continue;
-    if (Array.isArray(value)) {
-      for (const item of value) if (isNode(item)) out.push(item);
-    } else if (isNode(value)) {
-      out.push(value);
-    }
-  }
-  return out.sort((a, b) => a.start - b.start);
-}
 
 /**
  * The text a node is when it is CONSTANT — a string, a template with nothing
@@ -203,21 +172,10 @@ function textsOf(node: Node): string[] {
  * reads the tree and the certification cases below, so what those cases prove
  * about it is true of the scan that guards the tree.
  */
-function pricesIn(source: string, lang: "ts" | "tsx" | "dts"): Finding[] {
-  const lineStarts = [0];
-  for (let i = 0; i < source.length; i++) if (source[i] === "\n") lineStarts.push(i + 1);
-  const lineOf = (offset: number): number => {
-    let lo = 0;
-    let hi = lineStarts.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if ((lineStarts[mid] ?? 0) <= offset) lo = mid;
-      else hi = mid - 1;
-    }
-    return lo + 1;
-  };
+function pricesIn(source: string, lang: Lang): Finding[] {
+  const line = lineOf(source);
   const found: Finding[] = [];
-  const report = (node: Node, what: string) => found.push({ line: lineOf(node.start), what });
+  const report = (node: Node, what: string) => found.push({ line: line(node.start), what });
 
   const visit = (node: Node, insidePlus: boolean): void => {
     // NAMES: an identifier, a property, a JSX attribute or a type member.
@@ -268,45 +226,18 @@ function pricesIn(source: string, lang: "ts" | "tsx" | "dts"): Finding[] {
     for (const child of childrenOf(node)) visit(child, plus);
   };
 
-  visit(parseAst(source, { lang }) as unknown as Node, false);
+  visit(parse(source, lang), false);
   return found;
-}
-
-// `process.cwd()`, not `import.meta.url`: under the jsdom environment the
-// screens below need, a module's URL is the test server's rather than a file,
-// and Vitest runs from `dashboard/`.
-const SRC = join(process.cwd(), "src");
-
-/** Every module that ships, with the language it is parsed as. */
-function shippedModules(): { path: string; text: string; lang: "ts" | "tsx" | "dts" }[] {
-  const out: { path: string; text: string; lang: "ts" | "tsx" | "dts" }[] = [];
-  (function walk(dir: string): void {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
-        walk(full);
-        continue;
-      }
-      if (!/\.tsx?$/.test(entry) || entry.includes(".test.")) continue;
-      const lang = entry.endsWith(".d.ts") ? "dts" : entry.endsWith(".tsx") ? "tsx" : "ts";
-      out.push({
-        path: relative(SRC, full).split("\\").join("/"),
-        text: readFileSync(full, "utf8"),
-        lang,
-      });
-    }
-  })(SRC);
-  return out;
 }
 
 describe("the source", () => {
   test("no shipped module names, formats or spells a price", () => {
-    const modules = shippedModules();
+    const shipped = modules();
     // A FLOOR, because a walk that found nothing passes every assertion
     // below it — and a moved `src/` is exactly what would make it find
     // nothing. The tree holds about two hundred modules.
-    expect(modules.length).toBeGreaterThan(150);
-    const offenders = modules.flatMap(({ path, text, lang }) =>
+    expect(shipped.length).toBeGreaterThan(150);
+    const offenders = shipped.flatMap(({ path, text, lang }) =>
       pricesIn(text, lang).map((f) => `${path}:${f.line} — ${f.what}`),
     );
     expect(

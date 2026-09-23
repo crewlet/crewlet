@@ -1,8 +1,7 @@
 // @vitest-environment node
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
+
+import { modules } from "../test/source.ts";
 
 /**
  * WHERE THE ACCENT IS SPENT, which is a rule this product states four times and
@@ -36,8 +35,6 @@ import { describe, expect, test } from "vitest";
  * the primary button for the same reason — and `uiletTone(toneOf(...))`, which
  * is dynamic and unreadable statically. A floor, not a proof.
  */
-
-const SRC = fileURLToPath(new URL("..", import.meta.url));
 
 interface Site {
   file: string;
@@ -85,21 +82,13 @@ const ACCENT: Site[] = [
 
 /** Every source file under `src/`, comments blanked, as trimmed lines. */
 function lines(): { file: string; at: number; line: string }[] {
-  const walk = (dir: string): string[] =>
-    readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-      e.isDirectory()
-        ? walk(join(dir, e.name))
-        : /\.tsx?$/.test(e.name) && !e.name.includes(".test.")
-          ? [join(dir, e.name)]
-          : [],
-    );
-  return walk(SRC).flatMap((path) =>
-    readFileSync(path, "utf8")
+  return modules().flatMap(({ path, text }) =>
+    text
       // Blanked rather than removed, so a line number still points at the line.
       .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
       .replace(/\/\/[^\n]*/g, "")
       .split("\n")
-      .map((line, i) => ({ file: path.slice(SRC.length), at: i + 1, line: line.trim() })),
+      .map((line, i) => ({ file: path, at: i + 1, line: line.trim() })),
   );
 }
 

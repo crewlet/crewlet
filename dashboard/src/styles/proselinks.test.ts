@@ -1,8 +1,7 @@
 // @vitest-environment node
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
+
+import { modules } from "../test/source.ts";
 
 /**
  * AN ANCHOR IN A SENTENCE SAYS SO, because nothing else can tell.
@@ -36,8 +35,6 @@ import { describe, expect, test } from "vitest";
  * TWO-SIDED, like every gate in this directory: an entry in [ALLOWED] whose
  * anchor is gone fails too, so the list cannot outlive what it excuses.
  */
-
-const SRC = fileURLToPath(new URL("..", import.meta.url));
 
 /** An anchor this scan does not ask about, and why it does not have to. */
 interface Allowed {
@@ -74,17 +71,8 @@ const ALLOWED: Allowed[] = [
   },
 ];
 
+/** The modules that can hold markup: an anchor is JSX, and JSX is `.tsx`. */
 const SOURCE = /\.tsx$/;
-
-function files(directory: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(directory)) {
-    const path = join(directory, entry);
-    if (statSync(path).isDirectory()) out.push(...files(path));
-    else if (SOURCE.test(entry) && !entry.includes(".test.")) out.push(path);
-  }
-  return out;
-}
 
 /**
  * Every `<a` in the tree that opens without a `className`.
@@ -164,10 +152,9 @@ export function unmarkedInSentence(source: string): number[] {
 }
 
 describe("an anchor in a sentence", () => {
-  const scanned = files(SRC).map((path) => ({
-    where: path.slice(SRC.length),
-    text: readFileSync(path, "utf8"),
-  }));
+  const scanned = modules()
+    .filter(({ path }) => SOURCE.test(path))
+    .map(({ path, text }) => ({ where: path, text }));
 
   test("carries a class, so somebody decided which kind of link it is", () => {
     const bare = scanned

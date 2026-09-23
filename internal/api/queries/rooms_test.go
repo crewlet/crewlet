@@ -46,6 +46,12 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 // is to notice a missing name, twice silently narrowed by the shape of a
 // pattern — and it keyed each hit on the file's BASE name, so two rooms named
 // alike collapsed into one.
+//
+// A kind handed over in anything but a string literal is invisible here —
+// [clientsource.Calls] can read nothing else — and that is safe only because
+// the dashboard refuses one: `app/source.test.ts`'s "every read names its
+// question" requires a literal at every `useQuery(` and `query(` call, bare or
+// as a method, which is every call Calls is asked for below.
 func roomQueries(t *testing.T) map[string][]string {
 	t.Helper()
 	calls, err := clientsource.Calls(clientsource.Tree(t), "useQuery", "query")

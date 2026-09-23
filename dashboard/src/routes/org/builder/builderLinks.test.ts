@@ -27,31 +27,20 @@
  * to carry a route nobody has checked since it moved.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
 import { DESTINATIONS, RAIL } from "~/app/nav.ts";
+import { modules } from "~/test/source.ts";
 import { SCREENS, screenPath, type ScreenName } from "./dialogParts.tsx";
 
-const LENS = fileURLToPath(new URL(".", import.meta.url));
+/** This lens's directory, relative to `src/`. */
+const LENS = "routes/org/builder/";
 
-/** This lens's own source, the suites excluded. */
+/** This lens's own source, the suites excluded, by path relative to the lens. */
 function sources(): { path: string; text: string }[] {
-  const out: { path: string; text: string }[] = [];
-  (function walk(dir: string): void {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
-        walk(full);
-        continue;
-      }
-      if (!/\.tsx?$/.test(full) || full.includes(".test.")) continue;
-      out.push({ path: relative(LENS, full), text: readFileSync(full, "utf8") });
-    }
-  })(LENS);
-  return out;
+  return modules()
+    .filter(({ path }) => path.startsWith(LENS))
+    .map(({ path, text }) => ({ path: path.slice(LENS.length), text }));
 }
 
 const names = Object.keys(SCREENS) as ScreenName[];
@@ -90,11 +79,12 @@ test("every destination is a destination this application declares", () => {
  * these were in when the lens arrived.
  */
 test("every destination is linked to by something in the lens", () => {
-  const text = sources()
+  const lens = sources();
+  const text = lens
     .filter((f) => f.path !== "dialogParts.tsx")
     .map((f) => f.text)
     .join("\n");
-  const table = readFileSync(join(LENS, "dialogParts.tsx"), "utf8");
+  const table = lens.find((f) => f.path === "dialogParts.tsx")?.text ?? "";
   // Named at a `ScreenLink`, at a `ReadOnlyFact`'s link, or through
   // `screenPath` where the caller builds the href itself.
   const used = (name: string) =>

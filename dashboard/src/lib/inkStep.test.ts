@@ -27,12 +27,12 @@
  * `lib/phaseOrder.test.ts` makes for the same shape.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
-/** The directories whose sources a reader reads facts out of. */
-const SCANNED = ["src/routes", "src/components"];
+import { modules } from "../test/source.ts";
+
+/** The directories whose sources a reader reads facts out of, relative to `src/`. */
+const SCANNED = ["routes", "components"];
 
 /**
  * The sites where `faint` is a MARK rather than a word, with the reason.
@@ -59,25 +59,15 @@ interface Site {
 }
 
 function sources(): { file: string; text: string }[] {
-  const out: { file: string; text: string }[] = [];
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        // The org builder arrived from another branch with its own sheet and
-        // its own gate (`routes/org/builder/builderStyles.test.ts`); it is not
-        // this scan's subject.
-        if (entry.name !== "builder") walk(path);
-      } else if (
-        (entry.name.endsWith(".tsx") || entry.name.endsWith(".ts")) &&
-        !entry.name.includes(".test.")
-      ) {
-        out.push({ file: path, text: readFileSync(path, "utf8") });
-      }
-    }
-  };
-  for (const dir of SCANNED) walk(join(process.cwd(), dir));
-  return out;
+  return (
+    modules()
+      .filter(({ path }) => SCANNED.some((dir) => path.startsWith(`${dir}/`)))
+      // The org builder arrived from another branch with its own sheet and its
+      // own gate (`routes/org/builder/builderStyles.test.ts`); it is not this
+      // scan's subject.
+      .filter(({ path }) => !path.split("/").slice(0, -1).includes("builder"))
+      .map(({ path, text }) => ({ file: path, text }))
+  );
 }
 
 /** Every `className` in the shipped screens that names the decoration step. */
@@ -86,7 +76,7 @@ function faintSites(): Site[] {
   for (const { file, text } of sources()) {
     text.split("\n").forEach((line, i) => {
       if (/className=(["`])[^"`]*\bfaint\b/.test(line)) {
-        found.push({ file: file.slice(process.cwd().length + 1), line: i + 1, text: line.trim() });
+        found.push({ file, line: i + 1, text: line.trim() });
       }
     });
   }
