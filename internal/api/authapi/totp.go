@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -118,19 +119,29 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	person := principal.ID.String()
+	// THE ID IS MINTED ONCE, outside the apply: the decide may run again
+	// against a fresh snapshot, and an id minted inside it would be a
+	// different credential on each run — and a different one again in the
+	// event that says which was enrolled.
+	id := uuid.New().String()
+	const reason = "enrolled a second factor"
 	if _, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
 			return append(without(held, iamdomain.MethodTOTP),
-				totpCredential(in.Secret, step))
+				totpCredential(id, in.Secret, step))
 		},
-		OpID:   "totp:" + person + ":" + uuid.New().String(),
-		Reason: "enrolled a second factor",
+		OpID:   "totp:" + person + ":" + id,
+		Reason: reason,
 	}); err != nil {
 		log.ErrorContext(r.Context(), "api_totp_enrol_failed", "error", err)
 		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
 		return
 	}
+	s.audit.Emit(r.Context(), types.IAMCredentialMinted{
+		Credential: id, Kind: types.CredentialTOTP, Owner: person,
+		By: iam.ActorFor(principal).Name, Reason: reason,
+	})
 	log.InfoContext(r.Context(), "api_totp_enrolled", "person", person)
 	httpjson.Write(w, http.StatusOK, map[string]string{"status": "enrolled"})
 }
@@ -152,19 +163,25 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	person := principal.ID.String()
+	id := uuid.New().String()
+	const reason = "regenerated the recovery codes"
 	if _, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
 			return append(without(held, iamdomain.MethodRecovery),
-				recoveryCredential(verifiers))
+				recoveryCredential(id, verifiers))
 		},
-		OpID:   "recovery:" + person + ":" + uuid.New().String(),
-		Reason: "regenerated the recovery codes",
+		OpID:   "recovery:" + person + ":" + id,
+		Reason: reason,
 	}); err != nil {
 		log.ErrorContext(r.Context(), "api_recovery_store_failed", "error", err)
 		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
 		return
 	}
+	s.audit.Emit(r.Context(), types.IAMCredentialMinted{
+		Credential: id, Kind: types.CredentialRecovery, Owner: person,
+		By: iam.ActorFor(principal).Name, Reason: reason,
+	})
 	log.InfoContext(r.Context(), "api_recovery_regenerated", "person", person)
 	// ANSWERED ONCE AND NEVER AGAIN. What is stored is the hashes, so a
 	// person who loses this answer regenerates rather than recovers — and
@@ -228,10 +245,10 @@ func without(held []iamdomain.Credential, method iamdomain.CredentialMethod) []i
 }
 
 // totpCredential builds the stored second factor.
-func totpCredential(secret string, step int64) iamdomain.Credential {
+func totpCredential(id, secret string, step int64) iamdomain.Credential {
 	raw, _ := json.Marshal(step)
 	return iamdomain.Credential{
-		V: iamdomain.DocumentVersion, ID: uuid.New().String(),
+		V: iamdomain.DocumentVersion, ID: id,
 		Method: iamdomain.MethodTOTP, Verifier: secret,
 		// THE LAST ACCEPTED STEP RIDES IN Extra, so a replay inside the
 		// same thirty-second window is refused: the enrolment's own code
@@ -242,10 +259,10 @@ func totpCredential(secret string, step int64) iamdomain.Credential {
 }
 
 // recoveryCredential builds the stored code set.
-func recoveryCredential(verifiers []string) iamdomain.Credential {
+func recoveryCredential(id string, verifiers []string) iamdomain.Credential {
 	raw, _ := json.Marshal(verifiers)
 	return iamdomain.Credential{
-		V: iamdomain.DocumentVersion, ID: uuid.New().String(),
+		V: iamdomain.DocumentVersion, ID: id,
 		Method: iamdomain.MethodRecovery,
 		Extra:  map[string]json.RawMessage{"verifiers": raw},
 	}

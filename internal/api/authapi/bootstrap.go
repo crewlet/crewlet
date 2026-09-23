@@ -18,7 +18,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -83,7 +85,7 @@ type bootstrapRequest struct {
 func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	arrived := s.now()
 	source := s.sourceOf(r)
-	if !s.admit(w, r, source) {
+	if !s.admit(w, r, source, types.FailBootstrap) {
 		return
 	}
 	open, err := s.bootstrapOpen(r)
@@ -116,14 +118,21 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_bootstrap_code_unreadable",
 			"error", err, "path", s.bootstrapCodePath())
-		s.refuseSignIn(w, r, arrived, source, "no code file on this node")
+		s.refuseSignIn(w, r, arrived, authevents.Failure{
+			Client: source, Method: types.FailBootstrap,
+		}, "no code file on this node")
 		return
 	}
 	// CONSTANT TIME, like every other credential comparison here: an early
 	// exit makes the time taken depend on how much of the code was right,
 	// which is a code you can guess one character at a time.
 	if subtle.ConstantTimeCompare([]byte(held), []byte(in.Code)) != 1 {
-		s.refuseSignIn(w, r, arrived, source, "bootstrap code mismatch")
+		// THE CODE TRIED IS THE SUBJECT, keyed in memory and never
+		// kept: how many DIFFERENT codes one client tried in a minute is
+		// the difference between a typo and somebody guessing.
+		s.refuseSignIn(w, r, arrived, authevents.Failure{
+			Client: source, Method: types.FailBootstrap, Subject: in.Code,
+		}, "bootstrap code mismatch")
 		return
 	}
 	if err := credential.CheckStrength(in.Password); err != nil {
@@ -192,7 +201,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		ID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Login: in.Login, Grants: s.boot.API.Auth.MaxGrants,
 		Colleague: iam.ColleagueWrite,
-	})
+	}, signIn{method: types.SignInBootstrap})
 }
 
 // bootstrapOpen reports whether the first-person route may run at all.

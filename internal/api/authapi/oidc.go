@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -66,12 +68,16 @@ func (s *Service) OIDCStart(w http.ResponseWriter, r *http.Request) {
 func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	arrived := s.now()
 	source := s.sourceOf(r)
-	if !s.admit(w, r, source) {
+	if !s.admit(w, r, source, types.FailOIDC) {
 		return
 	}
+	// A ROUND TRIP THAT ENDS IN NOBODY is one failed attempt, whichever
+	// check refused it. The subject is the provider's own, once an ID
+	// token verified and there is one; before that nothing names anybody.
+	attempt := authevents.Failure{Client: source, Method: types.FailOIDC}
 	cookie, err := r.Cookie(flightCookieName)
 	if err != nil || cookie.Value == "" {
-		s.refuseSignIn(w, r, arrived, source, "no flight cookie")
+		s.refuseSignIn(w, r, arrived, attempt, "no flight cookie")
 		return
 	}
 	// THE FLIGHT IS CLEARED WHATEVER HAPPENS NEXT. A login that failed
@@ -81,19 +87,19 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	flight, err := oidc.Open(s.cipher, cookie.Value, s.now())
 	if err != nil {
-		s.refuseSignIn(w, r, arrived, source, "flight: "+err.Error())
+		s.refuseSignIn(w, r, arrived, attempt, "flight: "+err.Error())
 		return
 	}
 	// THE STATE COMPARISON, and it is what stops a callback link somebody
 	// was SENT from completing a login in their browser: the attacker
 	// cannot know the value sealed in the cookie beside it.
 	if r.URL.Query().Get("state") != flight.State {
-		s.refuseSignIn(w, r, arrived, source, "state mismatch")
+		s.refuseSignIn(w, r, arrived, attempt, "state mismatch")
 		return
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		s.refuseSignIn(w, r, arrived, source, "no authorization code")
+		s.refuseSignIn(w, r, arrived, attempt, "no authorization code")
 		return
 	}
 
@@ -103,11 +109,11 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, retryIdentity)
 		return
 	}
-	tokens, err := s.provider.Config().Exchange(r.Context(), nil,
+	tokens, err := s.provider.Exchange(r.Context(),
 		metadata.TokenEndpoint, code, flight.Verifier)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_exchange_failed", "error", err)
-		s.refuseSignIn(w, r, arrived, source, "code exchange failed")
+		s.refuseSignIn(w, r, arrived, attempt, "code exchange failed")
 		return
 	}
 	keys, err := s.provider.Keys(r.Context())
@@ -120,7 +126,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		tokens.IDToken, flight.Nonce, s.now())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_id_token_refused", "error", err)
-		s.refuseSignIn(w, r, arrived, source, "id token: "+err.Error())
+		s.refuseSignIn(w, r, arrived, attempt, "id token: "+err.Error())
 		return
 	}
 
@@ -129,11 +135,12 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
 		return
 	}
+	attempt.Subject, attempt.Person = claims.Issuer+"|"+claims.Subject, held.ID
 	if held.ID == "" || !stageAdmits(held.Stage) {
 		// NO LINK, NO SIGN-IN. See this function's doc: an address the
 		// provider asserts is not a link, and this is where that rule
 		// is enforced rather than merely stated.
-		s.refuseSignIn(w, r, arrived, source, "no linked credential for this subject")
+		s.refuseSignIn(w, r, arrived, attempt, "no linked credential for this subject")
 		return
 	}
 	s.throttle.Flush(r.Context(), source)
@@ -144,10 +151,16 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// provider saying it.
 	held.Grants = mergeGrants(held.Grants,
 		s.boot.API.Auth.OIDC.GrantsFor(claims.Groups))
-	s.completeSignIn(w, r, held)
-	if flight.Return != "" {
-		return
-	}
+	// BACK TO WHERE THE LOGIN BEGAN, by redirect. The callback is a
+	// browser following the provider's redirect, and it used to answer the
+	// JSON body the password route does — which a browser renders as text
+	// and goes nowhere from, with a dead `if flight.Return != ""` after it
+	// that was meant to be this. The return path was checked at the start
+	// to be a path on this deployment and was sealed into the flight since,
+	// so it is not the caller's to change now.
+	s.completeSignIn(w, r, held, signIn{
+		method: types.SignInOIDC, acr: claims.ACR, redirect: flight.Return,
+	})
 }
 
 // personForSubject resolves the provider's subject to somebody this estate

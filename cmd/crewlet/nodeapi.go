@@ -206,6 +206,11 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 		// [auth.Clients].
 		Clients:  auth.NewClients(boot),
 		Provider: signInProvider(boot),
+		// THE NODE'S ONE AUDIT TRAIL, which the guard and the directory
+		// hand what they saw to as well: a failed sign-in and a refused
+		// bearer fold into one row per client per minute only because
+		// both reach the same tally.
+		Audit: e.AuthEvents(),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("api: the sign-in surface: %w", err)

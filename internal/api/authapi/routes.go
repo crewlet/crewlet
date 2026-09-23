@@ -9,7 +9,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -157,6 +159,11 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, session.Cookie(s.boot.API.ExternalBase(), bearer, expires))
 	log.InfoContext(r.Context(), "api_token_exchanged",
 		"login", principal.Login, "expires_at", expires)
+	s.audit.Emit(r.Context(), types.IAMSessionStarted{
+		Person: principal.ID.String(), Login: principal.Login,
+		Method: types.SignInToken, Lineage: lineage.String(),
+		Remote: s.sourceOf(r), ExpiresAt: expires,
+	})
 	httpjson.Write(w, http.StatusOK, loginResponse{
 		Person: principal.ID.String(), Login: principal.Login,
 		ExpiresAt: expires, Position: at.String(),
@@ -183,7 +190,7 @@ type stepUpRequest struct {
 func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	arrived := s.now()
 	source := s.sourceOf(r)
-	if !s.admit(w, r, source) {
+	if !s.admit(w, r, source, types.FailPassword) {
 		return
 	}
 	principal, resolution := iam.From(r.Context())
@@ -219,23 +226,34 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
 		return
 	}
+	// THE CALLER IS KNOWN here, so the subject is who they signed in as and
+	// the person is whoever this node resolved that login to.
+	attempt := authevents.Failure{
+		Client: source, Method: types.FailPassword, Subject: principal.Login,
+		Person: held.ID,
+	}
 	if held.ID == "" || !stageAdmits(held.Stage) {
-		s.refuseSignIn(w, r, arrived, source, "step-up subject not active")
+		s.refuseSignIn(w, r, arrived, attempt, "step-up subject not active")
 		return
 	}
 	verifier, found := firstCredential(held.Credentials, iamdomain.MethodPassword)
 	if !found {
 		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, arrived, source, "step-up: no password credential")
+		s.refuseSignIn(w, r, arrived, attempt, "step-up: no password credential")
 		return
 	}
 	if ok, _ := s.hasher.Verify(verifier.Verifier, in.Password); !ok {
-		s.refuseSignIn(w, r, arrived, source, "step-up: password mismatch")
+		s.refuseSignIn(w, r, arrived, attempt, "step-up: password mismatch")
 		return
 	}
-	if factor, need := s.secondFactor(held); need && !s.checkSecondFactor(factor, in.Code) {
-		s.refuseSignIn(w, r, arrived, source, "step-up: second factor mismatch")
-		return
+	var factor factorUse
+	if holdsSecondFactor(held) {
+		attempt.Method = types.FailSecondFactor
+		var proved bool
+		if factor, proved = s.proveSecondFactor(w, r, arrived, attempt, held,
+			in.Code); !proved {
+			return
+		}
 	}
 
 	// THE PROOF IS RECORDED BY RE-OPENING THE SESSION, which stamps a
@@ -243,5 +261,8 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	// locally would be proof on ONE node, and the surface that asks for it
 	// is reached through whichever node a request lands on.
 	s.throttle.Flush(r.Context(), source)
-	s.completeSignIn(w, r, held)
+	s.completeSignIn(w, r, held, signIn{
+		method: types.SignInPassword, factor: factor.factor,
+		stepUp: true, replaces: s.lineageOf(r),
+	})
 }

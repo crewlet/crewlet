@@ -3,13 +3,18 @@ package authapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"maps"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -91,7 +96,7 @@ type loginResponse struct {
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	arrived := s.now()
 	source := s.sourceOf(r)
-	if !s.admit(w, r, source) {
+	if !s.admit(w, r, source, types.FailPassword) {
 		return
 	}
 	if s.backend() != config.AuthBackendLocal {
@@ -121,6 +126,14 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	held, method := s.resolve(r.Context(), in.Login)
+	// THE ATTEMPT AS THE AUDIT TRAIL COUNTS IT: the value typed goes in as
+	// the subject — keyed in memory and never kept — and the person only
+	// once THIS ENGINE resolved one, so a failure names somebody real
+	// rather than whatever the caller claimed to be.
+	attempt := authevents.Failure{
+		Client: source, Method: types.FailPassword, Subject: in.Login,
+		Person: held.ID,
+	}
 	// THE DECOY RUNS ON THE MISS, and it is not optional. Without it the
 	// no-such-login arm returns in microseconds and the wrong-password arm
 	// pays an argon2 verify — a difference a stopwatch reads as a roster.
@@ -128,7 +141,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	// spends it.
 	if held.ID == "" {
 		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, arrived, source, "no such "+method)
+		s.refuseSignIn(w, r, arrived, attempt, "no such "+method)
 		return
 	}
 	if !stageAdmits(held.Stage) {
@@ -137,7 +150,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		// would learn from the timing alone which accounts had been
 		// turned off, which is the roster again in a different shape.
 		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, arrived, source, "stage "+string(held.Stage))
+		s.refuseSignIn(w, r, arrived, attempt, "stage "+string(held.Stage))
 		return
 	}
 
@@ -147,36 +160,38 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		// invited and not yet redeemed. The decoy again, for the same
 		// reason the stage arm pays it.
 		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, arrived, source, "no password credential")
+		s.refuseSignIn(w, r, arrived, attempt, "no password credential")
 		return
 	}
 	ok, _ := s.hasher.Verify(verifier.Verifier, in.Password)
 	if !ok {
-		s.refuseSignIn(w, r, arrived, source, "password mismatch")
+		s.refuseSignIn(w, r, arrived, attempt, "password mismatch")
 		return
 	}
 
 	// THE FIRST FACTOR CHECKED OUT, so what follows may be specific: the
 	// caller has proved who they are, and telling them a second factor is
 	// needed discloses nothing to anybody else.
-	if factor, need := s.secondFactor(held); need {
+	var factor factorUse
+	if holdsSecondFactor(held) {
 		if in.Code == "" {
 			s.throttle.Pad(r.Context(), arrived)
 			httpjson.Fail(w, http.StatusUnauthorized,
 				httpjson.CodeSecondFactorRequired)
 			return
 		}
-		if !s.checkSecondFactor(factor, in.Code) {
-			// STILL THE GENERIC REFUSAL, because a wrong CODE and a
-			// wrong password must not be distinguishable to somebody
-			// who has stolen one of the two.
-			s.refuseSignIn(w, r, arrived, source, "second factor mismatch")
+		attempt.Method = types.FailSecondFactor
+		var proved bool
+		if factor, proved = s.proveSecondFactor(w, r, arrived, attempt, held,
+			in.Code); !proved {
 			return
 		}
 	}
 
 	s.throttle.Flush(r.Context(), source)
-	s.completeSignIn(w, r, held)
+	s.completeSignIn(w, r, held, signIn{
+		method: types.SignInPassword, factor: factor.factor,
+	})
 }
 
 // resolve finds the person a sign-in names, by login or by address.
@@ -254,42 +269,232 @@ func firstCredential(held []iamdomain.Credential, method iamdomain.CredentialMet
 	return iamdomain.Credential{}, false
 }
 
-// secondFactor reports which second factor this person holds, if any.
+// holdsSecondFactor reports whether this person holds any second factor.
 //
 // HELD RATHER THAN CONFIGURED, and the difference is what makes
 // `second_factor: optional` mean anything: the deployment says whether one may
 // be required, and the PERSON's own credentials say whether one is. A
 // deployment that requires it refuses a person who holds none at enrolment
 // rather than here, which is where somebody can still do something about it.
-func (s *Service) secondFactor(held iamdomain.Sighting) (iamdomain.Credential, bool) {
+func holdsSecondFactor(held iamdomain.Sighting) bool {
 	for _, method := range iamdomain.SecondFactorMethods {
-		if c, ok := firstCredential(held.Credentials, method); ok {
-			return c, true
+		if _, ok := firstCredential(held.Credentials, method); ok {
+			return true
 		}
-	}
-	return iamdomain.Credential{}, false
-}
-
-// checkSecondFactor verifies a presented code against the credential that
-// holds it.
-func (s *Service) checkSecondFactor(factor iamdomain.Credential, code string) bool {
-	switch factor.Method {
-	case iamdomain.MethodTOTP:
-		// THE LAST ACCEPTED STEP is what makes a code single-use, and it
-		// is read from the credential rather than kept in memory: the
-		// node that accepts the next code is rarely the node that
-		// accepted the last.
-		_, ok := credential.VerifyTOTP(factor.Verifier, code, s.now(), lastStep(factor))
-		return ok
-	case iamdomain.MethodRecovery:
-		return credential.SpendRecoveryCode(recoveryVerifiers(factor), code) >= 0
 	}
 	return false
 }
 
+// factorUse is a second factor that checked out, and what spending it takes.
+type factorUse struct {
+	factor types.SecondFactor
+
+	// credential is the id of the credential that matched.
+	credential string
+
+	// step is the TOTP step the code was for; verifier is the recovery
+	// code's own digest.
+	step     int64
+	verifier string
+
+	// remaining is how many recovery codes are left once this one is
+	// spent, as the spend itself established.
+	remaining int
+}
+
+// checkSecondFactor verifies a presented code against EVERY second factor the
+// person holds, and reports which one it proved.
+//
+// EVERY ONE, and that is a repair: it used to check only the first factor held
+// — the authenticator app, whenever there was one — so a recovery code, which
+// exists for exactly the day the app is lost, was checked against the app's
+// six digits and refused for everybody who had both. Both are evaluated
+// whatever the first answered, so the time taken does not say which one a
+// person holds; the app wins where both would match.
+func (s *Service) checkSecondFactor(held iamdomain.Sighting, code string) (factorUse, bool) {
+	var app, recovery factorUse
+	appOK, recoveryOK := false, false
+	if c, ok := firstCredential(held.Credentials, iamdomain.MethodTOTP); ok {
+		// THE LAST ACCEPTED STEP is what makes a code single-use, and it
+		// is read from the credential rather than kept in memory: the
+		// node that accepts the next code is rarely the node that
+		// accepted the last.
+		step, matched := credential.VerifyTOTP(c.Verifier, code, s.now(), lastStep(c))
+		app = factorUse{factor: types.FactorTOTP, credential: c.ID, step: step}
+		appOK = matched
+	}
+	if c, ok := firstCredential(held.Credentials, iamdomain.MethodRecovery); ok {
+		verifiers := recoveryVerifiers(c)
+		if i := credential.SpendRecoveryCode(verifiers, code); i >= 0 {
+			recovery = factorUse{factor: types.FactorRecovery, credential: c.ID,
+				verifier: verifiers[i], remaining: len(verifiers) - 1}
+			recoveryOK = true
+		}
+	}
+	switch {
+	case appOK:
+		return app, true
+	case recoveryOK:
+		return recovery, true
+	}
+	return factorUse{}, false
+}
+
+// errFactorSpent reports a second factor that checked out and had been spent
+// by the time the spend was recorded: a code used twice, the second time
+// concurrently.
+var errFactorSpent = errors.New("authapi: this second factor was already spent")
+
+// spendSecondFactor records a second factor as used, so it can never prove
+// anybody again.
+//
+// # It is what makes a code single-use, and it was missing
+//
+// A TOTP code carries its step and a recovery code is one of ten, and both
+// are only single-use if the use is WRITTEN: the step onto the credential,
+// the recovery verifier off it. Neither was — so an observed six-digit code
+// worked for the whole drift window, and a recovery code worked for ever.
+//
+// # Decided inside the write's own snapshot
+//
+// The set it writes is formed from the credential as the DECIDE reads it, and
+// if that already records this step, or no longer holds this recovery code,
+// the code was spent by somebody else between this node's check and this
+// write — the second of two concurrent uses — and the answer is
+// [errFactorSpent] rather than a sign-in. A decide may run again against a
+// fresh snapshot, so the verdict is the LAST run's.
+//
+// A FRESH OPERATION ID PER USE, never one derived from the step: two uses of
+// one code under one id would collapse into one record in the operation
+// ledger, and the second would read the first's success as its own.
+func (s *Service) spendSecondFactor(ctx context.Context, person string,
+	use factorUse) (factorUse, error) {
+
+	spent := false
+	remaining := use.remaining
+	_, err := s.writer.SetCredentials(ctx, iamdomain.CredentialSet{
+		PersonID: person,
+		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+			spent = true
+			out := make([]iamdomain.Credential, 0, len(held))
+			for _, c := range held {
+				if c.ID != use.credential || !c.RevokedAt.IsZero() {
+					out = append(out, c)
+					continue
+				}
+				switch use.factor {
+				case types.FactorTOTP:
+					if lastStep(c) < use.step {
+						spent = false
+						c = withExtra(c, "last_step", use.step)
+					}
+				case types.FactorRecovery:
+					verifiers := recoveryVerifiers(c)
+					if i := slices.Index(verifiers, use.verifier); i >= 0 {
+						spent = false
+						left := slices.Delete(slices.Clone(verifiers), i, i+1)
+						remaining = len(left)
+						c = withExtra(c, "verifiers", left)
+					}
+				}
+				out = append(out, c)
+			}
+			return out
+		},
+		OpID:   "second-factor:" + person + ":" + uuid.NewString(),
+		Reason: "spent a " + string(use.factor) + " second factor",
+	})
+	if err != nil {
+		return factorUse{}, err
+	}
+	if spent {
+		return factorUse{}, errFactorSpent
+	}
+	use.remaining = remaining
+	return use, nil
+}
+
+// withExtra is a credential with one carried field replaced, on a copy of its
+// map so the row the decide read is never written through.
+func withExtra(c iamdomain.Credential, key string, value any) iamdomain.Credential {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return c
+	}
+	extra := make(map[string]json.RawMessage, len(c.Extra)+1)
+	maps.Copy(extra, c.Extra)
+	extra[key] = raw
+	c.Extra = extra
+	return c
+}
+
+// proveSecondFactor checks a presented code and spends it, answering false
+// once it has written the refusal.
+//
+// ONE PATH FOR THE SIGN-IN AND THE STEP-UP, which are the two places a second
+// factor is presented, so the check, the spend and the refusal are decided
+// once. A recovery code spent here is ALSO its own event, because a person
+// down to their last one is one lost phone away from needing an administrator.
+func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
+	arrived time.Time, attempt authevents.Failure, held iamdomain.Sighting,
+	code string) (factorUse, bool) {
+
+	use, ok := s.checkSecondFactor(held, code)
+	if !ok {
+		// STILL THE GENERIC REFUSAL, because a wrong CODE and a wrong
+		// password must not be distinguishable to somebody who has
+		// stolen one of the two.
+		s.refuseSignIn(w, r, arrived, attempt, "second factor mismatch")
+		return factorUse{}, false
+	}
+	use, err := s.spendSecondFactor(r.Context(), held.ID, use)
+	switch {
+	case errors.Is(err, errFactorSpent):
+		s.refuseSignIn(w, r, arrived, attempt, "second factor already spent")
+		return factorUse{}, false
+	case err != nil:
+		// NOT A REFUSAL: the code was right, and this node could not
+		// record that it was used. Signing somebody in on a code that
+		// stays usable is the replay the spend exists to close, so the
+		// honest answer is that this node cannot finish the sign-in now.
+		log.ErrorContext(r.Context(), "api_second_factor_unspent",
+			"person", held.ID, "error", err)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, retryIdentity)
+		return factorUse{}, false
+	}
+	if use.factor == types.FactorRecovery {
+		s.audit.Emit(r.Context(), types.IAMRecoveryCodeUsed{
+			Person: held.ID, Login: held.Login, Remaining: use.remaining,
+			Remote: attempt.Client,
+		})
+	}
+	return use, true
+}
+
+// signIn is how a completed sign-in was proved, for the event it announces.
+type signIn struct {
+	method types.SignInMethod
+	factor types.SecondFactor
+
+	// acr is what an identity provider asserted about the authentication
+	// it performed, and empty on every other method.
+	acr string
+
+	// stepUp marks a signed-in person confirming who they are again, which
+	// announces itself as a step-up rather than as a fresh sign-in; replaces
+	// is the session the confirmation was made from.
+	stepUp   bool
+	replaces string
+
+	// redirect is where a BROWSER that arrived by navigation goes next,
+	// rather than a JSON body it has no script to read. Empty answers
+	// JSON, which is what every fetch-driven route wants.
+	redirect string
+}
+
 // completeSignIn opens the session and sets the cookie.
 func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
-	held iamdomain.Sighting) {
+	held iamdomain.Sighting, how signIn) {
 
 	lineage, err := uuid.NewV7()
 	if err != nil {
@@ -327,6 +532,27 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 	log.InfoContext(r.Context(), "api_sign_in",
 		"person", held.ID, "login", held.Login, "seat", held.Seat,
 		"position", at.String())
+	if how.stepUp {
+		s.audit.Emit(r.Context(), types.IAMStepUpCompleted{
+			Person: held.ID, Login: held.Login, Lineage: lineage.String(),
+			Replaces: how.replaces, SecondFactor: how.factor,
+			Remote: s.sourceOf(r),
+		})
+	} else {
+		s.audit.Emit(r.Context(), types.IAMSessionStarted{
+			Person: held.ID, Login: held.Login, Method: how.method,
+			Lineage: lineage.String(), Remote: s.sourceOf(r),
+			SecondFactor: how.factor, ACR: how.acr, ExpiresAt: expires,
+		})
+	}
+	if how.redirect != "" {
+		// A BROWSER THAT ARRIVED BY NAVIGATION leaves the same way. The
+		// cookie is on this response, so the page it lands on is signed
+		// in; a JSON body here was what the provider's callback answered,
+		// which a browser renders as text and goes nowhere.
+		http.Redirect(w, r, how.redirect, http.StatusFound)
+		return
+	}
 	httpjson.Write(w, http.StatusOK, loginResponse{
 		Person: held.ID, Login: held.Login, Seat: held.Seat,
 		ExpiresAt: expires, Position: at.String(),

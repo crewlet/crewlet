@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/google/uuid"
@@ -215,9 +216,30 @@ func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 		"signed out", "logout:"+lineage); err != nil {
 		log.WarnContext(r.Context(), "api_sign_out_record_failed",
 			"error", err, "lineage", lineage)
+	} else {
+		// ONLY ONCE THE RECORD LANDED. A cleared cookie is this browser
+		// forgetting; the session ending is the record every node reads,
+		// and a row saying it ended when the write did not land would be
+		// the one row in the trail that is false.
+		s.audit.Emit(r.Context(), types.IAMSessionEnded{
+			Person: bearer.Person, Lineage: lineage,
+			Reason: types.EndLogout, By: callerName(r),
+		})
 	}
 	log.InfoContext(r.Context(), "api_sign_out", "lineage", lineage)
 	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
+}
+
+// callerName is the name a row about this request records as its author, or
+// empty where the guard resolved nobody — a sign-out on a cookie this node
+// could no longer serve is still a sign-out, and its author is then the
+// person the bearer names rather than a principal.
+func callerName(r *http.Request) string {
+	principal, resolution := iam.From(r.Context())
+	if resolution != iam.Resolved {
+		return ""
+	}
+	return iam.ActorFor(principal).Name
 }
 
 // LogoutEverywhere ends every session this person holds, by bumping their own
@@ -248,6 +270,10 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
 		return
 	}
+	s.audit.Emit(r.Context(), types.IAMSessionEnded{
+		Person: person, Reason: types.EndLogoutAll,
+		By: iam.ActorFor(principal).Name,
+	})
 	log.InfoContext(r.Context(), "api_sign_out_all", "person", person)
 	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out everywhere"})
 }
@@ -280,6 +306,16 @@ func (s *Service) bearerOf(r *http.Request) session.Bearer {
 		return session.Bearer{}
 	}
 	return s.signer.Validate(r.Context(), s.directoryFor(), cookie).Bearer
+}
+
+// lineageOf is the lineage this request's cookie carries, or "" for a cookie
+// whose bearer did not verify — read under [Service.bearerOf]'s rule.
+func (s *Service) lineageOf(r *http.Request) string {
+	bearer := s.bearerOf(r)
+	if bearer.Lineage == uuid.Nil {
+		return ""
+	}
+	return bearer.Lineage.String()
 }
 
 // clearSession ends the session in the browser under every name a bearer can
@@ -349,6 +385,17 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
 		return
 	}
+	// A PERSON ENDING THEIR OWN is a logout; an operator ending somebody
+	// else's is a revocation, and the trail has to say which, because the
+	// second is the row an investigation of a stolen laptop is looking for.
+	reason := types.EndLogout
+	if owner != principal.ID.String() {
+		reason = types.EndRevoked
+	}
+	s.audit.Emit(r.Context(), types.IAMSessionEnded{
+		Person: owner, Lineage: lineage, Reason: reason,
+		By: iam.ActorFor(principal).Name,
+	})
 	// AND THE COOKIE GOES IF IT WAS THIS ONE, so a person who ends the
 	// session they are using is not left looking at a signed-in page.
 	if lineage == s.bearerOf(r).Lineage.String() {

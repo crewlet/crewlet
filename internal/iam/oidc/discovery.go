@@ -113,6 +113,19 @@ func NewProvider(config Config, client *http.Client, now func() time.Time) *Prov
 // Config is the provider's configuration.
 func (p *Provider) Config() Config { return p.config }
 
+// Exchange redeems an authorization code over THIS PROVIDER'S OWN CLIENT, the
+// one its discovery and its key set already use: the three requests go to one
+// party, and a caller reaching [Config.Exchange] with a client of its own — or
+// with none, which takes a fresh default — gives that party a second timeout
+// policy and a second trust store. The callback did exactly that, so a
+// provider built with a client that trusted its issuer discovered and fetched
+// keys fine and then failed every code exchange.
+func (p *Provider) Exchange(ctx context.Context, tokenEndpoint, code, verifier string) (
+	Tokens, error) {
+
+	return p.config.Exchange(ctx, p.client, tokenEndpoint, code, verifier)
+}
+
 // Metadata returns the discovery document, fetching it when the cache is cold
 // or stale.
 func (p *Provider) Metadata(ctx context.Context) (Metadata, error) {

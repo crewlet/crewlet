@@ -108,6 +108,7 @@ func buildWith(t *testing.T, b config.Bootstrap, provider *oidc.Provider,
 		Clients:   auth.NewClients(&b),
 		Provider:  provider,
 		Cipher:    stubCipher{},
+		Audit:     &recordingAudit{},
 		Now:       func() time.Time { return clock },
 	}
 	if replace != nil {

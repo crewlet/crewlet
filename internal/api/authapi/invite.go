@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -55,7 +56,7 @@ type inviteRedeem struct {
 // source, because the id is a value somebody could otherwise walk.
 func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 	source := s.sourceOf(r)
-	if !s.admit(w, r, source) {
+	if !s.admit(w, r, source, types.FailInvite) {
 		return
 	}
 	held, ok := s.invitation(w, r)
@@ -76,7 +77,7 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 // RedeemInvite creates the person an invitation was issued for.
 func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	source := s.sourceOf(r)
-	if !s.admit(w, r, source) {
+	if !s.admit(w, r, source, types.FailInvite) {
 		return
 	}
 	held, ok := s.invitation(w, r)
@@ -150,7 +151,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	s.completeSignIn(w, r, iamdomain.Sighting{
 		ID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Login: in.Login, Grants: held.Grants, Colleague: held.Colleague,
-	})
+	}, signIn{method: types.SignInInvite})
 }
 
 // refuseEnrolment answers an enrolment the domain did not land, and it is the

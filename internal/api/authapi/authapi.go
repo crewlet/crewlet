@@ -35,6 +35,28 @@
 // prompt is reached only by somebody who already passed the first; and an
 // invitation's refusal is read by somebody holding the link.
 //
+// # A second factor is spent by the sign-in it completes
+//
+// Either factor the person holds is accepted — an app code, or one of their
+// recovery codes when the phone is not to hand — and the one used is SPENT in
+// a write to their own credentials, decided in the snapshot that checked it:
+// an app code records the step it was accepted at, a recovery code is
+// removed. Without the first, the drift tolerance is a ninety-second window in
+// which one shoulder-surfed code works repeatedly; without the second, a
+// one-time code is a second password. Two sign-ins racing one code are
+// arbitrated like any other write to one person, and the loser is refused as a
+// wrong code would be. A spend this node cannot RECORD is a 503 rather than a
+// session: signing somebody in on a code that stays usable is the replay the
+// spend exists to close.
+//
+// # What it says about itself
+//
+// Every refusal reaches [Audit.Failed] and never [Audit.Emit]: a failed
+// attempt's rate is the caller's to choose, so it is a counter and one row per
+// client per minute from the engine's own loop (internal/iam/authevents). A
+// success is announced as the event it is — the session it opened, the step-up
+// it completed, the recovery code it spent — at the site that produced it.
+//
 // # A login cannot require a login
 //
 // Four routes here are unguarded, because requiring a credential to obtain one
@@ -54,7 +76,10 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -185,6 +210,18 @@ type Blinder interface {
 	Subject(issuer, subject string) (string, error)
 }
 
+// Audit is where this surface's authentication facts go.
+//
+// TWO METHODS AND TWO DOORS, and the split is the admission rule: a fact a
+// verified credential authored — somebody signed in, signed out, enrolled a
+// factor — is published as it happens, and a FAILED attempt is only ever
+// COUNTED, because whoever failed decides how many of those there are. See
+// internal/iam/authevents, whose Trail is what a running node hands in.
+type Audit interface {
+	Emit(ctx context.Context, payload events.Payload)
+	Failed(ctx context.Context, f authevents.Failure)
+}
+
 // Options is what the surface is built from.
 type Options struct {
 	// Bootstrap is Tier A. REQUIRED: the cookie's name and Secure flag,
@@ -264,6 +301,11 @@ type Options struct {
 	// of `api.trusted_proxies`, and there is one.
 	Clients *auth.Clients
 
+	// Audit records what this surface saw. REQUIRED: a sign-in surface
+	// that recorded nothing would leave no row saying who signed in, and
+	// no count of who failed to.
+	Audit Audit
+
 	// Now is the clock.
 	Now func() time.Time
 }
@@ -282,6 +324,7 @@ type Service struct {
 	cipher    secrets.Cipher
 	clients   *auth.Clients
 	provider  *oidc.Provider
+	audit     Audit
 	now       func() time.Time
 }
 
@@ -312,6 +355,7 @@ func New(opts Options) (*Service, error) {
 		// a wiring that is complete.
 		{"Cipher", opts.Provider != nil && opts.Cipher == nil},
 		{"Clients", opts.Clients == nil},
+		{"Audit", opts.Audit == nil},
 	} {
 		if field.absent {
 			missing = append(missing, "Options."+field.name)
@@ -329,7 +373,7 @@ func New(opts Options) (*Service, error) {
 		opener:   opts.Opener,
 		cipher:   opts.Cipher,
 		provider: opts.Provider,
-		clients:  opts.Clients, now: opts.Now,
+		clients:  opts.Clients, audit: opts.Audit, now: opts.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -353,19 +397,26 @@ func joinNames(names []string) string {
 // never sent: an operator investigating needs to know which arm it was, and
 // the caller must not.
 //
+// THE ATTEMPT IS COUNTED, NEVER PUBLISHED. A failed sign-in is authored by
+// whoever can reach this listener, so it goes to the audit trail's counter and
+// its per-client, per-minute tally — the engine's own loop decides when a row
+// is written, and the row carries counts rather than what was typed.
+//
 // IT PADS BEFORE IT ANSWERS. The pad is measured from when the request
 // ARRIVED rather than from here, so a slow arm and a fast one leave at the
 // same instant — which is the only shape in which a stopwatch learns nothing.
 func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, source, why string) {
+	arrived time.Time, attempt authevents.Failure, why string) {
 
-	s.throttle.Fail(r.Context(), source)
+	s.throttle.Fail(r.Context(), attempt.Client)
+	s.audit.Failed(r.Context(), attempt)
 	log.WarnContext(r.Context(), "api_sign_in_refused",
 		// THE ARM, for the log only. Never the login, never the
 		// presented value, and never anything that would let a log
 		// reader reconstruct who was being guessed at from a feed an
 		// operator's screen renders.
-		"reason", why, "route", r.URL.Path, "source", source)
+		"reason", why, "method", string(attempt.Method), "route", r.URL.Path,
+		"source", attempt.Client)
 	s.throttle.Pad(r.Context(), arrived)
 	httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeSignInRefused)
 }
@@ -376,12 +427,22 @@ func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 // BEFORE ANYTHING IS LOOKED UP, which is what keying on the source rather than
 // on the subject buys: a caller cannot learn that a login exists by watching
 // which requests get rate-limited.
-func (s *Service) admit(w http.ResponseWriter, r *http.Request, source string) bool {
+//
+// A THROTTLED REQUEST IS A FAILED ATTEMPT TOO, counted apart as one the
+// ceiling turned away: a client that keeps going after it was stopped is the
+// part of a guessing run an operator most wants to see, and the method names
+// which door it was pushing on.
+func (s *Service) admit(w http.ResponseWriter, r *http.Request, source string,
+	method types.FailureMethod) bool {
+
 	err := s.throttle.Admit(r.Context(), source)
 	if err == nil {
 		return true
 	}
 	if errors.Is(err, credential.ErrThrottled) {
+		s.audit.Failed(r.Context(), authevents.Failure{
+			Client: source, Method: method, Throttled: true,
+		})
 		// THE ONE SPECIFIC REFUSAL HERE, and it is safe because it is
 		// keyed on the source: a stranger learns they are rate-limited,
 		// which they already knew.
