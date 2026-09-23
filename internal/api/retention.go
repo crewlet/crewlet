@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -57,6 +58,10 @@ type retentionWriter interface {
 // press.
 type NodeGate interface {
 	EvictNode(ctx context.Context, opID, nodeID string) (tracker.WriteResult, error)
+
+	// ReadmitNode answers a [*statelog.ReadmissionRefusal], wrapped, for a
+	// node below a trim floor it would be counted against — which this
+	// route reports as a refusal rather than a failure.
 	ReadmitNode(ctx context.Context, opID, nodeID string) (tracker.WriteResult, error)
 }
 
@@ -314,6 +319,11 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 // readmission is the INVERSE COMMIT rather than a delete, written by the same
 // writer onto the same subject, so two handlers would be two copies of one
 // refusal vocabulary.
+//
+// The vocabulary has one word only the readmission reaches: a node below the
+// trim floor is REFUSED, by the writer and before anything is appended, and
+// the answer is a 409 carrying the node's position beside the floor rather
+// than a failure — see [statelog.PermitReadmission].
 func (a *App) gate(evict bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if a.nodes == nil {
@@ -347,7 +357,34 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 		} else {
 			result, err = a.nodes.ReadmitNode(r.Context(), opID, node)
 		}
-		if err != nil {
+		var refused *statelog.ReadmissionRefusal
+		switch {
+		case errors.As(err, &refused):
+			// A REFUSAL IS AN ANSWER, NOT A FAULT, and it is the one
+			// this route promises: the node the operator asked for is
+			// below a floor it would be counted against, and nothing
+			// was written. 409 with the numbers, because the inequality
+			// is the reason and the CLI prints the detail and the hint
+			// beneath the status — an operator told only "500
+			// gate_failed" would read an engine problem where there is
+			// a node still catching up.
+			log.Info("retention_readmission_refused", "operator", operator,
+				"node", node, "domain", refused.Domain,
+				"position", refused.Seq, "floor", refused.Bound.Held())
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":  "readmission_refused",
+				"detail": refused.Error(),
+				"hint":   refused.Remedy(),
+				"node":   node, "domain": refused.Domain,
+				"published":        refused.Published,
+				"position":         refused.Seq,
+				"generation":       refused.Generation,
+				"floor":            refused.Bound.Floor,
+				"first_seq":        refused.Bound.First,
+				"floor_generation": refused.Bound.Generation,
+			})
+			return
+		case err != nil:
 			log.Warn("api_retention_gate_failed", "node", node,
 				"evict", evict, "error", err)
 			writeJSON(w, http.StatusInternalServerError,

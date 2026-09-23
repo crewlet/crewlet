@@ -114,11 +114,16 @@ type PositionRegister interface {
 	// round trips for one answer.
 	Positions(ctx context.Context) ([]NodePositions, error)
 
-	// ForgetPositions removes a node's row.
+	// ForgetPositions removes a node's row, and it is the only way a row
+	// leaves.
 	//
-	// THE OPERATOR'S GESTURE, and the only way a row leaves. It is what an
-	// eviction calls after its own record is written, so the trim stops
-	// waiting for a node nobody is going to bring back.
+	// AN EVICTION DOES NOT CALL IT, and must not. What stops the trim
+	// waiting for an evicted node is its TOMBSTONE, which the counted set
+	// subtracts from these keys; the row itself is what a READMISSION is
+	// judged by — the node's last position against the floor — so an
+	// eviction that forgot it would turn every later readmission of a
+	// machine that is still switched off into a judgement about a node
+	// that has never reported anything.
 	ForgetPositions(ctx context.Context, nodeID string) error
 }
 

@@ -1,18 +1,33 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // fakeRetentionNode answers the retention read and the two gate routes, recording
 // what it was asked for.
 type fakeRetentionNode struct {
 	server *httptest.Server
-	report map[string]any
+
+	// report is served as the WRITER'S OWN TYPE, encoded as the node
+	// encodes it, never as JSON typed here: a fixture spelling this
+	// command's idea of the shape agrees with the command whatever the
+	// node sends, and that is how `status` came to decode nothing from any
+	// real node while every case here passed.
+	report *statelog.Report
 
 	acked    map[string]string
 	gated    string
@@ -65,49 +80,67 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 
 // blockedReport is a fleet whose trim is held by the backup term — the state a
 // fresh company is in, and the one an operator most often runs this for.
-func blockedReport() map[string]any {
-	return map[string]any{
-		"node_id":           "node-1",
-		"at":                "2031-04-02T03:14:00Z",
-		"backup_owner":      "platform-oncall",
-		"register_readable": true,
-		"domains": []map[string]any{{
-			"domain": "tracker", "stream": "CREWLET_TRACKER_LOG",
-			"generation": 0, "replay": "strict",
-			"first_seq": 918100000, "last_seq": 918280001,
-			"bytes": 67108864, "max_bytes": 4294967296,
-			"headroom_fraction": 0.984,
-			"trim_floor":        918100000,
-			"blocked_by":        "backup_floor",
-			"blocked_since":     "2031-03-30T02:00:00Z",
-			"prose": "Nothing is being trimmed on tracker: the newest complete " +
+func blockedReport() *statelog.Report {
+	stamp := func(s string) time.Time {
+		at, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			panic(err)
+		}
+		return at
+	}
+	headroom, caughtUp := 0.984, uint64(0)
+	return &statelog.Report{
+		V:                statelog.ReportVersion,
+		NodeID:           "node-1",
+		At:               stamp("2031-04-02T03:14:00Z"),
+		ReadLevel:        statelog.ReadStale,
+		BackupOwner:      "platform-oncall",
+		RegisterReadable: true,
+		Domains: []statelog.DomainReport{{
+			Domain: "tracker", Stream: "CREWLET_TRACKER_LOG",
+			Replay:   statelog.ReplayStrict,
+			FirstSeq: 918100000, LastSeq: 918280001,
+			Bytes: 67108864, MaxBytes: 4294967296,
+			HeadroomFraction: &headroom,
+			TrimFloor:        918100000,
+			BlockedBy:        statelog.TermBackupFloor,
+			BlockedSince:     stamp("2031-03-30T02:00:00Z"),
+			Prose: "Nothing is being trimmed on tracker: the newest complete " +
 				"backup is 3 days old (backup_max_age is 24h).",
-			"terms": []map[string]any{
-				{"name": "applied", "state": "known", "seq": 918279004},
-				{"name": "backup_floor", "state": "unknown",
-					"detail": "no backup has been taken"},
-				{"name": "feed_ack_floor", "state": "absent"},
+			Terms: []statelog.TermReport{
+				{Name: statelog.TermApplied, State: statelog.TermKnown, Seq: 918279004},
+				{Name: statelog.TermBackupFloor, State: statelog.TermUnreadable,
+					Detail: "no backup has been taken"},
+				{Name: statelog.TermFeedAckFloor, State: statelog.TermAbsent},
 			},
 		}},
-		"nodes": []map[string]any{{
-			"node_id": "node-1", "counted": true, "live": true,
-			"at": "2031-04-02T03:13:58Z",
-			"domains": []map[string]any{{
-				"domain": "tracker", "seq": 918280001,
-				"applied_through": 918280001, "lag": 0,
+		Nodes: []statelog.NodeReport{{
+			NodeID: "node-1", Counted: true, Live: true,
+			At: stamp("2031-04-02T03:13:58Z"),
+			Domains: map[string]statelog.NodeDomainReport{"tracker": {
+				Seq: 918280001, AppliedThrough: 918280001, Lag: &caughtUp,
 			}},
 		}, {
-			"node_id": "node-7", "counted": true, "live": true,
-			"note": "counted · no position yet",
+			NodeID: "node-4", Counted: false, Live: false,
+			At: stamp("2031-03-28T09:00:00Z"),
+			Domains: map[string]statelog.NodeDomainReport{"tracker": {
+				Seq: 918000000, AppliedThrough: 918000000,
+			}},
+			Evicted: &statelog.EvictionReport{
+				By: "sre@example.com", At: stamp("2031-04-01T12:00:00Z"),
+				EffectiveAt: stamp("2031-04-01T12:01:00Z"), Effective: true,
+			},
+		}, {
+			NodeID: "node-7", Counted: true, Live: true,
 		}},
-		"snapshots": []map[string]any{
-			{"node_id": "node-1", "at": "2031-04-02T01:00:00Z", "bytes": 10415140864,
-				"domains": []map[string]any{{"domain": "tracker", "seq": 918279900}}},
-			{"node_id": "node-4", "skip": "lagging"},
+		Snapshots: []statelog.SnapshotReport{
+			{NodeID: "node-1", At: stamp("2031-04-02T01:00:00Z"), Bytes: 10415140864,
+				Domains: map[string]uint64{"tracker": 918279900}},
+			{NodeID: "node-4", Skip: statelog.SkipLagging},
 		},
-		"replica": map[string]any{
-			"store_bytes": 10415140864, "projected_join_seconds": 308,
-			"rejoin_window_seconds": 1800,
+		Replica: statelog.ReplicaReport{
+			StoreBytes: 10415140864, ProjectedJoinSeconds: 308,
+			RejoinWindowSeconds: 1800,
 		},
 	}
 }
@@ -132,7 +165,16 @@ func TestRetentionStatusLeadsWithTheBlockingTermInProse(t *testing.T) {
 		"backup_floor",        // the term holding it
 		"2031-03-30",          // how long it has been holding
 		"node-7",              // a counted node with no position still gets a row
+		"no position yet",     // and says why it has no figures
 		"platform-oncall",     // who owns the backup
+		// AND THE FIGURES THE WRITER KEYS OR SPELLS DIFFERENTLY FROM A
+		// GUESS: a node's progress is a map by domain, a readable term's
+		// state is `ok`, and a tombstone is `evicted` — each of which
+		// this command once declared otherwise, and then either failed
+		// to decode or printed as nothing.
+		"918280001",                  // node-1's own tracker position
+		"918279004",                  // the applied term's sequence
+		"evicted by sre@example.com", // node-4's tombstone
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the report never mentions %q:\n%s", want, stdout)
@@ -147,10 +189,10 @@ func TestRetentionStatusLeadsWithTheBlockingTermInProse(t *testing.T) {
 func TestRetentionStatusExitsNonZeroOnAnAlarm(t *testing.T) {
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
-	report["alarms"] = []map[string]any{{
-		"kind":   "backup_age",
-		"detail": "the newest verified backup is 3 days old",
-		"remedy": "take a backup, or name the owner in retention.backup_owner",
+	report.Alarms = []statelog.Alarm{{
+		Kind:   statelog.KindBackupAge,
+		Detail: "the newest verified backup is 3 days old",
+		Remedy: "take a backup, or name the owner in retention.backup_owner",
 	}}
 	node.report = report
 
@@ -176,12 +218,12 @@ func TestRetentionStatusExitsNonZeroOnAnAlarm(t *testing.T) {
 func TestRetentionStatusLeadsWithAnOpenMaintenanceWindow(t *testing.T) {
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
-	report["maintenance"] = map[string]any{
-		"stream": "CREWLET_TRACKER_LOG", "operation_id": "op-9",
-		"phase": "observe", "attempt": 2,
-		"target_max_bytes": 2000000000, "original_max_bytes": 1000000000,
-		"since": "2031-04-02T02:00:00Z", "by": "sre@example.com",
-		"participants_missing": []string{"node-4", "node-7"},
+	report.Maintenance = &statelog.MaintenanceReport{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
+		Phase: "observe", Attempt: 2,
+		TargetMaxBytes: 2000000000, OriginalMaxBytes: 1000000000,
+		Since: time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC), By: "sre@example.com",
+		ParticipantsMissing: []string{"node-4", "node-7"},
 	}
 	node.report = report
 
@@ -208,10 +250,10 @@ func TestRetentionStatusLeadsWithAnOpenMaintenanceWindow(t *testing.T) {
 func TestAnOperationWithNobodyOutstandingSaysWhoItIsWaitingFor(t *testing.T) {
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
-	report["maintenance"] = map[string]any{
-		"stream": "CREWLET_TRACKER_LOG", "operation_id": "op-9",
-		"phase": "sealed", "attempt": 1,
-		"since": "2031-04-02T02:00:00Z",
+	report.Maintenance = &statelog.MaintenanceReport{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
+		Phase: "sealed", Attempt: 1,
+		Since: time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
 	}
 	node.report = report
 
@@ -245,10 +287,9 @@ func TestAHealthyFleetPrintsNoMaintenanceBanner(t *testing.T) {
 func TestRetentionStatusIsSilentAndZeroOnAHealthyFleet(t *testing.T) {
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
-	domains := report["domains"].([]map[string]any)
-	domains[0]["blocked_by"] = ""
-	domains[0]["prose"] = ""
-	domains[0]["trim_to"] = 918279004
+	report.Domains[0].BlockedBy = ""
+	report.Domains[0].Prose = ""
+	report.Domains[0].TrimTo = 918279004
 	node.report = report
 
 	stdout, stderr, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
@@ -332,5 +373,127 @@ func TestAGateGestureRequiresTheNodeIdTwice(t *testing.T) {
 	// the node stays counted reads the unchanged floor as a failed gesture.
 	if !strings.Contains(stdout, "stays COUNTED") {
 		t.Errorf("the eviction never says the node stays counted:\n%s", stdout)
+	}
+	// AND THE WATERMARK IT PROMISES IS PRINTED — a read of the node's
+	// answer that failed used to print nothing, silently.
+	if !strings.Contains(stdout, "tracker trim floor 918100000 → 918100000") {
+		t.Errorf("the eviction printed no watermark:\n%s", stdout)
+	}
+}
+
+// `crewlet retention readmit` IS REFUSED FOR A NODE BELOW THE TRIM FLOOR, and
+// the refusal prints the node's position beside the floor — end to end, from
+// the verb through the route and the writer to a real engine's register,
+// floors and log.
+//
+// This is what the reference and the retention guide promised and what nothing
+// did: the verb wrote the inverse record for any node and printed `applied`,
+// so an operator readmitting a machine that was still offline put back the
+// very pin the eviction had lifted and was told it had worked.
+func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
+	e := testEngine(t)
+	boot := bootstrapFor(t, 0)
+	boot.API.Port = freePort(t)
+	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "a-test-token"}}
+	surface, err := serveNode(t, boot, e)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	base := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
+	node := []string{"-url", base, "-token", "a-test-token"}
+	deadline := time.Now().Add(20 * time.Second)
+	for !e.NativeHydrated() {
+		if time.Now().After(deadline) {
+			t.Fatal("the node never established its state log")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// TWO EVICTIONS, so the log is far enough along for a floor to pass a
+	// node that has applied nothing.
+	for _, away := range []string{"node-away", "node-spare"} {
+		if _, _, err := cli(t, append([]string{"retention", "evict", away,
+			"-confirm", away}, node...)...); err != nil {
+			t.Fatalf("evict %s: %v", away, err)
+		}
+	}
+	client := &nodeClient{base: base, token: "a-test-token", http: httpxtest.Pool(t)}
+	var report retentionReport
+	if err := client.get(t.Context(), "/query/retention", &report); err != nil {
+		t.Fatalf("read the retention report: %v", err)
+	}
+	var tracker retentionDomain
+	for _, d := range report.Domains {
+		if d.Domain == "tracker" {
+			tracker = d
+		}
+	}
+	if tracker.LastSeq < 2 {
+		t.Fatalf("the tracker log ends at %d, too near its start for a floor to "+
+			"pass a node at zero", tracker.LastSeq)
+	}
+
+	// THE FLEET MOVED ON WITHOUT IT: the trim published a floor at the log's
+	// end while node-away's last heartbeat said it had applied nothing.
+	fleet := e.Backends().Fleet
+	if err := fleet.PutFloor(t.Context(), coord.TrimFloor{
+		Domain: "tracker", Generation: tracker.Generation,
+		TrimTo: tracker.LastSeq, Floor: tracker.LastSeq,
+		At: time.Now().UTC(), By: "peer",
+	}); err != nil {
+		t.Fatalf("publish the floor: %v", err)
+	}
+	reportAt := func(seq uint64) {
+		t.Helper()
+		if err := fleet.PutPositions(t.Context(), coord.NodePositions{
+			NodeID: "node-away", At: time.Now().UTC(),
+			Domains: map[string]coord.DomainPosition{"tracker": {
+				Generation: tracker.Generation, Seq: seq, AppliedThrough: seq}},
+		}); err != nil {
+			t.Fatalf("publish node-away's position: %v", err)
+		}
+	}
+	readmit := append([]string{"retention", "readmit", "node-away",
+		"-confirm", "node-away"}, node...)
+
+	reportAt(0)
+	stdout, _, err := cli(t, readmit...)
+	if err == nil {
+		t.Fatalf("a node at 0 against a floor of %d was readmitted:\n%s",
+			tracker.LastSeq, stdout)
+	}
+	floor := strconv.FormatUint(tracker.LastSeq, 10)
+	for _, want := range []string{"409", "readmission_refused", "node-away",
+		"is 0", "below " + floor, "crewlet retention snapshots"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal never says %q:\n%v", want, err)
+		}
+	}
+	if strings.Contains(stdout, "applied") {
+		t.Errorf("a refused readmission printed an outcome:\n%s", stdout)
+	}
+
+	// AND ONCE IT HAS APPLIED EVERY RECORD UP TO THE ONE BEFORE THE FLOOR,
+	// IT IS TAKEN BACK.
+	reportAt(tracker.LastSeq - 1)
+	stdout, _, err = cli(t, readmit...)
+	if err != nil {
+		t.Fatalf("a node one record short of the floor was refused: %v", err)
+	}
+	if !strings.Contains(stdout, "readmit node-away: applied") {
+		t.Errorf("the readmission did not report landing:\n%s", stdout)
+	}
+	// AND THE WATERMARK IS READ FROM A REAL NODE'S ANSWER, which is the
+	// one encoding every fixture here can drift from.
+	if want := "tracker trim floor " + floor; !strings.Contains(stdout, want) {
+		t.Errorf("the readmission printed no watermark from the node's own "+
+			"report, want %q:\n%s", want, stdout)
+	}
+	if stdout, _, err := cli(t, append([]string{"retention", "status"}, node...)...); err != nil &&
+		!strings.Contains(err.Error(), "alarm") {
+		t.Fatalf("retention status against a real node: %v\n%s", err, stdout)
+	} else if !strings.Contains(stdout, "node-away") {
+		t.Errorf("retention status against a real node never lists node-away:\n%s", stdout)
 	}
 }

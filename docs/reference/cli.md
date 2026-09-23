@@ -19,7 +19,7 @@ subcommand below is served by it.
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
 | `crewlet retention evict <node> -confirm <node>` | Stop a node's records applying anywhere in the fleet, so the trim can pass a floor an absent machine is pinning. Prints the watermark before and after |
-| `crewlet retention readmit <node> -confirm <node>` | The inverse commit. Can be refused when the node's own position is below the current trim floor, and the refusal prints both |
+| `crewlet retention readmit <node> -confirm <node>` | The inverse commit. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of the tracker's or the pages log, and the refusal prints the numbers. Nothing is written on a refusal |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
 | `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream: declare every position below the next generation comparable and safely stale |
@@ -734,10 +734,41 @@ eviction takes effect: **the node stays counted for about a minute**, so a live
 one is certain to have read its own tombstone before the trim passes it.
 
 `readmit` is the inverse commit rather than a delete, so the eviction's whole
-history survives a replay. It can be refused when the node's own position is
-below the current trim floor — that node has to adopt a snapshot first — and
-the refusal prints its position beside the floor, because that inequality is
-the reason.
+history survives a replay. It is **refused** while the node is below a trim
+floor — and the refusal prints its position beside the floor, because that
+inequality is the reason:
+
+```
+$ crewlet retention readmit node-4 -confirm node-4
+crewlet: the node answered 409: readmission_refused
+  statelog: node-4 may not be readmitted: its last position in tracker (reported 2031-04-02T03:14:00Z) is 1200 and records below 9000 may already be gone from the tracker log (published floor 9000, first surviving sequence 8800) — it has to catch up before the fleet counts it again
+  start node-4 if it is not running: it catches up on its own, …
+```
+
+The comparison is the one the node's own write fence makes: its **last
+published position** in each log that claims identity — the tracker's and the
+pages log — against the **higher of the published floor and the log's first
+surviving sequence**, and the node must have applied every record up to the
+one just before it. A node that has never published a position is judged as
+holding nothing; one whose position is from a generation the log has since
+left is refused, since nothing it holds compares with anything the log still
+has. Nothing is written on a refusal.
+
+What to do is let the node catch up, which it does on its own: start it if it
+is not running, and it replays what the log still holds or adopts a peer's
+snapshot where it does not (`crewlet retention snapshots` says whether any peer
+can donate). Readmit it once its `SEQ` in `crewlet retention status` has
+reached one less than the higher of that domain's `TRIM FLOOR` and `FIRST` — the
+refusal's own `floor`, `first_seq` and `generation` are the numbers it
+compared, and right after a reanchor the `TRIM FLOOR` column can still show the
+old generation's floor. The position is a heartbeat old, so a node that has only
+just caught up can be refused once more; run the command again.
+
+The refusal is the truth about the node rather than the thing keeping your data
+safe. Readmitting a node below the floor used to succeed, and it put back the
+pin the eviction had lifted: the trim, counting that node again, stops
+advancing. Its writes were never the danger — its own fence refuses any write
+that assumes a history it does not hold.
 
 ### `crewlet retention set-capacity`
 

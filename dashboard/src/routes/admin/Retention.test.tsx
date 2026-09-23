@@ -240,6 +240,42 @@ test("the evict gesture repeats the node id in the query the server checks", asy
   localStorage.clear();
 });
 
+// A REFUSED READMISSION SAYS WHAT TO DO, NOT ONLY WHY.
+//
+// The route answers `409 readmission_refused` with the reason in `detail` and
+// the remedy in `hint` — start the node, let it catch up, readmit once it has.
+// A dialog that rendered only the reason left the operator knowing the node was
+// behind and nothing about what to do next, and a refusal must never render as
+// the success outcome: nothing was written.
+test("a refused readmission renders its reason and its remedy, and no outcome", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: "readmission_refused",
+            detail: "statelog: node-2 may not be readmitted: its last position in tracker is 1200",
+            hint: "start node-2 if it is not running: it catches up on its own",
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        ),
+    ),
+  );
+  localStorage.setItem("crewlet_api_token", "t");
+
+  render(<GateDialog node="node-2" evict={false} onClose={() => {}} />);
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "node-2" } });
+  fireEvent.click(screen.getByRole("button", { name: "Readmit" }));
+
+  await waitFor(() => expect(screen.getByText(/may not be readmitted/)).toBeTruthy());
+  expect(screen.getByText(/start node-2 if it is not running/)).toBeTruthy();
+  expect(screen.queryByText(/is readmitted/)).toBeNull();
+
+  vi.unstubAllGlobals();
+  localStorage.clear();
+});
+
 // A DOCUMENT THAT CANNOT CLAIM AN AGE SAYS SO, and one that can says nothing.
 //
 // The retention answer is the one a person opens DURING the outage it

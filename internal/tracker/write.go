@@ -143,6 +143,19 @@ type Writer struct {
 	// filters against nobody.
 	World FieldWorld
 
+	// Readmission judges whether an evicted node may be taken back, and
+	// it is the one question about a gate this package cannot answer from
+	// rows: where the node stands is the positions register's, and what
+	// the log may have lost is the published floor's and the stream's.
+	//
+	// ON THE WRITER rather than in front of it, so every readmission this
+	// engine can write passes it — a route, a verb or a later duty — and
+	// no caller can reach the record without the judgement. Nil REFUSES a
+	// readmission by name, for [Writer.World]'s reason: a node nothing
+	// checked is a node the documentation told the operator was checked.
+	// An eviction never asks it.
+	Readmission Readmission
+
 	// Now is the clock the AUTHORED instants are stamped from. An
 	// argument rather than a package call, so a test can pin it and so
 	// nothing on the write path reads a clock the applier is forbidden.
@@ -171,7 +184,12 @@ type WriterDeps struct {
 
 	// World is the chart seam the custom-field coercion needs for the one
 	// field type whose value is a colleague — see [Writer.World].
-	World     FieldWorld
+	World FieldWorld
+
+	// Readmission is the judgement [Writer.ReadmitNode] asks before it
+	// writes — see [Writer.Readmission].
+	Readmission Readmission
+
 	Metrics   *metrics.Recorder
 	Drain     func() float64
 	Actor     string
@@ -385,7 +403,8 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
 		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
-		Drain: d.Drain, Leads: d.Leads, World: d.World, Now: now,
+		Drain: d.Drain, Leads: d.Leads, World: d.World,
+		Readmission: d.Readmission, Now: now,
 	}, nil
 }
 

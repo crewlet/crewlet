@@ -224,6 +224,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// than to a row — so the write resolves it and the record
 			// carries the handle, and no applier ever reads an org.
 			World: liveSeats{engine: e},
+			// AND THE STATE LOG FOR THE ONE GATE THE ROWS CANNOT
+			// JUDGE: a readmission is refused while the node is below
+			// a trim floor, and where it stands is the register's and
+			// what the log may have lost is the floor's and the
+			// stream's — all three held by the runtime, none here.
+			Readmission: sl,
 			// THE NODE'S OWN WRITER ACTS AS THE SYSTEM, and every
 			// surface derives its own from it with Writer.As: a seat's
 			// tools act as that seat, an operator's session as that

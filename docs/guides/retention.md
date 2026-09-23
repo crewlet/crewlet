@@ -315,10 +315,32 @@ survives a replay:
 crewlet retention readmit node-4 -confirm node-4
 ```
 
-It can be refused, and the refusal names the reason: a node whose own position
-is below the current trim floor cannot simply resume — it has to adopt a
-snapshot first, which is why the readmission prints its position beside the
-floor.
+It is **refused while the node is below a trim floor**, and the refusal prints
+its position beside the floor, because that inequality is the reason. A
+readmission makes the trim count the node again, so readmitting one the floor
+has passed — typically a machine that is still switched off — puts back
+exactly the pin the eviction lifted, while the node itself is missing records
+the log has already lost or is licensed to lose.
+
+The comparison is the one the node's own [write fence](#the-trim-floor) makes:
+its last published position in the tracker's log and the pages log, against
+the higher of each log's published floor and its first surviving sequence. A
+node that has never published a position is judged as holding nothing. Nothing
+is written on a refusal, and the node needs nothing from you but time: start it
+if it is not running, and it [catches up on its own](#the-join-runbook) —
+replaying what the log still holds, adopting a snapshot where it does not.
+Readmit it once it has applied every record up to the one just before that
+bound: in `crewlet retention status`, its `SEQ` for each of those domains has
+reached one less than the higher of the domain's `TRIM FLOOR` and `FIRST`. The
+refusal's own `floor`, `first_seq` and `generation` are the numbers it
+compared — right after a [re-anchor](#re-anchoring-a-recreated-stream) the
+`TRIM FLOOR` column can still show the old generation's floor, which the
+refusal no longer reads — and running the readmission again is always safe,
+since a refusal writes nothing.
+
+The refusal is not what keeps the fleet's data safe, and being refused is not
+an emergency: a node below the floor is refused every write that assumes a
+history it does not hold, by its own fence, whether it is readmitted or not.
 
 ## A full log refuses; it does not shed
 

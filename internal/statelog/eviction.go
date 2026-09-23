@@ -143,3 +143,188 @@ func PermitEviction(nodeID string, live []Presence, force bool) error {
 	}
 	return nil
 }
+
+// ReadmissionBound is one identity-claiming domain's bound, as the node that
+// is asked to write a readmission reads it.
+//
+// THE SAME TWO WITNESSES THE WRITE FENCE TAKES THE HIGHER OF, for the reason
+// the floor theorem gives: the published floor covers a purge in flight and
+// one the stream's own answer has not caught up with, and the stream's first
+// sequence covers what the floor cannot see — a floor published at another
+// generation reads as zero. A readmission judged against either alone would
+// clear a node the fence it is about to be subject to refuses.
+type ReadmissionBound struct {
+	// Domain names the log, as the positions register keys it.
+	Domain string
+
+	// Generation is the generation the asking node runs this log at, and
+	// the one Floor was read at: a published floor at a LOWER generation
+	// names a dead number space and reads as zero, which First then
+	// covers.
+	Generation uint32
+
+	// Floor is the fleet's published [coord.TrimFloor.Floor] and First the
+	// log's own first surviving sequence.
+	Floor uint64
+	First uint64
+}
+
+// Held is the higher of the two: every record below it may already be gone
+// from the log, so a node has to have applied every record up to the one just
+// before it — [Replayable]'s boundary.
+func (b ReadmissionBound) Held() uint64 { return max(b.Floor, b.First) }
+
+// ReadmissionRefusal reports why an evicted node may not be taken back yet.
+//
+// A TYPED ERROR CARRYING EVERY NUMBER the refusal is about, because the
+// inequality IS the reason and the operator acts on the numbers: how far the
+// node is behind decides whether to wait for its applier or to go and find out
+// why it has not adopted a snapshot.
+type ReadmissionRefusal struct {
+	// NodeID is who was refused and Domain the first log, in the register's
+	// own order, that refused it.
+	NodeID string
+	Domain string
+
+	// Published reports whether the node has a row in the positions
+	// register at all. One that has never published is judged as holding
+	// nothing — the reading [CountedSet] gives a node with a live lease and
+	// no row — and the refusal says so rather than printing a zero that
+	// reads as a position it reported.
+	Published bool
+
+	// Generation and Seq are the node's own last published position in
+	// Domain, and ReportedAt the heartbeat that carried it. Zero when
+	// Published is false.
+	Generation uint32
+	Seq        uint64
+	ReportedAt time.Time
+
+	// Bound is the domain as the asking node read it.
+	Bound ReadmissionBound
+}
+
+func (e *ReadmissionRefusal) Error() string {
+	gone := fmt.Sprintf("records below %d may already be gone from the %s log "+
+		"(published floor %d, first surviving sequence %d)",
+		e.Bound.Held(), e.Domain, e.Bound.Floor, e.Bound.First)
+	// THE HEARTBEAT'S OWN INSTANT, because the position is a heartbeat old
+	// at best: a node that adopted a snapshot a moment ago is refused on
+	// the row it wrote before, and the instant is what says so.
+	reported := ""
+	if !e.ReportedAt.IsZero() {
+		reported = " (reported " + e.ReportedAt.UTC().Format(time.RFC3339) + ")"
+	}
+	switch {
+	case !e.Published:
+		return fmt.Sprintf("statelog: %s may not be readmitted: it has never "+
+			"published a position, so as far as the fleet knows it holds "+
+			"nothing, and %s", e.NodeID, gone)
+	case e.Generation < e.Bound.Generation:
+		return fmt.Sprintf("statelog: %s may not be readmitted: its last position "+
+			"in %s%s is %d at generation %d and the log is at generation %d, a "+
+			"sequence space that no longer exists — nothing it holds can be "+
+			"compared with anything the log still has",
+			e.NodeID, e.Domain, reported, e.Seq, e.Generation, e.Bound.Generation)
+	}
+	return fmt.Sprintf("statelog: %s may not be readmitted: its last position in "+
+		"%s%s is %d and %s — it has to catch up before the fleet counts it again",
+		e.NodeID, e.Domain, reported, e.Seq, gone)
+}
+
+// Remedy is what the operator does about it.
+//
+// NOTHING THAT FORCES IT. A node below the floor repairs itself — it replays
+// while the log still holds what it is missing, and adopts a peer's snapshot
+// where it does not, at boot or on the heartbeat that finds it there — and a
+// readmission is the gesture that follows that repair rather than one that
+// stands in for it.
+func (e *ReadmissionRefusal) Remedy() string {
+	return fmt.Sprintf("start %s if it is not running: it catches up on its own, "+
+		"replaying what the log still holds and adopting a peer's snapshot where "+
+		"it does not (`crewlet retention snapshots` says whether any peer can "+
+		"donate). Readmit it once it has applied every record up to the one just "+
+		"before the higher of the floor and the first surviving sequence this "+
+		"refusal names: its SEQ in `crewlet retention status` at that bound minus "+
+		"one or above, at the log's current generation", e.NodeID)
+}
+
+// PermitReadmission decides whether an evicted node may be counted again.
+//
+// # What a readmission does, and why a node below the floor is refused one
+//
+// A readmission lifts the node's tombstone, so the trim counts it again and
+// its own position becomes a term of the applied minimum. A node the floor has
+// passed is missing records the log has lost or is licensed to lose: it is not
+// a replica again until it has replayed what is still there or adopted a
+// snapshot for what is not, and meanwhile its position drags every tick's
+// conclusion down to a point the log has already left. For a node that is
+// still offline that is the very pin the eviction was run to lift, put back.
+//
+// # It is guidance, not the fence — which is why a stale read is harmless
+//
+// Nothing about the fleet's data rests on this refusal. A readmitted node below
+// the floor is refused every write at an expectation of zero by its own fence,
+// verified within the call (the floor theorem's clause (ii)); its readiness
+// reports `below_floor`; and the trim, counting it again, never purges above
+// it. So the two inputs that are stale by construction — a register row that is
+// a heartbeat old, a floor that may move between this check and the record
+// landing — can at worst admit a state those mechanisms already hold safe, and
+// there is no read-then-write race here worth a lock. What the refusal buys is
+// the operator being told the truth about the node before they act.
+//
+// # Every identity-claiming domain, in the register's own order
+//
+// A node is a replica of every log it runs or of none — one snapshot holds
+// them all — so a node behind in any of them is not one that can resume. A
+// domain its row does not name is skipped, on [CountedSet]'s rule that a node
+// which does not run a domain is not a node at position zero in it; a node
+// with NO row is judged at position zero, on that function's other rule.
+//
+// # And a comparison this node cannot make is not a refusal
+//
+// A row at a HIGHER generation than the asking node runs is a fleet that has
+// re-anchored the log while this node has not applied it yet. Nothing here can
+// judge that position, so the answer is [ErrUnavailable] — retry, or ask a
+// node that has caught up — rather than a refusal naming a fault in the node.
+func PermitReadmission(nodeID string, register []coord.NodePositions,
+	bounds []ReadmissionBound) error {
+
+	if nodeID == "" {
+		return fmt.Errorf("statelog: a readmission names no node")
+	}
+	var row *coord.NodePositions
+	for i := range register {
+		if register[i].NodeID == nodeID {
+			row = &register[i]
+			break
+		}
+	}
+	for _, b := range bounds {
+		refusal := &ReadmissionRefusal{NodeID: nodeID, Domain: b.Domain, Bound: b}
+		if row == nil {
+			if !Replayable(0, b.Held()) {
+				return refusal
+			}
+			continue
+		}
+		at, runs := row.Domains[b.Domain]
+		if !runs {
+			continue
+		}
+		refusal.Published = true
+		refusal.Generation, refusal.Seq, refusal.ReportedAt = at.Generation, at.Seq, row.At
+		switch {
+		case at.Generation > b.Generation:
+			return fmt.Errorf("statelog: %s reports its %s position at generation %d "+
+				"and this node runs that log at generation %d — the fleet has "+
+				"re-anchored it and this node has not applied that yet, so it cannot "+
+				"judge where %s stands; retry, or readmit through a node that has "+
+				"caught up: %w", nodeID, b.Domain, at.Generation, b.Generation,
+				nodeID, ErrUnavailable)
+		case at.Generation < b.Generation, !Replayable(at.Seq, b.Held()):
+			return refusal
+		}
+	}
+	return nil
+}

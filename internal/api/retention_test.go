@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // fakeBackupRegister records the point the acknowledgement wrote.
@@ -181,5 +182,80 @@ func TestAnAcknowledgementNamingAnUnknownStreamIsRefused(t *testing.T) {
 	}
 	if register.calls != 0 {
 		t.Errorf("a point was written anyway: %v", register.point)
+	}
+}
+
+// fakeNodeGate answers the two gate writes with what it was built with.
+type fakeNodeGate struct {
+	readmit error
+	evicted []string
+}
+
+func (f *fakeNodeGate) EvictNode(_ context.Context, opID, node string) (tracker.WriteResult, error) {
+	f.evicted = append(f.evicted, node)
+	return tracker.WriteResult{Outcome: statelog.OutcomeApplied, OpID: opID}, nil
+}
+
+func (f *fakeNodeGate) ReadmitNode(_ context.Context, opID, _ string) (tracker.WriteResult, error) {
+	if f.readmit != nil {
+		return tracker.WriteResult{}, f.readmit
+	}
+	return tracker.WriteResult{Outcome: statelog.OutcomeApplied, OpID: opID}, nil
+}
+
+// A READMISSION REFUSED BELOW THE FLOOR IS A 409 CARRYING BOTH NUMBERS, and a
+// failure stays a failure.
+//
+// The refusal is the answer the operator documentation promises, and `crewlet
+// retention readmit` prints the error, the detail and the hint beneath the
+// status. Reported as the route's generic `500 gate_failed`, it read as an
+// engine fault where there is a node still catching up — and the numbers that
+// are the whole reason sat unlabelled in a wrapped error string.
+func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	refusal := &statelog.ReadmissionRefusal{
+		NodeID: "node-4", Domain: "tracker", Published: true,
+		Generation: 2, Seq: 1_200,
+		Bound: statelog.ReadmissionBound{Domain: "tracker", Generation: 2,
+			Floor: 9_000, First: 8_800},
+	}
+	gate := &fakeNodeGate{readmit: fmt.Errorf("tracker: readmit node node-4: %w", refusal)}
+	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
+
+	code, body := postAck(t, a, "/work/retention/readmit/node-4?confirm=node-4")
+	if code != http.StatusConflict {
+		t.Fatalf("a refused readmission answered %d: %v", code, body)
+	}
+	if body["error"] != "readmission_refused" {
+		t.Errorf("error = %v, want readmission_refused", body["error"])
+	}
+	detail, _ := body["detail"].(string)
+	if detail != refusal.Error() {
+		t.Errorf("detail = %q, want the refusal's own sentence %q", detail, refusal.Error())
+	}
+	if hint, _ := body["hint"].(string); hint != refusal.Remedy() {
+		t.Errorf("hint = %q, want the refusal's remedy", hint)
+	}
+	for field, want := range map[string]any{
+		"node": "node-4", "domain": "tracker", "position": float64(1_200),
+		"floor": float64(9_000), "first_seq": float64(8_800), "published": true,
+	} {
+		if body[field] != want {
+			t.Errorf("%s = %v, want %v", field, body[field], want)
+		}
+	}
+
+	// AND A JUDGEMENT NOBODY COULD MAKE IS NOT A REFUSAL OF THE NODE.
+	gate.readmit = errors.New("engine: read the positions register: unreachable")
+	if code, body := postAck(t, a, "/work/retention/readmit/node-4?confirm=node-4"); code !=
+		http.StatusInternalServerError || body["error"] != "gate_failed" {
+		t.Fatalf("an unreadable register answered %d %v, want 500 gate_failed", code, body)
+	}
+
+	// AND AN EVICTION IS UNTOUCHED BY ANY OF IT.
+	if code, body := postAck(t, a, "/work/retention/evict/node-5?confirm=node-5"); code !=
+		http.StatusOK || len(gate.evicted) != 1 {
+		t.Fatalf("an eviction answered %d %v", code, body)
 	}
 }

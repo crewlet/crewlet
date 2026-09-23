@@ -49,7 +49,12 @@ export function GateDialog({
 }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // THE REFUSAL'S HINT TRAVELS WITH ITS DETAIL. A refused readmission answers
+  // `409 readmission_refused` with the sentence in `detail` and what to do in
+  // `hint` — start the node, let it catch up, readmit once it has — and a
+  // dialog that kept only the message told the operator why and never what
+  // next, which is the half the 409 exists to carry.
+  const [error, setError] = useState<{ detail: string; hint: string } | null>(null);
   const [result, setResult] = useState<RetentionGateResult | null>(null);
 
   const verb = evict ? "Evict" : "Readmit";
@@ -73,7 +78,11 @@ export function GateDialog({
       )) as RetentionGateResult;
       setResult(answer);
     } catch (err) {
-      setError(err instanceof RestError ? err.message : String(err));
+      setError(
+        err instanceof RestError
+          ? { detail: err.message, hint: err.hint }
+          : { detail: String(err), hint: "" },
+      );
     } finally {
       setBusy(false);
     }
@@ -127,8 +136,12 @@ export function GateDialog({
             ) : (
               <>
                 <InlineCode>{node}</InlineCode> is counted again and the trim waits for it once
-                more. This is refused when the node&apos;s own position is already below the
-                published floor: there would be nothing left on the log for it to replay.
+                more. This is refused, with nothing written, until the node has applied every record
+                up to the one just before the higher of each log&apos;s published floor and its
+                first surviving sequence, in the tracker&apos;s log and the pages log: counting a
+                node the floor has passed would put back the pin the eviction lifted. A refused node
+                catches up on its own — replaying what the log still holds, adopting a snapshot
+                where it does not — and can be readmitted once it has.
               </>
             )}
           </p>
@@ -157,7 +170,10 @@ export function GateDialog({
 
           {error && (
             <Callout variant="danger" role="alert">
-              <span>{error}</span>
+              <span className="col" style={{ gap: 6 }}>
+                <span>{error.detail}</span>
+                {error.hint && <span className="t-caption">{error.hint}</span>}
+              </span>
             </Callout>
           )}
         </>

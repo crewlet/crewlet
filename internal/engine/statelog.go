@@ -921,6 +921,64 @@ func firstSeqOf(l *jetstream.DomainLog) func(context.Context) (uint64, error) {
 	}
 }
 
+// Readmissible answers the tracker writer's [tracker.Readmission]: whether an
+// evicted node has fallen below a floor it would be counted against again.
+//
+// HERE, because this is the one object holding all three inputs — the
+// positions register the node's own heartbeat writes, the floor the trim
+// publishes, and every domain's log — and each is read exactly as the write
+// fence reads it: the floor through [floorFor] at the generation this node
+// runs, and the stream's first sequence beside it, the higher of the two
+// bounding what may be gone. A readmission judged against a different bound
+// from the fence the node is about to be subject to would clear it for writes
+// that fence refuses.
+//
+// IDENTITY-CLAIMING DOMAINS ONLY. The floor theorem is about an expectation of
+// zero, which only a domain that claims identity can form; a compacted domain
+// has no such write, and a node behind in one is a coverage figure rather
+// than a node that cannot resume.
+//
+// Every read that fails is an error and REFUSES: a register nobody could list
+// is not a register without the node in it, and a floor nobody could read is
+// not a low one.
+func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
+	if s == nil || s.fleet == nil {
+		return fmt.Errorf("engine: this node reads no positions register, so it "+
+			"cannot judge where %s stands against the trim floor", nodeID)
+	}
+	register, err := s.fleet.Positions(ctx)
+	if err != nil {
+		return fmt.Errorf("engine: read the positions register to judge %s's "+
+			"readmission: %w", nodeID, err)
+	}
+	floors, err := s.fleet.Floors(ctx)
+	if err != nil {
+		return fmt.Errorf("engine: read the published trim floors to judge %s's "+
+			"readmission: %w", nodeID, err)
+	}
+	var bounds []statelog.ReadmissionBound
+	for _, name := range s.order {
+		running := s.domains[name]
+		if !running.domain.ClaimsIdentity() {
+			continue
+		}
+		generation := running.runner.Committed().Generation
+		floor, err := floorFor(floors, name, generation)
+		if err != nil {
+			return err
+		}
+		first, _, err := running.log.Bounds(ctx)
+		if err != nil {
+			return fmt.Errorf("engine: read %s's first surviving sequence to judge "+
+				"%s's readmission: %w", name, nodeID, err)
+		}
+		bounds = append(bounds, statelog.ReadmissionBound{
+			Domain: name, Generation: generation, Floor: floor, First: first,
+		})
+	}
+	return statelog.PermitReadmission(nodeID, register, bounds)
+}
+
 // Domain answers one running domain by name, or nil.
 func (s *stateLog) Domain(name string) *runningDomain {
 	if s == nil {

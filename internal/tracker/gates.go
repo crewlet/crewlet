@@ -486,8 +486,44 @@ func (w *Writer) EvictNode(ctx context.Context, opID, nodeID string) (WriteResul
 // ReadmitNode is the INVERSE COMMIT rather than a delete, so an eviction's
 // whole history survives a replay — and a node that was evicted, readmitted
 // and evicted again reads correctly rather than as one long absence.
+//
+// # And it is refused for a node the trim floor has passed
+//
+// [Writer.Readmission] is asked first, and its refusal is returned whole —
+// a [*statelog.ReadmissionRefusal] carrying the node's position and the floor
+// — with nothing appended. The judgement is made BEFORE the append and outside
+// the decide's snapshot, because neither of its inputs is in that
+// transaction: the positions register and the published floor are
+// coordination, and the log's first sequence is the broker's. Why reading them
+// a moment early costs nothing is [statelog.PermitReadmission]'s to say.
 func (w *Writer) ReadmitNode(ctx context.Context, opID, nodeID string) (WriteResult, error) {
+	if nodeID == "" {
+		return WriteResult{}, fmt.Errorf("tracker: a readmission names no node")
+	}
+	if w.Readmission == nil {
+		return WriteResult{}, fmt.Errorf("tracker: this writer cannot establish "+
+			"where node %s stands against the trim floor, so it cannot readmit "+
+			"it — a node the floor has passed cannot replay what it is missing, "+
+			"and the readmission is refused rather than written unjudged", nodeID)
+	}
+	if err := w.Readmission.Readmissible(ctx, nodeID); err != nil {
+		return WriteResult{}, fmt.Errorf("tracker: readmit node %s: %w", nodeID, err)
+	}
 	return w.gateNode(ctx, opID, nodeID, true)
+}
+
+// Readmission judges whether an evicted node may be counted again.
+//
+// DECLARED HERE, by the one caller, and answered by the engine: the inputs are
+// the positions register, the fleet's published floors and every
+// identity-claiming domain's own log, and this package holds none of them.
+type Readmission interface {
+	// Readmissible answers nil when the node may be taken back, a
+	// [*statelog.ReadmissionRefusal] when a floor it would be counted
+	// against has passed it, and any other error when that cannot be
+	// established — which refuses too, since a judgement nobody could
+	// make is not one that came back clear.
+	Readmissible(ctx context.Context, nodeID string) error
 }
 
 func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool) (WriteResult, error) {

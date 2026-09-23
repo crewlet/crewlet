@@ -11,7 +11,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -432,4 +434,145 @@ func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T
 		t.Fatalf("the log's last record is %d (err %v), want %d — an append "+
 			"landed from a node the fence should have refused", last, err, missed)
 	}
+}
+
+// A NODE BELOW THE TRIM FLOOR IS NOT READMITTED — through the writer the
+// readmission route calls, judged against the register, the published floors
+// and the logs as the engine wires them.
+//
+// The documentation promised this refusal; the writer wrote the inverse record
+// for any node, so an operator readmitting a machine that was still offline
+// put back exactly the pin the eviction had lifted and was told it had worked.
+// Each witness is exercised on its own — the published floor, then the
+// stream's first sequence with the floor at zero — because the fence the node
+// becomes subject to reads the higher of the two, and a readmission judged
+// against either alone clears a node that fence refuses. And every
+// identity-claiming domain is judged while the compacted one is not.
+func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
+	t.Parallel()
+	e, back, running := trimmedTracker(t)
+	s := e.native.log
+	writer := e.native.writer
+	if writer == nil {
+		t.Fatal("the node runs no tracker writer")
+	}
+	wiki := s.Domain(pages.Domain{}.Name())
+	vectors := s.Domain(search.Domain{}.Name())
+	if wiki == nil || vectors == nil {
+		t.Fatal("the pages or the vector domain is not running")
+	}
+
+	const away = "node-away"
+	if res, err := writer.EvictNode(t.Context(), "op-evict", away); err != nil ||
+		res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("evict %s: %v (outcome %q)", away, err, res.Outcome)
+	}
+	at := running.runner.Committed()
+	if at.Seq < 3 {
+		t.Fatalf("this node is at %d, too near the start of the log for a floor "+
+			"to pass anybody", at.Seq)
+	}
+	// THE ABSENT NODE'S LAST HEARTBEAT, from before the fleet moved on.
+	report := func(trackerSeq uint64) {
+		t.Helper()
+		if err := back.Fleet.PutPositions(t.Context(), coord.NodePositions{
+			NodeID: away, At: time.Now().UTC(),
+			Domains: map[string]coord.DomainPosition{
+				running.domain.Name(): {Generation: at.Generation, Seq: trackerSeq,
+					AppliedThrough: trackerSeq},
+				wiki.domain.Name(): {Generation: wiki.runner.Committed().Generation},
+				vectors.domain.Name(): {
+					Generation: vectors.runner.Committed().Generation},
+			},
+		}); err != nil {
+			t.Fatalf("publish %s's position: %v", away, err)
+		}
+	}
+	floor := func(r *runningDomain, f uint64) {
+		t.Helper()
+		if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{
+			Domain: r.domain.Name(), Generation: r.runner.Committed().Generation,
+			TrimTo: f, Floor: f, At: time.Now().UTC(), By: "peer",
+		}); err != nil {
+			t.Fatalf("publish %s's floor: %v", r.domain.Name(), err)
+		}
+	}
+	end := func() uint64 {
+		t.Helper()
+		_, last, err := running.log.Bounds(t.Context())
+		if err != nil {
+			t.Fatalf("read the log's end: %v", err)
+		}
+		return last
+	}
+	refusedIn := func(domain string, seq, floorWant, firstWant uint64) {
+		t.Helper()
+		before := end()
+		_, err := writer.ReadmitNode(t.Context(), "op-readmit", away)
+		var refusal *statelog.ReadmissionRefusal
+		if !errors.As(err, &refusal) {
+			t.Fatalf("readmitting %s answered %v, want a refusal naming %s", away,
+				err, domain)
+		}
+		if refusal.Domain != domain || refusal.Seq != seq ||
+			refusal.Bound.Floor != floorWant || refusal.Bound.First != firstWant {
+			t.Fatalf("refused in %s at %d against floor %d / first %d, want %s at %d "+
+				"against %d / %d", refusal.Domain, refusal.Seq, refusal.Bound.Floor,
+				refusal.Bound.First, domain, seq, floorWant, firstWant)
+		}
+		if last := end(); last != before {
+			t.Fatalf("the log moved from %d to %d on a refused readmission", before, last)
+		}
+	}
+
+	// THE PUBLISHED FLOOR HAS PASSED IT — and the vectors' floor is further
+	// still, which refuses nothing: a compacted domain forms no expectation
+	// of zero, so a node behind in it is a coverage figure.
+	report(1)
+	floor(running, at.Seq)
+	floor(vectors, 1_000_000)
+	refusedIn(running.domain.Name(), 1, at.Seq, 1)
+
+	// THE STREAM HAS LOST WHAT IT NEEDS while the published floor says
+	// nothing — a floor at zero is what a floor from another generation
+	// reads as.
+	floor(running, 0)
+	if err := running.log.Purge(t.Context(), at.Seq); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	refusedIn(running.domain.Name(), 1, 0, at.Seq)
+
+	// CAUGHT UP ON THE TRACKER, BEHIND ON THE PAGES: a node is a replica
+	// of every log it runs or of none.
+	report(at.Seq - 1)
+	floor(wiki, 5)
+	refusedIn(wiki.domain.Name(), 0, 5, logFirstOf(t, wiki))
+
+	// AND ONCE IT HOLDS EVERYTHING THAT MAY BE GONE, IT IS TAKEN BACK.
+	floor(wiki, 0)
+	res, err := writer.ReadmitNode(t.Context(), "op-readmit", away)
+	if err != nil {
+		t.Fatalf("a node one record short of every floor was refused: %v", err)
+	}
+	if res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the readmission answered %q, want applied", res.Outcome)
+	}
+	rows, err := tracker.Evictions(t.Context(), back.Store.Replicated(),
+		running.domain.Stream().Name)
+	if err != nil {
+		t.Fatalf("read the evictions: %v", err)
+	}
+	if len(rows) != 1 || rows[0].NodeID != away || !rows[0].IsBack {
+		t.Fatalf("evictions = %+v, want %s readmitted", rows, away)
+	}
+}
+
+// logFirstOf is a domain log's own first surviving sequence.
+func logFirstOf(t *testing.T, r *runningDomain) uint64 {
+	t.Helper()
+	first, _, err := r.log.Bounds(t.Context())
+	if err != nil {
+		t.Fatalf("read %s's bounds: %v", r.domain.Name(), err)
+	}
+	return first
 }
