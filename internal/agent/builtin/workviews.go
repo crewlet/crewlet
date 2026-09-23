@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -27,8 +28,15 @@ import (
 // write the same container two ways. The parse is shared for that reason.
 
 // ViewWriter is the tracker write side these tools need.
+//
+// ViewPrior is the read a save is decided on: a save replaces a view whole by
+// id, so who may make one is a question about the view it OVERWRITES as well
+// as the one it writes, and the write refuses a prior that no longer holds —
+// see [tracker.ViewPrior].
 type ViewWriter interface {
-	WriteView(ctx context.Context, opID string, view tracker.View) (tracker.WriteResult, error)
+	ViewPrior(ctx context.Context, id string) (tracker.ViewPrior, error)
+	WriteView(ctx context.Context, opID string, view tracker.View,
+		prior tracker.ViewPrior) (tracker.WriteResult, error)
 }
 
 // ViewReader is the read side.
@@ -163,7 +171,9 @@ func (t *saveWorkView) Parameters() map[string]any {
 			"default": map[string]any{
 				"type": "boolean",
 				"description": "True makes it the container's landing tab, " +
-					"taking that from whichever view held it.",
+					"taking that from whichever view held it. Only a SHARED " +
+					"view can be: nobody but its owner sees a personal one, " +
+					"so pin that instead with set_pins.",
 			},
 			"icon": map[string]any{"type": "string"},
 		},
@@ -194,9 +204,32 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// verb that always minted would write a second view on every retry of
 	// an `unknown` outcome; one that always required an id could not
 	// create.
+	writer := t.deps.ViewWriter(actor)
 	id := strings.TrimSpace(argString(args, "id"))
+	var prior tracker.ViewPrior
 	if id == "" {
 		id = uuid.NewString()
+	} else {
+		// A SAVE UNDER AN ID IT DID NOT MINT MAY REPLACE SOMEBODY ELSE'S
+		// VIEW, so the view it would overwrite is decided on as well as
+		// the one it writes. The gate decided the NEW view from the
+		// arguments; it could not decide the old one, which is a stored
+		// row — and decided on the arguments alone, anybody who may keep
+		// a view of their own could take over a project's shared tab or
+		// a colleague's personal one by naming its id. Asked here with
+		// the same action, on the stored owner and container, as
+		// `work.route` is asked on a task's stored project; the write
+		// then refuses if the view changes under this decision.
+		if prior, err = writer.ViewPrior(ctx, id); err != nil {
+			return readFailed(tracker.SaveWorkViewTool, err), nil
+		}
+		if prior.Held {
+			if refused := t.deps.mayWrite(ctx, authz.ActionViewSave,
+				viewObject(prior.Owner, prior.Container)); refused != nil {
+
+				return *refused, nil
+			}
+		}
 	}
 	view := tracker.View{
 		ID:        id,
@@ -209,7 +242,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Default:   argBool(args, "default"),
 		Icon:      strings.TrimSpace(argString(args, "icon")),
 	}
-	result, err := t.deps.ViewWriter(actor).WriteView(ctx, "view-"+id, view)
+	result, err := writer.WriteView(ctx, "view-"+id, view, prior)
 	if err != nil {
 		return writeFailed(tracker.SaveWorkViewTool, err), nil
 	}

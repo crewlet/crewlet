@@ -52,6 +52,94 @@ import (
 // container on all of them would make an ordinary rename defer every write in
 // the project behind it.
 
+// ViewPrior is the stored view a save was DECIDED against: whether a view was
+// held under the id, and — when it was — whose it was and which strip it lived
+// in.
+//
+// # Why a save carries what it replaced
+//
+// A save replaces a view WHOLE, by id, so who may make one is a question about
+// two views: the one the caller is writing and the one it overwrites. Decided
+// on the arguments alone, a caller who could write a view of their own could
+// overwrite ANY id with one — a project's shared tab taken over by somebody
+// who does not lead the project, a colleague's personal view rewritten as the
+// caller's. So the caller reads this with [Writer.ViewPrior], decides its
+// authority over the stored owner and container as well as the new ones, and
+// hands the value back here — and the decide REFUSES a save whose stored view
+// is no longer the one the authority was decided on. That is the pairing
+// [Writer.UpdateTask]'s If-Match makes for a task, stated for the two facts a
+// view's authority turns on.
+type ViewPrior struct {
+	// Held says a view existed under the id when the caller read it.
+	Held bool
+
+	// Owner and Container are that view's, and empty when none was held.
+	Owner     string
+	Container Container
+}
+
+// ViewPrior reads what a save of view id would replace, for the caller to
+// decide its authority on and to pass back to [Writer.WriteView].
+//
+// OUTSIDE THE SNAPSHOT, and [Writer.db]'s own rule is why that is safe: nothing
+// decided from this read is paired with a broker expectation, and the decide
+// verifies it in its own snapshot and refuses a save whose stored view moved,
+// changed hands or appeared since. It is also where the save's scope comes
+// from — see [Writer.WriteView] — so one read serves both.
+func (w *Writer) ViewPrior(ctx context.Context, id string) (ViewPrior, error) {
+	if w.db == nil {
+		return ViewPrior{}, fmt.Errorf("tracker: this writer has no store, so it "+
+			"cannot read what saving view %s would replace", id)
+	}
+	var prior ViewPrior
+	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		row := tx.QueryRowContext(ctx, `
+			SELECT owner, container_kind, container_id FROM tracker_views
+			WHERE id = ?`, id)
+		return row.Scan(&prior.Owner, &prior.Container.Kind, &prior.Container.ID)
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return ViewPrior{}, nil
+	case err != nil:
+		return ViewPrior{}, fmt.Errorf("tracker: read what saving view %s would "+
+			"replace: %w", id, err)
+	}
+	prior.Held = true
+	return prior, nil
+}
+
+// matches reports whether a view read in a decide's snapshot is still the one
+// a prior describes, or the refusal naming what changed.
+func (p ViewPrior) matches(id string, current View, held bool) error {
+	switch {
+	case held && !p.Held:
+		return fmt.Errorf("tracker: a view with id %s was saved while this one "+
+			"was being decided, so the authority to write it was decided on a "+
+			"view that did not exist — read it again and decide again: %w",
+			id, statelog.ErrConflict)
+	case !held && p.Held:
+		return fmt.Errorf("tracker: view %s is no longer in this node's rows, so "+
+			"the authority to replace it was decided on a view that is gone — "+
+			"read it again and decide again: %w", id, statelog.ErrConflict)
+	case held && (current.Owner != p.Owner || current.Container != p.Container):
+		return fmt.Errorf("tracker: view %s changed hands or moved while this "+
+			"save was being decided (it is %s's on %s %s now), so the authority "+
+			"to replace it was decided on another view — read it again and "+
+			"decide again: %w", id, ownerOrShared(current.Owner),
+			current.Container.Kind, current.Container.ID, statelog.ErrConflict)
+	}
+	return nil
+}
+
+// ownerOrShared renders a view's owner for a refusal.
+func ownerOrShared(owner string) string {
+	if owner == "" {
+		return "shared, nobody"
+	}
+	return owner
+}
+
 // WriteView saves a view, creating it or replacing it whole.
 //
 // WHOLE POST-STATE, like every other document object here: the record carries
@@ -62,7 +150,12 @@ import (
 // The CALLER mints the id, which is what makes a retry idempotent: a verb that
 // minted one would write a second view every time an `unknown` outcome was
 // retried.
-func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteResult, error) {
+//
+// prior is what the caller read with [Writer.ViewPrior] and decided its
+// authority on; a save whose stored view is no longer that one is refused.
+func (w *Writer) WriteView(ctx context.Context, opID string, view View,
+	prior ViewPrior) (WriteResult, error) {
+
 	if err := checkView(&view); err != nil {
 		return WriteResult{}, err
 	}
@@ -73,10 +166,14 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 	// strip and INTO another — a scope naming only the destination would
 	// let a write into the strip it left slip past a deferral that covers
 	// it, which is [Writer.UpdateTask]'s own rule for a project move said
-	// about a view.
-	from, moved, err := w.viewHome(ctx, view.ID, home)
-	if err != nil {
-		return WriteResult{}, err
+	// about a view. Taken from the PRIOR, which the decide verifies, so a
+	// scope formed from it is never an under-declaration that went
+	// unchecked.
+	var from string
+	var moved bool
+	if prior.Held {
+		from = containerScope(prior.Container)
+		moved = from != home
 	}
 	scope := ScopeSet{Subject: true, Container: home}
 	switch {
@@ -109,6 +206,17 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			// THE VIEW THE AUTHORITY WAS DECIDED ON IS STILL THE ONE
+			// BEING REPLACED — and, because the scope was formed from the
+			// same prior, the scope still names the strip it leaves. A
+			// view that moved, changed hands or appeared under this write
+			// is refused rather than published: an UNDER-declared scope is
+			// the one thing a record may never carry, and a save decided
+			// on somebody else's view is the takeover the prior exists to
+			// stop. The caller's retry re-reads.
+			if err := prior.matches(view.ID, current, held); err != nil {
+				return statelog.Decision{}, err
+			}
 			post := view
 			switch {
 			case !held:
@@ -122,21 +230,6 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 					post.Rank = rank
 				}
 			default:
-				// AND THE SCOPE'S OWN PRE-READ IS VERIFIED HERE, in
-				// the snapshot: it was taken outside one, so a view
-				// that moved under this write would have been scoped
-				// against a container it no longer lives in. Refused
-				// rather than published, because an UNDER-declared
-				// scope is the one thing a record may never carry —
-				// and the caller's retry re-reads.
-				if stored := containerScope(current.Container); stored != home &&
-					(!moved || stored != from) {
-					return statelog.Decision{}, fmt.Errorf("tracker: view %s "+
-						"moved to %s while this save was being prepared, so "+
-						"the record would not name the strip it is leaving — "+
-						"read it again and save: %w",
-						view.ID, stored, statelog.ErrConflict)
-				}
 				// A PROTECTED VIEW IS ITS OWNER'S, and that is the
 				// whole of what "protected" means here: it stops a
 				// shared board being rearranged under everybody,
@@ -164,38 +257,6 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 				post, nil, at)
 		},
 	})
-}
-
-// viewHome is the container a saved view lives in NOW, and whether that is a
-// different one from where this save would put it.
-//
-// A SCOPE, NEVER AN EXPECTATION — [Writer.db]'s own rule. Nothing decided from
-// this read is paired with a broker expectation: it only WIDENS the declared
-// scope, and an over-declared scope is always safe where an under-declared one
-// is the single claim a record may not make. It is verified inside the decide
-// snapshot all the same, because a scope formed from a stale read and never
-// checked is an under-declaration waiting for a race.
-//
-// A view this node does not hold reports no move: there is no strip for it to
-// be leaving.
-func (w *Writer) viewHome(ctx context.Context, id, home string) (string, bool, error) {
-	if w.db == nil {
-		return "", false, nil
-	}
-	var kind, container string
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		row := tx.QueryRowContext(ctx,
-			`SELECT container_kind, container_id FROM tracker_views WHERE id = ?`, id)
-		return row.Scan(&kind, &container)
-	})
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return "", false, nil
-	case err != nil:
-		return "", false, fmt.Errorf("tracker: read where view %s lives: %w", id, err)
-	}
-	from := containerScope(Container{Kind: kind, ID: container})
-	return from, from != home, nil
 }
 
 // checkView refuses a view that could not be rendered or could not be run.
@@ -230,6 +291,19 @@ func checkView(view *View) error {
 		return fmt.Errorf("tracker: view %s names a %s container with no id — "+
 			"a view belongs to one project, unit or person, and one belonging "+
 			"to nothing appears in no strip", view.ID, view.Container.Kind)
+	case view.Default && view.Owner != "":
+		// THE DEFAULT IS THE CONTAINER'S LANDING TAB, FOR EVERYBODY, and a
+		// personal view is in nobody's strip but its owner's. Accepted,
+		// the apply cleared the container's shared default — every other
+		// reader lost their landing tab to a row they cannot see — on
+		// the authority of a caller who needed no more than their own
+		// record to save it. Where a person wants their own view first,
+		// that is a PIN, which is theirs alone.
+		return fmt.Errorf("tracker: view %s is personal (%s's) and cannot be "+
+			"its container's default: the default is the landing tab for "+
+			"everybody, and nobody else sees a personal view. Share it to "+
+			"make it the default, or pin it to put it first for its owner",
+			view.ID, view.Owner)
 	case len(view.Params) > MaxViewParamKeys:
 		// A GUARD ON THE MAP'S SIZE. What refuses a key that is not a
 		// filter is [ParseQuery] below, which rejects an unknown

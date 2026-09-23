@@ -195,7 +195,9 @@ var subjectOf = map[string]subject{
 	// A SAVED VIEW IS EITHER, and its own class reads whichever it
 	// names. Its container is a kind plus a key in ONE argument
 	// (`project:ENG`, `unit:eng`, `person:ana`, `workspace`), which is
-	// why this row states a parser rather than a kind.
+	// why this row states a parser rather than a kind. This decides the
+	// view being WRITTEN; the one a save REPLACES is a stored row, and
+	// the tool asks the same action on it once it has read it.
 	"save_work_view": {kind: authz.KindView, owner: "owner", container: "container"},
 
 	// THE TRASH IS DECIDED BY THE TASK'S OWN PROJECT, which is a stored row
@@ -289,19 +291,45 @@ func containerArg(args map[string]any, field string) (authz.ObjectKind, string) 
 		}
 		return authz.KindProject, tracker.ProjectKey(raw)
 	}
-	switch kind {
+	if kind == tracker.ContainerWorkspace {
+		// THE WORKSPACE CARRIES NO ID, so `workspace:x` names nothing —
+		// the tool refuses the spelling with the grammar in its message.
+		return "", ""
+	}
+	return containerObject(tracker.Container{Kind: kind, ID: id})
+}
+
+// containerObject is a tracker container as the authority table's kind and
+// key.
+//
+// ONE MAPPING for both of the places a view's container reaches a decision —
+// the argument the gate reads and the STORED view `save_work_view` asks about
+// once it has read it — so the two cannot decide one container two ways.
+func containerObject(c tracker.Container) (authz.ObjectKind, string) {
+	switch c.Kind {
+	case tracker.ContainerWorkspace:
+		return authz.KindCompany, tracker.ContainerWorkspace
 	case tracker.ContainerProject:
-		return authz.KindProject, tracker.ProjectKey(id)
+		return authz.KindProject, tracker.ProjectKey(c.ID)
 	case tracker.ContainerUnit:
-		return authz.KindUnit, id
+		return authz.KindUnit, c.ID
 	case tracker.ContainerPerson:
-		return authz.KindPerson, id
+		return authz.KindPerson, c.ID
 	}
 	// A KIND THIS BUILD DOES NOT KNOW NAMES NOTHING, which every class
 	// refuses. The tool parses the same string and refuses it too, with a
 	// message that says what the grammar is — and the refusal a caller
 	// reads should be that one, not an authority answer.
 	return "", ""
+}
+
+// viewObject is a saved view as [authz.ClassSavedView] decides it: its owner,
+// which makes it that person's record, and its container, which makes a
+// shared one that container's lead's.
+func viewObject(owner string, c tracker.Container) authz.Object {
+	o := authz.Object{Kind: authz.KindView, Owner: owner}
+	o.ContainerKind, o.Container = containerObject(c)
+	return o
 }
 
 // stringArg is one argument as a string, or empty.

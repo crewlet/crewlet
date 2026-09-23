@@ -38,7 +38,7 @@ func TestAQuietChangeStillNamesWhatItWas(t *testing.T) {
 		t.Fatalf("WriteTypes: %v", err)
 	}
 	r.drain()
-	if _, err := r.writer.WriteView(t.Context(), "op-view", aView("v-1", nil)); err != nil {
+	if _, err := save(t, r.writer, "op-view", aView("v-1", nil)); err != nil {
 		t.Fatalf("WriteView: %v", err)
 	}
 	r.drain()

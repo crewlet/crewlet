@@ -833,7 +833,7 @@ unlocks.
 | **Colleague write** | Filing, commenting, updating, merging; declaring a project's tags; authoring a page; asking a colleague | `work:write` for work, `knowledge:write` for pages |
 | **Own record** | Marking an inbox, pinned views | The owner, or `fleet:operate` |
 | **Own or lead** | Priorities, a person's day, reading their queue | The owner, whoever leads them, or `fleet:operate` |
-| **Saved view** | Saving a view | A **personal** view (one naming an owner): its owner, or `fleet:operate`. A **shared** one: its container's lead — a project's, a unit's, or the person whose page it sits on and whoever leads them — or `fleet:operate`, which is the only way to a workspace-wide tab |
+| **Saved view** | Saving a view | A **personal** view (one naming an owner): its owner, or `fleet:operate`. A **shared** one: its container's lead — a project's, a unit's, or the person whose page it sits on and whoever leads them — or `fleet:operate`, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
 | **Container** | A project's policy — its fields, default assignee, tag renames and archives, archiving the project — re-routing a task to another team, and a page container's own settings | The project's lead or, for pages, the lead of the unit whose `space:` the container is; or `fleet:operate` |
 | **Chart object** | The public half of the org chart: a unit's name and purpose, a seat's goal and responsibilities | Whoever leads that unit or seat, or `fleet:operate` — a seat never edits its own |
 | **Destructive** | Removing and restoring a task; trashing and restoring a page | The **container's** lead, or `fleet:operate` |

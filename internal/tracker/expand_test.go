@@ -18,7 +18,7 @@ func TestASavedViewIsDefaultsTheCallerCanOverride(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	if _, err := r.writer.WriteView(t.Context(), "op-view", tracker.View{
+	if _, err := save(t, r.writer, "op-view", tracker.View{
 		ID:        "v-mine",
 		Name:      "Ana's todo",
 		Type:      tracker.ViewList,
@@ -157,7 +157,7 @@ func TestAViewBeatsAPresetAndTheCallerBeatsBoth(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	if _, err := r.writer.WriteView(t.Context(), "op-view", tracker.View{
+	if _, err := save(t, r.writer, "op-view", tracker.View{
 		ID:        "v-1",
 		Name:      "Bob's",
 		Type:      tracker.ViewList,
@@ -208,7 +208,7 @@ func TestASavedViewCannotCarryTheCallersOwnKeys(t *testing.T) {
 
 	for _, key := range []string{"view", "preset", "cursor", "read_level",
 		"max_lag_seconds", "max_lag_seq", "min_position"} {
-		_, err := r.writer.WriteView(t.Context(), "op-"+key, tracker.View{
+		_, err := save(t, r.writer, "op-"+key, tracker.View{
 			ID:        "v-" + key,
 			Name:      "Bad",
 			Type:      tracker.ViewList,
@@ -252,7 +252,7 @@ func TestAnAnswerSaysWhatItWasExpandedFrom(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	if _, err := r.writer.WriteView(t.Context(), "op-view", tracker.View{
+	if _, err := save(t, r.writer, "op-view", tracker.View{
 		ID:        "v-1",
 		Name:      "Open work",
 		Type:      tracker.ViewList,

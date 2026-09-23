@@ -409,9 +409,22 @@ easier question:
 | **Shared on a person's page** (`person:ana`) | that person, whoever leads them, or `fleet:operate` — it is a tab on a page other people read |
 | **Shared on the workspace** | `fleet:operate` alone: it is a tab every person in the company lands on |
 
+**Replacing a view is decided on the view it replaces, too.** A save names an
+`id` and replaces that view whole, so the rule above is asked twice: once for
+the view being written, and once for the view already stored under the id —
+its owner and its container as they are *now*. Without the second, anybody who
+may keep a personal view could name a project's shared tab, or a colleague's
+personal view, and overwrite it with their own. The write then refuses, as a
+conflict to re-read on, a save whose stored view moved or changed hands after
+that decision was taken.
+
 `default: true` takes the container's landing tab from whichever view held it,
 which is why a shared view is its container's decision rather than whoever
-happened to write it first.
+happened to write it first. **Only a shared view can be the default**: the
+landing tab is everybody's, and nobody but its owner sees a personal view, so a
+personal one saved with `default: true` is refused rather than clearing every
+other reader's landing tab for a row they cannot see. A person who wants their
+own view first pins it with `set_pins`.
 
 ### Manual order
 

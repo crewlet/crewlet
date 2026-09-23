@@ -2685,7 +2685,7 @@ for a verb with no tool, by the route.
 | `POST` | `/work/items/{key}/purge` | Destroy it and every row it produced — see [below](#a-purge) | `fleet:operate`, and **never a seat** |
 | `PUT` | `/work/projects/{key}` | `write_project`'s policy: `fields`, `default_assignee`, `archived` | the project's lead or `fleet:operate`; archiving never a seat |
 | `POST` | `/work/projects/{key}/tags` | `write_project`'s `tags_add`, `tags_rename`, `tags_archive` | declaring: `work:write`; renaming and archiving: the project's lead |
-| `POST` | `/work/views` | `save_work_view` | a personal view is its owner's; a shared one its container's lead's |
+| `POST` | `/work/views` | `save_work_view` | a personal view is its owner's; a shared one its container's lead's — and a save naming a stored view's `id` also needs that authority over the view it replaces. Only a shared view can be `default` |
 | `PUT` | `/work/catalogue` | `write_work_catalogue` | `config:write` |
 | `PUT` | `/work/people/{handle}/inbox` | `mark_inbox` — see [below](#somebody-elses-inbox) | the person, or `fleet:operate` |
 | `PUT` | `/work/people/{handle}/pins` | `set_pins` | the person, or `fleet:operate` |
