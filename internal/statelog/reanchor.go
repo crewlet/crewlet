@@ -964,7 +964,7 @@ func appendGeneration(ctx context.Context, d ReanchorDeps, spec StreamSpec, gen 
 			return nil
 		}
 		return generationIsOurs(ctx, d, subject, seq, gen)
-	case faultFull:
+	case faultFull, faultTooLarge, faultRefused:
 		return fmt.Errorf("the broker refused to store the record: %s", detail)
 	case faultRejected, faultUnknown:
 		held, found, probe := d.Stream.LastSeq(ctx, subject)

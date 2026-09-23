@@ -223,7 +223,7 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		// refusal rather than an answer.
 		seq, duplicate, err := r.log.Append(appendCtx, r.subject, "", nil, body)
 		if err != nil {
-			run.err = fmt.Errorf("statelog: append a barrier on %s: %w", r.subject, err)
+			run.err = barrierAppendError(r.subject, err)
 			return
 		}
 		if duplicate {
@@ -244,4 +244,23 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 				metrics.Attrs{"domain": r.domain})
 		}
 	}()
+}
+
+// barrierAppendError is what a barrier append that did not land tells the
+// readers waiting on it.
+//
+// A FULL LOG IS NAMED AS ONE. The append's own error was handed on raw, and
+// the read path's mapping ([barrierRefusal]) only knows a full log by its
+// refusal reason — so every linearizable read on a full log was refused
+// `no_quorum`, a majority that did not agree and a thing worth coming back
+// for, where the truth was a byte ceiling an operator has to raise.
+func barrierAppendError(subject string, err error) error {
+	if f, detail := classify(err); f == faultFull {
+		return &Unavailable{
+			Reason: ReasonLogFull,
+			Detail: fmt.Sprintf("the broker refused the barrier on %s: %s", subject, detail),
+			Cause:  err,
+		}
+	}
+	return fmt.Errorf("statelog: append a barrier on %s: %w", subject, err)
 }

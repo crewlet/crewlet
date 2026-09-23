@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -515,6 +517,8 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		"superseded":   {gate: refused(statelog.ReasonSuperseded), hint: "without -op-id"},
 		"op reused":    {gate: refused(statelog.ReasonOpReused), hint: "without -op-id"},
 		"skew":         {gate: refused(statelog.ReasonSkew), hint: "backup"},
+		"too large": {gate: DomainGate{Err: fmt.Errorf("statelog: record: %w",
+			queue.ErrTooLarge)}, hint: "max_payload"},
 	} {
 		if got := tc.gate.Retry(); got != tc.retry {
 			t.Errorf("%s: Retry() = %v, want %v", name, got, tc.retry)

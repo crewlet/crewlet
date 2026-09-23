@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -294,6 +295,10 @@ func (d DomainGate) judge() (bool, string) {
 	}
 	if errors.Is(d.Err, statelog.ErrConflict) {
 		return true, "the node's gate subject kept changing under this write"
+	}
+	if errors.Is(d.Err, queue.ErrTooLarge) {
+		return false, "the record is larger than the broker carries, which no " +
+			"retry changes: check the broker's max_payload"
 	}
 	return true, "the write failed before it could answer: the same gesture under " +
 		"the same operation id finishes it"

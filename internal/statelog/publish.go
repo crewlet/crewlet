@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -809,8 +810,8 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 	if err := p.fence0(ctx, req); err != nil {
 		return Result{Rounds: round}, dispDone, err
 	}
-	seq, duplicate, err := p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect, snap.Decision.Payload)
-	switch f, detail := classify(err); f {
+	seq, duplicate, appendErr := p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect, snap.Decision.Payload)
+	switch f, detail := classify(appendErr); f {
 	case faultNone:
 		at := Position{Stream: p.stream, Generation: gen, Seq: seq}
 		if err := at.Valid(); err != nil {
@@ -842,6 +843,20 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 				"retention status` names the term holding it)", detail),
 			OpID: req.OpID,
 		}
+
+	case faultTooLarge:
+		// NOTHING WAS STORED AND NOTHING EVER WILL BE: the same record
+		// is refused the same way on every round, so there is no round
+		// to run again.
+		return Result{Rounds: round}, dispDone, fmt.Errorf("statelog: the %s "+
+			"record for %s is %d bytes, more than the broker carries (%s), so "+
+			"nothing was stored: %w", p.domain.Name(), req.Subject,
+			len(snap.Decision.Payload), detail, queue.ErrTooLarge)
+
+	case faultRefused:
+		return Result{Rounds: round}, dispDone, fmt.Errorf("statelog: the broker "+
+			"refused the %s record for %s and stored nothing: %w",
+			p.domain.Name(), req.Subject, appendErr)
 
 	case faultUnknown:
 		res, err := p.classifyAmbiguous(ctx, req, snap, detail)

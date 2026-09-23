@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -41,8 +42,11 @@ type Appender interface {
 	LastSeq(ctx context.Context, subject string) (seq uint64, found bool, err error)
 }
 
-// fault is what a publish attempt actually was, which is three facts and not
-// two.
+// fault is what a publish attempt actually was — not a success or a failure
+// but one of these, because each has its own next step: a rejection is
+// discriminated, a full log or an oversized record is refused with a remedy
+// that differs from the other's, any other refusal is reported as the
+// broker's, and no answer is resolved.
 type fault int
 
 const (
@@ -56,12 +60,22 @@ const (
 	// faultFull is the stream refusing to store the record at all.
 	faultFull
 
+	// faultTooLarge is a record larger than the broker carries: refused by
+	// the client before anything was sent, against the payload limit the
+	// server announced, or by the stream against its own message size.
+	// Nothing was stored, and the same record is refused every time.
+	faultTooLarge
+
+	// faultRefused is any other decision the broker made and named. Nothing
+	// was stored, and it is neither a full log nor a lost race.
+	faultRefused
+
 	// faultUnknown is no answer: the append may or may not have landed,
 	// and nothing here can tell which.
 	faultUnknown
 )
 
-// classify decides which of the three a publish error was.
+// classify decides which of these a publish error was.
 //
 // # Why BOTH rejection codes, and why this is one function
 //
@@ -96,6 +110,15 @@ func classify(err error) (fault, string) {
 	if err == nil {
 		return faultNone, ""
 	}
+	// TOO LARGE BEFORE ANYTHING WAS SENT. The client refuses a message
+	// over the payload limit the server announced, locally and as a plain
+	// error — so read as "no answer" it went down the ambiguous path,
+	// found nothing landed, retook its snapshot, decided the same record
+	// and was refused again, sixteen times, and was reported as a
+	// colleague editing the object.
+	if errors.Is(err, nats.ErrMaxPayload) {
+		return faultTooLarge, err.Error()
+	}
 	var apiErr *jetstream.APIError
 	if errors.As(err, &apiErr) {
 		switch apiErr.ErrorCode {
@@ -111,21 +134,32 @@ func classify(err error) (fault, string) {
 			// handed on verbatim instead of being turned into a
 			// second enum this build would have to keep matching.
 			return faultFull, apiErr.Description
+		case codeMessageExceedsMaximum:
+			return faultTooLarge, apiErr.Description
 		}
-		// Any other API error is a decision the server made and named,
-		// so it is not ambiguous — but it is not one this framework
-		// knows how to act on either, so it is reported rather than
-		// retried.
-		return faultFull, apiErr.Description
+		// ANY OTHER API ERROR is a decision the server made and named, so
+		// it is not ambiguous — and it is NOT a full log. Reported as one,
+		// a stream deleted under the node, a cluster that lost its leader
+		// or a request the server would not queue told the caller to raise
+		// a byte ceiling, and an operator acting on it spent a maintenance
+		// window on a log with room to spare.
+		return faultRefused, apiErr.Description
 	}
-	// NO ANSWER IS THE THIRD VALUE. The client retries a no-responder
+	// NO ANSWER IS THE LAST VALUE. The client retries a no-responder
 	// twice on its own before giving up, so reaching here means the
 	// append may be on the stream and may not be, and only the ordered
 	// classification can say which.
 	return faultUnknown, err.Error()
 }
 
-// codeStreamStoreFailed is the server's "the stream would not store this"
-// code. It is not exported by the client, so it is written down here with
-// what it covers rather than left as a literal at the switch.
-const codeStreamStoreFailed jetstream.ErrorCode = 10077
+// The server's codes this framework acts on and the client does not export,
+// written down here with what they cover rather than left as literals at the
+// switch.
+const (
+	// codeStreamStoreFailed is "the stream would not store this".
+	codeStreamStoreFailed jetstream.ErrorCode = 10077
+
+	// codeMessageExceedsMaximum is a message over the stream's own size
+	// limit (JSStreamMessageExceedsMaximumErr).
+	codeMessageExceedsMaximum jetstream.ErrorCode = 10054
+)
