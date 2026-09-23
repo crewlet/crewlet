@@ -698,23 +698,49 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 // precisely because it is asked by an unauthenticated route — the answer is
 // one bit, and a roster is what it must never become.
 //
-// A RESERVATION IS NOBODY. Counted, the first founder's enrolment stopping
-// after its address claim closed the bootstrap for good: the retry that would
-// have finished it was refused as `already_bootstrapped` by the half it was
-// retrying.
+// IT IS [anybodyEnrolled], the predicate the person record's own decide and a
+// code's mint are refused on, so the route's open flag, the boot mint and the
+// record cannot disagree about whether the company has started.
 func (r *Reader) AnyPerson(ctx context.Context) (bool, error) {
 	var held bool
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		var count int
-		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM iam_people WHERE kind <> '')`).
-			Scan(&count); err != nil {
-			return fmt.Errorf("iamdomain: count people: %w", err)
-		}
-		held = count != 0
-		return nil
+		var err error
+		held, err = anybodyEnrolled(ctx, tx, "")
+		return err
 	})
 	return held, err
+}
+
+// anybodyEnrolled is THE ONE ANSWER to "has this company started": whether a
+// person or a machine other than `besides` is enrolled, read inside a
+// transaction already open.
+//
+// ONE PREDICATE, and it was four. The first-person route's open flag, the boot
+// path's decision to mint a code, the re-issue's refusal and the enrolment's
+// own check each asked the question for themselves, and three answers
+// disagreed with the fourth: the reads counted every row, so one bootstrap
+// refused after its address claim left a reservation that closed the route for
+// good while the record would still have admitted a founder; and the re-issue
+// asked for an ACTIVE, CREDENTIALLED ADMINISTRATOR, so a company whose only
+// person was suspended was handed a code the record then refused.
+//
+// A RESERVATION IS NOBODY — a claim whose content record has not landed has no
+// kind and may do nothing — and a REMOVED person is nobody, their row a
+// tombstone. A SUSPENDED one is somebody: the company has started, and the way
+// back in for it is an administrator or a Tier A token, never a second founder
+// carrying the whole ceiling.
+//
+// `besides` is the founder a retried bootstrap is creating, whose own row is
+// not "somebody else"; empty asks about everybody.
+func anybodyEnrolled(ctx context.Context, tx *sql.Tx, besides string) (bool, error) {
+	var held bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM iam_people
+		  WHERE kind <> '' AND id <> ?)`, besides).
+		Scan(&held); err != nil {
+		return false, fmt.Errorf("iamdomain: read whether anybody is enrolled: %w", err)
+	}
+	return held, nil
 }
 
 // HoldsBlinds reports whether any row this node holds carries a value derived

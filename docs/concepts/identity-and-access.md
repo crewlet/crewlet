@@ -234,6 +234,24 @@ snapshot the grants land from:
 | Redeeming an invitation | The invitation, as its issuer wrote it | A grant or a reach the invitation did not carry, an address it was not issued to, and a link already spent or aged out |
 | The first person | The one-time code | A code that is not on the log, is spent, withdrawn or aged out — and any enrolment once somebody else exists |
 
+An enrolment is a sequence — the address, then the login, then the person — and
+the authority in that table is read **twice**: once before the first claim,
+read-only, and again in the person record's own snapshot, which is the one that
+counts. The early read is what keeps a refusal the estate could already
+establish from leaving anything behind: met only at the last step, a code a
+day old was refused *after* the founder's address and login were claimed, and
+the reservation that attempt left held the founder's own address against the
+fresh code that would have let them in. What can still land between the two
+reads is a race — somebody else enrolling, a code withdrawn a moment ago — and
+its residue is the ordinary orphaned reservation the claim report names.
+
+"Somebody else exists" is **one predicate** everywhere it is asked — the
+record above, the route's open flag, the boot path's decision to mint a code,
+the re-issue and the mint itself: a person or a machine that is enrolled and
+not removed. A reservation is nobody, and a **suspended** person is somebody:
+the company has started, and the way back in for it is an administrator or a
+Tier A token, never a second founder carrying the whole ceiling.
+
 **`POST /iam/invalidate-all` takes `fleet:operate` rather than both.** It is
 the restore runbook's last step, run by whoever runs the deployment; requiring
 `people:manage` as well would mean every SRE who can restore also holds the

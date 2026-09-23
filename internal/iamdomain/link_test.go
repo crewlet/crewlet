@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE PROVIDER LINK'S INVARIANTS: a subject is pinned by a CLAIM, the claim is
@@ -30,7 +31,18 @@ type linkRig struct {
 
 func newLinkRig(t *testing.T) *linkRig {
 	t.Helper()
-	rig := newWriteRig(t)
+	return newLinkRigWith(t, nil)
+}
+
+// newLinkRigWith is [newLinkRig] with the publisher's appender wrapped, for a
+// case that needs an enrolment to STOP after its claims: a broker that answers
+// nothing for the person record leaves the claims landed and the person
+// unwritten, which is the sequence a crash between the two leaves.
+func newLinkRigWith(t *testing.T,
+	wrap func(statelog.Appender) statelog.Appender) *linkRig {
+
+	t.Helper()
+	rig := newWriteRigWith(t, wrap)
 	blinder, err := iamdomain.NewBlinder(testBlindKey)
 	if err != nil {
 		t.Fatalf("blinder: %v", err)
@@ -397,14 +409,19 @@ func TestOnlyAPersonIsLinked(t *testing.T) {
 // same redemption finishes.
 //
 // The redemption is the node's own writer standing on an invitation; the
-// first attempt asks for more than the invitation offered, so the person
-// record is refused AFTER its claims landed — which is exactly the sequence
-// that stopped. The claim report names the reservation holding the link (the
+// first attempt's person record goes unanswered by the broker, so the claims
+// land and the person is never written — which is exactly the sequence that
+// stopped. (Asking for more than the invitation offered no longer stops it
+// there: the basis is checked before the first claim.) The claim report names the reservation holding the link (the
 // subject signs in as nobody until it is repaired), and the retry of the same
 // redemption at the same derived id completes it.
 func TestAnEnrolmentThroughTheProviderPinsItsSubject(t *testing.T) {
 	t.Parallel()
-	rig := newLinkRig(t)
+	var broker *silentBroker
+	rig := newLinkRigWith(t, func(inner statelog.Appender) statelog.Appender {
+		broker = &silentBroker{Appender: inner, on: ".person."}
+		return broker
+	})
 	invitation := uuid.Must(uuid.NewV7()).String()
 	offered := []iam.Grant{iam.GrantStateRead}
 	if err := rig.draining(func() error {
@@ -440,11 +457,12 @@ func TestAnEnrolmentThroughTheProviderPinsItsSubject(t *testing.T) {
 		})
 	}
 
-	if err := redeem([]iam.Grant{iam.GrantStateRead, iam.GrantSecretRead},
-		link); err == nil {
-		t.Fatal("a redemption asking for more than the invitation offered " +
-			"was admitted")
+	broker.silent.Store(true)
+	if err := redeem(offered, link); err != nil {
+		t.Fatalf("a redemption whose person record went unanswered refused: %v",
+			err)
 	}
+	broker.silent.Store(false)
 	// A RESERVATION, and read as one: the subject is held and nobody holds
 	// it yet, so a sign-in through it has no kind, no stage and nothing it
 	// may do ([iamdomain.Sighting.Reserved]).
@@ -575,7 +593,11 @@ func TestADuplicateLinkIsReported(t *testing.T) {
 // row on the trail saying they were linked to it.
 func TestARedemptionFinishedByPasswordAnnouncesTheLinkItHolds(t *testing.T) {
 	t.Parallel()
-	rig := newLinkRig(t)
+	var broker *silentBroker
+	rig := newLinkRigWith(t, func(inner statelog.Appender) statelog.Appender {
+		broker = &silentBroker{Appender: inner, on: ".person."}
+		return broker
+	})
 	invitation := uuid.Must(uuid.NewV7()).String()
 	offered := []iam.Grant{iam.GrantStateRead}
 	if err := rig.draining(func() error {
@@ -607,10 +629,12 @@ func TestARedemptionFinishedByPasswordAnnouncesTheLinkItHolds(t *testing.T) {
 			return err
 		})
 	}
-	if err := redeem([]iam.Grant{iam.GrantStateRead, iam.GrantSecretRead},
-		&link); err == nil {
-		t.Fatal("a redemption asking for more than was offered was admitted")
+	broker.silent.Store(true)
+	if err := redeem(offered, &link); err != nil {
+		t.Fatalf("a redemption whose person record went unanswered refused: %v",
+			err)
 	}
+	broker.silent.Store(false)
 	rig.events.take()
 
 	if err := redeem(offered, nil); err != nil {

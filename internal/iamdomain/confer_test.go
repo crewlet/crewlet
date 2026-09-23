@@ -165,6 +165,13 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 				refused.name, err)
 		}
 	}
+	// REFUSED BEFORE THE FIRST CLAIM: the invitation is read before the
+	// address and the login are taken, so a redemption it does not cover
+	// leaves no reservation holding the joiner's address against the
+	// corrected retry. Sarah is the only row.
+	if rows := rig.column(`SELECT id FROM iam_people`); len(rows) != 1 {
+		t.Errorf("refused redemptions left rows behind: %v", rows)
+	}
 
 	// A SPENT LINK IS NOBODY'S AUTHORITY, however many times it is shown —
 	// including once the address it enrolled is free again. The spend binds
@@ -259,9 +266,10 @@ func TestTheFirstPersonMayCarryTheCeilingAndNobodyAfterThem(t *testing.T) {
 	// THE EXEMPTION IS CLOSED THE MOMENT SOMEBODY EXISTS, even though this
 	// code has not been spent yet — spending it is a second record, and the
 	// window between the two is exactly when a second caller would try.
-	if err := first("live-code", "second"); !errors.Is(err, iamdomain.ErrRefused) {
-		t.Errorf("a second person was created on the first-person exemption "+
-			"(%v)", err)
+	if err := first("live-code", "second"); !errors.Is(err, iamdomain.ErrRefused) ||
+		!errors.Is(err, iamdomain.ErrBootstrapClosed) {
+		t.Errorf("a second person was created on the first-person exemption, "+
+			"or refused as anything but a company that has started (%v)", err)
 	}
 	// AND WITHOUT THE CODE the node writer confers only what it holds.
 	person := uuid.Must(uuid.NewV7()).String()

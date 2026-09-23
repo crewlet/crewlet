@@ -96,6 +96,14 @@ func (e *ErrClaimed) Error() string {
 // refusal that shredded "its" key would destroy theirs. Only a pass that has
 // proved nobody owns the id may destroy it, which is [ShredKeys]: past
 // [OrphanKeyGrace], on a node that has applied everything the log held.
+//
+// EVERY BASIS IS CHECKED BEFORE THE FIRST CLAIM TOO, read-only, exactly as the
+// writer's own grants are: the claims go first because they are what can be
+// refused, and a refusal the estate could already establish — a code a day
+// old, a link somebody spent — met only at the person record leaves a
+// reservation holding the caller's own address and login behind it. The
+// person record's snapshot stays the AUTHORITY; what survives the early read
+// is only a race lost between the two, which is the legal residue above.
 func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, error) {
 	if err := w.mayAdminister(OpEnrol); err != nil {
 		return statelog.Result{}, err
@@ -122,15 +130,35 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// the enrolment before anything is written; resolved after the
 	// person's key was minted, the refusal would leave a key behind for
 	// somebody who never existed.
-	var blinder *Blinder
+	var blind string
 	if in.Email != "" {
-		resolved, err := w.blinds.Blinder(ctx)
+		blinder, err := w.blinds.Blinder(ctx)
 		if err != nil {
 			return statelog.Result{}, fmt.Errorf("iamdomain: this node "+
 				"cannot derive the subject an address claim arbitrates on: %w",
 				err)
 		}
-		blinder = resolved
+		if blind, err = blinder.Email(in.Email); err != nil {
+			return statelog.Result{}, err
+		}
+	}
+	// THE BASIS IS CHECKED BEFORE ANYTHING IS WRITTEN, and again, as the
+	// authority, in the person record's own snapshot below. The claims run
+	// first because they are what can be refused — but the basis can be
+	// refused too, and a refusal met only at the person record is met after
+	// the address and the login are already claimed: a founder holding a
+	// code a day old was told their company had started, and the
+	// reservation their attempt left behind held their own address against
+	// the fresh code that would have let them in. This read decides nothing
+	// the record does not decide again; it makes a refusal the snapshot can
+	// already establish cost nothing but the read. BEFORE THE KEY, too, for
+	// the blinder's reason: a refusal after the mint leaves a key behind for
+	// somebody who never existed.
+	basis := w.basisOf(ctx, in, blind)
+	if basis != nil {
+		if err := w.db.Replicated().Read(ctx, basis); err != nil {
+			return statelog.Result{}, err
+		}
 	}
 
 	// ONE MARK FOR THE WHOLE GESTURE: each step decides from a state holding
@@ -148,11 +176,8 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// address claim to take — but its NAME is still sealed, under a key
 	// minted for it like anybody else's, because a removal has to be able
 	// to shred `Release pipeline, raised by Dana` as surely as a person.
-	var sealedEmail, blind string
+	var sealedEmail string
 	if in.Email != "" {
-		if blind, err = blinder.Email(in.Email); err != nil {
-			return statelog.Result{}, err
-		}
 		if sealedEmail, err = w.sealer.Seal(ctx, in.PersonID, FieldEmail,
 			in.Email); err != nil {
 			return statelog.Result{}, err
@@ -217,21 +242,12 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	// THE BASIS IS READ IN THE PERSON RECORD'S OWN SNAPSHOT, the one the
-	// grants actually land from — a check against an earlier read would
-	// pair an invitation somebody spent a moment ago with a person it then
-	// creates. Nil for the writer's own authority, which was checked above.
-	var basis func(*sql.Tx) error
-	switch {
-	case in.Invitation != "":
-		basis = func(tx *sql.Tx) error {
-			return w.redeemable(ctx, tx, in, blind)
-		}
-	case in.BootstrapCode != "":
-		basis = func(tx *sql.Tx) error {
-			return w.bootstrappable(ctx, tx, in)
-		}
-	}
+	// THE BASIS IS READ AGAIN IN THE PERSON RECORD'S OWN SNAPSHOT, the one
+	// the grants actually land from, and THIS is the authority — the read
+	// above was earlier, and a check against it alone would pair an
+	// invitation somebody spent a moment ago with a person it then creates.
+	// Nil for the writer's own authority, which was checked above.
+	//
 	// AND THE LINK THE PERSON WILL HOLD, read in the same snapshot, because
 	// it is not only this enrolment's: a redemption that stopped after an
 	// attempt through the identity provider pinned a subject to this
@@ -282,6 +298,26 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		})
 	}
 	return result, err
+}
+
+// basisOf is the check an enrolment's named authority is held to, or nil for
+// an enrolment on the writer's own grants.
+//
+// ONE FUNCTION FOR BOTH READS [Writer.Enrol] makes of it — the advisory one
+// before the first claim and the authoritative one in the person record's
+// snapshot — so the two cannot drift into asking different questions.
+func (w *Writer) basisOf(ctx context.Context, in Enrolment, blind string) func(*sql.Tx) error {
+	switch {
+	case in.Invitation != "":
+		return func(tx *sql.Tx) error {
+			return w.redeemable(ctx, tx, in, blind)
+		}
+	case in.BootstrapCode != "":
+		return func(tx *sql.Tx) error {
+			return w.bootstrappable(ctx, tx, in)
+		}
+	}
+	return nil
 }
 
 // Enrolment is what creating a person needs.
@@ -501,53 +537,70 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
 	return nil
 }
 
-// bootstrappable refuses the first-person exemption once it no longer
-// applies, read inside the person record's own snapshot.
+// ErrBootstrapClosed reports the first-person exemption asked for once it is
+// over for good: the company has started — somebody is enrolled, or a code
+// already created somebody — so there is somebody whose grants bound whoever
+// comes next. A surface wraps it for `api.auth.bootstrap: closed` too, which
+// is the same answer given by the configuration rather than the estate.
 //
-// TWO FACTS AND BOTH ARE NEEDED. The code must be LIVE — minted, not spent by
-// anybody else, not withdrawn, not aged out — because a code is what proves
-// the caller can read a file on the host; and nobody ELSE may be enrolled,
-// because the exemption exists only for the instant there is nobody whose
-// grants could bound it. A reservation row (a claim whose content record has
-// not landed) is not somebody: it has no kind, may do nothing, and an
-// abandoned one must not close the company's only way in for good.
+// ITS OWN SENTINEL, wrapped beside [ErrRefused], because the surfaces answer
+// it differently from a dead code: this one is permanent and says "ask
+// somebody who already has an account", and a caller told it about a code that
+// merely aged out gives up on a company that is still waiting for them.
+var ErrBootstrapClosed = errors.New("iamdomain: the first-person exemption " +
+	"is closed")
+
+// ErrBootstrapCodeDead reports a one-time code the log does not hold as live
+// and nobody redeemed: absent, aged out, or withdrawn by a re-issue.
+//
+// THE REMEDY IS ONE COMMAND — `crewlet iam bootstrap-code`, or a restart of the
+// node whose file holds it — which is what makes it a different answer from
+// [ErrBootstrapClosed] rather than a flavour of it.
+var ErrBootstrapCodeDead = errors.New("iamdomain: that one-time code is not " +
+	"live on the log")
+
+// bootstrappable refuses the first-person exemption once it no longer
+// applies, read inside whatever snapshot it is handed.
+//
+// TWO FACTS AND BOTH ARE NEEDED. The code must be LIVE by [BootstrapCode.State]
+// — or already redeemed by THIS founder, which is a retry of a bootstrap whose
+// spend landed — because a code is what proves the caller can read a file on
+// the host; and nobody ELSE may be enrolled by [anybodyEnrolled], because the
+// exemption exists only for the instant there is nobody whose grants could
+// bound it. Both are the predicates every other reader of those questions
+// asks, so the route, the boot path and this decide cannot disagree.
 //
 // THE GRANTS ARE NOT BOUNDED BY A WRITER, which is the exemption itself — but
 // a grant this build cannot name is still refused, because conferring a
 // spelling nothing can check is not conferring the ceiling.
 func (w *Writer) bootstrappable(ctx context.Context, tx *sql.Tx, in Enrolment) error {
-	var (
-		expires, spent int64
-		redeemedBy     string
-	)
-	err := tx.QueryRowContext(ctx, `
-		SELECT expires_at, redeemed_at, person_id
-		  FROM iam_bootstrap_codes WHERE id = ?`, in.BootstrapCode).
-		Scan(&expires, &spent, &redeemedBy)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return fmt.Errorf("%w: no one-time code with that id is on the log, "+
-			"so the file that holds it is not one any node accepts",
-			ErrRefused)
-	case err != nil:
-		return fmt.Errorf("iamdomain: read the one-time code: %w", err)
-	case spent != 0 && redeemedBy != in.PersonID:
-		return fmt.Errorf("%w: the one-time code has been spent or "+
-			"withdrawn", ErrRefused)
-	case expires != 0 && !w.Now().Before(time.UnixMilli(expires)):
-		return fmt.Errorf("%w: the one-time code has aged out", ErrRefused)
+	code, err := bootstrapCodeIn(ctx, tx, in.BootstrapCode)
+	if err != nil {
+		return err
 	}
-	var somebody bool
-	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM iam_people
-		  WHERE kind != '' AND id != ?)`, in.PersonID).
-		Scan(&somebody); err != nil {
-		return fmt.Errorf("iamdomain: read whether anybody is enrolled: %w", err)
+	switch state := code.State(w.Now()); {
+	case state == CodeLive:
+	case state == CodeRedeemed && code.Person == in.PersonID:
+	case state == CodeRedeemed:
+		// SOMEBODY ELSE WAS CREATED WITH IT, which is the company
+		// having started — the enrolled check below would say so too,
+		// but only once this node has applied that person.
+		return fmt.Errorf("%w: %w: the one-time code already created "+
+			"somebody else", ErrRefused, ErrBootstrapClosed)
+	default:
+		return fmt.Errorf("%w: %w: the one-time code is %s — a code file is "+
+			"worth only what the log says about it, and a fresh one is "+
+			"`crewlet iam bootstrap-code` away", ErrRefused,
+			ErrBootstrapCodeDead, state)
+	}
+	somebody, err := anybodyEnrolled(ctx, tx, in.PersonID)
+	if err != nil {
+		return err
 	}
 	if somebody {
-		return fmt.Errorf("%w: this company already has somebody in it, so "+
-			"the first-person exemption is closed — an administrator "+
-			"enrols or invites everybody after them", ErrRefused)
+		return fmt.Errorf("%w: %w: this company already has somebody in "+
+			"it, and an administrator enrols or invites everybody after "+
+			"them", ErrRefused, ErrBootstrapClosed)
 	}
 	for _, g := range in.Grants {
 		if !g.Valid() {
@@ -1603,16 +1656,33 @@ func seatExists(ctx context.Context, tx *sql.Tx, seatID string) error {
 //
 // Nobody holds a credential yet, so a capability check here would be asking
 // somebody to prove authority the code exists to confer. What bounds it is
-// the estate: [Enrolment] of the first person spends the code, and a mint
-// against a company that already has people is refused by the CALLER, which
-// is the only place the question can be asked honestly — this decide runs
-// inside a snapshot that would have to scan a table it has no reason to.
+// the ESTATE, read in this record's own snapshot: a mint against a company
+// that has started is refused with [ErrBootstrapClosed], on [anybodyEnrolled]
+// — the predicate the first person's own enrolment is refused on. It used to
+// be left to the caller, and the two callers asked two different questions:
+// the boot path asked whether anybody was enrolled, and the re-issue asked
+// whether an active, credentialled administrator existed — so a company whose
+// only person was suspended was handed a code no record would ever honour.
+// The callers still ask first, so a refused mint writes no file; this is the
+// answer that counts.
+//
+// # A code always ages out
+//
+// A mint that states no expiry is refused, because a code with none would be
+// a superuser claim sitting in a file for ever — and [BootstrapCode.State]
+// reads a row without one as aged out, so it would be a code nothing honours
+// either.
 func (w *Writer) MintBootstrap(ctx context.Context, in BootstrapMint) (
 	statelog.Result, error) {
 
 	if in.ID == "" || in.Verifier == "" || in.OpID == "" {
 		return statelog.Result{}, errors.New("iamdomain: minting a bootstrap " +
 			"needs an id, a verifier and an operation id")
+	}
+	if in.ExpiresAt.IsZero() {
+		return statelog.Result{}, fmt.Errorf("%w: a one-time code needs an "+
+			"expiry — one without would be a way to become the first "+
+			"administrator for as long as its file survived", ErrInvalid)
 	}
 	mutation, err := EncodeBootstrapDoc(Bootstrap{
 		V: DocumentVersion, ID: in.ID, Verifier: in.Verifier,
@@ -1635,8 +1705,20 @@ func (w *Writer) MintBootstrap(ctx context.Context, in BootstrapMint) (
 	if err != nil {
 		return statelog.Result{}, err
 	}
+	started := func(tx *sql.Tx) error {
+		somebody, err := anybodyEnrolled(ctx, tx, "")
+		if err != nil {
+			return err
+		}
+		if somebody {
+			return fmt.Errorf("%w: %w: this company already has somebody "+
+				"in it, so no code is minted for it", ErrRefused,
+				ErrBootstrapClosed)
+		}
+		return nil
+	}
 	result, err := w.publish(ctx,
-		w.request(&rec, in.OpID, statelog.PatternArbitrated, nil))
+		w.request(&rec, in.OpID, statelog.PatternArbitrated, started))
 	return result, err
 }
 
@@ -1708,8 +1790,9 @@ type BootstrapMint struct {
 // own subject is a fresh uuid nobody else would name, so two of them would
 // both succeed and the company would have two founders. The sequence is the
 // tracker dependency's — one record has one subject — and its residue is a
-// spent code with no person, which a mint against a company holding people
-// refuses anyway.
+// person whose code was never marked spent, which is harmless: the person
+// closes the exemption by existing ([anybodyEnrolled]), and a mint against a
+// company holding people is refused.
 func (w *Writer) SpendBootstrap(ctx context.Context, in BootstrapSpend) (
 	statelog.Result, error) {
 
