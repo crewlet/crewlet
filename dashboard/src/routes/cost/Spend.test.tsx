@@ -51,8 +51,6 @@ function bucket(total: number): Bucket {
     output_tokens: 0,
     total_tokens: total,
     calls: 3,
-    cost_usd: 0,
-    priced_calls: 0,
   };
 }
 

@@ -11,8 +11,6 @@ function bucket(total: number, extra: Partial<Bucket> = {}): Bucket {
     output_tokens: 0,
     total_tokens: total,
     calls: total > 0 ? 1 : 0,
-    cost_usd: 0,
-    priced_calls: 0,
     ...extra,
   };
 }

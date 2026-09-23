@@ -13,15 +13,15 @@
  *
  * # The unit is TOKENS, and there is no money on this screen
  *
- * The engine records a price where one is reported — a subscription coding CLI
- * quotes `total_cost_usd` and nothing else does — and that figure is still on
- * the wire and still in the store. It is simply not RENDERED: a currency shown
- * for the small minority of calls that quote one, beside a token count covering
- * all of them, reads as the company's spend and is a fraction of it. Tokens are
- * the one unit every call here is measured in, so tokens are what this says.
- *
- * Nothing about that is irreversible: the field is untouched, so putting a
- * price back is a rendering change rather than a migration.
+ * Nor on any other: rule 19 in `docs/reference/dashboard-design.md`. The
+ * engine records a price where one is reported — a subscription coding CLI
+ * quotes one and nothing else does — but a currency shown for that small
+ * minority of calls, beside a token count covering all of them, reads as the
+ * company's spend and is a fraction of it. Tokens are the one unit every call
+ * here is measured in, so tokens are what this says, and the client declares
+ * no price field for a screen to reach for. `money.test.tsx` holds the source
+ * and the rendered screens to it, and `internal/api/dashboardjs_test.go` the
+ * bundle the engine serves.
  */
 
 import { useMemo } from "react";
@@ -204,18 +204,6 @@ function SpendOverTime({ range }: { range: TimeRange }) {
               <p className="t-caption">
                 {fmtCount(unbanded)} tokens in this window fall under no {group} and are not in the
                 bands above — the window's own total is {fmtExact(data.totals.total_tokens)}.
-              </p>
-            )}
-            {data.totals.priced_calls > 0 && (
-              // WHAT THE CALLS COST IS NOT SHOWN, deliberately — see the note
-              // at the head of this file. What survives is the fact the price
-              // was standing in for: how much of the window ANY figure here
-              // can account for, since only a subscription coding CLI reports
-              // per-call detail and the rest quote none.
-              <p className="t-caption">
-                {fmtExact(data.totals.priced_calls)} of {fmtExact(data.totals.calls)} calls came
-                back with their own accounting — only a subscription coding CLI reports it, so the
-                rest are counted by tokens alone.
               </p>
             )}
           </div>

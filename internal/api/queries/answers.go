@@ -569,9 +569,11 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 //
 // Each row is the event's PAYLOAD with the envelope's timestamp merged in: the
 // payload's field names are already the client's — turn_id, phase, iteration,
-// model, response, tool_executions, total_tokens, cost_usd — because the same
-// shape drives the live row, and the timestamp is the one field that lives on
-// the envelope rather than inside it.
+// model, response, tool_executions, total_tokens — because the same shape
+// drives the live row, and the timestamp is the one field that lives on the
+// envelope rather than inside it. The payload's price rides along, since the
+// row is the record as stored, and the dashboard reads none of it (rule 19 in
+// docs/reference/dashboard-design.md).
 func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) ([]store.EventRecord, string) {
 	if s.Events == nil {
 		return []store.EventRecord{}, ""
