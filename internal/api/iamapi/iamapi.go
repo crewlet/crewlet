@@ -80,13 +80,12 @@ type Writer interface {
 	SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (statelog.Position, error)
 	Claim(ctx context.Context, kind iamdomain.ObjectKind, token, personID,
 		opID string) (statelog.Position, error)
-	Release(ctx context.Context, kind iamdomain.ObjectKind, token, opID,
-		reason string) (statelog.Position, error)
+	Release(ctx context.Context, kind iamdomain.ObjectKind, token, holder,
+		opID, reason string) (statelog.Position, error)
 	Invite(ctx context.Context, in iamdomain.InviteMint) (statelog.Position, error)
 	Revoke(ctx context.Context, personID, opID, reason string) (statelog.Position, error)
 	InvalidateAll(ctx context.Context, opID, reason string) (statelog.Position, error)
 	Remove(ctx context.Context, personID, opID, reason string) (statelog.Position, error)
-	CloseSession(ctx context.Context, lineage, reason, opID string) (statelog.Position, error)
 }
 
 // Authority hands this surface one party's [Writer].

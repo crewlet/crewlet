@@ -402,11 +402,30 @@ func chartPositionOf(ctx context.Context, tx *sql.Tx) uint64 {
 // so a later claim on it is an ordinary conditional write rather than a create
 // at zero — which is what stops a released address being racily re-taken by
 // two writers who each read it as free.
-func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, opID,
-	reason string) (statelog.Position, error) {
+//
+// # The caller names the HOLDER, and the decide confirms it
+//
+// The record's scope is where a node that cannot decode it files the
+// deferral, and a read about a person looks in THAT PERSON'S bucket — so a
+// release has to state the holder's. It used to state the bucket of the TOKEN,
+// a hash of a login, a blind or a seat handle that no read ever consults: a
+// node deferring an unbinding went on serving the holder's row as if it still
+// held the seat, and never said it was behind about them. The scope is fixed
+// before the snapshot runs, so the holder cannot be discovered inside it; the
+// caller states who it is releasing FROM — every caller has just read the
+// person — and the decide refuses when the snapshot disagrees, naming who does
+// hold it. The record names the holder too, so the trail row lands on their
+// history rather than on nobody's.
+func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, holder,
+	opID, reason string) (statelog.Position, error) {
 
 	if err := w.mayAdminister(OpRelease); err != nil {
 		return statelog.Position{}, err
+	}
+	if token == "" || holder == "" || opID == "" {
+		return statelog.Position{}, fmt.Errorf("iamdomain: releasing a %s claim "+
+			"needs the token, the person it is released from and an operation "+
+			"id, and has (%q, %q, %q)", kind, token, holder, opID)
 	}
 	subject, err := claimSubject(kind, token)
 	if err != nil {
@@ -416,33 +435,29 @@ func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, opID,
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	// THE SCOPE IS THE ROOT ONLY IF NOBODY HOLDS IT. A release is about
-	// whoever holds the token, which the decide reads — so the record's
-	// scope is formed inside the snapshot rather than by the caller.
-	var holder string
+	rec, err := w.record(subject, OpRelease, holder, PeopleScope(holder),
+		mutation, reason)
+	if err != nil {
+		return statelog.Position{}, err
+	}
 	decide := func(tx *sql.Tx) error {
 		who, held, err := holderOf(ctx, tx, kind, token)
 		if err != nil {
 			return err
 		}
-		if !held {
+		switch {
+		case !held:
 			return fmt.Errorf("iamdomain: nobody holds the %s claim on %s, so "+
 				"there is nothing to release", kind, token)
+		case who != holder:
+			// ANOTHER PERSON HOLDS IT, and a release filed under the
+			// named holder's bucket would take it from them while
+			// every node that deferred it looked in the wrong place.
+			return &ErrClaimed{Kind: kind, Token: token, Holder: who}
 		}
-		holder = who
 		return nil
 	}
-	// The scope has to be formed BEFORE the decide runs, because the
-	// framework reads it off the returned envelope — so a release states
-	// the token's own bucket, which is where a deferral about it belongs
-	// whoever turns out to hold it.
-	rec, err := w.record(subject, OpRelease, "",
-		BucketScope(BucketOf(token)), mutation, reason)
-	if err != nil {
-		return statelog.Position{}, err
-	}
 	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, decide))
-	_ = holder
 	return result.Position, err
 }
 
@@ -702,23 +717,52 @@ type SessionStart struct {
 }
 
 // CloseSession ends one session, keeping its row until the sweep collects it.
-func (w *Writer) CloseSession(ctx context.Context, lineage, reason, opID string) (
-	statelog.Position, error) {
+//
+// # The caller names the session's PERSON
+//
+// For [Writer.Release]'s reason: validation asks whether a deferral covers the
+// PERSON's bucket, so a close has to be filed there. It used to be filed under
+// the bucket of the lineage — a hash no read consults — so a node that could
+// not decode a sign-out went on serving the session it ended, reporting
+// itself current. Both callers know the person: a sign-out reads it off a
+// bearer whose signature verified, and ending a named session has just read
+// the owner. The decide confirms it against this node's row when there is one;
+// when there is none — a session opened a moment ago that this node has not
+// applied — the caller's word is all there is, and it is a verified one.
+func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
+	opID string) (statelog.Position, error) {
 
-	if lineage == "" || opID == "" {
+	if lineage == "" || person == "" || opID == "" {
 		return statelog.Position{}, errors.New("iamdomain: closing a session " +
-			"needs a lineage and an operation id")
+			"needs a lineage, the person it belongs to and an operation id")
 	}
 	mutation, err := EncodeSession(Session{V: DocumentVersion, EndedReason: reason})
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	rec, err := w.record(SessionSubject(lineage), OpClose, "",
-		BucketScope(BucketOf(lineage)), mutation, reason)
+	rec, err := w.record(SessionSubject(lineage), OpClose, person,
+		PeopleScope(person), mutation, reason)
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, nil))
+	decide := func(tx *sql.Tx) error {
+		var owner string
+		err := tx.QueryRowContext(ctx,
+			`SELECT person_id FROM iam_sessions WHERE lineage = ?`, lineage).
+			Scan(&owner)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return fmt.Errorf("iamdomain: read session %s's owner: %w",
+				lineage, err)
+		case owner != person:
+			return fmt.Errorf("%w: session %s belongs to person %s, not %s",
+				ErrRefused, lineage, owner, person)
+		}
+		return nil
+	}
+	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, decide))
 	return result.Position, err
 }
 

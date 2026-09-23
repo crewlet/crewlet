@@ -819,7 +819,7 @@ func TestASeatBindingRecordsTheChartPositionItWasDecidedAt(t *testing.T) {
 	// AND A RELEASE TAKES IT BACK OFF. Left behind, it is a sentence
 	// about a binding that no longer exists.
 	if _, err := rig.writer.Release(rig.t.Context(), iamdomain.KindSeat,
-		"platform-lead", "op-unbind", "moved teams"); err != nil {
+		"platform-lead", id, "op-unbind", "moved teams"); err != nil {
 		t.Fatalf("release the seat: %v", err)
 	}
 	rig.drain()

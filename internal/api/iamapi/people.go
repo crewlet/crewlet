@@ -279,7 +279,7 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	if in.Seat != nil && *in.Seat != held.Seat {
 		if held.Seat != "" {
 			if _, err := writer.Release(r.Context(), iamdomain.KindSeat,
-				held.Seat, opID+":unbind", reason); err != nil {
+				held.Seat, id, opID+":unbind", reason); err != nil {
 
 				s.answerWrite(w, r, statelog0(), err, nil)
 				return
@@ -297,7 +297,7 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	if in.Login != nil && *in.Login != held.Login {
 		if held.Login != "" {
 			if _, err := writer.Release(r.Context(), iamdomain.KindLogin,
-				held.Login, opID+":unlogin", reason); err != nil {
+				held.Login, id, opID+":unlogin", reason); err != nil {
 
 				s.answerWrite(w, r, statelog0(), err, nil)
 				return

@@ -218,6 +218,9 @@ type fakeWriter struct {
 	updated  iamdomain.PersonUpdate
 	creds    iamdomain.CredentialSet
 	err      error
+
+	// releasedFrom is the holder each release named.
+	releasedFrom []string
 }
 
 func (w *fakeWriter) did(what string) (statelog.Position, error) {
@@ -259,8 +262,9 @@ func (w *fakeWriter) Claim(_ context.Context, kind iamdomain.ObjectKind,
 }
 
 func (w *fakeWriter) Release(_ context.Context, kind iamdomain.ObjectKind,
-	_, _, _ string) (statelog.Position, error) {
+	_, holder, _, _ string) (statelog.Position, error) {
 
+	w.releasedFrom = append(w.releasedFrom, holder)
 	return w.did("release:" + string(kind))
 }
 
@@ -287,12 +291,6 @@ func (w *fakeWriter) Remove(_ context.Context, _, _, _ string) (
 	statelog.Position, error) {
 
 	return w.did("remove")
-}
-
-func (w *fakeWriter) CloseSession(_ context.Context, _, _, _ string) (
-	statelog.Position, error) {
-
-	return w.did("close")
 }
 
 type fakeOpener struct{}
@@ -794,5 +792,29 @@ func TestAnOversizedWriteIsAnsweredRatherThanDropped(t *testing.T) {
 		strings.Repeat("x", iamapi.MaxBodyBytes))
 	if got.status != http.StatusRequestEntityTooLarge {
 		t.Errorf("an oversized write answered %d, want 413", got.status)
+	}
+}
+
+// A RELEASE NAMES WHOSE CLAIM IT GIVES BACK.
+//
+// The domain files a release under its HOLDER's bucket, which is where a node
+// that cannot decode it has to file the deferral for a read about that person
+// to find it — so the surface must say who it is releasing from, and the only
+// honest answer is the person the route names and just read.
+func TestAReleaseNamesThePersonItReleasesFrom(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
+		map[string]any{"seat": "", "login": "alice.a.admin"})
+	if got.status != http.StatusOK {
+		t.Fatalf("status %d (body %v)", got.status, got.body)
+	}
+	if len(r.writer.releasedFrom) != 2 {
+		t.Fatalf("releases %v, want the seat and the login", r.writer.releasedFrom)
+	}
+	for _, holder := range r.writer.releasedFrom {
+		if holder != alice.String() {
+			t.Errorf("a release named %q as the holder, want %s", holder, alice)
+		}
 	}
 }

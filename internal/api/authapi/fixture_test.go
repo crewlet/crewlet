@@ -150,7 +150,7 @@ func (stubWriter) OpenSession(context.Context, iamdomain.SessionStart) (statelog
 	return statelog.Position{}, nil
 }
 
-func (stubWriter) CloseSession(context.Context, string, string, string) (statelog.Position, error) {
+func (stubWriter) CloseSession(context.Context, string, string, string, string) (statelog.Position, error) {
 	return statelog.Position{}, nil
 }
 

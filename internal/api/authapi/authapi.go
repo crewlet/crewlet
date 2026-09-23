@@ -117,7 +117,10 @@ type Writer interface {
 	OpenSession(ctx context.Context, in iamdomain.SessionStart) (statelog.Position, error)
 
 	// CloseSession ends one, keeping its row until the sweep collects it.
-	CloseSession(ctx context.Context, lineage, reason, opID string) (statelog.Position, error)
+	// The person is the session's own, and the record is filed under
+	// their bucket.
+	CloseSession(ctx context.Context, lineage, person, reason,
+		opID string) (statelog.Position, error)
 
 	// Revoke bumps a person's revocation epoch, which ends every session
 	// they hold.

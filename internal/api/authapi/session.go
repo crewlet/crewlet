@@ -199,15 +199,19 @@ const retryIdentity = 2
 func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, session.Clear(s.boot.API.ExternalBase()))
 
-	lineage := s.lineageOf(r)
-	if lineage == "" {
+	bearer := s.bearerOf(r)
+	if bearer.Lineage == uuid.Nil {
 		// NOTHING TO END, and it is not an error: a client that clears
 		// its own cookie and posts here is asking for exactly what
 		// already happened.
 		httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
 		return
 	}
-	if _, err := s.writer.CloseSession(r.Context(), lineage,
+	lineage := bearer.Lineage.String()
+	// THE PERSON COMES OFF THE SAME VERIFIED BEARER as the lineage, and
+	// the record is filed under their bucket — where a node that cannot
+	// decode it has to say it is behind about them.
+	if _, err := s.writer.CloseSession(r.Context(), lineage, bearer.Person,
 		"signed out", "logout:"+lineage); err != nil {
 		log.WarnContext(r.Context(), "api_sign_out_record_failed",
 			"error", err, "lineage", lineage)
@@ -248,7 +252,7 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out everywhere"})
 }
 
-// lineageOf is the session this request is carrying, or empty.
+// bearerOf is the session this request is carrying, or the zero bearer.
 //
 // # It is the SIGNATURE that decides, never the field
 //
@@ -263,17 +267,13 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 // applied — which is precisely when somebody most wants to sign out — and
 // every one of those rows carries a bearer whose signature checked out. The
 // only row that does not is the malformed one, whose bearer is the zero value
-// and whose lineage is therefore empty.
-func (s *Service) lineageOf(r *http.Request) string {
+// and whose lineage is therefore the nil uuid.
+func (s *Service) bearerOf(r *http.Request) session.Bearer {
 	cookie, err := r.Cookie(session.CookieName(s.boot.API.ExternalBase()))
 	if err != nil || cookie.Value == "" {
-		return ""
+		return session.Bearer{}
 	}
-	verdict := s.signer.Validate(r.Context(), s.directoryFor(), cookie.Value)
-	if verdict.Bearer.Lineage == uuid.Nil {
-		return ""
-	}
-	return verdict.Bearer.Lineage.String()
+	return s.signer.Validate(r.Context(), s.directoryFor(), cookie.Value).Bearer
 }
 
 // LogoutOne ends ONE named session, which is how somebody signs out of a
@@ -328,7 +328,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusForbidden, httpjson.CodeUnauthorized)
 		return
 	}
-	if _, err := s.writer.CloseSession(r.Context(), lineage,
+	if _, err := s.writer.CloseSession(r.Context(), lineage, owner,
 		"signed out from another session", "logout-one:"+lineage); err != nil {
 		log.WarnContext(r.Context(), "api_sign_out_one_failed",
 			"error", err, "lineage", lineage)
@@ -337,7 +337,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	}
 	// AND THE COOKIE GOES IF IT WAS THIS ONE, so a person who ends the
 	// session they are using is not left looking at a signed-in page.
-	if lineage == s.lineageOf(r) {
+	if lineage == s.bearerOf(r).Lineage.String() {
 		http.SetCookie(w, session.Clear(s.boot.API.ExternalBase()))
 	}
 	log.InfoContext(r.Context(), "api_sign_out_one",
