@@ -298,9 +298,14 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	waitUntil(t, 20*time.Second, "the node to admit seats after a restart", e3.NativeHydrated)
 	for _, name := range e3.native.log.order {
 		runner := e3.native.log.Domain(name).runner
+		// THE CHECKPOINT ITS OWN ROW HOLDS, which is what loading it means
+		// — and zero for a log nothing was ever written to, which is every
+		// log but the tracker's here: the company boots with no activation,
+		// so neither its chart nor its containers are written at boot, and
+		// no vector was ever computed.
+		want := readCursorRow(t, e3, name).at
 		waitUntil(t, 10*time.Second, name+"'s applier to load its checkpoint", func() bool {
-			return runner.Stopped() != nil || runner.Committed().Seq > 0 ||
-				name == (search.Domain{}).Name()
+			return runner.Stopped() != nil || runner.Committed() == want
 		})
 		if err := runner.Stopped(); err != nil {
 			t.Errorf("%s's applier stopped after the restart: %v", name, err)
@@ -720,7 +725,7 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 	if store == nil {
 		t.Fatal("the node runs no knowledge base")
 	}
-	if _, _, err := store.EnsureContainer(t.Context(), "ENG", "Engineering", "before"); err != nil {
+	if _, _, err := store.EnsureContainer(t.Context(), testActivation, "ENG", "Engineering", "before"); err != nil {
 		t.Fatalf("a page write before the rebuild: %v", err)
 	}
 	if res, err := e.native.writer.EvictNode(t.Context(), "op-tracker", "node-x"); err != nil ||
@@ -772,7 +777,7 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 		r := s.Domain(pages.Domain{}.Name()).runner
 		return r.StreamIdentity() == nil && r.Committed().Generation == gen
 	})
-	if _, changed, err := store.EnsureContainer(t.Context(), "ENG", "Engineering", "after"); err != nil || !changed {
+	if _, changed, err := store.EnsureContainer(t.Context(), testActivation, "ENG", "Engineering", "after"); err != nil || !changed {
 		t.Fatalf("a page write after the reanchor: changed %v, %v", changed, err)
 	}
 	waitUntil(t, 10*time.Second, "the page write to apply in the new generation", func() bool {
@@ -897,6 +902,11 @@ func readCursorRow(t *testing.T, e *Engine, domain string) cursorRow {
 	}
 	return cursorRow{at: at, created: created}
 }
+
+// testActivation is the configuration activation an internal test's direct
+// container writes name. Any fixed non-zero instant: what these cases are
+// about is not the epoch, and the containers they write start at none.
+var testActivation = time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
 
 func countRows(t *testing.T, e *Engine, query string, args ...any) int {
 	t.Helper()

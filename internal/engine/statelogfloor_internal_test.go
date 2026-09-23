@@ -768,7 +768,7 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 			return err
 		}},
 		{domain: pages.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
-			_, _, err := e.native.pages.EnsureContainer(ctx, key, key, "")
+			_, _, err := e.native.pages.EnsureContainer(ctx, testActivation, key, key, "")
 			return err
 		}},
 	} {

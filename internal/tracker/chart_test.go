@@ -294,6 +294,26 @@ func TestTwoNodesApplyingOneActivationWriteOnce(t *testing.T) {
 	}
 }
 
+// A CHART WRITE WHOSE OUTCOME IS UNKNOWN IS AN ERROR, never a project the
+// caller logs as applied: the next apply decides it again, and only a caller
+// told so can say that.
+func TestAnUnknownChartWriteIsAnError(t *testing.T) {
+	t.Parallel()
+	r := newRoundTripWithoutProject(t)
+	// THE LEDGER HAS LOST ROWS UP TO AN HOUR FROM NOW, so it can vouch for
+	// no operation minted before then — which is every one this apply mints.
+	if err := statelog.RecordLedgerLoss(t.Context(), r.db.Replicated(),
+		tracker.Domain{}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("record the ledger's watermark: %v", err)
+	}
+	wrote, err := r.writer.ApplyChart(t.Context(), activation(0), []tracker.ChartProject{
+		{Key: "ENG", Name: "Engineering", Unit: "Eng"},
+	})
+	if err == nil {
+		t.Fatalf("an unknown outcome was reported as success (wrote %v)", wrote)
+	}
+}
+
 // activation is the instant of the nth configuration activation of a case, in
 // the order they were made.
 func activation(n int) time.Time {

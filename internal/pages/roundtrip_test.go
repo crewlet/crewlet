@@ -63,7 +63,13 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
+	return newRoundTripOn(t, log, openNodeStore(t, "node.db"), "node-a")
+}
+
+// openNodeStore opens one node's own store, closed with the test.
+func openNodeStore(t *testing.T, name string) *store.DB {
+	t.Helper()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), name),
 		store.Options{PinnedWriters: 1})
 	if err != nil {
 		t.Fatalf("open a store: %v", err)
@@ -73,12 +79,21 @@ func newRoundTrip(t *testing.T) *roundTrip {
 			t.Errorf("close the store: %v", err)
 		}
 	})
+	return db
+}
 
+// newRoundTripOn is the harness's node over a log and a store it is handed:
+// the ones [newRoundTrip] opens, or a SECOND node joining the same log under
+// its own id and its own store — the shape a race between two nodes needs.
+func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
+	nodeID string) *roundTrip {
+
+	t.Helper()
 	rows, err := pages.NewRows(db)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
-	fence := pages.NewFence(db, "node-a")
+	fence := pages.NewFence(db, nodeID)
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
 	// an absent anchor really does mean an unclaimed address. The log's own
@@ -96,7 +111,7 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	fence.Committed = waiter.Committed
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: pages.Domain{}, Log: log, Rows: rows, Fence: fence,
-		Gates: pages.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: "node-a",
+		Gates: pages.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
@@ -127,7 +142,7 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	}
 	return &roundTrip{
 		t: t, db: db, log: log, store: kb,
-		applier: pages.NewApplier("node-a", nil, nil),
+		applier: pages.NewApplier(nodeID, nil, nil),
 		reader:  reader, waiter: waiter,
 	}
 }
@@ -251,6 +266,22 @@ func (r *roundTrip) get(ref string) pages.Detail {
 type testWaiter struct {
 	mu sync.Mutex
 	at statelog.Position
+
+	// advance, when set, is this node's applier run from inside a write's
+	// own wait — see [roundTrip.applyWhileWriting].
+	advance func()
+}
+
+// applyWhileWriting makes this node's applier run from inside a write's own
+// wait, which is what it does in production and what this harness otherwise
+// cannot express: a write that lost the broker's arbitration to a peer's
+// record waits for this node to apply that record before it decides again,
+// and in a harness where nothing consumes the log during a call that wait can
+// only expire.
+func (r *roundTrip) applyWhileWriting() {
+	r.waiter.mu.Lock()
+	defer r.waiter.mu.Unlock()
+	r.waiter.advance = r.drain
 }
 
 func (w *testWaiter) reach(p statelog.Position) {
@@ -275,6 +306,12 @@ func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 	for {
 		if w.Committed().Packed() >= p.Packed() {
 			return nil
+		}
+		w.mu.Lock()
+		advance := w.advance
+		w.mu.Unlock()
+		if advance != nil {
+			advance()
 		}
 		select {
 		case <-ctx.Done():

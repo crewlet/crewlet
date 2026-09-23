@@ -7,15 +7,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// chartDoc is a company whose one unit names a project, with its purpose left
-// as a hole a case fills — the one chart-owned field a case can change
-// without renaming anything.
+// chartDoc is a company whose one unit names a project and a knowledge
+// space, with its purpose left as a hole a case fills — the one chart-owned
+// field a case can change without renaming anything, and one both the project
+// and the container carry.
 const chartDoc = `
 name: Acme
 providers:
@@ -27,6 +30,7 @@ providers:
 units:
   - name: Engineering
     project: ENG
+    space: ENGDOCS
     purpose: PURPOSE
     roles:
       - name: CEO
@@ -54,9 +58,14 @@ func TestABootStampsTheChartWithItsCompanysActivation(t *testing.T) {
 	if purpose != "builds it" {
 		t.Errorf("the project's purpose is %q", purpose)
 	}
-	if want := tracker.ChartEpochOf(activated); epoch != want {
+	if want := configplane.ActivationStamp(activated); epoch != want {
 		t.Errorf("the project is stamped %d, want the activation's own %d — "+
 			"a boot's clock is later than every newer revision's apply", epoch, want)
+	}
+	if got, want := eventuallyContainer(t, e, "ENGDOCS").ChartEpoch,
+		configplane.ActivationStamp(activated); got != want {
+		t.Errorf("the unit's knowledge space is stamped %d, want the activation's "+
+			"own %d", got, want)
 	}
 }
 
@@ -76,7 +85,7 @@ func TestAnUnactivatedCompanyIsChartedByItsActivation(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	_, epoch := eventuallyProject(t, e, "ENG")
-	if want := tracker.ChartEpochOf(activated); epoch != want {
+	if want := configplane.ActivationStamp(activated); epoch != want {
 		t.Errorf("the project is stamped %d, want the activation's %d", epoch, want)
 	}
 }
@@ -102,9 +111,17 @@ func TestAnOlderActivationAppliedLateDoesNotWalkTheChartBack(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	purpose, epoch := projectRow(t, e, "ENG")
-	if purpose != "ships it" || epoch != tracker.ChartEpochOf(newer) {
+	if purpose != "ships it" || epoch != configplane.ActivationStamp(newer) {
 		t.Errorf("after the older activation the project is (%q, %d), want the "+
-			"newer one's (\"ships it\", %d)", purpose, epoch, tracker.ChartEpochOf(newer))
+			"newer one's (\"ships it\", %d)", purpose, epoch, configplane.ActivationStamp(newer))
+	}
+	// AND THE UNIT'S KNOWLEDGE SPACE, which the same apply writes from the
+	// same chart and which walked back the same way until it was stamped.
+	space := containerRow(t, e, "ENGDOCS")
+	if space.Purpose != "ships it" || space.ChartEpoch != configplane.ActivationStamp(newer) {
+		t.Errorf("after the older activation the container is (%q, %d), want the "+
+			"newer one's (\"ships it\", %d)", space.Purpose, space.ChartEpoch,
+			configplane.ActivationStamp(newer))
 	}
 }
 
@@ -156,9 +173,9 @@ func TestTheReconcilerAppliesTheChartAtThePointersInstant(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 	purpose, epoch := eventuallyProject(t, p.engine, "ENG")
-	if purpose != "ships it" || epoch != tracker.ChartEpochOf(activated) {
+	if purpose != "ships it" || epoch != configplane.ActivationStamp(activated) {
 		t.Errorf("the project is (%q, %d), want (\"ships it\", %d) — the "+
-			"activation's own instant", purpose, epoch, tracker.ChartEpochOf(activated))
+			"activation's own instant", purpose, epoch, configplane.ActivationStamp(activated))
 	}
 }
 
@@ -206,6 +223,51 @@ func readProject(t *testing.T, e *engine.Engine, key string) (string, int64, boo
 		return "", 0, false, nil
 	}
 	return purpose, epoch, err == nil, err
+}
+
+// eventuallyContainer waits for a knowledge container's row to reach this node.
+func eventuallyContainer(t *testing.T, e *engine.Engine, key string) pages.Container {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if c, found := readContainer(t, e, key); found {
+			return c
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("container %s never reached this node", key)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// containerRow reads a container that must already be there.
+func containerRow(t *testing.T, e *engine.Engine, key string) pages.Container {
+	t.Helper()
+	c, found := readContainer(t, e, key)
+	if !found {
+		t.Fatalf("container %s is not on this node", key)
+	}
+	return c
+}
+
+func readContainer(t *testing.T, e *engine.Engine, key string) (pages.Container, bool) {
+	t.Helper()
+	var document []byte
+	err := e.Backends().Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT document FROM pages_containers WHERE key = ?`, key).Scan(&document)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return pages.Container{}, false
+	}
+	if err != nil {
+		t.Fatalf("read container %s: %v", key, err)
+	}
+	c, err := pages.DecodeContainer(document)
+	if err != nil {
+		t.Fatalf("decode container %s: %v", key, err)
+	}
+	return c, true
 }
 
 // projectHistory counts the project records this node has applied.

@@ -116,7 +116,7 @@ func TestAContainerSaysHowManyPagesItHolds(t *testing.T) {
 	// Declaring three, one of which nobody writes to, is what makes the zero
 	// below a real case rather than an absent key.
 	for _, key := range []string{"ENG", "PROD", "EMPTY"} {
-		if _, _, err := r.store.EnsureContainer(t.Context(), key, key, ""); err != nil {
+		if _, _, err := r.store.EnsureContainer(t.Context(), activation(0), key, key, ""); err != nil {
 			t.Fatalf("EnsureContainer %s: %v", key, err)
 		}
 	}
@@ -224,7 +224,7 @@ func TestEveryChangeToAPageIsReadable(t *testing.T) {
 func TestThePageFeedNarrowsByPageContainerAndKind(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	if _, _, err := r.store.EnsureContainer(t.Context(), "PROD", "Prod", ""); err != nil {
+	if _, _, err := r.store.EnsureContainer(t.Context(), activation(0), "PROD", "Prod", ""); err != nil {
 		t.Fatalf("EnsureContainer: %v", err)
 	}
 	r.drain()
@@ -401,7 +401,7 @@ func TestEnsuringAnUnchangedContainerWritesNothing(t *testing.T) {
 	// seen the first would be refused as behind rather than answering.
 	ensure := func(key, name, purpose string) bool {
 		t.Helper()
-		_, changed, err := r.store.EnsureContainer(t.Context(), key, name, purpose)
+		_, changed, err := r.store.EnsureContainer(t.Context(), activation(0), key, name, purpose)
 		if err != nil {
 			t.Fatalf("EnsureContainer %s: %v", key, err)
 		}

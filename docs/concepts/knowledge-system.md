@@ -325,6 +325,19 @@ Two properties differ from the vendor path and both are visible:
   row already says what the chart says is not written again, so the log grows
   with edits rather than with restarts.
 
+  Its name and purpose follow the configuration **activated last**, whichever
+  node applies what when. The row carries the instant its configuration was
+  activated (`chart_epoch`, in Unix milliseconds), and a configuration
+  activated earlier never overwrites one activated later — so a node
+  restarting on a revision the fleet has since replaced leaves the newer names
+  alone, exactly as the chart's projects do (see
+  [the work tracker](../guides/work-tracker.md#projects-and-keys)). A
+  container's settings are the one record this domain writes at record
+  version 2: during a rolling upgrade a node still on the previous build
+  holds such a record back rather than applying it without its stamp, and
+  with it the page writes in that container, until it is upgraded. Every
+  other record is still written at version 1.
+
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is
   missing from `GET /containers` and from the Knowledge rail. That is what a

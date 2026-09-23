@@ -48,7 +48,11 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 
 	// THE FIRST RUN applies everything its own boot wrote, which is what
 	// leaves each consumer acknowledged through the head of its log.
-	first, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	// AN ACTIVATED COMPANY, so its boot writes its chart and its knowledge
+	// spaces: those are the records this case needs on every log it can.
+	first, err := New(t.Context(), Options{
+		Bootstrap: &b, Company: cfg, Backends: back, ActivatedAt: testActivation,
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

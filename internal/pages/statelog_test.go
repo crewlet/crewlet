@@ -81,7 +81,7 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) erro
 	if err != nil {
 		return err
 	}
-	_, _, err = s.EnsureContainer(ctx, suiteContainer, "The suite's space", "")
+	_, _, err = s.EnsureContainer(ctx, activation(0), suiteContainer, "The suite's space", "")
 	return err
 }
 

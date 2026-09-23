@@ -67,8 +67,9 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	// record's own: it opens the generation it names, and the eviction
 	// gate reads the node that wrote it.
 	encoded, err := Encode(MutationRecord{
+		// NEVER [RecordVersion]: see [baseRecordVersion].
 		RecordEnvelope: RecordEnvelope{
-			V: RecordVersion, OpID: opID, Subject: subject, Op: OpGeneration,
+			V: baseRecordVersion, OpID: opID, Subject: subject, Op: OpGeneration,
 			CreatedAt: f.At.UTC(), Gen: f.Generation, Writer: f.Writer,
 			Scope: scope,
 		},

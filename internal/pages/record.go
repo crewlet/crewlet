@@ -12,7 +12,33 @@ import (
 // A record above it is RETAINED rather than skipped — see the deferral
 // contract in [statelog] — which is what makes a rolling upgrade a period of
 // reduced coverage rather than an outage.
-const RecordVersion = 1
+//
+// # What each version added
+//
+//   - 1: every shape this domain has.
+//   - 2: a container's settings carry the chart epoch they were written from
+//     ([ContainerPayload.ChartEpoch]).
+//
+// A record is WRITTEN at the lowest version a reader can apply without
+// losing anything it says, never simply at this constant — see
+// [recordVersionOf] for why that matters to a node still on the older build.
+const RecordVersion = 2
+
+// baseRecordVersion is the version a record whose shape no later version
+// changed is written at: 1, which every build there has ever been reads.
+//
+// THE BARRIER AND A REANCHOR'S GENERATION ARE WRITTEN AT IT FOR EVER, never at
+// [RecordVersion], because of what an older node does with a record it cannot
+// read: it retains it. A retained barrier is one more deferral row on that
+// node for every linearizable read anybody makes, and a node holding a
+// deferral declines to snapshot until it upgrades; a retained generation is a
+// transition that node never makes. Neither has anything a later version
+// could add to it.
+const baseRecordVersion = 1
+
+// containerEpochVersion is the version a container's settings are written at
+// since they began carrying the chart epoch. See [recordVersionOf].
+const containerEpochVersion = 2
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER.

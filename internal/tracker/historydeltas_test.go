@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -65,7 +66,7 @@ func TestAProjectReconcileRecordsWhatTheChartMoved(t *testing.T) {
 	}
 	r.drain()
 	// A CREATE LISTS WHAT IT SET, because every field moves from empty.
-	first := strconv.FormatInt(tracker.ChartEpochOf(activation(0)), 10)
+	first := strconv.FormatInt(configplane.ActivationStamp(activation(0)), 10)
 	if got := r.fieldsFor(tracker.ChangeProjectCreated); got != `{`+
 		`"chart_epoch":{"from":"0","to":"`+first+`"},`+
 		`"name":{"from":"","to":"Engineering"},`+
@@ -85,7 +86,7 @@ func TestAProjectReconcileRecordsWhatTheChartMoved(t *testing.T) {
 		t.Fatalf("the second chart apply: %v", err)
 	}
 	r.drain()
-	second := strconv.FormatInt(tracker.ChartEpochOf(activation(1)), 10)
+	second := strconv.FormatInt(configplane.ActivationStamp(activation(1)), 10)
 	if got := r.fieldsFor(tracker.ChangeProjectUpdated); got != `{`+
 		`"chart_epoch":{"from":"`+first+`","to":"`+second+`"},`+
 		`"purpose":{"from":"builds it","to":"ships it"}}` {

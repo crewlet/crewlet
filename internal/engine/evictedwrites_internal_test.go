@@ -54,7 +54,7 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 		evictedView("v-before")); err != nil {
 		t.Fatalf("the control view write: %v", err)
 	}
-	if _, _, err := e.native.pages.EnsureContainer(t.Context(), "BEFORE",
+	if _, _, err := e.native.pages.EnsureContainer(t.Context(), testActivation, "BEFORE",
 		"Before", ""); err != nil {
 		t.Fatalf("the control container write: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 			res.Outcome, err)
 	}
 	viewAt := res.Position
-	if _, _, err := e.native.pages.EnsureContainer(t.Context(), "EVICTED",
+	if _, _, err := e.native.pages.EnsureContainer(t.Context(), testActivation, "EVICTED",
 		"Evicted", ""); err != nil {
 		t.Fatalf("the evicted node's container write: %v", err)
 	}

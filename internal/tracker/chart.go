@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -45,7 +46,7 @@ import (
 // activatedAt is when the configuration this chart came from was activated —
 // the instant on the fleet's activation pointer, which every node reads and a
 // node keeps as its active revision's `activated_at` — and it is the project's
-// epoch ([ChartEpochOf]). Never the apply's own clock: every node applies one
+// epoch ([configplane.ActivationStamp]). Never the apply's own clock: every node applies one
 // activation separately, at its reconcile tick and again at every boot, so an
 // instant read there differs on every one of them and both things the epoch is
 // for stop working. A node that boots on a stale revision stamps NOW and walks
@@ -75,7 +76,7 @@ func (w *Writer) ApplyChart(ctx context.Context, activatedAt time.Time,
 	if activatedAt.IsZero() {
 		return nil, ErrNoChartActivation
 	}
-	epoch := ChartEpochOf(activatedAt)
+	epoch := configplane.ActivationStamp(activatedAt)
 	var wrote []string
 	for _, p := range chart {
 		if p.Key == "" {
@@ -212,22 +213,3 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 func chartOpID(at time.Time, key string) string {
 	return statelog.NewOpID(at, "chart-"+key)
 }
-
-// ChartEpochOf is the epoch a chart applied from a configuration activated at
-// activatedAt stamps: that instant in Unix MILLISECONDS.
-//
-// AN INSTANT rather than a counter, because the value has to survive the
-// coordination store being recreated: the activation pointer's own revision is
-// the one counter every node shares, and it restarts at 1 with a new store —
-// after which every chart would be older than every project's stamp and none
-// would ever be applied again. An instant carries on from where the last one
-// was.
-//
-// MILLISECONDS and not seconds, because two activations inside one second are
-// an ordinary thing for a script to do, and at a second's resolution they
-// share an epoch: a node still applying the first can land after the second's
-// record and walk its names back at an EQUAL epoch, which the guard lets
-// through. Both sources of the instant keep at least that much — the pointer
-// carries nanoseconds and the store microseconds — so the pointer's instant
-// and a boot's read of the store agree on it.
-func ChartEpochOf(activatedAt time.Time) int64 { return activatedAt.UTC().UnixMilli() }

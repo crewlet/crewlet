@@ -172,6 +172,40 @@ type ContainerPayload struct {
 	Key     string `json:"key"`
 	Name    string `json:"name,omitempty"`
 	Purpose string `json:"purpose,omitempty"`
+
+	// ChartEpoch is the configuration activation these settings were
+	// derived from ([configplane.ActivationStamp]), which the next
+	// EnsureContainer compares against so an older configuration applied
+	// late cannot walk a newer one back. Record version 2 onwards; a
+	// version-1 record carries none, and applies as epoch 0 — older than
+	// every configuration this build stamps.
+	ChartEpoch int64 `json:"chart_epoch,omitempty"`
+}
+
+// recordVersionOf is the version a record carrying payload is written at: the
+// lowest whose reader applies it without losing anything.
+//
+// A CONTAINER'S SETTINGS ARE WRITTEN AT 2, because version 2 is when they
+// began to carry [ContainerPayload.ChartEpoch]. A build reading only 1 decodes
+// the payload by ignoring the one field it does not know, and applies the rest
+// — which is the walk-back the epoch exists to stop, performed on the very
+// node that could not read the stamp, and a stored container that no longer
+// says which configuration wrote it. Written at 2, that build RETAINS the
+// record instead of applying half of it, and applies it once it is upgraded
+// (see the deferral contract in [statelog]).
+//
+// EVERYTHING ELSE STAYS AT 1, and not for tidiness. A retained record holds
+// back every later record whose scope nests under its own on that node — a
+// container's retained settings hold back every page write in that container
+// until the node upgrades — so a rolling upgrade loses coverage exactly where
+// a shape changed and nowhere else. A domain that raised every record to its
+// newest version would stall every older node's knowledge base for the whole
+// upgrade.
+func recordVersionOf(payload any) int {
+	if _, container := payload.(ContainerPayload); container {
+		return containerEpochVersion
+	}
+	return baseRecordVersion
 }
 
 // StatusPayload is a trash, a restore or a purge — the three ops that change
@@ -307,7 +341,8 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	}
 	return Encode(MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V:       RecordVersion,
+			// NEVER [RecordVersion]: see [baseRecordVersion].
+			V:       baseRecordVersion,
 			Subject: BarrierSubject(),
 			Op:      OpBarrier,
 			Scope:   ScopeSet{Subject: true},

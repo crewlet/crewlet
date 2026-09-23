@@ -1097,7 +1097,7 @@ type Project struct {
 	Unit    string `json:"unit,omitempty"`
 
 	// ChartEpoch is the activation the chart-owned fields were last
-	// written from ([ChartEpochOf]) — the guard that stops an older chart
+	// written from ([configplane.ActivationStamp]) — the guard that stops an older chart
 	// walking a newer one back.
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 

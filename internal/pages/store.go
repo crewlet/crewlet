@@ -186,7 +186,7 @@ func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op Op
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
+			V: recordVersionOf(payload), OpID: opID, Subject: subject, Op: op,
 			CreatedAt: at, Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Mutation:   body,

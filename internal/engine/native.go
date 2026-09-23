@@ -378,7 +378,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	e.applyChart(ctx, c, activatedAt)
 	// AND THE CONTAINERS, for the same reason and on the same terms — see
 	// [Engine.applyContainers], and the bug it fixes.
-	e.applyContainers(ctx, c)
+	e.applyContainers(ctx, c, activatedAt)
 	log.InfoContext(ctx, "native_backends_started",
 		"tracker", runTracker, "knowledge", wiki)
 	return nil
@@ -771,7 +771,7 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company, activatedAt ti
 		}
 	}
 	e.applyChart(ctx, c, activatedAt)
-	e.applyContainers(ctx, c)
+	e.applyContainers(ctx, c, activatedAt)
 }
 
 // applyContainers makes the knowledge containers this company names exist.
@@ -802,21 +802,33 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company, activatedAt ti
 // writes into them itself, and a container the engine writes into and cannot
 // list is the same defect one layer in.
 //
+// # Stamped with the ACTIVATION, on the chart's terms
+//
+// activatedAt is the instant the fleet activated c, and every container is
+// stamped with it exactly as [Engine.applyChart] stamps a project — for the
+// same two reasons: a node that boots on a revision the fleet has since
+// replaced must not rewrite the containers' names and purposes back to its
+// own, and a reapply of one activation must write nothing. A company no
+// activation has named yet is not applied here either; its first activation
+// is. See [pages.Store.EnsureContainer].
+//
 // # Best effort, and idempotent
 //
 // A failure is LOGGED rather than raised, exactly as [Engine.applyChart]
 // explains: this is one clause of an epoch apply and the rest of it stands
 // without it. Running on every apply and every boot is free after the first,
 // because EnsureContainer decides nothing when the row it finds already says
-// what the chart says — which is the guard its own doc was written around.
-func (e *Engine) applyContainers(ctx context.Context, c *Company) {
+// what the chart says at this activation — which is the guard its own doc was
+// written around.
+func (e *Engine) applyContainers(ctx context.Context, c *Company, activatedAt time.Time) {
 	store := e.PagesStore()
-	if store == nil || c == nil {
+	if store == nil || c == nil || activatedAt.IsZero() {
 		return
 	}
 	var wrote []string
 	for _, want := range chartContainers(c) {
-		_, changed, err := store.EnsureContainer(ctx, want.Key, want.Name, want.Purpose)
+		_, changed, err := store.EnsureContainer(ctx, activatedAt,
+			want.Key, want.Name, want.Purpose)
 		if err != nil {
 			// EVERY CONTAINER IS ATTEMPTED. One key's refusal must not
 			// leave the rest of a company's knowledge base unlistable,
@@ -920,7 +932,7 @@ func chartContainers(c *Company) []chartContainer {
 //
 // activatedAt is when the fleet activated c — the pointer's instant on an
 // apply, this node's active revision's on a boot — and it is what every
-// project is stamped with ([tracker.ChartEpochOf]). It used to be this node's
+// project is stamped with ([configplane.ActivationStamp]). It used to be this node's
 // clock at the call, which broke both halves of the epoch: a node that booted
 // on a stale revision stamped NOW and walked the fleet's newer project names
 // back to its own old ones, and no apply ever matched the epoch an earlier one
