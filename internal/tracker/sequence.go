@@ -9,6 +9,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -966,14 +968,19 @@ type held struct {
 // THE HEARTBEAT IS A GOROUTINE WITH AN OWNER, per this tree's rule: it is
 // started here, stopped by [held.release], and cannot outlive the sequence
 // that took it. A heartbeat nobody stops is a claim nobody else can ever take.
+//
+// UNDER AN OWNER OF ITS OWN ([Writer.claimOwner]), never this node's id, so a
+// second walk of the same thing on the SAME node is refused exactly as a
+// peer's would be.
 func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 	if w.claims == nil {
 		return nil, fmt.Errorf("tracker: this writer has no coordination, so "+
 			"it cannot take %s — a walking sequence without a claim is two "+
 			"nodes rewriting one subtree", resource)
 	}
+	owner := w.claimOwner()
 	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
-		Owner: w.nodeID, TTL: ClaimTTL,
+		Owner: owner, TTL: ClaimTTL,
 	})
 	switch {
 	case err != nil:
@@ -983,15 +990,41 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 		// tell from an abandoned walk.
 		return nil, fmt.Errorf("tracker: take %s: %w", resource, err)
 	case lease == nil:
-		return nil, fmt.Errorf("tracker: %s is held by another node, so this "+
-			"walk is already running: %w", resource, statelog.ErrUnavailable)
+		return nil, fmt.Errorf("tracker: %s is held by another walk, on this "+
+			"node or a peer, so this walk is already running: %w", resource,
+			statelog.ErrUnavailable)
 	}
 	h := &held{
-		claims: w.claims, resource: resource, owner: w.nodeID,
+		claims: w.claims, resource: resource, owner: owner,
 		epoch: lease.Epoch, stop: make(chan struct{}), done: make(chan struct{}),
 	}
 	go h.beat(context.WithoutCancel(ctx))
 	return h, nil
+}
+
+// claimOwner is the owner one claim is taken under: this node, and THIS call.
+//
+// UNIQUE PER CLAIM, never the node id alone, and that is the whole of it.
+// [coord] reads an owner that already holds a lease as that holder RENEWING
+// it — an owner is a holder, not a machine — so under the node id two walks
+// on one node were both told yes: the tracker duty's completion of a merge or
+// a move ran beside the live walk it was meant to leave alone on every
+// single-node deployment, two moves of one task walked it together, and
+// whichever finished first released the other's lease in the middle of its
+// walk, leaving it unclaimed for a third to join.
+//
+// Not an in-process claim beside a node-wide owner, the shape [setup.Hold]
+// takes: that closes the collision inside one process and leaves it open
+// across two that share a node id — a restarted process renewing the lease its
+// dead predecessor held, which it cannot tell from one that is still walking.
+// A holder of its own also costs that restart nothing it should keep: a claim
+// whose process died lapses over [ClaimTTL], after which the duty or a re-run
+// takes it, which is what an abandoned walk was always waiting for.
+//
+// The node id stays in front, so a claim a person reads still says where its
+// walk runs.
+func (w *Writer) claimOwner() string {
+	return w.nodeID + "/" + uuid.NewString()
 }
 
 func (h *held) beat(ctx context.Context) {
@@ -1818,8 +1851,13 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 	if ttl < ClaimHeartbeat {
 		ttl = ClaimHeartbeat
 	}
+	// AN OWNER OF ITS OWN, for the reason [Writer.claimOwner] gives: under
+	// the node id a second bulk on this node renewed the first one's lease
+	// rather than being refused, and whichever finished first released the
+	// other's.
+	owner := w.claimOwner()
 	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
-		Owner: w.nodeID, TTL: ttl,
+		Owner: owner, TTL: ttl,
 	})
 	switch {
 	case err != nil:
@@ -1839,7 +1877,7 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 	}
 	epoch := lease.Epoch
 	return func() {
-		_, _ = w.claims.Release(context.WithoutCancel(ctx), resource, w.nodeID, epoch)
+		_, _ = w.claims.Release(context.WithoutCancel(ctx), resource, owner, epoch)
 	}, nil
 }
 

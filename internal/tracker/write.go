@@ -90,8 +90,9 @@ type Writer struct {
 	db *store.DB
 
 	// claims is the coordination a walking sequence takes its claim from,
-	// and nodeID is who holds it. Both may be nil or empty on a writer
-	// that only makes single-append writes; a sequence that needs one
+	// and nodeID is where it runs — the prefix of every claim's owner, never
+	// the owner itself ([Writer.claimOwner]). Both may be nil or empty on a
+	// writer that only makes single-append writes; a sequence that needs one
 	// refuses by name rather than running without it.
 	claims Claims
 	nodeID string
