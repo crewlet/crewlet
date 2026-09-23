@@ -600,3 +600,59 @@ func TestARefusedRevealIsTheSameForANameThatDoesNotExist(t *testing.T) {
 			present)
 	}
 }
+
+// EVERY REFUSAL ON THIS SURFACE IS THE ENGINE'S ENVELOPE.
+//
+// The surface wrote its own `{"error": ...}` maps: a code the rest of the API
+// has no sentence for, so the dashboard — which renders the envelope's
+// `message` verbatim — showed nothing, and a code the vocabulary does not
+// declare is one nothing holds against its spelling. Each refusal is walked
+// here, and each must carry its code AND the vocabulary's sentence for it.
+func TestEveryRefusalHereIsTheEnginesEnvelope(t *testing.T) {
+	t.Parallel()
+	sealed := mounted(t, secretsapi.Options{
+		Fleet: coordmem.NewFleet(), Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1",
+		Now: func() time.Time { return clock },
+	}, iam.AllGrants...)
+	unkeyed := mounted(t, secretsapi.Options{
+		Fleet: coordmem.NewFleet(), Now: func() time.Time { return clock },
+	}, iam.AllGrants...)
+	for _, tc := range []struct {
+		name         string
+		h            http.Handler
+		method, path string
+		body         string
+		status       int
+		code         httpjson.Code
+	}{
+		{"a reserved name", sealed, http.MethodGet,
+			"/secrets/" + url.PathEscape("iam/blind-index-key"), "",
+			http.StatusForbidden, httpjson.CodeReservedName},
+		{"a name no reference can hold", sealed, http.MethodPut,
+			"/secrets/gitlab-token", "v", http.StatusBadRequest,
+			httpjson.CodeInvalidName},
+		{"an absent name", sealed, http.MethodGet, "/secrets/NOT_HERE", "",
+			http.StatusNotFound, httpjson.CodeNotFound},
+		{"a rekey onto another key", sealed, http.MethodPost,
+			"/secrets/rekey?key_id=k9", "", http.StatusConflict,
+			httpjson.CodeKeyIDMismatch},
+		{"a node with no keyring", unkeyed, http.MethodPut,
+			"/secrets/GITLAB_TOKEN", "v", http.StatusServiceUnavailable,
+			httpjson.CodeNoKeyring},
+	} {
+		code, raw := call(t, tc.h, tc.method, tc.path, tc.body)
+		var body map[string]any
+		if err := json.Unmarshal([]byte(raw), &body); err != nil {
+			t.Errorf("%s: the refusal is not JSON: %s", tc.name, raw)
+			continue
+		}
+		if code != tc.status || body["error"] != string(tc.code) {
+			t.Errorf("%s answered %d %v, want %d %s", tc.name, code,
+				body["error"], tc.status, tc.code)
+		}
+		if body["message"] != tc.code.Message() || tc.code.Message() == "" {
+			t.Errorf("%s carries message %q, want the vocabulary's sentence "+
+				"for %s", tc.name, body["message"], tc.code)
+		}
+	}
+}

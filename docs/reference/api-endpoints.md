@@ -1092,6 +1092,12 @@ seals or opens, pointing at `crewlet secrets keygen`. The store has no
 plaintext mode; refusing is the only alternative to holding credentials in the
 clear.
 
+**Every refusal here is the engine's envelope** — `error`, the sentence
+`message` a screen shows, and the route's own detail beside them:
+`reserved_name`, `invalid_name`, `not_found`, `no_keyring`, and on a rekey
+`no_active_key`, `key_id_mismatch` (with `key_id` and `your_key_id`) and
+`rekey_incomplete` (with the `moved` names and the `engine_keys_moved` count).
+
 `crewlet secrets` is the client for all of this — see
 [the secret store](../concepts/secret-store.md#which-store-the-cli-writes) for
 why the CLI goes through a running node rather than writing the KV itself.
