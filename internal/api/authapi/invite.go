@@ -127,10 +127,25 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		// than again by whoever happens to process the redemption —
 		// which is also what stops a redemption being a way to ask for
 		// more than was offered.
-		Grants:    held.Grants,
-		Colleague: held.Colleague,
-		OpID:      opID, Reason: "redeemed an invitation",
+		//
+		// AND THE INVITATION IS NAMED AS THE AUTHORITY, so the domain
+		// holds the enrolment to it in the snapshot the grants land
+		// from rather than to the node's own writer, which holds none
+		// of what an invitation usually confers.
+		Grants:     held.Grants,
+		Colleague:  held.Colleague,
+		Invitation: held.ID,
+		OpID:       opID, Reason: "redeemed an invitation",
 	}); err != nil {
+		if errors.Is(err, iamdomain.ErrRefused) {
+			// SPENT OR AGED OUT between the lookup above and the
+			// record, which is the same answer the lookup gives: one
+			// refusal for every way a link stops working.
+			log.InfoContext(r.Context(), "api_invite_refused_at_the_record",
+				"invitation", held.ID, "error", err)
+			httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
+			return
+		}
 		refuseEnrolment(w, r, "api_invite_enrol_failed", err)
 		return
 	}

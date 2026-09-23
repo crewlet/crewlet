@@ -128,9 +128,12 @@ func newWriteRig(t *testing.T) *writeRig {
 	writer, err := iamdomain.NewWriter(iamdomain.WriterDeps{
 		Publisher: publisher, DB: db, Blinds: blinder, Sealer: sealer,
 		Events: announced, Actor: "ana.admin", ActorKind: iam.KindPerson,
-		// THE RIG'S PARTY AUTHORS EVERYTHING, so every case here is
-		// about the rule it names rather than about the grant gate.
-		Grants: []iam.Grant{iam.GrantPeopleManage},
+		// THE RIG'S PARTY AUTHORS EVERYTHING — and holds every grant,
+		// because an enrolment may confer only what its writer holds —
+		// so every case here is about the rule it names rather than
+		// about the grant gate. A case about that gate narrows it with
+		// [iamdomain.Writer.As].
+		Grants: iam.AllGrants,
 		Now:    func() time.Time { return brokerAt },
 	})
 	if err != nil {

@@ -71,6 +71,13 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 			&iamdomain.ErrClaimed{Kind: iamdomain.KindEmail, Token: "email:x",
 				Holder: holder},
 			http.StatusConflict, "address already belongs"},
+		// A LINK THE RECORD REFUSES — spent or aged out between the
+		// lookup and the enrolment — answers what the lookup would have:
+		// one refusal for every way a link stops working.
+		{"an invitation the record no longer honours",
+			fmt.Errorf("%w: invitation inv-1 has already been used",
+				iamdomain.ErrRefused),
+			http.StatusGone, ""},
 		// THE CONTROL: a failure that is not the caller's stays 503, or the
 		// cases above would pass on a surface that answered 400 to
 		// everything.

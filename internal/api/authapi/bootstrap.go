@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -166,10 +167,27 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		// on the host, and the alternative is a first operator who
 		// cannot grant themselves what they need to grant anybody
 		// anything.
-		Grants:    s.boot.API.Auth.MaxGrants,
-		Colleague: iam.ColleagueWrite,
-		OpID:      opID, Reason: "the first operator",
+		//
+		// THE CODE IS THE AUTHORITY, named on the enrolment so the
+		// domain checks it in the snapshot the grants land from: live,
+		// and nobody else enrolled. The node's own writer could not
+		// confer the ceiling on its own grants, and must not be able to.
+		Grants:        s.boot.API.Auth.MaxGrants,
+		Colleague:     iam.ColleagueWrite,
+		BootstrapCode: bootstrapCodeID(held),
+		OpID:          opID, Reason: "the first operator",
 	}); err != nil {
+		if errors.Is(err, iamdomain.ErrRefused) {
+			// THE EXEMPTION CLOSED between the route's own check and
+			// the record: somebody else became the first person, or
+			// the code was spent or withdrawn. Nothing the caller
+			// retries will change that, so it is the closed answer
+			// rather than a 503.
+			log.InfoContext(r.Context(), "api_bootstrap_closed_at_the_record",
+				"error", err)
+			httpjson.Fail(w, http.StatusConflict, httpjson.CodeBootstrapClosed)
+			return
+		}
 		refuseEnrolment(w, r, "api_bootstrap_enrol_failed", err)
 		return
 	}

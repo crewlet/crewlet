@@ -56,12 +56,47 @@ func (e *ErrClaimed) Error() string {
 // claim whose subject still carries an anchor, and deleting the row on a
 // clock would leave that address arbitrated to nobody the directory can name.
 // Releasing is a decision, and a removal is the record that makes it.
+//
+// # What it may confer, and on whose authority
+//
+// An enrolment is a grant change from nothing to what it carries, so it is
+// held to [Writer.UpdatePerson]'s rule: a caller may not confer a grant they
+// do not hold. It used to be held to nothing, so a party holding people:manage
+// and no other grant could enrol somebody carrying secrets:read — or enrol a
+// colleague holding everything and sign in as them.
+//
+// TWO ENROLMENTS ARE NOT THE WRITER'S TO AUTHORISE, and each names what is:
+//
+//   - A REDEMPTION ([Enrolment.Invitation]) confers what the INVITATION's
+//     author conferred when they issued it, and was held to their grants then
+//     ([Writer.Invite]). The person record's decide reads the invitation in its
+//     own snapshot and refuses anything it does not cover — more grants, more
+//     reach, a different address, a link already spent or aged out — so the
+//     node that processes a redemption decides nothing a second time.
+//   - THE FIRST PERSON ([Enrolment.BootstrapCode]) is the one stated
+//     exemption: nobody holds a credential yet, so there is nobody whose
+//     grants could bound it, and it is taken by whoever proved they can read
+//     a file on the host. The decide reads the code and the directory in its
+//     own snapshot and refuses unless the code is live and nobody else is
+//     enrolled, so the exemption closes the moment anybody exists.
+//
+// The node's own writer holds fleet:operate and people:manage and nothing
+// else, so on its own authority it may confer those two; everything the
+// bootstrap and a redemption hand out comes from the basis they name.
 func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, error) {
 	if err := w.mayAdminister(OpEnrol); err != nil {
 		return statelog.Position{}, err
 	}
 	if err := in.validate(); err != nil {
 		return statelog.Position{}, err
+	}
+	if in.Invitation == "" && in.BootstrapCode == "" {
+		// THE WRITER'S OWN AUTHORITY, checked BEFORE the first claim:
+		// it reads nothing, so there is no reason to leave a claimed
+		// address behind a refusal that was knowable up front.
+		if err := w.mayConfer(nil, in.Grants); err != nil {
+			return statelog.Position{}, err
+		}
 	}
 	if w.sealer == nil || (in.Email != "" && w.blinds == nil) {
 		return statelog.Position{}, fmt.Errorf("iamdomain: this node cannot "+
@@ -97,10 +132,9 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	// address claim to take — but its NAME is still sealed, under a key
 	// minted for it like anybody else's, because a removal has to be able
 	// to shred `Release pipeline, raised by Dana` as surely as a person.
-	var sealedEmail string
+	var sealedEmail, blind string
 	if in.Email != "" {
-		blind, err := blinder.Email(in.Email)
-		if err != nil {
+		if blind, err = blinder.Email(in.Email); err != nil {
 			return statelog.Position{}, err
 		}
 		if sealedEmail, err = w.sealer.Seal(ctx, in.PersonID, FieldEmail,
@@ -138,13 +172,28 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	if err != nil {
 		return statelog.Position{}, err
 	}
+	// THE BASIS IS READ IN THE PERSON RECORD'S OWN SNAPSHOT, the one the
+	// grants actually land from — a check against an earlier read would
+	// pair an invitation somebody spent a moment ago with a person it then
+	// creates. Nil for the writer's own authority, which was checked above.
+	var decide func(*sql.Tx) error
+	switch {
+	case in.Invitation != "":
+		decide = func(tx *sql.Tx) error {
+			return w.redeemable(ctx, tx, in, blind)
+		}
+	case in.BootstrapCode != "":
+		decide = func(tx *sql.Tx) error {
+			return w.bootstrappable(ctx, tx, in)
+		}
+	}
 	// ARBITRATED, NOT A CREATE, and the claims are why: they run first and
 	// their apply leaves a RESERVATION row for this person, so a create
 	// pattern would find a guarding row and refuse the enrolment that put
 	// it there. What makes a retry of the whole gesture land once is the
 	// operation ledger, which is the mechanism for that anyway — the
 	// guarding row never was.
-	result, err := w.publish(ctx, w.request(&rec, in.OpID, statelog.PatternArbitrated, nil))
+	result, err := w.publish(ctx, w.request(&rec, in.OpID, statelog.PatternArbitrated, decide))
 	// AN ENROLMENT THAT CONFERS ANYTHING IS A GRANT CHANGE — from nothing
 	// to what it carries — and the first person a bootstrap code creates,
 	// holding the whole ceiling, is the one row of those an audit most
@@ -190,6 +239,17 @@ type Enrolment struct {
 	// [Person.Colleague].
 	Colleague iam.Colleague
 
+	// Invitation is the id of the invitation this enrolment REDEEMS, or
+	// empty. When set, what the enrolment confers is bounded by what the
+	// invitation says rather than by the writer's own grants — see
+	// [Writer.Enrol].
+	Invitation string
+
+	// BootstrapCode is the id of the one-time code this enrolment redeems,
+	// or empty. When set, it is the first person, and the one stated
+	// exemption from the conferral rule — see [Writer.Enrol].
+	BootstrapCode string
+
 	// OpID is the operation id for the whole gesture. Each append derives
 	// its own from it with a suffix, so a retry of the sequence dedupes
 	// step by step rather than all-or-nothing.
@@ -199,6 +259,13 @@ type Enrolment struct {
 
 func (e Enrolment) validate() error {
 	switch {
+	case e.Invitation != "" && e.BootstrapCode != "":
+		return errors.New("iamdomain: an enrolment redeems an invitation or " +
+			"the one-time code, never both — each is a different authority " +
+			"for what it confers, and one record cannot be bounded by two")
+	case e.Invitation != "" && e.Email == "":
+		return fmt.Errorf("%w: redeeming an invitation enrols the address it "+
+			"was issued to, and this enrolment names none", ErrNotFindable)
 	case e.PersonID == "":
 		return errors.New("iamdomain: an enrolment needs the person id it is " +
 			"creating: every append in the sequence names it, so one minted " +
@@ -235,6 +302,143 @@ func (e Enrolment) validate() error {
 		return loginFits(e.Kind, e.Login)
 	}
 	return nil
+}
+
+// redeemable refuses an enrolment its invitation does not cover, read inside
+// the person record's own snapshot.
+//
+// EVERY CLAUSE IS A WAY THE REDEMPTION COULD OTHERWISE ASK FOR MORE THAN WAS
+// OFFERED: a grant or a reach the invitation did not carry, an address it was
+// not issued to (holding somebody's link is not holding their address), and a
+// link that is spent or aged out. A link redeemed by THIS person already is
+// not spent against them, so a retry of a redemption whose spend landed still
+// lands as the same person.
+//
+// THE WRITER'S CLOCK decides the expiry, as [openInvitationFor]'s does: the
+// surface already refused an aged-out link against the same clock, and what
+// this buys is that the check and the grants it bounds are one snapshot.
+func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
+	blind string) error {
+
+	var (
+		held           string
+		expires, spent int64
+		redeemedBy     string
+		document       []byte
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT email_blind, expires_at, redeemed_at, person_id, document
+		  FROM iam_invites WHERE id = ?`, in.Invitation).
+		Scan(&held, &expires, &spent, &redeemedBy, &document)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("%w: invitation %s is not held on this node, so "+
+			"nothing says what redeeming it confers", ErrRefused, in.Invitation)
+	case err != nil:
+		return fmt.Errorf("iamdomain: read invitation %s: %w", in.Invitation, err)
+	}
+	invitation, err := DecodeInvitation(document)
+	if err != nil {
+		return fmt.Errorf("iamdomain: open invitation %s: %w", in.Invitation, err)
+	}
+	switch {
+	case held != blind:
+		return fmt.Errorf("%w: invitation %s was issued to another address — "+
+			"holding somebody's link is not holding their address",
+			ErrRefused, in.Invitation)
+	case spent != 0 && redeemedBy != in.PersonID:
+		return fmt.Errorf("%w: invitation %s has already been used",
+			ErrRefused, in.Invitation)
+	case expires != 0 && !w.Now().Before(time.UnixMilli(expires)):
+		return fmt.Errorf("%w: invitation %s has aged out", ErrRefused,
+			in.Invitation)
+	}
+	for _, g := range in.Grants {
+		if !g.Valid() || !slices.Contains(invitation.Grants, g) {
+			return fmt.Errorf("%w: redeeming invitation %s confers %v, and "+
+				"%s is not among them — a redemption hands out what was "+
+				"offered and nothing more", ErrRefused, in.Invitation,
+				invitation.Grants, g)
+		}
+	}
+	if !colleagueWithin(in.Colleague, invitation.Colleague) {
+		return fmt.Errorf("%w: redeeming invitation %s reaches the company's "+
+			"work at %q, and the enrolment asks for %q", ErrRefused,
+			in.Invitation, invitation.Colleague, in.Colleague)
+	}
+	return nil
+}
+
+// bootstrappable refuses the first-person exemption once it no longer
+// applies, read inside the person record's own snapshot.
+//
+// TWO FACTS AND BOTH ARE NEEDED. The code must be LIVE — minted, not spent by
+// anybody else, not withdrawn, not aged out — because a code is what proves
+// the caller can read a file on the host; and nobody ELSE may be enrolled,
+// because the exemption exists only for the instant there is nobody whose
+// grants could bound it. A reservation row (a claim whose content record has
+// not landed) is not somebody: it has no kind, may do nothing, and an
+// abandoned one must not close the company's only way in for good.
+//
+// THE GRANTS ARE NOT BOUNDED BY A WRITER, which is the exemption itself — but
+// a grant this build cannot name is still refused, because conferring a
+// spelling nothing can check is not conferring the ceiling.
+func (w *Writer) bootstrappable(ctx context.Context, tx *sql.Tx, in Enrolment) error {
+	var (
+		expires, spent int64
+		redeemedBy     string
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT expires_at, redeemed_at, person_id
+		  FROM iam_bootstrap_codes WHERE id = ?`, in.BootstrapCode).
+		Scan(&expires, &spent, &redeemedBy)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("%w: no one-time code with that id is on the log, "+
+			"so the file that holds it is not one any node accepts",
+			ErrRefused)
+	case err != nil:
+		return fmt.Errorf("iamdomain: read the one-time code: %w", err)
+	case spent != 0 && redeemedBy != in.PersonID:
+		return fmt.Errorf("%w: the one-time code has been spent or "+
+			"withdrawn", ErrRefused)
+	case expires != 0 && !w.Now().Before(time.UnixMilli(expires)):
+		return fmt.Errorf("%w: the one-time code has aged out", ErrRefused)
+	}
+	var somebody bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM iam_people
+		  WHERE shredded = 0 AND kind != '' AND id != ?)`, in.PersonID).
+		Scan(&somebody); err != nil {
+		return fmt.Errorf("iamdomain: read whether anybody is enrolled: %w", err)
+	}
+	if somebody {
+		return fmt.Errorf("%w: this company already has somebody in it, so "+
+			"the first-person exemption is closed — an administrator "+
+			"enrols or invites everybody after them", ErrRefused)
+	}
+	for _, g := range in.Grants {
+		if !g.Valid() {
+			return fmt.Errorf("%w: %q is not a grant this build knows",
+				ErrRefused, g)
+		}
+	}
+	return nil
+}
+
+// colleagueWithin reports whether a reach is no wider than a bound.
+//
+// THE ZERO VALUE IS THE CLOSED END, as it is everywhere a person's reach is
+// stored, and a level this build cannot name is never within anything.
+func colleagueWithin(asked, bound iam.Colleague) bool {
+	rung := func(c iam.Colleague) int {
+		if c == "" {
+			return 0
+		}
+		return slices.Index(iam.Colleagues, c)
+	}
+	mine, theirs := rung(asked), rung(bound)
+	return mine >= 0 && theirs >= 0 && mine <= theirs
 }
 
 // loginFits refuses a login that is not in its holder's kind's grammar.
@@ -1269,6 +1473,13 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	statelog.Position, error) {
 
 	if err := w.mayAdminister(OpInvite); err != nil {
+		return statelog.Position{}, err
+	}
+	// WHAT IT CONFERS IS DECIDED HERE, ONCE, against the issuer — the
+	// redemption reads it back rather than deciding again — so this is
+	// the one place an invitation can be held to the rule every other
+	// grant change is: a caller may not confer what they do not hold.
+	if err := w.mayConfer(nil, in.Grants); err != nil {
 		return statelog.Position{}, err
 	}
 	switch {

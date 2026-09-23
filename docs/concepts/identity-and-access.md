@@ -189,6 +189,20 @@ migration, none of which passes through one. Taking a grant *away* is always
 allowed: nobody escalates by narrowing, and an administrator who cannot hold
 `secrets:read` must still be able to withdraw it from a leaver.
 
+It holds on every record that hands a grant out: an edit of somebody's row,
+**an enrolment** — which is a grant change from nothing to what it carries —
+and **an invitation**, whose grants are decided once, by whoever issues it.
+Two enrolments are not the writer's to authorise, because the node's own
+writer performs them and holds only `fleet:operate` and `people:manage`; each
+names the authority it rests on instead, and the record checks it in the same
+snapshot the grants land from:
+
+| Enrolment | Its authority | What the record refuses |
+|---|---|---|
+| Created by an administrator (`POST /iam/people`) | The administrator's own grants | Any grant they do not hold, before the first claim is taken |
+| Redeeming an invitation | The invitation, as its issuer wrote it | A grant or a reach the invitation did not carry, an address it was not issued to, and a link already spent or aged out |
+| The first person | The one-time code | A code that is not on the log, is spent, withdrawn or aged out — and any enrolment once somebody else exists |
+
 **`POST /iam/invalidate-all` takes `fleet:operate` rather than both.** It is
 the restore runbook's last step, run by whoever runs the deployment; requiring
 `people:manage` as well would mean every SRE who can restore also holds the
@@ -348,7 +362,11 @@ Three things about that sequence are load-bearing:
 - **The first person receives every grant the ceiling permits.** This is the
   one stated exemption in the authority model, and it is taken at the moment
   nobody holds a credential — the alternative is a first operator who cannot
-  grant themselves what they need in order to grant anybody anything.
+  grant themselves what they need in order to grant anybody anything. The
+  enrolment **names the code** as its authority, and the record honours it
+  only while the code is live on the log and nobody else is enrolled; a code
+  file whose hash never reached the log is one no node accepts, and a second
+  caller racing the first is answered `409 bootstrap_closed`.
 
 It **closes for good** the moment anybody is enrolled, whatever the
 configuration says, because what it creates is an operator carrying the whole
@@ -365,7 +383,11 @@ one link contend with each other.
 
 What redeeming confers is decided **once, by whoever issued it**, rather than
 again by whoever happens to process the redemption. A redemption is therefore
-not a way to ask for more than was offered.
+not a way to ask for more than was offered: issuing one is held to the issuer's
+own grants, and the redemption names the invitation as its authority, so the
+record refuses anything the invitation does not cover — and a link that was
+spent or aged out between opening the form and posting it answers
+`410 invite_spent`, the same as one that was already spent.
 
 **The GET renders and never spends.** A link is followed by things that are not
 the person it was sent to: a mail client prefetching, a security scanner opening
