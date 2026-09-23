@@ -213,17 +213,28 @@ func TestEvictedNodeRefusesBeforeTheAppend(t *testing.T) {
 	// AND AN EVICTION THAT CANNOT BE READ BLOCKS. It is the third value:
 	// an eviction nobody can read is not an eviction that did not happen,
 	// and publishing under it produces durable records every node drops.
-	t.Run("an unreadable eviction blocks", func(t *testing.T) {
+	//
+	// BUT IT IS NOT AN EVICTION, and the refusal says so: an eviction is
+	// permanent until an operator readmits the node, and a coordination
+	// blip is gone in seconds. Answered as `evicted`, every write during
+	// the blip was a 503 with no Retry-After — "waiting cannot clear
+	// this" — which is the signal a client gives up on.
+	t.Run("an unreadable eviction blocks and says to come back", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
 		h.fence.evictErr = errors.New("coordination unreachable")
 		_, err := h.write(probeSubject("a"), "op-1", "hello")
 		var refusal *statelog.Unavailable
-		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonEvicted {
-			t.Fatalf("write = %v, want an evicted refusal", err)
+		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonEvictionUnknown {
+			t.Fatalf("write = %v, want an eviction_unknown refusal", err)
 		}
 		if got := h.appends.appends.Load(); got != 0 {
 			t.Fatalf("appended %d time(s) under an unreadable eviction", got)
+		}
+		if got := statelog.RetryAfter(err, 2*time.Second); got == 0 {
+			t.Error("a write refused on an eviction state nobody could read " +
+				"carries no Retry-After, which tells a client waiting cannot " +
+				"clear a refusal the next read clears")
 		}
 	})
 }

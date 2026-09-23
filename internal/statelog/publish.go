@@ -920,9 +920,12 @@ func (p *Publisher) checkEvicted(ctx context.Context) error {
 	if err != nil {
 		// THE THIRD VALUE BLOCKS. An eviction that cannot be read is
 		// not an eviction that did not happen, and publishing under it
-		// produces durable records every node drops.
+		// produces durable records every node drops — but it is not an
+		// eviction either, and the reason says which: this one clears
+		// when the state is read again, and a caller is told to come
+		// back rather than to give up on this node.
 		return &Unavailable{
-			Reason: ReasonEvicted,
+			Reason: ReasonEvictionUnknown,
 			Detail: fmt.Sprintf("this node's own eviction state could not be read: %v", err),
 		}
 	}

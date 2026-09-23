@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -79,12 +80,14 @@ const (
 	RefuseStalled ReadRefusal = "stalled"
 
 	// RefuseBelowFloor — records this node never applied have been
-	// trimmed, so its rows are missing state no replay can supply.
+	// trimmed, so its rows are missing state no replay can supply. It
+	// clears when the node adopts a peer's snapshot, which it does on its
+	// own.
 	RefuseBelowFloor ReadRefusal = "below_floor"
 
 	// RefuseFloorUnknown — the published floor could not be read, and the
 	// third value BLOCKS. Guessing here keeps a node serving over a hole
-	// it cannot see.
+	// it cannot see. It clears the next time the floor is read.
 	RefuseFloorUnknown ReadRefusal = "floor_unknown"
 
 	// RefuseEvicted — this node has been removed from the fleet.
@@ -131,9 +134,18 @@ func (r ReadRefusal) Valid() bool { return slices.Contains(ReadRefusals, r) }
 // catch up; a node holding a record it cannot decode will not, however long
 // the caller waits, and a hint there would send a caller round a loop that
 // cannot terminate.
+//
+// A FLOOR THAT COULD NOT BE READ IS READ AGAIN, and a node BELOW the floor
+// rejoins by adopting a peer's snapshot on its own — the position heartbeat
+// requests it — so both clear without anybody doing anything, which is what
+// their write-side twins ([ReasonFloorUnknown], [ReasonBelowFloor]) already
+// said. Answered as final here, a coordination blip long enough to age the
+// cached floor told every reader on the node to stop asking, while every
+// writer on it was told to come back.
 func (r ReadRefusal) Retryable() bool {
 	switch r {
-	case RefuseBehind, RefuseNoQuorum, RefuseBrokerUnreachable, RefuseStalled:
+	case RefuseBehind, RefuseNoQuorum, RefuseBrokerUnreachable, RefuseStalled,
+		RefuseBelowFloor, RefuseFloorUnknown:
 		return true
 	}
 	return false
@@ -192,6 +204,14 @@ func RetryHint(code ReadRefusal, lag uint64, recordsPerSecond float64) time.Dura
 	switch code {
 	case RefuseNoQuorum, RefuseBrokerUnreachable:
 		return ElectionRetryHint
+	case RefuseFloorUnknown, RefuseBelowFloor:
+		// ONE HEARTBEAT, and never the drain: neither clears by
+		// applying what is ahead of this node. The floor is read again,
+		// and a below-floor node's rejoin is requested, on the position
+		// heartbeat — so nothing can have changed sooner than the next
+		// one, and a drain-derived figure would be a lag this node
+		// cannot replay across.
+		return coord.ReconcileInterval
 	}
 	if recordsPerSecond <= 0 || lag == 0 {
 		// Nothing measured, or nothing to catch up on. A hint derived

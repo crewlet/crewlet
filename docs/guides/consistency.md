@@ -236,15 +236,24 @@ rather than downgraded. Each code names a different thing to do.
 | `log_full` | The log is at its byte ceiling and refuses appends, so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
 | `deferred` | This node holds a record it cannot decode covering what this read is about. | Ask another node, or upgrade this one. No amount of waiting changes it. |
 | `deferred_scope_unknown` | The deferred record's own scope could not be read, so nothing can be said about what it covers. | It blocks the whole domain, which is why it is a different code. Upgrade the node that is behind on the record version. |
-| `below_floor` | Records this node never applied have been trimmed. | Its rows are missing state no replay can supply. The node has to adopt a peer's snapshot; see [Retention](retention.md). |
-| `floor_unknown` | The published trim floor could not be read. | The third value blocks: guessing here keeps a node serving over a hole it cannot see. Check coordination. |
+| `below_floor` | Records this node never applied have been trimmed. | Its rows are missing state no replay can supply, so the node adopts a peer's snapshot — on its own: the position heartbeat requests the rejoin. Come back after the hint (one heartbeat, 15 s), or ask another node meanwhile; see [Retention](retention.md). |
+| `floor_unknown` | The published trim floor could not be read. | The third value blocks: guessing here keeps a node serving over a hole it cannot see. It clears the next time the floor is read, so come back after the hint (one heartbeat, 15 s); if it persists, check coordination. |
 | `evicted` | This node has been removed from the fleet. | Nothing it holds is authoritative. Readmit it, or route elsewhere. |
 | `wrong_stream` | The position this read was asked to reach is on another stream — including a `min_position` naming another domain's log, which is refused at every level rather than quietly dropped. Or this node's own log is not the one its rows are keyed to: its checkpoint is past the log's end, or the stream was deleted and rebuilt under it, which the position heartbeat names from the broker's own creation instant. | A caller bug, a cursor from before a reanchor, or a recreated stream; see [Retention](retention.md#re-anchoring-a-recreated-stream). |
 
-Four of them are worth coming back to **this** node for — `behind`,
-`no_quorum`, `broker_unreachable` and `stalled`. The rest are not, and the
-distinction is in the code rather than in a retry loop's guesswork: a caller
-that retried `deferred` would loop forever.
+Six of them are worth coming back to **this** node for — `behind`,
+`no_quorum`, `broker_unreachable`, `stalled`, `below_floor` and
+`floor_unknown`. The rest are not, and the distinction is in the code rather
+than in a retry loop's guesswork: a caller that retried `deferred` would loop
+forever.
+
+A **write** refused by the log names a reason from the same vocabulary, and a
+reason spelled like one of these codes agrees with it about waiting — the two
+describe one state of one node. One write reason has no read twin:
+`eviction_unknown`, a node that could not read its own eviction state, which
+blocks the write (publishing under an eviction nobody can see produces records
+every node drops) and clears the moment the state reads again. It is
+deliberately not `evicted`, which no wait clears.
 
 ## Completeness is a different fact from freshness
 

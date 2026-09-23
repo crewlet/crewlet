@@ -417,6 +417,7 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 		{statelog.ReasonBehind, true},
 		{statelog.ReasonBelowFloor, true},
 		{statelog.ReasonFloorUnknown, true},
+		{statelog.ReasonEvictionUnknown, true},
 		{statelog.ReasonEvicted, false},
 		{statelog.ReasonDeferred, false},
 		{statelog.ReasonDeleted, false},
@@ -443,6 +444,42 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 	// AND AN ERROR THIS PACKAGE DID NOT MAKE is the caller's to judge.
 	if got := statelog.RetryAfter(errors.New("a store blip"), otherwise); got != otherwise {
 		t.Errorf("a foreign error says %s, want the caller's own %s", got, otherwise)
+	}
+}
+
+// A WRITE REFUSAL AND ITS READ TWIN AGREE ON WHETHER WAITING HELPS.
+//
+// A [statelog.Reason] spelled like a [statelog.ReadRefusal] names the same
+// state of the same node — behind, below the floor, a floor nobody could read,
+// evicted, a record it cannot decode, a full log — so the two answers are one
+// fact said twice. They disagreed: `floor_unknown` and `below_floor` told a
+// writer to come back and a reader, on the same node at the same instant, that
+// waiting could not clear it. Both clear on their own — the floor is read
+// again, and a below-floor node rejoins by itself.
+func TestAWriteRefusalAndItsReadTwinAgreeOnWaiting(t *testing.T) {
+	t.Parallel()
+	twins := 0
+	for _, read := range statelog.ReadRefusals {
+		write := statelog.Reason(read)
+		switch write {
+		case statelog.ReasonBehind, statelog.ReasonDeferred,
+			statelog.ReasonBelowFloor, statelog.ReasonFloorUnknown,
+			statelog.ReasonEvicted, statelog.ReasonLogFull:
+		default:
+			continue
+		}
+		twins++
+		if write.Retryable() != read.Retryable() {
+			t.Errorf("%q: a write refusal says retryable=%v and a read refusal "+
+				"says %v, about one state of one node", read, write.Retryable(),
+				read.Retryable())
+		}
+	}
+	// THE SIX, so a twin renamed on one side stops being compared rather
+	// than silently passing.
+	if twins != 6 {
+		t.Errorf("compared %d twins, want 6 — a reason and a refusal spelled "+
+			"alike went missing from one side", twins)
 	}
 }
 

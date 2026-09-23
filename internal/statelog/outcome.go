@@ -113,6 +113,19 @@ const (
 	// it publishes will be applied anywhere. There is no retry.
 	ReasonEvicted Reason = "evicted"
 
+	// ReasonEvictionUnknown — this node's own eviction state could not be
+	// read, which is the third value and it BLOCKS: publishing under it
+	// could produce durable records every node drops. It clears when the
+	// state is read again.
+	//
+	// ITS OWN REASON RATHER THAN [ReasonEvicted], because the two send a
+	// caller opposite ways: an eviction is permanent until an operator
+	// readmits the node, while a coordination blip is gone in seconds.
+	// Folded into one, every write on the node during a blip was a 503
+	// saying "waiting cannot clear this" — no Retry-After — which is the
+	// signal a client stops asking on.
+	ReasonEvictionUnknown Reason = "eviction_unknown"
+
 	// ReasonDeferred — this node holds a record it cannot decode whose
 	// scope covers this object, so its rows are stale and any decision
 	// taken from them is unsafe. Another node can serve this write.
@@ -171,15 +184,20 @@ const (
 // reason: a node that is behind catches up, while an evicted node, a deleted
 // object or a full log refuses the same write however long the caller waits.
 //
-// THREE CLEAR ON THEIR OWN, each by its own constant's words: a node BEHIND the
+// FOUR CLEAR ON THEIR OWN, each by its own constant's words: a node BEHIND the
 // caller's previous write applies it, a node BELOW the trim floor catches up
-// or adopts a snapshot, and a floor that could not be read is read again.
-// [ReasonDeferred] is deliberately not one of them: ANOTHER node can serve the
-// write, and this one cannot until it is upgraded — so "come back here" is the
-// wrong instruction however soon it is given.
+// or adopts a snapshot, and a floor or an eviction state that could not be
+// read is read again. [ReasonDeferred] is deliberately not one of them:
+// ANOTHER node can serve the write, and this one cannot until it is upgraded —
+// so "come back here" is the wrong instruction however soon it is given.
+//
+// A REASON SPELLED LIKE A [ReadRefusal] IS ITS TWIN AND AGREES WITH IT, which
+// [TestAWriteRefusalAndItsReadTwinAgreeOnWaiting] holds: the two describe one
+// state of one node, so a surface telling a writer to come back and a reader
+// not to — or the reverse — is contradicting itself about that node.
 func (r Reason) Retryable() bool {
 	switch r {
-	case ReasonBehind, ReasonBelowFloor, ReasonFloorUnknown:
+	case ReasonBehind, ReasonBelowFloor, ReasonFloorUnknown, ReasonEvictionUnknown:
 		return true
 	}
 	return false
