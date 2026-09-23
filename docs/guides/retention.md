@@ -827,8 +827,10 @@ expiry, a revocation or a session invalidation — whether or not a provider is
 still configured. That used to be the probe's, and the probe runs only while an
 `oidc` block does: a deployment that dropped its provider kept every token, a
 live credential at that provider, for ever. A token whose session this node has
-not applied yet is kept, because its row is missing only because it has not
-arrived.
+not applied is kept — its row is missing because the session has not arrived
+there, or because it arrived in a record this node set aside (a newer build's,
+or one signed under a keyring key it was not restarted with) — since collecting
+it would leave the probe nothing to ask with while the session is still live.
 
 **The probe needs the refresh token, so a provider sign-in keeps it.** It is
 sealed into the company's secret store beside the session it belongs to, and a

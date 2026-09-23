@@ -111,7 +111,8 @@ func (e *Engine) BoundSeat(ctx context.Context, login string) (session.PersonRow
 // fake rather than only through a running domain.
 type bindingDirectory interface {
 	PersonByLogin(ctx context.Context, login string) (iamdomain.Sighting, error)
-	Staleness(person string) (lag time.Duration, deferred bool)
+	Staleness(ctx context.Context, person string) (lag time.Duration, deferred bool,
+		err error)
 }
 
 // boundRowOf is [Engine.BoundSeat] over its seam.
@@ -130,8 +131,12 @@ func boundRowOf(ctx context.Context, dir bindingDirectory, login string) (
 		seen.Seat == "" {
 		return session.PersonRow{}, nil
 	}
-	lag, deferred := dir.Staleness(seen.ID)
+	lag, deferred, err := dir.Staleness(ctx, seen.ID)
 	switch {
+	case err != nil:
+		return session.PersonRow{}, fmt.Errorf("engine: %s is bound to %s on "+
+			"this node, which could not say whether it holds a record about "+
+			"that machine it has not applied: %w", login, seen.Seat, err)
 	case lag > statelog.StallGrace:
 		return session.PersonRow{}, fmt.Errorf("engine: %s is bound to %s on "+
 			"this node, and its identity applier is %s behind — past the %s "+

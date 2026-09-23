@@ -1161,6 +1161,15 @@ honestly serve — reads of a session it has not yet seen — and it ends at the
 same sixty seconds the alarm table already calls a stall, so a node serving
 stale identity is by definition a node already alarmed.
 
+A node holding a record about the person it **cannot apply** — a newer build's
+during a rollout, or one signed under a keyring key it was not restarted with
+during a key rotation — answers 503 for the same reason, however current its
+position reads: its applier moved past that record without writing its rows,
+so a missing session row there may be exactly the session that record opened.
+It is asked of every record the node has set aside, not only the earliest, and
+only for the person's own bucket, so one record about somebody else refuses
+nobody here.
+
 ### The three credential shapes meet at one frame
 
 The guard resolves a request once and attaches an `iam.Principal`, so nothing

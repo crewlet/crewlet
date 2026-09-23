@@ -7,12 +7,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 )
 
-// STALENESS STATES BOTH FACTS, SCOPED TO THE PERSON — and Resolve reads the
-// same two.
+// STALENESS STATES BOTH FACTS, and Resolve reads the same two.
 //
 // A Tier A token's seat binding is a directory row read on every request, and
 // the engine refuses to honour one a node cannot vouch for: past the stall
@@ -20,17 +18,16 @@ import (
 // about the lag alone, a caught-up node holding exactly that record reads as
 // current; asked about any deferral at all, one record about somebody else
 // would refuse every bound credential on the node for the length of a rolling
-// upgrade. So the deferral is SCOPED to the person's bucket, and an empty
-// person is covered by every one, since nothing can say what a record this
-// node could not decode is about.
-func TestStalenessIsTheLagAndADeferralCoveringThatPerson(t *testing.T) {
+// upgrade.
+//
+// This case holds the LAG half and the control of the deferral half — a node
+// that retained nothing covers nobody, the empty person included. The deferral
+// half itself needs a record the node really retained, which only a real
+// applier produces: internal/engine's
+// TestARetainedRecordCoversExactlyItsPersonsBucket boots one and retains two.
+func TestStalenessIsTheLagAndNoDeferralWhereNothingIsRetained(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	covered := uuid.New().String()
-	elsewhere := uuid.New().String()
-	for iamdomain.BucketOf(elsewhere) == iamdomain.BucketOf(covered) {
-		elsewhere = uuid.New().String()
-	}
 	log, err := statelogtest.LocalReaderOver(
 		iamdomain.Domain{}, rig.db.Replicated(), rig.waiter)
 	if err != nil {
@@ -39,40 +36,32 @@ func TestStalenessIsTheLagAndADeferralCoveringThatPerson(t *testing.T) {
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
 		DB: rig.db, Log: log,
 		Lag: func() time.Duration { return 90 * time.Second },
-		Deferred: func() (statelog.Deferral, bool) {
-			return statelog.Deferral{Scope: statelog.ScopeSet{
-				Paths: []string{iamdomain.BucketOf(covered).Path()},
-			}}, true
-		},
 	})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
 	}
-	for _, tc := range []struct {
-		name     string
-		person   string
-		deferred bool
-	}{
-		{"the person the deferred record's bucket covers", covered, true},
-		{"a person in another bucket", elsewhere, false},
-		{"nobody in particular", "", true},
-	} {
-		lag, deferred := reader.Staleness(tc.person)
-		if lag != 90*time.Second {
-			t.Errorf("%s: lag %s, want the applier's 90s", tc.name, lag)
+	someone := uuid.New().String()
+	for _, person := range []string{someone, ""} {
+		lag, deferred, err := reader.Staleness(t.Context(), person)
+		if err != nil {
+			t.Fatalf("Staleness(%q): %v", person, err)
 		}
-		if deferred != tc.deferred {
-			t.Errorf("%s: deferred %v, want %v", tc.name, deferred, tc.deferred)
+		if lag != 90*time.Second {
+			t.Errorf("Staleness(%q): lag %s, want the applier's 90s", person, lag)
+		}
+		if deferred {
+			t.Errorf("Staleness(%q) reports a deferral on a node that retained "+
+				"nothing", person)
 		}
 	}
 	// AND THE SESSION TABLE READS THE SAME TWO FACTS, so a token and a
 	// cookie can never be told different things about one person.
-	identity, err := reader.Resolve(t.Context(), "no-such-lineage", covered)
+	identity, err := reader.Resolve(t.Context(), "no-such-lineage", someone)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if identity.Lag != 90*time.Second || !identity.Deferred {
-		t.Errorf("Resolve answered lag %s deferred %v, want 90s and true",
+	if identity.Lag != 90*time.Second || identity.Deferred {
+		t.Errorf("Resolve answered lag %s deferred %v, want 90s and false",
 			identity.Lag, identity.Deferred)
 	}
 }

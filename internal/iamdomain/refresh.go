@@ -36,9 +36,13 @@ import (
 // grant safe on a fleet: a login publishes its session record without waiting
 // for its own apply, so the probe can meet a grant whose session this node has
 // not applied yet — and "no such session here" means "gone" only once this
-// node has applied past the position the session began at. Below it, it means
-// "not arrived", and deleting the grant then would blind the probe to a live
-// session until it expired.
+// node has APPLIED the session's records. Below the start position, it means
+// "not arrived"; at or past it with a record RETAINED about the person's
+// bucket — a newer build's, or one signed under a keyring key this node was
+// not restarted with, which the applier's checkpoint moves past without
+// writing — it means "not applied". Deleting the grant in either would blind
+// the probe to a live session until it expired, and the person could be
+// disabled at their provider and keep it.
 
 // RefreshStore is the fleet secret store as custody uses it: a key store that
 // can also say which names exist.
@@ -210,9 +214,11 @@ func (r *Refreshes) Drop(ctx context.Context, lineage string) (bool, error) {
 // key duty is armed wherever the company's secret store is, which is wherever a
 // grant can exist.
 //
-// AN UNSEEN SESSION IS KEPT: its row is missing because it has not arrived on
-// this node, and collecting its grant would blind the probe to a live session
-// until it expired. See the file's header.
+// AN UNSEEN SESSION IS KEPT: its row is missing because this node has not
+// applied it — it has not arrived, or it arrived in a record this node RETAINED
+// and moved its checkpoint past — and collecting its grant would blind the
+// probe to a live session until it expired: somebody disabled at their
+// provider would keep it. See the file's header.
 func (r *Refreshes) CollectEnded(ctx context.Context, reader *Reader,
 	now time.Time) (collected []string, skipped []error, err error) {
 
@@ -255,8 +261,10 @@ const (
 	// custody of nothing.
 	SessionOver SessionState = "over"
 
-	// SessionUnseen is a session this node has not applied yet. NOT
-	// "over": its row is missing because it has not arrived.
+	// SessionUnseen is a session this node has not applied. NOT "over":
+	// its row is missing because it has not arrived, or because a record
+	// about its person is retained here — a newer build's, or one signed
+	// under a keyring key this node was not restarted with.
 	SessionUnseen SessionState = "unseen"
 )
 
@@ -271,18 +279,27 @@ func (s SessionState) Valid() bool {
 
 // SessionStates answers the three-valued state of each grant's session, in
 // ONE snapshot, against this node's rows at `now`.
+//
+// THE CHECKPOINT AND THE DEFERRALS ARE THE SNAPSHOT'S OWN, read in the
+// transaction that reads the rows ([statelog.PrefixIn], [deferredFor]): what
+// makes an absent row "over" is that these rows hold the session's records,
+// and a reading taken from the applier's memory is about some other instant.
 func (r *Reader) SessionStates(ctx context.Context, grants []RefreshGrant,
 	now time.Time) (map[string]SessionState, error) {
 
 	out := make(map[string]SessionState, len(grants))
-	applied := uint64(r.committed().Packed())
 	err := r.scan(ctx, func(tx *sql.Tx) error {
+		prefix, err := statelog.PrefixIn(ctx, tx, Domain{})
+		if err != nil {
+			return fmt.Errorf("iamdomain: read how much of the log these rows "+
+				"hold: %w", err)
+		}
 		invalidated, err := readInvalidated(ctx, tx)
 		if err != nil {
 			return err
 		}
 		for _, grant := range grants {
-			state, err := sessionState(ctx, tx, grant, applied,
+			state, err := sessionState(ctx, tx, grant, prefix.Settled,
 				invalidated, now)
 			if err != nil {
 				return err
@@ -311,9 +328,22 @@ func readInvalidated(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	return uint64(invalidated), nil
 }
 
-// sessionState is one grant's session, read inside the caller's snapshot.
+// sessionState is one grant's session, read inside the caller's snapshot, whose
+// checkpoint is settled.
+//
+// A ROW THAT IS THERE SAYS WHAT IT SAYS: ended, expired, invalidated, or at a
+// revocation epoch its person has moved past are all final — nothing this node
+// has not applied can bring a session back — and a row with none of those is
+// live as far as anything can be, since a record this node has not applied can
+// only end it. What needs proving is the ABSENCE: a missing row is a session
+// that is over only when these rows hold every record that could have written
+// it — the checkpoint past the session's start (below it the session has not
+// arrived) AND no record retained about its person's bucket, because the
+// applier moves its checkpoint past a record it retains without writing its
+// rows, and the session's own opening record may be exactly what is missing.
+// Either shortfall is UNSEEN, never over.
 func sessionState(ctx context.Context, tx *sql.Tx, grant RefreshGrant,
-	applied, invalidated uint64, now time.Time) (SessionState, error) {
+	settled statelog.Position, invalidated uint64, now time.Time) (SessionState, error) {
 
 	var (
 		person                       string
@@ -325,12 +355,19 @@ func sessionState(ctx context.Context, tx *sql.Tx, grant RefreshGrant,
 		Scan(&person, &epoch, &start, &expires, &ended)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// ABSENT MEANS GONE ONLY PAST WHERE THE SESSION BEGAN — see the
-		// file's header.
-		if applied >= grant.Start {
-			return SessionOver, nil
+		// ABSENT MEANS GONE ONLY WHERE THESE ROWS HOLD THE SESSION'S
+		// RECORDS — see the file's header.
+		if uint64(settled.Packed()) < grant.Start {
+			return SessionUnseen, nil
 		}
-		return SessionUnseen, nil
+		retained, err := deferredFor(ctx, tx, grant.Person)
+		if err != nil {
+			return "", err
+		}
+		if retained {
+			return SessionUnseen, nil
+		}
+		return SessionOver, nil
 	case err != nil:
 		return "", fmt.Errorf("iamdomain: read session %s: %w", grant.Lineage, err)
 	}

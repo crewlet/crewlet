@@ -56,7 +56,6 @@ type Reader struct {
 
 	committed func() statelog.Position
 	lag       func() time.Duration
-	deferred  func() (statelog.Deferral, bool)
 }
 
 // ReaderOptions is what a reader is built from.
@@ -70,13 +69,19 @@ type ReaderOptions struct {
 	// answer is worse than a refusal.
 	Log *statelog.Reader
 
-	// Committed is this node's applied position, Lag how far behind the
-	// log it is, and Deferred whether it holds a record it could not
-	// decode. Each is nil-safe and answers the zero value, which is what a
-	// reader with no runner behind it honestly has.
+	// Committed is this node's applied position and Lag how far behind the
+	// log it is. Each is nil-safe and answers the zero value, which is what
+	// a reader with no runner behind it honestly has.
+	//
+	// WHETHER A RECORD THIS NODE RETAINED IS ABOUT SOMEBODY is not an
+	// option: it is read out of the deferral index inside the snapshot the
+	// rows are read in ([statelog.DeferredIn]). It was the runner's
+	// earliest deferral, which is about one bucket and — as the runner read
+	// it — carried no scope at all, so no retained record was ever about
+	// anybody and every "this node cannot vouch for this person" answer
+	// the session table and a token's binding turn on was dead.
 	Committed func() statelog.Position
 	Lag       func() time.Duration
-	Deferred  func() (statelog.Deferral, bool)
 }
 
 // NewReader builds the identity estate's read side.
@@ -91,15 +96,12 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 			"nobody can tell from a correct refusal")
 	}
 	r := &Reader{db: opts.DB, log: opts.Log,
-		committed: opts.Committed, lag: opts.Lag, deferred: opts.Deferred}
+		committed: opts.Committed, lag: opts.Lag}
 	if r.committed == nil {
 		r.committed = func() statelog.Position { return statelog.Position{} }
 	}
 	if r.lag == nil {
 		r.lag = func() time.Duration { return 0 }
-	}
-	if r.deferred == nil {
-		r.deferred = func() (statelog.Deferral, bool) { return statelog.Deferral{}, false }
 	}
 	return r, nil
 }
@@ -129,16 +131,18 @@ func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 
 	out := session.Identity{
 		Applied: uint64(r.committed().Packed()),
+		Lag:     r.lag(),
 	}
-	// THE DEFERRAL IS READ FIRST and from the RUNNER rather than from a
-	// row, because it is the framework's own coverage answer: this node
-	// holds a record it could not decode whose scope covers this person's
-	// bucket. The read that follows SUCCEEDS and its rows are simply not
-	// known to be complete, which is why this is a field rather than an
-	// error.
-	out.Lag, out.Deferred = r.Staleness(person)
-
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		// THE DEFERRAL IS READ IN THE ROWS' OWN SNAPSHOT, and it is the
+		// framework's coverage answer: this node holds a record it could
+		// not decode whose scope covers this person's bucket. The read
+		// SUCCEEDS and its rows are simply not known to be complete,
+		// which is why this is a field rather than an error.
+		var err error
+		if out.Deferred, err = deferredFor(ctx, tx, person); err != nil {
+			return err
+		}
 		if err := readSessionRow(ctx, tx, lineage, &out.Session); err != nil {
 			return err
 		}
@@ -166,63 +170,50 @@ func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 // about the one event [statelog.StallGrace] already names. It is one method
 // rather than two so that a caller cannot ask about the lag and forget the
 // deferral, which reads as a caught-up node while it holds a newer peer's
-// record about exactly this person.
+// record about exactly this person. THREE-VALUED on the deferral: the index
+// is a read, and one that failed says nothing either way.
 //
 // An EMPTY person is covered by every deferral, because nothing can say which
 // bucket a record it could not decode is about.
-func (r *Reader) Staleness(person string) (lag time.Duration, deferred bool) {
-	return r.coverage().of(person)
+func (r *Reader) Staleness(ctx context.Context, person string) (
+	lag time.Duration, deferred bool, err error) {
+
+	err = r.withTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		deferred, err = deferredFor(ctx, tx, person)
+		return err
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	return r.lag(), deferred, nil
 }
 
-// coverage is one reading of how far this node can vouch, taken BEFORE the rows
-// it is about are read.
-//
-// A VALUE, for the one reader that cannot name its person up front: a machine
-// token's row is what says whose token it is, so its deferral has to be taken
-// before the owner is known and filtered by the owner's bucket once the row has
-// named them. Asked afterwards instead, a deferral reprocessed between the row
-// read and the question left rows from before a revocation paired with "nothing
-// deferred", which is a verdict that held at no instant — while the rows were
-// read the answer was unknown, and once the record applied it was refused.
-type coverage struct {
-	lag       time.Duration
-	held      statelog.Deferral
-	deferring bool
-}
-
-// coverage reads the deferral and the lag, in that order: the deferral is what
-// makes a caught-up node's rows incomplete, so it is the half that must predate
-// the read.
-func (r *Reader) coverage() coverage {
-	held, deferring := r.deferred()
-	return coverage{lag: r.lag(), held: held, deferring: deferring}
-}
-
-// of is the reading scoped to one person's bucket — every deferral, for an
-// empty person, because nothing can say which bucket an undecodable record is
-// about.
-func (c coverage) of(person string) (lag time.Duration, deferred bool) {
-	return c.lag, c.deferring && coversPerson(c.held, person)
-}
-
-// coversPerson reports whether a deferred record's scope covers this person's
-// bucket.
+// deferredFor reports, inside the caller's snapshot, whether this node holds a
+// record it could not decode whose scope covers this person's bucket.
 //
 // THE BUCKET AND NOT THE PERSON, because that is all a deferral can say: its
 // scope is a bucket path, and the person a record is about is inside a payload
 // the deferring node could not decode. See scope.go for why the scope is flat
-// and bucketed rather than per person.
-func coversPerson(d statelog.Deferral, person string) bool {
+// and bucketed rather than per person. And EVERY retained record, through the
+// framework's own index ([statelog.DeferredIn]) — the earliest one is usually
+// about somebody else, and a later one about exactly this person is the case
+// the answer exists for. A root-scoped record covers everybody, and an empty
+// person is covered by every record, since the probe is then the root.
+func deferredFor(ctx context.Context, tx *sql.Tx, person string) (bool, error) {
+	var scope ScopeSet
 	if person == "" {
-		return true
+		scope = RootScope()
+	} else {
+		scope = PeopleScope(person)
 	}
-	want := BucketOf(person).Path()
-	for _, path := range d.Scope.Paths {
-		if path == want || path == RootPath() {
-			return true
-		}
+	_, hit, err := statelog.DeferredIn(ctx, tx, Domain{},
+		scope.Resolve(PersonSubject(person)))
+	if err != nil {
+		return false, fmt.Errorf("iamdomain: ask whether a record this node "+
+			"retained is about this person: %w", err)
 	}
-	return false
+	return hit, nil
 }
 
 // reservation reports whether a row's kind column marks it as a RESERVATION:
@@ -382,10 +373,6 @@ func readEpoch(ctx context.Context, tx *sql.Tx, subject string, out *uint64) err
 // credential is broken for the length of an upgrade.
 func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenRow, error) {
 	out := credential.TokenRow{Applied: uint64(r.committed().Packed())}
-	// THE DEFERRAL IS TAKEN FIRST, as [Reader.Resolve] takes it — before
-	// the rows, and scoped once they have named the owner. See [coverage]
-	// for the verdict the other order produced.
-	vouch := r.coverage()
 	var owner string
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		var (
@@ -401,9 +388,12 @@ func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenR
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			// ABSENT IS A FINDING, which the token's own mint position
-			// turns into "gone" or "not yet".
+			// turns into "gone" or "not yet" — and EVERY deferral covers
+			// it, because nothing can say which bucket a record this node
+			// could not decode is about.
 			owner = ""
-			return nil
+			out.Deferred, err = deferredFor(ctx, tx, owner)
+			return err
 		case err != nil:
 			return fmt.Errorf("iamdomain: read a token: %w", err)
 		}
@@ -423,15 +413,17 @@ func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenR
 		if err := readGeneration(ctx, tx, &out.FleetGeneration); err != nil {
 			return err
 		}
+		// THE OWNER'S BUCKET, once the row has named them, read in the
+		// same snapshot as the row that named them.
+		if out.Deferred, err = deferredFor(ctx, tx, owner); err != nil {
+			return err
+		}
 		return readTokenOwner(ctx, tx, owner, &out.Owner)
 	})
 	if err != nil {
 		return credential.TokenRow{}, err
 	}
-	// THE OWNER'S BUCKET, once the row has named them — and every
-	// deferral when it has not, because nothing can say which bucket a
-	// record this node could not decode is about.
-	out.Lag, out.Deferred = vouch.of(owner)
+	out.Lag = r.lag()
 	return out, nil
 }
 
@@ -948,7 +940,10 @@ func (r *Reader) SessionStanding(ctx context.Context, lineage string,
 		owner string
 		state SessionState
 	)
-	applied := uint64(r.committed().Packed())
+	// THE CHECKPOINT IS ONLY EVER READ FOR AN ABSENT ROW, which this never
+	// hands on — an absent row is never live — so the applier's own is as
+	// good as the snapshot's here.
+	settled := r.committed()
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(ctx,
 			`SELECT person_id FROM iam_sessions WHERE lineage = ?`, lineage).
@@ -965,7 +960,7 @@ func (r *Reader) SessionStanding(ctx context.Context, lineage string,
 			return err
 		}
 		state, err = sessionState(ctx, tx, RefreshGrant{Lineage: lineage},
-			applied, invalidated, now)
+			settled, invalidated, now)
 		return err
 	})
 	if err != nil {

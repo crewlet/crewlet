@@ -17,6 +17,8 @@ type fakeBindings struct {
 	err      error
 	lag      time.Duration
 	deferred bool
+	// indexErr is a deferral index this node could not read.
+	indexErr error
 }
 
 func (f fakeBindings) PersonByLogin(_ context.Context, login string) (
@@ -28,8 +30,11 @@ func (f fakeBindings) PersonByLogin(_ context.Context, login string) (
 	return f.rows[login], nil
 }
 
-func (f fakeBindings) Staleness(string) (time.Duration, bool) {
-	return f.lag, f.deferred
+func (f fakeBindings) Staleness(context.Context, string) (time.Duration, bool, error) {
+	if f.indexErr != nil {
+		return 0, false, f.indexErr
+	}
+	return f.lag, f.deferred, nil
 }
 
 // boundMachine is an active machine under a Tier A token's login, bound to a
@@ -139,6 +144,8 @@ func TestABindingThisNodeCannotVouchForIsUnknown(t *testing.T) {
 			fakeBindings{lag: past}, true},
 		{"a bound row whose bucket holds a deferred record",
 			fakeBindings{deferred: true}, true},
+		{"a bound row whose deferral index could not be read",
+			fakeBindings{indexErr: errors.New("disk")}, true},
 		{"a bound row inside the grace",
 			fakeBindings{lag: statelog.StallGrace}, false},
 	} {

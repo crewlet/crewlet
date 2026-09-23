@@ -708,7 +708,6 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
 		DB: e.backends.Store, Log: running.reader,
 		Committed: running.runner.Committed,
-		Deferred:  running.runner.Deferred,
 		// AND THE LAG, which is what makes the session table's
 		// `stalled` row reachable at all: a node past the stall grace
 		// answers 503 to every arm, and with no lag to read it

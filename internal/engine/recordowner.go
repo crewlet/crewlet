@@ -81,8 +81,12 @@ func holderRecordOf(ctx context.Context, dir bindingDirectory, chart session.Cha
 	// absent row is asked about the EMPTY person, which every deferral
 	// covers: nothing can say which bucket a record this node could not
 	// decode is about, and it may be the enrolment that claimed this login.
-	lag, deferred := dir.Staleness(seen.ID)
+	lag, deferred, err := dir.Staleness(ctx, seen.ID)
 	switch {
+	case err != nil:
+		return "", fmt.Errorf("engine: this node could not say whether it "+
+			"holds an identity record about %s it has not applied, so it "+
+			"cannot say whose record that is: %w", login, err)
 	case lag > statelog.StallGrace:
 		return "", fmt.Errorf("engine: this node's identity applier is %s "+
 			"behind — past the %s stall grace — so it cannot say whose record "+
