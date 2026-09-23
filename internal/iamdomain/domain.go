@@ -26,6 +26,24 @@ type Domain struct{}
 // Name is the register key, the manifest key and the operator's own column.
 func (Domain) Name() string { return "iam" }
 
+// SessionOpsRetention is how long this node's operation ledger keeps a row for
+// a record on a SESSION subject — a sign-in or a sign-out — where every other
+// subject keeps the framework's month ([statelog.OpsRetention]).
+//
+// AN HOUR: the publisher's own resolve budget ([statelog.DefaultResolveBudget],
+// seconds) plus a margin of every retry a session op id is ever given. The
+// month the framework keeps is sized for a SEAT carrying an op id to its next
+// wake after a weekend, and nothing does that with a session's: a sign-in is
+// answered inside its request and never re-asked; a sign-out, an administrator
+// ending somebody's session and the deactivation probe re-decide rather than
+// re-ask — the probe lists only live sessions, so one whose close landed is
+// never asked about again — and a close repeated after its row has gone lands
+// on a closed session, which it leaves as it was: a close applies only to a
+// session still open. Kept a month, these
+// rows are a row per sign-in for a question nobody asks after an hour, and the
+// busiest thing this domain writes.
+const SessionOpsRetention = time.Hour
+
 // IamLogMaxBytes is the ceiling this domain declares for its log, which is
 // what the framework's own suites provision the stream with.
 //

@@ -186,6 +186,9 @@ type OpsLedger interface {
 	// reporting how many went.
 	PurgeOps(ctx context.Context, cutoff time.Time) (int64, error)
 
+	// PurgeOpsOfKind is PurgeOps over one subject kind's rows.
+	PurgeOpsOfKind(ctx context.Context, kind string, cutoff time.Time) (int64, error)
+
 	// PurgeAnchors deletes this node's arbitration anchors below the
 	// domain's published trim floor, reporting how many went.
 	//
@@ -211,6 +214,14 @@ type OpsLedger interface {
 type OpsHorizon struct {
 	Ledger    OpsLedger
 	Retention time.Duration
+
+	// Kinds are the subject kinds whose rows go sooner than Retention,
+	// each with its own horizon — a kind no slow client writes, whose op
+	// ids are re-asked inside the publisher's resolve budget if at all.
+	// The identity domain's sessions are the one today: a row per sign-in
+	// and per sign-out, kept a month for a question nobody asks after an
+	// hour. Empty is "one horizon for the whole ledger".
+	Kinds map[string]time.Duration
 }
 
 // StatelogJobs sweeps each registered domain's operation ledger.
@@ -246,7 +257,26 @@ func StatelogJobs(domains map[string]OpsHorizon) []Job {
 			Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
 				return domain.Ledger.PurgeOps(ctx, cutoff)
 			},
-		}, Job{
+		})
+		// A KIND WITH A HORIZON OF ITS OWN is a job of its own, so its
+		// deletions are reported under a name that says which rows went
+		// and the default job's count keeps meaning what it did. Sorted
+		// for the reason the domains are.
+		kinds := make([]string, 0, len(domain.Kinds))
+		for kind := range domain.Kinds {
+			kinds = append(kinds, kind)
+		}
+		slices.Sort(kinds)
+		for _, kind := range kinds {
+			jobs = append(jobs, Job{
+				Name: name + "_ops_" + kind, Scope: NodeLocal,
+				Horizon: domain.Kinds[kind],
+				Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
+					return domain.Ledger.PurgeOpsOfKind(ctx, kind, cutoff)
+				},
+			})
+		}
+		jobs = append(jobs, Job{
 			// AND THE ANCHORS, which had no sweep at all:
 			// `0001_the_state_log_lands.sql` ships
 			// `statelog_anchor_swept_idx` and states that the sweep

@@ -2035,3 +2035,65 @@ func TestTheArbitrationAnchorsAreSwept(t *testing.T) {
 			swept, err)
 	}
 }
+
+// ONE SUBJECT KIND'S LEDGER ROWS CAN BE SWEPT ON THEIR OWN HORIZON — and only
+// that kind's.
+//
+// A domain whose kind no slow client re-asks declares a shorter horizon for it
+// (the identity estate's sessions: an hour against the month), and that sweep
+// is a RANGE over the stored subject. A range is where the ways to be wrong
+// live, so each row below is one of them: the kind's own old rows go, its row
+// with no id goes, its recent row stays, and a kind whose name merely BEGINS
+// with this one's — the byte after the name is what a naive prefix test gets
+// wrong — stays, as does every other kind.
+func TestOneSubjectKindsLedgerRowsAreSweptOnTheirOwn(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	now := time.Now()
+	old, recent := now.Add(-2*time.Hour), now
+	rows := []struct {
+		op, subject string
+		at          time.Time
+		swept       bool
+	}{
+		{"session-old", probePrefix + ".session.l1", old, true},
+		{"session-bare", probePrefix + ".session", old, true},
+		{"session-recent", probePrefix + ".session.l2", recent, false},
+		{"lookalike-old", probePrefix + ".sessions.l3", old, false},
+		{"other-old", probePrefix + ".object.o1", old, false},
+	}
+	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		for _, r := range rows {
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO probe_ops (op_id, subject, position, applied_at)
+				VALUES (?, ?, 1, ?)`, r.op, r.subject, store.EncodeTime(r.at)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed the ledger: %v", err)
+	}
+
+	swept, err := h.runner.PurgeOpsOfKind(t.Context(), "session", now.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("PurgeOpsOfKind: %v", err)
+	}
+	want := 0
+	for _, r := range rows {
+		_, held, err := h.runner.Op(t.Context(), r.op)
+		if err != nil {
+			t.Fatalf("Op(%s): %v", r.op, err)
+		}
+		if held == r.swept {
+			t.Errorf("%s (%s): held=%v after the session sweep, want swept=%v",
+				r.op, r.subject, held, r.swept)
+		}
+		if r.swept {
+			want++
+		}
+	}
+	if swept != int64(want) {
+		t.Errorf("the sweep reported %d row(s) and deleted %d", swept, want)
+	}
+}

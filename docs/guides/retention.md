@@ -688,11 +688,18 @@ but a seat carries an operation id forward and re-asks on its next wake, hours
 or a weekend later. An operation id older than that resolves `unknown` rather
 than `applied`, which is the honest answer once the row is gone.
 
-That horizon belongs to the **domain** rather than to the framework. Every
-domain takes the same 30 days today, because the client that re-asks is the
-same for all of them; what the per-domain declaration buys is that a domain
-whose writers re-ask on a different rhythm says so where it is declared,
-instead of moving a constant every other domain reads.
+That horizon belongs to the **domain** rather than to the framework, and a
+domain may declare a **shorter** one for a subject kind whose writers never
+re-ask late. Every domain takes 30 days for its ledger as a whole, because the
+client that re-asks is the same for all of them — and the identity domain keeps
+its **session** subjects' rows for **one hour**: a row per sign-in and per
+sign-out, whose operation ids nobody re-asks after the request that wrote them
+(a sign-in is answered inside its request; a sign-out, an administrator ending
+somebody's session and the deactivation probe each re-decide rather than
+re-ask). Kept 30 days they were the busiest thing that domain wrote, for a
+question nobody asks after an hour. The hour is the publisher's own
+five-second resolve budget with a wide margin, and it is its own maintenance
+job, `iam_ops_session`, so what it deletes is counted apart.
 
 Each domain's **arbitration anchors** — one row per subject any writer has ever
 contended on, holding what that subject's last record expects — are swept at
@@ -751,12 +758,13 @@ later identity records for the same bucket behind it, and applies all of them
 once it is upgraded. During a rolling upgrade that is a bucket's worth of
 people whose changes reach that node late, and never a node that disagrees.
 
-The identity domain's **operation ledger** keeps the single 30-day horizon
-every other domain's does, which is not a contradiction with the two above: a
-ledger answers "did my write land" and is measured against the longest a client
-will retry, where a trail answers "what happened" and is measured against an
-audit obligation. It is swept like every other domain's — per node, by the
-maintenance sweep — because each node owns its own copy of it.
+The identity domain's **operation ledger** keeps the 30-day horizon every
+other domain's does, and one hour for its session subjects, which is not a
+contradiction with the two above: a ledger answers "did my write land" and is
+measured against the longest a client will retry, where a trail answers "what
+happened" and is measured against an audit obligation. It is swept like every
+other domain's — per node, by the maintenance sweep — because each node owns
+its own copy of it.
 
 ### The identity duties
 

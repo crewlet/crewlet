@@ -80,11 +80,64 @@ func TestEveryDomainGetsBothNodeLocalSweeps(t *testing.T) {
 	}
 }
 
-type countingLedger struct{ ops, anchors int }
+type countingLedger struct {
+	ops, anchors int
+	// kinds is which kinds PurgeOpsOfKind was asked about.
+	kinds []string
+}
 
 func (l *countingLedger) PurgeOps(context.Context, time.Time) (int64, error) {
 	l.ops++
 	return 0, nil
+}
+
+func (l *countingLedger) PurgeOpsOfKind(_ context.Context, kind string,
+	_ time.Time) (int64, error) {
+
+	l.kinds = append(l.kinds, kind)
+	return 0, nil
+}
+
+// A SUBJECT KIND WITH A HORIZON OF ITS OWN IS A SWEEP OF ITS OWN.
+//
+// The ledger's horizon is sized for the slowest client that re-asks an op id —
+// a seat, after a weekend — and a kind no such client writes (the identity
+// domain's sessions: one row per sign-in, re-asked inside the publisher's
+// resolve budget if at all) would otherwise keep a month of rows for a question
+// nobody asks after an hour. So each declared kind is its own node-local job,
+// at ITS horizon, asking the ledger about THAT kind — and the domain's default
+// job is still there for everything else.
+func TestASubjectKindWithItsOwnHorizonIsItsOwnSweep(t *testing.T) {
+	t.Parallel()
+	ledger := &countingLedger{}
+	jobs := maintenance.StatelogJobs(map[string]maintenance.OpsHorizon{
+		"iam": {Ledger: ledger, Retention: 30 * 24 * time.Hour,
+			Kinds: map[string]time.Duration{"session": time.Hour}},
+	})
+	byName := map[string]maintenance.Job{}
+	for _, j := range jobs {
+		byName[j.Name] = j
+	}
+	kind, held := byName["iam_ops_session"]
+	if !held {
+		t.Fatalf("no iam_ops_session job among %v", jobs)
+	}
+	if kind.Horizon != time.Hour || kind.Scope != maintenance.NodeLocal {
+		t.Errorf("the session sweep runs at %v scope with a %s horizon, want "+
+			"node-local and the kind's own hour", kind.Scope, kind.Horizon)
+	}
+	if byName["iam_ops"].Horizon != 30*24*time.Hour {
+		t.Errorf("the default ops sweep's horizon is %s, want the domain's",
+			byName["iam_ops"].Horizon)
+	}
+	if _, err := kind.Run(t.Context(), time.Now(), time.Now()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(ledger.kinds) != 1 || ledger.kinds[0] != "session" || ledger.ops != 0 {
+		t.Errorf("the session sweep asked the ledger about kinds %v and ran "+
+			"the whole-ledger purge %d time(s), want the one kind and none",
+			ledger.kinds, ledger.ops)
+	}
 }
 
 func (l *countingLedger) PurgeAnchors(context.Context) (int64, error) {

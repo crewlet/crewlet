@@ -1,0 +1,21 @@
+-- The index the identity ledger's per-kind sweep seeks on.
+--
+-- 0019 argued for ONE operation-ledger horizon on this domain: a `kind` column
+-- and a (kind, applied_at) index would be "a claim that a session's op id may
+-- be swept on a different schedule from an enrolment's", and two horizons on
+-- one ledger a retry resolving against a history half of which was deleted.
+-- That is true of a kind whose op ids a slow client carries forward, and it is
+-- not true of a session's: a sign-in is answered inside its request and never
+-- re-asked, and every close is re-DECIDED rather than re-asked. So the ledger
+-- now keeps a session subject's rows for an hour and everything else's for the
+-- framework's month (`internal/iamdomain`, `SessionOpsRetention`), and the
+-- sweep of the hour is a range over the stored SUBJECT, which already carries
+-- the kind — no column is added, so the framework's four columns stay what
+-- 0019 says they are.
+--
+-- (subject, applied_at) rather than subject alone: the range is one kind's
+-- subjects, and the second column is what lets the age filter be read off the
+-- index rather than off each row. The kind's rows are at most a sweep interval
+-- past their hour whenever the sweep has run, so the range it walks is an
+-- hour's sign-ins and not the table.
+CREATE INDEX iam_ops_subject_swept_idx ON iam_ops (subject, applied_at);                  -- the session ops' own sweep

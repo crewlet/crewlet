@@ -450,6 +450,21 @@ func (r *Runner) PurgeOps(ctx context.Context, cutoff time.Time) (int64, error) 
 	return r.tables.purgeOps(ctx, r.db, cutoff)
 }
 
+// PurgeOpsOfKind deletes this node's operation rows on one subject kind applied
+// before cutoff.
+//
+// FOR A KIND WHOSE WRITERS NEVER RE-ASK LATE. [OpsRetention] is sized for the
+// slowest client that retries an op id — a seat re-asking after a weekend —
+// and a kind no such client writes, whose every op id is re-asked inside the
+// publisher's own resolve budget if at all, holds a month of rows nobody will
+// ever look up. A domain declares such a kind's own horizon at its
+// registration, and ships the `(subject, applied_at)` index this seeks on.
+func (r *Runner) PurgeOpsOfKind(ctx context.Context, kind string,
+	cutoff time.Time) (int64, error) {
+
+	return r.tables.purgeOpsOfKind(ctx, r.db, kind, cutoff)
+}
+
 // PurgeAnchors removes this domain's arbitration anchors below floor.
 //
 // PER NODE, like the operation ledger's sweep and unlike a fleet singleton's:

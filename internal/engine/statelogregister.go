@@ -110,6 +110,19 @@ type registration struct {
 	// Zero takes [statelog.OpsRetention].
 	OpsRetention time.Duration
 
+	// OpsKindRetention is a SHORTER horizon for the ledger rows of a subject
+	// kind no slow client writes, keyed on the kind.
+	//
+	// The domain's horizon is sized for the slowest client that re-asks an
+	// op id, and a kind whose every op id is re-asked inside the
+	// publisher's own resolve budget if at all — nobody carries it to a
+	// next wake — keeps that horizon's worth of rows for a question nobody
+	// asks. A declared kind is its own node-local sweep, and the domain
+	// ships the `(subject, applied_at)` index it seeks on
+	// ([statelog.Runner.PurgeOpsOfKind]). Nil is one horizon for the
+	// whole ledger, which is every domain but the identity estate's.
+	OpsKindRetention map[string]time.Duration
+
 	// Participates reports whether a node with these roles runs this
 	// domain. Required, and stated per domain rather than defaulted,
 	// because "every node runs everything" is an answer rather than an
@@ -320,6 +333,13 @@ func register() []registration {
 			},
 			Barrier:      iamdomain.EncodeBarrier,
 			OpsRetention: statelog.OpsRetention,
+			// SESSIONS GO IN AN HOUR: a row per sign-in and per
+			// sign-out, whose op ids nobody re-asks after the
+			// request that wrote them — see
+			// [iamdomain.SessionOpsRetention].
+			OpsKindRetention: map[string]time.Duration{
+				string(iamdomain.KindSession): iamdomain.SessionOpsRetention,
+			},
 			// THE FIRST DOMAIN THAT NARROWS, which is what
 			// participationIn's own comment anticipated.
 			Participates: servesPeople,
@@ -377,6 +397,16 @@ func checkRegister(entries []registration) error {
 				"retrying client, and a horizon of zero or less would sweep a row "+
 				"the client has not had a chance to re-ask with",
 				name, entry.OpsRetention)
+		}
+		for kind, horizon := range entry.OpsKindRetention {
+			if horizon <= 0 || horizon >= entry.OpsRetention {
+				return fmt.Errorf("engine: the state-log register's entry for %q "+
+					"declares a %s horizon for its %q ledger rows beside a domain "+
+					"horizon of %s — a kind's own horizon exists to be SHORTER, and "+
+					"one at or past the domain's would never be what sweeps a row, "+
+					"while zero or less sweeps a row before its writer can re-ask",
+					name, horizon, kind, entry.OpsRetention)
+			}
 		}
 		if entry.Participates == nil {
 			return fmt.Errorf("engine: the state-log register's entry for %q says "+

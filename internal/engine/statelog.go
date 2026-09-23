@@ -2676,6 +2676,7 @@ func (s *stateLog) opsLedgers() map[string]maintenance.OpsHorizon {
 				stream:     entry.Domain.Stream().Name,
 			},
 			Retention: entry.OpsRetention,
+			Kinds:     entry.OpsKindRetention,
 		}
 	}
 	return out
@@ -2698,6 +2699,12 @@ type domainLedger struct {
 
 func (l domainLedger) PurgeOps(ctx context.Context, cutoff time.Time) (int64, error) {
 	return l.runner.PurgeOps(ctx, cutoff)
+}
+
+func (l domainLedger) PurgeOpsOfKind(ctx context.Context, kind string,
+	cutoff time.Time) (int64, error) {
+
+	return l.runner.PurgeOpsOfKind(ctx, kind, cutoff)
 }
 
 func (l domainLedger) PurgeAnchors(ctx context.Context) (int64, error) {

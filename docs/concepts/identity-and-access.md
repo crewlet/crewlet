@@ -1583,9 +1583,11 @@ the record:
   kept.
 
 Keeping the second as long as the first would be storing more about people than
-there is a reason to. The operation ledger has **one** horizon, which is not a
-contradiction: it answers "did my write land", and is measured against the
-longest a client will retry.
+there is a reason to. The operation ledger has its own horizons, which is not
+a contradiction: it answers "did my write land", and is measured against the
+longest a client will retry — a month for everything a seat may carry an
+operation id forward for, and an hour for a session's, which nothing re-asks
+after its request.
 
 The sweep that enforces them is a **record on the log**, not a local delete,
 and it names a *position range* the publisher resolves once — so two nodes with

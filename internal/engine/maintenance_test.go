@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -93,6 +94,12 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// would hold different bytes. See internal/iamdomain's sweep.
 		"iam_anchors",
 		"iam_ops",
+		// AND ITS SESSION SUBJECTS' OWN, the one ledger kind with a
+		// horizon shorter than its domain's: a row per sign-in and per
+		// sign-out, whose op ids nobody re-asks after their request.
+		// A job of its own, so its deletions are counted under a name
+		// that says which rows went.
+		"iam_ops_session",
 		// EVERY REGISTERED DOMAIN'S OPERATION LEDGER, and they are on
 		// this list for exactly the reason the list exists: each
 		// `<domain>_ops` migration says the table is swept and ships
@@ -333,6 +340,11 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		// the ledger is framework bookkeeping about what THIS applier
 		// wrote, not a durable row any peer reads.
 		"<domain>_ops": statelog.OpsRetention,
+		// BUT ONE KIND, the identity estate's sessions, whose op ids
+		// nobody re-asks after their request and whose rows go in an
+		// hour — the shortest horizon the sweep keeps, and the one a
+		// longer tick would most easily outgrow.
+		"iam_ops_session": iamdomain.SessionOpsRetention,
 	} {
 		if horizon <= maintenance.Interval {
 			t.Errorf("%s retention (%v) is not longer than the %v tick",

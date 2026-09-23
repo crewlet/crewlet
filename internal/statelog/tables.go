@@ -213,6 +213,32 @@ const OpsPurgeBatch = 2000
 // backlog would hold the writer the applier is queued behind for the length of
 // it, which on a first tick after a long absence is the whole month.
 func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int64, error) {
+	return t.purgeOpsWhere(ctx, db, `applied_at < ?`, store.EncodeTime(cutoff))
+}
+
+// purgeOpsOfKind deletes the operation rows on one subject KIND applied before
+// cutoff, reporting how many went.
+//
+// A RANGE OVER THE SUBJECT, which is how the ledger stores it — the stream's
+// prefix, the kind, the id — so a kind is the subjects between `<kind>.` and
+// the next character up, plus the kind itself for one with no id. It seeks on
+// a `(subject, applied_at)` index the DOMAIN ships beside its ops table: a
+// kind with a horizon of its own is one whose rows the default sweep would
+// otherwise keep for the default's length, and only a domain that declares
+// one pays for the index.
+func (t tables) purgeOpsOfKind(ctx context.Context, db Estate, kind string,
+	cutoff time.Time) (int64, error) {
+
+	whole := t.prefix + "." + kind
+	return t.purgeOpsWhere(ctx, db,
+		`(subject = ? OR (subject >= ? AND subject < ?)) AND applied_at < ?`,
+		whole, whole+".", whole+"/", store.EncodeTime(cutoff))
+}
+
+// purgeOpsWhere is both sweeps' loop over one predicate.
+func (t tables) purgeOpsWhere(ctx context.Context, db Estate, predicate string,
+	args ...any) (int64, error) {
+
 	if t.ops == "" {
 		return 0, nil
 	}
@@ -222,8 +248,8 @@ func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int6
 		err := db.Tx(ctx, func(tx *sql.Tx) error {
 			res, err := tx.ExecContext(ctx, `
 				DELETE FROM `+t.ops+` WHERE rowid IN (
-					SELECT rowid FROM `+t.ops+` WHERE applied_at < ? LIMIT ?)`,
-				store.EncodeTime(cutoff), OpsPurgeBatch)
+					SELECT rowid FROM `+t.ops+` WHERE `+predicate+` LIMIT ?)`,
+				append(args, OpsPurgeBatch)...)
 			if err != nil {
 				return err
 			}

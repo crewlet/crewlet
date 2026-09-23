@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
@@ -445,6 +446,47 @@ func TestEveryRegisteredDomainsSeamsAreComplete(t *testing.T) {
 					"on one line inside the fifth constructor rather than here",
 					name, field)
 			}
+		}
+	}
+}
+
+// THE IDENTITY LEDGER'S SESSION ROWS GO IN AN HOUR, and only a SHORTER kind
+// horizon is a declaration the boot accepts.
+//
+// The shipped answer first: the identity entry declares its session subjects'
+// own horizon, and it is an hour — the design's number, a resolve budget plus
+// a margin — with every other domain keeping one horizon for the whole ledger.
+// Then the controls: a kind horizon at or past the domain's would never be what
+// sweeps a row, and one of zero sweeps a row before its writer could re-ask.
+func TestTheIdentityLedgersSessionRowsGoInAnHour(t *testing.T) {
+	for _, entry := range register() {
+		name := entry.Domain.Name()
+		if name != (iamdomain.Domain{}).Name() {
+			if len(entry.OpsKindRetention) != 0 {
+				t.Errorf("%s declares kind horizons %v, and no writer of it is "+
+					"known to spare its op ids", name, entry.OpsKindRetention)
+			}
+			continue
+		}
+		got := entry.OpsKindRetention[string(iamdomain.KindSession)]
+		if got != time.Hour {
+			t.Errorf("the identity ledger keeps session rows for %s, want %s",
+				got, time.Hour)
+		}
+	}
+	for _, horizon := range []time.Duration{0, statelog.OpsRetention,
+		2 * statelog.OpsRetention} {
+		entries := register()
+		for i := range entries {
+			if entries[i].Domain.Name() == (iamdomain.Domain{}).Name() {
+				entries[i].OpsKindRetention = map[string]time.Duration{
+					string(iamdomain.KindSession): horizon,
+				}
+			}
+		}
+		if err := checkRegister(entries); err == nil {
+			t.Errorf("a %s session horizon beside the domain's %s passed the "+
+				"boot check", horizon, statelog.OpsRetention)
 		}
 	}
 }
