@@ -15,8 +15,8 @@ import (
 // how they are used: listed, revealed, rotated and resolved into a provider or
 // a child process. And the ENGINE's key material: a person's data key, whose
 // deletion is what removing them does; an OIDC session's refresh token, a
-// credential at somebody else's identity provider; the company's two
-// blind-index keys, under which every stored address is matched. Those live in
+// credential at somebody else's identity provider; the identity estate's
+// blind-index key, under which every stored address is matched. Those live in
 // the same store because it is the one place a delete reaches every node at
 // once and nothing on the request path reads it back.
 //
@@ -58,7 +58,7 @@ var ErrReservedName = errors.New(
 //
 // A CLOSED SET, so a name is reserved by its first segment rather than by
 // whatever a caller happened to put a slash in.
-var estateOwners = []string{"iam", "chart"}
+var estateOwners = []string{"iam"}
 
 // Reserved reports whether a name is in the engine's own namespace — the
 // question every operator surface asks before it touches a row.
@@ -119,7 +119,7 @@ func CheckEstateName(name string) error {
 // IT EXISTS FOR THE ROTATION. A rekey re-seals these rows with everything else,
 // and the operator retiring the old key needs to know that none is still
 // sealed under it — dropping that key would make every person's name, every
-// refresh token and both blind-index keys unreadable at once. A count per key
+// refresh token and the blind-index key unreadable at once. A count per key
 // answers that without putting a person's id or a session's lineage on an
 // operator's screen.
 type EngineKeys struct {

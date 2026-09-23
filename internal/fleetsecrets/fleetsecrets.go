@@ -30,7 +30,7 @@
 // # Two views over one bucket: the operator's, and the engine's own
 //
 // The bucket also holds the ENGINE's key material — a person's data key, an
-// OIDC session's refresh token, the company's blind-index keys — under
+// OIDC session's refresh token, the identity estate's blind-index key — under
 // path-shaped names no `${VAR}` can reach ([secrets.Reserved]). [Store] is the
 // OPERATOR's view: it neither lists, snapshots, reads, writes nor deletes a
 // reserved row, and says so by name ([secrets.ErrReservedName]). [Estate] is
@@ -304,7 +304,7 @@ type Rekeyed struct {
 // Rekey re-seals every row this node can open under the active key — the
 // operator's AND the engine's, because the keyring is one keyring: an engine
 // row left under a retired key is every person's name, every refresh token and
-// both blind-index keys unreadable the moment that key is dropped.
+// the blind-index key unreadable the moment that key is dropped.
 //
 // A row already under the active key is left alone, so a second run reports
 // nothing and costs one read — which is what makes this safe to put in a

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -178,10 +177,9 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 
 // WriteSeat publishes one seat's content.
 //
-// IT IS THE ONE WRITE HERE THAT READS A ROW BACK. A seat carries the two things
-// that need the treatment this file is about: a masked value that has to be
-// restored from what is stored, and an email whose plaintext is sealed but
-// whose BLIND INDEX every node has to be able to compute identically.
+// IT IS THE ONE WRITE HERE THAT READS A ROW BACK. A seat's email is a value a
+// read MASKS, so a write that hands the mask back has to be restored from what
+// is stored rather than written as eight characters of `__redacted__`.
 func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent) (
 	WriteResult, error) {
 
@@ -292,27 +290,4 @@ func priorEmail(prior Seat, found bool) string {
 		return ""
 	}
 	return prior.Email
-}
-
-// BlindIndexFor computes a seat's email blind index under the fleet's key.
-//
-// IT IS A WRITER METHOD RATHER THAN A FREE FUNCTION because the key comes from
-// the secret store, and a caller that had to fetch it would be a second place
-// deciding which key this index is computed under — which is a lookup that
-// silently matches nothing the day the two disagree.
-func (w *Writer) BlindIndexFor(ctx context.Context, email string) (string, error) {
-	if iam.NormalizeEmail(email) == "" {
-		return "", nil
-	}
-	if w.seal == nil {
-		return "", fmt.Errorf("chart: this node has no secret store, so it " +
-			"cannot read the key an email's blind index is computed under — " +
-			"and an index computed without it would match nothing on any " +
-			"node that has the key")
-	}
-	key, err := w.seal.BlindKey(ctx)
-	if err != nil {
-		return "", fmt.Errorf("chart: read the blind-index key: %w", err)
-	}
-	return BlindIndex(key, email), nil
 }

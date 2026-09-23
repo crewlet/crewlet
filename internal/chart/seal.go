@@ -2,15 +2,11 @@ package chart
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base32"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
-	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // WHAT A CHART RECORD MAY AND MAY NOT CARRY IN PLAINTEXT.
@@ -57,8 +53,8 @@ import (
 
 // Sealer turns a literal credential into a reference the record may carry.
 //
-// DEFINED BY THE CONSUMER, as every seam in this tree is: the chart needs two
-// verbs and neither of them is the secret store's whole surface. What satisfies
+// DEFINED BY THE CONSUMER, as every seam in this tree is: the chart needs one
+// verb and it is not the secret store's whole surface. What satisfies
 // it is [internal/fleetsecrets], wired by the engine.
 type Sealer interface {
 	// Seal stores value under name and returns nothing but an error. The
@@ -66,12 +62,6 @@ type Sealer interface {
 	// the field, so a re-seal of one field overwrites rather than
 	// accumulating a key per edit.
 	Seal(ctx context.Context, name, value string) error
-
-	// BlindKey is the keyed material a blind index is computed with. It is
-	// a SEPARATE key from the one that seals values: a blind index is a
-	// lookup surface that every node computes and compares, so the key has
-	// to be readable by every node — where a sealing key ideally is not.
-	BlindKey(ctx context.Context) ([]byte, error)
 }
 
 // SecretRef is the name a sealed value is stored under, rendered as the
@@ -143,46 +133,6 @@ func (w *Writer) sealValue(ctx context.Context, object ObjectRef, field, value s
 		return "", fmt.Errorf("chart: seal %s on %s: %w", field, object, err)
 	}
 	return SecretRef(object, field), nil
-}
-
-// BlindIndex is the searchable form of a value whose plaintext is sealed.
-//
-// # What it is for
-//
-// A vendor payload carries an email address, and something has to turn that
-// into a seat. A plaintext column would answer that in one indexed read and
-// would also be the personal data the sealing exists to protect — in every
-// node's rows, in every snapshot, in every backup.
-//
-// So the column holds a KEYED HASH instead: every node computes the same value
-// from the same address under the fleet's own key, so the lookup is still one
-// indexed read, and the column reveals nothing to anyone without the key. It is
-// keyed rather than a plain digest because an email address has far too little
-// entropy for an unkeyed hash to hide it — the whole corpus of plausible
-// addresses at one company is enumerable in seconds.
-//
-// # What it deliberately cannot do
-//
-// It answers EQUALITY and nothing else. There is no prefix search, no domain
-// filter, no ordering. A surface that wants "everyone at example.com" cannot
-// have it from this column, and that is the trade the sealing bought.
-//
-// The output is base32 without padding: it goes in a TEXT column and is
-// compared for equality, so a case-stable alphabet with no `=` is what makes
-// two nodes' values identical byte for byte without anybody normalising.
-func BlindIndex(key []byte, value string) string {
-	normalised := iam.NormalizeEmail(value)
-	if normalised == "" {
-		return ""
-	}
-	mac := hmac.New(sha256.New, key)
-	// THE DOMAIN SEPARATOR is what stops one blind index being valid in
-	// another: a key reused for two kinds of value would let a match in one
-	// confirm a guess in the other.
-	mac.Write([]byte("crewlet/chart/email\x00"))
-	mac.Write([]byte(normalised))
-	return base32.StdEncoding.WithPadding(base32.NoPadding).
-		EncodeToString(mac.Sum(nil))
 }
 
 // marshal is json.Marshal, named so the encode path reads as one step.

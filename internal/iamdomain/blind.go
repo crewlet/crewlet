@@ -64,9 +64,9 @@ import (
 // somebody plans, not a sweep that runs, so there is no second name for a
 // previous key to live under and no arm here that tries both.
 //
-// IN THE ENGINE'S OWN NAMESPACE of the company's secret store, beside the
-// chart's `chart/blind-index-key` ([secrets.Reserved]). It used to be an
-// environment-variable name, which made it an operator secret: listable,
+// IN THE ENGINE'S OWN NAMESPACE of the company's secret store
+// ([secrets.Reserved]). It used to be an environment-variable name, which
+// made it an operator secret: listable,
 // revealable — and a PUT of a different value orphaned every address in the
 // directory and let each be claimed again, while `${…}` in an `mcp_env` handed
 // the key that makes every address enumerable to a child process. No operator

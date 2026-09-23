@@ -65,22 +65,16 @@ So the chart makes its own trade, and states it rather than inheriting one:
 - **A whole `${VAR}` is stored as written.** It names a credential rather than
   being one, it is what you edit, and sealing it would put a pointer inside the
   store and a pointer to that pointer on the record.
-- **A person's own fields ride under a key that can be deleted.** A human
-  seat's name, address and contact identities are personal data rather than
-  company structure. Deleting that one key makes every copy of those fields —
-  in every node's rows, in every snapshot, in the log itself — unreadable,
-  which is the only erasure a write-ahead log can actually offer.
-
-**An address is still searchable, through a blind index.** A vendor payload
-carries an email and something has to turn it into a seat. The column holds a
-*keyed hash* instead of the address: every node computes the same value under
-the fleet's own key, so the lookup is one indexed read, and the column reveals
-nothing without that key. It is keyed rather than a plain digest because an
-email address has far too little entropy for an unkeyed hash to hide — the
-whole corpus of plausible addresses at one company is enumerable in seconds.
-What it costs is stated too: it answers **equality and nothing else**. There is
-no prefix search, no domain filter, no ordering, and a screen that wants
-"everyone at example.com" cannot have it from this column.
+- **A human seat's own fields are not sealed.** A seat's name and address
+  are fields of the chart like any other, in every node's rows, in every
+  snapshot and on the log itself, and its `email_index` is the address's
+  normalised form, in the clear — that is what a vendor payload's address is
+  matched against, one indexed read. The place a *person's* name and address
+  live under a key that can be deleted is the
+  [identity directory](identity-and-access.md): removing somebody there
+  destroys that key, which makes every copy unreadable at once — the only
+  erasure a write-ahead log can actually offer. A leaver's seat still names
+  them until the seat's own `name` and `email` are cleared.
 
 At boot the engine loads every record into a process-local snapshot and installs it as the **secret source**. From then on `${VAR}` resolution asks the store first and falls back to the process environment:
 
@@ -132,16 +126,16 @@ secrets:
 The same bucket holds key material the **engine** keeps for itself: each
 person's data key (deleting it is what removing somebody does), each provider
 sign-in's refresh token (the deactivation probe's only way to ask the identity
-provider about a session), and the two blind-index keys every stored address is
-matched under. They live here because this is the one store a delete reaches on
-every node at once — and they are **not your secrets**:
+provider about a session), and the identity directory's blind-index key, which
+every stored address is matched under. They live here because this is the one
+store a delete reaches on every node at once — and they are **not your
+secrets**:
 
 | Name | What it is |
 |---|---|
 | `iam/person/<id>/dek` | One person's data key — their name and address are sealed under it |
 | `iam/session/<lineage>/refresh` | One provider session's refresh token |
 | `iam/blind-index-key` | The key an address or a provider subject is blinded under in the identity directory |
-| `chart/blind-index-key` | The key a seat's address is indexed under in the org chart |
 
 A name with a `/` in it is one no `${VAR}` can spell, so none of them can be
 resolved into a provider, an `mcp_env` or a child process by any document.
@@ -157,9 +151,9 @@ sealed under the key they are about to retire.
 
 To act on one, use the gesture it belongs to: `crewlet iam remove` destroys a
 person's key, `crewlet iam revoke` ends their sessions and the probe drops each
-refresh token once its session is over. A blind-index key is never minted over
-one that was deleted — it comes back with the coordination store it lived in,
-from the backup that holds it ([Backups § Restoring](../guides/backup.md#restoring)).
+refresh token once its session is over. The blind-index key is never minted
+over one that was deleted — it comes back with the coordination store it lived
+in, from the backup that holds it ([Backups § Restoring](../guides/backup.md#restoring)).
 
 ---
 

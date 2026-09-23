@@ -30,7 +30,7 @@
 // # The engine's own key material is not reachable from here at all
 //
 // The same bucket holds a person's data key, each OIDC session's refresh
-// token and the company's blind-index keys, under names in the engine's own
+// token and the identity estate's blind-index key, under names in the engine's own
 // namespace ([secrets.Reserved]). Every route that takes a name refuses one of
 // those with `403 reserved_name` before anything else — whatever the caller
 // holds — and the listing counts them per keyring key without naming any. They

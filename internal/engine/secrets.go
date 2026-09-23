@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"maps"
@@ -224,11 +223,21 @@ func openCipher(boot *config.Bootstrap) (secrets.Cipher, error) {
 //
 // # Why an adapter rather than the store itself
 //
-// [chart.Sealer] is two verbs — seal one value, read the blind-index key —
-// and the store's surface is eleven. A consumer-defined interface is what
-// keeps the chart from importing a rekey, a listing and a migration it has no
-// business with, and what lets a test satisfy it without a coordination
-// backend.
+// [chart.Sealer] is one verb — seal one value — and the store's surface is
+// eleven. A consumer-defined interface is what keeps the chart from importing
+// a rekey, a listing and a migration it has no business with, and what lets a
+// test satisfy it without a coordination backend.
+//
+// # It had a second verb, a blind-index key, and nothing derived a value under it
+//
+// The chart matches a vendor payload's address against `chart_seats.email_index`,
+// which the applier writes as the address's MATCHED FORM (iam.NormalizeEmail),
+// in the clear. A keyed blind of the address was designed beside it and never
+// wired: the only thing that read the key was a writer method nothing called,
+// so the key was minted on demand, without the guard the identity estate's has
+// against minting over a deleted one, for an index no row held. Keying the
+// chart's address index is part of sealing a human seat's personal fields, and
+// it arrives with that — together with the rows it would be derived into.
 //
 // NIL IS A REAL CONFIGURATION rather than a missing wire: a company with no
 // fleet backend or no keyring has no store, and the chart's own write path
@@ -246,9 +255,6 @@ func (e *Engine) chartSealer() chart.Sealer {
 		store: fleetsecrets.New(e.backends.Fleet, e.cipher),
 		node:  node,
 		now:   time.Now,
-		key: func(ctx context.Context) (string, error) {
-			return e.companyKey(ctx, ChartBlindIndexKey, "chart", nil)
-		},
 	}
 }
 
@@ -257,10 +263,6 @@ type chartSealer struct {
 	store *fleetsecrets.Store
 	node  string
 	now   func() time.Time
-
-	// key reads the blind-index key, minting it under the fleet's hold
-	// when no node ever has. See companykeys.go.
-	key func(ctx context.Context) (string, error)
 }
 
 // Seal stores one value under the name the chart derived.
@@ -272,58 +274,6 @@ func (c *chartSealer) Seal(ctx context.Context, name, value string) error {
 	// the wrong place.
 	return c.store.Set(ctx, name, value, c.node, "chart", c.now())
 }
-
-// BlindKey is the material an email's blind index is computed under.
-//
-// # Why it is a stored secret rather than the keyring's own key
-//
-// The keyring seals values and ideally no node needs it to answer a question.
-// A blind index is the opposite: EVERY node computes and compares it on every
-// inbound vendor payload, so its key has to be readable by every node on the
-// ordinary read path. Making it a record in the company's own store is what
-// keeps those two key roles apart — a fleet can rotate one without making the
-// other's ciphertext unreadable.
-//
-// IT IS MINTED ON FIRST USE and never afterwards. Changing it would make every
-// stored index unmatchable at once, with no gesture that recomputes them, so a
-// rotation is a migration rather than a setting — which is why nothing here
-// takes one.
-func (c *chartSealer) BlindKey(ctx context.Context) ([]byte, error) {
-	// MINTED ONCE, UNDER THE FLEET'S HOLD. The read-back this used to rely on
-	// did not make a race harmless: two nodes that both found the key absent
-	// each read their OWN write back when the other's had not landed yet, and
-	// went on indexing under different keys — see companykeys.go.
-	value, err := c.key(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("engine: the chart's blind-index key: %w", err)
-	}
-	return decodeBlindKey(value)
-}
-
-// decodeBlindKey reads the stored key back out of the form it was written in.
-func decodeBlindKey(value string) ([]byte, error) {
-	key, err := base64.StdEncoding.DecodeString(value)
-	if err != nil {
-		return nil, fmt.Errorf("engine: the chart's blind-index key is not "+
-			"the form it is written in: %w", err)
-	}
-	if len(key) == 0 {
-		return nil, errors.New("engine: the chart's blind-index key is empty, " +
-			"so every address would index to one value")
-	}
-	return key, nil
-}
-
-// ChartBlindIndexKey is the secret name the chart's blind-index key lives
-// under.
-//
-// IN THE ENGINE'S OWN NAMESPACE of the company's store ([secrets.Reserved]),
-// beside [iamdomain.BlindKeyName] and for its reason: it used to be an
-// operator secret, so a PUT of another value made every stored address index
-// match nothing, and a `${…}` handed the key that makes the index enumerable
-// to a child process. A rekey still moves it with every other row, and
-// counts it rather than naming it.
-const ChartBlindIndexKey = "chart/blind-index-key"
 
 // personSealer is the per-person key store, which seals a person's own values
 // AND is what the identity applier shreds through.

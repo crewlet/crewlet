@@ -91,7 +91,7 @@ func mintConcurrently(t *testing.T, nodes []*Engine, fleet coord.Fleet) ([]strin
 	var wg sync.WaitGroup
 	for i, node := range nodes {
 		wg.Go(func() {
-			got[i], errs[i] = node.companyKey(ctx, racedKey, "test", nil)
+			got[i], errs[i] = node.companyKey(ctx, racedKey, "test", noEstate)
 		})
 	}
 	wg.Wait()

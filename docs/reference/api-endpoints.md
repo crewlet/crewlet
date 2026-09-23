@@ -1046,9 +1046,9 @@ a caller who could not write a credential there cannot write one here either.
 | `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id` — the engine's own keys included — answering the names of yours it moved and `engine_keys_moved`, a count of the engine's. `?key_id=` is refused with `409` when it names a different key |
 
 **The engine's own keys are not addressable here.** A person's data key, a
-provider session's refresh token and the two blind-index keys share the bucket
+provider session's refresh token and the identity directory's blind-index key share the bucket
 under path-shaped names (`iam/person/<id>/dek`, `iam/session/<lineage>/refresh`,
-`iam/blind-index-key`, `chart/blind-index-key`). Every route that takes a name
+`iam/blind-index-key`). Every route that takes a name
 answers one of those `403 reserved_name` before anything else — a reveal, an
 overwrite and a delete alike, whatever the caller holds — because a reveal
 would copy a person's key out ahead of the removal that shreds it and a delete

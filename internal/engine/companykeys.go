@@ -16,12 +16,25 @@ import (
 // COMPANY KEYS: the secrets the engine mints for itself, once per company, and
 // every node then reads.
 //
-// Two exist: the chart's blind-index key and the identity estate's. Each is the
-// key a BLIND is derived under, and a blind is compared across nodes — a claim
-// arbitrates on it, a vendor payload is routed by it — so every node has to
-// hold the SAME key. A node computing under one it minted and did not keep is
-// computing values nobody else can match, and nothing reports it, because a
-// blind is opaque by construction.
+// One exists: the identity estate's blind-index key. It is the key a BLIND is
+// derived under, and a blind is compared across nodes — a claim arbitrates on
+// it — so every node has to hold the SAME key. A node computing under one it
+// minted and did not keep is computing values nobody else can match, and
+// nothing reports it, because a blind is opaque by construction.
+//
+// There were two. The org chart's was minted on demand for a keyed address
+// index no chart row holds — the chart matches on the address's normalised
+// form — and it was the one mint with no guard against a deleted key. It went
+// with the unwired index it was for; see [Engine.chartSealer].
+//
+// # Every key is minted behind a guard
+//
+// A missing key is not always a key nobody minted: somebody may have deleted
+// one that every stored value was derived under, and minting another then
+// silently orphans all of them. Only the estate that derived values under a
+// key can say whether it ever did, so [Engine.companyKey] REQUIRES the caller's
+// guard rather than taking a nil for "mint whatever happens" — which is exactly
+// how the chart's key came to have none.
 //
 // # Why the mint is held, and why a read-back alone was not enough
 //
@@ -51,11 +64,18 @@ const companyKeyHoldTTL = seat.SeatLeaseTTL / seat.HeartbeatRatio
 // and faster would buy nothing but reads against a store that is mid-write.
 const companyKeyPoll = 250 * time.Millisecond
 
-// errKeyMintBehind is a node that cannot yet tell whether a missing key may be
-// minted, because it has not applied everything its estate might say about it.
-var errKeyMintBehind = errors.New("engine: this node has not applied the " +
-	"whole identity log yet, so it cannot tell whether a missing key was " +
-	"ever in use; retry once it has caught up")
+// errIdentityBehind is a node asked a question only a caught-up identity estate
+// can answer — whether a missing key was ever in use, whether a key still
+// belongs to somebody — when it has not applied everything the log held at the
+// moment it was asked.
+//
+// BEHIND IS NOT ABSENT. A row this node has not applied reads exactly like a
+// row that does not exist, and both questions it guards are answered by an
+// absence: a key minted over one still in use, or destroyed while somebody
+// still holds it, cannot be taken back.
+var errIdentityBehind = errors.New("engine: this node has not applied the " +
+	"whole identity log yet, so its rows cannot say whether a key is in use; " +
+	"retry once it has caught up")
 
 // mintGate is the in-process half of the mint's exclusion. Its zero value is
 // ready, so an engine a test built by hand holds one too.
@@ -80,10 +100,16 @@ func (g *mintGate) enter(ctx context.Context) (func(), error) {
 // may is asked, under the hold, before a key is minted, and its error refuses
 // the mint: a missing key is not always a key nobody minted — somebody may have
 // deleted one that every stored blind was derived under — and only the caller
-// knows what its estate would say about that. Nil mints unconditionally.
+// knows what its estate would say about that. It is REQUIRED; see the file's
+// header.
 func (e *Engine) companyKey(ctx context.Context, name, source string,
 	may func(context.Context) error) (string, error) {
 
+	if may == nil {
+		return "", fmt.Errorf("engine: %s has no mint guard, and a company key "+
+			"minted with none is minted over a deleted one the day somebody "+
+			"deletes it", name)
+	}
 	if e.backends == nil || e.backends.Fleet == nil || e.cipher == nil {
 		return "", fmt.Errorf("engine: this node has no company secret store, "+
 			"so it cannot read %s", name)
@@ -137,10 +163,8 @@ func (e *Engine) mintKey(ctx context.Context, store *fleetsecrets.Estate, name,
 	if value, err := presentKey(ctx, store, name); value != "" || err != nil {
 		return value, err
 	}
-	if may != nil {
-		if err := may(ctx); err != nil {
-			return "", err
-		}
+	if err := may(ctx); err != nil {
+		return "", err
 	}
 	minted, err := secrets.GenerateKey()
 	if err != nil {
@@ -242,20 +266,54 @@ func (e *Engine) mayMintPersonBlindKey(ctx context.Context) error {
 			"cannot tell whether %s was ever in use", iamdomain.ErrNoBlindKey,
 			iamdomain.BlindKeyName)
 	}
+	return judgeBlindKeyMint(ctx, e.identityCaughtUp, e.native.iamReader.HoldsBlinds)
+}
+
+// identityCaughtUp answers whether this node has applied everything the
+// identity log held when it was asked, and [errIdentityBehind] when it has not.
+//
+// THE LOG'S END IS READ FIRST and this node's position after it, so a record
+// that lands between the two can only make the answer "behind" — never let a
+// node that missed it answer as though it had not.
+func (e *Engine) identityCaughtUp(ctx context.Context) error {
+	if e.native == nil || e.native.log == nil {
+		return fmt.Errorf("%w: this node runs no identity domain", errIdentityBehind)
+	}
 	running := e.native.log.Domain(iamdomain.Domain{}.Name())
 	if running == nil {
 		return fmt.Errorf("%w: the identity log is not running on this node",
-			iamdomain.ErrNoBlindKey)
+			errIdentityBehind)
 	}
 	end, err := running.log.End(ctx)
 	if err != nil {
 		return fmt.Errorf("engine: read how far the identity log goes: %w", err)
 	}
-	if applied := running.runner.Committed(); applied.Seq < end {
-		return fmt.Errorf("%w (applied %d of %d)", errKeyMintBehind,
-			applied.Seq, end)
+	return caughtUp(running.runner.Committed().Seq, end)
+}
+
+// caughtUp is the one comparison both identity questions turn on.
+func caughtUp(applied, end uint64) error {
+	if applied < end {
+		return fmt.Errorf("%w (applied %d of %d)", errIdentityBehind, applied, end)
 	}
-	holds, err := e.native.iamReader.HoldsBlinds(ctx)
+	return nil
+}
+
+// judgeBlindKeyMint is the mint decision over its two seams: whether this node
+// has caught up with the identity log, and whether its rows hold a blind.
+//
+// SEPARATE FROM THE ENGINE so every arm is a case of its own — the one that
+// matters most, a node behind the log, is the one no running fleet can be
+// arranged into on demand. THE ROWS ARE NOT ASKED WHILE BEHIND: an estate that
+// holds no blind yet may be one whose blinded rows have not arrived, and a
+// "no" read then is the answer that mints over a deleted key.
+func judgeBlindKeyMint(ctx context.Context, caughtUp func(context.Context) error,
+	holdsBlinds func(context.Context) (bool, error)) error {
+
+	if err := caughtUp(ctx); err != nil {
+		return err
+	}
+	holds, err := holdsBlinds(ctx)
 	if err != nil {
 		return err
 	}

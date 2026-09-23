@@ -23,7 +23,6 @@ func TestTheEnginesNamespaceAndTheOperatorsNeverOverlap(t *testing.T) {
 		{"iam/person/018f3a9c-0000-7000-8000-000000000001/dek", true, true},
 		{"iam/session/lin-1/refresh", true, true},
 		{"iam/blind-index-key", true, true},
-		{"chart/blind-index-key", true, true},
 		// RESERVED AND STILL NOT WRITABLE: an owner with a malformed tail.
 		{"iam/person//dek", true, false},
 		{"iam/Person/x/dek", true, false},
@@ -32,6 +31,7 @@ func TestTheEnginesNamespaceAndTheOperatorsNeverOverlap(t *testing.T) {
 		{"GITLAB_TOKEN", false, false},
 		{"IAM_PERSON_X_DEK", false, false},
 		{"other/thing", false, false},
+		{"chart/blind-index-key", false, false},
 		{"iamx/thing", false, false},
 	} {
 		if got := secrets.Reserved(tc.name); got != tc.reserved {
