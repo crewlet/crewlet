@@ -285,7 +285,10 @@ func TestASchemaShapedSubmissionDecodesIntoItsStruct(t *testing.T) {
 	// The schemas are hand-written so their DESCRIPTIONS can be real prose,
 	// which means the tags and the schema can drift. This is what says they
 	// have not: every property the schema publishes is a field the struct
-	// accepts.
+	// accepts. It can say so only because a submission's decode REFUSES a
+	// field its struct lacks — while the decode dropped one, a property
+	// published with no field behind it decoded cleanly here and was
+	// discarded from every real submission.
 	decodeAWork := decodeWork(turn.NoReply(), func() []ledger.Call { return nil }, deliverySurface)
 	for name, pair := range map[string]struct {
 		schema map[string]any
@@ -305,6 +308,29 @@ func TestASchemaShapedSubmissionDecodesIntoItsStruct(t *testing.T) {
 		if err := pair.decode(payload); err != nil {
 			t.Errorf("%s: a submission shaped by the schema did not decode: %v", name, err)
 		}
+	}
+}
+
+// A SUBMISSION FIELD THE SCHEMA DOES NOT DECLARE GOES BACK TO THE MODEL,
+// named, rather than being dropped from what the phase decided.
+//
+// A reviewer's `complete_work` for `completed_work` was accepted as a
+// self_iterate that never told the next round what had already landed — the
+// field exists so that round adds to a post rather than firing it a second
+// time — and a work submission's `evidnce` as an answer saying nothing about
+// what it tried. Each an answer the model did not give.
+func TestASubmissionFieldTheSchemaDoesNotDeclareIsRefused(t *testing.T) {
+	t.Parallel()
+	decodeAWork := decodeWork(turn.NoReply(), func() []ledger.Call { return nil }, deliverySurface)
+	if _, err := decodeReview(args(t, `{"decision":"self_iterate",`+
+		`"notes":"link the runbook","complete_work":"posted the summary"}`)); err == nil ||
+		!strings.Contains(err.Error(), `"complete_work"`) {
+		t.Errorf("a review's misspelt field answered %v, want it refused by name", err)
+	}
+	if _, err := decodeAWork(args(t,
+		`{"outcome":"no_action","summary":"nothing asked","evidnce":"x"}`)); err == nil ||
+		!strings.Contains(err.Error(), `"evidnce"`) {
+		t.Errorf("a work submission's misspelt field answered %v, want it refused by name", err)
 	}
 }
 

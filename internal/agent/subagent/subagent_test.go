@@ -2319,6 +2319,47 @@ func TestATaskOutputNoWorkerCanAnswerInIsRefusedUpFront(t *testing.T) {
 	}
 }
 
+// A FIELD THE TOOL DOES NOT DECLARE IS REFUSED BY NAME, and no task starts.
+//
+// Decoded the obvious way it was DROPPED: a task spelling `after` as `afer`
+// ran at once, concurrently with the task it was told to wait for, on input
+// it never received — and the parent was answered as though the graph were
+// the one it asked for. Refused, the model is told which field to fix, which
+// is the one failure a model reliably corrects.
+func TestAFieldTheToolDoesNotDeclareIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name  string
+		args  map[string]any
+		field string
+	}{
+		{"a task's misspelt dependency", map[string]any{"tasks": []any{
+			taskArg("gather", "read it", nil),
+			taskArg("write", "summarise it", map[string]any{"afer": []any{"gather"}}),
+		}}, `"afer"`},
+		{"a stray argument beside the tasks", map[string]any{
+			"tasks":    []any{taskArg("a", "t", nil)},
+			"parallel": 2,
+		}, `"parallel"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			p := &provider{name: "sub"}
+			tool, _ := toolFixture(t, p)
+			res, err := tool.Call(context.Background(), c.args)
+			if err != nil {
+				t.Fatalf("Call: %v", err)
+			}
+			if !res.Failed || !strings.Contains(res.Output, c.field) {
+				t.Fatalf("answered %q, want the field %s refused by name", res.Output, c.field)
+			}
+			if p.count() != 0 {
+				t.Error("a refused plan still started a worker")
+			}
+		})
+	}
+}
+
 func TestTheToolRejectsMalformedToolNames(t *testing.T) {
 	t.Parallel()
 	p := &provider{name: "sub"}

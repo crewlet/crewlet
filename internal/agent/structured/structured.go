@@ -25,6 +25,7 @@
 package structured
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -98,12 +99,26 @@ func (t *Tool[T]) Value() (T, bool) { return t.value, t.called }
 // the wire as JSON and the struct tags are the schema — one definition of the
 // mapping instead of two that can disagree. json.Number survives the round
 // trip, so a large id in a submission's own arguments stays exact.
+//
+// A FIELD THE STRUCT DOES NOT HAVE IS REFUSED, at any depth, naming it. A
+// plain unmarshal DROPS it, and a dropped field is not a no-op: a model that
+// misspelt an optional one — a delegated task's `afer`, a reviewer's
+// `completed_work` — had its submission accepted as though it had said less,
+// so the task ran without the input it was told to wait for and the next
+// round was never told what had already landed, and nothing told the model
+// which field it got wrong. A refusal goes back to the model, which is the
+// one failure it reliably fixes.
+// It is also what lets a test hold a hand-written schema to its struct at
+// all: while a property the struct lacked decoded cleanly, the walk that
+// submits every published property could not fail on the drift it names.
 func Remarshal(args map[string]any, into any) error {
 	blob, err := json.Marshal(args)
 	if err != nil {
 		return fmt.Errorf("arguments could not be re-encoded: %w", err)
 	}
-	if err := json.Unmarshal(blob, into); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(blob))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(into); err != nil {
 		return fmt.Errorf("arguments do not match the schema: %w", err)
 	}
 	return nil

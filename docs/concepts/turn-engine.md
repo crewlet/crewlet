@@ -73,6 +73,8 @@ type Work struct {
 }
 ```
 
+**A field the schema does not declare is refused, naming it**, and goes back to the model like any other rejected submission — at any depth, and in `submit_review` and a [`delegate`](#one-call-a-graph-of-tasks) call too, which decode the same way. Decoded the obvious way it was dropped, so a misspelt optional field was accepted as an answer the model did not give: a reviewer's misspelt `completed_work` never told the next round what had already landed, so it could fire the same post a second time, and a delegated task's `afer` for `after` ran at once, on input it was told to wait for.
+
 To hand a task off to a colleague the executor reaches them where the work lives — a chat mention, an issue comment or reassignment, or `a2a_ask` — and reports that as the delivery. There is no dedicated `delegate` outcome: a handoff is just a colleague-surface tool call.
 
 **Real code work** is the `run_sandbox` tool. For a role gated with `role.sandbox.enabled`, the executor calls it to run a coding agent (Claude Code / OpenCode) in an isolated sandbox. The call **suspends** the tool loop (detached run); when the run completes the engine **resumes the same loop** with the result spliced in as that call's reply, so the agent reports and acts in the same turn. See [Code Sandbox](code-sandbox.md).

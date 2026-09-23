@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -230,8 +231,12 @@ func (t *turnCount) UnmarshalJSON(b []byte) error {
 // Call plans and runs the delegate call.
 func (t *Tool) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
 	var parsed callArgs
-	if err := remarshal(args, &parsed); err != nil {
-		return failed(err.Error()), nil
+	// structured's rule and not a copy of it: a field the arguments do not
+	// declare — a task's `afer` — is refused by name rather than dropped,
+	// because dropped it ran the task at once on input it was told to wait
+	// for. The copy that lived here dropped it.
+	if err := structured.Remarshal(args, &parsed); err != nil {
+		return failed(fmt.Sprintf("%s: %v", ToolName, err)), nil
 	}
 
 	req := Request{Tasks: make([]Task, 0, len(parsed.Tasks))}
@@ -332,20 +337,6 @@ func renderResults(results []Result) string {
 			len(results), err)
 	}
 	return string(blob)
-}
-
-// remarshal moves a decoded argument map into a typed struct, via JSON
-// because the arguments already came off the wire as JSON and the struct tags
-// are the schema.
-func remarshal(args map[string]any, into any) error {
-	blob, err := json.Marshal(args)
-	if err != nil {
-		return fmt.Errorf("%s: arguments could not be re-encoded: %w", ToolName, err)
-	}
-	if err := json.Unmarshal(blob, into); err != nil {
-		return fmt.Errorf("%s: arguments do not match the schema: %w", ToolName, err)
-	}
-	return nil
 }
 
 // failed is a tool refusal the model reads and can act on.
