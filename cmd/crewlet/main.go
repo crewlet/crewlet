@@ -1074,32 +1074,19 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		}
 	}()
 
-	// THE EPOCH THIS NODE STARTS ON. With a Tier B file it is that file's
-	// company, which the reconcile below converges onto the fleet's before
-	// anything is claimed. Without one it is whatever this node's store has
-	// marked active — because the store is authoritative at runtime and a
-	// node whose company already lives there needs no file at all.
-	//
-	// Read BEFORE the engine, in its own open-and-close, so the engine still
-	// owns the backends it opens; see [companyFromStore].
-	//
-	// A FILE'S COMPANY HAS NO ACTIVATION YET, so its instant stays zero and
-	// the engine leaves its chart to the reconciler's first tick, which
-	// publishes the file and applies it with the pointer's own instant. The
-	// store's company carries the instant it was activated at.
-	var activatedAt time.Time
-	if company == nil {
-		if company, activatedAt, err = companyFromStore(ctx, *cfg.bootstrap); err != nil {
-			return err
-		}
+	// THE EPOCH THIS NODE STARTS ON, and the instant it was activated at:
+	// see [bootOptions], which is where it is decided and what its test
+	// holds. The options go to the engine WHOLE, so no field of them can be
+	// decided there and dropped here.
+	opts, err := bootOptions(ctx, *cfg.bootstrap, boot, company)
+	if err != nil {
+		return err
 	}
+	opts.Metrics, opts.Mode = recorder, nodeMode
 
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
-		"company", companyName(company))
-	e, err := engine.New(ctx, engine.Options{
-		Bootstrap: boot, Company: company, ActivatedAt: activatedAt,
-		Metrics: recorder, Mode: nodeMode,
-	})
+		"company", companyName(opts.Company))
+	e, err := engine.New(ctx, opts)
 	if err != nil {
 		return err
 	}

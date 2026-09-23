@@ -280,6 +280,37 @@ func nudge(ctx context.Context, pub queue.Publisher, revisionID, summary string,
 	}
 }
 
+// bootOptions is what `crewlet run` builds its engine from: the Tier A it
+// loaded, the company this node starts on, and the instant that company was
+// activated at.
+//
+// With a Tier B file the company is that file's, which the reconcile converges
+// onto the fleet's before anything is claimed — and a file's company has NO
+// ACTIVATION YET, so its instant stays zero and the engine leaves its chart to
+// the reconciler's first tick, which publishes the file and applies it with
+// the pointer's own instant. Without one it is whatever this node's store has
+// marked active, WITH the instant it was activated at ([companyFromStore]),
+// which is what the engine stamps the chart and the knowledge spaces with at
+// boot ([engine.Options.ActivatedAt]): a boot that dropped it would stamp
+// nothing at all, and the company's projects would wait for the next apply.
+//
+// Read BEFORE the engine, in its own open-and-close, so the engine still owns
+// the backends it opens.
+func bootOptions(ctx context.Context, bootstrapPath string, boot *config.Bootstrap,
+	file *config.Company) (engine.Options, error) {
+
+	opts := engine.Options{Bootstrap: boot, Company: file}
+	if file != nil {
+		return opts, nil
+	}
+	company, activatedAt, err := companyFromStore(ctx, bootstrapPath)
+	if err != nil {
+		return engine.Options{}, err
+	}
+	opts.Company, opts.ActivatedAt = company, activatedAt
+	return opts, nil
+}
+
 // companyFromStore is the epoch a node with no Tier B file boots on.
 //
 // The store is authoritative at runtime, so a node whose company already lives
