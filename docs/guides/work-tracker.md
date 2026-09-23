@@ -628,11 +628,18 @@ given — `list_work_views`, `save_work_view`,
 `set_priorities`, `remove_work_item` and `restore_work_item`
 — the five page tools beside them and knowledge
 search — the seat's own implementations, with one
-field different: a write carries the **caller's** own name as its author — a
-token's id, or a signed-in person's login — and the author kind `operator`.
+field different: a write carries the **caller's** own name as its author — the
+seat's handle with the author kind `human` for a person the identity directory
+binds to a seat, and otherwise the credential's whole login (`token:ops`,
+`jane.doe`) with the author kind `operator` (see [who a write is attributed
+to](../reference/api-endpoints.md#who-a-write-is-attributed-to)).
 There is deliberately no way for the caller to name a seat to act
 as — a tracker whose author field is chosen by the writer is not an audit
-trail.
+trail. The personal tools are the caller's own for the same reason:
+`my_work`, `mark_inbox` and `set_pins` take no name at all, and
+`list_work_views` renders **your** strip — the shared views, your personal
+ones and your pins — under the same name those are written with, with no
+argument that could name somebody else's.
 
 **Whether the call is allowed is decided exactly as a seat's is**: every tool
 on that surface goes through the same authority table, over the same chart,

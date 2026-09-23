@@ -46,15 +46,16 @@ type ViewReader interface {
 
 type listWorkViews struct{ deps WorkDeps }
 
-var _ tools.Callable = (*listWorkViews)(nil)
+var _ tools.SeatCallable = (*listWorkViews)(nil)
 
 func (t *listWorkViews) Name() string { return tracker.ListWorkViewsTool }
 
 func (t *listWorkViews) Description() string {
 	return "List the saved views on a project, unit, person or the whole " +
-		"workspace. Every container has a list, a board and a calendar " +
-		"without anybody saving one; what comes back beyond those is what " +
-		"somebody arranged. To run one, pass its `id` as `view` to " +
+		"workspace, as YOUR strip: the shared views, your own personal ones, " +
+		"and your pins first. Every container has a list, a board and a " +
+		"calendar without anybody saving one; what comes back beyond those " +
+		"is what somebody arranged. To run one, pass its `id` as `view` to " +
 		"list_work_items — its `params` are in the query grammar's own " +
 		"names and are not this tool's arguments."
 }
@@ -64,17 +65,30 @@ func (t *listWorkViews) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"container": containerParameter(),
-			"viewer": map[string]any{
-				"type": "string",
-				"description": "Whose strip to render: their personal views " +
-					"and their pins first. Omit for the shared strip.",
-			},
 		},
 		"required": []string{"container"},
 	}
 }
 
 func (t *listWorkViews) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+func (t *listWorkViews) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	// WHOSE STRIP IS THE CALLER'S, and never an argument. The tool took a
+	// free `viewer` once, so any caller rendered anybody's personal views
+	// and pins by naming them — an arrangement nobody else sees is that
+	// person's, and the read had no rule at all. The viewer is the name
+	// the caller's OWN pins and personal views are written under, which is
+	// the actor's handle: the same value `set_pins` and `save_work_view`
+	// write with, so a strip shows exactly what its reader arranged.
+	actor, err := t.deps.actor(ctx, turn)
+	if err != nil {
+		//nolint:nilerr // A tool failure is a RESULT the caller reads.
+		return notInATurn(tracker.ListWorkViewsTool), nil
+	}
 	if t.deps.Reader == nil {
 		return unconfigured(tracker.ListWorkViewsTool), nil
 	}
@@ -84,7 +98,7 @@ func (t *listWorkViews) Call(ctx context.Context, args map[string]any) (tools.Re
 	}
 	listing, err := t.deps.Reader.Views(ctx, tracker.ViewQuery{
 		Container: container,
-		Viewer:    strings.TrimSpace(argString(args, "viewer")),
+		Viewer:    actor.Handle,
 		// THE SEAT'S OWN LEVEL, like every other tool read here: a
 		// caller that saves a view and then lists the strip sees the
 		// view it just saved — see [seatReadLevel].

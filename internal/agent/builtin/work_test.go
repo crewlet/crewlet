@@ -92,6 +92,10 @@ type fakeTracker struct {
 	myWorkQuery   tracker.MyWorkQuery
 	myWork        tracker.MyWork
 
+	// viewQuery is the last strip the view listing asked for, so a case
+	// can assert WHOSE strip a caller was shown.
+	viewQuery tracker.ViewQuery
+
 	readErr  error
 	writeErr error
 }
@@ -157,7 +161,8 @@ func (f *fakeTracker) Task(_ context.Context, idOrKey string, want tracker.Detai
 	return tracker.TaskDetail{}, fmt.Errorf("%w: %s", tracker.ErrNoTask, idOrKey)
 }
 
-func (f *fakeTracker) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
+func (f *fakeTracker) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
+	f.viewQuery = q
 	return tracker.ViewListing{}, nil
 }
 

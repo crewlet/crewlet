@@ -48,6 +48,67 @@ func (s *recordSpy) WritePriorities(_ context.Context, _, handle string, _ []str
 	return s.wrote(handle)
 }
 
+// A VIEW STRIP IS ITS READER'S, AND NOBODY ELSE'S IS REACHABLE.
+//
+// `list_work_views` took a free `viewer` argument, so any caller — a seat, or
+// the operator's assistant — rendered another person's personal views and
+// pins by naming them. The strip is the caller's own now, under the SAME name
+// their pins and personal views are written with, so it shows exactly what
+// they arranged; a `viewer` sent anyway names nothing the tool reads.
+func TestAViewStripIsTheCallersOwn(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		caller iam.Principal
+		want   string
+	}{
+		{"a person bound to a seat", iam.Principal{
+			Login: "ana.silva", Seat: "ana", Kind: iam.KindPerson,
+		}, "ana"},
+		{"an unbound token", iam.Principal{
+			Login: "token:ops", Kind: iam.KindMachine,
+		}, "token:ops"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			caller := c.caller
+			caller.ID, caller.Stage = uuid.New(), iam.StageActive
+			caller.Grants = []iam.Grant{iam.GrantStateRead}
+			trk := newFakeTracker()
+			var listed bool
+			for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+				Work: builtin.WorkDeps{
+					Reader: trk, Writer: trk.as, Actor: builtin.PrincipalActor,
+				},
+				Authorize: builtin.Decide(chartRefuses),
+			}) {
+				if tool.Name() != tracker.ListWorkViewsTool {
+					continue
+				}
+				if _, declared := tool.Parameters()["properties"].(map[string]any)["viewer"]; declared {
+					t.Error("list_work_views still declares a `viewer`, so a " +
+						"caller can still name whose strip to render")
+				}
+				res, err := tool.Call(iam.WithPrincipal(context.Background(), caller),
+					map[string]any{"container": "project:ENG", "viewer": "bob"})
+				if err != nil {
+					t.Fatalf("list_work_views: %v", err)
+				}
+				if res.Failed {
+					t.Fatalf("list_work_views refused: %s", res.Output)
+				}
+				listed = true
+			}
+			if !listed {
+				t.Fatal("list_work_views is not on the operator surface")
+			}
+			if got := trk.viewQuery.Viewer; got != c.want {
+				t.Errorf("the strip rendered is %q's, want the caller's own %q", got, c.want)
+			}
+		})
+	}
+}
+
 // A PERSONAL VERB IS DECIDED ON THE RECORD IT WRITES.
 //
 // `my_work`, `mark_inbox` and `set_pins` name nobody: the gate decides them on
