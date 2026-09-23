@@ -57,6 +57,42 @@ func callValues(records []coord.BridgeCallRecord) []string {
 	return out
 }
 
+func (h *fleetHarness) reserveCall(turnID, launchID string) uint64 {
+	h.t.Helper()
+	seq, err := h.f.ReserveBridgeCall(h.ctx, turnID, launchID)
+	if err != nil {
+		h.t.Fatalf("ReserveBridgeCall(%s/%s): %v", turnID, launchID, err)
+	}
+	return seq
+}
+
+func (h *fleetHarness) createCall(turnID, launchID string, seq uint64, value string) bool {
+	h.t.Helper()
+	created, err := h.f.CreateBridgeCall(h.ctx, turnID, launchID, seq, []byte(value))
+	if err != nil {
+		h.t.Fatalf("CreateBridgeCall(%s/%s#%d): %v", turnID, launchID, seq, err)
+	}
+	return created
+}
+
+func (h *fleetHarness) createPart(turnID, launchID string, seq uint64, part int, value string) bool {
+	h.t.Helper()
+	created, err := h.f.CreateBridgeCallPart(h.ctx, turnID, launchID, seq, part, []byte(value))
+	if err != nil {
+		h.t.Fatalf("CreateBridgeCallPart(%s/%s#%d.%d): %v", turnID, launchID, seq, part, err)
+	}
+	return created
+}
+
+// partsOf renders a record's parts as "<part>=<value>", in the order read.
+func partsOf(record coord.BridgeCallRecord) []string {
+	out := make([]string, 0, len(record.Parts))
+	for _, p := range record.Parts {
+		out = append(out, fmt.Sprintf("%d=%s", p.Part, p.Value))
+	}
+	return out
+}
+
 var bridgeCallCases = []fleetCase{{
 	// THE REASON THE LOG LEFT THE RUN'S ROW. An agent-mode resume rebuilds
 	// the whole phase from these calls — its submission, its delivery check,
@@ -372,17 +408,255 @@ var bridgeCallCases = []fleetCase{{
 		}
 	},
 }, {
+	// A PART IS NOT A CALL. A call too large for one record keeps its whole
+	// in parts filed under the call's own address, and every read of the
+	// launch has to tell the two apart: a part listed as a call would be a
+	// call the run never made, replayed into its resume and counted by its
+	// board. The whole-log read hands each call the parts under ITS number,
+	// in part order however they were filed; a page reads none and counts
+	// none.
+	name: "a call's parts come back with it, in order, and never as a call",
+	fn: func(h *fleetHarness) {
+		first := h.appendCall("turn-1", "launch-1", "small")
+		seq := h.reserveCall("turn-1", "launch-1")
+		for _, part := range []int{3, 1, 2} {
+			if !h.createPart("turn-1", "launch-1", seq, part, fmt.Sprintf("piece-%d", part)) {
+				h.t.Fatalf("part %d of call %d was reported already filed", part, seq)
+			}
+		}
+		if !h.createCall("turn-1", "launch-1", seq, "fitted") {
+			h.t.Fatalf("the record of reserved call %d was reported already filed", seq)
+		}
+		last := h.appendCall("turn-1", "launch-1", "after")
+
+		got := h.calls("turn-1", "launch-1")
+		if values := callValues(got); !slices.Equal(values, []string{"small", "fitted", "after"}) {
+			h.t.Fatalf("the log = %q: a part was read as a call, or a call was lost", values)
+		}
+		if got[0].Seq != first || got[1].Seq != seq || got[2].Seq != last {
+			h.t.Errorf("the calls are numbered %d, %d, %d; want %d, %d, %d",
+				got[0].Seq, got[1].Seq, got[2].Seq, first, seq, last)
+		}
+		if parts := partsOf(got[1]); !slices.Equal(parts, []string{"1=piece-1", "2=piece-2", "3=piece-3"}) {
+			h.t.Errorf("the parts of call %d = %q, want its three in part order", seq, parts)
+		}
+		if len(got[0].Parts) != 0 || len(got[2].Parts) != 0 {
+			h.t.Errorf("calls with no parts carry %q and %q", partsOf(got[0]), partsOf(got[2]))
+		}
+
+		page := h.callPage(coord.BridgeCallQuery{
+			TurnID: "turn-1", LaunchID: "launch-1", Limit: 10, MaxBytes: 1 << 20,
+		})
+		if page.Total != 3 || !slices.Equal(callValues(page.Calls), []string{"small", "fitted", "after"}) {
+			h.t.Errorf("the page = %q of %d, want the three calls and nothing under them",
+				callValues(page.Calls), page.Total)
+		}
+		end := h.callPage(coord.BridgeCallQuery{
+			TurnID: "turn-1", LaunchID: "launch-1", Last: true, Limit: 2, MaxBytes: 1 << 20,
+		})
+		if !slices.Equal(callValues(end.Calls), []string{"fitted", "after"}) || end.Total != 3 {
+			h.t.Errorf("the log's end = %q of %d, want its two newest calls of 3",
+				callValues(end.Calls), end.Total)
+		}
+		for _, record := range append(page.Calls, end.Calls...) {
+			if len(record.Parts) != 0 {
+				h.t.Errorf("a page carried the parts of call %d", record.Seq)
+			}
+		}
+	},
+}, {
+	// The parts are filed BEFORE their record, so a number can hold parts and
+	// no record: the record could not be written, or the parts' writer died
+	// between the two. Those parts belong to no call and are not one.
+	name: "parts under a number with no record belong to no call",
+	fn: func(h *fleetHarness) {
+		seq := h.reserveCall("turn-1", "launch-1")
+		h.createPart("turn-1", "launch-1", seq, 1, "orphan")
+		h.appendCall("turn-1", "launch-1", "call")
+
+		got := h.calls("turn-1", "launch-1")
+		if len(got) != 1 || string(got[0].Value) != "call" || len(got[0].Parts) != 0 {
+			h.t.Fatalf("the log = %q with parts %q, want the one call and no part",
+				callValues(got), partsOf(got[0]))
+		}
+		if got[0].Seq == seq {
+			h.t.Errorf("the append took reserved number %d", seq)
+		}
+		if page := h.callPage(coord.BridgeCallQuery{
+			TurnID: "turn-1", LaunchID: "launch-1", Limit: 10, MaxBytes: 1 << 20,
+		}); page.Total != 1 {
+			h.t.Errorf("a page counts %d calls, want 1: an orphaned part was counted", page.Total)
+		}
+	},
+}, {
+	// A reserved number is the reserver's: concurrent reservations take
+	// distinct numbers, an append never takes one, and a record or part filed
+	// at an address is never overwritten — a second writer is told the
+	// address is taken and takes another number.
+	name: "a reserved number is taken once, and nothing filed is overwritten",
+	fn: func(h *fleetHarness) {
+		const reservers = 8
+		var wg sync.WaitGroup
+		seqs := make([]uint64, reservers)
+		errs := make([]error, reservers)
+		for i := range reservers {
+			wg.Go(func() {
+				seqs[i], errs[i] = h.f.ReserveBridgeCall(h.ctx, "turn-1", "launch-1")
+			})
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				h.t.Fatalf("reservation %d: %v", i, err)
+			}
+		}
+		if distinct := slices.Compact(slices.Sorted(slices.Values(seqs))); len(distinct) != reservers {
+			h.t.Fatalf("numbers %v: two reservations shared one", seqs)
+		}
+		seq := slices.Max(seqs)
+		if !h.createCall("turn-1", "launch-1", seq, "first") {
+			h.t.Fatal("a reserved number's first record was reported taken")
+		}
+		if h.createCall("turn-1", "launch-1", seq, "second") {
+			h.t.Error("a second record at one number was reported filed")
+		}
+		if !h.createPart("turn-1", "launch-1", seq, 1, "p") || h.createPart("turn-1", "launch-1", seq, 1, "q") {
+			h.t.Error("a part was not filed once and then refused")
+		}
+		got := h.calls("turn-1", "launch-1")
+		if len(got) != 1 || string(got[0].Value) != "first" || !slices.Equal(partsOf(got[0]), []string{"1=p"}) {
+			h.t.Errorf("the log = %q with parts %q, want the first record and the first part",
+				callValues(got), partsOf(got[0]))
+		}
+		if next := h.appendCall("turn-1", "launch-1", "appended"); next <= seq {
+			h.t.Errorf("an append took number %d, at or below the reserved %d", next, seq)
+		}
+	},
+}, {
+	// A purge resets the numbering, and an append that raced it can land
+	// its record afterwards at the number it took before. The appends that
+	// follow count up from 1 again and reach that number: it is somebody's
+	// call, so it is passed over, never overwritten.
+	name: "an append passes over a number a stray record holds",
+	fn: func(h *fleetHarness) {
+		h.appendCall("turn-1", "launch-1", "before")
+		if err := h.f.PurgeBridgeCalls(h.ctx, "turn-1", "launch-1"); err != nil {
+			h.t.Fatalf("PurgeBridgeCalls: %v", err)
+		}
+		if !h.createCall("turn-1", "launch-1", 2, "stray") {
+			h.t.Fatal("the stray's record was reported taken")
+		}
+		one := h.appendCall("turn-1", "launch-1", "x")
+		three := h.appendCall("turn-1", "launch-1", "y")
+		if one != 1 || three != 3 {
+			h.t.Errorf("the appends were numbered %d and %d, want 1 and 3 around the stray at 2", one, three)
+		}
+		if got := callValues(h.calls("turn-1", "launch-1")); !slices.Equal(got, []string{"x", "stray", "y"}) {
+			h.t.Errorf("the log = %q, want the stray kept between the two appends", got)
+		}
+	},
+}, {
+	// THE PARTS GO WITH THEIR CALLS. A purge ends a launch, and a part it
+	// left behind would be a whole kept for the life of the deployment in a
+	// bucket with no age. And a part filed AFTER its launch was purged — by a
+	// call whose parts were still being written — is the only key that launch
+	// holds, so the sweep's listing has to find it by that part alone.
+	name: "parts go with their launch, and a launch holding only parts is listed",
+	fn: func(h *fleetHarness) {
+		seq := h.reserveCall("turn-1", "launch-1")
+		h.createPart("turn-1", "launch-1", seq, 1, "whole")
+		h.createCall("turn-1", "launch-1", seq, "fitted")
+		h.appendCall("turn-2", "launch-1", "another run")
+
+		if err := h.f.PurgeBridgeCalls(h.ctx, "turn-1", "launch-1"); err != nil {
+			h.t.Fatalf("PurgeBridgeCalls: %v", err)
+		}
+		other := []coord.BridgeLaunch{{TurnID: "turn-2", LaunchID: "launch-1"}}
+		if got := h.launches(); !slices.Equal(got, other) {
+			h.t.Errorf("launches after the purge = %+v, want %+v", got, other)
+		}
+
+		h.createPart("turn-1", "launch-1", seq, 2, "late")
+		want := []coord.BridgeLaunch{{TurnID: "turn-1", LaunchID: "launch-1"}, {TurnID: "turn-2", LaunchID: "launch-1"}}
+		if got := h.launches(); !slices.Equal(got, want) {
+			h.t.Errorf("launches = %+v, want %+v: a launch holding only a part is invisible to the sweep",
+				got, want)
+		}
+		if got := h.calls("turn-1", "launch-1"); len(got) != 0 {
+			h.t.Errorf("a launch holding only a part reads as %q", callValues(got))
+		}
+		if err := h.f.PurgeBridgeCalls(h.ctx, "turn-1", "launch-1"); err != nil {
+			h.t.Fatalf("PurgeBridgeCalls: %v", err)
+		}
+		if got := h.launches(); !slices.Equal(got, other) {
+			h.t.Errorf("launches after purging the late part = %+v, want %+v", got, other)
+		}
+		// A record re-created at the purged number reads back with no part
+		// left over from before the purge.
+		h.createCall("turn-1", "launch-1", seq, "again")
+		if got := h.calls("turn-1", "launch-1"); len(got) != 1 || len(got[0].Parts) != 0 {
+			h.t.Errorf("a purged launch's parts survived under a record filed at their number: %q",
+				partsOf(got[0]))
+		}
+	},
+}, {
+	// A part is one message too, so it has the same ceiling as a record and
+	// the same refusal past it: stored whole at the ceiling, refused past it
+	// as permanently too large, never stored cut.
+	name: "a part at the ceiling is stored whole, and one past it is refused",
+	fn: func(h *fleetHarness) {
+		whole := bytes.Repeat([]byte("p"), coord.MaxBridgeCallBytes)
+		seq := h.reserveCall("turn-1", "launch-1")
+		if created, err := h.f.CreateBridgeCallPart(h.ctx, "turn-1", "launch-1", seq, 1, whole); err != nil || !created {
+			h.t.Fatalf("a part of exactly coord.MaxBridgeCallBytes = %v, %v", created, err)
+		}
+		_, err := h.f.CreateBridgeCallPart(h.ctx, "turn-1", "launch-1", seq, 2, append(whole, 'z'))
+		switch {
+		case err == nil:
+			h.t.Error("a part one byte past coord.MaxBridgeCallBytes was accepted")
+		case !errors.Is(err, coord.ErrTooLarge) || errors.Is(err, coord.ErrUnavailable):
+			h.t.Errorf("the refusal = %v, want coord.ErrTooLarge and not coord.ErrUnavailable", err)
+		}
+		if _, err := h.f.CreateBridgeCall(h.ctx, "turn-1", "launch-1", seq, append(whole, 'z')); !errors.Is(err, coord.ErrTooLarge) {
+			h.t.Errorf("a record one byte past the ceiling at a reserved number = %v, want coord.ErrTooLarge", err)
+		}
+		h.createCall("turn-1", "launch-1", seq, "fitted")
+		got := h.calls("turn-1", "launch-1")
+		if len(got) != 1 || len(got[0].Parts) != 1 || !bytes.Equal(got[0].Parts[0].Value, whole) {
+			h.t.Fatalf("the part at the ceiling did not come back whole under its call")
+		}
+	},
+}, {
 	name: "an unaddressed call is an error, not an empty log",
 	fn: func(h *fleetHarness) {
 		for _, ids := range [][2]string{{"", "launch-1"}, {"turn-1", ""}} {
 			if _, err := h.f.AppendBridgeCall(h.ctx, ids[0], ids[1], []byte("x")); err == nil {
 				h.t.Errorf("AppendBridgeCall(%q, %q) was accepted", ids[0], ids[1])
 			}
+			if _, err := h.f.ReserveBridgeCall(h.ctx, ids[0], ids[1]); err == nil {
+				h.t.Errorf("ReserveBridgeCall(%q, %q) was accepted", ids[0], ids[1])
+			}
+			if _, err := h.f.CreateBridgeCall(h.ctx, ids[0], ids[1], 1, []byte("x")); err == nil {
+				h.t.Errorf("CreateBridgeCall(%q, %q) was accepted", ids[0], ids[1])
+			}
+			if _, err := h.f.CreateBridgeCallPart(h.ctx, ids[0], ids[1], 1, 1, []byte("x")); err == nil {
+				h.t.Errorf("CreateBridgeCallPart(%q, %q) was accepted", ids[0], ids[1])
+			}
 			if _, err := h.f.BridgeCalls(h.ctx, ids[0], ids[1]); err == nil {
 				h.t.Errorf("BridgeCalls(%q, %q) answered", ids[0], ids[1])
 			}
 			if err := h.f.PurgeBridgeCalls(h.ctx, ids[0], ids[1]); err == nil {
 				h.t.Errorf("PurgeBridgeCalls(%q, %q) was accepted", ids[0], ids[1])
+			}
+		}
+		// Nothing is numbered zero: a call or a part filed there is one no
+		// read of the log could return.
+		if _, err := h.f.CreateBridgeCall(h.ctx, "turn-1", "launch-1", 0, []byte("x")); err == nil {
+			h.t.Error("a record at call 0 was accepted")
+		}
+		for _, at := range [][2]int{{0, 1}, {1, 0}, {1, -1}} {
+			if _, err := h.f.CreateBridgeCallPart(h.ctx, "turn-1", "launch-1", uint64(at[0]), at[1], []byte("x")); err == nil {
+				h.t.Errorf("a part at call %d part %d was accepted", at[0], at[1])
 			}
 		}
 		for _, q := range []coord.BridgeCallQuery{
@@ -397,17 +671,23 @@ var bridgeCallCases = []fleetCase{{
 }, {
 	name: "a caller mutating a read value cannot reach the store",
 	fn: func(h *fleetHarness) {
-		h.appendCall("turn-1", "launch-1", "original")
+		seq := h.reserveCall("turn-1", "launch-1")
+		h.createPart("turn-1", "launch-1", seq, 1, "piece")
+		h.createCall("turn-1", "launch-1", seq, "original")
 		got := h.calls("turn-1", "launch-1")
 		for i := range got[0].Value {
 			got[0].Value[i] = 'x'
+		}
+		for i := range got[0].Parts[0].Value {
+			got[0].Parts[0].Value[i] = 'x'
 		}
 		page := h.callPage(coord.BridgeCallQuery{TurnID: "turn-1", LaunchID: "launch-1", Limit: 1, MaxBytes: 1})
 		for i := range page.Calls[0].Value {
 			page.Calls[0].Value[i] = 'x'
 		}
-		if again := callValues(h.calls("turn-1", "launch-1")); !slices.Equal(again, []string{"original"}) {
-			h.t.Errorf("the store took a caller's mutation: %q", again)
+		again := h.calls("turn-1", "launch-1")
+		if !slices.Equal(callValues(again), []string{"original"}) || !slices.Equal(partsOf(again[0]), []string{"1=piece"}) {
+			h.t.Errorf("the store took a caller's mutation: %q with parts %q", callValues(again), partsOf(again[0]))
 		}
 	},
 }}

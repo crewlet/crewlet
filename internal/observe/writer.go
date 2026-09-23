@@ -66,8 +66,9 @@ func (w *Writer) onPublish(ctx context.Context, _ string, ev *events.Event) {
 		// is something a running company should shout about once per event.
 		if ev != nil && Excluded(ev.Type) == "" {
 			log.DebugContext(ctx, "event_not_persisted", "type", ev.Type,
-				"hint", "no category in observe.categories, so this type reaches "+
-					"neither the event store nor the activity feed")
+				"hint", "internal/events neither categorises this type nor names "+
+					"it unlisted, so it reaches neither the event store nor the "+
+					"activity feed")
 		}
 		return
 	}

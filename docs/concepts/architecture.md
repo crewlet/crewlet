@@ -108,7 +108,7 @@ the dashboard, running every agent, and performing the company-wide duties.
 ```mermaid
 flowchart TB
     ING["<b>ingress</b>: terminate inbound traffic<br/><i>webhooks · REST · /ws/stream · OTLP · probes</i>"]
-    ALWAYS["<b>Always on, whatever the roles</b><br/><i>notifications · reconciler · presence ·<br/>reflection · observability edge</i>"]
+    ALWAYS["<b>Always on, whatever the roles</b><br/><i>notifications · reconciler · presence ·<br/>reflection · observability edge ·<br/>node-local sweeps</i>"]
     SEATS["<b>seats</b>: run agents<br/><i>mailbox → batching → turn engine · MCP bridge</i>"]
     WORK["<b>workers</b> — company-wide singletons<br/><i>each on a worker:DUTY lease</i>"]
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream, an embedded<br/>cluster, or an external one</i>")]
@@ -136,17 +136,18 @@ Three of those four groups are **inventories, not pipelines**: no box inside
 `ingress`, `workers` or the always-on set hands work to another box in the same
 group. They are named here rather than drawn.
 
-**Two slots and a file.** The stream and coordination are the two *chosen*
+**Two slots and a store.** The stream and coordination are the two *chosen*
 backends, validated together — a multi-node fleet cannot coordinate locally, and
 a two-member fleet has no quorum. The store is not a third choice: it is this
-node's own file, opened with them because everything that writes to it is driven
-by them. A node holding one without the others could hear work it may not do,
-hold seats it cannot serve, or run turns it cannot record.
+node's own two files, the node estate and the replicated estate beside it,
+opened with them because everything that writes to either is driven by them. A
+node holding one without the others could hear work it may not do, hold seats
+it cannot serve, or run turns it cannot record.
 
 **Coordination rides the stream's broker.** Never a second broker, and never
-the store file: against an external cluster it shares the queue's own
-connection rather than dialling one that could fail on its own, and on the
-embedded broker it connects to the same server inside the process — see
+the store: it shares the queue's own connection on every topology — an
+external cluster, a clustered embedded member and a solo one alike — rather
+than opening one that could fail on its own. See
 [Coordination](coordination.md#backends) for why, and for the line between the
 two estates, and [section 5](#5-where-state-lives) for which fact lives where. Only the *lease* half follows `coordination.type`: on a
 single node it falls back to an in-process store, while the shared
@@ -172,13 +173,13 @@ back what it wrote.
 |---|---|
 | `worker:scheduler` | Role- and unit-scoped cron; a fire is published to the stream. |
 | `worker:sandbox-waiter` | Polls detached runs and resumes the turns waiting on them, over the stream. The same tick is the box keepalive. |
-| `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", the retirement of a removed seat's mailbox and coding runs, the purge of bridged calls whose launch no run names, and the native tracker's repairs of work a crash left half-done. |
+| `worker:maintenance` | The maintenance duty's fleet jobs: closing an idle agent-to-agent channel and deleting a closed one, the retirement of a removed seat's mailbox and coding runs, the purge of bridged calls whose launch no run names, and the native tracker's repairs of work a crash left half-done. The same worker's retention sweeps of the tables each node keeps its own copy of — the event store, the conversation ledger, the scheduled-run history and the rest — run on every node on the same tick, holding this lease or not and whatever the node's roles. |
 | `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: every connected third-party app's pass, on a cadence set by who has to act. |
 | `worker:skill-curator` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |
 | `worker:retention` | The state log's trim: reads each domain's terms from the live fleet, purges from the ordered log what they all permit, and publishes what it concluded, so a node not holding the duty can still say why a log is not shrinking. |
 | `worker:embeddings` | Embeds the company's pages and work items once for the fleet, publishing each vector on the vector domain's log for every node's applier to write, so the provider is billed once. |
 
-**Five more services run on every node, whatever the roles say.**
+**Six more services run on every node, whatever the roles say.**
 
 | Always on | What it does |
 |---|---|
@@ -187,6 +188,7 @@ back what it wrote.
 | Node presence | The `node:ID` lease in the KV, plus the posture heartbeat. |
 | Reflection worker | Consumes `turn_completed`, one delivery at a time, and writes to the store. |
 | Observability edge | Two routes off one published event: a publish listener writes the store row, a projector pushes it live onto `/ws/stream`. |
+| Node-local sweeps | The maintenance worker's retention jobs over the tables each node keeps its own copy of, on the same tick as the `worker:maintenance` fleet jobs and whether or not this node holds that lease. |
 
 `seats` is the exception — the one group whose boxes hand work to each other.
 This is what a wake becomes after the stream delivers it:
@@ -572,7 +574,7 @@ exceptions are `adr/0002`, held by
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
 | **`crewlet_budgets`** · `crewlet_rate` · `crewlet_cooldowns` | The token counter, the notification valve, benched credentials |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
-| `crewlet_bridge_calls` | Every tool call an agent-mode coding run made over the MCP bridge, one record per call under the run and its launch — what the run's resume rebuilds its phase from. **No age**: a run's lifecycle purges its calls when it finishes or a second launch replaces the first, and the maintenance duty's `bridge_calls` job purges the calls of any launch no run names |
+| `crewlet_bridge_calls` | Every tool call an agent-mode coding run made over the MCP bridge, one record per call under the run and its launch, and the whole of a call too large for one record in parts filed under that record — what the run's resume rebuilds its phase from, reassembling each such call from its parts. **No age**: a run's lifecycle purges its calls, with their parts, when it finishes or a second launch replaces the first, and the maintenance duty's `bridge_calls` job purges the calls of any launch no run names |
 | `crewlet_follows` | The chat threads each seat follows, one record per backend, seat, channel and thread. Its age, 90 days, is a last-activity horizon, since every re-assert rewrites the record |
 | `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |
 | `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each owner's newest backup covers, which is the only input the backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |

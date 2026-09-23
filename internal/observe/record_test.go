@@ -60,3 +60,27 @@ func TestANonPhaseEventCarriesNoSpend(t *testing.T) {
 		t.Errorf("a non-phase-completion event carried spend: %+v", *rec.Spend)
 	}
 }
+
+// THE WRITER TAGS A NOTIFICATION OUTCOME WITH ITS INTEGRATION.
+//
+// The Integrations answer counts each third-party app's skipped and coalesced
+// deliveries by this tag, grouped in the store — and this writer is the one
+// the engine writes every row through. A row without the tag is left out of
+// that count as one written before the tag existed.
+func TestTheWriterTagsANotificationOutcomeWithItsIntegration(t *testing.T) {
+	t.Parallel()
+	for _, ev := range []*events.Event{
+		events.New(types.NotificationSkipped{Handle: "eng", NotificationSource: "gitlab",
+			Reason: "own_message"}, events.TraceContext{}),
+		events.New(types.NotificationsCoalesced{AgentHandle: "eng", NotificationSource: "gitlab",
+			Count: 3}, events.TraceContext{}),
+	} {
+		rec, ok := observe.Record(ev)
+		if !ok {
+			t.Fatalf("%s was not persisted", ev.Type)
+		}
+		if got := rec.Tags["notification_source"]; got != "gitlab" {
+			t.Errorf("%s: notification_source tag = %q, want gitlab (tags %v)", ev.Type, got, rec.Tags)
+		}
+	}
+}

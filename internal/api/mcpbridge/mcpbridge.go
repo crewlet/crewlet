@@ -532,7 +532,27 @@ func (s *Session) sync() {
 	}
 	s.synced = rev
 	live := make(map[string]struct{})
+	universe := s.Surface.Universe()
 	for _, def := range s.Surface.ToolDefs() {
+		// A DETACHED TOOL IS NEVER OFFERED, and so never run: a server
+		// carries a handler only for what it advertises. Such a tool's
+		// call suspends the caller's own loop, and there is no engine loop
+		// here — the conversation belongs to a vendor CLI. Refusing its
+		// suspension after the call came too late, because running is what
+		// does the damage: run_sandbox launches under the turn's own run
+		// id wherever the seat's sandbox gate lets it launch at all, and
+		// for this run that resets its own record to a new launch — its
+		// suspension cleared, its call log purged — before the call
+		// returns. The executor's surface leaves it out of an agent-mode
+		// run's active set (runner.offersSandbox), and this holds the line
+		// against the one thing that can still widen that set here: a
+		// bridged activate_tool, which reaches every tool the registry
+		// holds.
+		if entry, ok := universe.Lookup(def.Name); ok {
+			if _, detached := entry.Tool.(tools.Detached); detached {
+				continue
+			}
+		}
 		live[def.Name] = struct{}{}
 		if _, have := s.advertised[def.Name]; have {
 			continue
@@ -635,6 +655,8 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 			return failure(err.Error()), nil
 		}
 
+		// No call here can SUSPEND: only a detached tool suspends, and
+		// [Session.sync] never gives one a handler.
 		res, err := s.Surface.Execute(ctx, llm.ToolCall{Name: name, Arguments: args})
 		if err != nil {
 			// The surface returns an error only for something that
@@ -644,20 +666,6 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 			log.ErrorContext(ctx, "mcp_bridge_dispatch_failed",
 				"run_id", s.RunID, "seat", s.Handle, "tool", name, "error", err)
 			return nil, fmt.Errorf("crewlet: %s: %w", name, err)
-		}
-		if res.Suspend {
-			// A SUSPEND CANNOT CROSS THIS BOUNDARY. It stops the
-			// ENGINE's tool loop with the call unanswered so the
-			// conversation can be persisted and re-entered; there is no
-			// engine loop here, and the conversation belongs to a vendor
-			// CLI that would simply hang. The tool that wants it is
-			// run_sandbox, which is offered to a bridged run as a
-			// handle-plus-wait pair instead — see the engine's bridge
-			// surface.
-			log.ErrorContext(ctx, "mcp_bridge_suspend_refused",
-				"run_id", s.RunID, "seat", s.Handle, "tool", name)
-			return failure("This tool cannot be used from a coding run; " +
-				"it suspends the caller's own loop."), nil
 		}
 
 		s.appendCall(ctx, name, args, res.Output, res.Failed)

@@ -99,6 +99,7 @@ func (s *SQLConversations) Append(ctx context.Context, handle, conversation stri
 		if err != nil {
 			return fmt.Errorf("ledgerstore: encode session for %s: %w", handle, err)
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO conversation_sessions
 			   (entry_id, agent_handle, conversation_key, work_key, turn_id,

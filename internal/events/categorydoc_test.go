@@ -45,6 +45,17 @@ func TestTheDocumentedCategoryVocabularyMatchesTheMap(t *testing.T) {
 				"nothing and no explanation (%s)", eventType, categoryDoc, reason)
 		}
 	}
+	// AND THE THIRD PLACEMENT. A type stored without ever being listed is a
+	// row an operator meets only through SQL against the file, where the
+	// table this page carries is the whole vocabulary they have to go on.
+	for _, eventType := range events.UnlistedTypes() {
+		if !strings.Contains(page, "`"+eventType+"`") {
+			t.Errorf("event type %q is written to the store and never listed, and "+
+				"%s does not say so; an operator reading the table with SQL finds "+
+				"rows of a type the page never names (%s)",
+				eventType, categoryDoc, events.Unlisted(eventType))
+		}
+	}
 }
 
 // And the other direction: a type the page names that the engine no longer
@@ -54,6 +65,9 @@ func TestTheDocumentedTableNamesNoVanishedType(t *testing.T) {
 	t.Parallel()
 	known := allTypes()
 	for name := range events.Exclusions() {
+		known[name] = true
+	}
+	for _, name := range events.UnlistedTypes() {
 		known[name] = true
 	}
 

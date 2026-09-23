@@ -826,6 +826,7 @@ func (x *Indexer) Sweep(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := x.Upsert(ctx, stale); err != nil {
 		return false, err
 	}

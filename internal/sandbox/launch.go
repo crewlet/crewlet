@@ -280,6 +280,10 @@ func abandon(ctx context.Context, m *Manager, store PendingStore, req LaunchRequ
 				"sandbox_id", sandboxID, "error", err.Error())
 		}
 	}
+	// An agent-mode job that had started before the launch failed can have
+	// called the bridge already, and those calls go with this finish, unread:
+	// the launch's error fails the executor pass that asked for it, so no
+	// resume will collect them.
 	if _, err := store.Finish(ctx, req.Turn.TurnID, req.Fence); err != nil {
 		log.WarnContext(ctx, "sandbox_launch_finish_failed",
 			"turn_id", req.Turn.TurnID, "error", err.Error())

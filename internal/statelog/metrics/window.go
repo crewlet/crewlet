@@ -55,8 +55,13 @@ type Window struct {
 //
 // The bins are the recorder's own, so a windowed quantile and a cumulative one
 // are computed the same way and can be compared.
+//
+// total is a float64 for the reason the recorder's series total is: the window
+// sums the same increments the cumulative series does, and a windowed total
+// that rounded where the cumulative one did not would put two different
+// numbers for one counter on the operator record and the collector's panel.
 type bucketValue struct {
-	total  uint64
+	total  float64
 	max    float64
 	counts []uint64
 	n      uint64
@@ -75,14 +80,14 @@ func NewWindow(now func() time.Time) *Window {
 	return w
 }
 
-// Add contributes to a counter in the current hour.
-func (w *Window) Add(key string, n uint64) {
+// Add contributes to a counter in the current hour, fraction and all.
+func (w *Window) Add(key string, v float64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	b := w.bucket()
-	v := b[key]
-	v.total += n
-	b[key] = v
+	cur := b[key]
+	cur.total += v
+	b[key] = cur
 }
 
 // Max contributes to a maximum in the current hour.
@@ -208,10 +213,10 @@ func (w *Window) bucket() map[string]bucketValue {
 }
 
 // Total sums a counter over the window.
-func (w *Window) Total(key string) uint64 {
+func (w *Window) Total(key string) float64 {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	var out uint64
+	var out float64
 	for _, b := range w.live() {
 		out += b[key].total
 	}

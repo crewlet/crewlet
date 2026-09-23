@@ -5,7 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -205,5 +208,56 @@ func TestRecordForTagsTheNotificationSource(t *testing.T) {
 					got, rec.Tags)
 			}
 		})
+	}
+}
+
+// A PART OF A PHASE RECORD IS STORED, AND AS NOTHING A LISTING CAN REACH.
+//
+// It is kept because the record it belongs to is incomplete without it, and
+// it is storage rather than an event: its identity and its bytes, and none of
+// the dimensions a listing filters on — so no read keyed on a trace, a turn, a
+// seat or a party can reach it, and it writes no party row.
+func TestRecordForKeepsAPartAsStorageAndNothingElse(t *testing.T) {
+	t.Parallel()
+	record := uuid.New()
+	part := events.New(types.AgentPhaseRecordPart{
+		RecordID: record.String(), Index: 0, WholeBytes: 3, Data: []byte("abc"),
+	}, events.TraceContext{TraceID: "tr-1", SpanID: "sp-1"})
+	part.ID = types.PhaseRecordPartID(record, 0)
+	part.Source = "Lead"
+
+	rec, stored, err := store.RecordFor(part)
+	if err != nil || !stored {
+		t.Fatalf("RecordFor = stored %v, %v; a part must be stored, or its record's whole cannot be read back",
+			stored, err)
+	}
+	if rec.ID != part.ID.String() || rec.Type != part.Type || !rec.Time.Equal(part.Timestamp) {
+		t.Errorf("row identity = %s %s %v; want the part's own", rec.ID, rec.Type, rec.Time)
+	}
+	if rec.Category != "" || rec.Source != "" || rec.Actor != "" || rec.TraceID != "" ||
+		rec.SpanID != "" || len(rec.Tags) != 0 || rec.Spend != nil {
+		t.Errorf("a part's row names what a listing filters on: %+v", rec)
+	}
+	var back events.Event
+	if err := json.Unmarshal(rec.Payload, &back); err != nil {
+		t.Fatalf("the stored payload does not decode: %v", err)
+	}
+	if got, ok := back.Data.(*types.AgentPhaseRecordPart); !ok || string(got.Data) != "abc" {
+		t.Errorf("the stored payload holds %#v, want the part's bytes", back.Data)
+	}
+}
+
+// A ZERO TIMESTAMP IS STAMPED, NOT STORED: year one is below every read floor,
+// so the row would exist and no query would return it, and Append refuses one.
+func TestRecordForStampsAZeroTimestamp(t *testing.T) {
+	t.Parallel()
+	ev := events.New(types.TaskAssigned{Description: "ship it"}, events.TraceContext{})
+	ev.Timestamp = time.Time{}
+	rec, stored, err := store.RecordFor(ev)
+	if err != nil || !stored {
+		t.Fatalf("RecordFor = stored %v, %v", stored, err)
+	}
+	if rec.Time.IsZero() {
+		t.Error("a zero timestamp reached the row, where no read floor lets a query return it")
 	}
 }

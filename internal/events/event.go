@@ -617,20 +617,27 @@ func NewTrace() TraceContext {
 
 // MaxDiagnosticBytes bounds ONE free-text diagnostic field on an event.
 //
-// Not a content budget — the prompts, responses, artifacts and tool results
-// events carry are verbatim, deliberately. This is a delivery guarantee for
-// the one field whose length is set by something outside the engine: an
-// error string. A provider chain that exhausted can carry every attempt's
-// body, and a decode failure can carry the whole undecodable document.
+// Not a content budget: where the prompts, responses, artifacts and tool
+// results an event carries are cut at all, the publisher that knows where the
+// rest is kept decides it — a live frame bounds a tool's output because the
+// phase's completed record carries it, and a phase record too large for one
+// event is published cut with its whole kept in parts
+// (internal/agent/runner/phasefit.go). This is a delivery guarantee for the
+// one field whose length is set by something outside the engine: an error
+// string. A provider chain that exhausted can carry every attempt's body, and
+// a decode failure can carry the whole undecodable document.
 //
 // The failure it prevents is worse than a cut. An event over the queue's
 // [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] (8 MiB) is
-// REFUSED, and every telemetry publisher logs the refusal and moves on — so
-// an unbounded error does not arrive shortened, it does not arrive at all,
-// and the operator diagnosing the incident sees no event rather than a long
-// one. 64 KiB is two orders of magnitude past any message written to be read
-// and two orders below the ceiling, so the field can never be what pushes an
-// event over it.
+// REFUSED, and a telemetry publisher logs the refusal and moves on — so an
+// unbounded error does not arrive shortened, it does not arrive at all, and
+// the operator diagnosing the incident sees no event rather than a long one.
+// The phase record is the one event a refusal does not end, and the bound
+// holds there too: no cut form of the record shortens its error, so an
+// unbounded one would leave even its least form too large to publish. 64 KiB
+// is two orders of magnitude past any message written to be read and two
+// orders below the ceiling, so the field can never be what pushes an event
+// over it.
 const MaxDiagnosticBytes = 64 << 10
 
 // ClipDiagnostic applies [MaxDiagnosticBytes], marking the cut.

@@ -261,25 +261,46 @@ kept only the first and last 100 calls of a long run: the calls between
 are kept nowhere, so the resume is told how many are missing and where,
 and says so on the phase's record and in the reviewer's tool log — but a
 delivery among them is one the delivery check cannot see. A call too
-large for one record is fitted to it, and the cut is marked; see
+large for one record keeps its whole in parts filed under that record, and
+the resume reads it back whole, so the resumed phase is rebuilt from the
+tool's whole output and the whole arguments it was called with. Where the
+parts could not be written, or do not reassemble into the call, the resume
+gets the record's fitted form instead, marked where it was cut and saying
+that its whole is not there — never a shortened text posing as the whole.
+See
 [Code Sandbox § The tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
-for that, for the bounded copy the run's row still keeps for older
-builds, and for how `sandbox_runs` serves a long log.
+for the bounded copy the run's row still keeps for older builds, and for
+how `sandbox_runs` serves a long log.
 
 The resumed phase's own record carries every one of those calls too. A
-phase record too large for one event (8 MiB) is not dropped: its longest
-texts are cut to a common level until it fits — the tool results first,
-then the tool arguments, then the prose — each ending in `…`, a cut tool
-call carrying its whole length as `result_bytes`, `error_bytes` or
-`arguments_bytes`, and the record's notes say it was cut
-(`phase_record_fitted` in the log). Texts shorter than the level are left
-whole. What was cut is kept whole nowhere else: it was in the phase's own
-conversation when it ran. A record refused although it is *within* 8 MiB
-was refused by a NATS server configured below that ceiling, which no cut
-can answer: the node logs `phase_record_refused_within_ceiling`, naming
-`max_payload`, and the record is not published. A node does not boot
-against an external cluster whose server announces less, so this is a
-server it met later, after a reconnect.
+phase record too large for one event (8 MiB) is published cut rather than
+dropped, with its **whole** — the record exactly as it would have been
+stored — kept beside it: published first, as parts under ids derived from
+the record's own, which the event store keeps for as long as it keeps
+events; the
+[`phase_record` question](../reference/api-endpoints.md#ws-wsstream)
+(`GET /phases/{id}`) reassembles them. Then the **record** is published in
+the largest form the transport accepts: its longest texts cut to a common
+level — the tool results first, then the tool arguments, then the prose —
+each ending in `…`, a cut tool call carrying its whole length as
+`result_bytes`, `error_bytes` or `arguments_bytes`; failing that every text
+reduced to its mark; and failing that its first calls carried and the rest
+counted in `tool_executions_omitted`. Texts shorter than the level are left
+whole, the tokens and the cost always are, and the record's `whole_bytes`,
+`whole_parts` and notes say what was cut and where the whole is
+(`phase_record_fitted` in the log). If a part cannot be published the whole
+is not kept, and the record's notes say so and why
+(`phase_record_whole_not_kept`).
+
+A record, or a part, refused although it is *within* 8 MiB was refused by a
+NATS server configured below that ceiling. The node halves what it cuts the
+record to on each such refusal and splits a refused part in two, rather than
+guessing the server's limit, and logs `phase_record_refused_within_ceiling`,
+naming `max_payload`. Only a server that refuses even the record's smallest
+form — every text at its mark, every call counted — leaves the phase with no
+record (`phase_record_not_published`), and its whole is still readable if its
+parts landed. A node does not boot against an external cluster whose server
+announces less, so this is a server it met later, after a reconnect.
 
 #### Code work inside the run
 

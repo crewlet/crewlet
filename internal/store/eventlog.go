@@ -11,8 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -333,13 +335,9 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	// promotion exists to remove, so it must not be reintroduced by the
 	// write path.
 	//
-	// The comment here used to say [RecordFor] fills it on the one
-	// production path "so this normally costs nothing". That was false in
-	// both halves: RecordFor has no production caller — the wiring is
-	// observe.NewWriter — so this branch was the ONLY one ever taken, and
-	// it re-decoded the payload on every phase completion. observe.Record
-	// now sets Spend from the bytes it already has, which makes the
-	// fallback the exception it was always described as.
+	// [RecordFor] sets it from the one decode it already makes, and the
+	// engine's writer builds every row through RecordFor, so this branch
+	// runs for a record assembled by hand.
 	//
 	// The zero value writes the same empty strings and zeroes the column
 	// defaults would, so every non-phase row is unaffected.
@@ -486,6 +484,16 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 	}
 
 	where, args = q.window(col)
+	// STORAGE IS NOT AN EVENT. A type events.Unlisted names is written only
+	// as a piece of another row — a phase record's whole, in parts nearly as
+	// large as one event — and carries no category, source, actor or tag, so
+	// every filter above and below that could exclude it is one a caller may
+	// leave empty. Refused BY TYPE here, once, because this predicate is what
+	// the listing, its histogram and its tallies share.
+	for _, unlisted := range events.UnlistedTypes() {
+		where = append(where, col("event_type")+" != ?")
+		args = append(args, unlisted)
+	}
 	addEq := func(name, val string) {
 		if val != "" {
 			where = append(where, col(name)+" = ?")
@@ -981,6 +989,217 @@ func (l *EventLog) one(ctx context.Context, what, where string, args ...any) (Ev
 		return EventRecord{}, fmt.Errorf("%w: %s", ErrNotFound, what)
 	}
 	return recs[0], nil
+}
+
+// PhaseWhole is one phase record whole, as [EventLog.PhaseRecordWhole] reads it.
+type PhaseWhole struct {
+	// Payload is the record's event exactly as it would be stored had it
+	// been published whole — the same bytes a row's payload column holds.
+	Payload json.RawMessage
+
+	// Parts is how many parts it was reassembled from: zero when the
+	// record's own row is the whole.
+	Parts int
+}
+
+// MissingWholeError reports a phase record published cut whose whole this
+// store cannot put back together: the parts it holds, contiguous from the
+// first byte, stop short of the whole's length.
+//
+// TYPED, because the reasons send a reader to different places and the
+// numbers are the answer: how much of the whole is here, and of how much.
+// Kept and Recorded say which reason it is, as far as this store can tell.
+type MissingWholeError struct {
+	// ID is the phase record's own event id.
+	ID string
+
+	// FoundBytes is how much of the whole the parts here cover, contiguous
+	// from its first byte, in Parts parts.
+	FoundBytes, Parts int
+
+	// WholeBytes is the whole's length, as the record's row states it or,
+	// with no row, as its first part does. Zero when neither is here.
+	WholeBytes int
+
+	// Kept says the record's row states that every part was published, so
+	// the parts that are missing are not in this store: a part whose write
+	// failed on this node was logged there as event_write_failed, and the
+	// retention sweep deletes in batches and can stop between two. False
+	// with a row: the parts were never all published, and the record's
+	// notes say why.
+	Kept bool
+
+	// Recorded says the record's own row is in this store. Without it
+	// nothing here says whether every part was published: a part whose
+	// publish failed was logged on this node as phase_record_whole_not_kept,
+	// and one that was published can be missing for either reason Kept
+	// gives.
+	Recorded bool
+}
+
+func (e *MissingWholeError) Error() string {
+	switch {
+	case e.Kept:
+		return fmt.Sprintf("store: phase record %s: this store holds %d of the %d bytes of its "+
+			"whole, in %d parts, and the record says every part was published — the rest "+
+			"is not in this store: a part write that failed here (event_write_failed), or "+
+			"the retention sweep", e.ID, e.FoundBytes, e.WholeBytes, e.Parts)
+	case e.Recorded:
+		return fmt.Sprintf("store: phase record %s was published cut and its whole (%d bytes) "+
+			"was not kept — the record's notes say why; %d bytes of it are here, in %d parts",
+			e.ID, e.WholeBytes, e.FoundBytes, e.Parts)
+	default:
+		return fmt.Sprintf("store: phase record %s has no row in this store, and the parts "+
+			"of its whole here stop at byte %d of %d: a part's publish failed "+
+			"(phase_record_whole_not_kept), or the rest is not in this store (a part write "+
+			"that failed here, event_write_failed, or the retention sweep)",
+			e.ID, e.FoundBytes, e.WholeBytes)
+	}
+}
+
+// phaseRecordRowSQL is the record's own row and what it says about its whole.
+//
+// Through the id index, like [EventLog.ByID], and newest first for the reason
+// ByID gives. The two integers are read in SQL so the payload is decoded only
+// by the reader it is handed to.
+const phaseRecordRowSQL = `
+SELECT payload,
+       COALESCE(json_extract(payload, '$.whole_bytes'), 0),
+       COALESCE(json_extract(payload, '$.whole_parts'), 0)
+  FROM crewlet_events
+ WHERE event_id = ? AND event_type = ?
+ ORDER BY event_time DESC
+ LIMIT 1`
+
+// phasePart is a part's wire type, taken from the payload type itself for the
+// reason [phaseCompleted] is.
+var phasePart = types.AgentPhaseRecordPart{}.EventType()
+
+// phaseRecordPartSQL is one part's row, through the id index too: a part's id
+// is derived from the record's ([types.PhaseRecordPartID]), which is what lets
+// this read need no index of its own.
+const phaseRecordPartSQL = `
+SELECT payload
+  FROM crewlet_events
+ WHERE event_id = ? AND event_type = ?
+ ORDER BY event_time DESC
+ LIMIT 1`
+
+// PhaseRecordWhole returns one phase record WHOLE.
+//
+// A record published whole is its own row, and that row's payload is the
+// answer. A record the transport refused as too large was published CUT, with
+// `whole_bytes` saying so, and its whole was published before it as parts
+// ([types.AgentPhaseRecordPart]) under ids derived from the record's own — the
+// answer is those parts reassembled, verified contiguous from the first byte
+// to the whole's length. The parts answer on their own when this store holds
+// no row for the record — every cut form of it refused, or its publish or its
+// write failing where its parts' did not — because the first of them states
+// the whole's length and every later one is held to it.
+//
+// ONE PART AT A TIME, through the id index: every part but the last is up to
+// nearly as large as one event may be, so a batched read would hold several of
+// them beside the whole being assembled.
+//
+// No history window, like [EventLog.ByID]: this reads rows the caller names,
+// and the parts share the record's lifetime — the retention sweep takes them
+// on the same horizon as every row.
+//
+// [ErrNotFound] when this store holds neither the record's row nor any part of
+// it; [*MissingWholeError] when it holds a cut record, or parts, that do not
+// reach the whole.
+func (l *EventLog) PhaseRecordWhole(ctx context.Context, id string) (PhaseWhole, error) {
+	var (
+		payload                []byte
+		wholeBytes, wholeParts int
+	)
+	err := l.db.sql.QueryRowContext(ctx, phaseRecordRowSQL, id, phaseCompleted).
+		Scan(&payload, &wholeBytes, &wholeParts)
+	recorded := err == nil
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return PhaseWhole{}, fmt.Errorf("store: read phase record %s: %w", id, err)
+	case wholeBytes == 0:
+		return PhaseWhole{Payload: payload}, nil
+	}
+	record, err := uuid.Parse(id)
+	if err != nil {
+		// Every event id this engine mints is a UUID, and a part's id is
+		// derived from its record's, so an id that is not one names no
+		// parts at all.
+		if recorded {
+			return PhaseWhole{}, &MissingWholeError{ID: id, WholeBytes: wholeBytes,
+				Kept: wholeParts > 0, Recorded: true}
+		}
+		return PhaseWhole{}, fmt.Errorf("%w: phase record %s", ErrNotFound, id)
+	}
+	whole, parts, stated, err := l.phaseRecordParts(ctx, record, wholeBytes)
+	if err != nil {
+		return PhaseWhole{}, err
+	}
+	if wholeBytes == 0 {
+		wholeBytes = stated
+	}
+	switch {
+	case parts == 0 && !recorded:
+		return PhaseWhole{}, fmt.Errorf("%w: phase record %s", ErrNotFound, id)
+	case parts == 0 || len(whole) < wholeBytes:
+		return PhaseWhole{}, &MissingWholeError{ID: id, FoundBytes: len(whole), Parts: parts,
+			WholeBytes: wholeBytes, Kept: wholeParts > 0, Recorded: recorded}
+	}
+	return PhaseWhole{Payload: whole, Parts: parts}, nil
+}
+
+// phaseRecordParts reads a record's parts in order and assembles them, stopping
+// at the first part this store does not hold or at the whole's length.
+//
+// want is the whole's length as the record's row states it, or zero when there
+// is no row, in which case the first part's statement is taken and every later
+// part is held to it. It returns the bytes assembled, how many parts they came
+// from and the length the parts state.
+//
+// A part that does not continue the whole — another record's, out of order,
+// overlapping, past the end, or stating another length — is REFUSED rather than
+// skipped: assembled bytes that are not the whole are worse than none, because
+// nothing downstream could tell.
+func (l *EventLog) phaseRecordParts(ctx context.Context, record uuid.UUID, want int) ([]byte, int, int, error) {
+	var whole []byte
+	for index := 0; ; index++ {
+		if want > 0 && len(whole) == want {
+			return whole, index, want, nil
+		}
+		var raw []byte
+		err := l.db.sql.QueryRowContext(ctx, phaseRecordPartSQL,
+			types.PhaseRecordPartID(record, index).String(), phasePart).Scan(&raw)
+		if errors.Is(err, sql.ErrNoRows) {
+			return whole, index, want, nil
+		}
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("store: read part %d of phase record %s: %w", index, record, err)
+		}
+		var part types.AgentPhaseRecordPart
+		if err := json.Unmarshal(raw, &part); err != nil {
+			return nil, 0, 0, fmt.Errorf("store: decode part %d of phase record %s: %w", index, record, err)
+		}
+		if want == 0 {
+			want = part.WholeBytes
+		}
+		switch {
+		case part.RecordID != record.String(), part.Index != index:
+			return nil, 0, 0, fmt.Errorf("store: part %d of phase record %s names record %q "+
+				"and index %d: the parts do not describe this record", index, record,
+				part.RecordID, part.Index)
+		case part.WholeBytes != want:
+			return nil, 0, 0, fmt.Errorf("store: part %d of phase record %s states a whole of %d "+
+				"bytes where the whole is %d", index, record, part.WholeBytes, want)
+		case part.Offset != len(whole), len(part.Data) == 0, part.Offset+len(part.Data) > want:
+			return nil, 0, 0, fmt.Errorf("store: part %d of phase record %s covers bytes %d to %d "+
+				"where the whole of %d bytes continues at %d: the parts are not contiguous",
+				index, record, part.Offset, part.Offset+len(part.Data), want, len(whole))
+		}
+		whole = append(whole, part.Data...)
+	}
 }
 
 // Purge deletes events past EventRetention and reports how many went.

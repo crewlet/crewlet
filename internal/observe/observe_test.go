@@ -3,11 +3,15 @@ package observe_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/observe"
@@ -193,6 +197,81 @@ func TestALiveOnlyEventReachesTheProjectionAndNotTheStore(t *testing.T) {
 	})
 	if s.count() != 0 {
 		t.Errorf("a live-only event was persisted: %+v", s.rows)
+	}
+}
+
+// A PART OF A PHASE RECORD REACHES THE STORE, AND NO DASHBOARD SOCKET.
+//
+// A part can be nearly as large as one event may be and holds another row's
+// bytes. Published on crewlet.events.* like every event, it reaches this node's
+// broadcast subscription — and stops there: the writer stores it, and the
+// projection, which alone feeds every socket, never sees it. A phase event
+// published after it is the proof that delivery ran past the part.
+func TestAPartReachesTheStoreAndNoDashboardSocket(t *testing.T) {
+	t.Parallel()
+	q := memory.New()
+	s := &sink{}
+	q.AddPublishListener(observe.NewWriter(s).Listen())
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+
+	service, err := stream.NewService(livestate.New(), stream.Options{
+		Health:    func() stream.Health { return stream.Health{Status: "ok"} },
+		Handles:   func() map[string]string { return map[string]string{} },
+		Roster:    func() []map[string]any { return nil },
+		Org:       func() any { return map[string]any{} },
+		Tools:     func() []map[string]any { return nil },
+		Schedules: func() any { return []any{} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(service.Stop)
+	socket := stream.NewClient()
+	service.Hub().Register(socket)
+	p := observe.NewProjector(q, service)
+	if err := p.Start(t.Context()); err != nil {
+		t.Fatalf("projector start: %v", err)
+	}
+	t.Cleanup(func() { p.Stop(context.Background()) })
+
+	record := uuid.New()
+	part := events.New(types.AgentPhaseRecordPart{
+		RecordID: record.String(), WholeBytes: 4, Data: []byte("abcd"),
+	}, events.TraceContext{})
+	part.ID = types.PhaseRecordPartID(record, 0)
+	sentinel := phaseEvent("CEO")
+	for _, ev := range []*events.Event{part, sentinel} {
+		if err := q.Publish(t.Context(), topics.Event(ev.Type), ev); err != nil {
+			t.Fatalf("publish %s: %v", ev.Type, err)
+		}
+	}
+
+	var pushed []string
+	for seen := false; !seen; {
+		select {
+		case frame := <-socket.Out():
+			if env, ok := frame.Data.(livestate.Envelope); ok && frame.Kind == stream.KindEvent {
+				pushed = append(pushed, env.Type)
+				seen = env.ID == sentinel.ID.String()
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the phase event published after the part never reached the socket (pushed %v)", pushed)
+		}
+	}
+	if slices.Contains(pushed, part.Type) {
+		t.Errorf("a part was pushed to a dashboard socket: %v", pushed)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stored := false
+	for _, row := range s.rows {
+		stored = stored || row.ID == part.ID.String()
+	}
+	if !stored {
+		t.Error("the part was not written to the event store, so its record's whole cannot be read back")
 	}
 }
 

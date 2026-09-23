@@ -48,10 +48,144 @@ func TestAMalformedCatalogueIsRefused(t *testing.T) {
 			{Name: "a", Kind: KindCounter, Unit: UnitCount, Shows: "x"},
 			{Name: "a", Kind: KindGauge, Unit: UnitCount, Shows: "y"},
 		},
+		"a gauge marked fractional": {
+			{Name: "a", Kind: KindGauge, Unit: UnitCount, Fractional: true, Shows: "x"},
+		},
+		"a histogram marked fractional": {
+			{Name: "a", Kind: KindHistogram, Unit: UnitMilliseconds, Fractional: true, Shows: "x"},
+		},
+		"a duration summed in whole seconds": {
+			{Name: "a", Kind: KindCounter, Unit: UnitSeconds, Shows: "x"},
+		},
+		"a duration summed in whole milliseconds": {
+			{Name: "a", Kind: KindCounter, Unit: UnitMilliseconds, Shows: "x"},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := Validate(entries); err == nil {
 				t.Error("accepted")
+			}
+		})
+	}
+
+	// THE CONTROL for the two duration cases: the same counter marked
+	// Fractional is accepted, so the rule refuses the integer form of a
+	// summed duration rather than every counter in seconds.
+	if err := Validate([]Instrument{{
+		Name: "a", Kind: KindCounter, Unit: UnitSeconds, Fractional: true, Shows: "x",
+	}}); err != nil {
+		t.Errorf("a fractional counter in seconds was refused: %v", err)
+	}
+}
+
+// totalOf is one instrument's counter total across every attribute set.
+func totalOf(reading []Snapshot, name string) float64 {
+	var out float64
+	for _, s := range reading {
+		if s.Name == name {
+			out += s.Total
+		}
+	}
+	return out
+}
+
+// A SUB-SECOND CONTRIBUTION TO A FRACTIONAL COUNTER IS KEPT, in the cumulative
+// series an exporter reads AND in the window the operator record reads.
+//
+// The fractional counter sums the applier seconds a bulk edit projects, and a
+// bulk smaller than one second's drain projects a fraction of a second. As a
+// whole number each of those adds zero, and a day of them sums to zero — the
+// one answer that looks like a healthy fleet.
+//
+// Mutation: put `uint64(v)` back into the counter case of [Recorder.record]
+// and both readings are zero; truncate in [Window.Add] alone and the windowed
+// one is.
+func TestAFractionalCounterKeepsEverySubSecondContribution(t *testing.T) {
+	t.Parallel()
+	r, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// NINE HUNDRED AND NINETY-NINE EIGHTHS OF A SECOND: each one under a
+	// second, and a total a float64 holds exactly, so the comparison needs
+	// no tolerance and no whole-number total can pass it.
+	for range 999 {
+		r.AddValue(TrackerBulkApplySeconds, 0.125, nil)
+	}
+	const want = 124.875
+	if got := totalOf(r.Read(), TrackerBulkApplySeconds); got != want {
+		t.Errorf("cumulative total = %v, want %v: a contribution under one "+
+			"second has to be kept, not rounded away", got, want)
+	}
+	if got := totalOf(r.ReadWindow(), TrackerBulkApplySeconds); got != want {
+		t.Errorf("windowed total = %v, want %v: the operator record reads this "+
+			"one, and it has to agree with the series the collector reads",
+			got, want)
+	}
+}
+
+// A FRACTION REACHES ONLY A COUNTER THAT CAN HOLD ONE.
+//
+// A counter that is not Fractional is exported as an integer, so a fraction the
+// recorder kept in it would be on the operator record and dropped on the
+// collector's panel. A whole increment is exact in either arithmetic, which is
+// why a fractional counter still takes one from [Recorder.Add].
+//
+// Mutation: drop the Fractional check in [Recorder.AddValue] and the integer
+// counter holds half a read.
+func TestAFractionReachesOnlyAFractionalCounter(t *testing.T) {
+	t.Parallel()
+	r, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	served := Attrs{"domain": "tracker", "level": "linearizable"}
+	r.AddValue(StatelogReadServed, 0.5, served)
+	if got := totalOf(r.Read(), StatelogReadServed); got != 0 {
+		t.Errorf("a counter exported as an integer holds %v after a fraction "+
+			"was offered to it, want nothing: the collector would read a "+
+			"different number from the operator record", got)
+	}
+	// THE CONTROL: the same counter takes the whole increments it counts.
+	r.Add(StatelogReadServed, 2, served)
+	if got := totalOf(r.Read(), StatelogReadServed); got != 2 {
+		t.Errorf("the integer counter holds %v after Add(2), want 2", got)
+	}
+
+	r.Add(TrackerBulkApplySeconds, 2, nil)
+	if got := totalOf(r.Read(), TrackerBulkApplySeconds); got != 2 {
+		t.Errorf("a fractional counter holds %v after Add(2), want 2: a whole "+
+			"increment is exact in either arithmetic", got)
+	}
+}
+
+// A COUNTER ONLY RISES, so an amount that would lower it or poison it is
+// refused.
+//
+// Mutation: drop the check at the top of [Recorder.AddValue] and each case
+// reads its bad amount in the total: -0.5, NaN, +Inf.
+func TestAFractionalCounterRefusesAnAmountThatWouldNotRise(t *testing.T) {
+	t.Parallel()
+	for name, amount := range map[string]float64{
+		"negative": -1,
+		"NaN":      math.NaN(),
+		"infinite": math.Inf(1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r, err := New()
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			r.AddValue(TrackerBulkApplySeconds, 0.5, nil)
+			r.AddValue(TrackerBulkApplySeconds, amount, nil)
+			if got := totalOf(r.Read(), TrackerBulkApplySeconds); got != 0.5 {
+				t.Errorf("cumulative total after %v = %v, want the 0.5 before it",
+					amount, got)
+			}
+			if got := totalOf(r.ReadWindow(), TrackerBulkApplySeconds); got != 0.5 {
+				t.Errorf("windowed total after %v = %v, want the 0.5 before it",
+					amount, got)
 			}
 		})
 	}
@@ -149,7 +283,7 @@ func TestAWindowedValueForgetsAfter24Hours(t *testing.T) {
 	w.Add("refusals", 5)
 	w.Max("longest_tx_ms", 16000)
 	if got := w.Total("refusals"); got != 5 {
-		t.Fatalf("total = %d, want 5", got)
+		t.Fatalf("total = %v, want 5", got)
 	}
 	if got := w.Peak("longest_tx_ms"); got != 16000 {
 		t.Fatalf("peak = %v, want 16000", got)
@@ -159,13 +293,13 @@ func TestAWindowedValueForgetsAfter24Hours(t *testing.T) {
 	at = at.Add(12 * time.Hour)
 	w.Add("refusals", 2)
 	if got := w.Total("refusals"); got != 7 {
-		t.Errorf("total after 12h = %d, want 7", got)
+		t.Errorf("total after 12h = %v, want 7", got)
 	}
 
 	// TWENTY-FIVE HOURS FROM THE FIRST: the first hour is gone.
 	at = at.Add(13 * time.Hour)
 	if got := w.Total("refusals"); got != 2 {
-		t.Errorf("total after 25h = %d, want only the later 2: the first "+
+		t.Errorf("total after 25h = %v, want only the later 2: the first "+
 			"hour's contribution has to leave the window", got)
 	}
 	if got := w.Peak("longest_tx_ms"); got != 0 {
@@ -251,32 +385,27 @@ func TestAWindowedCounterFallsBackToZeroAndACumulativeOneNever(t *testing.T) {
 	}
 	r = r.WithClock(clock)
 
-	total := func(read func() []Snapshot) uint64 {
-		for _, s := range read() {
-			if s.Name == StatelogReadRefusals {
-				return s.Total
-			}
-		}
-		return 0
+	total := func(read func() []Snapshot) float64 {
+		return totalOf(read(), StatelogReadRefusals)
 	}
 
 	r.Add(StatelogReadRefusals, 1, Attrs{"domain": "tracker", "code": "stalled"})
 	if got := total(r.ReadWindow); got != 1 {
-		t.Fatalf("windowed total right after the event = %d, want 1", got)
+		t.Fatalf("windowed total right after the event = %v, want 1", got)
 	}
 	if got := total(r.Read); got != 1 {
-		t.Fatalf("cumulative total right after the event = %d, want 1", got)
+		t.Fatalf("cumulative total right after the event = %v, want 1", got)
 	}
 
 	// A DAY LATER, WITH NOTHING SINCE. The window has rolled the hour that
 	// held it out; the cumulative series never will.
 	at = at.Add(Buckets*time.Hour + time.Hour)
 	if got := total(r.ReadWindow); got != 0 {
-		t.Errorf("windowed total a day later = %d, want 0 — an alarm built on "+
+		t.Errorf("windowed total a day later = %v, want 0 — an alarm built on "+
 			"this can never go out", got)
 	}
 	if got := total(r.Read); got != 1 {
-		t.Errorf("cumulative total a day later = %d, want 1 — the counter an "+
+		t.Errorf("cumulative total a day later = %v, want 1 — the counter an "+
 			"exporter diffs must keep growing", got)
 	}
 }

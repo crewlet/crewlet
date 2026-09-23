@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -453,6 +454,55 @@ func TestARowHoldingTheWholeLogHasNoCursor(t *testing.T) {
 		if v, present := row[key]; present {
 			t.Errorf("%s = %v with every call on the row", key, v)
 		}
+	}
+}
+
+// A CALL WHOSE WHOLE IS IN PARTS SAYS SO ON THE WIRE, and the answer never
+// carries or counts a part.
+//
+// The board shows a call as its record holds it: cut to fit one record, and
+// marked. A reader of that cut has to be told whether the rest is kept or gone,
+// and `whole_bytes` and `whole_parts` are the record's reference to the whole
+// the run's resume reads back. A call kept whole in its record carries
+// neither, and the parts themselves are not calls.
+func TestACallWhoseWholeIsInPartsSaysSo(t *testing.T) {
+	t.Parallel()
+	store := seedRuns(t, sandbox.PendingRun{
+		TurnID: "t-parts", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
+	})
+	for _, call := range []sandbox.BridgeCall{
+		{Name: "small", Output: "ok"},
+		{Name: "large", Output: strings.Repeat("z", sandbox.MaxBridgeCallBytes*2)},
+	} {
+		if ok, err := store.AppendBridgeCall(t.Context(), "t-parts", call); err != nil || !ok {
+			t.Fatalf("AppendBridgeCall(%s) = %v, %v", call.Name, ok, err)
+		}
+	}
+	row := askRuns(t, store)[0]
+	if row["bridge_calls_total"] != 2 {
+		t.Errorf("bridge_calls_total = %v, want the 2 calls and no part", row["bridge_calls_total"])
+	}
+	raw, err := json.Marshal(row["bridge_calls"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []map[string]any
+	if err := json.Unmarshal(raw, &calls); err != nil || len(calls) != 2 {
+		t.Fatalf("bridge_calls on the wire = %d entries, %v; want the 2 calls", len(calls), err)
+	}
+	for _, key := range []string{"whole_bytes", "whole_parts"} {
+		if v, has := calls[0][key]; has {
+			t.Errorf("a call kept whole in its record carries %s = %v", key, v)
+		}
+	}
+	size, _ := calls[1]["whole_bytes"].(float64)
+	parts, _ := calls[1]["whole_parts"].(float64)
+	if size <= float64(sandbox.MaxBridgeCallBytes) || parts < 2 {
+		t.Errorf("the large call carries whole_bytes %v and whole_parts %v; want its whole's length "+
+			"and every part it is kept in", calls[1]["whole_bytes"], calls[1]["whole_parts"])
+	}
+	if output, _ := calls[1]["output"].(string); !strings.HasSuffix(output, "…") {
+		t.Errorf("the large call's output does not end in the cut's mark")
 	}
 }
 

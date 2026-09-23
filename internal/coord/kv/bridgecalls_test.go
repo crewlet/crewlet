@@ -38,6 +38,41 @@ func TestAFleetStoreRefusesAServerBelowTheRecordCeiling(t *testing.T) {
 	}
 }
 
+// A BUILD THAT PREDATES PARTS NEVER TAKES ONE FOR A CALL.
+//
+// A rolling upgrade puts such a build on this bucket, reading launches a newer
+// build wrote. It walks a launch by the launch's filter, which selects the
+// parts too, and decodes each key with bridgeCallSeq — the same decode this
+// build reads calls with — so the part's key must fail that decode, and must
+// sit under the filter its purge removes. Checked on the keys themselves,
+// because that older build is not here to ask: what it runs is this decode.
+func TestAPartsKeyIsNeverDecodedAsACallAndGoesWithItsLaunch(t *testing.T) {
+	t.Parallel()
+	for _, ids := range [][2]string{{"turn-1", "launch-1"}, {"run.a", "launch.b"}, {"t:é", "l 1"}} {
+		turnID, launchID := ids[0], ids[1]
+		call, part := bridgeCallKey(turnID, launchID, 7), bridgePartKey(turnID, launchID, 7, 1)
+
+		if seq, ok := bridgeCallSeq(part); ok {
+			t.Errorf("%s: a part's key decodes as call %d", turnID, seq)
+		}
+		if seq, ok := bridgeCallSeq(call); !ok || seq != 7 {
+			t.Errorf("%s: the call's own key decodes as %d, %v", turnID, seq, ok)
+		}
+		if seq, n, ok := bridgePartAddress(part); !ok || seq != 7 || n != 1 {
+			t.Errorf("%s: the part's key decodes as call %d part %d, %v", turnID, seq, n, ok)
+		}
+		if _, _, ok := bridgePartAddress(call); ok {
+			t.Errorf("%s: a call's key decodes as a part", turnID)
+		}
+		if !strings.HasPrefix(part, call+coord.KeySeparator) {
+			t.Errorf("%s: the part %q is not filed under its call %q", turnID, part, call)
+		}
+		if launch := strings.TrimSuffix(bridgeCallFilter(turnID, launchID), ">"); !strings.HasPrefix(part, launch) {
+			t.Errorf("%s: the part %q is outside the launch's filter, so a purge would leave it", turnID, part)
+		}
+	}
+}
+
 // THE CLIENT'S SIZE REFUSAL IS PERMANENT, NOT A BLIP.
 //
 // The open-time check reads what the server announced when this node

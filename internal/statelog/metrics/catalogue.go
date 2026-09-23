@@ -77,6 +77,23 @@ type Instrument struct {
 	// series per object, which is how a metrics backend falls over.
 	Attributes []string
 
+	// Fractional marks a counter whose increments need not be whole — a
+	// duration or a projection summed — so it is exported as a
+	// floating-point sum and written with [Recorder.AddValue]. Every other
+	// counter counts events and is exported as an integer.
+	//
+	// DECLARED rather than inferred from what a caller happens to pass,
+	// because the exporter fixes each instrument's number type when it
+	// registers it, before anything is recorded. A fractional counter
+	// exported as an integer would reach the collector without the fraction
+	// of its total — 0.9 seconds as 0 — while the operator record beside it
+	// showed the real one.
+	//
+	// Only a counter has the choice. A gauge and a histogram are
+	// floating-point already, and [Validate] refuses the mark on them
+	// rather than let it sit there meaning nothing.
+	Fractional bool
+
 	// Shows is the failure this instrument makes visible. It is the reason
 	// the instrument exists, and an entry that cannot fill it in is an
 	// instrument nobody will alarm on.
@@ -254,18 +271,6 @@ func Catalogue() []Instrument {
 				"elsewhere in the file can abort an apply. A non-zero count " +
 				"on the operator's own hardware means the retry budget is " +
 				"being spent rather than held in reserve.",
-			// AND IT IS THE ONLY RETRY THE APPLIER HAS. A catalogued
-			// `apply.retries` sat beside this one, declared as
-			// "transient apply failures retried in place" — a
-			// mechanism that does not exist: [statelog.Runner.Run]
-			// returns on any error and the applier stays stopped
-			// until a build that can read the record runs. The
-			// transaction abort above IS the retry in place, so two
-			// instruments named one phenomenon and nothing recorded
-			// the vaguer of them. It was removed rather than given a
-			// call site, because inventing a second count for one
-			// event is the drift the single catalogue exists to
-			// prevent.
 		},
 		{
 			Name: StatelogRecordsGated, Kind: KindCounter, Unit: UnitCount,
@@ -463,6 +468,11 @@ func Catalogue() []Instrument {
 		},
 		{
 			Name: TrackerBulkApplySeconds, Kind: KindCounter, Unit: UnitSeconds,
+			// FRACTIONAL, because one bulk's projection is its rows over
+			// the applier's measured drain: any bulk smaller than one
+			// second's drain projects a fraction of a second, which an
+			// integer total adds as nothing.
+			Fractional: true,
 			Attributes: nil,
 			Shows: "Seconds of applier occupancy bulk edits projected, " +
 				"summed. Over 24 hours it IS the fleet-wide read-degradation " +
@@ -506,6 +516,18 @@ func Validate(entries []Instrument) error {
 			return fmt.Errorf("metrics: %q does not say which failure it makes "+
 				"visible: an instrument nobody will alarm on is a number on a "+
 				"page, which is what this catalogue replaces", e.Name)
+		case e.Fractional && e.Kind != KindCounter:
+			return fmt.Errorf("metrics: %q is a %s marked Fractional: only a "+
+				"counter has an integer form to choose against, so remove the "+
+				"mark", e.Name, e.Kind)
+		case e.Kind == KindCounter && !e.Fractional &&
+			(e.Unit == UnitSeconds || e.Unit == UnitMilliseconds):
+			// A SUMMED DURATION IS NOT A COUNT OF WHOLE UNITS, and as an
+			// integer it loses every contribution shorter than one — a
+			// counter that reads zero while the thing it sums is happening.
+			return fmt.Errorf("metrics: %q sums a duration in %q as an integer, "+
+				"which drops every contribution shorter than one unit: mark it "+
+				"Fractional", e.Name, e.Unit)
 		}
 		seen[e.Name] = true
 	}

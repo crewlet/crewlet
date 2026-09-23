@@ -372,6 +372,11 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 		// than an entity browser, so no room asks — which is not the same as
 		// nobody reading it.
 		"config_entities": "docs/guides/configure-via-api.md reads it over REST, not a room",
+		// A documented PUBLIC read, like config_entities: GET /phases/{id} in
+		// docs/reference/api-endpoints.md, the one read that answers a phase
+		// record published cut WHOLE. The dashboard renders the cut record it
+		// already has and reads its whole from no room yet.
+		"phase_record": "docs/reference/api-endpoints.md reads it as GET /phases/{id}, not a room",
 	}
 
 	asked := roomQueries(t)

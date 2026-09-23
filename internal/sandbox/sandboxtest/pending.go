@@ -82,9 +82,10 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"BridgeCallsSurviveWithoutAFence", testBridgeCallsSurviveWithoutAFence},
 		{"BridgeCallsForAMissingRunAreDropped", testBridgeCallsForAMissingRunAreDropped},
 		{"EveryBridgedCallIsReadBackPastTheRowsBound", testEveryBridgedCallIsReadBackPastTheRowsBound},
-		{"ABridgedCallsOutputIsCutToFitItsRecordAndMarked", testABridgedCallsOutputIsCutToFitItsRecordAndMarked},
-		{"ABridgedCallsArgumentsAreKeptWholeOrNotAtAll", testABridgedCallsArgumentsAreKeptWholeOrNotAtAll},
+		{"ABridgedCallPastTheRecordCeilingIsReadBackWhole", testABridgedCallPastTheRecordCeilingIsReadBackWhole},
+		{"ABridgedCallsArgumentsAreKeptWholeOrMarkedWhereTheyAre", testABridgedCallsArgumentsAreKeptWholeOrMarkedWhereTheyAre},
 		{"ABridgedCallsArgumentsOutrankItsOutput", testABridgedCallsArgumentsOutrankItsOutput},
+		{"AWholeKeptInPartsIsNeverPagedOrCounted", testAWholeKeptInPartsIsNeverPagedOrCounted},
 		{"BridgedCallsPageWithACursor", testBridgedCallsPageWithACursor},
 		{"AFirstPageCarriesTheEndOfTheLog", testAFirstPageCarriesTheEndOfTheLog},
 	}
@@ -1403,56 +1404,104 @@ func testEveryBridgedCallIsReadBackPastTheRowsBound(t *testing.T, s sandbox.Pend
 	}
 }
 
-// A CALL TOO LARGE FOR ONE RECORD IS STILL RECORDED — cut to fit, and marked.
+// recorded is the run's calls as their RECORDS hold them: one page of the log,
+// which reads each call's record and never the parts filed under it.
+func recorded(t *testing.T, s sandbox.PendingStore, turnID string) []sandbox.BridgeCall {
+	t.Helper()
+	page, err := s.BridgeCallPage(t.Context(), mustGet(t, s, turnID), 0, 100)
+	if err != nil {
+		t.Fatalf("BridgeCallPage(%s): %v", turnID, err)
+	}
+	return append(page.Calls, page.End...)
+}
+
+// sameCall reports how a call read back differs from the call that was made,
+// or "" when it is that call, every text byte for byte.
+func sameCall(got, sent sandbox.BridgeCall) string {
+	switch {
+	case got.Name != sent.Name:
+		return fmt.Sprintf("name %q, want %q", got.Name, sent.Name)
+	case got.Args != sent.Args:
+		return fmt.Sprintf("arguments of %d bytes, want the %d sent", len(got.Args), len(sent.Args))
+	case got.Output != sent.Output:
+		return fmt.Sprintf("output of %d bytes, want the %d returned", len(got.Output), len(sent.Output))
+	case got.Failed != sent.Failed || !got.At.Equal(sent.At):
+		return fmt.Sprintf("outcome %v at %s, want %v at %s", got.Failed, got.At, sent.Failed, sent.At)
+	case got.WholeBytes != 0 || got.WholeParts != 0:
+		return fmt.Sprintf("a reference to %d bytes in %d parts, on what should be the whole itself",
+			got.WholeBytes, got.WholeParts)
+	}
+	return ""
+}
+
+// A CALL TOO LARGE FOR ONE RECORD IS READ BACK WHOLE, BYTE FOR BYTE.
 //
-// Refusing it would leave the call out of the only log a resume reads, which
-// is the failure the per-call records exist to end; storing it whole is
-// impossible, because a record is one message on the transport. So its output
-// is cut, on a character boundary, ending in "…" — and the arguments, which
-// the output alone can make room for here, are kept whole.
-func testABridgedCallsOutputIsCutToFitItsRecordAndMarked(t *testing.T, s sandbox.PendingStore) {
+// The coding agent in the box was handed the whole output, and the log a
+// resume reads is what the resumed phase's record is built from: a text cut
+// there is a fact nothing downstream ever holds again. So the whole is kept in
+// parts under the call's record and the resume's read reassembles it — while
+// the record, one message on the transport, holds the call FITTED and marked,
+// with a reference to its whole, for the readers of the record alone.
+func testABridgedCallPastTheRecordCeilingIsReadBackWhole(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	r := run("t-bridge-huge")
 	mustLaunched(t, s, r)
 
-	// Three-byte characters, so a byte cut through one would show.
-	whole := strings.Repeat("あ", sandbox.MaxBridgeCallBytes/3+1000)
-	if ok, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
-		Name: "read_file", Args: `{"path":"big.txt"}`, Output: whole,
-	}); err != nil || !ok {
+	// Three-byte characters, so a byte cut through one would show; and two
+	// records' worth of them, so the whole takes more than one part.
+	sent := sandbox.BridgeCall{
+		Name: "read_file", Args: `{"path":"big.txt"}`, Failed: true, At: base,
+		Output: strings.Repeat("あ", sandbox.MaxBridgeCallBytes*2/3+1000),
+	}
+	if ok, err := s.AppendBridgeCall(ctx, r.TurnID, sent); err != nil || !ok {
 		t.Fatalf("a call too large for one record was not recorded: %v, %v", ok, err)
 	}
 	got := mustCalls(t, s, r.TurnID)
 	if len(got) != 1 {
-		t.Fatalf("%d calls recorded, want the one", len(got))
+		t.Fatalf("%d calls read back, want the one", len(got))
 	}
-	call := got[0]
-	if !strings.HasSuffix(call.Output, "…") || !strings.HasPrefix(whole, strings.TrimSuffix(call.Output, "…")) {
-		t.Error("the cut output is not a marked head of the whole")
+	if diff := sameCall(got[0], sent); diff != "" {
+		t.Errorf("the call read back is not the call made: %s", diff)
 	}
-	if len(call.Output) < sandbox.MaxBridgeCallBytes-1024 {
-		t.Errorf("the cut kept %d bytes of output, far short of the %d-byte record it had room in",
-			len(call.Output), sandbox.MaxBridgeCallBytes)
+	if got[0].Seq != 1 {
+		t.Errorf("the call read back is numbered %d, want 1", got[0].Seq)
 	}
-	if !utf8.ValidString(call.Output) {
-		t.Error("the cut went through a character")
+
+	record := recorded(t, s, r.TurnID)[0]
+	if !strings.HasSuffix(record.Output, "…") || !strings.HasPrefix(sent.Output, strings.TrimSuffix(record.Output, "…")) {
+		t.Error("the record's output is not a marked head of the whole")
 	}
-	if call.Args != `{"path":"big.txt"}` {
-		t.Errorf("the arguments were touched while the output alone could make room: %q", call.Args)
+	if len(record.Output) < sandbox.MaxBridgeCallBytes-1024 {
+		t.Errorf("the record kept %d bytes of output, far short of the %d-byte record it had room in",
+			len(record.Output), sandbox.MaxBridgeCallBytes)
 	}
-	assertRecordFits(t, call)
-	// And a call that fits is left exactly as it was.
-	if ok, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
-		Name: "read_file", Output: "small…",
-	}); err != nil || !ok {
+	if !utf8.ValidString(record.Output) {
+		t.Error("the record's cut went through a character")
+	}
+	if record.Args != sent.Args {
+		t.Errorf("the record's arguments were touched while the output alone could make room: %q", record.Args)
+	}
+	if record.WholeParts < 2 || record.WholeBytes <= sandbox.MaxBridgeCallBytes {
+		t.Errorf("the record's reference = %d bytes in %d parts, want the whole's length and every part",
+			record.WholeBytes, record.WholeParts)
+	}
+	assertRecordFits(t, record)
+
+	// And a call that fits is left exactly as it was, with nothing to refer to.
+	small := sandbox.BridgeCall{Name: "read_file", Output: "small…", At: base}
+	if ok, err := s.AppendBridgeCall(ctx, r.TurnID, small); err != nil || !ok {
 		t.Fatalf("append: %v, %v", ok, err)
 	}
-	if small := mustCalls(t, s, r.TurnID)[1]; small.Output != "small…" || small.Args != "" {
-		t.Errorf("a call that fits was changed: %+v", small)
+	if diff := sameCall(mustCalls(t, s, r.TurnID)[1], small); diff != "" {
+		t.Errorf("a call that fits was changed: %s", diff)
+	}
+	if diff := sameCall(recorded(t, s, r.TurnID)[1], small); diff != "" {
+		t.Errorf("a call that fits was recorded changed: %s", diff)
 	}
 }
 
-// assertRecordFits holds a call as read back to the ceiling its record had.
+// assertRecordFits holds a call as its record holds it to the ceiling the
+// record had.
 func assertRecordFits(t *testing.T, call sandbox.BridgeCall) {
 	t.Helper()
 	raw, err := json.Marshal(call)
@@ -1470,66 +1519,120 @@ func assertRecordFits(t *testing.T, call sandbox.BridgeCall) {
 }
 
 // ARGUMENTS ARE JSON, and a cut through JSON is text nothing can parse — so
-// when they alone overfill the record, they are not kept, and the marker that
-// takes their place says so in the field every reader shows.
+// when they alone overfill the record, the record holds a marker in their
+// place, in the field every reader of it shows, saying they are kept whole in
+// the call's parts; and the resume reads them whole from there.
 //
 // AND THE OUTPUT KEEPS THE ROOM THEY GAVE BACK. The arguments are decided
 // before the output is cut, so a small output beside them — "posted", after a
 // nine-megabyte message body — is kept whole rather than cut for room the
 // arguments were about to give up.
-func testABridgedCallsArgumentsAreKeptWholeOrNotAtAll(t *testing.T, s sandbox.PendingStore) {
+func testABridgedCallsArgumentsAreKeptWholeOrMarkedWhereTheyAre(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	r := run("t-bridge-huge-args")
 	mustLaunched(t, s, r)
 
-	args := `{"text":"` + strings.Repeat("x", sandbox.MaxBridgeCallBytes) + `"}`
-	if ok, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
-		Name: "slack_post", Args: args, Output: "posted",
-	}); err != nil || !ok {
+	sent := sandbox.BridgeCall{
+		Name: "slack_post", Args: `{"text":"` + strings.Repeat("x", sandbox.MaxBridgeCallBytes) + `"}`,
+		Output: "posted", At: base,
+	}
+	if ok, err := s.AppendBridgeCall(ctx, r.TurnID, sent); err != nil || !ok {
 		t.Fatalf("a call whose arguments alone overfill a record was not recorded: %v, %v", ok, err)
 	}
-	call := mustCalls(t, s, r.TurnID)[0]
-	if call.Args != sandbox.ArgsNotKept(len(args)) {
-		t.Errorf("arguments = %.80q…, want the marker saying %d bytes were not kept", call.Args, len(args))
+	record := recorded(t, s, r.TurnID)[0]
+	if record.Args != sandbox.ArgsInParts(len(sent.Args)) {
+		t.Errorf("the record's arguments = %.80q…, want the marker saying the %d bytes are in its parts",
+			record.Args, len(sent.Args))
 	}
 	var marker map[string]any
-	if err := json.Unmarshal([]byte(call.Args), &marker); err != nil || len(marker) != 1 {
-		t.Errorf("the marker is not the one-member JSON object a reader decodes: %q (%v)", call.Args, err)
+	if err := json.Unmarshal([]byte(record.Args), &marker); err != nil || len(marker) != 1 {
+		t.Errorf("the marker is not the one-member JSON object a reader decodes: %q (%v)", record.Args, err)
 	}
-	if call.Output != "posted" {
-		t.Errorf("output = %q, want %q kept whole: the record had room for it once the "+
-			"arguments were set aside", call.Output, "posted")
+	if record.Output != "posted" {
+		t.Errorf("the record's output = %q, want %q kept whole: the record had room for it once the "+
+			"arguments were set aside", record.Output, "posted")
 	}
-	if call.Name != "slack_post" {
-		t.Errorf("the call lost its name: %+v", call)
+	if record.Name != "slack_post" {
+		t.Errorf("the record lost the call's name: %+v", record)
 	}
-	assertRecordFits(t, call)
+	assertRecordFits(t, record)
+
+	if diff := sameCall(mustCalls(t, s, r.TurnID)[0], sent); diff != "" {
+		t.Errorf("the call read back is not the call made: %s", diff)
+	}
 }
 
-// ARGUMENTS THAT FIT ONCE THE OUTPUT IS CUT ARE KEPT. Only a record over the
-// ceiling with an output of nothing but its mark drops them: arguments are
-// what the call DID, and an output is what it was told back.
+// ARGUMENTS THAT FIT ONCE THE OUTPUT IS CUT ARE KEPT in the record. Only a
+// record over the ceiling with an output of nothing but its mark sets them
+// aside: arguments are what the call DID, and an output is what it was told
+// back. Read whole, the call has both.
 func testABridgedCallsArgumentsOutrankItsOutput(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	r := run("t-bridge-both-large")
 	mustLaunched(t, s, r)
 
-	args := `{"body":"` + strings.Repeat("a", sandbox.MaxBridgeCallBytes/2) + `"}`
-	output := strings.Repeat("b", sandbox.MaxBridgeCallBytes/2+1000)
-	if ok, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
-		Name: "create_page", Args: args, Output: output,
-	}); err != nil || !ok {
+	sent := sandbox.BridgeCall{
+		Name:   "create_page",
+		Args:   `{"body":"` + strings.Repeat("a", sandbox.MaxBridgeCallBytes/2) + `"}`,
+		Output: strings.Repeat("b", sandbox.MaxBridgeCallBytes/2+1000), At: base,
+	}
+	if ok, err := s.AppendBridgeCall(ctx, r.TurnID, sent); err != nil || !ok {
 		t.Fatalf("append: %v, %v", ok, err)
 	}
-	call := mustCalls(t, s, r.TurnID)[0]
-	if call.Args != args {
-		t.Errorf("the arguments were not kept whole (%d bytes of %d) although the output "+
-			"could make room for them", len(call.Args), len(args))
+	record := recorded(t, s, r.TurnID)[0]
+	if record.Args != sent.Args {
+		t.Errorf("the record's arguments were not kept whole (%d bytes of %d) although the output "+
+			"could make room for them", len(record.Args), len(sent.Args))
 	}
-	if !strings.HasSuffix(call.Output, "…") || !strings.HasPrefix(output, strings.TrimSuffix(call.Output, "…")) {
-		t.Error("the output is not a marked head of the whole")
+	if !strings.HasSuffix(record.Output, "…") || !strings.HasPrefix(sent.Output, strings.TrimSuffix(record.Output, "…")) {
+		t.Error("the record's output is not a marked head of the whole")
 	}
-	assertRecordFits(t, call)
+	assertRecordFits(t, record)
+	if diff := sameCall(mustCalls(t, s, r.TurnID)[0], sent); diff != "" {
+		t.Errorf("the call read back is not the call made: %s", diff)
+	}
+}
+
+// A WHOLE KEPT IN PARTS IS NEVER A CALL. Its parts are records in the same
+// bucket, under the call's own; a log that paged or counted them would show a
+// run making calls it never made, and a board's cursor would step through
+// pieces of one output as though they were the run's work.
+func testAWholeKeptInPartsIsNeverPagedOrCounted(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bridge-parts-paged")
+	mustLaunched(t, s, r)
+	for _, call := range []sandbox.BridgeCall{
+		{Name: "c0"},
+		{Name: "c1", Output: strings.Repeat("z", sandbox.MaxBridgeCallBytes*2)},
+		{Name: "c2"},
+	} {
+		if ok, err := s.AppendBridgeCall(ctx, r.TurnID, call); err != nil || !ok {
+			t.Fatalf("append %s: %v, %v", call.Name, ok, err)
+		}
+	}
+	var seen []string
+	after := uint64(0)
+	for range 5 {
+		page, err := s.BridgeCallPage(ctx, mustGet(t, s, r.TurnID), after, 1)
+		if err != nil {
+			t.Fatalf("BridgeCallPage: %v", err)
+		}
+		if page.Total != 3 || page.Between+len(page.Calls)+len(page.End) > 3 {
+			t.Errorf("a page counts %d calls (%d between), want the 3 the run made", page.Total, page.Between)
+		}
+		seen = append(seen, names(page.Calls)...)
+		if page.Next == 0 {
+			seen = append(seen, names(page.End)...)
+			break
+		}
+		after = page.Next
+	}
+	if want := []string{"c0", "c1", "c2"}; !slices.Equal(seen, want) {
+		t.Errorf("paged %q, want %q", seen, want)
+	}
+	if got := names(mustCalls(t, s, r.TurnID)); !slices.Equal(got, []string{"c0", "c1", "c2"}) {
+		t.Errorf("the log read whole = %q, want the three calls", got)
+	}
 }
 
 // THE CURSOR. A dashboard pages a long log rather than asking for all of it in

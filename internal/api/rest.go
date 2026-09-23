@@ -59,6 +59,12 @@ var namedRoutes = []struct {
 	// filing it there would put the unit of work under the log that
 	// records it.
 	{method: "GET", pattern: "/turns", what: "turns"},
+	// THE PHASE RECORDS, and ONE OF THEM WHOLE. The listing carries each
+	// record as it was published; /phases/{id} answers a record too large
+	// for one event by reassembling the whole it kept in parts, and any
+	// other record with its own row.
+	{method: "GET", pattern: "/phases/{id}", what: "phase_record", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/phases", what: "phases"},
 	{method: "GET", pattern: "/tokens/breakdown", what: "tokens"},
 	// THE SAME SPEND WITH A TIME AXIS. Beside the breakdown rather than a
 	// parameter of it: the two answers have different shapes, and one route

@@ -28,10 +28,11 @@ import (
 // cannot coordinate locally, and a two-member fleet has no quorum.
 //
 // The STORE is not a third slot in that sense — there is nothing to choose, and
-// nothing to validate against the other two. It is this node's own file, a
-// rebuildable index over what the replicated layer already holds, and it is
-// here because its lifetime is the same lifetime: opened before anything can
-// deliver, closed after everything has stopped delivering.
+// nothing to validate against the other two. It is this node's own pair of
+// databases, the node estate and the replicated estate beside it (see
+// internal/store), and it is here because its lifetime is the same lifetime:
+// opened before anything can deliver, closed after everything has stopped
+// delivering.
 //
 // All three are opened here and closed together, because a node holding one
 // without the others is a node that can hear work it may not do, hold seats it
@@ -45,13 +46,13 @@ type Backends struct {
 	// credential cooldowns and the config activation pointer.
 	//
 	// Beside Coord rather than inside Store, because Store is this node's
-	// LOCAL database — one file, one process — and every one of these has
+	// LOCAL databases — two files, one process — and every one of these has
 	// to be agreed across the fleet to mean anything. See coord/fleet.go
 	// for what each was doing while it was per-node.
 	Fleet coord.Fleet
 
-	// Store is this node's local materialized index — the third thing a
-	// node runs on, and the one that is not replicated. It is opened here
+	// Store is this node's two local databases: the node estate, and the
+	// replicated estate a state log's applier writes. It is opened here
 	// with the other two because everything that writes to it is driven by
 	// them: a node holding a queue attachment without somewhere to record
 	// what a turn did is a node that works and forgets.
@@ -60,14 +61,11 @@ type Backends struct {
 	// stopServer shuts down an embedded broker this node started. Nil when
 	// the stream is external — a node must never take down a broker it
 	// merely dialled.
+	//
+	// There is no connection beside it. The queue opens the broker
+	// connection the coordination store rides, on every topology, and
+	// owns it and closes it in Stop — see [openNATS].
 	stopServer func()
-
-	// conn is the NATS connection the coordination store rides when it
-	// shares the stream's broker. Held so Close can release it; the store
-	// does not own it, because on an embedded topology the SERVER owns the
-	// lifetime and closing the connection from underneath it would take
-	// the stream down with the leases.
-	conn *nats.Conn
 }
 
 // Complete reports which of the four a Backends lacks, or nil when it holds
@@ -101,22 +99,38 @@ func (b *Backends) Complete() error {
 		strings.Join(missing, ", "))
 }
 
-// Conn exposes the broker connection this node's coordination store rides.
+// Conn is the broker connection the queue opened — the one the coordination
+// store rides — when the broker is EMBEDDED in this node's process, and nil
+// when this node dialled an external one.
 //
-// For the ONE subsystem that has to talk to the broker outside the queue
-// contract and outside coordination: the backup, which snapshots the streams
-// themselves. The estate it copies is not addressable any other way — on the
-// default topology the broker is embedded here and binds no socket — so a
-// backup that could not reach this connection could not exist.
+// The backup snapshots the streams over it, and on the default topology it has
+// no other way in: the embedded broker binds no socket. Nil is its answer for a
+// dialled broker because of what the backup reads nil as — the stream estate
+// belongs to a cluster somebody else runs, and is backed up there (see
+// internal/backup's Options.Conn). The connection exists on that topology all
+// the same; this accessor declines to name it.
 //
-// Nil when this node DIALLED an external broker: the queue owns that
-// connection, and the streams belong to a cluster with its own backup tooling.
-// The caller takes no ownership: closing it is [Backends.Close]'s job, and
-// closing it from underneath an embedded server would take the stream down with
-// the leases.
-func (b *Backends) Conn() *nats.Conn { return b.conn }
+// ASKED OF THE QUEUE rather than remembered from the open, because Queue is an
+// exported slot a caller may fill with a wrapper around the one OpenBackends
+// built, and a remembered connection could disagree with the one the queue in
+// that slot rides. A queue that exposes no connection answers nil.
+//
+// The caller takes no ownership. The queue closes this connection in Stop,
+// which [Backends.Close] calls, and a caller that closed it first would take
+// the queue, every consumer and the coordination store down with it.
+func (b *Backends) Conn() *nats.Conn {
+	if b.stopServer == nil {
+		return nil
+	}
+	broker, ok := b.Queue.(interface{ Conn() *nats.Conn })
+	if !ok {
+		return nil
+	}
+	return broker.Conn()
+}
 
-// Close releases both slots, in the reverse order of acquisition.
+// Close releases the stream, the broker and the store, in the reverse order of
+// acquisition.
 //
 // THE ORDER IS THE POINT and each step depends on the one before:
 //
@@ -127,45 +141,41 @@ func (b *Backends) Conn() *nats.Conn { return b.conn }
 //     exits — and leaves every prefetched message to wait out the broker's
 //     full ack timeout before a peer can have it.
 //
-//     NOT COVERED BY A TEST IN THIS PACKAGE, and it is worth saying so
-//     rather than implying otherwise: the whole effect is on a PEER's
-//     handoff latency, and in one process a shut-down server kills the
-//     connection either way. What would cover it is the fleet suite —
-//     two nodes, one broker, measuring how long a successor waits for a
-//     departed node's messages.
+//     It also closes the broker connection the queue opened and owns,
+//     which the coordination store rides. So there is no separate
+//     coordination step to order against it, and nothing here closes that
+//     connection a second time.
 //
-//  2. Close the COORDINATION connection, if the store rides one. After the
-//     queue, because a node that released its broker while still holding
-//     leases looks alive to its peers: renewals keep succeeding against a
-//     store it can no longer reach work through, and its seats stay
-//     unclaimable for a full TTL.
+//     COVERED IN PART, and it is worth saying which part. The wait is: a
+//     consume loop cannot exit while its handler runs, so the queue's
+//     bounded wait for its loops gives a handler still in flight time to
+//     record what it drained before step 3 closes the store, and
+//     TestTheStoreOutlivesTheHandlersThatWriteToIt goes red without this
+//     step. The clean release of unacked messages is not: its whole effect
+//     is on a PEER's handoff latency, and in one process a shut-down server
+//     kills the connection either way. What would cover it is the fleet
+//     suite — two nodes, one broker, measuring how long a successor waits
+//     for a departed node's messages.
 //
-//  3. Shut down the embedded SERVER, if this node started one. Last of the
-//     three broker steps, because everything above it is a client of it.
+//  2. Shut down the embedded SERVER, if this node started one. After the
+//     queue, because the queue is a client of it. Covered through a failed
+//     open, whose cleanup is this Close:
+//     TestAStoreThatCannotOpenTakesTheBrokerDownWithIt counts the
+//     goroutines a server left running behind it.
 //
-//     Also not covered here, and for a plainer reason: a solo embedded
-//     server runs with DontListen and binds no port at all, so there is no
-//     socket to probe after the fact. A clustered one does bind, but a
-//     single member never reaches JetStream quorum — measured, it waits
-//     the full 60 s and fails — so a one-node probe cannot be stood up.
-//
-//  4. Close the STORE. After everything, because everything writes to it:
+//  3. Close the STORE. After everything, because everything writes to it:
 //     the ledgers a turn records into, the event log the queue's own writer
 //     appends to. Closing it first would turn the tail of a graceful drain
 //     into a run of "database is closed" — the drain would still finish,
 //     and would finish having recorded none of what it drained.
 //
-// A node that merely DIALLED an external broker never reaches step 3: it
+// A node that merely DIALLED an external broker never reaches step 2: it
 // must not take down a broker its peers are using.
 func (b *Backends) Close(ctx context.Context) {
 	if b.Queue != nil {
 		if err := b.Queue.Stop(ctx); err != nil {
 			log.WarnContext(ctx, "queue_stop_failed", "error", err)
 		}
-	}
-	if b.conn != nil {
-		b.conn.Close()
-		b.conn = nil
 	}
 	if b.stopServer != nil {
 		b.stopServer()
@@ -184,9 +194,9 @@ func (b *Backends) Close(ctx context.Context) {
 // It does NOT re-validate the topology: config.Bootstrap.Validate already
 // refuses the incoherent combinations, and duplicating those rules here would
 // give an operator two places to read and two chances to disagree. What this
-// adds is the construction, and one rule validation cannot express — an
-// embedded-KV coordination store rides the stream's own NATS connection, so the
-// two slots are not independent at runtime even though they are in config.
+// adds is the construction, and one rule validation cannot express — the
+// coordination store rides the stream's own NATS connection, so the two slots
+// are not independent at runtime even though they are in config.
 //
 // It takes the COMPANY as well as the bootstrap, for one field: the width of
 // the vectors the configured embedding model produces. That width is Tier B
@@ -304,10 +314,22 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 // coordination store that rides its connection.
 //
 // TWO BRANCHES FOR THE STREAM, ONE TAIL FOR COORDINATION. The branches differ
-// only in who owns the broker and therefore who owns the connection; what is
-// built on top of it is identical, and writing that twice is how one copy
-// ends up without a fleet store — which is not a startup error but a panic
-// hours later in whichever subsystem reached for it first.
+// only in who runs the broker; what is built on top of it is identical, and
+// writing that twice is how one copy ends up without a fleet store — which is
+// not a startup error but a panic hours later in whichever subsystem reached
+// for it first.
+//
+// # One connection, on every topology
+//
+// The coordination store is handed the QUEUE'S OWN CONNECTION, and there is no
+// other connection in this function to hand it. A second one would work and
+// would be worse: two connections to one broker fail independently, so a node
+// could hold live leases over a connection that still works while the one
+// carrying its inbox has dropped — alive to its peers, deaf to its work. That
+// holds on the embedded broker as much as on an external one: a clustered
+// member is reached over a TCP connection to its own client port and a solo
+// one over an in-process pipe, and one such connection can close while another
+// to the same server stays open.
 func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	// THROUGH THE RESOLVER, never the raw field. `node.id` is only one of
 	// the three places a node's name comes from — the file, then
@@ -358,26 +380,25 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	if b.Stream.EventRetentionHours > 0 {
 		cfg.EventRetention = b.Stream.EventRetention()
 	}
-	out, conn, err := openStream(ctx, b, cfg)
+	q, stopServer, err := openStream(ctx, b, cfg)
 	if err != nil {
 		return nil, err
 	}
-	if err = attachCoordination(ctx, b, out, conn); err != nil {
+	out := &Backends{Queue: q, stopServer: stopServer}
+	if err = attachCoordination(ctx, b, out, q.Conn()); err != nil {
 		out.Close(ctx)
 		return nil, err
 	}
 	return out, nil
 }
 
-// openStream dials or starts the broker, and answers the connection
-// coordination should ride.
+// openStream dials or starts the broker and returns the queue on it, together
+// with what shuts the broker down when this node started it — nil when it
+// dialled one.
 //
-// THE COORDINATION STORE RIDES THE STREAM'S CONNECTION either way. A second
-// dial would work and would be worse: two connections to one broker fail
-// independently, so a node could hold live leases over a connection that
-// still works while the one carrying its inbox has dropped — alive to its
-// peers, deaf to its work.
-func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) (*Backends, *nats.Conn, error) {
+// It returns no connection of its own: the coordination store rides the
+// queue's, and [openNATS] takes it from the queue.
+func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) (*jetstream.Queue, func(), error) {
 	// A URL IS A BROKER SOMEBODY ELSE RUNS, and this branch is what makes
 	// `stream.type: nats` mean anything. Without it every path here
 	// started an in-process member and connected to THAT: an operator who
@@ -392,11 +413,9 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 		if err != nil {
 			return nil, nil, fmt.Errorf("engine: stream: %w", err)
 		}
-		// NO stopServer: this node dialled a broker its peers are using
-		// and must never take it down. And no `conn` either — the QUEUE
-		// owns this connection, so Close must not close it a second time
-		// underneath the client that is still shutting down.
-		return &Backends{Queue: q}, q.Conn(), nil
+		// NO stop: this node dialled a broker its peers are using and
+		// must never take it down.
+		return q, nil, nil
 	}
 
 	server, err := jetstream.StartServer(ctx, cfg)
@@ -408,25 +427,15 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 		server.Shutdown()
 		return nil, nil, fmt.Errorf("engine: stream client: %w", err)
 	}
-	out := &Backends{Queue: q, stopServer: server.Shutdown}
-	conn, err := server.Conn()
-	if err != nil {
-		out.Close(ctx)
-		return nil, nil, fmt.Errorf("engine: coordination connection: %w", err)
-	}
-	// OWNED HERE, because this is a SECOND connection to the node's own
-	// in-process server — the queue holds its own. The external branch
-	// shares the queue's instead, which is why it leaves this nil.
-	out.conn = conn
-	return out, conn, nil
+	return q, server.Shutdown, nil
 }
 
 // attachCoordination builds the fleet store and the lease slot on one
-// connection.
+// connection, which is the queue's — see [openNATS].
 //
 // ONE FUNCTION FOR BOTH BRANCHES, and that is the point rather than tidiness:
-// an external broker and an embedded one differ in who owns the connection
-// and nothing else, so two copies of this would be two chances to forget the
+// an external broker and an embedded one differ in who runs the broker and
+// nothing else, so two copies of this would be two chances to forget the
 // fleet store on one of them — and a nil Fleet is not a startup error, it is
 // a panic hours later in whichever subsystem reached for it first.
 //

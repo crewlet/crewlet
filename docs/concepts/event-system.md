@@ -302,6 +302,16 @@ A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
 already rows as `a2a_channel_opened` and `a2a_message_sent`). See the
 exclusions table in the Deployment page above.
 
+**Stored and never listed**: `agent_phase_record_part`, a piece of the whole
+of a phase record the transport refused as too large. The record is published
+cut and names its parts, which went first; the store keeps them with their
+bytes and nothing a listing filters on, no read that lists, counts or folds
+events returns one, and the projection never takes one, so no dashboard socket
+carries one. A point read by a part's own id (`GET /events/{id}`) returns it
+as it returns any row; the read that puts the parts back together is the
+record's: `GET /phases/{id}` reassembles its whole (see
+[API Endpoints](../reference/api-endpoints.md#ws-wsstream), `phase_record`).
+
 ---
 
 ## Event Schema
@@ -410,7 +420,7 @@ Beyond competing-consumer `Subscribe` and inline `AddPublishListener`, the `Even
 
 The JetStream backend implements it as a per-caller **ephemeral consumer** on the stream the pattern resolves to, and three of its settings are the whole design. It delivers from *now* rather than from the beginning, because a live feed that replayed a month of history on every browser refresh would be unusable and the durable half of that question is a REST query against the event store. It acknowledges nothing, because a dashboard must never be able to hold a message — a slow subscriber misses events rather than keeping them from anyone else. And it carries a one-minute inactivity threshold, so the server reaps it shortly after a browser tab goes away even if the caller never unsubscribes. A pattern that would span every namespace is refused rather than resolved to a guess. The memory twin implements the same primitive with a topic-filtered publish listener.
 
-The dashboard's `/ws/stream` endpoint uses this primitive: each connected tab is one ephemeral consumer, and the in-process `api/stream` both updates the live-state projection and fans every event out to every connected WebSocket. See [API Endpoints — Live Stream](../reference/api-endpoints.md#live-stream).
+The dashboard's `/ws/stream` endpoint is fed by this primitive: each node serving the API holds **one** ephemeral consumer on `crewlet.events.>` for its live-state projection, and the in-process `api/stream` both updates the projection from it and fans what the projection takes out to every connected WebSocket — each categorised event as it is, and what a live-only one moved. A type with neither placement reaches that consumer and goes no further: the parts a phase record too large for one event keeps its whole in are dropped there, so no socket carries one. See [API Endpoints — Live Stream](../reference/api-endpoints.md#live-stream).
 
 The pattern accepts subject wildcards: `*` matches one segment, `>` matches one-or-more trailing segments. Crewlet's subject grammar **is** NATS grammar, which is a large part of why this backend fits: the wildcards a caller writes are the wildcards the broker matches, with no translation layer to disagree about.
 

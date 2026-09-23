@@ -62,8 +62,8 @@ flowchart TB
         direction TB
         API["<b>ingress — API + dashboard</b><br/>webhook routes · REST · /config · /secrets<br/>/ws/stream · OTLP ingest · /health · /ready"]
         SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: executor → reviewer, one per running turn<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models over a credential pool"]
-        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · retention sweep · skill curator"]
-        CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · reflection · observability edge"]
+        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · maintenance · skill curator"]
+        CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · reflection · observability edge<br/>retention sweeps of this node's own tables"]
     end
 
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.HANDLE.inbox · .control<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
@@ -92,7 +92,7 @@ node, the hop-by-hop path a trigger takes across a fleet, what a turn does,
 where every table and bucket lives, and what changes when a second node
 appears.
 
-**Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is a local file it creates. Outgrowing one node moves only the stream: the embedded servers join one cluster, or every node dials one external NATS (see [Running a Fleet](../guides/fleet.md)). It is the same client code either way — embedded versus external is a connection choice, not a second backend — and the store stays each node's own file. OpenTelemetry for distributed tracing.
+**Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is two local files it creates. Outgrowing one node moves only the stream: the embedded servers join one cluster, or every node dials one external NATS (see [Running a Fleet](../guides/fleet.md)). It is the same client code either way — embedded versus external is a connection choice, not a second backend — and the store stays each node's own two files. OpenTelemetry for distributed tracing.
 
 **One node type**: `crewlet run` is the node, and what it does is a config value: `node.roles` picks from `ingress` (serve the HTTP API and its webhooks), `seats` (run agents), and `workers` (the company-wide singleton duties). The default is all three: one process serving the API and the dashboard and running every agent, which is the whole stack. Giving the API nodes of its own is the same command with `-roles ingress`: an engine that serves the API and claims no seats, so both topologies are the same code path rather than two wirings that have to be kept in step.
 
@@ -241,7 +241,8 @@ internal/
 ├── provision/            # The shared provisioning grammar and its sinks
 ├── backup/               # A verified copy of both estates, taken from inside
 │                         #   the engine — the only place either is reachable
-├── maintenance/          # The retention sweep, behind one singleton duty
+├── maintenance/          # The sweeps: the fleet's behind one singleton duty,
+│                         #   each node's own tables on every node
 ├── tokens/               # Token accounting shared by the meter and the API
 ├── hostbox/ procgroup/   # The local sandbox host, and process-tree teardown
 ├── whsec/                # Webhook signing secrets: the format, minting and the HMAC key

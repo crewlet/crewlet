@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -15,40 +17,72 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// A phase record too large for one event is FIT rather than dropped. The one
-// exception is a record refused as too large although it is WITHIN one event,
-// which is reported and not published.
+// A phase record too large for one event is published CUT, and its WHOLE is
+// kept beside it.
 //
 // A completed phase carries every tool call it made with each call's result,
 // and an agent-mode run's resumed phase carries every call its bridge log
-// holds, however many that was. Past [queue.MaxPayloadBytes] the transport
-// refuses the event outright, and a refused event is not a shorter record but
-// NO record: the phase is missing from the event store and from every screen
-// that reads it, and the longer the phase ran the likelier that is.
+// holds, however many that was. Past what the transport carries the event is
+// refused outright, and a refused event is not a shorter record but NO record:
+// the phase would be missing from the event store, from every screen that
+// reads it and from every spend total, and the longer the phase ran the
+// likelier that is.
 //
-// So a record the transport refuses as too large, and that is past
-// [phaseRecordCeiling], is published again with its longest texts cut to a
-// common level until it fits — the tool results first, because they are what
-// a record's size is made of, then the tool arguments, then the prose and the
-// prompts. Every text shorter than the level is left whole. Each cut text ends
-// in "…"; a cut on a tool call or a round also records how long the whole was
-// under `<field>_bytes` on that row; and the record's Notes says it was fit.
+// So a record the transport refuses as too large goes out in two halves, in
+// this order:
 //
-// A record refused as too large while it is within the ceiling — whole, or
-// once fit — means the server this node reached accepts less than the
-// contract says every connection carries. No cut to the contract's number
-// answers that, so the record is not published, and the error it is logged
-// with names the server setting that does (see [phaseRecordCeiling]).
+//   - ITS WHOLE, AS PARTS. The record's event exactly as the transport refused
+//     it — the bytes the event store would have held — cut into consecutive
+//     ranges of [phasePartBytes], each published as an agent_phase_record_part
+//     under an id derived from the record's own ([types.PhaseRecordPartID]).
+//     A part refused as too large is split in two and each half published,
+//     down to [phasePartFloor]; the parts carry their offsets, so parts of
+//     mixed sizes reassemble. First, so a record that names its whole names
+//     parts that are already durable.
+//   - THE RECORD, in the largest form the transport accepts. First its longest
+//     texts cut to a common level — the tool results, because they are what a
+//     record's size is made of, then the tool arguments, then the prose and
+//     the prompts — each cut text ending in "…" and, on a tool call or a
+//     round, with its whole length beside it as `<field>_bytes`. Failing that,
+//     the LEAST form: every text reduced to its mark. Failing that, the least
+//     form carrying its first rows, tool calls given up before rounds, and
+//     counting the rest in tool_executions_omitted and round_narration_omitted.
+//     Every form carries the scalars whole — the tokens, the cost, the model,
+//     the decision, the phase, the iteration, the host phase — so the spend
+//     totals never lose a phase that published anything. The record names its
+//     whole with whole_bytes and whole_parts, and its notes say what was cut
+//     and where the whole is.
 //
-// WHERE THE WHOLE OF EACH TEXT IS: in the phase's own model conversation,
-// while the phase ran. A tool result here is the text the loop handed the
-// model as that tool's answer, and every other text was sent to the model or
-// written by it. An agent-mode run's calls are read from its bridge log, whose
-// records hold what the coding agent in the box was handed — fit and marked
-// there first when a call is too large for one record (internal/sandbox). This
-// record is the engine's durable account of the phase, which is why a text is
-// cut only when the alternative is no record at all, and why every cut is
-// marked on the text it touches.
+// WHERE THE WHOLE IS: in its parts, under the record's own event id, in the
+// event store of the node that published them, for as long as that store
+// keeps events. The store's PhaseRecordWhole reassembles them, and the API
+// answers it as `phase_record` (GET /phases/{id}). A part that fails for any
+// reason other than its size, or is refused at the floor, ends the parts: the
+// record then carries no reference to a whole, its notes say the whole was not
+// kept and why, and phase_record_whole_not_kept is logged at ERROR.
+//
+// A REFUSAL WITHIN THE CEILING — of the whole, of a part, or of a form of the
+// record no larger than [phaseRecordCeiling] — means the server this node
+// reached accepts less than the contract says every connection carries. The
+// target the record is cut to is then HALVED on each such refusal rather than
+// guessed at: the Publisher contract does not say what a server accepts, and
+// nothing above the queue may ask which backend is running. It is logged once
+// per record at ERROR, naming max_payload.
+//
+// THE ONE FLOOR: when the transport refuses the smallest form this record has
+// — every text at its mark and every row counted rather than carried — no
+// record of the phase is published, and phase_record_not_published is logged
+// at ERROR. Its parts, if they all landed, still hold it whole, and
+// PhaseRecordWhole answers from them alone; but with no agent_phase_completed
+// row its tokens and cost are missing from every spend total.
+//
+// WHAT PARTS COST: the whole's bytes again, and then a third more for base64.
+// On the CREWLET_EVENTS stream, which keeps by age (Tier A's
+// stream.event_retention_hours) under no byte ceiling; and in the publishing
+// node's event store, until the retention sweep takes them with the record.
+// They are published on crewlet.events.*, so every node serving the API
+// receives each one on the broadcast subscription its projection reads and
+// drops it there (observe.Envelope); no dashboard socket carries one.
 
 // phaseRecordCeiling is the most a published phase record may weigh: the
 // transport's own ceiling, measured on the encoded envelope exactly as the
@@ -60,113 +94,556 @@ import (
 // exactly it, and a node whose stream is an external cluster announcing less
 // does not boot (internal/coord/kv's OpenFleet opens on that same connection
 // and refuses it). A server announcing less can still be met later, after a
-// reconnect, and there a record within this ceiling is refused — which no fit
-// can answer, so [emitter.publishPhase] reports it rather than cutting for a
-// number it does not know.
+// reconnect, and there a record within this ceiling is refused — see
+// [nextTarget].
 const phaseRecordCeiling = queue.MaxPayloadBytes
 
 // phaseCutOverhead is what one text's first cut can add back to the record:
 // the "…" that marks it and the `<field>_bytes` entry that says how long it
 // was — a key, a colon, up to twenty digits and a comma, well under this. It
 // is charged per text when choosing the level, so one choice fits the record
-// rather than a cut that its own marks push back over the ceiling.
+// rather than a cut that its own marks push back over the target.
 const phaseCutOverhead = 64
 
-// phaseOutcome is what became of one phase record: the account
-// [emitter.publishPhase] logs, returned so that a test holds the account
-// rather than a log line.
-type phaseOutcome string
+// phasePartReserve is how much of one event a part leaves for everything but
+// its data: the envelope's id, time and trace, the record's id, its index, its
+// offset and the whole's length. That measures well under a kilobyte
+// (TestAFullPartFitsOneEventWithItsReserveToSpare); sixty-four KiB is kept so
+// a field a later build adds to the part cannot push a full part past the
+// ceiling, at a cost of under one percent of each part.
+const phasePartReserve = 64 << 10
+
+// phasePartBytes is how much of the whole one part carries: what fits one
+// event beside [phasePartReserve], at three bytes of data for every four
+// base64 writes. A multiple of three by construction, so every part but the
+// last encodes with no padding.
+const phasePartBytes = (queue.MaxPayloadBytes - phasePartReserve) / 4 * 3
+
+// phasePartFloor is the smallest a refused part is split to.
+//
+// Sixty-four KiB is a sixteenth of nats-server's default max_payload (1 MiB,
+// the setting [queue.MaxPayloadBytes] exists because of), so a server left at
+// its default is met three halvings down, well above the floor. A server that
+// refuses parts smaller than this is not one more halving can serve at a
+// reasonable cost: each part is a publish, broadcast to every node serving the
+// API, and a whole of W bytes would take up to W/64 KiB of them. The whole is
+// then not kept, and the log names the setting to change.
+const phasePartFloor = 64 << 10
+
+// phaseForm is the form a phase record was published in.
+type phaseForm string
 
 const (
-	// phasePublished: the record was published whole.
-	phasePublished phaseOutcome = "published"
-	// phaseFitted: the record was past the ceiling, and was published with
-	// its longest texts cut to fit it.
-	phaseFitted phaseOutcome = "fitted"
-	// phaseRefusedWithinCeiling: the record was refused as too large while
-	// within the ceiling, whole or once fit, and was not published.
-	phaseRefusedWithinCeiling phaseOutcome = "refused_within_ceiling"
-	// phaseUnfittable: the record was past the ceiling even with every text
-	// it carries cut, and was not published.
-	phaseUnfittable phaseOutcome = "unfittable"
-	// phaseNotPublished: the transport failed for a reason other than size,
-	// and the record was not published.
-	phaseNotPublished phaseOutcome = "not_published"
+	// phaseWhole: the record went whole.
+	phaseWhole phaseForm = "whole"
+	// phaseFitted: its longest texts were cut to a common level.
+	phaseFitted phaseForm = "fitted"
+	// phaseLeast: every text was reduced to its mark, every row carried.
+	phaseLeast phaseForm = "least"
+	// phaseRowsOmitted: every text at its mark, and only its first rows
+	// carried.
+	phaseRowsOmitted phaseForm = "rows_omitted"
 )
 
-// publishPhase publishes a completed phase record, fitting it to the transport
-// when it is too large to go whole, and reports what became of it.
-func (e emitter) publishPhase(ctx context.Context, rec types.AgentPhaseCompleted) phaseOutcome {
+// phaseAccount is what became of one phase record: the account
+// [emitter.publishPhase] logs, returned so that a test holds the account
+// rather than a log line.
+type phaseAccount struct {
+	// Form is the form the record was published in, and empty when no form
+	// of it was.
+	Form phaseForm
+
+	// Parts is how many parts hold the record's whole: non-zero only on a
+	// record published cut whose parts all landed.
+	Parts int
+
+	// Err is why no record was published, when none was.
+	Err error
+}
+
+// publishPhase publishes a completed phase record — whole when the transport
+// carries it, and otherwise its whole in parts followed by the record cut to
+// the largest form the transport accepts — and reports what became of it.
+func (e emitter) publishPhase(ctx context.Context, rec types.AgentPhaseCompleted) phaseAccount {
 	env := events.New(rec, e.traceFor(ctx))
 	env.Source = e.role
-	published := e.pub.Publish(ctx, topics.Event(env.Type), env)
-	if published == nil {
-		return phasePublished
+	err := e.pub.Publish(ctx, topics.Event(env.Type), env)
+	if err == nil {
+		return phaseAccount{Form: phaseWhole}
 	}
-	if !errors.Is(published, queue.ErrTooLarge) {
+	if !errors.Is(err, queue.ErrTooLarge) {
 		log.WarnContext(ctx, "phase_telemetry_publish_failed", "type", env.Type,
-			"role", e.role, "turn_id", e.turn.RunID, "error", published)
-		return phaseNotPublished
+			"role", e.role, "turn_id", e.turn.RunID, "error", err)
+		return phaseAccount{Err: err}
 	}
-	payload, ok := env.Data.(*types.AgentPhaseCompleted)
+	original, ok := env.Data.(*types.AgentPhaseCompleted)
 	if !ok {
 		// events.New stores the pointer to its own copy; anything else is
 		// a change there this code has not followed.
-		log.ErrorContext(ctx, "phase_record_unfittable", "turn_id", e.turn.RunID,
-			"error", fmt.Sprintf("the event carries %T", env.Data))
-		return phaseUnfittable
+		err = fmt.Errorf("the phase record's event carries %T", env.Data)
+		log.ErrorContext(ctx, "phase_record_not_published", "turn_id", e.turn.RunID,
+			"error", err.Error())
+		return phaseAccount{Err: err}
 	}
-	fit, err := fitPhaseRecord(env, payload)
-	if err != nil {
-		log.ErrorContext(ctx, "phase_record_unfittable", "turn_id", e.turn.RunID,
-			"phase", payload.Phase, "iteration", payload.Iteration, "error", err.Error(),
-			"detail", "the phase record could not be cut to fit one event and was not published")
-		return phaseUnfittable
+	// THE BYTES THE TRANSPORT REFUSED, which are what the event store would
+	// have held for this record had it gone whole.
+	whole, merr := json.Marshal(env)
+	if merr != nil {
+		log.ErrorContext(ctx, "phase_record_not_published", "turn_id", e.turn.RunID,
+			"phase", original.Phase, "iteration", original.Iteration, "error", merr.Error())
+		return phaseAccount{Err: merr}
 	}
-	if fit.before <= phaseRecordCeiling {
-		// REFUSED WITHIN THE CEILING, so there is nothing to fit.
-		// Publishing the same bytes again would be refused the same way,
-		// and calling that a fit would report a cut that never happened.
-		e.refusedWithinCeiling(ctx, payload, fit.before, 0, published)
-		return phaseRefusedWithinCeiling
+	cut := &phaseCutter{env: env, original: original, whole: len(whole)}
+	cut.kept = e.publishParts(ctx, env, whole)
+	account, withinRefused := e.publishCut(ctx, cut, err)
+	e.reportWithinCeiling(ctx, cut, withinRefused)
+	return account
+}
+
+// wholeKept is what became of a record's whole.
+type wholeKept struct {
+	// parts is how many parts hold it, and zero when it was not kept.
+	parts int
+	// published is how many parts landed, whether or not every one did.
+	published int
+	// lost says why the whole was not kept, and is empty when it was.
+	lost string
+	// refusedBytes is the encoded size of the smallest part the transport
+	// refused as too large, and zero when it refused none.
+	refusedBytes int
+}
+
+// publishParts publishes a record's whole as consecutive parts, splitting a
+// part the transport refuses as too large, and reports what became of it.
+//
+// ONCE A SIZE IS REFUSED, THE PARTS AFTER IT ARE PUBLISHED AT THE HALVED SIZE:
+// the server that refused one part of a size refuses the next of the same
+// size, and asking it again would spend a refused publish of the largest size
+// on every part. The two halves of a refused part are therefore the next two
+// parts, and so on down to [phasePartFloor]. Halved ROUNDING UP, because the
+// last part is whatever is left and its length can be odd: rounded down, its
+// halves would leave a byte over, published as a third part of its own.
+func (e emitter) publishParts(ctx context.Context, env *events.Event, whole []byte) wholeKept {
+	var kept wholeKept
+	size := phasePartBytes
+	for index, offset := 0, 0; offset < len(whole); {
+		n := min(size, len(whole)-offset)
+		part := events.New(types.AgentPhaseRecordPart{
+			RecordID:   env.ID.String(),
+			Index:      index,
+			Offset:     offset,
+			WholeBytes: len(whole),
+			Data:       whole[offset : offset+n],
+		}, e.traceFor(ctx))
+		part.ID = types.PhaseRecordPartID(env.ID, index)
+		err := e.pub.Publish(ctx, topics.Event(part.Type), part)
+		switch {
+		case err == nil:
+			index++
+			offset += n
+			kept.published = index
+			continue
+		case errors.Is(err, queue.ErrTooLarge):
+			if raw, merr := json.Marshal(part); merr == nil {
+				kept.refusedBytes = len(raw)
+			}
+			if half := (n + 1) / 2; half >= phasePartFloor {
+				size = half
+				continue
+			}
+			kept.lost = fmt.Sprintf("the transport refused a part of %d bytes as too large, "+
+				"and parts are not split below %d bytes of data", kept.refusedBytes, phasePartFloor)
+			log.ErrorContext(ctx, "phase_record_whole_not_kept", "turn_id", e.turn.RunID,
+				"record_id", env.ID.String(), "whole_bytes", len(whole),
+				"parts_published", kept.published, "refused_part_bytes", kept.refusedBytes,
+				"error", err.Error(),
+				"detail", "the NATS server this node is connected to refused a part of the phase "+
+					"record's whole that the contract says it carries: set max_payload to at least "+
+					"the ceiling on every server of the cluster. The record is cut with no whole "+
+					"behind it, so what it leaves out is kept nowhere")
+		default:
+			kept.lost = "a part could not be published: " + err.Error()
+			log.ErrorContext(ctx, "phase_record_whole_not_kept", "turn_id", e.turn.RunID,
+				"record_id", env.ID.String(), "whole_bytes", len(whole),
+				"parts_published", kept.published, "error", err.Error(),
+				"detail", "a part of the phase record's whole failed to publish for a reason other "+
+					"than its size, so the record is cut with no whole behind it and what it leaves "+
+					"out is kept nowhere")
+		}
+		return kept
 	}
-	published = e.pub.Publish(ctx, topics.Event(env.Type), env)
-	switch {
-	case published == nil:
-		log.WarnContext(ctx, "phase_record_fitted", "turn_id", e.turn.RunID,
-			"phase", payload.Phase, "iteration", payload.Iteration,
-			"record_bytes", fit.before, "fitted_bytes", fit.after, "ceiling_bytes", phaseRecordCeiling,
-			"texts_cut", fit.cut,
-			"detail", "the record was too large to publish whole; its longest texts were cut to "+
-				"fit, each ending in …, and its notes say so")
-		return phaseFitted
-	case errors.Is(published, queue.ErrTooLarge):
-		// FIT, AND REFUSED ANYWAY. The fit brought the record within the
-		// ceiling, so this is the refusal above met one step later, and it
-		// is reported as that: as a publish failure, its log line would name
-		// neither the server nor the setting that caused it.
-		e.refusedWithinCeiling(ctx, payload, fit.after, fit.cut, published)
-		return phaseRefusedWithinCeiling
-	default:
-		log.WarnContext(ctx, "phase_telemetry_publish_failed", "type", env.Type,
-			"role", e.role, "turn_id", e.turn.RunID, "texts_cut", fit.cut, "error", published)
-		return phaseNotPublished
+	kept.parts = kept.published
+	return kept
+}
+
+// publishCut publishes the record in the largest form the transport accepts
+// and reports what became of it, with the encoded size of the smallest record
+// it refused within [phaseRecordCeiling] (zero when it refused none). refusal
+// is the transport's answer to the whole.
+//
+// EVERY FORM TRIED IS SMALLER THAN EVERYTHING REFUSED BEFORE IT, which is what
+// ends the walk: a form at least as large as one the transport refused would
+// be refused the same way. See [nextTarget] for what each refusal leaves the
+// walk aiming at.
+func (e emitter) publishCut(ctx context.Context, cut *phaseCutter, refusal error) (phaseAccount, int) {
+	refused, within := cut.whole, 0
+	if cut.whole <= phaseRecordCeiling {
+		within = cut.whole
+	}
+	target, last := nextTarget(refused), refusal
+	for {
+		form, ok, err := cut.shapeBelow(target, refused)
+		if err != nil {
+			log.ErrorContext(ctx, "phase_record_not_published", "turn_id", e.turn.RunID,
+				"phase", cut.original.Phase, "iteration", cut.original.Iteration,
+				"record_bytes", cut.whole, "error", err.Error())
+			return phaseAccount{Err: err}, within
+		}
+		if !ok {
+			// THE FLOOR, and the one way a phase leaves no record.
+			log.ErrorContext(ctx, "phase_record_not_published", "turn_id", e.turn.RunID,
+				"phase", cut.original.Phase, "iteration", cut.original.Iteration,
+				"record_bytes", cut.whole, "refused_bytes", refused, "whole_parts", cut.kept.parts,
+				"error", last.Error(),
+				"detail", "the transport refused even the smallest form of this phase record — "+
+					"every text reduced to its mark, every row counted rather than carried — so "+
+					"the event store has no record of the phase and every spend total is missing "+
+					"its tokens and cost; "+cut.wholeWhere())
+			return phaseAccount{Err: last}, within
+		}
+		err = e.pub.Publish(ctx, topics.Event(form.env.Type), form.env)
+		switch {
+		case err == nil:
+			log.WarnContext(ctx, "phase_record_fitted", "turn_id", e.turn.RunID,
+				"phase", cut.original.Phase, "iteration", cut.original.Iteration,
+				"form", form.form, "record_bytes", cut.whole, "published_bytes", form.bytes,
+				"ceiling_bytes", phaseRecordCeiling, "texts_cut", form.texts,
+				"tool_executions_omitted", form.calls, "round_narration_omitted", form.rounds,
+				"whole_parts", cut.kept.parts,
+				"detail", "the record was too large to publish whole and was published cut, "+
+					"its notes saying how; "+cut.wholeWhere())
+			return phaseAccount{Form: form.form, Parts: cut.kept.parts}, within
+		case !errors.Is(err, queue.ErrTooLarge):
+			log.WarnContext(ctx, "phase_telemetry_publish_failed", "type", form.env.Type,
+				"role", e.role, "turn_id", e.turn.RunID, "form", form.form,
+				"texts_cut", form.texts, "error", err)
+			return phaseAccount{Err: err}, within
+		}
+		// REFUSED AS TOO LARGE. A form within the ceiling refused is the
+		// server below the contract, kept for the one line that says so.
+		last = err
+		if form.bytes <= phaseRecordCeiling && (within == 0 || form.bytes < within) {
+			within = form.bytes
+		}
+		refused = form.bytes
+		target = nextTarget(refused)
 	}
 }
 
-// refusedWithinCeiling reports a record the transport refused as too large
-// while it weighed no more than [phaseRecordCeiling]: the server this node
-// reached accepts less than the contract says every connection carries.
-func (e emitter) refusedWithinCeiling(ctx context.Context, rec *types.AgentPhaseCompleted,
-	size, cut int, refused error,
-) {
+// nextTarget is what the walk cuts to once the transport has refused a form of
+// `refused` bytes.
+//
+// PAST THE CEILING, THE CEILING: that refusal is the contract working, and a
+// form within it is one every connection carries — halving there would publish
+// less than the transport takes. WITHIN IT, HALF: the server accepts less than
+// the contract says, the Publisher contract does not say how much less, and
+// nothing above the queue may ask which backend is running, so the target
+// halves on each such refusal rather than guessing. Either way it is below what
+// was refused, which the walk's end depends on.
+func nextTarget(refused int) int {
+	if refused > phaseRecordCeiling {
+		return phaseRecordCeiling
+	}
+	return refused / 2
+}
+
+// reportWithinCeiling logs, once per record, that the server this node reached
+// refused something the contract says it carries.
+func (e emitter) reportWithinCeiling(ctx context.Context, cut *phaseCutter, recordBytes int) {
+	if recordBytes == 0 && cut.kept.refusedBytes == 0 {
+		return
+	}
 	log.ErrorContext(ctx, "phase_record_refused_within_ceiling", "turn_id", e.turn.RunID,
-		"phase", rec.Phase, "iteration", rec.Iteration,
-		"record_bytes", size, "ceiling_bytes", phaseRecordCeiling, "texts_cut", cut,
-		"error", refused.Error(),
-		"detail", "the NATS server this node is connected to refused a record the contract says "+
-			"it carries: set max_payload to at least the ceiling on every server of the "+
-			"cluster; the record was not published")
+		"phase", cut.original.Phase, "iteration", cut.original.Iteration,
+		"refused_record_bytes", recordBytes, "refused_part_bytes", cut.kept.refusedBytes,
+		"ceiling_bytes", phaseRecordCeiling,
+		"detail", "the NATS server this node is connected to refused a message the contract "+
+			"says it carries: set max_payload to at least the ceiling on every server of the "+
+			"cluster. The record was cut to fit under what the server takes, halving on each "+
+			"refusal, and each refused part of its whole was split in two; phase_record_fitted "+
+			"or phase_record_not_published says what the record came to, and "+
+			"phase_record_whole_not_kept is logged when its whole was not kept")
+}
+
+// phaseCutter makes the cut forms of one record, each from the record as it
+// was refused.
+type phaseCutter struct {
+	// env and original are the refused event and its record. Neither is
+	// ever changed: every form is cut from a copy.
+	env      *events.Event
+	original *types.AgentPhaseCompleted
+
+	// whole is the refused event's encoded length, and kept is what became
+	// of the parts holding it.
+	whole int
+	kept  wholeKept
+
+	// least is the least form, made once: it is the size every fitted form
+	// is bounded by from below.
+	least *phaseShape
+}
+
+// phaseShape is one form of a record, and what making it cost.
+type phaseShape struct {
+	env  *events.Event
+	form phaseForm
+	// bytes is the form's encoded size, measured as the publisher encodes it.
+	bytes int
+	// texts is how many texts were cut; calls and rounds how many rows of
+	// each list are not carried.
+	texts, calls, rounds int
+}
+
+// shapeBelow is the largest form of the record the transport may still accept,
+// given that it refused one of `refused` bytes: a form fitted to target when
+// one fits, otherwise the least form, otherwise the least form carrying the
+// first rows that fit target. False when even the smallest form weighs at
+// least what was refused.
+func (c *phaseCutter) shapeBelow(target, refused int) (phaseShape, bool, error) {
+	least, err := c.leastForm()
+	if err != nil {
+		return phaseShape{}, false, err
+	}
+	if least.bytes <= target {
+		// A fit ends at the least form at worst, so it fits target — and one
+		// that ended there IS the least form, reported as that: the same
+		// texts cut, each to its mark, which is the only way the two can
+		// weigh the same.
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		fitted, err := c.fitted(target)
+		if err != nil {
+			return phaseShape{}, false, err
+		}
+		if fitted.texts == least.texts && fitted.bytes == least.bytes {
+			return least, true, nil
+		}
+		return fitted, true, nil
+	}
+	if least.bytes < refused {
+		return least, true, nil
+	}
+	rows, err := c.rowsFitting(target)
+	if err != nil || rows.bytes >= refused {
+		return phaseShape{}, false, err
+	}
+	return rows, true, nil
+}
+
+// copy is a record to cut: the envelope and the record as they were refused,
+// with every row its own map so a cut to it touches nothing it was copied from,
+// and the reference to the whole set.
+func (c *phaseCutter) copy() (*events.Event, *types.AgentPhaseCompleted) {
+	rec := *c.original
+	rec.ToolExecutions = cloneRows(c.original.ToolExecutions)
+	rec.RoundNarration = cloneRows(c.original.RoundNarration)
+	rec.WholeBytes = c.whole
+	rec.WholeParts = c.kept.parts
+	env := *c.env
+	env.Data = &rec
+	return &env, &rec
+}
+
+// cloneRows copies a list of rows, one map each. The values are the scalars
+// and strings a cut replaces, never mutates, so a shallow copy of each map is
+// the whole of what a cut can reach.
+func cloneRows(rows []map[string]any) []map[string]any {
+	if rows == nil {
+		return nil
+	}
+	out := make([]map[string]any, len(rows))
+	for i, row := range rows {
+		out[i] = maps.Clone(row)
+	}
+	return out
+}
+
+// measure is an event's encoded size, exactly as the publisher encodes it.
+func measure(env *events.Event) (int, error) {
+	raw, err := json.Marshal(env)
+	return len(raw), err
+}
+
+// fitted cuts the longest texts on a copy of the record, tier by tier, to the
+// highest common level at which the envelope fits target.
+//
+// THE NOTE IS MEASURED WITH THE CUTS, never added after them. It is part of
+// the record, and the level is the highest one that sheds the excess, so a
+// fit of one long text lands a few dozen bytes under the target: a note
+// written after the level was chosen would push that record back over it. So
+// every measurement carries the note for the count of texts cut so far, and
+// the last one is the note the record is published with.
+func (c *phaseCutter) fitted(target int) (phaseShape, error) {
+	env, rec := c.copy()
+	shape := phaseShape{env: env, form: phaseFitted}
+	remeasure := func() (err error) {
+		rec.Notes = joinNotes(c.original.Notes, c.note(shape.texts, 0, 0))
+		shape.bytes, err = measure(env)
+		return err
+	}
+	if err := remeasure(); err != nil {
+		return shape, err
+	}
+	for _, tier := range phaseRecordTiers(rec) {
+		for shape.bytes > target {
+			level, ok := waterLevel(tier, shape.bytes-target)
+			if !ok {
+				break
+			}
+			for _, slot := range tier {
+				// A cut that would not SHORTEN the text is no cut: a text
+				// under the level stays whole, and so does one no longer
+				// than the mark a cut would put in its place.
+				short := textcut.Within(slot.text, level)
+				if len(short) >= len(slot.text) {
+					continue
+				}
+				if !slot.cut {
+					shape.texts++
+				}
+				slot.set(short, len(slot.text))
+				slot.text, slot.cut = short, true
+			}
+			if err := remeasure(); err != nil {
+				return shape, err
+			}
+		}
+		if shape.bytes <= target {
+			break
+		}
+	}
+	return shape, nil
+}
+
+// leastForm is the record with every text reduced to its mark and every row
+// carried: made once, since it does not depend on any target.
+func (c *phaseCutter) leastForm() (phaseShape, error) {
+	if c.least != nil {
+		return *c.least, nil
+	}
+	env, rec := c.copy()
+	shape := phaseShape{env: env, form: phaseLeast}
+	for _, tier := range phaseRecordTiers(rec) {
+		for _, slot := range tier {
+			// The fit's own cut at a level of nothing, so this is exactly
+			// where every fit ends at worst. A text no longer than the mark
+			// is left whole: the mark in its place would claim a cut of
+			// nothing.
+			mark := textcut.Within(slot.text, 0)
+			if len(mark) >= len(slot.text) {
+				continue
+			}
+			slot.set(mark, len(slot.text))
+			shape.texts++
+		}
+	}
+	rec.Notes = joinNotes(c.original.Notes, c.note(shape.texts, 0, 0))
+	var err error
+	if shape.bytes, err = measure(env); err != nil {
+		return shape, err
+	}
+	c.least = &shape
+	return shape, nil
+}
+
+// rowsFitting is the least form carrying the FIRST rows of each list that fit
+// target and counting the rest — the tool calls given up first, from the end,
+// because they are the bulk of a record, and the rounds only once no call is
+// left. With no row left it is the smallest form the record has, whatever it
+// weighs, and its size says whether that fits.
+func (c *phaseCutter) rowsFitting(target int) (phaseShape, error) {
+	least, err := c.leastForm()
+	if err != nil {
+		return phaseShape{}, err
+	}
+	// A copy of the least form to take rows from: its rows are already
+	// reduced to their marks.
+	env := *least.env
+	leastRec, ok := least.env.Data.(*types.AgentPhaseCompleted)
+	if !ok {
+		return phaseShape{}, fmt.Errorf("the least form carries %T", least.env.Data)
+	}
+	rec := *leastRec
+	env.Data = &rec
+	calls, rounds := leastRec.ToolExecutions, leastRec.RoundNarration
+	shape := phaseShape{env: &env, form: phaseRowsOmitted, texts: least.texts}
+	carry := func(k, m int) (int, error) {
+		rec.ToolExecutions, rec.RoundNarration = calls[:k], rounds[:m]
+		rec.ToolExecutionsOmitted, rec.RoundNarrationOmitted = len(calls)-k, len(rounds)-m
+		rec.Notes = joinNotes(c.original.Notes, c.note(least.texts, len(calls)-k, len(rounds)-m))
+		return measure(&env)
+	}
+	k, err := mostThatFit(len(calls), target, func(k int) (int, error) { return carry(k, len(rounds)) })
+	if err != nil {
+		return shape, err
+	}
+	m := len(rounds)
+	if k < 0 {
+		k = 0
+		if m, err = mostThatFit(len(rounds), target, func(m int) (int, error) { return carry(0, m) }); err != nil {
+			return shape, err
+		}
+		m = max(m, 0)
+	}
+	if shape.bytes, err = carry(k, m); err != nil {
+		return shape, err
+	}
+	shape.calls, shape.rounds = len(calls)-k, len(rounds)-m
+	return shape, nil
+}
+
+// mostThatFit is the largest n in [0, most] whose size fits target, or -1 when
+// none does. size must not shrink as n grows, which carrying one more row never
+// makes it do: a row adds its encoding, and the count it takes off the omitted
+// total is a digit or two at most.
+func mostThatFit(most, target int, size func(n int) (int, error)) (int, error) {
+	fits, over := -1, most+1
+	for over-fits > 1 {
+		mid := fits + (over-fits)/2
+		n, err := size(mid)
+		if err != nil {
+			return -1, err
+		}
+		if n <= target {
+			fits = mid
+		} else {
+			over = mid
+		}
+	}
+	return fits, nil
+}
+
+// note is what a cut record's notes say about the cut and about its whole.
+func (c *phaseCutter) note(texts, calls, rounds int) string {
+	var clauses []string
+	if texts > 0 {
+		clauses = append(clauses, fmt.Sprintf("%d texts shortened, each ending in …; on a tool "+
+			"call or a round, <field>_bytes beside a cut text is its whole length", texts))
+	}
+	if calls > 0 || rounds > 0 {
+		clauses = append(clauses, fmt.Sprintf("%d tool calls and %d rounds after the first are "+
+			"not carried (tool_executions_omitted, round_narration_omitted)", calls, rounds))
+	}
+	clauses = append(clauses, c.wholeWhere())
+	return "record cut to fit one event: " + strings.Join(clauses, "; ")
+}
+
+// wholeWhere says where the record's whole is, or why it is nowhere.
+func (c *phaseCutter) wholeWhere() string {
+	if c.kept.parts > 0 {
+		return fmt.Sprintf("the whole record (%d bytes) is kept in %d parts under this record's "+
+			"id, which the phase_record query reassembles", c.whole, c.kept.parts)
+	}
+	return fmt.Sprintf("the whole record (%d bytes) was not kept: %s", c.whole, c.kept.lost)
 }
 
 // textSlot is one text on a phase record the fit may shorten.
@@ -176,84 +653,6 @@ type textSlot struct {
 	// recording it and every later one leaving it alone.
 	set func(cut string, whole int)
 	cut bool
-}
-
-// phaseFit is what [fitPhaseRecord] did: the envelope's size before the fit
-// and after it, in bytes, and how many texts it shortened.
-type phaseFit struct {
-	before, after, cut int
-}
-
-// fitPhaseRecord cuts the longest texts on rec, in tiers, until the envelope
-// that carries it fits [phaseRecordCeiling]. A record that already fits is
-// left exactly as it was.
-//
-// THE NOTE IS MEASURED WITH THE CUTS, never added after them. It is part of
-// the record, and the level is the highest one that sheds the excess, so a
-// fit of one long text lands a few dozen bytes under the ceiling: a note
-// written after the level was chosen pushed that record back over, and the
-// transport refused the record the fit had just saved. So every measurement
-// carries the note for the count of texts cut so far, and the last one is the
-// note the record is published with.
-func fitPhaseRecord(env *events.Event, rec *types.AgentPhaseCompleted) (phaseFit, error) {
-	size := func() (int, error) {
-		raw, err := json.Marshal(env)
-		return len(raw), err
-	}
-	before, err := size()
-	if err != nil || before <= phaseRecordCeiling {
-		return phaseFit{before: before, after: before}, err
-	}
-	cut := 0
-	notes := rec.Notes
-	measure := func() (int, error) {
-		rec.Notes = joinNotes(notes, fitNote(cut))
-		return size()
-	}
-	n, err := measure()
-	if err != nil {
-		return phaseFit{before: before, after: n}, err
-	}
-	for _, tier := range phaseRecordTiers(rec) {
-		for n > phaseRecordCeiling {
-			level, ok := waterLevel(tier, n-phaseRecordCeiling)
-			if !ok {
-				break
-			}
-			for _, slot := range tier {
-				if len(slot.text) <= level {
-					continue
-				}
-				short := textcut.Within(slot.text, level)
-				if short == slot.text {
-					continue
-				}
-				if !slot.cut {
-					cut++
-				}
-				slot.set(short, len(slot.text))
-				slot.text, slot.cut = short, true
-			}
-			if n, err = measure(); err != nil {
-				return phaseFit{before: before, after: n, cut: cut}, err
-			}
-		}
-		if n <= phaseRecordCeiling {
-			break
-		}
-	}
-	fit := phaseFit{before: before, after: n, cut: cut}
-	if n > phaseRecordCeiling {
-		return fit, fmt.Errorf("the record is %d bytes with every text it carries cut, "+
-			"past the %d-byte ceiling of one event", n, phaseRecordCeiling)
-	}
-	return fit, nil
-}
-
-// fitNote is what a fit record's Notes says about it.
-func fitNote(cut int) string {
-	return fmt.Sprintf("record cut to fit one event: %d texts shortened, each ending in …; on a tool "+
-		"call or a round, <field>_bytes beside a cut text is its whole length", cut)
 }
 
 // waterLevel is the length to cut a tier's texts to so that, together, they

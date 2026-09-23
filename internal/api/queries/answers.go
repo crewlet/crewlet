@@ -325,6 +325,9 @@ func Register(r *Registry, s Sources) {
 		// serve this: its listing never selects the payload, and a phase
 		// record without one has no prompts, no response and no decision.
 		r.Register("phases", s.phases)
+		// AND ONE OF THEM WHOLE: a record too large for one event is
+		// published cut, and this reassembles the whole it kept in parts.
+		r.Register("phase_record", s.phaseRecord)
 		// AND THE TIME AXIS. `tokens` is a breakdown whose every row is a
 		// sum over the whole window, so it cannot say WHEN — which is the
 		// question a cost explorer is for. Gated on the event store rather

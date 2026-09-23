@@ -58,7 +58,11 @@ all at an external cluster with `stream.type: nats` and `stream.url`. It is
 the same client code either way; embedded versus external is a connection
 choice, not a second backend — and it really is either/or: `stream.cluster`
 configures the embedded server's own membership, so writing one against
-`stream.type: nats` is refused rather than accepted and read by nobody.
+`stream.type: nats` is refused rather than accepted and read by nobody. An
+external cluster's servers must each accept 8 MiB messages, where
+nats-server's own `max_payload` default is 1 MiB, or a node pointed at one
+refuses to start: see
+[Deployment § An external NATS server](deployment.md#an-external-nats-server).
 
 **`stream.replicas: 3` on a clustered fleet.** Replication is what makes a
 publish a quorum commit before it returns, so "published" means "survives
@@ -80,14 +84,16 @@ so (`jetstream_stream_awaiting_peers`) while it retries inside the per-create
 provisioning deadline — **two minutes** on a member with peers, against thirty
 seconds on a solo node, because the two creates are not the same call
 underneath — rather than hanging with nothing to read. See
-[Deployment](deployment.md#a-clustered-node-is-given-longer-to-create-them).
+[Deployment § Every node embeds a member of one
+cluster](deployment.md#every-node-embeds-a-member-of-one-cluster).
 
 **Credentials go through a node that is running.** The
 [secret store](../concepts/secret-store.md#which-store-the-cli-writes) is on
 the KV like everything else the fleet shares, so `crewlet secrets set` against
 a live node reaches all of them — but it gets there through that node's
-authenticated API, because the coordination broker is inside the engine's own
-process and listens on no socket. Against a **stopped** node the same command
+authenticated API on every topology, and never by dialling the broker: on the
+default one the coordination KV lives inside the engine's own process and
+listens on no socket at all. Against a **stopped** node the same command
 writes that node's own table instead, which is the bootstrap path: the value
 is on one node until it starts and migrates the row. Fine for a first
 provisioning run, wrong for a rotation on a live fleet. `-secret-store` on a
@@ -99,8 +105,9 @@ resolves from, so a platform secret projected as env still works unchanged.
 without each other, so the fleet stops serving the moment either
 restarts — and a rolling upgrade restarts them one at a time, which makes
 the outage certain rather than unlucky. Tier A refuses a two-member
-config by name, counting the **stream's** members: the KV rides the
-stream's connection, so the coordination quorum *is* the stream cluster's.
+config by name, counting the **stream's** members: the KV's buckets are
+streams on that same broker, so the coordination quorum *is* the stream
+cluster's.
 
 **A distinct, stable id per node.** `node.id` in the Tier A file, or
 `CREWLET_NODE_ID`, which is how an orchestrator injects a pod name
@@ -132,7 +139,7 @@ node:
 |---|---|
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
-| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance duty's fleet jobs (the agent-to-agent channel sweep, removed-seat mailbox retirement, the purge of bridged calls no run names, the native tracker's repairs), the sandbox waiter, the integration reconcile loop, the embedding pass, the state log's trim, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease. The retention sweeps of the tables each node keeps its own copy of are not duties: they run on every node, whatever its roles |
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
@@ -293,8 +300,8 @@ finish, releases each seat as it goes idle, gives back every fleet duty it
 holds once its duty loops have finished their last tick, and exits. Peers
 pick the seats and the duties up. A node that is killed instead releases
 nothing: its seats move after the lease TTL, and its duties after their own
-TTL, which for the retention sweep is 45 minutes and for the skill curator
-three hours. Point load-balancer readiness at `/ready` (`503` while
+TTL, which for the maintenance duty and the state log's trim is 45 minutes and
+for the skill curator three hours. Point load-balancer readiness at `/ready` (`503` while
 draining) and liveness at `/health` (stays `200` through a drain), and
 give the orchestrator a termination grace period longer than your longest
 turn. The engine does not impose its own cutoff, because that would be a
@@ -325,9 +332,9 @@ Two consequences worth stating plainly:
   newer node's expired leases. Nothing in the table can stop it.
 - **A stalled rollout stalls the fleet duties too, on upgrades that move
   them.** Upgrading from a build that kept the `worker:` leases beside the
-  seat leases, newer nodes run no scheduler tick, retention sweep,
-  integration reconcile or curator pass while any older node is live, and
-  say so once with `coord_kv_duties_wait_for_older_build` (and
+  seat leases, newer nodes run no duty — no scheduler tick, maintenance
+  fleet job, integration reconcile or curator pass — while any older node is
+  live, and say so once with `coord_kv_duties_wait_for_older_build` (and
   `coord_kv_duties_resumed` when it ends). See
   [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-duty-bucket).
 

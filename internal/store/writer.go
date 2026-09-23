@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 
@@ -9,19 +8,18 @@ import (
 )
 
 // Category reports the dashboard category an event type is filed under, and
-// whether the type is stored at all.
+// whether it has one.
 //
-// THE TAXONOMY IS [events]'s, and delegating to it is the point: this was an
-// identical map here and another in internal/observe, with nothing asserting
-// they agreed — so a type placed in one and forgotten in the other would be
-// written and never shown, or shown and never written, and no test anywhere
-// could see it. internal/observe imports this package, so neither could import
-// the other; the one map lives in the package that owns the type registry.
+// THE TAXONOMY IS [events]'s, and delegating to it is the point: one map, in
+// the package that owns the type registry, read by this package and by
+// internal/observe alike, so a type cannot be written here and filed under
+// something else there.
 //
-// An absent type is NOT WRITTEN, and that is deliberate for three types and a
-// hazard for every other one: the sandbox panel once drew rows that vanished on
-// reload and 404'd when clicked, because its events reached the live stream and
-// never the store. See events.Exclusions for which three, and why.
+// A type with no category is NOT WRITTEN unless [events.Unlisted] names it,
+// and that is deliberate for the types events.Exclusions names and a hazard
+// for every other one: the sandbox panel once drew rows that vanished on
+// reload and 404'd when clicked, because its events reached the live stream
+// and never the store.
 func Category(eventType string) (string, bool) { return events.Category(eventType) }
 
 // tagKeys are the flat JSON fields promoted out of an event into its tags.
@@ -37,20 +35,27 @@ func Category(eventType string) (string, bool) { return events.Category(eventTyp
 // differ in one place — `role` on the event is `agent_role` in the tags,
 // because that is the name every filter and index uses.
 var tagKeys = map[string]string{
-	"agent_id":         "agent_id",
-	"role":             "agent_role",
-	"task_id":          "task_id",
-	"channel_id":       "channel_id",
-	"sender":           "sender",
+	"agent_id":   "agent_id",
+	"role":       "agent_role",
+	"task_id":    "task_id",
+	"channel_id": "channel_id",
+	"sender":     "sender",
+	// Which conversation (a Slack thread, a Jira issue, a PR) the event
+	// belongs to. channel_id does not cover it: that is set on A2A events
+	// alone and never on the phase records that carry the model's
+	// reasoning, so without this no query can ask history for one
+	// thread's turns.
 	"conversation_key": "conversation_key",
-	// The two turn identities. `turn_id` was MISSING here while
-	// internal/observe's copy of this map carried it, so this mapping and
-	// the one the engine actually writes through disagreed about a
-	// dimension [EventLog.Append] reads back out of the tags — see the
-	// fallback there. `work_key` is its counterpart: turn_id names one RUN
-	// and this names the unit of work behind it (ADR-0017).
-	"turn_id":   "turn_id",
-	"work_key":  "work_key",
+	// The two turn identities, which [EventLog.Append] also reads back out
+	// of the tags into their columns. turn_id names ONE RUN — every phase
+	// record, the turn's own completion, a fallback, a breach — and a trace
+	// is no substitute for it: one trace can span several turns, and a turn
+	// resumed after a restart several traces. work_key names the unit of
+	// work behind the run, which a redelivered trigger's second run repeats
+	// (ADR-0017).
+	"turn_id":  "turn_id",
+	"work_key": "work_key",
+	// A2A participants, for cross-referencing a channel's traffic.
 	"requester": "requester",
 	"target":    "target",
 	"recipient": "recipient",
@@ -66,34 +71,69 @@ var tagKeys = map[string]string{
 }
 
 // RecordFor builds the stored form of an event, reporting false when the event
-// is not one this store keeps (see [Category]).
+// is not one this store keeps (see [Category] and [events.Unlisted]).
 //
-// Pure: it touches no database, so the mapping is testable on its own.
+// THE ONE BUILDER OF A ROW, and internal/observe's writer — the engine's only
+// production writer — builds through it: which dimensions become tags, which
+// spend becomes columns and what an unlisted type's row carries are rules
+// about this store's columns, so they are stated beside them, once.
+//
+// Pure apart from the clock: it touches no database, so the mapping is
+// testable on its own.
+//
+// A ZERO TIMESTAMP IS STAMPED NOW. Year one is permanently below every read
+// floor, so the row would exist and no query would return it, and [EventLog.Append]
+// refuses one outright; stamping it keeps the event, one write late rather
+// than lost.
 func RecordFor(ev *events.Event) (EventRecord, bool, error) {
 	if ev == nil {
 		return EventRecord{}, false, nil
 	}
-	category, tracked := events.Category(ev.Type)
-	if !tracked {
+	category, listed := events.Category(ev.Type)
+	unlisted := events.Unlisted(ev.Type) != ""
+	if !listed && !unlisted {
 		return EventRecord{}, false, nil
 	}
 	payload, err := json.Marshal(ev)
 	if err != nil {
 		return EventRecord{}, false, fmt.Errorf("store: encode event %s: %w", ev.ID, err)
 	}
+	at := ev.Timestamp
+	if at.IsZero() {
+		at = now()
+	}
+	if unlisted {
+		// STORAGE FOR ANOTHER ROW, NOT AN EVENT: its identity, its bytes and
+		// a summary line for the one kind of read that reaches it — a point
+		// read by its id — and NOTHING a listing filters on. It names no
+		// trace, turn, seat or party, so a read keyed on any of them cannot
+		// reach it and no party row is written for it; the unkeyed listings
+		// refuse its type by name (see [ListQuery.predicate]).
+		return EventRecord{
+			ID: ev.ID.String(), Type: ev.Type, Time: at,
+			Summary: ev.Summary(), Payload: payload,
+		}, true, nil
+	}
+	// ONE shallow decode, for the tags and the spend alike: a phase
+	// completion carries the phase's whole prompt and tool log, and this
+	// runs on the publishing goroutine of every event the engine keeps.
+	var flat map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &flat); err != nil {
+		flat = nil
+	}
 	return EventRecord{
 		ID:           ev.ID.String(),
 		Type:         ev.Type,
 		Source:       ev.Source,
-		Time:         ev.Timestamp,
+		Time:         at,
 		Category:     category,
 		Summary:      ev.Summary(),
 		Actor:        ev.Actor(),
 		TraceID:      ev.TraceID,
 		SpanID:       ev.SpanID,
 		ParentSpanID: ev.ParentSpanID,
-		Tags:         extractTags(payload),
-		Spend:        SpendFor(ev.Type, payload),
+		Tags:         tagsOf(flat),
+		Spend:        spendOf(ev.Type, flat, flat != nil),
 		Payload:      payload,
 	}, true, nil
 }
@@ -107,20 +147,18 @@ const spendEventType = "agent_phase_completed"
 
 // SpendFor pulls one LLM call's cost out of a phase completion.
 //
-// Read from the event's serialized form for the same reason [extractTags] is:
-// an event type this build has never heard of still arrives with its fields
+// Read from the event's serialized form for the same reason [tagsOf] is: an
+// event type this build has never heard of still arrives with its fields
 // intact in the envelope, so a newer node's phase completions are recorded
 // here exactly as a known one's are. Reaching through the decoded payload
 // instead would see nothing at all on an unknown type.
 //
 // Nil for every other event, which is what leaves the promoted columns at
 // their defaults — see schema/0015 for why they are columns.
-// It reads the SHALLOW form, like [extractTags] fifty lines below and unlike
-// the version this replaces: nine scalars are wanted, and decoding into
-// map[string]any deep-decoded the engine's largest payload — a phase
-// completion carries the phase's whole prompt and tool log — on the
-// publishing goroutine of every LLM call. map[string]json.RawMessage leaves
-// everything it is not asked for as bytes.
+// It reads the SHALLOW form: nine scalars are wanted, and decoding into
+// map[string]any would deep-decode the engine's largest payload — a phase
+// completion carries the phase's whole prompt and tool log.
+// map[string]json.RawMessage leaves everything it is not asked for as bytes.
 //
 // A struct decode would be shorter and is wrong here for the reason the
 // per-field accessors exist: it fails the whole call on one wrong-typed
@@ -130,9 +168,19 @@ func SpendFor(eventType string, payload []byte) *Spend {
 		return nil
 	}
 	var body map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &body); err != nil {
-		// The call happened, and dropping it because its payload would
-		// not decode understates the spend this exists to report.
+	err := json.Unmarshal(payload, &body)
+	return spendOf(eventType, body, err == nil)
+}
+
+// spendOf is [SpendFor] over a body already decoded. decoded is false when the
+// payload would not decode, which still answers a spend: the call happened,
+// and dropping it because its payload would not decode understates the spend
+// this exists to report.
+func spendOf(eventType string, body map[string]json.RawMessage, decoded bool) *Spend {
+	if eventType != spendEventType {
+		return nil
+	}
+	if !decoded {
 		return &Spend{}
 	}
 	spend := &Spend{
@@ -156,33 +204,14 @@ func SpendFor(eventType string, payload []byte) *Spend {
 	return spend
 }
 
-// Record writes an event to the log, skipping types the store does not keep.
-//
-// Errors are returned rather than swallowed, but the caller is a publish
-// listener and must treat them as fire-and-forget: an observability write that
-// fails must not disrupt the event pipeline that produced it.
-func (l *EventLog) Record(ctx context.Context, ev *events.Event) error {
-	rec, tracked, err := RecordFor(ev)
-	if err != nil {
-		return err
-	}
-	if !tracked {
-		return nil
-	}
-	return l.Append(ctx, rec)
-}
-
-// extractTags pulls the filterable dimensions out of an event's serialized
-// form.
+// tagsOf pulls the filterable dimensions out of an event's serialized form,
+// decoded shallowly — the one derivation of them, see [RecordFor].
 //
 // "Which agent does this event concern" is a RULE, not a field, and one copy
 // of it is all this codebase should have — which is why it lives beside the
 // columns it feeds rather than being re-derived by each reader downstream.
-func extractTags(payload []byte) map[string]string {
-	var flat map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &flat); err != nil {
-		return map[string]string{}
-	}
+// A body that would not decode yields no tags rather than no row.
+func tagsOf(flat map[string]json.RawMessage) map[string]string {
 	tags := map[string]string{}
 	for field, tag := range tagKeys {
 		if s := jsonString(flat[field]); s != "" {

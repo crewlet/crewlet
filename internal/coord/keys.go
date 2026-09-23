@@ -18,6 +18,18 @@ import "strings"
 // splits into two tokens and changes what a filtered watch matches, and a
 // segment containing a space, a colon or a non-ASCII letter is refused by the
 // store outright.
+//
+// A KEY BUILT FROM MORE SEGMENTS NESTS UNDER THE KEY IT EXTENDS, and nothing
+// else does. DocumentKey(a, b, c) is DocumentKey(a, b), the separator and c's
+// escape, so the shorter key's [DocumentFilter] selects the longer one and
+// [DocumentSegments] reads it back exactly one segment deeper — while a key
+// whose last segment merely BEGINS like another's, or carries a separator of
+// its own, does neither, because the separator is never literal in a segment.
+// That is what lets a record file pieces of itself beneath its own key: the
+// bridged-call log files a call's parts under the call (internal/coord/kv's
+// bridgecalls.go), so whatever removes a launch's filter removes the parts
+// with their calls, and a reader that decodes a call at its exact depth never
+// takes a part for one.
 
 // KeySeparator is what joins a key's segments.
 //

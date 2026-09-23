@@ -86,7 +86,15 @@ type series struct {
 	sum    float64
 	n      uint64
 	value  float64 // gauge
-	total  uint64  // counter
+
+	// total is a counter's sum.
+	//
+	// FLOAT64 FOR EVERY COUNTER, whole or [Instrument.Fractional], so a
+	// counter's total has one field and no reader can pick the other. A
+	// counter that counts events loses nothing by it: a float64 holds every
+	// whole number up to 2^53 exactly, which at a million increments a
+	// second is 285 years of one process.
+	total float64
 }
 
 // New builds a recorder over the catalogue, refusing a malformed one.
@@ -159,11 +167,10 @@ func (r *Recorder) WithClock(now func() time.Time) *Recorder {
 // are both two strings and only one is right.
 type Attrs map[string]string
 
-// Observe records one measurement into a histogram.
+// Observe records one measurement into a histogram in milliseconds.
 //
-// A DURATION rather than a float, because every histogram in this catalogue is
-// a latency and a caller converting to milliseconds itself is a caller that
-// can convert to seconds by mistake.
+// A DURATION rather than a float, because a caller converting to milliseconds
+// itself is a caller that can convert to seconds by mistake.
 func (r *Recorder) Observe(name string, d time.Duration, attrs Attrs) {
 	r.record(name, KindHistogram, float64(d)/float64(time.Millisecond), attrs)
 }
@@ -174,19 +181,40 @@ func (r *Recorder) ObserveValue(name string, v float64, attrs Attrs) {
 	r.record(name, KindHistogram, v, attrs)
 }
 
-// Add increments a counter by a whole number of events.
+// Add increments a counter by a whole amount — for most counters, a number of
+// events.
+//
+// EVERY COUNTER TAKES IT, an [Instrument.Fractional] one included: a whole
+// increment is exact in either arithmetic.
 func (r *Recorder) Add(name string, n uint64, attrs Attrs) {
 	r.record(name, KindCounter, float64(n), attrs)
 }
 
-// AddValue increments a counter by a fractional amount.
+// AddValue increments an [Instrument.Fractional] counter by an amount that
+// need not be whole.
 //
 // A COUNTER NEED NOT COUNT EVENTS. Some of what is summed here is a duration
-// or a projection — seconds of applier occupancy a bulk edit imposes, where
-// one call's contribution is a few hundredths — and rounding each to a whole
-// number sums a company's whole day to zero, which is the one answer that
-// looks like a healthy fleet.
+// or a projection — seconds of applier occupancy a bulk edit imposes, which is
+// a fraction of a second for every bulk smaller than one second's drain — and
+// rounded to a whole number each of those adds nothing, so a day of them sums
+// to zero, which is the one answer that looks like a healthy fleet.
+//
+// REFUSED ON A COUNTER THAT IS NOT FRACTIONAL, because that counter is
+// exported as an integer: a fraction added to it would be in the operator
+// record and dropped on the collector's panel, two numbers for one
+// measurement. byName is read here without the lock because only [New] writes
+// it, before the recorder is returned.
+//
+// REFUSED WHEN THE AMOUNT IS NEGATIVE, NaN OR INFINITE, because a counter only
+// rises: a negative amount would make it fall, and a NaN or an infinity would
+// stay in the total for the life of the process.
 func (r *Recorder) AddValue(name string, v float64, attrs Attrs) {
+	if v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return
+	}
+	if inst, known := r.byName[name]; !known || !inst.Fractional {
+		return
+	}
 	r.record(name, KindCounter, v, attrs)
 }
 
@@ -210,8 +238,8 @@ func (r *Recorder) record(name string, kind Kind, v float64, attrs Attrs) {
 	key := seriesKey(inst.Name, inst.Attributes, attrs)
 	switch kind {
 	case KindCounter:
-		s.total += uint64(v)
-		r.window.Add(key, uint64(v))
+		s.total += v
+		r.window.Add(key, v)
 	case KindGauge:
 		s.value = v
 		r.window.Max(key, v)
@@ -265,13 +293,12 @@ func seriesKey(name string, declared []string, attrs Attrs) string {
 	return b.String()
 }
 
-// binFor is the index of the bucket a value falls in.
+// binFor is the index of the bucket a value falls in: the first boundary at or
+// above it, or len(bins) — the overflow bucket — when none is, which is what
+// [sort.SearchFloat64s] returns for a value past the last boundary and for a
+// NaN alike.
 func binFor(v float64) int {
-	i := sort.SearchFloat64s(bins, v)
-	if i > len(bins) {
-		i = len(bins)
-	}
-	return i
+	return sort.SearchFloat64s(bins, v)
 }
 
 // Snapshot is one series as a reader sees it.
@@ -282,7 +309,11 @@ type Snapshot struct {
 	Attrs map[string]string
 
 	// Total is a counter's sum; Value is a gauge's current reading.
-	Total uint64
+	//
+	// Total is a float64 for every counter, for the reason at the series'
+	// own total: a counter that counts events reads back as a whole number,
+	// exactly, and an [Instrument.Fractional] one keeps its fraction.
+	Total float64
 	Value float64
 
 	// Count, Sum and Counts describe a histogram: how many observations,

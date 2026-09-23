@@ -43,8 +43,10 @@ import (
 //     finished. Published TWICE per round — once the model has spoken, before
 //     its tools run, and again once they return — so the model's reasoning
 //     reaches a screen without waiting on the slowest tool.
-//   - agent_phase_completed — the durable record: the prompts verbatim, the
-//     response, the tools, the tokens, the decision.
+//   - agent_phase_completed — the durable record: the prompts, the response,
+//     the tools, the tokens, the decision. Whole, or — past what one event
+//     carries — cut, with its whole kept in parts under its own id
+//     (phasefit.go).
 //
 // TELEMETRY NEVER FAILS THE WORK. Every publish here is fire-and-log: the
 // phase has already run, its deliveries have already fired, and a broker that
@@ -544,7 +546,10 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration int,
 	if granted > 0 {
 		verdict = "extend"
 	}
-	e.publish(ctx, events.New(types.AgentPhaseCompleted{
+	// THROUGH publishPhase, like every other phase record, so one the
+	// transport refuses as too large is published cut with its whole kept in
+	// parts rather than dropped.
+	e.publishPhase(ctx, types.AgentPhaseCompleted{
 		Agent:    e.turn.AgentID,
 		RoleName: e.role,
 		TurnID:   e.turn.RunID,
@@ -575,7 +580,7 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration int,
 		DurationMS:      int(took / time.Millisecond),
 		Backend:         types.BackendNative,
 		ConversationKey: e.turn.ConversationKey,
-	}, e.traceFor(ctx)))
+	})
 }
 
 // subagentCompleted closes ONE sub-agent, as a phase nested under the Execute
@@ -676,11 +681,13 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		Failed:          res.Failed(),
 		// A CHILD'S failure text, which is the one field on this event
 		// whose length is set by something the parent does not control.
-		// Bounded only so the event can be published — one over the
-		// queue's ceiling is refused and this publisher logs and moves
-		// on, so an unbounded child error costs the operator the whole
-		// record rather than its tail. The parent phase's own error is
-		// carried the same way; see events.MaxDiagnosticBytes.
+		// Bounded at events.MaxDiagnosticBytes, marked where it cuts,
+		// because no cut form of a record shortens its error: an
+		// unbounded one would leave even the record's least form too large
+		// to publish, and the phase with no record at all. The parent
+		// phase's own error is carried the same way. What the bound drops
+		// is on neither the record nor the parts of its whole, which are
+		// taken from the record after the bound.
 		Error:     events.ClipDiagnostic(res.Error),
 		ErrorKind: string(res.Status),
 	}
@@ -756,13 +763,12 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
 	}
 	if rec.Err != nil {
-		// The 2000-character cut this used to carry landed on exactly the
-		// errors worth reading: an exhausted provider chain naming what
-		// each attempt refused, a wrapped chain whose cause is at its end.
-		// What is left is a DELIVERY GUARANTEE, not a content budget —
-		// an event over the queue's ceiling is refused and this publisher
-		// logs and moves on, so an unbounded error would reach the
-		// operator not shortened but ABSENT. See events.MaxDiagnosticBytes.
+		// Bounded at events.MaxDiagnosticBytes, which is two orders of
+		// magnitude past a message written to be read — an exhausted
+		// provider chain naming what each attempt refused, a wrapped chain
+		// whose cause is at its end — for the reason the worker's error
+		// above is: no cut form of a record shortens its error, so an
+		// unbounded one would leave the phase with no record at all.
 		ev.Error = events.ClipDiagnostic(rec.Err.Error())
 		ev.ErrorKind = classifyError(rec.Err)
 	}
@@ -887,11 +893,12 @@ func partialRound(p *toolloop.Partial) map[string]any {
 
 // liveExecutions is the round's tool calls with their OUTPUT bounded.
 //
-// Only on the live event: the durable record keeps every result verbatim, and
-// this is the copy that is republished five times a second for the length of
-// the phase. A tool result is routinely the largest thing on the frame — a
-// knowledge search, a file read — and it is already final: the reader opens it
-// on the completed record, where it is whole.
+// Only on the live event, which is republished five times a second for the
+// length of the phase. A tool result is routinely the largest thing on the
+// frame — a knowledge search, a file read — and it is already final: the
+// reader opens it on the completed record, which carries it whole, or — on a
+// record too large for one event — whose whole, kept in parts under the
+// record's id, does.
 //
 // The arguments are NOT bounded. They are what a reader scans a running phase
 // for ("which file is it reading now?"), they are small, and cutting JSON in
@@ -920,8 +927,10 @@ func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
 // the length of the round.
 //
 // The tail is what a reader is actually watching — text appears at the END —
-// and the full text arrives moments later on the round's own narration, which
-// is authoritative anyway. At four thousand bytes, each field this cuts adds
+// and once the round commits its text is carried whole in the round narration
+// of every frame after it, and kept on the phase's completed record (whole, or
+// in the parts of a record too large for one event). At four thousand bytes,
+// each field this cuts adds
 // at most that much (plus the three-byte marker) to a frame, however long the
 // round runs. Bytes rather than characters because that cost is what the bound
 // is for, so a round written in a script whose characters take three bytes

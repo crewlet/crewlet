@@ -56,6 +56,10 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"ListReadsAreNeverNil", testListReadsAreNeverNil},
 		{"ByID", testByID},
 		{"ByKeyReadsTheRowAListingNamedWhenItsIDIsShared", testByKey},
+		{"APhaseRecordReadsBackWholeFromItsParts", testPhaseRecordWholeFromItsParts},
+		{"AWholeNotAllHereIsNamedWithHowMuchIs", testPhaseRecordWholeNamesWhatIsMissing},
+		{"PartsThatDoNotContinueTheWholeAreRefused", testPhaseRecordWholeRefusesPartsThatDoNotContinueIt},
+		{"APartIsNeverListedCountedOrFolded", testPartsAreNeverListed},
 		{"ReadFloor", testReadFloor},
 		{"RetentionSweep", testRetention},
 		{"RetentionSweepDrainsABacklogWiderThanOneBatch", testRetentionBacklog},
@@ -651,6 +655,7 @@ func testTurnClosing(t *testing.T, db *store.DB) {
 		t.Fatalf("the listing reached %v past the two reads, want exactly the middle %v",
 			ids(middle), wantMiddle)
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if byID, err := log.ByID(t.Context(), firstMiddle); err != nil {
 		t.Fatalf("read the shared id: %v", err)
 	} else if byID.Time.Equal(middle[0].Time) {

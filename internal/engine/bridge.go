@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/providers/llm/httpapi"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -29,7 +30,12 @@ import (
 //
 // EVERY CALL, from the run's own log in the coordination store — the whole
 // record, since the process collecting a run may not be the one that launched
-// it and its surface has executed nothing. The one log that can be missing
+// it and its surface has executed nothing — and EACH CALL WHOLE: a call too
+// large for one coordination record comes back reassembled from the parts
+// filed under it (see [sandbox.PendingStore.BridgeCalls]), so the resumed
+// phase's record carries what the box was handed rather than the record's cut
+// of it — and that record is what outlives the run, whose end purges the log,
+// parts and all, once a resume has returned. The one log that can be missing
 // calls is a launch an older build recorded, which kept only the ends of a
 // long run; that stretch is carried to the resume as a count and a place (see
 // [runner.DroppedCalls]) and logged here, because it is missing for good. A
@@ -69,16 +75,18 @@ func (e *Engine) resumeBridged(ctx context.Context, in resumeInput) ([]ledger.Ca
 // The delivery check, the submission's citations and the iteration ledger all
 // read the result, so it keeps every field they read. A call whose arguments
 // cannot be decoded keeps its name and loses its arguments, which renders one
-// ledger line worse; failing the resume over it would lose the whole turn.
-// Arguments the store could not keep are not that case: they are recorded as
-// [sandbox.ArgsNotKept], which decodes, so the marker is what every reader of
-// the call's arguments shows.
+// ledger line worse; failing the resume over it would lose the whole turn. A
+// call the log hands back in its record's fitted form — its whole not kept, or
+// not readable back — is not that case: its arguments, when they did not fit,
+// are a marker that decodes ([sandbox.ArgsNotKept], [sandbox.ArgsInParts]),
+// and its texts say what became of the rest ([sandbox.BridgeLog.Calls]), so
+// every reader of the call shows the cut as a cut.
 func bridgedCalls(logged []sandbox.BridgeCall) []ledger.Call {
 	out := make([]ledger.Call, 0, len(logged))
 	for _, call := range logged {
 		out = append(out, ledger.Call{
 			Name:   call.Name,
-			Args:   decodeBridgeArgs(call.Args),
+			Args:   decodeBridgeArgs(call.Args, call.Name),
 			Result: call.Output,
 			Failed: call.Failed,
 		})
@@ -87,15 +95,18 @@ func bridgedCalls(logged []sandbox.BridgeCall) []ledger.Call {
 }
 
 // decodeBridgeArgs reads the JSON text a bridged call was recorded with.
-func decodeBridgeArgs(raw string) map[string]any {
+//
+// THROUGH [httpapi.DecodeArgs], the one decode a tool call's arguments take,
+// because it keeps an integer exact: the bridge decoded the box's arguments
+// with json.Number before recording them, and a plain decode here would turn a
+// 19-digit id back into a float64, so the resumed phase's record, its review
+// and a replayed submission would name a different id from the one the tool
+// was called with. Empty text is a call made with no arguments.
+func decodeBridgeArgs(raw, tool string) map[string]any {
 	if raw == "" {
 		return nil
 	}
-	var args map[string]any
-	if err := json.Unmarshal([]byte(raw), &args); err != nil {
-		return nil
-	}
-	return args
+	return httpapi.DecodeArgs([]byte(raw), tool)
 }
 
 // bridgeLedger records a bridged run's calls in the run's durable log.
@@ -109,32 +120,35 @@ func (l bridgeLedger) Append(ctx context.Context, runID string, call tools.Call)
 	if l.store == nil {
 		return nil
 	}
-	_, err := l.store.AppendBridgeCall(ctx, runID, sandbox.BridgeCall{
-		Name: call.Name,
-		// ENCODED HERE, once. The record is JSON in the coordination
-		// store, so a decoded map would be re-encoded by the store's own
-		// pass — and a large id survives one round trip through a
-		// json.Number-aware decode and not two through the default one.
-		Args:   encodeArgs(call.Args),
-		Output: call.Output,
-		Failed: call.Failed,
+	// ENCODED HERE, once. The record is JSON in the coordination store, so a
+	// decoded map would be re-encoded by the store's own pass — and a large
+	// id survives one round trip through a json.Number-aware decode and not
+	// two through the default one.
+	args, err := encodeArgs(call.Args)
+	if err != nil {
+		return fmt.Errorf("record bridged call %q of run %s: %w", call.Name, runID, err)
+	}
+	_, err = l.store.AppendBridgeCall(ctx, runID, sandbox.BridgeCall{
+		Name: call.Name, Args: args, Output: call.Output, Failed: call.Failed,
 	})
 	return err
 }
 
-// encodeArgs renders a call's arguments as the JSON text the record holds.
+// encodeArgs renders a call's arguments as the JSON text the record holds, ""
+// for a call made with none.
 //
-// An UNENCODABLE argument is not an error worth failing a log append over: the
-// call already ran. It records as empty, with the name and outcome intact,
-// which is still the fact a reviewer needs.
-func encodeArgs(args map[string]any) string {
+// It cannot fail on what the bridge hands it — every value came out of the
+// bridge's own JSON decode — and the check stays because the alternative is
+// worse than an error: arguments recorded as "" read as a call made with none,
+// which is a claim about the call rather than a note that something went
+// wrong. Returned, it reaches the bridge's own log line for a failed append.
+func encodeArgs(args map[string]any) (string, error) {
 	if len(args) == 0 {
-		return ""
+		return "", nil
 	}
 	blob, err := json.Marshal(args)
 	if err != nil {
-		log.Warn("bridge_ledger_args_unencodable", "error", err)
-		return ""
+		return "", fmt.Errorf("the arguments are not JSON: %w", err)
 	}
-	return string(blob)
+	return string(blob), nil
 }

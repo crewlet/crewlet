@@ -160,6 +160,7 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Seat string `json:"seat"`
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := json.Unmarshal(body, &in); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, codeBadBody, map[string]string{"hint": err.Error()})
 		return
