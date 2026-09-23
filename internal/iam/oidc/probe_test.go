@@ -19,6 +19,7 @@ type sessionStore struct {
 	ended   map[string]string
 	rotated map[string]string
 	listErr error
+	skipped []error
 	endErr  error
 }
 
@@ -28,10 +29,10 @@ func newSessions(live ...oidc.LiveSession) *sessionStore {
 	}
 }
 
-func (s *sessionStore) LiveOIDC(context.Context) ([]oidc.LiveSession, error) {
+func (s *sessionStore) LiveOIDC(context.Context) (oidc.Listing, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.live, s.listErr
+	return oidc.Listing{Sessions: s.live, Skipped: s.skipped}, s.listErr
 }
 
 func (s *sessionStore) End(_ context.Context, session oidc.LiveSession, reason string) error {
@@ -74,7 +75,8 @@ func TestTheProbeEndsASessionAsIdpRevokedOnInvalidGrant(t *testing.T) {
 		oidc.NewProvider(idp.config(), idp.Client(), func() time.Time { return at }),
 		sessions, quiet())
 
-	checked, ended, err := prober.Run(t.Context())
+	pass, err := prober.Run(t.Context())
+	checked, ended := pass.Checked, pass.Ended
 	if err != nil {
 		t.Fatalf("the pass failed: %v", err)
 	}
@@ -107,7 +109,8 @@ func TestAnUnreachableProviderEndsNothing(t *testing.T) {
 			prober := oidc.NewProber(
 				oidc.NewProvider(idp.config(), idp.Client(), func() time.Time { return at }),
 				sessions, quiet())
-			checked, ended, err := prober.Run(t.Context())
+			pass, err := prober.Run(t.Context())
+			checked, ended := pass.Checked, pass.Ended
 			if err != nil {
 				t.Fatalf("the pass failed: %v", err)
 			}
@@ -140,8 +143,8 @@ func TestARotatedRefreshTokenIsRecorded(t *testing.T) {
 		oidc.NewProvider(idp.config(), idp.Client(), func() time.Time { return at }),
 		sessions, quiet())
 
-	if _, ended, err := prober.Run(t.Context()); err != nil || ended != 0 {
-		t.Fatalf("the pass ended %d sessions: %v", ended, err)
+	if pass, err := prober.Run(t.Context()); err != nil || pass.Ended != 0 {
+		t.Fatalf("the pass ended %d sessions: %v", pass.Ended, err)
 	}
 	if sessions.rotated["lin-1"] != "refresh-2" {
 		t.Errorf("the rotated token reads %q, want %q — the next probe would "+
@@ -168,7 +171,8 @@ func TestASessionWithNoRefreshTokenIsSkipped(t *testing.T) {
 		oidc.NewProvider(idp.config(), idp.Client(), func() time.Time { return at }),
 		sessions, quiet())
 
-	checked, ended, err := prober.Run(t.Context())
+	pass, err := prober.Run(t.Context())
+	checked, ended := pass.Checked, pass.Ended
 	if err != nil {
 		t.Fatalf("the pass failed: %v", err)
 	}
@@ -201,7 +205,8 @@ func TestOneSessionsFailureDoesNotStopThePass(t *testing.T) {
 		oidc.NewProvider(idp.config(), idp.Client(), func() time.Time { return at }),
 		sessions, quiet())
 
-	checked, ended, err := prober.Run(t.Context())
+	pass, err := prober.Run(t.Context())
+	checked, ended := pass.Checked, pass.Ended
 	if err != nil {
 		t.Fatalf("the pass failed outright: %v", err)
 	}
@@ -211,6 +216,64 @@ func TestOneSessionsFailureDoesNotStopThePass(t *testing.T) {
 	}
 	if ended != 0 {
 		t.Errorf("%d sessions were counted as ended although every write failed", ended)
+	}
+	if pass.Failed != 3 {
+		t.Errorf("the pass counted %d failed closes, want 3 — a deactivation "+
+			"that did not land is something an operator is told about", pass.Failed)
+	}
+}
+
+// A SESSION THE LISTING COULD NOT HAND OVER DOES NOT STOP THE PASS.
+//
+// Each session's refresh token is its own row, so one that will not read — a
+// newer peer's grant during a rolling upgrade, a store blip on one key — says
+// nothing about the rest. The probe used to discard the whole listing whenever
+// it carried an error, so one unreadable grant meant nobody in the company was
+// asked about for as long as it stood, and everybody the provider had disabled
+// kept their session. The listing's own error is still the whole-failure arm:
+// a pass that could list nothing ends nothing.
+func TestASkippedSessionDoesNotStopThePass(t *testing.T) {
+	t.Parallel()
+	idp := newIssuer(t)
+	idp.refusal = "invalid_grant"
+	sessions := newSessions(oidc.LiveSession{
+		Lineage: "lin-1", Person: "p-1", Refresh: "refresh-1",
+	})
+	sessions.skipped = []error{
+		errors.New("session lin-2's grant is a version this build cannot read"),
+	}
+	prober := oidc.NewProber(
+		oidc.NewProvider(idp.config(), idp.Client(), func() time.Time { return at }),
+		sessions, quiet())
+
+	pass, err := prober.Run(t.Context())
+	if err != nil {
+		t.Fatalf("one unreadable grant failed the whole pass: %v", err)
+	}
+	if pass.Checked != 1 || pass.Ended != 1 {
+		t.Errorf("the pass checked %d and ended %d, want 1 and 1 — the session "+
+			"beside an unreadable grant was never asked about", pass.Checked,
+			pass.Ended)
+	}
+	if pass.Skipped != 1 {
+		t.Errorf("the pass counted %d skipped sessions, want 1", pass.Skipped)
+	}
+	if sessions.ended["lin-1"] != oidc.ReasonIdPRevoked {
+		t.Errorf("the deactivated session ended as %q, want %q",
+			sessions.ended["lin-1"], oidc.ReasonIdPRevoked)
+	}
+
+	// THE WHOLE-FAILURE ARM: a listing that failed outright ends nothing.
+	sessions = newSessions(oidc.LiveSession{
+		Lineage: "lin-1", Person: "p-1", Refresh: "refresh-1",
+	})
+	sessions.listErr = errors.New("the directory is unreadable")
+	prober = oidc.NewProber(
+		oidc.NewProvider(idp.config(), idp.Client(), func() time.Time { return at }),
+		sessions, quiet())
+	if pass, err := prober.Run(t.Context()); err == nil || pass.Ended != 0 {
+		t.Errorf("a listing that failed whole answered %+v and %v, want nothing "+
+			"ended and the error", pass, err)
 	}
 }
 

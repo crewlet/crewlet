@@ -88,7 +88,9 @@ func TestTheProbeEndsRevokesRotatesAndCollectsThroughTheEstate(t *testing.T) {
 	var checked, ended int
 	if err := rig.during(func() error {
 		var err error
-		checked, ended, err = prober.Run(t.Context())
+		var pass oidc.Pass
+		pass, err = prober.Run(t.Context())
+		checked, ended = pass.Checked, pass.Ended
 		return err
 	}); err != nil {
 		t.Fatalf("the pass failed: %v", err)
@@ -114,9 +116,9 @@ func TestTheProbeEndsRevokesRotatesAndCollectsThroughTheEstate(t *testing.T) {
 	}
 
 	held := map[string]string{}
-	grants, err := custody.Held(t.Context())
-	if err != nil {
-		t.Fatalf("Held: %v", err)
+	grants, unreadable, err := custody.Held(t.Context())
+	if err != nil || len(unreadable) != 0 {
+		t.Fatalf("Held: %v %v", err, unreadable)
 	}
 	for _, g := range grants {
 		held[g.Lineage] = g.Token
@@ -148,6 +150,78 @@ func TestTheProbeEndsRevokesRotatesAndCollectsThroughTheEstate(t *testing.T) {
 	}
 	if idp.asked("previous-provider-token") {
 		t.Error("another provider's token was presented to this one")
+	}
+}
+
+// ONE GRANT THIS BUILD CANNOT READ DOES NOT STOP THE PROBE.
+//
+// Custody is one row per session, so a grant a newer peer wrote during a
+// rolling upgrade — or one whose name and content disagree — is one session
+// the probe cannot ask about, and says nothing about the rest. The listing used
+// to join that failure into its error and the probe discarded the whole list,
+// so a deactivated person beside it kept their session until its absolute
+// deadline, pass after pass, with a warning as the only sign.
+func TestAnUnreadableGrantDoesNotStopTheProbe(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+	custody, err := iamdomain.NewRefreshes(rig.keys, "node-a")
+	if err != nil {
+		t.Fatalf("NewRefreshes: %v", err)
+	}
+	idp := newRefreshIssuer(t)
+
+	person := uuid.Must(uuid.NewV7()).String()
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Sarah Chen", Email: "sarah.chen@example.com",
+		Login: "sarah.chen", OpID: "enrol-sarah", Reason: "a joiner",
+	}); err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	lineage, at := rig.openSessionAt(person, time.Now().Add(24*time.Hour))
+	if err := custody.Hold(t.Context(), iamdomain.RefreshGrant{
+		Lineage: lineage, Person: person, Issuer: idp.URL, Token: "gone",
+		Start: uint64(at.Packed()),
+	}, time.Now()); err != nil {
+		t.Fatalf("Hold: %v", err)
+	}
+	// A GRANT FROM A NEWER BUILD, filed under a session of its own.
+	rig.keys.put(iamdomain.SessionRefreshName("other"),
+		`{"v":2,"lineage":"other","person":"somebody"}`)
+
+	sessions, err := iamdomain.NewProbeSessions(reader, rig.writer, custody,
+		idp.URL, nil)
+	if err != nil {
+		t.Fatalf("NewProbeSessions: %v", err)
+	}
+	prober := oidc.NewProber(oidc.NewProvider(oidc.Config{
+		Issuer: idp.URL, ClientID: "crewlet", ClientSecret: "not-a-real-secret",
+		RedirectURI: "https://crewlet.example.com/auth/oidc/callback",
+	}, idp.Client(), nil), sessions, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	var pass oidc.Pass
+	if err := rig.during(func() error {
+		var err error
+		pass, err = prober.Run(t.Context())
+		return err
+	}); err != nil {
+		t.Fatalf("one unreadable grant failed the whole pass: %v", err)
+	}
+	if pass.Checked != 1 || pass.Ended != 1 || pass.Skipped != 1 {
+		t.Fatalf("the pass read %+v, want the readable session checked and "+
+			"ended and the unreadable grant counted as skipped", pass)
+	}
+	if why := rig.column(`SELECT ended_reason FROM iam_sessions
+		WHERE lineage = ? AND ended_at > 0`, lineage); len(why) != 1 ||
+		why[0] != oidc.ReasonIdPRevoked {
+		t.Errorf("the deactivated session reads %v, want ended as %s", why,
+			oidc.ReasonIdPRevoked)
+	}
+	// AND THE UNREADABLE GRANT IS LEFT ALONE: it may be a newer peer's, and
+	// a build that cannot read it has no business deleting it.
+	if rig.keys.value(iamdomain.SessionRefreshName("other")) == "" {
+		t.Error("the probe deleted a grant it could not read")
 	}
 }
 

@@ -79,6 +79,48 @@ type LiveSession struct {
 	Refresh string
 }
 
+// Listing is one pass's work: the sessions to ask about, and the ones that
+// could not be.
+//
+// # Partial is the ordinary shape, and it is carried rather than joined
+//
+// Each session's refresh token is its own row in its own custody, so one that
+// will not read — a newer peer's grant during a rolling upgrade, a row whose
+// name and content disagree, a store blip on one key — says nothing about the
+// others. The contract used to be a list and a joined error, and the probe
+// threw the list away whenever the error was set: one unreadable grant meant
+// every session in the company went unasked for as long as it stood, and
+// everybody an identity provider had disabled kept their session until its
+// absolute deadline, with a warning as the only sign. A skipped session is
+// COUNTED and the pass goes on.
+type Listing struct {
+	// Sessions are the live sessions the probe may ask about.
+	Sessions []LiveSession
+
+	// Skipped is one error per session this pass could not ask about or
+	// could not tidy up after, each naming which.
+	Skipped []error
+}
+
+// Pass is what one probe pass did.
+type Pass struct {
+	// Checked is how many sessions the provider was asked about.
+	Checked int
+
+	// Ended is how many it said were gone, and were closed here.
+	Ended int
+
+	// Skipped is how many sessions the listing could not hand over — see
+	// [Listing.Skipped]. Each was logged by name.
+	Skipped int
+
+	// Failed is how many sessions were asked about and then could not be
+	// acted on: a deactivation whose close did not land, or a rotated token
+	// that could not be recorded. Each was logged by name, and the next
+	// pass asks again.
+	Failed int
+}
+
 // Sessions is where the probe gets its work and how it reports a conclusion.
 //
 // DEFINED HERE, by the caller, and three methods wide. The identity estate has
@@ -87,8 +129,14 @@ type LiveSession struct {
 // the provider rotated.
 type Sessions interface {
 	// LiveOIDC lists the sessions this probe may ask about — open,
-	// opened through this provider, and holding a refresh token.
-	LiveOIDC(ctx context.Context) ([]LiveSession, error)
+	// opened through this provider, and holding a refresh token — and
+	// every one it could not.
+	//
+	// THE ERROR IS FOR A LISTING THAT FAILED WHOLE, and nothing else: a
+	// grant that would not read, or one whose ended session could not be
+	// collected, is ONE session this pass cannot ask about and belongs in
+	// [Listing.Skipped] beside the rest.
+	LiveOIDC(ctx context.Context) (Listing, error)
 
 	// End closes one session as `idp_revoked`. It takes the SESSION rather
 	// than its lineage because a close is filed under its person's bucket.
@@ -148,43 +196,56 @@ func (p *Prober) WithAudit(a Audit) *Prober {
 // Interval is how often the duty should run.
 func (p *Prober) Interval() time.Duration { return p.provider.Config().Probe() }
 
-// Run performs one pass and reports how many sessions it ended.
+// Run performs one pass and reports what it did.
 //
-// A PASS IS BEST EFFORT PER SESSION. One provider error must not stop the
-// pass: the sessions are independent, and a rate limit part-way through would
-// otherwise mean every session after it in the list is never checked at all.
-func (p *Prober) Run(ctx context.Context) (checked, ended int, err error) {
+// A PASS IS BEST EFFORT PER SESSION, from the listing to the last close. One
+// provider error must not stop the pass: the sessions are independent, and a
+// rate limit part-way through would otherwise mean every session after it in
+// the list is never checked at all. The same holds one step earlier — a
+// session the listing could not hand over is counted in [Pass.Skipped] and
+// the rest are asked about. The error is for a pass that could do NOTHING:
+// no provider metadata, a listing that failed whole, a cancelled context.
+func (p *Prober) Run(ctx context.Context) (Pass, error) {
+	var pass Pass
 	if p.provider == nil || p.sessions == nil {
-		return 0, 0, errors.New("oidc: the probe has no provider or no sessions")
+		return pass, errors.New("oidc: the probe has no provider or no sessions")
 	}
 	metadata, err := p.provider.Metadata(ctx)
 	if err != nil {
 		// NO METADATA IS NOT A DEACTIVATION. Without the token endpoint
 		// there is nothing to ask, and the honest answer is to do
 		// nothing this interval.
-		return 0, 0, err
+		return pass, err
 	}
-	live, err := p.sessions.LiveOIDC(ctx)
+	listing, err := p.sessions.LiveOIDC(ctx)
 	if err != nil {
-		return 0, 0, err
+		return pass, err
 	}
-	for _, session := range live {
+	for _, skipped := range listing.Skipped {
+		pass.Skipped++
+		p.logger.WarnContext(ctx, "oidc_probe_session_skipped",
+			"error", skipped.Error(),
+			"detail", "this session is not asked about this pass; every "+
+				"other one is, and the next pass tries it again")
+	}
+	for _, session := range listing.Sessions {
 		if ctx.Err() != nil {
-			return checked, ended, ctx.Err()
+			return pass, ctx.Err()
 		}
 		if session.Refresh == "" {
 			continue
 		}
-		checked++
+		pass.Checked++
 		verdict, rotated := p.check(ctx, metadata.TokenEndpoint, session)
 		switch verdict {
 		case VerdictDeactivated:
 			if err := p.sessions.End(ctx, session, ReasonIdPRevoked); err != nil {
+				pass.Failed++
 				p.logger.WarnContext(ctx, "oidc_probe_end_failed",
 					"lineage", session.Lineage, "error", err.Error())
 				continue
 			}
-			ended++
+			pass.Ended++
 			p.logger.InfoContext(ctx, "iam_session_ended",
 				"lineage", session.Lineage, "person", session.Person,
 				"reason", ReasonIdPRevoked)
@@ -200,6 +261,7 @@ func (p *Prober) Run(ctx context.Context) (checked, ended int, err error) {
 		case VerdictLive:
 			if rotated != "" && rotated != session.Refresh {
 				if err := p.sessions.Rotated(ctx, session.Lineage, rotated); err != nil {
+					pass.Failed++
 					p.logger.WarnContext(ctx, "oidc_probe_rotation_unrecorded",
 						"lineage", session.Lineage, "error", err.Error(),
 						"detail", "the provider replaced this session's refresh "+
@@ -209,7 +271,7 @@ func (p *Prober) Run(ctx context.Context) (checked, ended int, err error) {
 			}
 		}
 	}
-	return checked, ended, nil
+	return pass, nil
 }
 
 // check asks the provider about one session.

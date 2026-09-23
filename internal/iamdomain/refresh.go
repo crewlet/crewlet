@@ -113,18 +113,20 @@ func (r *Refreshes) Hold(ctx context.Context, grant RefreshGrant, now time.Time)
 
 // Held reads every grant in custody.
 //
-// PARTIAL ON FAILURE, and both halves come back: a grant that will not open
-// or decode is one session the probe cannot ask about this interval, which is
-// a thing to say, and the rest are still worth asking about.
-func (r *Refreshes) Held(ctx context.Context) ([]RefreshGrant, error) {
+// PARTIAL ON FAILURE, and the three answers come back apart: the grants that
+// read; one error per grant that would not open or decode, each of which is
+// one session the probe cannot ask about this interval; and an error for a
+// listing that failed whole. They are apart rather than joined because a
+// joined error beside a list reads, to every caller that checks `err != nil`
+// first, as "nothing here" — which is how one unreadable grant used to stop
+// every session in the company being asked about.
+func (r *Refreshes) Held(ctx context.Context) (grants []RefreshGrant,
+	unreadable []error, err error) {
+
 	names, err := r.keys.Names(ctx, sessionRefreshPrefix)
 	if err != nil {
-		return nil, fmt.Errorf("iamdomain: list the refresh grants: %w", err)
+		return nil, nil, fmt.Errorf("iamdomain: list the refresh grants: %w", err)
 	}
-	var (
-		out  []RefreshGrant
-		errs []error
-	)
 	for _, name := range names {
 		if !strings.HasSuffix(name, sessionRefreshSuffix) {
 			continue
@@ -136,12 +138,12 @@ func (r *Refreshes) Held(ctx context.Context) ([]RefreshGrant, error) {
 			// sign-out or a peer's pass: a grant that is gone.
 			continue
 		case err != nil:
-			errs = append(errs, err)
+			unreadable = append(unreadable, err)
 			continue
 		}
-		out = append(out, grant)
+		grants = append(grants, grant)
 	}
-	return out, errors.Join(errs...)
+	return grants, unreadable, nil
 }
 
 // read opens one grant by its name.
@@ -336,25 +338,32 @@ var _ oidc.Sessions = (*ProbeSessions)(nil)
 // wide invalidation, an expiry and a removal end sessions with no per-lineage
 // write at all — so the pass that already reads every grant is the one place
 // that sees all of them end.
-func (p *ProbeSessions) LiveOIDC(ctx context.Context) ([]oidc.LiveSession, error) {
-	grants, heldErr := p.custody.Held(ctx)
+//
+// ONE GRANT'S FAILURE IS ONE SESSION'S: a grant that will not read and a grant
+// whose ended session could not be collected are each carried in
+// [oidc.Listing.Skipped], and the rest are handed over. The error is for a
+// pass that could establish nothing — no listing, or no snapshot to judge the
+// sessions in.
+func (p *ProbeSessions) LiveOIDC(ctx context.Context) (oidc.Listing, error) {
+	grants, unreadable, err := p.custody.Held(ctx)
+	if err != nil {
+		return oidc.Listing{}, err
+	}
+	listing := oidc.Listing{Skipped: unreadable}
 	if len(grants) == 0 {
-		return nil, heldErr
+		return listing, nil
 	}
 	states, err := p.reader.SessionStates(ctx, grants, p.now())
 	if err != nil {
-		return nil, errors.Join(heldErr, err)
+		return oidc.Listing{}, err
 	}
-	var (
-		out  []oidc.LiveSession
-		errs = []error{heldErr}
-	)
 	for _, grant := range grants {
 		switch states[grant.Lineage] {
 		case SessionOver:
 			if _, err := p.custody.Drop(ctx, grant.Lineage); err != nil {
-				errs = append(errs, fmt.Errorf("iamdomain: collect session %s's "+
-					"grant: %w", grant.Lineage, err))
+				listing.Skipped = append(listing.Skipped, fmt.Errorf(
+					"iamdomain: collect session %s's grant: %w",
+					grant.Lineage, err))
 			}
 		case SessionLive:
 			if grant.Issuer != p.issuer {
@@ -363,13 +372,13 @@ func (p *ProbeSessions) LiveOIDC(ctx context.Context) ([]oidc.LiveSession, error
 				// invalid_grant and end a session nobody deactivated.
 				continue
 			}
-			out = append(out, oidc.LiveSession{
+			listing.Sessions = append(listing.Sessions, oidc.LiveSession{
 				Lineage: grant.Lineage, Person: grant.Person,
 				Refresh: grant.Token,
 			})
 		}
 	}
-	return out, errors.Join(errs...)
+	return listing, nil
 }
 
 // End closes one session for the probe, and destroys its grant.

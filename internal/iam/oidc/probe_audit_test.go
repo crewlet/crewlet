@@ -42,7 +42,7 @@ func TestAnEndedSessionIsAnnouncedAsIdpRevoked(t *testing.T) {
 	prober := oidc.NewProber(
 		oidc.NewProvider(idp.config(), idp.Client(), func() time.Time { return at }),
 		sessions, quiet()).WithAudit(audit)
-	if _, _, err := prober.Run(t.Context()); err != nil {
+	if _, err := prober.Run(t.Context()); err != nil {
 		t.Fatalf("the pass failed: %v", err)
 	}
 	if len(audit.seen) != 1 {
@@ -66,7 +66,7 @@ func TestAnEndedSessionIsAnnouncedAsIdpRevoked(t *testing.T) {
 	prober = oidc.NewProber(
 		oidc.NewProvider(idp.config(), idp.Client(), func() time.Time { return at }),
 		failing, quiet()).WithAudit(unlanded)
-	if _, _, err := prober.Run(t.Context()); err != nil {
+	if _, err := prober.Run(t.Context()); err != nil {
 		t.Fatalf("the pass failed: %v", err)
 	}
 	if len(unlanded.seen) != 0 {

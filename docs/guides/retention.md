@@ -782,6 +782,16 @@ retired and read the refusal as an off-boarding. A token whose session has
 ended — by logout, expiry, a revocation or a session invalidation — is dropped
 on the next pass.
 
+**One session the probe cannot handle is one session, not the pass.** A token
+it cannot read — one a newer node wrote in the middle of a rolling upgrade —
+and one whose ended session it could not tidy away are each logged by name
+(`oidc_probe_session_skipped`) and left alone, and every other session is still
+asked about; a close that did not land, or a rotated token that could not be
+recorded, is logged the same way and tried again next pass. Such a pass ends
+with `iam_probe_pass_partial` at WARN, counting what it checked, ended,
+skipped and failed. Only a pass that could do nothing at all — no provider
+metadata, a directory it could not read — logs `iam_probe_failed`.
+
 **The probe's interval can exceed what a lease may live.** A lease is capped at
 three hours and every singleton keeps three claims to a lease, so a duty whose
 interval is longer than an hour claims hourly and runs every so many claims —

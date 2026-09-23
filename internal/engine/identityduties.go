@@ -389,16 +389,27 @@ func keysPass(ctx context.Context, reader *iamdomain.Reader, keys iamdomain.KeyI
 }
 
 // probePass asks the provider about every live session once.
+//
+// A PASS THAT COULD NOT ASK ABOUT EVERYBODY IS A WARNING, not a quiet success:
+// each skipped or failed session is already named on its own line, and this is
+// the one line that says how much of the company the pass did not reach.
 func probePass(ctx context.Context, prober *oidc.Prober) {
-	checked, ended, err := prober.Run(ctx)
+	pass, err := prober.Run(ctx)
 	if err != nil {
 		identityLog.WarnContext(ctx, "iam_probe_failed", "error", err.Error(),
-			"checked", checked, "ended", ended)
+			"checked", pass.Checked, "ended", pass.Ended)
 		return
 	}
-	if ended > 0 {
-		identityLog.InfoContext(ctx, "iam_probe_pass", "checked", checked,
-			"ended", ended)
+	switch {
+	case pass.Skipped > 0 || pass.Failed > 0:
+		identityLog.WarnContext(ctx, "iam_probe_pass_partial",
+			"checked", pass.Checked, "ended", pass.Ended,
+			"skipped", pass.Skipped, "failed", pass.Failed,
+			"detail", "every other session was asked about; the ones "+
+				"named above are asked again next pass")
+	case pass.Ended > 0:
+		identityLog.InfoContext(ctx, "iam_probe_pass", "checked", pass.Checked,
+			"ended", pass.Ended)
 	}
 }
 
