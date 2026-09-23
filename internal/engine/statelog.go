@@ -517,7 +517,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	// arriving later as one domain's constructor failing. Every record on
 	// every log is signed under it, because the broker has no auth of its
 	// own and a record is whatever the next node applies.
-	if _, err := statelog.NewSigner(registeredDomains()[0].Name(), recordKeyring(boot)); err != nil {
+	if _, err = statelog.NewSigner(registeredDomains()[0].Name(), recordKeyring(boot)); err != nil {
 		return nil, err
 	}
 	// WHICH DOMAINS THIS NODE RUNS, decided once and held, because five
