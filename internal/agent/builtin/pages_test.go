@@ -174,7 +174,7 @@ func (f *fakeKB) await(_ context.Context, at statelog.Position) error {
 func kbRegistry(t *testing.T, deps builtin.PageDeps) *tools.Registry {
 	t.Helper()
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, builtin.Deps{Pages: deps}); err != nil {
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Pages: deps})); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	return reg
@@ -233,32 +233,6 @@ func TestASaveNeedsTheVersionItRead(t *testing.T) {
 	}
 	if len(kb.saved) != 1 || kb.saved[0].BaseVersion != 4 {
 		t.Errorf("the base version did not reach the store: %+v", kb.saved)
-	}
-}
-
-// A RESERVED CONTAINER IS REFUSED NAMING IT. A page written there is excluded
-// from every search, so it would land somewhere no reader ever finds — and
-// the seat would report the work as done.
-func TestWritingToAReservedContainerIsRefused(t *testing.T) {
-	t.Parallel()
-	kb := newFakeKB()
-	reg := kbRegistry(t, builtin.PageDeps{
-		Reader: kb, Writer: kb, Reserved: []string{"TS", "HOME"},
-	})
-	for _, container := range []string{"TS", "ts", "HOME"} {
-		got := callWork(t, reg, builtin.WritePageTool, map[string]any{
-			"title": "somewhere hidden", "body": "x", "container": container,
-		})
-		if !got.Failed {
-			t.Errorf("a page was written into the reserved container %q", container)
-			continue
-		}
-		if !strings.Contains(got.Output, "excluded from every search") {
-			t.Errorf("the refusal does not say why: %s", got.Output)
-		}
-	}
-	if len(kb.created) != 0 {
-		t.Errorf("a reserved write reached the store: %+v", kb.created)
 	}
 }
 

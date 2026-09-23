@@ -229,6 +229,23 @@ func NormalizeTitle(title string) string {
 	return strings.ToLower(strings.Join(strings.Fields(title), " "))
 }
 
+// ContainerKey is the canonical form of a container key, for comparison, for
+// every query argument and for the subject a record arbitrates on.
+//
+// UPPER-CASE AND TRIMMED, because a container key is an ADDRESS a person
+// types — in a unit's `space:`, in a tool argument, in a URL — and a company
+// whose `ENG` and `eng` are two containers is one where every page is filed
+// in whichever the author happened to type.
+//
+// ONE FUNCTION because it was eleven copies and they had ALREADY DRIFTED: six
+// upper-cased without trimming and five trimmed first, so a filter built from
+// a key with a trailing space matched nothing while the lookup beside it,
+// built from the same string, matched the container — a page that was plainly
+// there and could not be listed.
+func ContainerKey(raw string) string {
+	return strings.ToUpper(strings.TrimSpace(raw))
+}
+
 // nowUTC is the default clock.
 func nowUTC() time.Time { return time.Now().UTC() }
 

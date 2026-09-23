@@ -66,6 +66,18 @@ const (
 	ActionViewSave      Action = "save_work_view"
 	ActionPrioritiesSet Action = "set_priorities"
 
+	// --- a field inside a write, decided against what was read ------ //
+	//
+	// DOTTED, so they are not tool names: a verb this build serves as a
+	// tool carries the tool's own name, and these are asked FROM inside
+	// one. They exist because the object is not in the arguments — which
+	// project a task is filed under, and which project a label is being
+	// declared in, come out of the stored row — so the registration gate
+	// cannot form the object and the tool asks once it has read.
+	ActionWorkRoute      Action = "work.route"
+	ActionProjectPolicy  Action = "work.project.policy"
+	ActionProjectArchive Action = "work.project.archive"
+
 	// --- a container's own policy ----------------------------------- //
 	ActionProjectWrite   Action = "write_project"
 	ActionCatalogueWrite Action = "write_work_catalogue"
@@ -143,6 +155,18 @@ type rule struct {
 	// and empty on an operator row is a gate somebody forgot to fill in,
 	// which [granted] refuses.
 	grant iam.Grant
+
+	// humanOnly marks a verb NO AGENT may take, whatever its class would
+	// allow — purging a task beyond recovery, taking a project out of
+	// circulation. It is a fact about the VERB rather than about anybody's
+	// relation to an object, which is why it is a field beside the class
+	// and not a class of its own: the same fact composes with the
+	// container relation and with the admin grant, and written as two
+	// classes it was already two spellings of one rule.
+	//
+	// CHECKED BEFORE THE CLASS, so an agent holding the grant is told it
+	// is a seat rather than that it lacks a capability it plainly has.
+	humanOnly bool
 }
 
 // rules is THE authority table: every verb this engine knows, and how it is
@@ -199,20 +223,55 @@ var rules = map[Action]rule{
 	ActionPrioritiesSet: {class: ClassOwnOrLead},
 	ActionInboxMark:     {class: ClassOwnRecord},
 	ActionPinsSet:       {class: ClassOwnRecord},
-	ActionViewSave:      {class: ClassOwnRecord},
 
-	ActionProjectWrite:   {class: ClassContainer},
-	ActionCatalogueWrite: {class: ClassContainer},
-	ActionPageRename:     {class: ClassContainer},
+	// A VIEW IS NOT A RECORD, because half of them are not personal at
+	// all: omitting the owner SHARES it, which is a tab on somebody's
+	// project, unit or person page. See [ClassSavedView].
+	ActionViewSave: {class: ClassSavedView},
+
+	ActionPageRename: {class: ClassContainer},
+
+	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which
+	// is what internal/tracker's own tag rule has always said: adding a
+	// label is open to every colleague, and renaming or archiving one
+	// takes the word off everybody's board. So the TOOL takes the
+	// colleague write and the lead-only facets — a rename, an archive,
+	// any policy edit — ask [ActionProjectPolicy] from inside it. Gating
+	// the whole tool as the container's refused a colleague the one facet
+	// the domain grants them.
+	ActionProjectWrite:  {class: ClassColleagueWrite},
+	ActionProjectPolicy: {class: ClassContainer},
+
+	// AND RE-ROUTING IS THE LEAD'S for the same reason, asked from inside
+	// `update_work_item`: it decides which team hears about the work, and
+	// which project the task is filed under comes out of the stored row
+	// rather than the arguments.
+	ActionWorkRoute:      {class: ClassContainer},
 	ActionContainerWrite: {class: ClassContainer},
+
+	// THE CATALOGUE IS THE COMPANY'S, NOT A CONTAINER'S. Task types and
+	// custom fields are declared once for the whole workspace — the tool
+	// names no project and could not, so a container class asked about an
+	// empty key and refused everybody but the admin. It is configuration,
+	// and it takes the grant that edits the company's own document.
+	ActionCatalogueWrite: {class: ClassOperator, grant: iam.GrantConfigWrite},
 
 	ActionWorkRemove:  {class: ClassDestructive},
 	ActionWorkRestore: {class: ClassDestructive},
 	ActionPageTrash:   {class: ClassDestructive},
 	ActionPageRestore: {class: ClassDestructive},
 
-	ActionWorkPurge: {class: ClassPurge},
-	ActionPagePurge: {class: ClassPurge},
+	ActionWorkPurge: {class: ClassOperator, grant: iam.GrantFleetOperate,
+		humanOnly: true},
+	ActionPagePurge: {class: ClassOperator, grant: iam.GrantFleetOperate,
+		humanOnly: true},
+
+	// ARCHIVING A PROJECT TAKES IT OUT OF CIRCULATION for everybody, so
+	// it is the lead's like the rest of the policy AND it is never an
+	// agent's: a project nobody can file into again is a company decision.
+	// internal/tracker has always said so — it asked for a principal that
+	// was not a seat — and this is that rule where every other one lives.
+	ActionProjectArchive: {class: ClassContainer, humanOnly: true},
 
 	ActionPageCommentEdit:   {class: ClassAuthored},
 	ActionPageCommentRemove: {class: ClassAuthored},

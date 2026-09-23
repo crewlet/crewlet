@@ -196,21 +196,23 @@ type chartMounter interface {
 // on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
 // unset environment variable), and the defaults a test injects.
 type Options struct {
-	// BoundSeat maps a Tier A token id to the chart seat that claims it,
-	// and answers empty for a credential nobody in the chart claims.
+	// BoundSeat maps a Tier A token's LOGIN to the seat the identity
+	// directory binds it to, and answers empty for a credential nobody in
+	// the directory holds.
 	//
-	// THE COMPANY'S HALF OF A PRINCIPAL. `contact.crewlet_operator_id`
-	// declares the binding, and it is what makes somebody at the dashboard
-	// act as THEMSELVES rather than as the credential they hold — without
-	// it every authority rule asking "do you lead this" falls through to
-	// the admin grant, and a founder is indistinguishable from a CI
-	// pipeline in every audit row and every refusal.
+	// THE COMPANY'S HALF OF A PRINCIPAL: it is what makes somebody acting
+	// through a token act as THEMSELVES rather than as the credential —
+	// without it every authority rule asking "do you lead this" falls
+	// through to the admin grant. The binding used to be a field on a
+	// seat's contact block naming the token id; it is a directory row now,
+	// arbitrated on `iam.seat.<handle>` so two holders cannot claim one
+	// seat.
 	//
 	// OPTIONAL, and its absence is an ordinary wiring rather than a
-	// mistake: an API built before any company is active has no chart to
-	// ask, and every credential is then unbound — which is exactly what
-	// an unbound one already means.
-	BoundSeat func(operatorID string) string
+	// mistake: an API built before the identity domain runs has no
+	// directory to ask, and every credential is then unbound — which is
+	// exactly what an unbound one already means.
+	BoundSeat func(login string) string
 
 	// SeatHeld reports whether a seat is one somebody in the identity
 	// directory is bound to, or nil on a node that cannot tell.
@@ -861,8 +863,8 @@ func (a *App) Queries() *queries.Registry { return a.queries }
 // wire codes would be a domain package encoding a transport's vocabulary, and
 // a transport that classified errors itself would be a second place for the
 // two to disagree about what "unauthorized" means.
-func (a *App) answer(ctx context.Context, what string, params map[string]any, operatorID string) (any, error) {
-	data, err := a.queries.Answer(ctx, what, params, operatorID)
+func (a *App) answer(ctx context.Context, what string, params map[string]any) (any, error) {
+	data, err := a.queries.Answer(ctx, what, params)
 	switch {
 	case err == nil:
 		return data, nil
@@ -910,14 +912,11 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 // one implementation, not two that agree today.
 func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 	what := r.PathValue("what")
-	// See [App.answerHTTP] for why this is the total reader.
-	operatorID := auth.OperatorOf(r.Context())
-
 	// Params come from the query string, read through the same accessors a
 	// socket frame's JSON object goes through — which is what stops a
 	// filter being honoured on one transport and ignored on the other.
 	data, err := a.queries.AnswerWith(r.Context(), what,
-		queries.FromQuery(r.URL.Query()), operatorID)
+		queries.FromQuery(r.URL.Query()))
 	if err != nil {
 		writeQueryError(w, what, err)
 		return

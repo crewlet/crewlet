@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -35,9 +36,11 @@ import (
 type PersonWriter interface {
 	WriteInbox(ctx context.Context, opID, handle string,
 		read, unread, snoozed []tracker.InboxEntry, reasons []tracker.Reason,
-		seenThrough tracker.Position) (tracker.WriteResult, error)
+		seenThrough tracker.Position,
+		authority tracker.PersonAuthority) (tracker.WriteResult, error)
 	WritePins(ctx context.Context, opID, handle string,
-		pinnedViews []string, favorites []tracker.Favorite) (tracker.WriteResult, error)
+		pinnedViews []string, favorites []tracker.Favorite,
+		authority tracker.PersonAuthority) (tracker.WriteResult, error)
 	WritePriorities(ctx context.Context, opID, handle string,
 		priorities []string, authority tracker.PersonAuthority) (tracker.WriteResult, error)
 }
@@ -46,26 +49,6 @@ type PersonWriter interface {
 type PersonReader interface {
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
 }
-
-// Leads reports whether one handle leads another in the org chart.
-//
-// A SEAM RATHER THAN A CHART, because the answer is a fact about the company's
-// configuration and this package holds none — and because a lead relation that
-// this package derived would be a second opinion about the hierarchy.
-//
-// THREE-VALUED, which is the shape [authz.Chart] states and the one this used
-// to collapse: the implementation opens with "does this node hold a company",
-// and a node that is booting, applying a revision or simply behind the chart
-// log is not a node saying "you lead nobody". Those are opposite facts, and
-// under one bool a lagging node silently demoted every lead in the company
-// while reporting itself healthy.
-//
-// NIL RESOLVES NOTHING, which degrades to "your own only": a company whose
-// surface did not wire this loses a lead's convenience rather than gaining a
-// hole. That stays a false rather than becoming an error, because it is a
-// statement about the SURFACE and is true for every request it will ever
-// serve — where an unreadable chart clears on the next tick.
-type Leads func(ctx context.Context, actor, handle string) (bool, error)
 
 type getPerson struct{ deps WorkDeps }
 
@@ -106,10 +89,7 @@ func (t *getPerson) Call(ctx context.Context, args map[string]any) (tools.Result
 	return jsonResult(state)
 }
 
-type setPriorities struct {
-	deps  WorkDeps
-	leads Leads
-}
+type setPriorities struct{ deps WorkDeps }
 
 var _ tools.Callable = (*setPriorities)(nil)
 
@@ -164,33 +144,25 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(unknown), nil
 	}
 	handle = whose
-	authority := tracker.PersonAuthority{
-		// A HUMAN OR AN OPERATOR MAY WRITE ANYBODY'S, which is the
-		// design's own rule and the one the gate was missing. It matters
-		// here specifically: this tool is registered on the operator MCP
-		// alone, and an operator's actor is a TOKEN's name rather than a
-		// handle in the chart — so no ancestor walk can ever match it,
-		// `Lead` is false for every operator by construction, and the
-		// only shipped surface for the verb could not use it.
-		Person: actor.Kind.Person(),
+	// THE AUTHORITY IS ASKED HERE AND NOT AT THE GATE, because the
+	// ARGUMENT IS NOT THE OBJECT: a model types a name, an email or a
+	// handle and the line above resolves it against the chart, so a
+	// decision taken on what was typed is a decision about a string
+	// nobody's record is under — it refuses a lead who wrote their
+	// report's NAME, and names the relation rather than the spelling.
+	// [subjectOf] leaves this verb's owner unnamed for exactly that
+	// reason, and this is the ask it defers to.
+	if refused := t.deps.mayWrite(ctx, authz.ActionPrioritiesSet,
+		authz.Object{Kind: authz.KindPerson, Owner: handle}); refused != nil {
+
+		return *refused, nil
 	}
-	// AND THE LEAD RELATION IS RESOLVED HERE and passed as a value,
-	// because the tracker has no chart — see the file head. A surface that
-	// wired no lookup resolves false, which degrades to "your own only".
-	//
-	// A CHART THAT COULD NOT ANSWER REFUSES THE CALL rather than deciding
-	// without it. It is the one case a bool could not carry: treated as
-	// "does not lead", a node that is merely behind tells a lead they may
-	// not re-order their own report's queue, and names the relation rather
-	// than the lag. Told to try again, they try again and it works.
-	if t.leads != nil && handle != actor.Handle {
-		led, err := t.leads(ctx, actor.Handle, handle)
-		if err != nil {
-			return failed(fmt.Sprintf("this node cannot say who leads %s yet, "+
-				"so it will not decide whether you may set their priorities: "+
-				"%v. Try again in a moment.", handle, err)), nil
-		}
-		authority.Lead = led
+	// AND THE GESTURE BAR IS THE TRACKER'S OWN, passed rather than
+	// decided: a seat that LEADS somebody is admitted by the table above
+	// and still may not re-order their queue, because that is a hand-off
+	// in disguise. See [tracker.PersonAuthority].
+	authority := tracker.PersonAuthority{
+		Authorized: true, Agent: !actor.Kind.Person(),
 	}
 	// EVERY ENTRY IS RESOLVED TO AN ID, because the list is stored as ids
 	// and read back by joining on them — and this tool's own description
@@ -274,7 +246,7 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	result, err := writer.WritePins(ctx,
 		"pins-"+actor.Handle+"-"+callKey(turn), actor.Handle,
-		argStrings(args, "views"), favorites)
+		argStrings(args, "views"), favorites, ownWrite(actor))
 	if err != nil {
 		return failed(writeFailure(tracker.SetPinsTool, err)), nil
 	}
@@ -385,7 +357,7 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		read, unread, snoozed, reasons, tracker.Position{
 			Stream: strings.TrimSpace(argString(args, "seen_through_stream")),
 			Seq:    uint64(argFloat(args, "seen_through")),
-		})
+		}, ownWrite(actor))
 	if err != nil {
 		return failed(writeFailure(tracker.MarkInboxTool, err)), nil
 	}
@@ -393,6 +365,17 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return jsonResult(map[string]any{
 		"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 	})
+}
+
+// ownWrite is the authority a tool writing the CALLER's own record passes.
+//
+// AUTHORIZED IS ALWAYS TRUE HERE and that is not a rubber stamp: these verbs
+// take no handle at all, the registration gate has already decided them as the
+// caller's own record, and [tracker.ownRecord] compares the actor to the
+// handle before it ever reads this. What the value carries that matters is the
+// GESTURE bar, which is the tracker's own and not the table's.
+func ownWrite(actor Actor) tracker.PersonAuthority {
+	return tracker.PersonAuthority{Authorized: true, Agent: !actor.Kind.Person()}
 }
 
 // person resolves the actor and the writer for a priority write.

@@ -62,18 +62,15 @@ type PageDeps struct {
 	Reader PageReader
 	Writer PageWriter
 
+	// Authorize decides the checks a tool can only take after a read, in
+	// the shape and for the reason [WorkDeps.Authorize] states.
+	Authorize Authorizer
+
 	Mentions MentionResolver
 
 	// DefaultContainer is where a seat writes a page that names none — its
 	// unit's space. Empty makes the container argument required.
 	DefaultContainer func(handle string) string
-
-	// Reserved are the containers a seat may not write to directly: the
-	// tool-skills container (whose pages are machinery published by the
-	// sync CLI) and the org root. A write there is refused naming the
-	// container, rather than silently landing somewhere excluded from
-	// every search.
-	Reserved []string
 
 	// Actor decides who a write is attributed to. Nil takes the turn's
 	// seat; the operator surface sets it. See [WorkDeps.Actor] for why
@@ -124,15 +121,6 @@ func (d PageDeps) actor(ctx context.Context, turn *turnctx.Turn) (pages.Actor, e
 		return d.Actor(ctx, turn)
 	}
 	return pageActor(turn)
-}
-
-func (d PageDeps) reserved(container string) bool {
-	for _, key := range d.Reserved {
-		if strings.EqualFold(strings.TrimSpace(key), container) {
-			return true
-		}
-	}
-	return false
 }
 
 func unconfiguredKB(name string) tools.Result {
@@ -356,13 +344,6 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 				"so there is no default. Ask where this belongs rather than guessing."), nil
 		}
 	}
-	if t.deps.reserved(in.Container) {
-		return failed(fmt.Sprintf(
-			"%s is a reserved container and pages written there are excluded "+
-				"from every search. Write this somewhere a reader will find it.",
-			clip(in.Container))), nil
-	}
-
 	got, err := t.deps.Writer.Create(ctx, actor, in)
 	if err != nil {
 		return failed(pageWriteFailure(WritePageTool, err)), nil

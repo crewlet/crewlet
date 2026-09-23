@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -136,6 +137,48 @@ func leadsProjectInChart(o *org.Organization, actor, project string) bool {
 	// lead" a one-seat project has.
 	for role := range o.AllRoles() {
 		if tracker.ProjectKey(role.Project) == key && role.Handle() == actor {
+			return true
+		}
+	}
+	return false
+}
+
+// LeadsContainer reports whether actor leads the unit that owns a page
+// container, or is the seat whose own container it is.
+//
+// THE WALK IS [leadsProjectInChart]'S over a different field, which is the
+// whole of why [authz.Chart] states a third method: a unit declares its
+// tracker project in `project:` and its page container in `space:`, and the
+// two keys are unrelated strings.
+//
+// A CONTAINER NO UNIT AND NO SEAT DECLARES ANSWERS FALSE rather than erroring,
+// for [LeadsProject]'s reason.
+func (c ChartAuthority) LeadsContainer(_ context.Context, actor, container string) (bool, error) {
+	o, err := c.org()
+	if err != nil {
+		return false, err
+	}
+	return leadsContainerInChart(o, actor, container), nil
+}
+
+// leadsContainerInChart is the walk, split out for the reason [leadsInChart] is.
+func leadsContainerInChart(o *org.Organization, actor, container string) bool {
+	key := pages.ContainerKey(container)
+	if actor == "" || key == "" {
+		return false
+	}
+	for unit := range o.AllUnits() {
+		if pages.ContainerKey(unit.Space) != key {
+			continue
+		}
+		if lead := o.EffectiveLead(unit); lead != nil && lead.Handle() == actor {
+			return true
+		}
+	}
+	// A SEAT'S OWN CONTAINER IS LED BY THAT SEAT, for the reason a role's
+	// own project is.
+	for role := range o.AllRoles() {
+		if pages.ContainerKey(role.Space) == key && role.Handle() == actor {
 			return true
 		}
 	}

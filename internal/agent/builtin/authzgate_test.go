@@ -85,7 +85,7 @@ func TestEveryToolShapedActionIsARegisteredTool(t *testing.T) {
 func everyToolName(t *testing.T) []string {
 	t.Helper()
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, fullDeps(t)); err != nil {
+	if _, err := builtin.Register(reg, gated(fullDeps(t))); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	names := reg.Names()
@@ -124,6 +124,6 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
 		},
-		Leads: leadAlways, LeadsProject: leadAlways,
+		Authorize: builtin.Decide(chartLeads),
 	}
 }

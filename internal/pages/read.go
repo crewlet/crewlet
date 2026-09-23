@@ -171,7 +171,7 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 	var args []any
 	if f.Container != "" {
 		where = append(where, "p.container = ?")
-		args = append(args, strings.ToUpper(f.Container))
+		args = append(args, ContainerKey(f.Container))
 	}
 	if f.ParentID != "" {
 		where = append(where, "p.parent_id = ?")
@@ -418,7 +418,7 @@ func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document s
 		// so every address lookup scanned the container.
 		query = `SELECT id, document, ` + HeadRevision + ` FROM pages_heads
 		          WHERE container = ? AND title_norm = ?`
-		args = []any{strings.ToUpper(strings.TrimSpace(container)), NormalizeTitle(title)}
+		args = []any{ContainerKey(container), NormalizeTitle(title)}
 	}
 	err = tx.QueryRowContext(ctx, query, args...).Scan(&id, &document, &rev)
 	switch {
@@ -657,7 +657,7 @@ func (r *Reader) SkillPages(ctx context.Context, container string,
 	if fresh.Level == "" {
 		return nil, errors.New("pages: this read names no level")
 	}
-	container = strings.ToUpper(strings.TrimSpace(container))
+	container = ContainerKey(container)
 	if container == "" {
 		return nil, nil
 	}

@@ -44,19 +44,20 @@ type OperatorDeps struct {
 	// with it nil that tool refuses every call it is registered for.
 	Org func() *org.Organization
 
-	// Leads answers whether one handle leads another, which is the one
-	// authority over a person's record that reaches across people. Nil
-	// resolves nothing, which degrades to "your own only" rather than to
-	// a hole — see [Leads].
-	Leads Leads
-
-	// LeadsProject answers whether a handle leads the unit that owns a
-	// project, which is the authority over that project's PLAN. A
-	// separate seam from [Leads] because it is a different question: one
-	// is about a person, the other about a container, and a company can
-	// answer either without answering the other. Nil REFUSES rather than
-	// degrading — see [LeadsProject].
-	LeadsProject LeadsProject
+	// Authorize decides whether the party behind a call may make it, and
+	// it is the SAME seam a seat's registry and the HTTP surface use.
+	//
+	// It replaced `Leads` and `LeadsProject`, which asked the chart the
+	// two relation questions [authz.ClassOwnOrLead] and
+	// [authz.ClassContainer] already ask — from the tool rather than from
+	// the table, two-valued, and consulting no grant at all, so an
+	// operator holding fleet:operate was refused here while every HTTP
+	// route allowed.
+	//
+	// NIL REFUSES EVERYTHING, on [Deps.Authorize]'s rule. Pushed down
+	// into [OperatorDeps.Work] and [OperatorDeps.Pages] by
+	// [OperatorTools], so a caller cannot set the three differently.
+	Authorize Authorizer
 }
 
 // OperatorTools is the catalogue for one operator surface.
@@ -69,6 +70,7 @@ type OperatorDeps struct {
 // write, work before knowledge. Nothing depends on it, and a stable one means
 // two boots of one config advertise the same list.
 func OperatorTools(deps OperatorDeps) []tools.Callable {
+	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
 	work, pages := deps.Work, deps.Pages
 	candidates := []struct {
 		tool tools.Callable
@@ -77,7 +79,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&listWorkItems{deps: work}, work.Reader != nil},
 		{&getWorkItem{deps: work}, work.Reader != nil},
 		{&createWorkItem{deps: work}, work.Writer != nil},
-		{&updateWorkItem{deps: work, leads: deps.LeadsProject},
+		{&updateWorkItem{deps: work},
 			work.Writer != nil && work.Reader != nil},
 		{&commentOnWorkItem{deps: work}, work.Writer != nil && work.Reader != nil},
 		{&mergeWorkItem{deps: work}, work.Merges != nil && work.Reader != nil},
@@ -94,12 +96,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&taskActivity{deps: work}, feedReads(work)},
 		{&myWork{deps: work}, feedReads(work)},
 		{&getPerson{deps: work}, work.Reader != nil},
-		{&setPriorities{deps: work, leads: deps.Leads}, work.PersonWriter != nil},
+		{&setPriorities{deps: work}, work.PersonWriter != nil},
 		{&setPins{deps: work}, work.PersonWriter != nil},
 		{&markInbox{deps: work}, work.PersonWriter != nil},
 		{&workInbox{deps: work}, work.Inbox != nil},
-		{&writeProject{deps: work, leads: deps.LeadsProject},
-			work.ProjectWriter != nil},
+		{&writeProject{deps: work}, work.ProjectWriter != nil},
 		{&removeWorkItem{deps: work}, work.TrashWriter != nil && work.Reader != nil},
 		{&restoreWorkItem{deps: work}, work.TrashWriter != nil && work.Reader != nil},
 		{&listPages{deps: pages}, pages.Reader != nil},
@@ -113,7 +114,12 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 	var out []tools.Callable
 	for _, c := range candidates {
 		if c.on {
-			out = append(out, c.tool)
+			// GATED HERE TOO, and with the same decision a seat's
+			// registry is gated with. An operator's assistant is a
+			// caller like any other: the tools it holds are the same
+			// values, and a catalogue that skipped the wrapper would
+			// be the one surface of three that decided nothing.
+			out = append(out, gate(c.tool, deps.Authorize))
 		}
 	}
 	return out

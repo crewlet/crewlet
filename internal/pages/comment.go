@@ -90,6 +90,9 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			if err := s.refuseReserved(actor, head.Container); err != nil {
+				return statelog.Decision{}, err
+			}
 			patch := PagePatch{V: DocumentVersion, Comment: &CommentPatch{
 				ID: comment.ID, Body: &body, Author: comment.Author,
 				AuthorKind: actor.Kind, ReplyTo: comment.ReplyTo,
@@ -155,6 +158,9 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			if err := s.refuseReserved(actor, head.Container); err != nil {
+				return statelog.Decision{}, err
+			}
 			read = revision
 			held, err := readCommentTx(ctx, tx, pageID, commentID)
 			if err != nil {
@@ -197,9 +203,35 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 	}, nil
 }
 
+// CommentAuthority is what a caller may do to somebody else's remark.
+//
+// A VALUE RATHER THAN A BOOL for [tracker.PersonAuthority]'s reason, and it
+// states the DECISION: the caller asks [authz.ActionPageCommentRemove] and
+// passes what came back, because this package holds no chart and no grants.
+type CommentAuthority struct {
+	// Moderate reports a caller authorized to take down a remark they did
+	// not write, which [authz.ClassAuthored] admits on the DEPLOYMENT
+	// GRANT alone — not on any relation to the page. A lead is not
+	// automatically a moderator of what is said on their team's pages,
+	// and making them one is a decision the table would have to state.
+	//
+	// THERE IS NO EDIT EQUIVALENT, deliberately. Removing a remark takes
+	// it down and everyone can see that it is gone; an EDIT rewrites it,
+	// so a remark somebody else can change is a remark attributed to a
+	// person who did not make it — on a record that outlives the page's
+	// body and is quoted in a wake. A lead moderating a page removes;
+	// nobody puts words in somebody's mouth.
+	Moderate bool
+}
+
 // RemoveComment takes one remark down.
+//
+// THE AUTHOR, OR A MODERATOR. It used to be neither: this verb had no check
+// at all, so any caller that could reach it could take down any remark on any
+// page — which [EditComment] three functions up refuses in its own decide, and
+// the asymmetry was invisible because nothing called this yet.
 func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
-	commentID string) (Written, error) {
+	commentID string, authority CommentAuthority) (Written, error) {
 
 	if err := actor.validate(); err != nil {
 		return Written{}, err
@@ -219,6 +251,25 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			if err := s.refuseReserved(actor, head.Container); err != nil {
+				return statelog.Decision{}, err
+			}
+			// THE AUTHOR IS READ IN THE DECIDE'S OWN SNAPSHOT, which
+			// is the only place it can be: a removal names a comment
+			// id and who wrote it is a row. A comment that is already
+			// gone reads as an empty author, which is neither this
+			// actor nor anybody — so a caller with no moderate answer
+			// is refused rather than writing the no-op record below.
+			held, err := readCommentTx(ctx, tx, pageID, commentID)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			if !authority.Moderate && held.Author != actor.Name() {
+				return statelog.Decision{}, invalid("comment",
+					"comment %s was written by %s — a remark is taken down by "+
+						"whoever made it, and by nobody else without the "+
+						"deployment grant", commentID, held.Author)
+			}
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(true, ChangeCommentEdited, head, "", nil)
 			return s.decide(actor, subject, OpPatch, scope, opID, PagePatch{
@@ -230,9 +281,9 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 	if err != nil {
 		return Written{}, err
 	}
-	// UNCONDITIONAL LIKE THE COMMENT ITSELF: removing a comment that is
-	// already gone still writes a record, because only the applier can see
-	// whether the row is there on every node.
+	// UNCONDITIONAL FOR WHOEVER MAY: removing a comment that is already
+	// gone still writes a record, because only the applier can see whether
+	// the row is there on every node.
 	return Written{
 		Revision: writtenRevision(result, 0), ChangeID: opID, Outcome: result,
 	}, nil

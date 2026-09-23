@@ -10,6 +10,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -21,7 +23,7 @@ import (
 func TestWriteProjectLetsAnySeatDeclareATag(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := projectRegistry(t, trk, nil)
+	reg := projectRegistry(t, trk, chartRefuses)
 
 	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
 		"project":  "ENG",
@@ -37,41 +39,52 @@ func TestWriteProjectLetsAnySeatDeclareATag(t *testing.T) {
 	}
 	// AND THE AUTHORITY IT CARRIES IS THE TRUTH about this seat, never a
 	// convenience: the writer is what enforces the gate, and a tool that
-	// claimed `Lead: true` would hand every seat a lead's verbs.
-	if trk.tagAuthority[0].Lead {
-		t.Error("a seat with no lead lookup was sent as a lead")
+	// claimed the policy answer would hand every seat a lead's verbs.
+	// THE TABLE IS NEVER ASKED AT ALL for a pure add, which is what makes
+	// the verb reachable on a chart that refuses everything.
+	if trk.tagAuthority[0].Policy {
+		t.Error("a seat the chart refuses was sent as the project's lead")
 	}
 }
 
-// THE LEAD SEAM DECIDES, and nil REFUSES rather than degrading — a build that
-// wired no chart lookup loses the verbs rather than opening them to everybody.
+// THE TABLE DECIDES THE LEAD-ONLY FACETS, and a chart that refuses is a
+// REFUSAL of the call rather than a write carrying a false authority: the
+// decision is taken before the writer is reached now, so the tracker's own
+// gate is the second line and not the first.
 func TestWriteProjectCarriesTheLeadAnswer(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		leads builtin.LeadsProject
-		want  bool
+		chart   authz.Chart
+		wrote   bool
+		refusal string
 	}{
-		"no lookup": {nil, false},
-		"not the lead": {func(context.Context, string, string) (bool, error) {
-			return false, nil
-		}, false},
-		"the lead": {func(context.Context, string, string) (bool, error) {
-			return true, nil
-		}, true},
+		"not the lead": {chartRefuses, false, "refused"},
+		"the lead":     {chartLeads, true, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			trk := newFakeTracker()
-			reg := projectRegistry(t, trk, tc.leads)
-			got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
-				"project":     "ENG",
-				"tags_rename": map[string]any{"api": "Public API"},
-			})
-			if got.Failed {
-				t.Fatalf("write_project failed: %q", got.Output)
+			reg := projectRegistry(t, trk, tc.chart)
+			got := callWorkAs(t, reg, colleagueCaller(), tracker.WriteProjectTool,
+				map[string]any{
+					"project":     "ENG",
+					"tags_rename": map[string]any{"api": "Public API"},
+				})
+			if got.Failed == tc.wrote {
+				t.Fatalf("write_project failed = %v, want %v: %q",
+					got.Failed, !tc.wrote, got.Output)
 			}
-			if trk.tagAuthority[0].Lead != tc.want {
-				t.Fatalf("authority.Lead = %v, want %v",
-					trk.tagAuthority[0].Lead, tc.want)
+			if !tc.wrote {
+				if !strings.Contains(got.Output, tc.refusal) {
+					t.Errorf("the refusal reads %q", got.Output)
+				}
+				if len(trk.tagAuthority) != 0 {
+					t.Error("a refused rename still reached the writer")
+				}
+				return
+			}
+			if !trk.tagAuthority[0].Policy {
+				t.Error("the lead's rename did not carry the policy answer, " +
+					"so the tracker's own gate refuses it")
 			}
 		})
 	}
@@ -84,15 +97,13 @@ func TestWriteProjectResolvesTheLeadOnce(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	asked := 0
-	reg := projectRegistry(t, trk, func(context.Context, string, string) (bool, error) {
-		asked++
-		return true, nil
-	})
-	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
-		"project":          "ENG",
-		"tags_add":         []any{map[string]any{"slug": "regression"}},
-		"default_assignee": "alice",
-	})
+	reg := projectRegistry(t, trk, countingChart{asked: &asked})
+	got := callWorkAs(t, reg, colleagueCaller(), tracker.WriteProjectTool,
+		map[string]any{
+			"project":          "ENG",
+			"tags_add":         []any{map[string]any{"slug": "regression"}},
+			"default_assignee": "alice",
+		})
 	if got.Failed {
 		t.Fatalf("write_project failed: %q", got.Output)
 	}
@@ -105,13 +116,24 @@ func TestWriteProjectResolvesTheLeadOnce(t *testing.T) {
 	}
 }
 
+// countingChart counts how many times the project relation is asked.
+type countingChart struct {
+	projectChart
+	asked *int
+}
+
+func (c countingChart) LeadsProject(context.Context, string, string) (bool, error) {
+	*c.asked++
+	return true, nil
+}
+
 // PRESENCE DECIDES, never the value. `default_assignee: ""` means triage and
 // omitting it means leave it alone, and a reader that could not tell them
 // apart would clear a project's default every time somebody declared a field.
 func TestWriteProjectTellsAbsentFromEmpty(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := projectRegistry(t, trk, leadAlways)
+	reg := projectRegistry(t, trk, chartLeads)
 
 	callWork(t, reg, tracker.WriteProjectTool, map[string]any{
 		"project": "ENG", "default_assignee": "",
@@ -120,30 +142,51 @@ func TestWriteProjectTellsAbsentFromEmpty(t *testing.T) {
 		t.Fatal("an empty default assignee was read as absent, so a project " +
 			"cannot be put back into triage")
 	}
-	callWork(t, reg, tracker.WriteProjectTool, map[string]any{
-		"project": "ENG", "archived": true,
-	})
+	// THE ARCHIVE FACET IS A PERSON'S, which is what the human-only bar
+	// on [authz.ActionProjectArchive] says — see
+	// [TestAnAgentNeverArchivesAProject].
+	callWorkAs(t, reg, personHolding(iam.AllGrants...),
+		tracker.WriteProjectTool, map[string]any{
+			"project": "ENG", "archived": true,
+		})
 	if len(trk.projectEdits) != 2 || trk.projectEdits[1].DefaultAssignee != nil {
 		t.Fatal("an unsent default assignee was read as an empty one, so an " +
 			"unrelated edit clears it")
 	}
 }
 
-// AN OPERATOR IS AN OPERATOR AND A SEAT IS NOT, which is what the archive
-// facet turns on. The tool reports the caller's kind and never decides it.
-func TestWriteProjectReportsTheCallerKind(t *testing.T) {
+// AN AGENT NEVER ARCHIVES A PROJECT, and the bar is the TABLE's now rather
+// than a kind the tool reported.
+//
+// It used to be `ProjectAuthority.Operator`, filled from "the actor is not a
+// seat" — which was the same fact the policy gate accepted as a SUBSTITUTE for
+// the lead relation, so a person's own credential was authority over every
+// project in the company. [authz] states it once, as a human-only bar on the
+// archive verb alone, and a seat that leads the project is refused by it while
+// keeping every other facet.
+func TestAnAgentNeverArchivesAProject(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := projectRegistry(t, trk, leadAlways)
-	callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+	reg := projectRegistry(t, trk, chartLeads)
+	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
 		"project": "ENG", "archived": true,
 	})
-	if trk.projectAuthority[0].Operator {
-		t.Error("a seat was sent as an operator, so the archive gate is open " +
-			"to every lead")
+	if !got.Failed {
+		t.Fatal("a seat that leads ENG archived it")
+	}
+	if len(trk.projectEdits) != 0 {
+		t.Fatal("the refused archive still reached the writer")
 	}
 
-	// AND AN OPERATOR SURFACE, whose actor IS a person, reports one.
+	// AND THE SAME SEAT KEEPS THE POLICY, which is what makes the bar a
+	// property of the VERB rather than of the caller.
+	if got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+		"project": "ENG", "default_assignee": "alice",
+	}); got.Failed {
+		t.Fatalf("the lead could not set the default assignee: %q", got.Output)
+	}
+
+	// AND A PERSON'S OWN CREDENTIAL DOES ARCHIVE, through the same table.
 	operator := newFakeTracker()
 	opReg := tools.NewRegistry()
 	if _, err := builtin.Register(opReg, builtin.Deps{
@@ -155,16 +198,21 @@ func TestWriteProjectReportsTheCallerKind(t *testing.T) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
 		},
-		LeadsProject: leadAlways,
+		Authorize: builtin.Decide(chartLeads),
 	}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	callWork(t, opReg, tracker.WriteProjectTool, map[string]any{
-		"project": "ENG", "archived": true,
-	})
-	if !operator.projectAuthority[0].Operator {
-		t.Error("a person's own credential was not reported as an operator, " +
-			"so nothing can ever archive a project")
+	entry, _ := opReg.Lookup(tracker.WriteProjectTool)
+	if got, err := entry.Tool.Call(personHolding(iam.AllGrants...),
+		map[string]any{"project": "ENG", "archived": true}); err != nil {
+
+		t.Fatalf("write_project: %v", err)
+	} else if got.Failed {
+		t.Fatalf("a person could not archive a project: %q", got.Output)
+	}
+	if !operator.projectAuthority[0].Archive {
+		t.Error("the archive answer did not reach the writer, so nothing can " +
+			"ever archive a project")
 	}
 }
 
@@ -174,7 +222,7 @@ func TestWriteProjectCarriesTheTagWarnings(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	trk.tagWarnings = []string{"apis is within a typo of api"}
-	reg := projectRegistry(t, trk, nil)
+	reg := projectRegistry(t, trk, chartRefuses)
 
 	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
 		"project": "ENG", "tags_add": []any{map[string]any{"slug": "apis"}},
@@ -192,7 +240,7 @@ func TestWriteProjectCarriesTheTagWarnings(t *testing.T) {
 func TestWriteProjectRefusesAnEmptyCall(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := projectRegistry(t, trk, leadAlways)
+	reg := projectRegistry(t, trk, chartLeads)
 	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{"project": "ENG"})
 	if !got.Failed {
 		t.Fatal("a call setting nothing was accepted")
@@ -210,7 +258,7 @@ func TestWriteProjectRefusesAnEmptyCall(t *testing.T) {
 func TestWriteProjectFallsBackToTheSeatsOwnProject(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := projectRegistryIn(t, trk, nil, "ENG")
+	reg := projectRegistryIn(t, trk, chartRefuses, "ENG")
 	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
 		"tags_add": []any{map[string]any{"slug": "regression"}},
 	})
@@ -227,7 +275,7 @@ func TestWriteProjectFallsBackToTheSeatsOwnProject(t *testing.T) {
 
 	// AND A SEAT WHOSE UNIT OWNS NONE IS REFUSED naming the lookup rather
 	// than writing to an empty key.
-	unowned := projectRegistry(t, newFakeTracker(), nil)
+	unowned := projectRegistry(t, newFakeTracker(), chartRefuses)
 	if got := callWork(t, unowned, tracker.WriteProjectTool, map[string]any{
 		"tags_add": []any{map[string]any{"slug": "regression"}},
 	}); !got.Failed {
@@ -258,7 +306,7 @@ func TestLabelsAreDeclaredOnlyWhenTheCallerSaysSo(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			trk := newFakeTracker()
-			reg := projectRegistryIn(t, trk, nil, "ENG")
+			reg := projectRegistryIn(t, trk, chartRefuses, "ENG")
 			got := callWork(t, reg, tracker.CreateWorkItemTool, tc.args)
 			if got.Failed {
 				t.Fatalf("create failed: %q", got.Output)
@@ -279,7 +327,7 @@ func TestLabelsAreDeclaredOnlyWhenTheCallerSaysSo(t *testing.T) {
 func TestADeclaredLabelIsReportedBack(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := projectRegistryIn(t, trk, nil, "ENG")
+	reg := projectRegistryIn(t, trk, chartRefuses, "ENG")
 	got := callWork(t, reg, tracker.CreateWorkItemTool, map[string]any{
 		"title": "A task", "labels": []any{"regresion"},
 		"labels_create_missing": true,
@@ -305,7 +353,7 @@ func TestADeclaredLabelIsReportedBack(t *testing.T) {
 func TestLabelsAreDeclaredBeforeTheTaskIsFiled(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := projectRegistryIn(t, trk, nil, "ENG")
+	reg := projectRegistryIn(t, trk, chartRefuses, "ENG")
 	callWork(t, reg, tracker.CreateWorkItemTool, map[string]any{
 		"title": "A task", "labels": []any{"regression"},
 		"labels_create_missing": true,
@@ -327,7 +375,7 @@ func TestLabelsAreDeclaredBeforeTheTaskIsFiled(t *testing.T) {
 // and every suite would stay green.
 func TestWriteProjectIsDeclaredDestructive(t *testing.T) {
 	t.Parallel()
-	reg := projectRegistry(t, newFakeTracker(), nil)
+	reg := projectRegistry(t, newFakeTracker(), chartRefuses)
 	entry, ok := reg.Snapshot().Lookup(tracker.WriteProjectTool)
 	if !ok {
 		t.Fatal("write_project is not registered")
@@ -346,21 +394,52 @@ func TestWriteProjectIsDeclaredDestructive(t *testing.T) {
 
 // ---- helpers ------------------------------------------------------------ //
 
-func leadAlways(context.Context, string, string) (bool, error) { return true, nil }
+// projectChart answers the project relation and nothing else, which is what
+// every case in this file turns on.
+//
+// THE OTHER TWO RELATIONS REFUSE rather than mirroring this one, on
+// [authz.Chart.LeadsUnit]'s own rule: a fixture that folded them would agree
+// with a rule asking either, and the whole point of three methods is that a
+// rule asking the wrong one is caught.
+type projectChart struct {
+	leads bool
+	err   error
+}
 
-// leadUnknown is a chart that could not answer — a node booting, applying a
+func (c projectChart) Leads(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (c projectChart) LeadsProject(context.Context, string, string) (bool, error) {
+	return c.leads, c.err
+}
+
+func (c projectChart) LeadsUnit(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (c projectChart) LeadsContainer(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+// chartLeads and chartRefuses are the two answers a chart that CAN answer
+// gives.
+var (
+	chartLeads   = projectChart{leads: true}
+	chartRefuses = projectChart{}
+)
+
+// chartUnknown is a chart that could not answer — a node booting, applying a
 // revision, or behind the chart log. It is a fixture rather than an error
 // literal at the call sites because the outcome it drives is the one the
 // two-valued seam could not express at all.
-func leadUnknown(context.Context, string, string) (bool, error) {
-	return false, errors.New("this node is behind the chart log")
+var chartUnknown = projectChart{err: errors.New("this node is behind the chart log")}
+
+func projectRegistry(t *testing.T, trk *fakeTracker, chart authz.Chart) *tools.Registry {
+	return projectRegistryIn(t, trk, chart, "")
 }
 
-func projectRegistry(t *testing.T, trk *fakeTracker, leads builtin.LeadsProject) *tools.Registry {
-	return projectRegistryIn(t, trk, leads, "")
-}
-
-func projectRegistryIn(t *testing.T, trk *fakeTracker, leads builtin.LeadsProject,
+func projectRegistryIn(t *testing.T, trk *fakeTracker, chart authz.Chart,
 	project string) *tools.Registry {
 
 	t.Helper()
@@ -370,12 +449,12 @@ func projectRegistryIn(t *testing.T, trk *fakeTracker, leads builtin.LeadsProjec
 			Reader: trk, Writer: trk.as,
 			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
 		},
-		LeadsProject: leads,
+		Authorize: builtin.Decide(chart),
 	}
 	if project != "" {
 		deps.Work.DefaultProject = func(string) string { return project }
 	}
-	if _, err := builtin.Register(reg, deps); err != nil {
+	if _, err := builtin.Register(reg, gated(deps)); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	return reg
@@ -396,11 +475,12 @@ func projectRegistryIn(t *testing.T, trk *fakeTracker, leads builtin.LeadsProjec
 func TestWriteProjectRefusesWhenTheChartCannotAnswer(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := projectRegistry(t, trk, leadUnknown)
-	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
-		"project":     "ENG",
-		"tags_rename": map[string]any{"api": "Public API"},
-	})
+	reg := projectRegistry(t, trk, chartUnknown)
+	got := callWorkAs(t, reg, colleagueCaller(), tracker.WriteProjectTool,
+		map[string]any{
+			"project":     "ENG",
+			"tags_rename": map[string]any{"api": "Public API"},
+		})
 	if !got.Failed {
 		t.Fatalf("a chart that could not answer decided anyway: %q", got.Output)
 	}
@@ -408,7 +488,7 @@ func TestWriteProjectRefusesWhenTheChartCannotAnswer(t *testing.T) {
 		t.Errorf("the write landed with authority %+v, decided without the "+
 			"one relation it turns on", trk.tagAuthority[0])
 	}
-	for _, want := range []string{"cannot say who leads", "Try again"} {
+	for _, want := range []string{"could not decide", "chart"} {
 		if !strings.Contains(got.Output, want) {
 			t.Errorf("the refusal does not say %q:\n%s", want, got.Output)
 		}

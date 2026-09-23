@@ -2768,7 +2768,6 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			Reader: reader, Writer: writer,
 			Actor:    opsmcp.PageActor,
 			Mentions: engine.LiveMentions(e),
-			Reserved: reservedFor(e),
 			Await:    e.WaitCommitted,
 		}
 	}
@@ -2788,30 +2787,12 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			return c.Org
 		}
 	}
-	// THE LEAD RELATION, which the tracker deliberately does not derive:
-	// it holds no org chart, and one it derived would be a second opinion
-	// about the hierarchy.
-	opts.Leads = engine.LeadsOf(e)
-	// AND THE PROJECT'S OWN LEAD, which is a different question: one is
-	// about a person's line, the other about who plans a container's work.
-	opts.LeadsProject = engine.LeadsProjectOf(e)
+	// THE AUTHORITY DECISION, which is the SAME one every seat's registry
+	// is built with — one table, one function, three surfaces. It reads
+	// the chart per call, because an apply replaces the epoch under a
+	// long-lived MCP session.
+	opts.Authorize = builtin.Decide(engine.ChartAuthorityOf(e))
 	return opsmcp.New(opts)
-}
-
-// reservedFor is the containers an operator's assistant may not write to
-// directly, on the same terms a seat has them.
-func reservedFor(e *engine.Engine) []string {
-	c := e.Company()
-	if c == nil || c.Config == nil {
-		return nil
-	}
-	var out []string
-	for _, key := range []string{c.Config.SkillsContainerKey(), c.Config.RootSpaceKey()} {
-		if key = strings.TrimSpace(key); key != "" {
-			out = append(out, key)
-		}
-	}
-	return out
 }
 
 // operatorKnowledge resolves the node's searcher per call, for the reason the

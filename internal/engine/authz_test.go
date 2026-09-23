@@ -19,8 +19,8 @@ import (
 // one of those told a lead they lead nobody — a refusal naming the project
 // rather than the lag, on a node reporting itself healthy.
 //
-// Asserted on BOTH methods, because the collapse was written once per method
-// and a repair on one is the shape that leaves the other.
+// Asserted on EVERY method, because the collapse was written once per method
+// and a repair on one is the shape that leaves the others.
 func TestAChartAuthorityWithNoCompanyIsUnknownRatherThanFalse(t *testing.T) {
 	t.Parallel()
 	chart := engine.ChartAuthorityOf(nil)
@@ -31,9 +31,19 @@ func TestAChartAuthorityWithNoCompanyIsUnknownRatherThanFalse(t *testing.T) {
 	if _, err := chart.LeadsProject(t.Context(), "cto", "PLATFORM"); !errors.Is(err, authz.ErrNoChart) {
 		t.Errorf("LeadsProject err = %v, want it to name the absent chart", err)
 	}
+	if _, err := chart.LeadsUnit(t.Context(), "cto", "sre"); !errors.Is(err, authz.ErrNoChart) {
+		t.Errorf("LeadsUnit err = %v, want it to name the absent chart", err)
+	}
+	if _, err := chart.LeadsContainer(t.Context(), "cto", "RUNBOOKS"); !errors.Is(err, authz.ErrNoChart) {
+		t.Errorf("LeadsContainer err = %v, want it to name the absent chart", err)
+	}
 	// AND THE DECISION IS UNKNOWN, which is what a surface renders as 503
 	// rather than 403 — the whole reason the error exists.
-	d := authz.Decide(t.Context(), leadPrincipal("cto"), authz.ActionProjectWrite,
+	//
+	// ASKED WITH THE POLICY VERB, because `write_project` itself is a
+	// colleague write now and reads no chart at all: adding a label is
+	// open to every seat, and only the lead-only facets ask a relation.
+	d := authz.Decide(t.Context(), leadPrincipal("cto"), authz.ActionProjectPolicy,
 		authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}, chart)
 	if !d.Unknown() {
 		t.Errorf("a node with no company decided %v (%q) rather than "+

@@ -379,7 +379,7 @@ test("a reader without the credential gets the open list and not the private que
         ],
       });
     }
-    if (what === "viewer") return Promise.resolve({ operator_id: "", operator: false, handle: "" });
+    if (what === "viewer") return Promise.resolve({ login: "", grants: [], handle: "" });
     return answering(what);
   });
 

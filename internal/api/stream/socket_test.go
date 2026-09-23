@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // socketFixture is a running server plus the pieces a test drives it with.
@@ -369,7 +370,7 @@ func TestAMalformedFrameDoesNotDropTheSocket(t *testing.T) {
 
 func TestAQueryIsAnsweredWithItsCorrelationID(t *testing.T) {
 	t.Parallel()
-	f := newSocket(t, nil, func(_ context.Context, what string, params map[string]any, _ string) (any, error) {
+	f := newSocket(t, nil, func(_ context.Context, what string, params map[string]any) (any, error) {
 		return map[string]any{"what": what, "role": params["role"]}, nil
 	})
 	conn, _, err := f.dial(t, "")
@@ -409,7 +410,7 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 		{stream.ErrUnavailable, stream.CodeUnavailable},
 		{errors.New("the store fell over at /var/lib/crewlet/crewlet.db"), stream.CodeQueryFailed},
 	} {
-		f := newSocket(t, nil, func(context.Context, string, map[string]any, string) (any, error) {
+		f := newSocket(t, nil, func(context.Context, string, map[string]any) (any, error) {
 			return nil, tc.err
 		})
 		conn, _, err := f.dial(t, "")
@@ -447,13 +448,27 @@ func TestAQueryWithNoSurfaceIsAnUnknownQuery(t *testing.T) {
 	}
 }
 
-func TestTheSocketsOperatorReachesTheQuery(t *testing.T) {
+// THE CALLER REACHES THE QUERY, and it reaches it in the CONTEXT.
+//
+// The socket used to hand an operator id along as a fourth argument, converted
+// from the very principal the guard had already resolved into that context —
+// so a question asking who was calling read a string derived from an answer it
+// could have read directly, and the two were one edit from disagreeing.
+func TestTheSocketsCallerReachesTheQuery(t *testing.T) {
 	t.Parallel()
 	seen := make(chan string, 1)
 	f := newSocket(t, func(a *config.APIAuth) {
 		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, func(_ context.Context, _ string, _ map[string]any, operatorID string) (any, error) {
-		seen <- operatorID
+	}, func(ctx context.Context, _ string, _ map[string]any) (any, error) {
+		// BOTH VALUES, because the resolution is the point: a socket
+		// this node could not check must not reach a query looking
+		// like an anonymous one.
+		principal, how := iam.From(ctx)
+		if how != iam.Resolved {
+			seen <- "unresolved: " + string(how)
+			return nil, nil
+		}
+		seen <- auth.OperatorID(principal)
 		return nil, nil
 	})
 	conn, _, err := f.dial(t, "secret")
@@ -521,8 +536,16 @@ func TestABadFrameTokenDoesNotDowngradeAnAuthenticatedSocket(t *testing.T) {
 	seen := make(chan string, 1)
 	f := newSocket(t, func(a *config.APIAuth) {
 		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	}, func(_ context.Context, _ string, _ map[string]any, operatorID string) (any, error) {
-		seen <- operatorID
+	}, func(ctx context.Context, _ string, _ map[string]any) (any, error) {
+		// BOTH VALUES, because the resolution is the point: a socket
+		// this node could not check must not reach a query looking
+		// like an anonymous one.
+		principal, how := iam.From(ctx)
+		if how != iam.Resolved {
+			seen <- "unresolved: " + string(how)
+			return nil, nil
+		}
+		seen <- auth.OperatorID(principal)
 		return nil, nil
 	})
 	conn, _, err := f.dial(t, "secret")
@@ -550,7 +573,7 @@ func TestQueriesRunConcurrentlyUpToTheBound(t *testing.T) {
 	// the bound is PER is the case below this one.
 	entered := make(chan struct{}, stream.MaxInFlightQueries*4)
 	release := make(chan struct{})
-	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any, _ string) (any, error) {
+	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any) (any, error) {
 		entered <- struct{}{}
 		select {
 		case <-release:
@@ -594,7 +617,7 @@ func TestOnePrincipalsTabsShareOneInFlightBudget(t *testing.T) {
 	t.Parallel()
 	entered := make(chan struct{}, stream.MaxInFlightQueries*8)
 	release := make(chan struct{})
-	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any, _ string) (any, error) {
+	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any) (any, error) {
 		entered <- struct{}{}
 		select {
 		case <-release:
@@ -651,7 +674,7 @@ func TestASecondPrincipalGetsItsOwnInFlightBudget(t *testing.T) {
 			{ID: "founder", Token: fixtureToken},
 			{ID: "second", Token: "a-second-operators-own-credential"},
 		}
-	}, func(ctx context.Context, _ string, _ map[string]any, _ string) (any, error) {
+	}, func(ctx context.Context, _ string, _ map[string]any) (any, error) {
 		entered <- struct{}{}
 		select {
 		case <-release:
@@ -700,7 +723,7 @@ func TestASlowQueryDoesNotStallTheLiveFeed(t *testing.T) {
 	t.Parallel()
 	// The reason queries run off the read loop at all.
 	release := make(chan struct{})
-	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any, _ string) (any, error) {
+	f := newSocket(t, nil, func(ctx context.Context, _ string, _ map[string]any) (any, error) {
 		select {
 		case <-release:
 		case <-ctx.Done():

@@ -46,7 +46,7 @@ func TestTheDegradedEnvelopeHoldsTheSocketOpen(t *testing.T) {
 	t.Parallel()
 	ran := make(chan struct{}, 1)
 	f := newSocketWith(t, nil,
-		func(context.Context, string, map[string]any, string) (any, error) {
+		func(context.Context, string, map[string]any) (any, error) {
 			ran <- struct{}{}
 			return map[string]any{"answered": true}, nil
 		},
@@ -131,7 +131,7 @@ func TestAServingNodeAnswersTheSameSocket(t *testing.T) {
 	t.Parallel()
 	ran := make(chan struct{}, 1)
 	f := newSocketWith(t, func(a *config.APIAuth) {},
-		func(context.Context, string, map[string]any, string) (any, error) {
+		func(context.Context, string, map[string]any) (any, error) {
 			ran <- struct{}{}
 			return map[string]any{"answered": true}, nil
 		},

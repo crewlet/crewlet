@@ -585,12 +585,12 @@ roles:
       # scripts/mattermost-dev-bootstrap.sh creates.
       mattermost_user_id: founder
       gitlab_username: jane-founder
-      # Binds the ``founder`` API token in nimbus.config.yaml to THIS
-      # seat, so what she files from the dashboard is filed by her and
-      # wakes her colleagues by the identities above.  An attribution, not
-      # an address — the engine never sends as itself, so this id is left
-      # out of rosters and lookup_colleague.
-      crewlet_operator_id: founder
+      # WHO SHE IS ON THE DASHBOARD is not written here.  She signs in as
+      # a person in the identity directory (`crewlet iam invite`, then
+      # `crewlet iam bind <id> founder`), and the directory binds her to
+      # this seat — so what she files there is filed by her.  A contact
+      # block is how to REACH a person; a credential is something they
+      # hold, and the company document names none of them.
 
 # Flexible org — units can nest to any depth.
 # Each unit has a type (department, team, squad, pod, etc.) and can

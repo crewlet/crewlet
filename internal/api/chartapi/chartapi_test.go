@@ -140,10 +140,11 @@ func (w *writer) WriteImport(_ context.Context, opID, _ string, _ []chart.Edge) 
 // rel is the lead relation, and it is DELIBERATELY THREE MAPS: a fake that
 // answered one question with another would agree with a rule asking either.
 type rel struct {
-	units    map[[2]string]bool
-	projects map[[2]string]bool
-	seats    map[[2]string]bool
-	err      error
+	units      map[[2]string]bool
+	projects   map[[2]string]bool
+	seats      map[[2]string]bool
+	containers map[[2]string]bool
+	err        error
 }
 
 func (c rel) Leads(_ context.Context, actor, subject string) (bool, error) {
@@ -156,6 +157,10 @@ func (c rel) LeadsProject(_ context.Context, actor, project string) (bool, error
 
 func (c rel) LeadsUnit(_ context.Context, actor, unit string) (bool, error) {
 	return c.answer(c.units, actor, unit)
+}
+
+func (c rel) LeadsContainer(_ context.Context, actor, container string) (bool, error) {
+	return c.answer(c.containers, actor, container)
 }
 
 func (c rel) answer(in map[[2]string]bool, actor, subject string) (bool, error) {

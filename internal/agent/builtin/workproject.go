@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -51,27 +52,7 @@ type ProjectWriter interface {
 		[]string, []string, error)
 }
 
-// LeadsProject reports whether a handle leads the unit that owns a project.
-//
-// A SEAM RATHER THAN A CHART, for the reason [Leads] is one: the answer is a
-// fact about the company's configuration, this package holds none, and a lead
-// relation derived here would be a second opinion about the hierarchy.
-//
-// NIL RESOLVES FALSE, which refuses every action naming what is missing — the
-// safe direction, and the one an operator can diagnose: a surface that wired
-// no lookup loses the verb rather than opening it to everybody.
-//
-// THREE-VALUED, for the reason [Leads] carries: a node that holds no company
-// yet cannot tell a lead from a stranger, and the false it used to answer was
-// indistinguishable from "you do not lead this project". A lead locked out of
-// their own project's policy by a node that was merely lagging reads as a
-// permissions bug, and the node reports itself healthy throughout.
-type LeadsProject func(ctx context.Context, actor, project string) (bool, error)
-
-type writeProject struct {
-	deps  WorkDeps
-	leads LeadsProject
-}
+type writeProject struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*writeProject)(nil)
 
@@ -229,27 +210,32 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE AUTHORITY IS RESOLVED ONCE, before either write, so a call that
 	// holds both facets cannot land the tag half and then be refused the
 	// policy half on a different answer to the same question.
-	// EITHER AUTHORITY IS ENOUGH, and the operator half is why the lookup
-	// below is not the whole answer: it resolves the lead from the ORG
-	// CHART by handle, and an operator token carries its own name rather
-	// than a seat's — so for the founder's own surface it always answers
-	// false. See [tracker.ProjectAuthority].
-	var lead bool
-	if t.leads != nil {
-		led, err := t.leads(ctx, actor.Handle, key)
-		if err != nil {
-			// UNKNOWN IS NOT A REFUSAL, and this is the one verb where
-			// deciding without the answer would WRITE: `person` alone is
-			// enough for the operator half, so a chart that could not
-			// answer would land a lead's edit as an operator's or refuse
-			// a lead naming the relation rather than the lag.
-			return failed(fmt.Sprintf("this node cannot say who leads %s yet, "+
-				"so it will not decide whether you may change its policy: %v. "+
-				"Try again in a moment.", key, err)), nil
+	//
+	// AND IT IS ASKED PER FACET, because they are two rules: adding a
+	// label is open to every colleague — which is what the tool's own
+	// gate already decided — while renaming one, archiving one or
+	// touching the policy is the project lead's, and taking the project
+	// out of circulation is that AND never an agent's. Asking the whole
+	// verb as the lead's refused a colleague the one facet
+	// internal/tracker grants them.
+	project := authz.Object{Kind: authz.KindProject, Container: key}
+	var authority tracker.ProjectAuthority
+	if !edit.Empty() || len(tagEdit.Rename) > 0 || len(tagEdit.Archive) > 0 {
+		if refusal := t.deps.mayWrite(ctx, authz.ActionProjectPolicy,
+			project); refusal != nil {
+
+			return *refusal, nil
 		}
-		lead = led
+		authority.Policy = true
 	}
-	person := actor.Kind.Person()
+	if edit.Archived != nil {
+		if refusal := t.deps.mayWrite(ctx, authz.ActionProjectArchive,
+			project); refusal != nil {
+
+			return *refusal, nil
+		}
+		authority.Archive = true
+	}
 	writer := t.deps.ProjectWriter(actor)
 	out := map[string]any{"project": key}
 
@@ -258,7 +244,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// as a mistake. Two writes, never one — two objects on two subjects.
 	if !tagEdit.Empty() {
 		result, err := writer.WriteTags(ctx, "tags-"+uuid.NewString(), key,
-			tagEdit, tracker.TagAuthority{Lead: lead, Operator: person})
+			tagEdit, tracker.TagAuthority{Policy: authority.Policy})
 		if err != nil {
 			return failed(writeFailure(tracker.WriteProjectTool, err)), nil
 		}
@@ -273,7 +259,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if !edit.Empty() {
 		result, err := writer.WriteProject(ctx, "policy-"+uuid.NewString(), key,
-			edit, tracker.ProjectAuthority{Lead: lead, Operator: person})
+			edit, authority)
 		if err != nil {
 			return failed(writeFailure(tracker.WriteProjectTool, err)), nil
 		}

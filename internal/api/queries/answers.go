@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -78,6 +79,14 @@ type Sources struct {
 	// that took the integrations from one and the roster from the next
 	// would describe a company that never existed.
 	Company func() (*config.Company, *org.Organization)
+
+	// Chart answers the lead relations the personal questions are scoped
+	// by, through the SAME seam internal/authz asks every other surface's
+	// through — see [Sources.viewerHandle]. Nil is a surface with no
+	// chart, which [authz.NoChart] reports as UNKNOWN rather than as
+	// "leads nobody": a 503 a caller retries, never a 403 that sends them
+	// to ask for authority they already hold.
+	Chart authz.Chart
 
 	// Coord is the lease table: the fleet's one shared answer to "which
 	// node holds what". Nil leaves the fleet question unregistered.

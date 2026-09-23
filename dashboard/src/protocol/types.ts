@@ -3339,16 +3339,18 @@ export interface TurnsAnswer {
   next: string | null;
 }
 
-/** Who the presented credential belongs to — see `lib/viewer.ts`. */
+/** Who the engine resolved this caller to — see `lib/viewer.ts`. */
 export interface Viewer {
-  /** The operator id the token resolves to, or "" for an anonymous caller. */
-  operator_id: string;
-  /** Whether this caller may ask the operator-gated questions. */
-  operator: boolean;
-  /** The seat whose `contact.crewlet_operator_id` names that id, or "".
+  /** The principal's login: a person's dotted name, or a machine's `class:id`. */
+  login: string;
+  /** The capabilities this caller carries, after the node's ceiling. */
+  grants: string[];
+  /** The seat the identity directory binds this caller to, or "".
    *  UNBOUND IS AN ORDINARY STATE, not a misconfiguration. */
   handle: string;
+  /** That seat's display name, or "". */
   name: string;
+  /** That seat's kind — `human` or `agent` — or "" for no seat. */
   kind: string;
 }
 

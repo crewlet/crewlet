@@ -63,6 +63,10 @@ type Store struct {
 	// read here is paired with an expectation.
 	db *store.DB
 
+	// reserved names the containers a SEAT may not write to. See
+	// [Options.Reserved].
+	reserved func() []string
+
 	now      func() time.Time
 	newID    func() string
 	newSeqID func() string
@@ -80,6 +84,34 @@ type Options struct {
 	// test can pin it and so nothing on the write path reads a clock the
 	// applier is forbidden.
 	Now func() time.Time
+
+	// Reserved names the containers this company holds for itself — the
+	// tool-skills container, whose pages are machinery, and the org root,
+	// which holds the onboarding tree. An AGENT's write to one is refused
+	// with [ErrReserved].
+	//
+	// # Why it is here and not at a tool
+	//
+	// It was one check at `write_page`, so a seat that could not CREATE a
+	// page in the skills container could still save over one, rename one
+	// and comment on one — and every surface that grows later inherits
+	// the same hole, silently, because nothing says the rule exists. The
+	// store is the one place every write path goes through.
+	//
+	// # Why the ACTOR and not the authority table
+	//
+	// Because this is not a question about capability. internal/authz
+	// decides who may write a page at all; what is left is that pages in
+	// a reserved container are excluded from knowledge search and from
+	// routing, so a SEAT writing there produces something silently
+	// unreadable — and an agent cannot know that from anything it holds.
+	// A person doing it on purpose, through the CLI that publishes the
+	// skills or through the dashboard, is the intended use of those
+	// containers rather than a mistake.
+	//
+	// A FUNCTION because the keys are Tier B: `knowledge.skills_container`
+	// moves on an apply, and this store is built once per node.
+	Reserved func() []string
 }
 
 // NewStore builds the knowledge base over its own log.
@@ -96,7 +128,8 @@ func NewStore(opts Options) (*Store, error) {
 	}
 	s := &Store{
 		publisher: opts.Publisher, db: opts.DB, now: opts.Now,
-		newID: uuid.NewString, newSeqID: newTimeOrderedID,
+		reserved: opts.Reserved,
+		newID:    uuid.NewString, newSeqID: newTimeOrderedID,
 	}
 	if s.now == nil {
 		s.now = nowUTC
@@ -274,6 +307,33 @@ func (a Actor) Name() string {
 		return "operator:" + a.OperatorID
 	}
 	return "operator:anonymous"
+}
+
+// refuseReserved refuses an AGENT's write to a container the engine holds for
+// itself.
+//
+// THE CONTAINER KEY IS CANONICALISED on both sides, because an operator types
+// `eng` in one file and `ENG` in another and a comparison that read them as
+// two containers would let a seat write to the one it was refused.
+func (s *Store) refuseReserved(actor Actor, container string) error {
+	if s.reserved == nil || actor.IsHuman() {
+		return nil
+	}
+	key := ContainerKey(container)
+	if key == "" {
+		return nil
+	}
+	for _, held := range s.reserved() {
+		if ContainerKey(held) != key {
+			continue
+		}
+		return fmt.Errorf("%w: %s holds this company's own pages — they are "+
+			"excluded from knowledge search and from routing, so what you "+
+			"write there is silently unreadable. Write it somewhere a reader "+
+			"will find it, or ask a person to publish it here",
+			ErrReserved, key)
+	}
+	return nil
 }
 
 // IsHuman reports an actor a notification treats as a person.

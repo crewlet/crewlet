@@ -65,6 +65,25 @@ const (
 	// whoever leads them, or the admin path.
 	ClassOwnOrLead Class = "own_or_lead"
 
+	// ClassSavedView — a saved view, whose authority follows what the view
+	// IS rather than who is asking. A view naming an OWNER is that
+	// person's own strip and appears in nobody else's, so it is their
+	// record; a view naming none is SHARED on its container — everybody
+	// sees it as a tab, and `default` takes the container's landing tab
+	// from whichever view held it — so it is that container's lead.
+	//
+	// ONE CLASS AND NOT TWO VERBS, which is the whole reason it exists:
+	// the table is keyed on the ACTION, so two verbs would let the CALLER
+	// choose which question is asked, and a caller writing a shared view
+	// would ask the personal one. The payload decides, and there is
+	// nothing to pick.
+	//
+	// It reads the container's KIND for [ClassChartObject]'s reason — a
+	// project key and a unit key are two relations — and the WORKSPACE
+	// container reaches no relation at all, so a company-wide tab is the
+	// admin path alone.
+	ClassSavedView Class = "saved_view"
+
 	// ClassContainer — a project's own policy: its fields, its default
 	// assignee, its routing unit, a tag rename. Whoever leads the project,
 	// or the admin path.
@@ -91,16 +110,6 @@ const (
 	// restoring a page. The CONTAINER's lead, or the admin path: a
 	// colleague may file work in a project and may not take it out again.
 	ClassDestructive Class = "destructive"
-
-	// ClassPurge — a task or page purged beyond recovery. The admin
-	// grant AND a principal that is not an agent.
-	//
-	// THE ONE CLASS THAT REFUSES A CAPABILITY SOMEBODY HOLDS. A seat
-	// carrying fleet:operate is an agent that was granted the deployment's
-	// controls, which is a legitimate configuration — and an irreversible
-	// delete decided inside a turn is not something a model should be able
-	// to reach for at all. A person or a machine credential does it.
-	ClassPurge Class = "purge"
 
 	// ClassAuthored — editing and removing a page comment. Whoever wrote
 	// it, or the admin path.
@@ -145,8 +154,9 @@ const (
 // Classes are the thirteen, in declaration order.
 var Classes = []Class{
 	ClassRead, ClassSelf, ClassColleagueWrite, ClassOwnRecord, ClassOwnOrLead,
-	ClassContainer, ClassChartObject, ClassDestructive, ClassPurge,
-	ClassAuthored, ClassOperator, ClassDirectoryRead, ClassDirectorySelf,
+	ClassSavedView, ClassContainer, ClassChartObject, ClassDestructive,
+	ClassAuthored, ClassOperator, ClassDirectoryRead,
+	ClassDirectorySelf,
 }
 
 // Decide answers whether p may do a to o.
@@ -170,6 +180,9 @@ var Classes = []Class{
 // never succeed, on every retry, for ever. The reason is a closed value a
 // caller can branch on; that is what it is for.
 //
+// THEN THE HUMAN-ONLY BAR, which is a fact about the VERB and therefore
+// decided before any class reads any relation — see [rule.humanOnly].
+//
 // THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
 // because the chart can fail and the grant cannot: an operator holding
 // fleet:operate must not be told "I cannot tell" by a node that is behind.
@@ -180,6 +193,13 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	r, known := rules[a]
 	if !known {
 		return Decision{Reason: ReasonUnknownAction}
+	}
+	// AND AN AGENT NEVER TAKES A HUMAN-ONLY VERB, checked before the
+	// class so the refusal names what it actually is: an agent holding
+	// the grant is told it is a seat, not that it lacks a capability it
+	// plainly has. See [rule.humanOnly].
+	if r.humanOnly && p.Kind == iam.KindSeat {
+		return Decision{Reason: ReasonSeatRefused}
 	}
 	switch r.class {
 	case ClassRead:
@@ -225,12 +245,61 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 		}
 		return leads(ctx, chart, actorOf(p), o.Owner, ReasonNotSelf)
 
+	case ClassSavedView:
+		if p.Can(adminGrant) {
+			return Decision{Allowed: true, Reason: ReasonGrant}
+		}
+		// A PERSONAL VIEW IS A RECORD AND NOT A TAB, so it takes
+		// [ClassOwnRecord]'s answer and not [ClassOwnOrLead]'s: a lead
+		// re-orders what their report works on, and rearranging the
+		// tabs above it is a gesture nobody asked a lead to make.
+		if o.Owner != "" {
+			if p.Login != "" && p.Login == o.Owner ||
+				p.Seat != "" && p.Seat == o.Owner {
+
+				return Decision{Allowed: true, Reason: ReasonSelf}
+			}
+			return Decision{Reason: ReasonNotSelf}
+		}
+		if o.Container == "" {
+			return Decision{Reason: ReasonUnnamed}
+		}
+		switch o.ContainerKind {
+		case KindProject:
+			return leadsProject(ctx, chart, actorOf(p), o.Container)
+		case KindUnit:
+			return leadsUnit(ctx, chart, actorOf(p), o.Container)
+		case KindPerson:
+			// A SHARED VIEW ON SOMEBODY'S PAGE, which is theirs and
+			// their lead's — the opposite of the personal arm above,
+			// because this one is a tab on a page other people read
+			// rather than a strip only its owner sees.
+			if p.Login != "" && p.Login == o.Container ||
+				p.Seat != "" && p.Seat == o.Container {
+
+				return Decision{Allowed: true, Reason: ReasonSelf}
+			}
+			return leads(ctx, chart, actorOf(p), o.Container, ReasonNotSelf)
+		}
+		// THE WORKSPACE, and anything this build does not know. A tab
+		// every person in the company lands on is the admin path,
+		// which the grant check above is.
+		return Decision{Reason: ReasonNotLead}
+
 	case ClassContainer, ClassDestructive:
 		if p.Can(adminGrant) {
 			return Decision{Allowed: true, Reason: ReasonGrant}
 		}
 		if o.Container == "" {
 			return Decision{Reason: ReasonUnnamed}
+		}
+		// THE KIND PICKS THE RELATION, for [ClassChartObject]'s reason
+		// and [Chart.LeadsContainer]'s: a page container and a tracker
+		// project are two key classes a unit declares in two fields,
+		// and one relation asked with the other's key matches only a
+		// company that spelled them the same.
+		if o.Kind == KindContainer || o.Kind == KindPage {
+			return leadsContainer(ctx, chart, actorOf(p), o.Container)
 		}
 		return leadsProject(ctx, chart, actorOf(p), o.Container)
 
@@ -259,16 +328,6 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 			return leads(ctx, chart, actorOf(p), o.Owner, ReasonNotLead)
 		}
 		return Decision{Reason: ReasonUnnamed}
-
-	case ClassPurge:
-		// THE CAPABILITY IS NOT ENOUGH ON ITS OWN, and the order says
-		// which refusal a reader gets: an agent holding the grant is
-		// told it is a seat, not that it lacks a capability it plainly
-		// has.
-		if p.Kind == iam.KindSeat {
-			return Decision{Reason: ReasonSeatRefused}
-		}
-		return granted(p, adminGrant)
 
 	case ClassAuthored:
 		if o.Author == "" {
@@ -366,6 +425,24 @@ func leads(ctx context.Context, chart Chart, actor, subject string, refusal Reas
 		return Decision{Allowed: true, Reason: ReasonLead}
 	}
 	return Decision{Reason: refusal}
+}
+
+// leadsContainer is [leads] over a page container key.
+func leadsContainer(ctx context.Context, chart Chart, actor, container string) Decision {
+	if actor == "" {
+		return Decision{Reason: ReasonNotLead}
+	}
+	if chart == nil {
+		return Decision{Reason: ReasonNotLead, Err: ErrNoChart}
+	}
+	ok, err := chart.LeadsContainer(ctx, actor, container)
+	switch {
+	case err != nil:
+		return Decision{Reason: ReasonNotLead, Err: err}
+	case ok:
+		return Decision{Allowed: true, Reason: ReasonLead}
+	}
+	return Decision{Reason: ReasonNotLead}
 }
 
 // leadsProject is [leads] over a project key.

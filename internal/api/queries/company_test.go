@@ -88,7 +88,7 @@ func answer(t *testing.T, s queries.Sources, what string, params map[string]any)
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	data, err := r.Answer(everyGrant(t), what, params, "operator")
+	data, err := r.Answer(everyGrant(t), what, params)
 	if err != nil {
 		t.Fatalf("%s: %v", what, err)
 	}
@@ -503,7 +503,7 @@ func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
 			ID: uuid.New(), Login: "token:reader", Kind: iam.KindMachine,
 			Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead},
 		})
-		if _, err := r.Answer(narrow, what, nil, "reader"); !errors.Is(
+		if _, err := r.Answer(narrow, what, nil); !errors.Is(
 			err, queries.ErrUnauthorized) {
 
 			t.Errorf("%s answered %v to the ordinary dashboard reader, want an "+
@@ -527,7 +527,7 @@ func TestAnUnreachableLeaseTableIsUnavailableRatherThanFailed(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Coord: faulty, NodeID: "node-a"})
 
-	_, err := r.Answer(everyGrant(t), "fleet", nil, "op-1")
+	_, err := r.Answer(everyGrant(t), "fleet", nil)
 	if !errors.Is(err, queries.ErrUnavailable) {
 		t.Fatalf("an unreachable lease table answered %v, want ErrUnavailable", err)
 	}
@@ -547,7 +547,7 @@ func TestACoordinationFailureThatIsNotAnOutageIsNotRetried(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Coord: faulty})
 
-	_, err := r.Answer(everyGrant(t), "fleet", nil, "op-1")
+	_, err := r.Answer(everyGrant(t), "fleet", nil)
 	if err == nil {
 		t.Fatal("a failed read answered successfully")
 	}
@@ -567,7 +567,7 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 		"fleet", "schedules", "integrations", "conversations",
 		"agent_memory", "config", "config_audit", "config_diff",
 	} {
-		if _, err := r.Answer(everyGrant(t), what, nil, "operator"); err == nil {
+		if _, err := r.Answer(everyGrant(t), what, nil); err == nil {
 			t.Errorf("%s answered from a registry with no source for it", what)
 		}
 	}
@@ -636,7 +636,7 @@ func TestAgentMemoryNeedsASeat(t *testing.T) {
 	db := openStore(t)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Diary: learning.NewDiary(db)})
-	if _, err := r.Answer(everyGrant(t), "agent_memory", nil, "operator"); err == nil {
+	if _, err := r.Answer(everyGrant(t), "agent_memory", nil); err == nil {
 		t.Fatal("an agent_memory query with no id was answered")
 	}
 }
@@ -726,7 +726,7 @@ func TestAnUnreadableLeaseTableFailsTheFleetQuery(t *testing.T) {
 		Coord:  brokenCoord(errors.New("store down")),
 		NodeID: "node-a",
 	})
-	if _, err := r.Answer(everyGrant(t), "fleet", nil, "operator"); err == nil {
+	if _, err := r.Answer(everyGrant(t), "fleet", nil); err == nil {
 		t.Fatal("an unreadable lease table answered a fleet")
 	}
 }

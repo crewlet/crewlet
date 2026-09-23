@@ -24,7 +24,7 @@ func TestARegisteredQuestionIsAnswered(t *testing.T) {
 	r := queries.NewRegistry()
 	r.Register("events", iam.GrantStateRead, answersWith("rows"))
 
-	got, err := r.Answer(everyGrant(t), "events", nil, "")
+	got, err := r.Answer(everyGrant(t), "events", nil)
 	if err != nil {
 		t.Fatalf("Answer: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestARegisteredQuestionIsAnswered(t *testing.T) {
 func TestAnUnregisteredQuestionIsUnknown(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	_, err := r.Answer(everyGrant(t), "nope", nil, "")
+	_, err := r.Answer(everyGrant(t), "nope", nil)
 	if !errors.Is(err, queries.ErrUnknown) {
 		t.Errorf("err = %v, want ErrUnknown", err)
 	}
@@ -61,15 +61,15 @@ func TestAQuestionIsAnsweredOnlyToTheGrantItDeclares(t *testing.T) {
 	r.Register("events", iam.GrantAuditRead, answersWith("rows"))
 
 	narrow := asking(t, iam.GrantStateRead)
-	if _, err := r.Answer(narrow, "config", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
+	if _, err := r.Answer(narrow, "config", nil); !errors.Is(err, queries.ErrUnauthorized) {
 		t.Errorf("a state:read credential read the company document: %v", err)
 	}
-	if _, err := r.Answer(narrow, "events", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
+	if _, err := r.Answer(narrow, "events", nil); !errors.Is(err, queries.ErrUnauthorized) {
 		t.Errorf("a state:read credential read the transcripts: %v", err)
 	}
 	// The counterfactual: the grant it DOES declare is answered, or the
 	// assertions above would pass on a registry that refused everything.
-	got, err := r.Answer(asking(t, iam.GrantConfigRead), "config", nil, "founder")
+	got, err := r.Answer(asking(t, iam.GrantConfigRead), "config", nil)
 	if err != nil {
 		t.Fatalf("the declared grant was refused: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestAQuestionIsRefusedToACallerNobodyResolved(t *testing.T) {
 	r.Register("events", iam.GrantStateRead, answersWith("rows"))
 	// DELIBERATELY t.Context(): a context no resolver ever touched, which
 	// is what a handler nobody wired through the guard hands down.
-	data, err := r.Answer(t.Context(), "events", nil, "")
+	data, err := r.Answer(t.Context(), "events", nil)
 	if err == nil {
 		t.Fatalf("a context nobody resolved was answered: %v", data)
 	}
@@ -135,7 +135,7 @@ func TestNobodyAskingIsADifferentRefusalFromLackingTheGrant(t *testing.T) {
 	r := queries.NewRegistry()
 	r.Register("events", iam.GrantAuditRead, answersWith("rows"))
 
-	_, anonymous := r.Answer(iam.WithAnonymous(t.Context()), "events", nil, "")
+	_, anonymous := r.Answer(iam.WithAnonymous(t.Context()), "events", nil)
 	if !errors.Is(anonymous, queries.ErrUnauthenticated) {
 		t.Errorf("a caller presenting nothing is not ErrUnauthenticated: %v", anonymous)
 	}
@@ -144,7 +144,7 @@ func TestNobodyAskingIsADifferentRefusalFromLackingTheGrant(t *testing.T) {
 			"fall short: %v", anonymous)
 	}
 
-	_, narrow := r.Answer(asking(t, iam.GrantStateRead), "events", nil, "")
+	_, narrow := r.Answer(asking(t, iam.GrantStateRead), "events", nil)
 	if !errors.Is(narrow, queries.ErrUnauthorized) {
 		t.Errorf("a principal lacking the grant is not ErrUnauthorized: %v", narrow)
 	}
@@ -169,7 +169,7 @@ func TestAQuestionIsRetriedRatherThanRefusedWhenIdentityIsUnreadable(t *testing.
 
 	down := errors.New("the identity estate is behind")
 	ctx := iam.WithUnresolved(t.Context(), down)
-	data, err := r.Answer(ctx, "events", nil, "")
+	data, err := r.Answer(ctx, "events", nil)
 	if err == nil {
 		t.Fatalf("a question was answered while identity was unreadable: %v", data)
 	}
@@ -217,7 +217,7 @@ func TestTheDeclaredGrantIsWhatAnswerEnforces(t *testing.T) {
 				others = append(others, g)
 			}
 		}
-		if _, err := r.Answer(asking(t, others...), what, nil, "somebody"); !errors.Is(err, queries.ErrUnauthorized) {
+		if _, err := r.Answer(asking(t, others...), what, nil); !errors.Is(err, queries.ErrUnauthorized) {
 			t.Errorf("%s answered a caller holding every grant but %s: %v", what, want, err)
 		}
 	}
@@ -314,7 +314,7 @@ func TestAFailingAnswerReachesTheCaller(t *testing.T) {
 	r.Register("events", iam.GrantStateRead, func(context.Context, queries.Params) (any, error) {
 		return nil, sentinel
 	})
-	if _, err := r.Answer(asking(t, iam.GrantStateRead), "events", nil, ""); !errors.Is(err, sentinel) {
+	if _, err := r.Answer(asking(t, iam.GrantStateRead), "events", nil); !errors.Is(err, sentinel) {
 		t.Errorf("err = %v, want the answer's own", err)
 	}
 }

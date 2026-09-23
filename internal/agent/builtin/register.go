@@ -100,12 +100,24 @@ type Deps struct {
 	// does not run would reach for it and fail at the call.
 	Work WorkDeps
 
-	// LeadsProject answers whether a seat leads the unit that owns a
-	// project, which is the authority over that project's own settings.
-	// Nil REFUSES rather than degrading — see [LeadsProject] — so a build
-	// that wired no chart lookup leaves write_project able to declare a
-	// tag and nothing else, which is the safe direction.
-	LeadsProject LeadsProject
+	// Authorize decides whether the party behind a call may make it.
+	//
+	// EVERY TOOL GOES THROUGH IT, wrapped once at registration rather
+	// than checked inside each one, because the action IS the tool's own
+	// name and there is therefore exactly one place the check could be
+	// forgotten.
+	//
+	// NIL REFUSES EVERYTHING, which is the opposite of what a nil skill
+	// gate means and deliberately so: a missing skill gate is a company
+	// that locked nothing, and a missing authority decision is a surface
+	// that shipped without wiring one. See authority.go.
+	//
+	// ONE FIELD, PUSHED DOWN into [WorkDeps] and [PageDeps] by [Register],
+	// because a few checks can only be taken after a read and those tools
+	// reach the decision through their own deps. A caller that set three
+	// fields could set two of them differently, which is the drift this
+	// whole seam exists to remove.
+	Authorize Authorizer
 }
 
 // Register adds every builtin the given dependencies can support.
@@ -122,6 +134,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	if reg == nil {
 		return nil, fmt.Errorf("builtin: no registry")
 	}
+	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
 
 	// lookup_colleague is unconditional: its corpus is the turn's own org,
 	// so it works on any node that is running a company at all — and it is
@@ -157,7 +170,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&listWorkItems{deps: deps.Work}, deps.Work.Reader != nil},
 		{&getWorkItem{deps: deps.Work}, deps.Work.Reader != nil},
 		{&createWorkItem{deps: deps.Work}, deps.Work.Writer != nil},
-		{&updateWorkItem{deps: deps.Work, leads: deps.LeadsProject},
+		{&updateWorkItem{deps: deps.Work},
 			deps.Work.Writer != nil && deps.Work.Reader != nil},
 		{&commentOnWorkItem{deps: deps.Work}, deps.Work.Writer != nil && deps.Work.Reader != nil},
 		// AND THE FOLD, which is a seat's for the reason the trash is
@@ -182,7 +195,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// AND THE ONE PROJECT WRITE a seat holds, for one facet: a
 		// create refuses a label the project has not declared, so a
 		// seat without this could never use `labels` at all.
-		{&writeProject{deps: deps.Work, leads: deps.LeadsProject},
+		{&writeProject{deps: deps.Work},
 			deps.Work.ProjectWriter != nil},
 		// AND THE TWO ABOUT CHANGE rather than about state: a board says
 		// what is there now, and no filter over its rows can answer
@@ -221,7 +234,12 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		case slices.Contains(PageWrites(), c.tool.Name()):
 			opts = append(opts, tools.DeliversTo(pages.Source))
 		}
-		if err := reg.RegisterWith(c.tool, tools.OriginBuiltin,
+		// THE GATE WRAPS EVERY ONE, and it wraps HERE rather than at
+		// each tool: the authority table is keyed on the tool's own
+		// name, so one wrapper covers every verb and a new tool cannot
+		// ship ungated by somebody forgetting a line inside it.
+		if err := reg.RegisterWith(gate(c.tool, deps.Authorize),
+			tools.OriginBuiltin,
 			annotationsFor(c.tool.Name()), opts...); err != nil {
 			return names, fmt.Errorf("builtin: %w", err)
 		}

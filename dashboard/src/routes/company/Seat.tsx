@@ -579,11 +579,13 @@ export function SeatScreen({ handle }: { handle: string }) {
   // on a person's record describes one, so this is read only for a human.
   // AND ONLY WHERE THE READER MAY HAVE IT. A person record is somebody's
   // unread notices, the order they mean to work in and who set it — the
-  // engine scopes it to the seat the caller's own credential is bound to, and
-  // a colleague reading it needs an operator one. Asking anyway would put a
-  // refusal on the screen where the honest answer is that this is theirs.
+  // engine answers it to its owner, whoever leads them, and `people:manage`.
+  // The lead relation is the chart's and not this screen's to compute, so a
+  // lead's read is asked for the owner and the grant alone; asking for every
+  // colleague would put a refusal on the screen where the honest answer is
+  // that this is somebody else's.
   const viewer = useViewer();
-  const mayReadPerson = viewer.operator || (viewer.handle !== "" && viewer.handle === handle);
+  const mayReadPerson = viewer.managesPeople || (viewer.handle !== "" && viewer.handle === handle);
   const person = useQuery(
     "work_person",
     { handle },

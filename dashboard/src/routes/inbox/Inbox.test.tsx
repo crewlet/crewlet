@@ -96,8 +96,8 @@ function mount(answers: Record<string, unknown> = {}) {
     }
     if (what === "viewer") {
       return Promise.resolve({
-        operator_id: "U0FOUNDER",
-        operator: true,
+        login: "U0FOUNDER",
+        grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
         handle: "ada",
         name: "Ada",
         kind: "human",
@@ -257,7 +257,12 @@ test("a figure whose query has not answered draws a dash, never a zero", async (
     }
   ).query = (what: string) => {
     if (what === "viewer") {
-      return Promise.resolve({ operator_id: "U0FOUNDER", operator: true, handle: "", name: "" });
+      return Promise.resolve({
+        login: "U0FOUNDER",
+        grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
+        handle: "",
+        name: "",
+      });
     }
     // The two the strip reads never answer.
     if (what === "work_projects" || what === "work_workload") return new Promise(() => {});

@@ -261,21 +261,20 @@ type Guard struct {
 	// freshness is measured against.
 	now func() time.Time
 
-	// boundSeat maps a Tier A token id to the chart seat that claims it,
-	// and answers empty for a credential nobody in the chart claims.
+	// boundSeat maps a Tier A token's LOGIN to the seat the identity
+	// directory binds it to, and answers empty for a credential nobody in
+	// the directory holds.
 	//
 	// THE COMPANY'S HALF OF A PRINCIPAL, handed in rather than read here,
-	// because it comes from the org chart and this package resolves a
-	// CREDENTIAL. `contact.crewlet_operator_id` is what declares the
-	// binding, and carrying it is what makes a LEAD relation reachable at
-	// all: without the seat handle every authority rule asking "do you
-	// lead this" falls through to the admin grant, and a founder is
-	// indistinguishable from a CI pipeline in every audit row and every
-	// refusal.
+	// because it comes from the identity estate and this package resolves
+	// a CREDENTIAL. Carrying it is what makes a LEAD relation reachable
+	// for a token at all: without the seat handle every authority rule
+	// asking "do you lead this" falls through to the admin grant, and a
+	// founder is indistinguishable from a CI pipeline in every audit row.
 	//
 	// Nil is an ordinary wiring — a guard built before any company is
 	// active — and answers as an unbound credential does.
-	boundSeat func(operatorID string) string
+	boundSeat func(login string) string
 
 	// dev is the development principal an unauthenticated request resolves
 	// to, or nil. Installed by [Guard.WithDevPrincipal], refused at
@@ -298,7 +297,7 @@ type Guard struct {
 // CALLED ONCE, AT WIRING TIME, before this guard serves anything: the lookup
 // is read on every request and a guard whose seam moved under a request in
 // flight would attribute one write two ways.
-func (g *Guard) BindSeats(lookup func(operatorID string) string) *Guard {
+func (g *Guard) BindSeats(lookup func(login string) string) *Guard {
 	g.boundSeat = lookup
 	return g
 }

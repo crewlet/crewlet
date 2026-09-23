@@ -244,7 +244,7 @@ func TestWritingSomebodyElsesPrioritiesWakesThem(t *testing.T) {
 
 	lead := r.writer.As("lead", tracker.AuthorHuman, tracker.Provenance{})
 	if _, err := lead.WritePriorities(t.Context(), "op-prio", "alice",
-		[]string{task.ID}, tracker.PersonAuthority{Lead: true}); err != nil {
+		[]string{task.ID}, tracker.PersonAuthority{Authorized: true}); err != nil {
 
 		t.Fatalf("write alice's priorities: %v", err)
 	}
@@ -352,11 +352,11 @@ func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 		allowed   bool
 	}{
 		"an operator": {"ops", tracker.AuthorOperator,
-			tracker.PersonAuthority{Person: true}, true},
+			tracker.PersonAuthority{Authorized: true}, true},
 		"a human": {"founder", tracker.AuthorHuman,
-			tracker.PersonAuthority{Person: true}, true},
+			tracker.PersonAuthority{Authorized: true}, true},
 		"a lead": {"lead", tracker.AuthorAgent,
-			tracker.PersonAuthority{Lead: true}, true},
+			tracker.PersonAuthority{Authorized: true}, true},
 		// A SEAT IS THE ONE PARTY THAT MAY NOT. An agent re-ordering a
 		// colleague's list is a hand-off in disguise: an Addressed wake
 		// that bypasses the guarded take and the reassignment budget.

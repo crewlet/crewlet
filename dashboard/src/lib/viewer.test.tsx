@@ -30,10 +30,10 @@ afterEach(() => {
 });
 
 describe("who the dashboard thinks you are", () => {
-  test("a bound token names the seat, and is neither unbound nor anonymous", async () => {
+  test("a bound principal names the seat, and is neither unbound nor anonymous", async () => {
     answering({
-      operator_id: "ops-1",
-      operator: true,
+      login: "ops-1",
+      grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
       handle: "ana",
       name: "Ana Diaz",
       kind: "human",
@@ -46,28 +46,34 @@ describe("who the dashboard thinks you are", () => {
     expect(result.current.anonymous).toBe(false);
   });
 
-  // AN ORDINARY STATE. The remedy is a line of company configuration, and a
-  // screen can only say which line if it has the id to put in it.
-  test("a token no seat claims is UNBOUND and still carries its operator id", async () => {
-    answering({ operator_id: "ops-7", operator: true, handle: "", name: "", kind: "" });
+  // AN ORDINARY STATE. The remedy is a binding in the identity directory, and
+  // a screen can only say what to bind if it has the login to name.
+  test("a credential no seat is bound to is UNBOUND and still carries its login", async () => {
+    answering({
+      login: "ops-7",
+      grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
+      handle: "",
+      name: "",
+      kind: "",
+    });
     const { result } = renderHook(() => useViewer());
     await waitFor(() => expect(result.current.unbound).toBe(true));
-    expect(result.current.operatorID).toBe("ops-7");
+    expect(result.current.login).toBe("ops-7");
     expect(result.current.anonymous).toBe(false);
   });
 
-  test("no token at all is ANONYMOUS, which is a different sentence", async () => {
-    answering({ operator_id: "", operator: false, handle: "", name: "", kind: "" });
+  test("nobody resolved at all is ANONYMOUS, which is a different sentence", async () => {
+    answering({ login: "", grants: [], handle: "", name: "", kind: "" });
     const { result } = renderHook(() => useViewer());
     await waitFor(() => expect(result.current.anonymous).toBe(true));
     expect(result.current.unbound).toBe(false);
-    expect(result.current.operator).toBe(false);
+    expect(result.current.managesPeople).toBe(false);
   });
 
   // A FAILED READ IS NOT AN ANSWER, and anonymity is the worst of the three
   // to guess: it locks the app rail, My work and the inbox for an operator
-  // whose token is valid and every one of whose other queries answered. The
-  // engine reports anonymity as an EMPTY operator id with no error, so a throw
+  // whose credential is valid and every one of whose other queries answered.
+  // The engine reports anonymity as an EMPTY login with no error, so a throw
   // here means only that nothing came back.
   test("a read that failed is nobody yet, not ANONYMOUS", async () => {
     // ONE rejected promise, so the test can wait on the very object the hook

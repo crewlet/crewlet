@@ -90,10 +90,10 @@ type Principal struct {
 
 	// Seat is the seat handle this principal acts as, or "" for one that
 	// acts as itself. For [KindSeat] it is the seat. For [KindPerson] it
-	// is the binding the company document declares with
-	// `contact.crewlet_operator_id`, which is what lets somebody at the
-	// dashboard act AS THEMSELVES rather than as a credential — and
-	// unbound is an ordinary state, not a misconfiguration.
+	// is the binding the IDENTITY DIRECTORY holds for them, which is what
+	// lets somebody at the dashboard act AS THEMSELVES rather than as a
+	// credential — and unbound is an ordinary state, not a
+	// misconfiguration.
 	//
 	// Carried as an opaque string: internal/org owns the seat-handle
 	// grammar, and a second copy of it in a leaf package is a copy that

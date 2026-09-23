@@ -271,6 +271,66 @@ func TestOnlyTheAuthorEditsAComment(t *testing.T) {
 	}
 }
 
+// AND ONLY THE AUTHOR OR A MODERATOR REMOVES ONE.
+//
+// This verb had NO CHECK AT ALL: any caller that could reach it could take
+// down any remark on any page, while [pages.Store.EditComment] three functions
+// up refused exactly that. The asymmetry was invisible because nothing called
+// it yet — the pages routes are its first caller.
+func TestANonAuthorCannotRemoveAComment(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	comment, _, err := r.store.Comment(t.Context(), author("jane"), page.Page.ID,
+		pages.NewComment{Body: "jane's remark"})
+	if err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+
+	if _, err := r.store.RemoveComment(t.Context(), author("bob"),
+		page.Page.ID, comment.ID, pages.CommentAuthority{}); !errors.Is(
+		err, pages.ErrInvalid) {
+
+		t.Fatalf("a second person removed somebody else's comment: %v", err)
+	}
+	r.drain()
+	if thread, err := r.store.Thread(t.Context(), page.Page.ID); err != nil {
+		t.Fatalf("thread: %v", err)
+	} else if len(thread) != 1 {
+		t.Fatalf("the comment came down anyway: %+v", thread)
+	}
+
+	// AND A MODERATOR DOES, which is the arm the deployment grant opens:
+	// somebody has to be able to take down what nobody else can.
+	if _, err := r.store.RemoveComment(t.Context(), author("bob"),
+		page.Page.ID, comment.ID,
+		pages.CommentAuthority{Moderate: true}); err != nil {
+
+		t.Fatalf("a moderator could not remove a comment: %v", err)
+	}
+	r.drain()
+	if thread, err := r.store.Thread(t.Context(), page.Page.ID); err != nil {
+		t.Fatalf("thread: %v", err)
+	} else if len(thread) != 0 {
+		t.Fatalf("the moderator's removal did not land: %+v", thread)
+	}
+
+	// AND THE AUTHOR NEEDS NO ANSWER AT ALL, which is what keeps the
+	// ordinary case reachable on a node that can decide nothing.
+	second, _, err := r.store.Comment(t.Context(), author("jane"),
+		page.Page.ID, pages.NewComment{Body: "another"})
+	if err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.RemoveComment(t.Context(), author("jane"),
+		page.Page.ID, second.ID, pages.CommentAuthority{}); err != nil {
+
+		t.Fatalf("jane could not remove her own remark: %v", err)
+	}
+}
+
 // ENSURING A CONTAINER IS IDEMPOTENT, and it runs on every boot for every
 // unit's space — so a record per boot would be a log that grows with restarts
 // rather than with edits.
@@ -806,5 +866,72 @@ func TestAHeadReadReportsTheRevisionItWasReadAt(t *testing.T) {
 		t.Errorf("a rename left the head at revision %d (was %d) — a rename "+
 			"stamps `scoped_through` and never `version`, so a revision taken "+
 			"from the version alone never moves for one", moved, revision)
+	}
+}
+
+// THE RESERVED RULE FIRES ON EVERY WRITE PATH, not only on a create.
+//
+// It used to be one check inside `write_page`, so a seat that could not create
+// a page in the tool-skills container could still SAVE over one, RENAME one
+// and COMMENT on one — and every surface added later inherited the hole
+// silently, because nothing in the domain said the rule existed. The store is
+// the one place every write goes through, which is why it is here and why
+// [pages.ErrReserved] finally has a producer.
+//
+// A PERSON IS NOT REFUSED. The rule is not about capability — internal/authz
+// decides that — it is that a page in a reserved container is excluded from
+// knowledge search and from routing, so an AGENT writing there produces
+// something silently unreadable, while a person publishing the skills is the
+// intended use of the container.
+func TestTheReservedRuleFiresOnSaveRenameAndComment(t *testing.T) {
+	r := newRoundTrip(t)
+
+	// THE PAGE IS PUT THERE BY A PERSON, which is both the setup and the
+	// first half of the rule: the same call an agent is refused.
+	page := r.write(author("ana"), pages.NewPage{
+		Container: "TS", Title: "Chat conventions", Body: "thread your reply",
+	}).Page
+
+	for name, write := range map[string]func(pages.Actor) error{
+		"create": func(a pages.Actor) error {
+			_, err := r.store.Create(t.Context(), a, pages.NewPage{
+				Container: "ts", Title: "another", Body: "x",
+			})
+			return err
+		},
+		"save": func(a pages.Actor) error {
+			_, err := r.store.SavePage(t.Context(), a, page.ID,
+				pages.Save{BaseVersion: 1, Body: ptr("rewritten")})
+			return err
+		},
+		"rename": func(a pages.Actor) error {
+			_, err := r.store.Rename(t.Context(), a, page.ID,
+				"Chat rules", false)
+			return err
+		},
+		"comment": func(a pages.Actor) error {
+			_, _, err := r.store.Comment(t.Context(), a, page.ID,
+				pages.NewComment{Body: "why?"})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := write(agent("pm"))
+			if !errors.Is(err, pages.ErrReserved) {
+				t.Fatalf("an agent's %s into a reserved container gave %v, "+
+					"want ErrReserved", name, err)
+			}
+			if !strings.Contains(err.Error(), "TS") {
+				t.Errorf("the refusal does not name the container: %v", err)
+			}
+		})
+	}
+
+	// AND AN ORDINARY CONTAINER IS UNTOUCHED, or the rule would be a ban
+	// on agents writing anything.
+	if _, err := r.store.Create(t.Context(), agent("pm"), pages.NewPage{
+		Container: "ENG", Title: "Deploy notes", Body: "x",
+	}); err != nil {
+		t.Fatalf("an agent could not write an ordinary container: %v", err)
 	}
 }

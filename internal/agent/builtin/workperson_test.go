@@ -14,26 +14,29 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// AN OPERATOR WRITING SOMEBODY'S PRIORITIES CARRIES THE AUTHORITY TO DO IT.
+// A SEAT NEVER RE-ORDERS SOMEBODY ELSE'S QUEUE, and a person does.
 //
-// This is the wiring that decided whether the `prioritised` wake could fire at
-// all. `set_priorities` is registered on the operator MCP alone, and an
-// operator's actor is an API TOKEN's name — never a handle in the org chart —
-// so the lead lookup can never match it. With the tool sending only `Lead`,
-// the writer refused every cross-person write through the only surface that
-// exists, and omitting the handle silently wrote a person record for the
-// token instead of for a person.
-func TestAnOperatorCarriesTheAuthorityToWriteAPersonsPriorities(t *testing.T) {
+// The bar is the tracker's own and it is the one thing the authority table
+// does NOT decide: [authz.ClassOwnOrLead] admits a lead, and a seat that leads
+// somebody is still not allowed this — an agent re-ordering a colleague's list
+// is a hand-off in disguise, bypassing the guarded take and the reassignment
+// budget.
+//
+// It used to be carried as `PersonAuthority.Person`, filled from "the actor is
+// not a seat", which was ALSO how an operator satisfied the cross-person gate
+// at all: the lead lookup resolved an org-chart handle and an operator token
+// carries its own name, so `Lead` was false for every operator by construction
+// and the only shipped surface for the verb refused the founder every time.
+// The relation half is the table's now; this is the half that is left.
+func TestASeatNeverReordersSomebodyElsesQueue(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		kind       tracker.AuthorKind
-		wantPerson bool
+		kind      tracker.AuthorKind
+		wantAgent bool
 	}{
-		"an operator token": {tracker.AuthorOperator, true},
-		"a human":           {tracker.AuthorHuman, true},
-		// A SEAT CARRIES NEITHER unless it genuinely leads the handle,
-		// which the lead seam answers separately.
-		"a seat": {tracker.AuthorAgent, false},
+		"an operator token": {tracker.AuthorOperator, false},
+		"a human":           {tracker.AuthorHuman, false},
+		"a seat":            {tracker.AuthorAgent, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			person := &personSpy{}
@@ -47,6 +50,7 @@ func TestAnOperatorCarriesTheAuthorityToWriteAPersonsPriorities(t *testing.T) {
 						return builtin.Actor{Handle: "ops", Kind: tc.kind}, nil
 					},
 				},
+				Authorize: builtin.Decide(chartLeads),
 			}) {
 				if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
 					t.Fatalf("register %s: %v", tool.Name(), err)
@@ -58,11 +62,15 @@ func TestAnOperatorCarriesTheAuthorityToWriteAPersonsPriorities(t *testing.T) {
 			if got.Failed {
 				t.Fatalf("set_priorities failed: %q", got.Output)
 			}
-			if person.authority.Person != tc.wantPerson {
-				t.Errorf("authority.Person = %v, want %v — %s writing "+
+			if person.authority.Agent != tc.wantAgent {
+				t.Errorf("authority.Agent = %v, want %v — %s writing "+
 					"somebody else's queue reaches the writer's gate with "+
-					"this and nothing else",
-					person.authority.Person, tc.wantPerson, name)
+					"this and the table's answer, and nothing else",
+					person.authority.Agent, tc.wantAgent, name)
+			}
+			if !person.authority.Authorized {
+				t.Error("the table's answer did not reach the writer, so " +
+					"every cross-person write is refused at the record")
 			}
 		})
 	}
@@ -128,6 +136,7 @@ func operatorRegistry(t *testing.T, trk *fakeTracker, person builtin.PersonWrite
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
 		},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
 			t.Fatalf("register %s: %v", tool.Name(), err)
@@ -155,17 +164,20 @@ func (p *personSpy) WritePriorities(_ context.Context, _, handle string,
 }
 
 func (p *personSpy) WritePins(_ context.Context, _, _ string, _ []string,
-	_ []tracker.Favorite) (
+	_ []tracker.Favorite, authority tracker.PersonAuthority) (
 	tracker.WriteResult, error) {
+
+	p.authority = authority
 
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
 func (p *personSpy) WriteInbox(_ context.Context, _, _ string,
 	_, _, _ []tracker.InboxEntry, reasons []tracker.Reason,
-	_ tracker.Position) (tracker.WriteResult, error) {
+	_ tracker.Position, authority tracker.PersonAuthority) (
+	tracker.WriteResult, error) {
 
-	p.reasons = reasons
+	p.authority, p.reasons = authority, reasons
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
@@ -250,7 +262,7 @@ func callPlain(t *testing.T, reg *tools.Registry, name string,
 	if !held {
 		t.Fatalf("%s is not registered", name)
 	}
-	got, err := entry.Tool.Call(t.Context(), args)
+	got, err := entry.Tool.Call(everyGrant(), args)
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -273,6 +285,7 @@ func personRegistry(t *testing.T, person *personSpy) *tools.Registry {
 				}, nil
 			},
 		},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		// WITH THE HINTS, which is what the operator surface itself
 		// serves now — registering without them would make the

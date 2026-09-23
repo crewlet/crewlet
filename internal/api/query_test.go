@@ -339,7 +339,7 @@ func TestAnOperatorQuestionIsGuardedOnBothTransports(t *testing.T) {
 	// operator. It is what the guard's exemption list is checked against:
 	// a question registered as operator-only must not answer merely
 	// because the route it arrived on was not guarded.
-	if _, err := a.Queries().Answer(t.Context(), "secrets", nil, ""); err == nil {
+	if _, err := a.Queries().Answer(t.Context(), "secrets", nil); err == nil {
 		t.Error("the registry answered an operator-only question to nobody")
 	}
 }

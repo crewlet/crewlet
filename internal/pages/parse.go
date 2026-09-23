@@ -70,7 +70,7 @@ type ParserOptions struct {
 func NewParser(opts ParserOptions) *Parser {
 	leads := make(Leads, len(opts.Leads))
 	for container, handle := range opts.Leads {
-		leads[strings.ToUpper(strings.TrimSpace(container))] = handle
+		leads[ContainerKey(container)] = handle
 	}
 	return &Parser{leads: leads, baseURL: strings.TrimRight(opts.BaseURL, "/")}
 }
@@ -180,7 +180,7 @@ func (p *Parser) leadCopy(base notify.Inbound, container, actor string, reg *not
 	if container == "" {
 		return nil
 	}
-	lead := p.leads[strings.ToUpper(container)]
+	lead := p.leads[ContainerKey(container)]
 	if lead == "" {
 		log.Debug("pages_no_recipients", "container", container,
 			"page", base.Metadata[MetaTitle])

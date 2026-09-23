@@ -176,8 +176,8 @@ describe("the Inbox rail badge", () => {
     ).query = (what: string) => {
       if (what === "viewer") {
         return Promise.resolve({
-          operator_id: "U0FOUNDER",
-          operator: true,
+          login: "U0FOUNDER",
+          grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
           handle: "ada",
           name: "Ada",
           kind: "human",

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -112,6 +113,24 @@ type WorkMerger interface {
 // WorkDeps are the tracker halves plus what a write needs to attribute itself.
 type WorkDeps struct {
 	Reader WorkReader
+
+	// Authorize decides the checks a tool can only take AFTER a read.
+	//
+	// THE SAME SEAM THE REGISTRATION GATE USES, pushed down by [Register]
+	// and [OperatorTools] so a caller cannot set the two differently.
+	// Most verbs are decided once, before the tool runs; a few cannot be,
+	// because the object is not in the arguments — re-routing a task is
+	// the lead of the task's HOME project's decision, and which project
+	// that is comes out of the stored row. So those ask here, with their
+	// own action, against the same table.
+	//
+	// IT REPLACED TWO BOOL SEAMS — `Leads` and `LeadsProject` — which
+	// asked the chart the same two questions a class already asks, from
+	// the tool rather than from the table. Two answers to one question is
+	// exactly what internal/authz exists to remove, and these two had
+	// already diverged from it: neither consulted a grant, so an operator
+	// holding fleet:operate was refused where every HTTP route allowed.
+	Authorize Authorizer
 
 	// Writer resolves the tracker's write side FOR ONE ACTOR.
 	//
@@ -1467,15 +1486,6 @@ func opIDFor(actor Actor, verb, object string) string {
 
 type updateWorkItem struct {
 	deps WorkDeps
-
-	// leads answers whether this seat leads the project a task is filed
-	// in, which is the gate on `routing_unit`.
-	//
-	// A RE-ROUTE IS A LEAD'S, unlike the unit a create stamps: filing your
-	// own work into your own team is what every seat does, and pointing
-	// somebody ELSE's work at a different team is a decision about who
-	// owns it.
-	leads LeadsProject
 }
 
 var _ tools.SeatCallable = (*updateWorkItem)(nil)
@@ -1655,28 +1665,21 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// task that still has an assignee.
 	if raw, held := args["routing_unit"]; held {
 		unit := strings.TrimSpace(argString(map[string]any{"v": raw}, "v"))
-		if t.leads == nil {
-			return failed(fmt.Sprintf("Pointing %s at a different team is the "+
-				"lead of %s's decision, and this surface cannot resolve who "+
-				"that is.", before.Task.Key, before.Task.Project)), nil
-		}
-		// AND A CHART THAT COULD NOT ANSWER IS TOLD APART FROM ONE THAT
-		// SAID NO. Under the bool this seam used to be, a node that was
+		// ASKED HERE AND NOT AT THE GATE, because the object is not in
+		// the arguments: which project this task is filed under comes
+		// out of the row that was just read, and the verb as a whole is
+		// an ordinary colleague write. A chart that could not answer is
+		// told apart from one that said no by [Authorizer]'s own error
+		// kinds — under the bool this used to be, a node that was merely
 		// behind told a lead that re-routing their own project's work is
-		// somebody else's decision — naming a colleague who does not
+		// somebody else's decision, naming a colleague who does not
 		// exist and sending them to ask.
-		led, err := t.leads(ctx, actor.Handle, before.Task.Project)
-		if err != nil {
-			return failed(fmt.Sprintf("This node cannot say who leads %s yet, "+
-				"so it will not decide whether you may point %s at a different "+
-				"team: %v. Try again in a moment.",
-				before.Task.Project, before.Task.Key, err)), nil
-		}
-		if !led {
-			return failed(fmt.Sprintf("Pointing %s at a different team is the "+
-				"lead of %s's decision, not yours. Ask them, or say in a "+
-				"comment why it belongs elsewhere.",
-				before.Task.Key, before.Task.Project)), nil
+		if refusal := t.deps.mayWrite(ctx, authz.ActionWorkRoute,
+			authz.Object{
+				Kind: authz.KindProject, Container: before.Task.Project,
+			}); refusal != nil {
+
+			return *refusal, nil
 		}
 		if unit != "" && t.deps.Units != nil {
 			if _, _, found := t.deps.Units.ResolveUnit(unit); !found {

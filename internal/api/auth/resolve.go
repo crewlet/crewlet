@@ -80,15 +80,19 @@ func (g *Guard) principalFor(entry config.APIToken, now time.Time) iam.Principal
 		Stage:    iam.StageActive,
 	}
 	// A BOUND CREDENTIAL ACTS AS ITS SEAT, which is the one thing this
-	// translation is not blunt about. The binding is the company's
-	// (`contact.crewlet_operator_id` on a human seat) and it already
-	// means exactly this: somebody at the dashboard acts as themselves
-	// rather than as the credential they hold. It changes the KIND as
-	// well as the name, because [iam.ActorFor] splits a person on their
-	// seat and a machine has no such split — a write from a bound
-	// credential lands under a person's own handle.
+	// translation is not blunt about. The binding is the IDENTITY
+	// DIRECTORY's: a token enrolled there as a machine under its own
+	// login and bound to a seat acts as that seat's holder rather than as
+	// a bare credential. It changes the KIND as well as the name, because
+	// [iam.ActorFor] splits a person on their seat and a machine has no
+	// such split — a write from a bound credential lands under the seat.
+	//
+	// KEYED ON THE LOGIN, never the bare token id: the login is what the
+	// directory claims arbitrate on (`iam.login.<login>`), and a bare id
+	// could collide with a person's login where the colon-joined machine
+	// grammar cannot.
 	if g.boundSeat != nil {
-		if handle := g.boundSeat(entry.ID); handle != "" {
+		if handle := g.boundSeat(p.Login); handle != "" {
 			p.Kind, p.Seat = iam.KindPerson, handle
 		}
 	}

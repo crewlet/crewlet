@@ -106,14 +106,10 @@ export function SavedViews({ id }: { id?: string }) {
   // writing through the MCP surface owns views too — falls through to the
   // handle itself rather than to nothing.
   const index = useMemo(() => indexOrg(org), [org]);
-  // THE VIEWER IS SENT, which is what makes pins and personal views appear at
-  // all: `work_views` answers the SHARED strip without one, so this screen
-  // showed every reader the same list and no pin could ever render.
-  const views = useQuery(
-    "work_views",
-    { container: "workspace", ...(viewer.handle ? { viewer: viewer.handle } : {}) },
-    { pollMs: 120_000 },
-  );
+  // THE VIEWER IS THE CALLER, and the engine knows who that is: the strip is
+  // ordered by the pins of the seat this browser is bound to, and there is no
+  // parameter to choose somebody else's.
+  const views = useQuery("work_views", { container: "workspace" }, { pollMs: 120_000 });
   usePageCoverage(views.data);
 
   const saved = useMemo(

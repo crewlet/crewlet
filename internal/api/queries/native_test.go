@@ -247,7 +247,7 @@ func askNative(t *testing.T, s queries.Sources, what string, params map[string]a
 	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	return r.Answer(asGrants(t, "", iam.GrantStateRead), what, params, "")
+	return r.Answer(asGrants(t, "", iam.GrantStateRead), what, params)
 }
 
 // askTranscripts is askNative for the questions that serve what a turn SAID:
@@ -262,7 +262,7 @@ func askTranscripts(t *testing.T, s queries.Sources, what string,
 	r := queries.NewRegistry()
 	queries.Register(r, s)
 	return r.Answer(asGrants(t, "", iam.GrantStateRead, iam.GrantAuditRead),
-		what, params, "")
+		what, params)
 }
 
 // askAsOperator is askNative for the questions that describe the DEPLOYMENT
@@ -274,7 +274,42 @@ func askAsOperator(t *testing.T, s queries.Sources, what string,
 	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	return r.Answer(asGrants(t, "ops-1", iam.AllGrants...), what, params, "ops-1")
+	return r.Answer(asGrants(t, "ops-1", iam.AllGrants...), what, params)
+}
+
+// asSeat is a context carrying a caller BOUND TO A SEAT, which is what every
+// personal answer is scoped by now — the viewer is the principal's own seat
+// and no longer a parameter anybody types.
+func asSeat(t *testing.T, handle string, grants ...iam.Grant) context.Context {
+	t.Helper()
+	return iam.WithPrincipal(t.Context(), iam.Principal{
+		ID: uuid.New(), Login: handle, Kind: iam.KindPerson, Seat: handle,
+		Stage: iam.StageActive, Grants: grants,
+	})
+}
+
+// askAsSeat is [askNative] for a caller who holds one.
+func askAsSeat(t *testing.T, s queries.Sources, handle, what string,
+	params map[string]any) (any, error) {
+
+	t.Helper()
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	return r.Answer(asSeat(t, handle, iam.AllGrants...), what, params)
+}
+
+// askHolding is [askAsSeat] for a case about AUTHORITY, which states the
+// grants rather than taking every one: [iam.AllGrants] carries people:manage,
+// which every personal class admits before it asks the chart — so a case using
+// it against a chart that reports no relation is allowed anyway and asserts
+// nothing.
+func askHolding(t *testing.T, s queries.Sources, handle, what string,
+	params map[string]any, grants ...iam.Grant) (any, error) {
+
+	t.Helper()
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	return r.Answer(asSeat(t, handle, grants...), what, params)
 }
 
 // asGrants is a context carrying a credential with exactly these grants.
@@ -493,7 +528,7 @@ func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) 
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{}, "")
+	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{})
 	if !errors.Is(err, queries.ErrUnavailable) {
 		t.Fatalf("a node that is behind answered %v — a read refusal that "+
 			"reaches a client as a plain failure is rendered as a broken "+
@@ -523,7 +558,7 @@ func TestARefusalWaitingCannotClearIsNotAnInvitationToRetry(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{}, "")
+	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{})
 	if err == nil {
 		t.Fatal("a refused read answered successfully")
 	}
@@ -545,7 +580,7 @@ func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{}, "")
+	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("err = %v, want ErrBadParams", err)
 	}
@@ -572,11 +607,11 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
 			w := &stubWork{}
-			// AS AN OPERATOR, because naming somebody else's
-			// handle is what the credential buys — see
-			// TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName.
-			if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
-				map[string]any{"container": tc.raw, "viewer": "ana"}); err != nil {
+			// AS ANA, because the strip is personalised by the
+			// CALLER's own seat now: a `viewer=` parameter was a
+			// free choice of whose pins to read.
+			if _, err := askAsSeat(t, queries.Sources{Work: w}, "ana",
+				"work_views", map[string]any{"container": tc.raw}); err != nil {
 				t.Fatalf("work_views: %v", err)
 			}
 			if w.views.Container.Kind != tc.kind || w.views.Container.ID != tc.id {
@@ -602,60 +637,60 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 	}
 }
 
-// A STRIP IS ONLY PERSONALISED BY A VIEWER THE CALLER MAY NAME.
+// A STRIP IS PERSONALISED BY THE CALLER AND BY NOBODY ELSE.
 //
-// `viewer=` selects WHOSE pins and personal views order the strip, and nothing
-// checked it: on a node with `api.allow_anonymous_read` a reader could take
-// the handles out of `org` and page through every seat's pinned views. The
-// scope rule is the one the other personal questions take — your own, or an
-// operator credential for anybody else's.
+// `viewer=` used to select WHOSE pins and personal views order the strip, and
+// nothing checked it: on a node with anonymous reads a caller could take the
+// handles out of `org` and page through every seat's pinned views. The
+// parameter is gone — the strip is ordered by the principal's own seat — so
+// there is no handle to check and nothing to refuse.
 //
-// THE ABSENT CASE IS THE POINT OF THE SEPARATE RULE. A question ABOUT
-// somebody refuses when the caller names nobody and has no seat; a strip is
-// about a CONTAINER, so naming nobody is the shared strip, which is what the
-// sidebar and the board poll for. Refusing that would have taken the strip off
-// two screens for every reader whose token is not bound to a seat.
-func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
+// A CALLER WITH NO SEAT STILL GETS THE SHARED STRIP, which is the case the
+// separate rule existed for: a question ABOUT somebody refuses when the caller
+// names nobody and has no seat, and a strip is about a CONTAINER. Refusing it
+// would take the strip off the sidebar and the board for every unbound reader.
+func TestAStripIsPersonalisedByTheCallerAlone(t *testing.T) {
 	t.Parallel()
 
-	// SOMEBODY ELSE'S, with no credential: refused, and as an
-	// authorization failure rather than a bad parameter — the remedy is a
-	// different credential, not a different handle.
+	// THE CALLER'S OWN, never a handle in the bag.
 	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
-		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); !errors.Is(
-		err, queries.ErrUnauthorized) {
+	if _, err := askAsSeat(t, queries.Sources{Work: w}, "ada-okonkwo",
+		"work_views", map[string]any{"container": "workspace"}); err != nil {
 
-		t.Errorf("an anonymous caller naming another seat's handle answered %v, "+
-			"want an authorization refusal", err)
-	}
-	// AND THE READER WAS NEVER ASKED, which is the half a refusal
-	// returned after the read would not have bought.
-	if w.views.Viewer != "" {
-		t.Errorf("the refused handle reached the reader as %q", w.views.Viewer)
-	}
-
-	// AN OPERATOR NAMES ANYBODY'S: they hold the credential that writes
-	// these records in the first place.
-	w = &stubWork{}
-	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
-		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); err != nil {
-		t.Fatalf("an operator naming a seat's handle: %v", err)
+		t.Fatalf("work_views: %v", err)
 	}
 	if w.views.Viewer != "ada-okonkwo" {
-		t.Errorf("an operator's viewer reached the reader as %q, want ada-okonkwo",
+		t.Errorf("the strip was personalised by %q, want the caller's own seat",
 			w.views.Viewer)
 	}
 
-	// AND NAMING NOBODY IS STILL THE SHARED STRIP, anonymously: a real
+	// AND A HANDLE IN THE BAG IS IGNORED rather than honoured: the
+	// parameter does not exist, so there is no way to ask for somebody
+	// else's pins at all.
+	w = &stubWork{}
+	if _, err := askAsSeat(t, queries.Sources{Work: w}, "ada-okonkwo",
+		"work_views", map[string]any{
+			"container": "workspace", "viewer": "somebody.else",
+		}); err != nil {
+
+		t.Fatalf("work_views: %v", err)
+	}
+	if w.views.Viewer != "ada-okonkwo" {
+		t.Errorf("a `viewer` in the bag reached the reader as %q", w.views.Viewer)
+	}
+
+	// AND A CALLER WITH NO SEAT STILL GETS THE SHARED STRIP: a real
 	// answer with an empty viewer, never a refusal.
 	w = &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Work: w})
+	if _, err := r.Answer(everyGrant(t), "work_views",
 		map[string]any{"container": "workspace"}); err != nil {
-		t.Fatalf("the shared strip, asked anonymously: %v", err)
+
+		t.Fatalf("the shared strip, asked by an unbound caller: %v", err)
 	}
 	if w.views.Viewer != "" {
-		t.Errorf("an unnamed viewer reached the reader as %q, want empty", w.views.Viewer)
+		t.Errorf("an unbound caller's strip was personalised by %q", w.views.Viewer)
 	}
 }
 
@@ -1017,59 +1052,43 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 	}
 }
 
-// THE VIEWER IS A PROPERTY OF THE SURFACE, NOT A FILTER THE TRACKER PARSES.
+// THE VIEWER IS THE CALLER, AND NOT A PARAMETER AT ALL.
 //
-// `workItems` read the viewer out of the parameters to build `tracker.Viewer`
-// and then handed the WHOLE bag — `viewer` still in it — to `ExpandedQuery`,
-// whose `ParseQuery` runs `checkKeys` over the merged map. `viewer` is not in
-// `tracker.QueryKeys`, and `checkKeys` refuses a key nothing parses rather
-// than ignoring it, so every `work_items` call that named a viewer came back
-// `bad_params`.
+// It was one, and `workItems` read it out of the bag and deleted the key again
+// before handing the rest to `ExpandedQuery` — because `viewer` is not in
+// `tracker.QueryKeys` and `checkKeys` refuses a key nothing parses. Which left
+// exactly one honest value for the parameter and made every other one a free
+// choice of whose queue to render, on a surface where `preset=my_queue`,
+// `preset=priorities` and `f.<slug>=me` all resolve against it.
 //
-// Two things that made it invisible. The refusal is a 400 with a message about
-// an unknown parameter, which reads like the caller's fault; and the one
-// surface that sends a viewer — the board's view strip — is also the one whose
-// handler comment asserts the opposite, so the code documented the behaviour it
-// did not have.
-//
-// It also made `preset=my_queue` unreachable here, which is the case below:
-// the preset expands from `viewer.Handle` (internal/tracker/expand.go), so it
-// is answerable only on a surface that HAS a viewer, and this was the surface.
-func TestABoardMayNameItsViewer(t *testing.T) {
+// It is the principal's own seat now. What this case keeps is the half that
+// still has to hold: the value reaches the EXPANSION as a viewer, because a
+// fix that dropped the parameter without threading the caller's seat would
+// make `me` and every personal preset resolve to nobody — a quieter wrong
+// answer than the refusal it replaced.
+func TestTheViewerIsTheCallersOwnSeat(t *testing.T) {
 	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", map[string]any{
-		"viewer": "ada", "assignee": "ada",
-	}); err != nil {
-		t.Fatalf("work_items naming a viewer: %v", err)
+	if _, err := askAsSeat(t, queries.Sources{Work: w}, "ada", "work_items",
+		map[string]any{"assignee": "ada"}); err != nil {
+
+		t.Fatalf("work_items: %v", err)
 	}
-	// AND THE VIEWER STILL REACHED THE EXPANSION. Dropping the key is only
-	// correct if the value survives as what it is — otherwise the fix would
-	// be the bug's mirror, with `me` and every preset resolving to nobody.
 	if got := w.query.Assignee; len(got) != 1 || got[0] != "ada" {
 		t.Errorf("assignee = %v, want [ada]", got)
 	}
-}
-
-// AND THE VIEWER STILL ARRIVES AS A VIEWER, which is the half a test on the
-// refusal alone cannot see. Dropping the key is only correct if the value
-// survives as what it is — the expansion resolves `f.<slug>=me` and every
-// personal preset from `Viewer.Handle`, and a fix that deleted the key without
-// threading the value would have made those resolve to nobody, which is a
-// quieter wrong answer than the refusal it replaced.
-//
-// ASSERTED ON WHAT THE HANDLER PASSED rather than on a resolved `me`: `me` is
-// a custom-field operator (`resolveViewerKeys` only substitutes `f.`-prefixed
-// keys) and its resolution is the tracker's own, covered in that package. Here
-// the question is whether this surface hands the viewer over at all.
-func TestAViewerNamedByTheSurfaceReachesTheExpansion(t *testing.T) {
-	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", map[string]any{
-		"viewer": "ada",
-	}); err != nil {
-		t.Fatalf("work_items naming a viewer: %v", err)
+	if w.expandViewer.Handle != "ada" {
+		t.Errorf("the viewer reached the expansion as %q, want the caller's "+
+			"own seat — `me` and every personal preset resolve from it",
+			w.expandViewer.Handle)
 	}
-	if got := w.expandViewer.Handle; got != "ada" {
-		t.Errorf("expansion viewer = %q, want ada", got)
+
+	// AND A CALLER WHO NAMES ONE IS REFUSED, which is the parameter being
+	// gone rather than ignored: a key nothing parses widens an answer
+	// silently, so the grammar refuses it.
+	if _, err := askAsSeat(t, queries.Sources{Work: &stubWork{}}, "ada",
+		"work_items", map[string]any{"viewer": "someone.else"}); err == nil {
+
+		t.Error("a caller named a viewer and was answered")
 	}
 }
 

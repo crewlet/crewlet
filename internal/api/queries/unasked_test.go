@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -37,11 +38,13 @@ func answeredTranscripts(t *testing.T, s queries.Sources, what string,
 	return answerMap(t, got, err)
 }
 
-func answeredAsOperator(t *testing.T, s queries.Sources, what string,
+// answeredAsAna is [answeredMap] for a caller bound to a SEAT, which is what
+// every per-seat question is scoped by.
+func answeredAsAna(t *testing.T, s queries.Sources, what string,
 	params map[string]any) map[string]any {
 
 	t.Helper()
-	got, err := askAsOperator(t, s, what, params)
+	got, err := askAsSeat(t, s, "ana", what, params)
 	return answerMap(t, got, err)
 }
 
@@ -207,8 +210,8 @@ func (s *stubConversations) History(_ context.Context, handle, key string, _ int
 	return s.entries, s.err
 }
 
-// SCOPED LIKE EVERY OTHER PER-SEAT QUESTION. A caller reads the seat their own
-// token is bound to; naming somebody else's needs an operator credential.
+// SCOPED LIKE EVERY OTHER PER-SEAT QUESTION. A caller reads their own seat;
+// naming somebody else's takes the lead relation or people:manage.
 func TestTheThreadLedgerIsScopedToTheCallersOwnSeat(t *testing.T) {
 	t.Parallel()
 	ledgerStub := &stubConversations{
@@ -217,18 +220,21 @@ func TestTheThreadLedgerIsScopedToTheCallersOwnSeat(t *testing.T) {
 	s := viewerSources(t, &stubWork{})
 	s.Conversations = ledgerStub
 
-	// The operator's own seat, with no handle named.
-	got := answeredAsOperator(t, s, "conversations", nil)
+	// The caller's own seat, with no handle named.
+	got := answeredAsAna(t, s, "conversations", nil)
 	if got["handle"] != "ana" {
-		t.Errorf("handle = %v, want the seat bound to the token", got["handle"])
+		t.Errorf("handle = %v, want the caller's own seat", got["handle"])
 	}
 	if ledgerStub.handle != "ana" {
 		t.Errorf("the ledger was asked about %q", ledgerStub.handle)
 	}
 
-	// Somebody else's, with no credential at all.
-	if _, err := askTranscripts(t, s, "conversations", map[string]any{"handle": "bo"}); err == nil {
-		t.Error("an anonymous caller read another seat's threads")
+	// Somebody else's, as a colleague the chart reports no relation for.
+	if _, err := askHolding(t, s, "ana", "conversations",
+		map[string]any{"handle": "bo"},
+		iam.GrantStateRead, iam.GrantAuditRead); err == nil {
+
+		t.Error("a colleague read another seat's threads")
 	}
 }
 
@@ -247,7 +253,7 @@ func TestNamingAThreadAddsItsTurnsToTheSameAnswer(t *testing.T) {
 
 	// WITHOUT a thread named: the list, and an EMPTY entries list rather
 	// than an absent key.
-	got := answeredAsOperator(t, s, "conversations", nil)
+	got := answeredAsAna(t, s, "conversations", nil)
 	entries, ok := got["entries"].([]ledger.Session)
 	if !ok || len(entries) != 0 {
 		t.Fatalf("entries = %#v, want an empty slice", got["entries"])
@@ -257,7 +263,7 @@ func TestNamingAThreadAddsItsTurnsToTheSameAnswer(t *testing.T) {
 	}
 
 	// WITH one: the same list, plus its turns.
-	got = answeredAsOperator(t, s, "conversations",
+	got = answeredAsAna(t, s, "conversations",
 		map[string]any{"conversation": "slack:C1"})
 	entries, _ = got["entries"].([]ledger.Session)
 	if len(entries) != 1 || entries[0].TurnID != "t-1" {
@@ -378,7 +384,7 @@ func TestTheConversationPageIsBoundedInBothDirections(t *testing.T) {
 			if c.asked != nil {
 				params["limit"] = c.asked
 			}
-			if _, err := askAsOperator(t, s, "conversations", params); err != nil {
+			if _, err := askAsSeat(t, s, "ana", "conversations", params); err != nil {
 				t.Fatalf("conversations: %v", err)
 			}
 			if ledgerStub.limit != c.want {

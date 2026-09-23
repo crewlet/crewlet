@@ -5,13 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"os"
 	"slices"
 	"strings"
 
 	"github.com/google/uuid"
-
-	"github.com/crewlet/crewlet/internal/envref"
 )
 
 // Organization is the whole company: a flexible hierarchy of units, the
@@ -216,83 +213,6 @@ func (o *Organization) AgentSeatByHandle(handle string) *Role {
 // names a seat — so this is a name for the caller's question rather than a
 // second walk that could answer differently.
 func (o *Organization) SeatByHandle(handle string) *Role { return o.Role(handle) }
-
-// SeatByOperatorID returns the seat an api.auth token id is bound to, or nil.
-//
-// THE BINDING IS ON THE SEAT, not on the token, and [HumanContact] says why:
-// Tier A is the root of trust and may never read Tier B, so a `seat:` field on
-// a token would have the trusted tier depending on the untrusted one. The
-// inverse lookup therefore lives here, where the seats are.
-//
-// It is what lets a person acting through the dashboard, the REST API or the
-// operator tool server act AS THEMSELVES: the token resolves to an operator
-// id, the operator id resolves to a seat, and that seat's own inbox, queue and
-// pins are theirs rather than a credential's.
-//
-// COMPARED CASE-INSENSITIVELY on a trimmed value, for the reason the field's
-// own doc gives: the id is written in two files by one person and two files
-// are two chances to disagree about case.
-//
-// A seat of EITHER KIND, though in practice only a human seat carries one —
-// nothing stops a company binding a token to an agent seat, and refusing that
-// here would be this lookup inventing a rule the config does not state.
-// Returns the FIRST match: two seats naming one token id is a configuration
-// mistake, and answering "both" would only move the decision to every caller.
-//
-// THE DECLARED VALUE IS A POINTER, NOT AN ANSWER, which is what `lookup` is
-// for. Tier B stores a `${VAR}` verbatim — that is the whole point of the
-// pointer — so a company writing `crewlet_operator_id: ${FOUNDER_ID}` had its
-// founder compared against the literal text `${FOUNDER_ID}`, matched nothing,
-// and got a dashboard silently bound to no seat: their own inbox, queue and
-// pins all empty, with no refusal anywhere to explain it. Every other consumer
-// of this field resolves it — [HumanContact.ResolvedIdentities] takes the same
-// lookup for the same reason — and this one did not.
-//
-// AN UNSET OR EMPTY VARIABLE MATCHES NOTHING, and the reason is what it must
-// NOT fall back to. Comparing the raw `${VAR}` text is the bug above wearing a
-// smaller hat: a token id is an operator-chosen string, so a company could
-// present one shaped like a reference and be bound to a seat by a line out of
-// a config file. Comparing the empty string instead is merely useless — an
-// empty `operatorID` is already refused above — but it is a seat this lookup
-// cannot speak for either way, exactly as it is for an identity.
-//
-// A nil lookup reads the process environment, matching
-// [HumanContact.ResolvedIdentities].
-func (o *Organization) SeatByOperatorID(operatorID string, lookup EnvLookup) *Role {
-	want := strings.ToLower(strings.TrimSpace(operatorID))
-	if want == "" {
-		return nil
-	}
-	if lookup == nil {
-		lookup = os.LookupEnv
-	}
-	for r := range o.AllRoles() {
-		// Contact is a POINTER and most seats have none: an agent seat
-		// has no external identities at all, and a human seat that
-		// declares only availability has none either.
-		if r == nil || r.Contact == nil {
-			continue
-		}
-		declared := strings.TrimSpace(r.Contact.CrewletOperatorID)
-		if declared == "" {
-			continue
-		}
-		if name, isRef := envref.Whole(declared); isRef {
-			v, ok := lookup(name)
-			if !ok {
-				continue
-			}
-			declared = strings.TrimSpace(v)
-			if declared == "" {
-				continue
-			}
-		}
-		if strings.ToLower(declared) == want {
-			return r
-		}
-	}
-	return nil
-}
 
 // AgentSeatByID returns the agent seat whose derived id is id — the inverse
 // of AgentIDFor.
@@ -1278,10 +1198,10 @@ func describeUnits(units []placedUnit, key string) string {
 // An identity is how an inbound message finds a person, and the two consumers
 // resolve a duplicate OPPOSITE WAYS. [notify.Registry.ReconcileHumanContacts]
 // keys a map on (transport, id), so the last seat in chart order wins and the
-// first silently stops being reachable. Every walk of the chart —
-// [Organization.SeatByOperatorID] among them — answers the first. So a
-// duplicated `crewlet_operator_id` gives one person another person's dashboard
-// while their own wakes go elsewhere, and neither seat looks wrong.
+// first silently stops being reachable, while every walk of the chart answers
+// the first. So a duplicated `slack_user_id` sends one person's wakes to
+// another while an inbound message resolves back to the first, and neither
+// seat looks wrong.
 //
 // It is checked on the DECLARED values rather than the resolved ones for the
 // reason [HumanContact.Identities] gives: validation runs where the config is

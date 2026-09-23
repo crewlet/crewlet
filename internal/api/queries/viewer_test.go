@@ -3,18 +3,26 @@
 package queries_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// viewerCompany binds one operator id to one seat, and leaves a second seat
-// bound to nobody — which is what makes "somebody else's handle" a real case
-// rather than a typo.
+// viewerCompany holds two human seats, so "somebody else's handle" is a real
+// case rather than a typo.
+//
+// NOTHING BINDS A CREDENTIAL HERE ANY MORE. Ana's contact block used to name
+// the token id `ops-1`, which was the engine's only link between a token and a
+// seat; the identity estate holds that binding now,
+// and a test says who is calling by building the PRINCIPAL rather than by
+// configuring the company.
 const viewerCompany = `
 name: Acme
 roles:
@@ -22,7 +30,7 @@ roles:
     handle: ana
     kind: human
     contact:
-      crewlet_operator_id: ops-1
+      slack_user_id: U0ANA
   - name: Bo Lang
     handle: bo
     kind: human
@@ -39,7 +47,37 @@ func viewerSources(t *testing.T, work *stubWork) queries.Sources {
 	return queries.Sources{
 		Company: companySource(t, cfg),
 		Work:    work,
+		// THE CHART ANSWERS NO RELATION, which is what makes the
+		// cross-person cases about authority rather than about a lead
+		// this fixture happens to declare. A case that needs the lead
+		// arm states its own chart.
+		Chart: flatChart{},
 	}
+}
+
+// flatChart is a chart that can answer and reports no relation at all —
+// deliberately NOT [authz.NoChart], whose every answer is UNKNOWN.
+//
+// The two are opposite fixtures and the distinction is the whole of what
+// internal/authz's three-valued seam buys: "this company has no lead relation
+// between these two" is a 403, and "this node could not read its chart" is a
+// 503 the caller retries.
+type flatChart struct{}
+
+func (flatChart) Leads(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (flatChart) LeadsProject(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (flatChart) LeadsUnit(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (flatChart) LeadsContainer(context.Context, string, string) (bool, error) {
+	return false, nil
 }
 
 // answer runs one question and insists it succeeded, so a case about a VALUE
@@ -56,16 +94,19 @@ func answerMap(t *testing.T, got any, err error) map[string]any {
 	return out
 }
 
-// THE CREDENTIAL RESOLVES TO A PERSON. Two steps that have both existed since
-// the engine shipped — a token maps to an operator id, a seat names one in its
-// contact block — and nothing walked them, so every personal surface in the
-// dashboard was guessing.
-func TestTheViewerIsTheSeatTheTokenIsBoundTo(t *testing.T) {
+// THE VIEWER IS THE PRINCIPAL, and nothing is derived.
+//
+// It used to walk two steps — a token mapped to an operator id, and a seat
+// named one in its contact block — which was the engine's only link between a
+// credential and a person. The identity estate replaced both: a person is a
+// row, a session resolves to it, and the seat they hold is on the chart.
+func TestTheViewerIsThePrincipalsOwnSeat(t *testing.T) {
 	t.Parallel()
-	answered, err := askAsOperator(t, viewerSources(t, &stubWork{}), "viewer", nil)
+	answered, err := askAsSeat(t, viewerSources(t, &stubWork{}), "ana",
+		"viewer", nil)
 	got := answerMap(t, answered, err)
 	if got["handle"] != "ana" {
-		t.Errorf("handle = %v, want the seat binding ops-1", got["handle"])
+		t.Errorf("handle = %v, want the principal's own seat", got["handle"])
 	}
 	if got["name"] != "Ana Diaz" {
 		t.Errorf("name = %v, want the seat's own", got["name"])
@@ -73,40 +114,39 @@ func TestTheViewerIsTheSeatTheTokenIsBoundTo(t *testing.T) {
 	if got["kind"] != "human" {
 		t.Errorf("kind = %v, want human", got["kind"])
 	}
-	if got["operator"] != true {
-		t.Errorf("operator = %v; a presented token is what the guarded rows turn on", got["operator"])
+	if got["login"] != "ana" {
+		t.Errorf("login = %v, want the principal's own", got["login"])
 	}
 }
 
-// AN UNBOUND TOKEN IS AN ORDINARY STATE, not an error. The remedy is a line of
-// company configuration, and a screen that renders an error cannot say so —
-// which is why the operator id is answered even when no seat claims it.
-func TestAnUnboundTokenAnswersItsOperatorIdAndNoSeat(t *testing.T) {
+// AN UNBOUND CREDENTIAL IS AN ORDINARY STATE, not an error. The remedy is a
+// binding in the org chart, and a screen that renders an error cannot say so —
+// which is why the login is answered even when no seat holds it.
+func TestAnUnboundCredentialAnswersItsLoginAndNoSeat(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, viewerSources(t, &stubWork{}))
-	answered, err := r.Answer(everyGrant(t), "viewer", nil, "ops-nobody")
+	answered, err := r.Answer(everyGrant(t), "viewer", nil)
 	got := answerMap(t, answered, err)
-	if got["operator_id"] != "ops-nobody" {
-		t.Errorf("operator_id = %v, want the id the token carries", got["operator_id"])
+	if got["login"] == "" {
+		t.Errorf("login = %v, want the one the credential carries", got["login"])
 	}
 	if got["handle"] != "" {
-		t.Errorf("handle = %v, want none: no seat names ops-nobody", got["handle"])
+		t.Errorf("handle = %v, want none: this credential holds no seat", got["handle"])
 	}
 }
 
-// AND AN ANONYMOUS READER IS A THIRD STATE. No token at all is neither an
+// AND AN ANONYMOUS READER IS A THIRD STATE. No credential at all is neither an
 // unbound one nor a bound one, and the three take three different sentences on
 // screen — so the answer has to keep them apart.
-func TestAnAnonymousReaderIsNeitherBoundNorAnOperator(t *testing.T) {
+func TestAnAnonymousReaderIsNeitherBoundNorSeated(t *testing.T) {
 	t.Parallel()
-	answered, err := askNative(t, viewerSources(t, &stubWork{}), "viewer", nil)
-	got := answerMap(t, answered, err)
-	if got["operator_id"] != "" || got["operator"] != false {
-		t.Errorf("anonymous answered %v, want no id and no operator", got)
-	}
-	if got["handle"] != "" {
-		t.Errorf("handle = %v, want none", got["handle"])
+	r := queries.NewRegistry()
+	queries.Register(r, viewerSources(t, &stubWork{}))
+	_, err := r.Answer(iam.WithAnonymous(t.Context()), "viewer", nil)
+	if !errors.Is(err, queries.ErrUnauthenticated) {
+		t.Fatalf("an anonymous read of `viewer` = %v, want unauthenticated — "+
+			"every question on this surface needs a credential now", err)
 	}
 }
 
@@ -120,7 +160,7 @@ func TestAnAnonymousReaderIsNeitherBoundNorAnOperator(t *testing.T) {
 func TestAPersonalQuestionDefaultsToTheCallersOwnSeat(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	if _, err := askAsOperator(t, viewerSources(t, work), "work_my_work", nil); err != nil {
+	if _, err := askAsSeat(t, viewerSources(t, work), "ana", "work_my_work", nil); err != nil {
 		t.Fatalf("work_my_work with no handle: %v", err)
 	}
 	if work.myWorkQuery.Handle != "ana" {
@@ -128,28 +168,67 @@ func TestAPersonalQuestionDefaultsToTheCallersOwnSeat(t *testing.T) {
 	}
 }
 
-// NAMING SOMEBODY ELSE NEEDS THE CREDENTIAL. Without this the scope rule is
-// decoration: any reader could name any handle.
-func TestReadingAnotherPersonsDayNeedsAnOperatorCredential(t *testing.T) {
+// NAMING SOMEBODY ELSE TAKES THE LEAD RELATION OR people:manage, and the
+// whole scope rule is decoration without it: any reader could name any handle.
+//
+// It used to be "any operator credential", which made every token in Tier A a
+// reader of every seat's day. It is [authz.ClassOwnOrLead]'s answer now —
+// the owner, whoever leads them, or the grant that can grant — which is the
+// same rule the tracker's own writer enforces at the record.
+func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	_, err := askNative(t, viewerSources(t, work), "work_my_work", map[string]any{"handle": "bo"})
+	// A COLLEAGUE, holding every grant BUT people:manage, against a chart
+	// that reports no relation: the most authority a caller can have and
+	// still be refused, which is what makes the refusal about the rule.
+	colleague := viewerSources(t, work)
+	_, err := askHolding(t, colleague, "ana", "work_my_work",
+		map[string]any{"handle": "bo"},
+		iam.GrantStateRead, iam.GrantWorkWrite)
 	if !errors.Is(err, queries.ErrUnauthorized) {
-		t.Fatalf("anonymous read of bo's day = %v, want unauthorized", err)
+		t.Fatalf("a colleague read bo's day = %v, want unauthorized", err)
 	}
 	if work.myWorkQuery.Handle != "" {
 		t.Errorf("the reader was called with %q anyway", work.myWorkQuery.Handle)
 	}
-	// And WITH one it is allowed: an operator reading a report's day is a
-	// real thing to do, and the refusal above must not be "handles other
-	// than your own are refused".
-	if _, err := askAsOperator(t, viewerSources(t, work), "work_my_work",
-		map[string]any{"handle": "bo"}); err != nil {
-		t.Fatalf("an operator reading bo's day: %v", err)
+
+	// AND THEIR LEAD MAY, which the refusal above must not be mistaken
+	// for: "handles other than your own are refused" would make a lead's
+	// own screen unreachable.
+	led := viewerSources(t, work)
+	led.Chart = leadsChart{lead: "ana", report: "bo"}
+	if _, err := askHolding(t, led, "ana", "work_my_work",
+		map[string]any{"handle": "bo"},
+		iam.GrantStateRead); err != nil {
+
+		t.Fatalf("ana reading her report's day: %v", err)
 	}
 	if work.myWorkQuery.Handle != "bo" {
-		t.Errorf("read %q's day, want the handle the operator named", work.myWorkQuery.Handle)
+		t.Errorf("read %q's day, want the handle the lead named",
+			work.myWorkQuery.Handle)
 	}
+
+	// AND A NODE THAT COULD NOT READ ITS CHART SAYS SO, rather than
+	// refusing: 503 is retried and 403 sends a lead to ask for authority
+	// they hold.
+	blind := viewerSources(t, &stubWork{})
+	blind.Chart = authz.NoChart{}
+	if _, err := askHolding(t, blind, "ana", "work_my_work",
+		map[string]any{"handle": "bo"},
+		iam.GrantStateRead); !errors.Is(err, queries.ErrUnavailable) {
+
+		t.Errorf("an unreadable chart answered %v, want unavailable", err)
+	}
+}
+
+// leadsChart reports exactly one management relation.
+type leadsChart struct {
+	flatChart
+	lead, report string
+}
+
+func (c leadsChart) Leads(_ context.Context, actor, subject string) (bool, error) {
+	return actor == c.lead && subject == c.report, nil
 }
 
 // A CALLER NOBODY IS BOUND TO IS REFUSED FOR PARAMETERS, NOT FOR AUTHORITY.
@@ -158,12 +237,14 @@ func TestReadingAnotherPersonsDayNeedsAnOperatorCredential(t *testing.T) {
 // that has not bound theirs.
 func TestAnUnbindableCallerIsRefusedForWantOfAHandle(t *testing.T) {
 	t.Parallel()
-	_, err := askNative(t, viewerSources(t, &stubWork{}), "work_my_work", nil)
+	r := queries.NewRegistry()
+	queries.Register(r, viewerSources(t, &stubWork{}))
+	_, err := r.Answer(everyGrant(t), "work_my_work", nil)
 	if !errors.Is(err, queries.ErrBadParams) {
-		t.Fatalf("no token and no handle = %v, want bad_params", err)
+		t.Fatalf("a seatless caller naming no handle = %v, want bad_params", err)
 	}
 	if errors.Is(err, queries.ErrUnauthorized) {
-		t.Error("refused as unauthorized; the remedy is configuration, not a credential")
+		t.Error("refused as unauthorized; the remedy is a binding, not a credential")
 	}
 }
 
@@ -171,15 +252,17 @@ func TestAnUnbindableCallerIsRefusedForWantOfAHandle(t *testing.T) {
 func TestTheInboxIsScopedTheSameWay(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	if _, err := askAsOperator(t, viewerSources(t, work), "work_inbox", nil); err != nil {
+	if _, err := askAsSeat(t, viewerSources(t, work), "ana", "work_inbox", nil); err != nil {
 		t.Fatalf("work_inbox with no handle: %v", err)
 	}
 	if work.inboxQuery.Handle != "ana" {
 		t.Errorf("read %q's inbox, want the caller's own", work.inboxQuery.Handle)
 	}
-	if _, err := askNative(t, viewerSources(t, work), "work_inbox",
-		map[string]any{"handle": "bo"}); !errors.Is(err, queries.ErrUnauthorized) {
-		t.Errorf("anonymous read of bo's inbox = %v, want unauthorized", err)
+	if _, err := askHolding(t, viewerSources(t, work), "ana", "work_inbox",
+		map[string]any{"handle": "bo"},
+		iam.GrantStateRead); !errors.Is(err, queries.ErrUnauthorized) {
+
+		t.Errorf("a colleague read bo's inbox = %v, want unauthorized", err)
 	}
 }
 
@@ -189,7 +272,7 @@ func TestTheInboxIsScopedTheSameWay(t *testing.T) {
 func TestEveryInboxFilterReachesTheReader(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	_, err := askAsOperator(t, viewerSources(t, work), "work_inbox", map[string]any{
+	_, err := askAsSeat(t, viewerSources(t, work), "ana", "work_inbox", map[string]any{
 		"unread":          true,
 		"primary_only":    true,
 		"include_snoozed": true,
@@ -218,7 +301,7 @@ func TestEveryInboxFilterReachesTheReader(t *testing.T) {
 // acts on by assuming nobody has written to them.
 func TestAnUnknownInboxReasonIsRefusedNamingTheSet(t *testing.T) {
 	t.Parallel()
-	_, err := askAsOperator(t, viewerSources(t, &stubWork{}), "work_inbox",
+	_, err := askAsSeat(t, viewerSources(t, &stubWork{}), "ana", "work_inbox",
 		map[string]any{"reasons": "shouted_at"})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("an unknown reason = %v, want bad_params", err)
@@ -238,14 +321,14 @@ func TestAnUnknownInboxReasonIsRefusedNamingTheSet(t *testing.T) {
 func TestTheInboxResumeTakesTheWholePosition(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	if _, err := askAsOperator(t, viewerSources(t, work), "work_inbox",
+	if _, err := askAsSeat(t, viewerSources(t, work), "ana", "work_inbox",
 		map[string]any{"since": "CREWLET_TRACKER_LOG@2:41"}); err != nil {
 		t.Fatalf("a whole position: %v", err)
 	}
 	if work.inboxQuery.Since.Generation != 2 || work.inboxQuery.Since.Seq != 41 {
 		t.Errorf("the position reached the reader as %s", work.inboxQuery.Since)
 	}
-	if _, err := askAsOperator(t, viewerSources(t, work), "work_inbox",
+	if _, err := askAsSeat(t, viewerSources(t, work), "ana", "work_inbox",
 		map[string]any{"since": "41"}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a bare sequence = %v, want bad_params", err)
 	}

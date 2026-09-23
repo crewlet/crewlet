@@ -349,7 +349,13 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		span.SetAttributes(attribute.String("crewlet.tool_server", server))
 	}
 
-	res, err := s.invoke(ctx, e.Tool, args)
+	// THE ACTING SEAT IS ATTACHED HERE, which is the one frame every seat
+	// tool call goes through: the authority decision reads the principal
+	// off the context on every call, and until this line nothing produced
+	// one for a seat at all. An outer answer wins — see
+	// [turnctx.WithPrincipal] — so a surface reached through somebody's
+	// own credential still acts as them.
+	res, err := s.invoke(turnctx.WithPrincipal(ctx, s.turn), e.Tool, args)
 	if err != nil {
 		tracing.Fail(span, err)
 		// The caller's own context ended — the turn is being torn down.

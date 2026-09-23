@@ -189,7 +189,7 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 	}
 	if q.Container != "" {
 		where = append(where, "p.container = ?")
-		args = append(args, strings.ToUpper(q.Container))
+		args = append(args, ContainerKey(q.Container))
 	}
 	if len(q.Kinds) > 0 {
 		marks := make([]string, len(q.Kinds))

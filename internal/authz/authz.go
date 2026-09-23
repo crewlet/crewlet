@@ -79,16 +79,22 @@ const (
 	KindContainer ObjectKind = "container"
 	// KindPerson is a person's own record: their inbox, pins, priorities.
 	KindPerson ObjectKind = "person"
+	// KindView is a saved view — a named query with a shape, which is
+	// EITHER one person's strip or a container's shared tab depending on
+	// whether it names an owner. Its own kind rather than [KindPerson],
+	// because the personal kind is where an absent owner is read as the
+	// CALLER, and a view with no owner is shared rather than mine.
+	KindView ObjectKind = "view"
 	// KindCompany is the company itself — its configuration, its
 	// credentials, its integrations, the node it runs on. The operator
 	// surfaces, which name their own grant on the action.
 	KindCompany ObjectKind = "company"
 )
 
-// ObjectKinds are the six, in declaration order.
+// ObjectKinds are every kind, in declaration order.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindUnit, KindPage, KindContainer, KindPerson,
-	KindCompany,
+	KindView, KindCompany,
 }
 
 // Valid reports whether a kind is one this build knows.
@@ -126,6 +132,18 @@ type Object struct {
 	// page sits in. It is what the container and destructive classes ask
 	// the chart about.
 	Container string
+
+	// ContainerKind is what sort of thing Container names, for the one
+	// class whose object is neither the container nor governed by a
+	// single relation: a saved view sits on a project, a unit, a person
+	// or the workspace, and those are four different questions.
+	//
+	// SEPARATE FROM Kind rather than overloading it, because Kind is what
+	// the object IS — [ClassColleagueWrite] picks a write grant from it —
+	// and a view whose Kind said "project" would be a view the colleague
+	// rules read as a project. Empty on every other class, which reads
+	// Kind and never this.
+	ContainerKind ObjectKind
 }
 
 // Decision is what [Decide] concluded.
@@ -184,7 +202,7 @@ const (
 	// ReasonNotAuthor is a refusal: somebody else wrote it.
 	ReasonNotAuthor Reason = "not_author"
 	// ReasonSeatRefused is a refusal an agent gets and a person does not.
-	// See [ClassPurge].
+	// See [rule.humanOnly].
 	ReasonSeatRefused Reason = "seat_refused"
 	// ReasonStage is a refusal: this principal is not through enrolment,
 	// so nothing it asks for is granted yet.

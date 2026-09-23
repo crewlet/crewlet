@@ -643,7 +643,7 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 	// this case is about.
 	lead := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
 	if _, err := lead.WritePriorities(t.Context(), "op-prio", "ana",
-		[]string{"t-1"}, tracker.PersonAuthority{Lead: true}); err != nil {
+		[]string{"t-1"}, tracker.PersonAuthority{Authorized: true}); err != nil {
 		t.Fatalf("WritePriorities: %v", err)
 	}
 	r.drain()

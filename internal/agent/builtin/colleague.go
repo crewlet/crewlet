@@ -147,15 +147,16 @@ func Corpus(o *org.Organization) []colleague.Seat {
 			seat.Kind = string(org.KindAgent)
 		}
 		for _, id := range role.Contact.ResolvedIdentities(nil) {
-			// UNREACHABLE TRANSPORTS ARE LEFT OUT. This map is both the
+			// EVERY TRANSPORT HERE IS A PLACE A MESSAGE CAN BE SENT.
+			// It was not always: a `crewlet` transport carried the
+			// operator id a Tier A token bound a seat with, and it had
+			// to be filtered out of this map — which is both the
 			// exact-id index and what describe renders under a person's
-			// name, so an operator id would appear beside their Slack id as
-			// though it were somewhere an agent could mention them. It is
-			// an attribution key on the engine's own surface, and the seat
-			// handle already addresses that seat.
-			if !id.Transport.Reachable() {
-				continue
-			}
+			// name — or an attribution key appeared beside their Slack
+			// id as though an agent could mention them there. The
+			// identity estate holds that binding now and the transport
+			// is gone, so there is nothing left to filter.
+			//
 			// Keyed by transport, so an exact-id query matches whichever
 			// platform the id was copied from without the tool having to
 			// be told which.

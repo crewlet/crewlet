@@ -49,35 +49,36 @@ import (
 // A VALUE RATHER THAN A BOOL on the writer, because "may I set this person's
 // priorities" is a question about a PAIR — who is asking and about whom — and
 // the answer for one pair says nothing about another.
+//
+// # It states the DECISION, not its inputs
+//
+// Both fields used to be inputs: `Lead` from an org-chart lookup, and
+// `Person` from "the actor is not a seat" — which existed because an
+// operator's actor was an API TOKEN's name, never a handle in the chart, so
+// `Lead` answered false for every operator by construction and the one shipped
+// surface for `set_priorities` refused the founder every time.
+//
+// Both are gone because the premise is: an actor is a PRINCIPAL now, an
+// operator holds grants, and [authz.ClassOwnOrLead] answers "the owner, their
+// lead, or the admin path" in one place for every surface. What is left here
+// is the half a chart cannot know — which VERB each answer unlocks — and one
+// invariant no caller may waive: a seat never writes a colleague's record.
 type PersonAuthority struct {
-	// Lead reports whether the actor leads the handle being written.
-	// Resolved by the caller from the org chart, because this package has
-	// no chart.
-	Lead bool
+	// Authorized reports a caller the authority table admitted for this
+	// person's record: the owner, whoever leads them, or the deployment
+	// grant.
+	Authorized bool
 
-	// Person reports an actor acting as a HUMAN or through a person's own
-	// credential, rather than as a seat.
+	// Agent reports a caller acting AS A SEAT rather than as a human.
 	//
-	// # Why this is a second authority rather than a special case of Lead
-	//
-	// Because it is a different question, and the chart cannot answer it.
-	// An operator's actor is an API TOKEN's name — it is not a handle in
-	// the chart, so no ancestor walk can ever match it, and `Lead` is
-	// false for every operator by construction.
-	//
-	// Without it the ONE shipped surface for this verb could not use it.
-	// `set_priorities` is registered on the operator MCP alone; an
-	// operator could therefore never satisfy `own || Lead`, so a founder
-	// re-ordering an agent's queue through the only tool that exists got
-	// "<token> is not <handle> and does not lead them" every time — while
-	// omitting the handle silently wrote a PERSON RECORD FOR THE TOKEN.
-	//
-	// The rule this restores is the design's own: a person's priorities
-	// are written by the owner, by lead-or-above, by a human, or by an
-	// operator. A SEAT is the one party that may not, which is the whole
-	// point — an agent re-ordering a colleague's list is a hand-off in
-	// disguise, bypassing the guarded take and the reassignment budget.
-	Person bool
+	// THE ONE RULE THIS PACKAGE KEEPS OF ITS OWN, because it is about the
+	// gesture and not about anybody's authority: an agent re-ordering a
+	// colleague's queue is a hand-off in disguise, and it bypasses the
+	// guarded take and the reassignment budget. A seat that LEADS the
+	// person is admitted by the table and refused here, which is the
+	// intended reading — the relation is real and the gesture is still
+	// not an agent's.
+	Agent bool
 }
 
 // MaxSnoozeAhead bounds how far into the future an item may be snoozed.
@@ -94,9 +95,9 @@ const MaxSnoozeAhead = 365 * 24 * time.Hour
 // same, and the refusal says so rather than silently writing nothing.
 func (w *Writer) WriteInbox(ctx context.Context, opID, handle string,
 	read, unread, snoozed []InboxEntry, reasons []Reason,
-	seenThrough Position) (WriteResult, error) {
+	seenThrough Position, authority PersonAuthority) (WriteResult, error) {
 
-	if err := ownRecord(w.Actor, handle, "inbox"); err != nil {
+	if err := ownRecord(w.Actor, handle, "inbox", authority); err != nil {
 		return WriteResult{}, err
 	}
 	if err := checkInbox(read, unread, snoozed, reasons, w.Now()); err != nil {
@@ -121,9 +122,10 @@ func (w *Writer) WriteInbox(ctx context.Context, opID, handle string,
 // ONLY ON BEHALF OF THAT PERSON: a pin somebody else can set is one that moves
 // under them.
 func (w *Writer) WritePins(ctx context.Context, opID, handle string,
-	pinnedViews []string, favorites []Favorite) (WriteResult, error) {
+	pinnedViews []string, favorites []Favorite,
+	authority PersonAuthority) (WriteResult, error) {
 
-	if err := ownRecord(w.Actor, handle, "pins"); err != nil {
+	if err := ownRecord(w.Actor, handle, "pins", authority); err != nil {
 		return WriteResult{}, err
 	}
 	pinnedViews = cleanHandles(pinnedViews)
@@ -184,7 +186,7 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 	priorities = cleanHandles(priorities)
 	own := w.Actor == handle
 	switch {
-	case !own && !authority.Lead && !authority.Person:
+	case !own && (!authority.Authorized || authority.Agent):
 		return WriteResult{}, fmt.Errorf("tracker: %s is a seat, is not %s and "+
 			"does not lead them, so it cannot set what %s does next — an agent "+
 			"re-ordering a colleague's list is a hand-off in disguise, and it "+
@@ -279,8 +281,19 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 }
 
 // ownRecord refuses a write on somebody else's half of a person record.
-func ownRecord(actor, handle, what string) error {
-	if actor == handle {
+//
+// THE OWNER, OR THE ADMIN PATH, AND NEVER AN AGENT. The owner arm is a
+// comparison this package can make on its own; the second is the authority
+// table's answer, and it exists because a departed person's queue has to be
+// unstickable by somebody. What it is NOT is a lead path: a lead re-orders
+// what their report works on ([WritePriorities]) and marking somebody's mail
+// read is a gesture nobody asked a lead to make, which is exactly the line
+// [authz.ClassOwnRecord] draws.
+func ownRecord(actor, handle, what string, authority PersonAuthority) error {
+	switch {
+	case actor == handle:
+		return nil
+	case authority.Authorized && !authority.Agent:
 		return nil
 	}
 	return fmt.Errorf("tracker: %s cannot write %s's %s — it is written on "+

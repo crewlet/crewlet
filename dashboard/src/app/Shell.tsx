@@ -382,7 +382,7 @@ export function Shell({ children }: { children: ReactNode }) {
           badges={badges}
           collapsed={collapsed}
           onToggle={toggleRail}
-          locked={!viewer.operator}
+          locked={viewer.anonymous}
           footer={
             <EngineFooter
               connected={connected}
@@ -480,15 +480,14 @@ function ViewerChip() {
     return (
       <Tag
         appearance="outline"
-        // A TOKEN ID IS A MACHINE VALUE, so it is set in the mono face: the
-        // operator compares it character by character against the one in their
-        // `crewlet.yaml`, which proportional digits make harder than it needs
-        // to be. Ours had `mono` for the same reason and this chip never asked
-        // for it.
+        // A LOGIN IS A MACHINE VALUE, so it is set in the mono face: the
+        // operator compares it character by character against the one the
+        // directory lists, which proportional digits make harder than it
+        // needs to be.
         monospace
-        title={`Token ${viewer.operatorID} is not bound to a seat — give a human seat contact.crewlet_operator_id: ${viewer.operatorID}`}
+        title={`${viewer.login} is not bound to a seat — bind it with crewlet iam bind`}
       >
-        {viewer.operatorID}
+        {viewer.login}
       </Tag>
     );
   }

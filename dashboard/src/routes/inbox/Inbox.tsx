@@ -261,9 +261,9 @@ export function Inbox() {
         </Callout>
       ) : viewer.unbound ? (
         <Callout variant="warning">
-          This token is <code className="inline">{viewer.operatorID}</code> and no seat claims it.
-          Give a human seat <code className="inline">contact.crewlet_operator_id</code> with that
-          value and this becomes their inbox.
+          You are <code className="inline">{viewer.login}</code> and the directory binds you to no
+          seat. Bind it with <code className="inline">crewlet iam bind</code> and this becomes your
+          inbox.
         </Callout>
       ) : null}
 

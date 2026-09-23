@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -190,43 +191,61 @@ func (e *Engine) ImportReady(ctx context.Context) (string, error) {
 		"and import again.", who, floor, coord.ProtocolVersion), nil
 }
 
-// BoundSeat maps an operator credential to the chart seat that claims it.
+// BoundSeat resolves a Tier A credential to the seat its holder is bound to.
 //
-// THE BINDING IS WRITTEN ON THE SEAT and not on the token, which is the org
-// model's own decision and the reason this lookup is a walk rather than an
-// index: Tier A is the root of trust and may never read Tier B, so a `seat:`
-// field on the token would have the trusted tier depending on the untrusted
-// one. The chart says which credential is a person instead.
+// # The binding moved out of the org chart
 //
-// A NODE WITH NO COMPANY ANSWERS EMPTY, which is the honest answer and the
-// safe one: the caller is then a machine principal, decided by its grants
-// alone, rather than a person the engine guessed at. An empty id answers the
-// same way and is equally ordinary — an operator token that is nobody's is a
-// pipeline's.
+// It used to be a field on a human seat's contact block naming one of Tier A's
+// token ids. That field is gone, and with it the whole
+// idea that the COMPANY DOCUMENT says who a credential is — a seat's contact
+// block is how to reach a person, and a credential is something they hold.
+// The identity estate says it instead: a person or a machine is a ROW with a
+// login and a seat binding, arbitrated on `iam.seat.<handle>` so two people
+// cannot claim one seat.
 //
-// IT ANSWERS HERE rather than beside each caller because it is a fact about
-// the company this engine runs, and more than one surface has to decide
-// whether a credential is a PERSON: the CLI's principal resolver, and the
-// end-to-end harness that stands the same surfaces up. Written twice it would
-// be two answers to "who is this operator" — a request resolving to a seat on
-// one path and to a bare operator id on the other, with the audit feed showing
-// one person as two people, which is exactly the failure internal/iam's
-// namespace rules exist to make unrepeatable.
-func (e *Engine) BoundSeat(operatorID string) string {
-	if e == nil || operatorID == "" {
+// # Empty is an ordinary answer and an ERROR is not
+//
+// A credential nobody in the directory holds is not bound to a seat, which is
+// what every Tier A token on a fresh estate is: an operator rather than a
+// colleague. That answers empty.
+//
+// A directory this node CANNOT READ also answers empty, and that is the one
+// judgement here. The alternative is failing the request, which would make
+// every API call on a node whose iam applier is behind a 503 — including the
+// calls an operator makes to fix it. What is lost by answering empty is the
+// LEAD relation: the caller acts as the credential rather than as their seat,
+// so an authority rule asking "do you lead this" falls through to the grant.
+// A narrower surface for a moment is the safe direction; a locked-out
+// operator is not.
+func (e *Engine) BoundSeat(login string) string {
+	if e == nil || login == "" {
 		return ""
 	}
-	company := e.Company()
-	if company == nil || company.Org == nil {
+	reader := e.IAM()
+	if reader == nil {
 		return ""
 	}
-	for role := range company.Org.AllRoles() {
-		if role.Contact == nil {
-			continue
-		}
-		if role.Contact.CrewletOperatorID == operatorID {
-			return role.Handle()
-		}
+	// THE PROCESS'S OWN CONTEXT, because this runs inside a request whose
+	// cancellation is the caller's: a browser that navigated away would
+	// otherwise turn the binding into an empty answer for the request
+	// still being served beside it.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()),
+		boundSeatBudget)
+	defer cancel()
+	seen, err := reader.PersonByLogin(ctx, login)
+	if err != nil {
+		log.Debug("bound_seat_unreadable", "login", login, "error", err)
+		return ""
 	}
-	return ""
+	return seen.Seat
 }
+
+// boundSeatBudget bounds the directory read one request's seat binding costs.
+//
+// TWO SECONDS, which is the same budget [seatExists] takes for the same shape
+// of question and for the same reason: it is a local read of a replicated
+// table on this node's own store, so anything approaching a second means the
+// store is in trouble rather than that the answer is slow — and this sits in
+// front of every guarded request, so a longer one would hold the whole surface
+// behind one sick file handle.
+const boundSeatBudget = 2 * time.Second

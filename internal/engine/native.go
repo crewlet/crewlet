@@ -351,6 +351,17 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		var err error
 		if n.pages, err = pages.NewStore(pages.Options{
 			Publisher: running.publisher, DB: e.backends.Store,
+			// LIVE off the epoch for the reason the searcher below is:
+			// `knowledge.skills_container` is Tier B, and this store is
+			// built once per node while an apply can move the key
+			// underneath it.
+			Reserved: func() []string {
+				c := e.Company()
+				if c == nil {
+					return nil
+				}
+				return reservedContainers(c.Config)
+			},
 		}); err != nil {
 			return fmt.Errorf("engine: pages store: %w", err)
 		}
@@ -1627,14 +1638,7 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 				func(u *org.Unit) string { return u.Space },
 				func(r *org.Role) string { return r.Space })
 		},
-		// THE TWO CONTAINERS A SEAT MAY NOT WRITE TO DIRECTLY: the
-		// tool-skills container, whose pages are machinery the sync
-		// publishes, and the org root, which holds the onboarding tree.
-		// Read off the CURRENT epoch for the reason the defaults are —
-		// and refused by name at the call rather than silently landing
-		// somewhere every search excludes.
-		Reserved: reservedContainers(c.Config),
-		Await:    e.WaitCommitted,
+		Await: e.WaitCommitted,
 	}
 }
 
@@ -1883,29 +1887,4 @@ func (e *Engine) enterSearch() func() {
 		e.metrics.Set(metrics.TrackerSearchConcurrency,
 			float64(e.searching.Add(-1)), nil)
 	}
-}
-
-// LeadsProjectOf answers whether a handle leads the unit that owns a project.
-//
-// THROUGH [ChartAuthority], which is the seam [authz.Decide] asks the same
-// question through. Two implementations of "who leads this" is two chances for
-// a tool surface and a route to answer differently about one person, which is
-// the class of divergence internal/authz exists to remove — so this is the
-// adapter, not a second walk.
-//
-// A PROJECT THIS BUILD CANNOT RESOLVE ANSWERS FALSE, and a node that cannot
-// read its chart at all answers an ERROR. Those used to be one value, and the
-// second is the one that mattered: a node booting, applying a revision or
-// behind the chart log told every lead in the company that they lead nothing.
-func LeadsProjectOf(e *Engine) builtin.LeadsProject {
-	return ChartAuthorityOf(e).LeadsProject
-}
-
-// LeadsOf answers whether one handle leads another, through the same seam.
-//
-// THE SECOND HALF OF THE SAME ADAPTER. The person surfaces resolved this with
-// their own lookup, which is exactly the second opinion about the hierarchy
-// that the tools' own seam doc warns against.
-func LeadsOf(e *Engine) builtin.Leads {
-	return ChartAuthorityOf(e).Leads
 }

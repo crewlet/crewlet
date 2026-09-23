@@ -395,7 +395,7 @@ func (f fakeMentions) Mentions(string) []string { return f }
 func workRegistry(t *testing.T, deps builtin.WorkDeps) *tools.Registry {
 	t.Helper()
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, builtin.Deps{Work: deps}); err != nil {
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Work: deps})); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	return reg
@@ -417,6 +417,19 @@ func workTurn(t *testing.T) *turnctx.Turn {
 
 func callWork(t *testing.T, reg *tools.Registry, name string, args map[string]any) tools.Result {
 	t.Helper()
+	return callWorkAs(t, reg, everyGrant(), name, args)
+}
+
+// callWorkAs is [callWork] for a case that is about WHO is calling.
+//
+// A CASE ABOUT AUTHORITY MUST NOT USE [everyGrant], which carries
+// fleet:operate — the grant every relation class checks BEFORE the chart, so
+// a fixture holding it is allowed by a chart that refuses everything and the
+// case asserts nothing.
+func callWorkAs(t *testing.T, reg *tools.Registry, ctx context.Context,
+	name string, args map[string]any) tools.Result {
+
+	t.Helper()
 	entry, ok := reg.Lookup(name)
 	if !ok {
 		t.Fatalf("%s is not registered", name)
@@ -425,7 +438,7 @@ func callWork(t *testing.T, reg *tools.Registry, name string, args map[string]an
 	if !ok {
 		t.Fatalf("%s is not seat-callable", name)
 	}
-	got, err := seatCallable.CallForTurn(t.Context(), workTurn(t), args)
+	got, err := seatCallable.CallForTurn(ctx, workTurn(t), args)
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -544,7 +557,7 @@ func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is not registered", name)
 		}
-		got, err := entry.Tool.Call(t.Context(), map[string]any{"item": "ENG-1", "title": "x", "body": "y"})
+		got, err := entry.Tool.Call(everyGrant(), map[string]any{"item": "ENG-1", "title": "x", "body": "y"})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -959,6 +972,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
 		},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		operator[tool.Name()] = true
 	}
@@ -1041,7 +1055,7 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 			!strings.HasPrefix(tool.Name(), "get_") {
 			continue
 		}
-		result, err := tool.Call(t.Context(), map[string]any{})
+		result, err := tool.Call(everyGrant(), map[string]any{})
 		if err != nil {
 			t.Fatalf("%s: %v", tool.Name(), err)
 		}
@@ -1203,7 +1217,7 @@ func TestAFieldsOnlyUpdateIsNotSilentlyDropped(t *testing.T) {
 			// THE RE-ROUTE IS THE LEAD'S DECISION, so the registry
 			// carries one — otherwise that case would be refused for
 			// a reason unrelated to what it is asserting.
-			reg := projectRegistry(t, trk, leadAlways)
+			reg := projectRegistry(t, trk, chartLeads)
 			got := callWork(t, reg, builtin.UpdateWorkItemTool, args)
 			if got.Failed {
 				t.Fatalf("the update failed: %s", got.Output)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // The close codes this socket ends a connection with, on top of the ones the
@@ -127,10 +128,12 @@ var (
 
 // Query answers one client question.
 //
-// operatorID is empty for an unauthenticated socket. A query that needs one
-// returns [ErrUnauthorized] rather than deciding for itself what to do about
-// it, so the refusal reaches the client as a code it already handles.
-type Query func(ctx context.Context, what string, params map[string]any, operatorID string) (any, error)
+// WHO IS ASKING TRAVELS IN THE CONTEXT, which the guard resolved before this
+// handler ran — never as an argument beside it, because two identities on one
+// call are two chances to answer about different people. A query the caller
+// may not ask returns [ErrUnauthorized] rather than deciding for itself what
+// to do about it, so the refusal reaches the client as a code it handles.
+type Query func(ctx context.Context, what string, params map[string]any) (any, error)
 
 // request is one client-to-server frame.
 type request struct {
@@ -159,12 +162,39 @@ type request struct {
 // Handler serves the dashboard's live socket.
 //
 // The credential is ?token= on the URL, because browsers cannot set headers on
-// a WebSocket constructor. Non-browser clients may send Authorization instead,
-// and should: a query string appears in proxy logs.
+// a WebSocket constructor, or the session cookie a signed-in browser sends on
+// its own. Non-browser clients may send Authorization instead, and should: a
+// query string appears in proxy logs.
+//
+// # Who is calling is the GUARD's answer, read once
+//
+// It used to be a second answer: this handler re-read the credential through
+// the guard's Tier A arm alone, so a person signed in with a session cookie —
+// which is every browser once `/auth` exists — was refused here while every
+// REST route beside it served them. The guard resolves both shapes, the
+// middleware has already run it for this path, and the handler reads the
+// result from the context like every other surface does.
 func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		operatorID, ok := authenticate(guard, r)
-		if !ok {
+		r, refusal := resolved(guard, w, r)
+		principal, how := iam.From(r.Context())
+		if refusal == nil && how == iam.Unknown {
+			// 503 AND NEVER 401, for the guard's own reason: a browser
+			// reads 401 as "sign in again" and discards the cookie, and
+			// this node merely could not read its identity estate.
+			httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
+				auth.RetryIdentitySeconds)
+			return
+		}
+		if refusal != nil {
+			// A PERSON WHOSE SEAT IS GONE is resolved and still refused,
+			// with the guard's own code and detail — a socket is a
+			// surface that acts as the seat.
+			httpjson.FailWith(w, refusal.Status, refusal.Code,
+				map[string]string{"detail": refusal.Detail})
+			return
+		}
+		if how != iam.Resolved {
 			// REFUSED BEFORE THE UPGRADE. Accepting a credential this
 			// node rejects, purely to close it politely a moment later,
 			// would let anyone open a socket here.
@@ -191,6 +221,11 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
+		// THE BUDGET IS THE PRINCIPAL'S, keyed on the login: the same
+		// person across their tabs, and a login is stable across every
+		// request a credential makes where a principal's session id is
+		// not.
+		budgetKey := principal.Login
 
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			// The dashboard is served by this same process, so the
@@ -202,49 +237,37 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			log.Debug("stream_accept_failed", "error", err)
 			return
 		}
-		serveSocket(r.Context(), conn, svc, query, operatorID)
+		serveSocket(r.Context(), conn, svc, query, budgetKey)
 	})
 }
 
-// authenticate resolves the socket's operator, or refuses it.
+// resolved is the request carrying the guard's answer, and the guard's
+// refusal if it made one.
 //
-// The socket is guarded exactly as the equivalent HTTP read is, which now
-// means: always. A credential that is absent and one that is present and wrong
-// are refused alike — the first used to open an anonymous socket, and what
-// that socket could read is every LLM transcript this company has produced.
-// The credential is read by the guard's own rule, the same one the middleware
-// applied a moment earlier, so the two can never disagree about where a
-// socket's token may ride.
+// THE MIDDLEWARE HAS NORMALLY ALREADY ANSWERED, and then this is a read: the
+// socket path is guarded, so in the engine every request reaching this handler
+// carries a resolution — and resolving a second time would read the identity
+// estate twice and could write the session cookie twice on one response.
 //
-// IT STILL ASKS [auth.Unguarded] rather than assuming the answer. The
-// exemption list is that package's to state, and a socket path that somebody
-// later declares unguarded must open here rather than being refused by a
-// second, private copy of the rule.
-func authenticate(guard *auth.Guard, r *http.Request) (string, bool) {
-	operatorID, authenticated := guard.Presented(r)
-	if authenticated {
-		return operatorID, true
+// A CONTEXT NOBODY RESOLVED is this handler mounted bare, which is how its own
+// suite and any embedding that skips the middleware reach it. It is not a
+// wiring fault here the way it is for a query — this handler is HANDED the
+// guard, so it can answer the question itself, once, by the same rule.
+func resolved(guard *auth.Guard, w http.ResponseWriter,
+	r *http.Request) (*http.Request, *auth.Refusal) {
+
+	if !errors.Is(iam.Reason(r.Context()), iam.ErrUnresolved) {
+		// NO REFUSAL CAN BE PENDING HERE: the middleware writes a seat
+		// refusal itself on every path outside `/auth/`, so a request
+		// it answered and passed on is one it did not refuse.
+		return r, nil
 	}
-	// A CREDENTIAL THAT IS PRESENT AND WRONG IS REFUSED EVEN IF THIS PATH
-	// WERE EXEMPT, which is where this parts company with the HTTP
-	// middleware: there an unguarded route serves a bad token as nobody,
-	// and here it must not. A socket is a long-lived subscription rather
-	// than one answer, and a reader whose token is stale would sit on it
-	// for hours getting whatever an exempt socket serves, never told that
-	// the credential they typed is wrong.
-	//
-	// Both arms answer false today, because the socket path is guarded —
-	// they are kept apart because only one of them may change if it ever
-	// stops being.
-	if guard.Credential(r) != "" {
-		return "", false
-	}
-	return "", auth.Unguarded(auth.SocketPath)
+	return guard.Resolve(w, r)
 }
 
 // serveSocket runs one connection until it closes.
 func serveSocket(ctx context.Context, conn *websocket.Conn,
-	svc *Service, query Query, operatorID string,
+	svc *Service, query Query, budgetKey string,
 ) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -252,7 +275,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	// THE BUDGET IS ACQUIRED BEFORE ANY FRAME IS READ and released when
 	// this socket is done, so a person's tabs share one allowance for
 	// exactly as long as they are open. See budget.go.
-	slots, releaseBudget := svc.budgets.acquire(operatorID)
+	slots, releaseBudget := svc.budgets.acquire(budgetKey)
 	defer releaseBudget()
 
 	client := NewClient()
@@ -273,7 +296,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	})
 
 	client.Reply(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
-	code, reason := readLoop(ctx, conn, svc.Hub(), client, query, operatorID, slots)
+	code, reason := readLoop(ctx, conn, svc.Hub(), client, query, slots)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -336,7 +359,7 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // answered ON the socket and the socket stays open. See [CloseUnauthenticated]
 // and [FrameDegraded].
 func readLoop(ctx context.Context, conn *websocket.Conn,
-	hub *Hub, client *Client, query Query, operatorID string,
+	hub *Hub, client *Client, query Query,
 	slots chan struct{},
 ) (websocket.StatusCode, string) {
 	// THE CONCURRENCY BOUND ARRIVES FROM THE SERVICE rather than being
@@ -370,7 +393,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			// learns why its pushes stopped.
 			client.Reply(Envelope{Kind: KindPong})
 		case "watch":
-			if code, reason := watch(ctx, hub, client, req, operatorID); code != 0 {
+			if code, reason := watch(ctx, hub, client, req); code != 0 {
 				return code, reason
 			}
 		case "query":
@@ -397,7 +420,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			go func() {
 				defer running.Done()
 				defer func() { <-slots }()
-				runQuery(ctx, client, query, req, operatorID)
+				runQuery(ctx, client, query, req)
 			}()
 		default:
 			// Unknown kinds are ignored, which is what makes new ones
@@ -424,22 +447,24 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 // A close rather than an error frame, because a watch carries no correlation
 // id: the socket itself is the only channel the refusal has.
 func watch(ctx context.Context, hub *Hub, client *Client,
-	req request, operatorID string,
+	req request,
 ) (websocket.StatusCode, string) {
-	if operatorID == "" {
+	// WHO IS WATCHING IS THE GUARD'S ANSWER, read from the context rather
+	// than from an id passed alongside — this socket reached the handler
+	// past the guard, so a principal it could not resolve never gets here.
+	principal, how := iam.From(ctx)
+	if how != iam.Resolved {
 		return CloseUnauthenticated,
-			"watching a seat needs an operator credential"
+			"watching a seat needs a credential this node can resolve"
 	}
 	hub.Watch(client, req.Seat)
-	log.DebugContext(ctx, "stream_watch", "operator", operatorID, "seat", req.Seat)
+	log.DebugContext(ctx, "stream_watch", "login", principal.Login, "seat", req.Seat)
 	return 0, ""
 }
 
 // runQuery answers one question onto the client's own queue.
-func runQuery(ctx context.Context, client *Client, query Query,
-	req request, operatorID string,
-) {
-	data, err := query(ctx, req.What, req.Params, operatorID)
+func runQuery(ctx context.Context, client *Client, query Query, req request) {
+	data, err := query(ctx, req.What, req.Params)
 	switch {
 	case err == nil:
 		client.Reply(Envelope{Kind: KindResult, ID: req.ID, What: req.What, Data: data})

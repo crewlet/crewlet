@@ -68,7 +68,7 @@ func TestTheConfigQueryIsOperatorOnly(t *testing.T) {
 		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead},
 	})
 	for _, what := range []string{"config", "config_audit", "config_diff", "config_entities"} {
-		if _, err := r.Answer(narrow, what, nil, "reader"); err == nil {
+		if _, err := r.Answer(narrow, what, nil); err == nil {
 			t.Errorf("%s answered the ordinary dashboard reader", what)
 		}
 		// The control: the grant it DOES need is answered, or the
@@ -129,7 +129,7 @@ func TestTheEntityQueryRefusesWhatItCannotAddress(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := r.Answer(everyGrant(t), "config_entities", tc.params, "operator")
+			_, err := r.Answer(everyGrant(t), "config_entities", tc.params)
 			if err == nil {
 				t.Fatal("answered rather than refused")
 			}
@@ -174,7 +174,7 @@ func TestTheConfigQueryOnAnUnconfiguredNodeIsNullNotAnError(t *testing.T) {
 	surface, _ := configSurface(t)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Config: surface})
-	data, err := r.Answer(everyGrant(t), "config", nil, "operator")
+	data, err := r.Answer(everyGrant(t), "config", nil)
 	if err != nil {
 		t.Fatalf("config: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestADiffOfARevisionThatIsGoneIsNullNotAnError(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Config: surface})
 	data, err := r.Answer(everyGrant(t), "config_diff",
-		map[string]any{"revision_id": "00000000-0000-0000-0000-000000000000"}, "operator")
+		map[string]any{"revision_id": "00000000-0000-0000-0000-000000000000"})
 	if err != nil {
 		t.Fatalf("config_diff: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestTheDiffQueryNeedsARevision(t *testing.T) {
 	surface, _ := configSurface(t, companyDoc)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Config: surface})
-	if _, err := r.Answer(everyGrant(t), "config_diff", nil, "operator"); err == nil {
+	if _, err := r.Answer(everyGrant(t), "config_diff", nil); err == nil {
 		t.Fatal("a diff query with no revision was answered")
 	}
 }

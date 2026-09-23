@@ -148,7 +148,7 @@ func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 	// rather than being storage for a rule nobody wrote.
 	if _, err := asBob(r).WriteInbox(t.Context(), "op-prefs", "bob", nil, nil,
 		nil, []tracker.Reason{tracker.ReasonMention},
-		tracker.Position{}); err != nil {
+		tracker.Position{}, tracker.PersonAuthority{Authorized: true}); err != nil {
 
 		t.Fatalf("declare the split: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 		nil, nil, tracker.Position{
 			Stream: oldest.LogStream, Generation: oldest.LogGeneration,
 			Seq: oldest.LogSeq,
-		}); err != nil {
+		}, tracker.PersonAuthority{Authorized: true}); err != nil {
 
 		t.Fatalf("mark the seen-through position: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 		nil, nil, nil, tracker.Position{
 			Stream: oldest.LogStream, Generation: oldest.LogGeneration,
 			Seq: oldest.LogSeq,
-		}); err != nil {
+		}, tracker.PersonAuthority{Authorized: true}); err != nil {
 
 		t.Fatalf("mark the newer notice read: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 		nil, nil, tracker.Position{
 			Stream:     "CREWLET_TRACKER_LOG_FROM_A_PREVIOUS_LIFE",
 			Generation: notice.LogGeneration, Seq: notice.LogSeq + 1_000,
-		}); err != nil {
+		}, tracker.PersonAuthority{Authorized: true}); err != nil {
 
 		t.Fatalf("mark a position in a dead stream: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 	if _, err := asBob(r).WriteInbox(t.Context(), "op-snooze", "bob", nil, nil,
 		[]tracker.InboxEntry{{
 			RecordID: notice.RecordID, Position: notice.LogSeq, Until: &asleep,
-		}}, nil, tracker.Position{}); err != nil {
+		}}, nil, tracker.Position{}, tracker.PersonAuthority{Authorized: true}); err != nil {
 
 		t.Fatalf("snooze: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 	if _, err := asBob(r).WriteInbox(t.Context(), "op-due", "bob", nil, nil,
 		[]tracker.InboxEntry{{
 			RecordID: notice.RecordID, Position: notice.LogSeq, Until: &past,
-		}}, nil, tracker.Position{}); err != nil {
+		}}, nil, tracker.Position{}, tracker.PersonAuthority{Authorized: true}); err != nil {
 
 		t.Fatalf("snooze into the past: %v", err)
 	}

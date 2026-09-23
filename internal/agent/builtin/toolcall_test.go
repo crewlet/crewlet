@@ -103,7 +103,8 @@ func operatorCatalogue() map[string]servedTool {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
 		},
-		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
+		Pages:     builtin.PageDeps{Reader: kb, Writer: kb},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		out[tool.Name()] = servedTool{
 			fields:   schemaFields(tool.Parameters()),

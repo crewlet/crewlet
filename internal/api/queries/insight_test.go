@@ -377,7 +377,7 @@ func TestAHalfCursorIsRefused(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	r := registryOver(t, queries.Sources{Events: db.Events()})
-	if _, err := r.Answer(everyGrant(t), "phases", map[string]any{"before_id": "x"}, ""); err == nil {
+	if _, err := r.Answer(everyGrant(t), "phases", map[string]any{"before_id": "x"}); err == nil {
 		t.Fatal("a before_id with no before_time was accepted")
 	}
 }

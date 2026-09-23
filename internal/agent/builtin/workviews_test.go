@@ -158,6 +158,7 @@ func TestTheViewShapesTheToolOffersAreTheOnesTheEngineTakes(t *testing.T) {
 			Writer:     work.as,
 			ViewWriter: func(builtin.Actor) builtin.ViewWriter { return nil },
 		},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		if tool.Name() != tracker.SaveWorkViewTool {
 			continue

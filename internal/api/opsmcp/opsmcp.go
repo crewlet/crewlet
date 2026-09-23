@@ -86,17 +86,11 @@ type Options struct {
 	// call, so it is registered only when both are present.
 	Org func() *org.Organization
 
-	// Leads answers whether one handle leads another — the one authority
-	// over a person's record that reaches across people. Nil degrades to
-	// "your own only" rather than to a hole.
-	Leads builtin.Leads
-
-	// LeadsProject answers whether a handle leads the unit that owns a
-	// project — the authority over that project's SETTINGS, which is a
-	// different question from the line above: one is about a person, the
-	// other about a container. Nil REFUSES every policy edit naming the
-	// project, which is the safe direction.
-	LeadsProject builtin.LeadsProject
+	// Authorize decides whether the party behind a call may make it, and
+	// it is the SAME decision a seat's own registry is built with — one
+	// table, one function, three surfaces. Nil REFUSES everything, which
+	// is the safe direction and the one a missing wiring must take.
+	Authorize builtin.Authorizer
 
 	// Company names the company in the server's own title, so an operator
 	// with two of these connected can tell which is which.
@@ -117,7 +111,7 @@ type Server struct {
 func New(opts Options) *Server {
 	catalogue := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: opts.Work, Pages: opts.Pages, Knowledge: opts.Knowledge,
-		Org: opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
+		Org: opts.Org, Authorize: opts.Authorize,
 	})
 	if len(catalogue) == 0 {
 		return nil

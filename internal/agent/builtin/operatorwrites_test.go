@@ -73,7 +73,7 @@ func callNoTurn(t *testing.T, reg *tools.Registry, name string,
 	if !ok {
 		t.Fatalf("%s is not seat-callable", name)
 	}
-	got, err := callable.CallForTurn(t.Context(), nil, args)
+	got, err := callable.CallForTurn(everyGrant(), nil, args)
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -173,7 +173,7 @@ func TestTwoRunsOfOneTriggerWriteOneOperation(t *testing.T) {
 		if !ok {
 			t.Fatal("update_work_item is not seat-callable")
 		}
-		if _, err := callable.CallForTurn(t.Context(), turn, map[string]any{
+		if _, err := callable.CallForTurn(everyGrant(), turn, map[string]any{
 			"item": "ENG-1", "priority": "urgent",
 		}); err != nil {
 			t.Fatalf("%s: %v", name, err)

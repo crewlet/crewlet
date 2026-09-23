@@ -80,10 +80,10 @@ type Actor struct {
 // engine, which is the least this can claim and still be total.
 //
 // A PERSON SPLITS ON THEIR SEAT, and that split is the whole point of the
-// `crewlet_operator_id` binding in the company document: bound, they act as
-// themselves and their work lands under their own seat handle; unbound — an
-// operator who is not in the org chart, a pipeline, an automation — they act
-// as the credential, under its login. Both are ordinary.
+// seat binding the identity directory holds: bound, they act as themselves and
+// their work lands under their own seat handle; unbound — an operator who is
+// not in the org chart, a pipeline, an automation — they act as the
+// credential, under its login. Both are ordinary.
 func ActorFor(p Principal) Actor {
 	switch p.Kind {
 	case KindSeat:

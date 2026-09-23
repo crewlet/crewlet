@@ -359,12 +359,13 @@ func rosterProfile(s Seat, report *org.Role) []string {
 			// each id once, labelled by its first transport —
 			// repeating it reads as two different accounts.
 			//
-			// An UNREACHABLE transport is left out entirely: an
-			// operator id identifies this person on the engine's own
-			// surface, where nothing is ever sent, so listing it under
-			// how to reach them would have an agent @-mentioning a
-			// name no platform resolves.
-			if seen[id.ExternalID] || !id.Transport.Reachable() {
+			// EVERY TRANSPORT LISTED IS ONE A MESSAGE REACHES. The
+			// `crewlet` transport used to be here too, carrying the
+			// operator id a Tier A token bound a seat with, and it had
+			// to be filtered: listing it under how to reach somebody
+			// would have an agent @-mentioning a name no platform
+			// resolves. The identity estate holds that binding now.
+			if seen[id.ExternalID] {
 				continue
 			}
 			seen[id.ExternalID] = true

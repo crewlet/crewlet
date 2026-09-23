@@ -23,7 +23,7 @@ func TestProjectPolicyIsTheLeads(t *testing.T) {
 		t.Fatal("a seat that does not lead ENG set its default assignee")
 	}
 	if _, err := r.writer.WriteProject(t.Context(), "op-lead", "ENG", edit,
-		tracker.ProjectAuthority{Lead: true}); err != nil {
+		tracker.ProjectAuthority{Policy: true}); err != nil {
 
 		t.Fatalf("the lead could not set the default assignee: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestArchivingAProjectTakesAPerson(t *testing.T) {
 	edit := tracker.ProjectEdit{Archived: &archived}
 
 	_, err := r.writer.WriteProject(t.Context(), "op-lead-archive", "ENG", edit,
-		tracker.ProjectAuthority{Lead: true})
+		tracker.ProjectAuthority{Policy: true})
 	if err == nil {
 		t.Fatal("a lead archived a project without a person's credential")
 	}
@@ -50,7 +50,7 @@ func TestArchivingAProjectTakesAPerson(t *testing.T) {
 		t.Fatalf("the refusal does not say what is missing: %v", err)
 	}
 	if _, err := r.writer.WriteProject(t.Context(), "op-operator-archive", "ENG",
-		edit, tracker.ProjectAuthority{Lead: true, Operator: true}); err != nil {
+		edit, tracker.ProjectAuthority{Policy: true, Archive: true}); err != nil {
 
 		t.Fatalf("an operator could not archive a project: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestPolicyVersionMovesOnlyForWhatATaskIsValidatedAgainst(t *testing.T) {
 	who := "alice"
 	if _, err := r.writer.WriteProject(t.Context(), "op-assignee", "ENG",
 		tracker.ProjectEdit{DefaultAssignee: &who},
-		tracker.ProjectAuthority{Lead: true}); err != nil {
+		tracker.ProjectAuthority{Policy: true}); err != nil {
 
 		t.Fatalf("set the default assignee: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestPolicyVersionMovesOnlyForWhatATaskIsValidatedAgainst(t *testing.T) {
 	}}
 	if _, err := r.writer.WriteProject(t.Context(), "op-fields", "ENG",
 		tracker.ProjectEdit{Fields: &fields},
-		tracker.ProjectAuthority{Lead: true}); err != nil {
+		tracker.ProjectAuthority{Policy: true}); err != nil {
 
 		t.Fatalf("declare a field: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestAProjectsOwnFieldsReachItsReaders(t *testing.T) {
 	}}
 	if _, err := r.writer.WriteProject(t.Context(), "op-fields", "ENG",
 		tracker.ProjectEdit{Fields: &fields},
-		tracker.ProjectAuthority{Lead: true}); err != nil {
+		tracker.ProjectAuthority{Policy: true}); err != nil {
 
 		t.Fatalf("declare: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestAProjectsOwnFieldsReachItsReaders(t *testing.T) {
 	shorter := []tracker.FieldDef{}
 	if _, err := r.writer.WriteProject(t.Context(), "op-clear", "ENG",
 		tracker.ProjectEdit{Fields: &shorter},
-		tracker.ProjectAuthority{Lead: true}); err != nil {
+		tracker.ProjectAuthority{Policy: true}); err != nil {
 
 		t.Fatalf("clear the project's fields: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestAProjectFieldArchiveIsOneWay(t *testing.T) {
 		fields := []tracker.FieldDef{f}
 		_, err := r.writer.WriteProject(t.Context(), op, "ENG",
 			tracker.ProjectEdit{Fields: &fields},
-			tracker.ProjectAuthority{Lead: true})
+			tracker.ProjectAuthority{Policy: true})
 		r.drain()
 		return err
 	}
@@ -261,7 +261,7 @@ func TestARepeatedProjectEditWritesNothing(t *testing.T) {
 	who := "alice"
 	edit := tracker.ProjectEdit{DefaultAssignee: &who}
 	if _, err := r.writer.WriteProject(t.Context(), "op-first", "ENG", edit,
-		tracker.ProjectAuthority{Lead: true}); err != nil {
+		tracker.ProjectAuthority{Policy: true}); err != nil {
 
 		t.Fatalf("first: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestARepeatedProjectEditWritesNothing(t *testing.T) {
 	before := r.project(tracker.ProjectDetailQuery{Project: "ENG"}).Version
 
 	if _, err := r.writer.WriteProject(t.Context(), "op-second", "ENG", edit,
-		tracker.ProjectAuthority{Lead: true}); err != nil {
+		tracker.ProjectAuthority{Policy: true}); err != nil {
 
 		t.Fatalf("second: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestARepeatedProjectEditWritesNothing(t *testing.T) {
 func TestProjectEditRefusesAnEmptyGesture(t *testing.T) {
 	r := newRoundTrip(t)
 	_, err := r.writer.WriteProject(t.Context(), "op-empty", "ENG",
-		tracker.ProjectEdit{}, tracker.ProjectAuthority{Lead: true})
+		tracker.ProjectEdit{}, tracker.ProjectAuthority{Policy: true})
 	if err == nil {
 		t.Fatal("an edit that sets nothing was accepted")
 	}
@@ -302,7 +302,7 @@ func TestProjectEditNamesAnUnknownProject(t *testing.T) {
 	who := "alice"
 	_, err := r.writer.WriteProject(t.Context(), "op-nope", "NOPE",
 		tracker.ProjectEdit{DefaultAssignee: &who},
-		tracker.ProjectAuthority{Lead: true})
+		tracker.ProjectAuthority{Policy: true})
 	if err == nil {
 		t.Fatal("an edit to a project that does not exist created one")
 	}
@@ -311,32 +311,54 @@ func TestProjectEditNamesAnUnknownProject(t *testing.T) {
 	}
 }
 
-// AN OPERATOR IS NOT A SEAT, and the gate that admitted only the lead refused
-// the one actor the whole operator surface exists for.
+// THE TWO FACETS ARE TWO ANSWERS, and the split is what makes the second one
+// mean anything.
 //
-// It was reachable rather than theoretical: `/operator/mcp` resolves the lead
-// from the ORG CHART by handle and an operator token carries its own name
-// rather than a seat's, so the lookup answered false and `write_project` was
-// refused for every operator in every company — including the founder
-// declaring the fields a project files work under. The archive gate below it
-// already expected an operator, which is what made the hole visible: a person
-// could take a project out of circulation and could not say how its work was
-// filed.
-func TestAPersonsOwnCredentialIsAuthorityOverAProjectsPolicy(t *testing.T) {
+// Both fields used to be INPUTS to one policy — `Lead` from a chart lookup and
+// `Operator` from "the actor is not a seat" — joined here as `!Lead &&
+// !Operator`. Under that reading a person's own credential was authority over
+// every project's policy in the company, whether or not they led it and
+// whether or not they held any grant: the archive gate below wanted an
+// operator, and the policy gate accepted the same fact as a substitute for the
+// relation. Now each facet carries the answer [authz.Decide] gave for ITS own
+// verb, and holding one says nothing about the other.
+func TestEachProjectFacetTakesItsOwnAnswer(t *testing.T) {
 	r := newRoundTrip(t)
 	who := "alice"
 	edit := tracker.ProjectEdit{DefaultAssignee: &who}
 
-	if _, err := r.writer.WriteProject(t.Context(), "op-operator", "ENG", edit,
-		tracker.ProjectAuthority{Operator: true}); err != nil {
+	// THE ARCHIVE ANSWER DOES NOT UNLOCK THE POLICY, which is the hole
+	// the old join had: a person who may take a project out of
+	// circulation is not thereby the person who says how its work is
+	// filed.
+	if _, err := r.writer.WriteProject(t.Context(), "op-archive-only", "ENG",
+		edit, tracker.ProjectAuthority{Archive: true}); err == nil {
 
-		t.Fatalf("an operator who does not lead ENG could not set its "+
-			"policy: %v", err)
+		t.Fatal("an archive answer set the project's default assignee")
+	}
+
+	if _, err := r.writer.WriteProject(t.Context(), "op-policy", "ENG", edit,
+		tracker.ProjectAuthority{Policy: true}); err != nil {
+
+		t.Fatalf("a caller the table admitted could not set ENG's policy: %v", err)
 	}
 	r.drain()
 	if got := r.project(tracker.ProjectDetailQuery{Project: "ENG"}); got.DefaultAssignee != who {
 		t.Fatalf("default assignee = %q, want %q", got.DefaultAssignee, who)
 	}
+
+	// AND THE POLICY ANSWER DOES NOT UNLOCK THE ARCHIVE, which is the
+	// other direction: a project nobody can file into again is a company
+	// decision and never an agent's, so the table asks a second verb with
+	// a human-only bar on it.
+	archived := true
+	if _, err := r.writer.WriteProject(t.Context(), "op-policy-archive", "ENG",
+		tracker.ProjectEdit{Archived: &archived},
+		tracker.ProjectAuthority{Policy: true}); err == nil {
+
+		t.Fatal("a policy answer archived the project")
+	}
+
 	// AND THE REFUSAL STILL NAMES BOTH WAYS IN, for the seat that is
 	// neither: "ask the lead" is the useful answer, and so is "or a person".
 	_, err := r.writer.WriteProject(t.Context(), "op-seat", "ENG", edit,
@@ -350,9 +372,10 @@ func TestAPersonsOwnCredentialIsAuthorityOverAProjectsPolicy(t *testing.T) {
 	}
 }
 
-// AND THE SAME FOR A TAG, which is the same gate one object over: renaming or
-// archiving a tag changes the word on every task already filed under it.
-func TestAPersonsOwnCredentialMayRenameATag(t *testing.T) {
+// AND A TAG IS THE SAME GATE ONE OBJECT OVER: adding one is open to every
+// colleague, and renaming or archiving one changes the word on every task
+// already filed under it.
+func TestOnlyThePolicyAnswerRenamesATag(t *testing.T) {
 	r := newRoundTrip(t)
 	if _, err := r.writer.WriteTags(t.Context(), "op-add", "ENG",
 		tracker.TagEdit{Add: []tracker.Tag{{Slug: "api", Label: "API"}}},
@@ -366,12 +389,11 @@ func TestAPersonsOwnCredentialMayRenameATag(t *testing.T) {
 	if _, err := r.writer.WriteTags(t.Context(), "op-seat-rename", "ENG",
 		rename, tracker.TagAuthority{}); err == nil {
 
-		t.Fatal("a seat that neither leads ENG nor holds a person's " +
-			"credential renamed one of its tags")
+		t.Fatal("a caller the table did not admit renamed one of ENG's tags")
 	}
 	if _, err := r.writer.WriteTags(t.Context(), "op-operator-rename", "ENG",
-		rename, tracker.TagAuthority{Operator: true}); err != nil {
+		rename, tracker.TagAuthority{Policy: true}); err != nil {
 
-		t.Fatalf("an operator could not rename a tag: %v", err)
+		t.Fatalf("a caller the table admitted could not rename a tag: %v", err)
 	}
 }

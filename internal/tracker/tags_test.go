@@ -87,7 +87,7 @@ func TestTagRenameAndArchiveAreTheLeads(t *testing.T) {
 				t.Fatalf("the refusal does not name the lead: %v", err)
 			}
 			if _, err := r.writer.WriteTags(t.Context(), "op-lead-"+c.name,
-				"ENG", c.edit, tracker.TagAuthority{Lead: true}); err != nil {
+				"ENG", c.edit, tracker.TagAuthority{Policy: true}); err != nil {
 
 				t.Fatalf("the lead could not %s: %v", c.name, err)
 			}
@@ -104,7 +104,7 @@ func TestTagArchiveIsOneWayForNewWork(t *testing.T) {
 	r.declareTags("legacy")
 	if _, err := r.writer.WriteTags(t.Context(), "op-archive", "ENG",
 		tracker.TagEdit{Archive: []string{"legacy"}},
-		tracker.TagAuthority{Lead: true}); err != nil {
+		tracker.TagAuthority{Policy: true}); err != nil {
 
 		t.Fatalf("archive: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestTagsPerTaskIsCapped(t *testing.T) {
 func TestTagEditRefusesAnEmptyGesture(t *testing.T) {
 	r := newRoundTrip(t)
 	if _, err := r.writer.WriteTags(t.Context(), "op-empty", "ENG",
-		tracker.TagEdit{}, tracker.TagAuthority{Lead: true}); err == nil {
+		tracker.TagEdit{}, tracker.TagAuthority{Policy: true}); err == nil {
 
 		t.Fatal("an edit that adds, renames and archives nothing was accepted")
 	}
@@ -385,7 +385,7 @@ func TestRenameKeepsTheSlug(t *testing.T) {
 
 	if _, err := r.writer.WriteTags(t.Context(), "op-rename", "ENG",
 		tracker.TagEdit{Rename: map[string]string{"api": "Public API"}},
-		tracker.TagAuthority{Lead: true}); err != nil {
+		tracker.TagAuthority{Policy: true}); err != nil {
 
 		t.Fatalf("rename: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestRenameOfAnUnknownSlugIsRefused(t *testing.T) {
 	r.declareTags("api")
 	_, err := r.writer.WriteTags(t.Context(), "op-rename-unknown", "ENG",
 		tracker.TagEdit{Rename: map[string]string{"nope": "Nope"}},
-		tracker.TagAuthority{Lead: true})
+		tracker.TagAuthority{Policy: true})
 	if err == nil {
 		t.Fatal("a rename of a tag that does not exist was accepted")
 	}

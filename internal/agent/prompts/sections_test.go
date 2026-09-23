@@ -131,12 +131,14 @@ func TestCapitalizeMatchesPythonSemantics(t *testing.T) {
 	}
 }
 
-// A PERSON WHO HOLDS ONLY AN OPERATOR CREDENTIAL HAS NOBODY TO @-MENTION.
-// Their id identifies them on the engine's own surface, where nothing is ever
-// sent — so a roster that listed it and then told an agent to mention them
-// would produce a message addressed to a handle resolving to nobody, which
-// reads to everyone else as work handed over.
-func TestRosterDoesNotOfferAnOperatorIDAsAnAddress(t *testing.T) {
+// A PERSON WITH NO CHAT ACCOUNT HAS NOBODY TO @-MENTION.
+//
+// A human seat can be in the chart with no contact identity at all — somebody
+// who signs in to the dashboard and never joined the company's chat — and a
+// roster that told an agent to mention them would produce a message addressed
+// to a handle resolving to nobody, which reads to everyone else as work handed
+// over.
+func TestRosterOffersNoMentionForAPersonWithNoChatAccount(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
 		Name: "Acme",
@@ -149,7 +151,7 @@ func TestRosterDoesNotOfferAnOperatorIDAsAnAddress(t *testing.T) {
 				{
 					Name:    "Jane Founder",
 					Kind:    org.KindHuman,
-					Contact: &org.HumanContact{CrewletOperatorID: "founder"},
+					Contact: &org.HumanContact{},
 				},
 			},
 		}},

@@ -80,12 +80,14 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if e.skills != nil {
 		deps.ToolSkills = e.skills
 	}
+	// THE AUTHORITY DECISION, over the chart READ PER CALL for the reason
+	// the lead seam below is: a seat's tools are cloned into its lease and
+	// an apply does not rebuild the clone, so a decision holding this
+	// epoch's chart would refuse a seat its own work the moment somebody
+	// reorganised. [ChartAuthorityOf] holds the engine and asks it each
+	// time, three-valued.
+	deps.Authorize = builtin.Decide(ChartAuthorityOf(e))
 	deps.Work = e.workDeps(c)
-	// THE PROJECT-LEAD SEAM, read PER CALL against the epoch current when
-	// the tool runs rather than against this one: a seat's tools are
-	// cloned into its lease, an apply does not rebuild the clone, and a
-	// captured chart would grant or refuse against an org that has moved.
-	deps.LeadsProject = LeadsProjectOf(e)
 	deps.Pages = e.pageDeps(c)
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err

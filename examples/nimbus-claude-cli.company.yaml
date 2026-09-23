@@ -703,13 +703,11 @@ roles:
       # connect.  The tracker and the knowledge base need none: they are
       # the engine's own, and a seat is addressed there by its handle.
       mattermost_user_id: founder
-      # Binds the ``founder`` API token in
-      # nimbus-claude-cli.config.yaml to THIS seat, so the dashboard
-      # knows whose day it is showing and what she files from it is
-      # filed by her.  Without it the token is an ORDINARY unbound one
-      # — it is refused nothing, but every personal surface has nobody
-      # to be about.
-      crewlet_operator_id: founder
+      # WHO SHE IS ON THE DASHBOARD is not written here: she signs in as
+      # a person in the identity directory, which binds her to this seat
+      # — so the dashboard knows whose day it is showing and what she
+      # files from it is filed by her.  Until somebody is bound, the
+      # seat is an ordinary unheld one and `crewlet chart check` says so.
 
 # Flexible org — units can nest to any depth.
 # Each unit has a type (department, team, squad, pod, etc.) and can

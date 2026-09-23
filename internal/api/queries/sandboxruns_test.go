@@ -42,7 +42,7 @@ func askRuns(t *testing.T, store queries.PendingRuns) []map[string]any {
 	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Sandbox: store})
-	got, err := r.Answer(everyGrant(t), "sandbox_runs", nil, "")
+	got, err := r.Answer(everyGrant(t), "sandbox_runs", nil)
 	if err != nil {
 		t.Fatalf("sandbox_runs: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 func TestARegistryWithNoRunRecordDoesNotAnswerTheQuestion(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{})
-	if _, err := r.Answer(everyGrant(t), "sandbox_runs", nil, ""); err == nil {
+	if _, err := r.Answer(everyGrant(t), "sandbox_runs", nil); err == nil {
 		t.Fatal("a registry with no run record answered the question")
 	}
 }
@@ -268,7 +268,7 @@ func TestAnUnreachableRunRecordIsUnavailableRatherThanFailed(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Sandbox: unreachableRuns{}})
-	if _, err := r.Answer(everyGrant(t), "sandbox_runs", nil, ""); !errors.Is(err, queries.ErrUnavailable) {
+	if _, err := r.Answer(everyGrant(t), "sandbox_runs", nil); !errors.Is(err, queries.ErrUnavailable) {
 		t.Fatalf("an unreachable run record answered %v, want ErrUnavailable", err)
 	}
 }

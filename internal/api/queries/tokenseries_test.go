@@ -88,7 +88,7 @@ func TestAnUnknownDimensionIsRefusedRatherThanDefaulted(t *testing.T) {
 		{"group": "project"},
 		{"bucket": "minute"},
 	} {
-		if _, err := r.Answer(everyGrant(t), "token_series", params, ""); !errors.Is(err, queries.ErrBadParams) {
+		if _, err := r.Answer(everyGrant(t), "token_series", params); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%v answered err = %v, want ErrBadParams", params, err)
 		}
 	}
@@ -139,7 +139,7 @@ func TestPreviousWithoutAWindowIsRefused(t *testing.T) {
 	r := registryOver(t, queries.Sources{Events: openStore(t).Events()})
 	_, err := r.Answer(everyGrant(t), "token_series", map[string]any{
 		"previous": true, "since": time.Now().UTC().Format(time.RFC3339),
-	}, "")
+	})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("err = %v, want ErrBadParams", err)
 	}

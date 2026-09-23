@@ -6,50 +6,52 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The two refusals a personal question makes, told apart because the remedies
-// are different: one is a line of company configuration, the other a
-// credential.
+// are different: one is a line of company configuration, the other authority.
 var (
-	errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — give a human "+
-		"seat contact.crewlet_operator_id matching the api.auth token id, or name a handle",
-		ErrBadParams)
-	errNotYours = fmt.Errorf("%w: reading another seat's record needs an operator credential",
-		ErrUnauthorized)
+	errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind "+
+		"the person to one in the org chart, or name a handle", ErrBadParams)
+	errNotYours = fmt.Errorf("%w: reading another seat's record needs the "+
+		"lead relation or people:manage", ErrUnauthorized)
 )
 
-// viewer answers who this socket's credential belongs to.
+// viewer answers who this caller is.
 //
-// THE FRAME HAS NEVER HAD A VIEWER, and everything personal in the dashboard
-// is fiction without one: "my work" picked the alphabetically first seat,
-// `work_views` was asked without a viewer so no pinned or personal view could
-// exist, the five `preset=` values that resolve against the caller's identity
-// were never sent, and an inbox could not be anyone's.
+// THE PRINCIPAL AND NOTHING ELSE. It used to walk a chain of two — Tier A's
+// `api.auth.tokens` mapped a credential to an operator id, and a field on a
+// seat's contact block named one of those ids — which was the only binding
+// this engine had between a credential and a seat. The identity estate
+// replaced it: a person is a ROW, a session resolves to that row, and the seat
+// they hold is on the chart. Nothing here derives anything any more.
 //
-// The resolution is a chain of two, and NEITHER STEP IS NEW: Tier A's
-// `api.auth.tokens` maps a presented credential to an operator id, and a seat
-// binds one of those ids with `contact.crewlet_operator_id`. What was missing
-// is a question that walks it.
-//
-// AN UNBOUND TOKEN IS AN ORDINARY STATE. `org.HumanContact` says so in as many
-// words, so this answers the operator id with no seat rather than an error —
-// the screen then says what to bind, which is a different thing from a screen
-// that looks broken.
+// AN UNBOUND CREDENTIAL IS AN ORDINARY STATE, so this answers the login with
+// no seat rather than an error — the screen then says what to bind, which is a
+// different thing from a screen that looks broken.
 func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
-	operatorID := operatorFrom(ctx)
-	out := map[string]any{
-		"operator_id": operatorID,
-		// WHETHER THIS CALLER MAY ASK THE GUARDED QUESTIONS, which is the
-		// same test the registry makes, answered once so a screen can draw
-		// a locked row rather than discovering the refusal per question.
-		"operator": operatorID != "",
-		"handle":   "",
-		"name":     "",
-		"kind":     "",
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "viewer")
 	}
-	seat := s.seatForOperator(operatorID)
+	out := map[string]any{
+		"login": principal.Login,
+		// WHAT THIS CALLER MAY ASK, answered once so a screen can draw a
+		// locked row rather than discovering the refusal per question.
+		"grants": grantNames(principal),
+		// THE SEAT'S OWN FIELDS, empty for a credential that holds none.
+		// `kind` is the SEAT's — human or agent — and never the
+		// principal's: the two are different vocabularies, and a screen
+		// reading "person" where the chart says "human" would be reading
+		// a word this company never wrote.
+		"handle": "",
+		"name":   "",
+		"kind":   "",
+	}
+	seat := s.seatOf(principal)
 	if seat == nil {
 		return out, nil
 	}
@@ -57,58 +59,59 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	out["name"] = seat.Name
 	// The zero value is an agent, which is what config.Role's own `kind`
 	// defaults to — reporting "" would make the common case look unset.
-	kind := seat.Kind
-	if kind == "" {
-		kind = org.KindAgent
+	if kind := seat.Kind; kind != "" {
+		out["kind"] = string(kind)
+	} else {
+		out["kind"] = string(org.KindAgent)
 	}
-	out["kind"] = string(kind)
 	return out, nil
 }
 
-// seatForOperator resolves the caller's operator id to a seat, or nil.
-func (s Sources) seatForOperator(operatorID string) *org.Role {
-	if operatorID == "" || s.Company == nil {
+// grantNames renders a principal's capabilities for the screen.
+func grantNames(p iam.Principal) []string {
+	out := make([]string, 0, len(p.Grants))
+	for _, g := range p.Grants {
+		out = append(out, string(g))
+	}
+	return out
+}
+
+// seatOf resolves the caller's own seat, or nil.
+func (s Sources) seatOf(p iam.Principal) *org.Role {
+	if p.Seat == "" || s.Company == nil {
 		return nil
 	}
 	company, roster := s.Company()
-	if company == nil {
+	if company == nil || roster == nil {
 		return nil
 	}
-	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
-	// than re-resolved from the document: a stored revision carries no
-	// seats at all, so the derivation this replaced answered an EMPTY
-	// organization for every running company.
-	if roster == nil {
-		return nil
-	}
-	// NIL LOOKUP, so the reference resolves against this process's own
-	// environment — which is where Tier B's `${VAR}` pointers are resolved
-	// everywhere else in the engine.
-	return roster.SeatByOperatorID(operatorID, nil)
+	// EVERY SEAT AND NOT ONLY THE AGENTS: a person holds a HUMAN seat,
+	// which is the whole case this resolves.
+	return roster.SeatByHandle(p.Seat)
 }
 
 // viewerHandle is the handle a personal question answers for when the caller
 // named none, and the authority check when they named one.
 //
-// THE SCOPE RULE, in one place because three questions share it: a caller
-// reads the seat their own token is bound to, and naming anybody else's handle
-// requires an operator credential. Registering these operator-only instead —
-// which is what `work_my_work` did — makes the landing screen the most-gated
-// screen in the product and the human teammate, who is one of the two readers
-// this dashboard is for, fictional.
+// THE SCOPE RULE, in one place because four questions share it — and it is the
+// authority TABLE's rule rather than a second copy of it: the caller reads
+// their own record, whoever leads them, or anybody's with people:manage, which
+// is exactly [authz.ClassOwnOrLead]. It used to be "your own, or ANY operator
+// credential for anybody else's", which made every token in Tier A a reader of
+// every seat's inbox.
 //
 // Returns the handle to read and an error to refuse with.
 func (s Sources) viewerHandle(ctx context.Context, asked string) (string, error) {
-	operatorID := operatorFrom(ctx)
-	own := ""
-	if seat := s.seatForOperator(operatorID); seat != nil {
-		own = seat.Handle()
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return "", unresolved(ctx, "viewer")
 	}
+	own := principal.Seat
 	if asked == "" {
 		if own == "" {
 			// NOT AN AUTHORIZATION FAILURE. Nobody was refused: there is
-			// no person to answer about, and the remedy is a line of
-			// company configuration rather than a different credential.
+			// no person to answer about, and the remedy is a binding in
+			// the org chart rather than a different credential.
 			return "", errNoSeat
 		}
 		return own, nil
@@ -116,11 +119,18 @@ func (s Sources) viewerHandle(ctx context.Context, asked string) (string, error)
 	if asked == own {
 		return asked, nil
 	}
-	if operatorID == "" {
+	d := authz.Decide(ctx, principal, authz.ActionPersonRead,
+		authz.Object{Kind: authz.KindPerson, Owner: asked}, s.Chart)
+	switch {
+	case d.Unknown():
+		// THIS NODE COULD NOT TELL, which a surface renders as 503 and
+		// never as a refusal: a node behind the chart log telling a lead
+		// they lead nobody sends them to ask for authority they hold.
+		return "", fmt.Errorf("%w: this node cannot say who leads %s yet: %w",
+			ErrUnavailable, asked, d.Err)
+	case !d.Allowed:
 		return "", errNotYours
 	}
-	// An operator reads anybody's: they hold the credential that writes
-	// these records through the operator tool server in the first place.
 	return asked, nil
 }
 
@@ -133,14 +143,8 @@ func (s Sources) viewerHandle(ctx context.Context, asked string) (string, error)
 // answer and [errNoSeat] says so. A view strip is about a CONTAINER and the
 // viewer only decides whose pins order it, so naming nobody is the SHARED
 // strip — a real answer, the documented meaning of an empty
-// [tracker.ViewQuery.Viewer], and the one an anonymous or unbound caller must
-// keep getting, because the sidebar and the board ask for exactly that.
-//
-// What is identical is the half that matters. `viewer` selected whose record
-// was read and nothing checked it, so a reader could walk the org chart and
-// page through every seat's pinned views by handle — the personal record
-// `work_person` is scoped for, on a surface `api.allow_anonymous_read` opens.
-// A scope rule three of the four personal questions follow is not a rule.
+// [tracker.ViewQuery.Viewer], and the one an unbound caller must keep getting,
+// because the sidebar and the board ask for exactly that.
 func (s Sources) viewerPins(ctx context.Context, asked string) (string, error) {
 	if asked == "" {
 		return "", nil

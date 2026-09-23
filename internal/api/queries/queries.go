@@ -59,40 +59,6 @@ var (
 	ErrBadParams = errors.New("queries: bad parameters")
 )
 
-// operatorKey is the context key this package carries the caller's operator id
-// under.
-//
-// THE CONTEXT, NOT THE PARAMS, and the distinction is a security one: params
-// are the caller's own bag, so an id read from there would be an id the caller
-// chose. This one is written in exactly one place — [Registry.AnswerWith],
-// after the operator check — so every question that asks who is calling gets
-// the same answer, on both transports, and no caller can write it.
-//
-// Its own type, unexported, so nothing outside this package can collide with
-// the key or forge a value under it.
-type operatorKey struct{}
-
-// withOperator returns a context carrying the caller's operator id.
-//
-// UNEXPORTED, because both transports reach an answer through
-// [Registry.AnswerWith] and there is nowhere else this may be set from. A
-// package that could stamp its own operator id onto a context would be a
-// second authority on who the caller is, which is the whole thing this key
-// exists to prevent.
-func withOperator(ctx context.Context, operatorID string) context.Context {
-	return context.WithValue(ctx, operatorKey{}, operatorID)
-}
-
-// operatorFrom reads the caller's operator id, or "" for an anonymous one.
-//
-// EMPTY IS A REAL ANSWER, not a failure: most questions here are readable
-// without a token, and "nobody presented one" is exactly what a viewer query
-// reports back.
-func operatorFrom(ctx context.Context) string {
-	id, _ := ctx.Value(operatorKey{}).(string)
-	return id
-}
-
 // Params are one query's arguments.
 //
 // It exists so a single answer function can be fed from both transports: a
@@ -321,8 +287,8 @@ func (r *Registry) Names() []string {
 // The signature is the socket's, because the socket is the surface with a
 // name-to-question dispatch; a REST route knows its own question and calls the
 // answer directly. Both reach the same function either way.
-func (r *Registry) Answer(ctx context.Context, what string, params map[string]any, operatorID string) (any, error) {
-	return r.AnswerWith(ctx, what, FromMap(params), operatorID)
+func (r *Registry) Answer(ctx context.Context, what string, params map[string]any) (any, error) {
+	return r.AnswerWith(ctx, what, FromMap(params))
 }
 
 // AnswerWith runs one question against already-read parameters.
@@ -332,7 +298,7 @@ func (r *Registry) Answer(ctx context.Context, what string, params map[string]an
 // same authorization check — the alternative is a route that reads its own
 // params and forgets the operator check, which is the shape of the bug this
 // package exists to make impossible.
-func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operatorID string) (any, error) {
+func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, error) {
 	r.mu.RLock()
 	e, known := r.entries[what]
 	r.mu.RUnlock()
@@ -340,10 +306,12 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 		return nil, fmt.Errorf("%w: %q", ErrUnknown, what)
 	}
 	// THE GRANT THE CALLER ACTUALLY CARRIES, from the principal the guard
-	// resolved. The operator id beside it is attribution and nothing more:
-	// it names who a per-viewer answer is scoped to, and it decided
-	// authority until this build — under which any credential could ask
-	// any question that was not on the config surface.
+	// resolved. An operator id used to travel beside it, converted from
+	// that same principal by each transport and stamped onto the context
+	// here — so a question asking who was calling read a STRING derived
+	// from an answer already in the context. It is gone: every personal
+	// question reads [iam.From] directly, which is the one place the
+	// caller is established.
 	//
 	// AND THE REFUSAL IS THREE-VALUED, which is why the resolution is read
 	// rather than dropped. A principal with no grants is the same zero
@@ -364,11 +332,7 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 	case !principal.Can(e.needs):
 		return nil, fmt.Errorf("%w: %q needs %s", ErrUnauthorized, what, e.needs)
 	}
-	// WHO IS ASKING, for the questions that answer differently per person.
-	// Set here rather than at each transport, because this is the one
-	// function both of them meet at, which is the same reason this package
-	// exists at all.
-	data, err := e.answer(withOperator(ctx, operatorID), p)
+	data, err := e.answer(ctx, p)
 	return data, unavailableIfTransient(err)
 }
 

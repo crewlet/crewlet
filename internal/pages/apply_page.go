@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -904,7 +903,7 @@ func claimTitle(ctx context.Context, tx *sql.Tx, at applyContext,
 func addressMatches(at applyContext, container, token, claimedContainer,
 	claimedTitle string) error {
 
-	if strings.ToUpper(claimedContainer) == container &&
+	if ContainerKey(claimedContainer) == container &&
 		TitleToken(claimedTitle) == token {
 		return nil
 	}
@@ -912,5 +911,5 @@ func addressMatches(at applyContext, container, token, claimedContainer,
 		"its payload claims %s/%q — the subject IS the address, so a record "+
 		"that took one and wrote another would leave the arbitrated name held "+
 		"by nothing", at.position, container, token,
-		strings.ToUpper(claimedContainer), claimedTitle)
+		ContainerKey(claimedContainer), claimedTitle)
 }

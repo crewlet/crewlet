@@ -75,19 +75,15 @@ func (e TagEdit) Empty() bool {
 // values are: "may I archive this project's tags" is a question about a PAIR —
 // who is asking and about which project — and the answer for one pair says
 // nothing about another.
+//
+// IT STATES THE DECISION rather than its inputs, for the reason and with the
+// history [ProjectAuthority] records.
 type TagAuthority struct {
-	// Lead reports whether the actor leads the project or sits above it.
-	// Resolved by the caller from the org chart, because this package has
-	// no chart.
-	Lead bool
-
-	// Operator reports whether the actor is acting through a person's own
-	// credential rather than as a seat, and is authority here in its own
-	// right — [ProjectAuthority] carries the same pair for the same
-	// reason. An operator is not a seat, so the chart lookup that resolves
-	// `Lead` answers false for one, and a gate on the lead alone refused
-	// every rename and archive the founder's own surface asked for.
-	Operator bool
+	// Policy reports a caller authorized to RENAME or ARCHIVE a tag of
+	// this project: its lead, or the deployment grant. Adding one is open
+	// to every colleague and takes nothing — a zero value is what an
+	// inline declare passes, and it cannot reach the gate below.
+	Policy bool
 }
 
 // WriteTags applies one edit to a project's tag set.
@@ -106,7 +102,7 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 	case edit.Empty():
 		return WriteResult{}, fmt.Errorf("tracker: a tag edit of %s adds, "+
 			"renames and archives nothing", project)
-	case !authority.Lead && !authority.Operator &&
+	case !authority.Policy &&
 		(len(edit.Rename) > 0 || len(edit.Archive) > 0):
 		// THE REFUSAL NAMES WHO CAN, because a seat that hit it was
 		// tidying up and the answer is "ask the lead" rather than

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -136,28 +137,24 @@ type PageReader interface {
 func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	now := time.Now().UTC()
 	// THROUGH THE EXPANSION, so a `view=` or a `preset=` is the set of
-	// defaults it stands for rather than a key nothing reads. The viewer
-	// is a parameter here for the reason it is on the view strip: this
-	// surface is guarded, so the caller already holds the company's own
-	// credential, and what it selects is whose queue to render.
+	// defaults it stands for rather than a key nothing reads.
+	//
+	// THE VIEWER IS THE CALLER and is not a parameter at all. It was one,
+	// read out of the bag and deleted from it again — so a screen selected
+	// WHOSE queue to render by typing a handle, on a surface where
+	// `preset=my_queue`, `preset=priorities` and every personal expansion
+	// resolve against it. What the caller's own seat is has an answer now:
+	// the principal the guard resolved.
+	//
 	// THE VIEWER'S OWN PROJECT comes from the chart, because
 	// `preset=my_queue` asks what is unclaimed in THEIR container and an
 	// unscoped second arm offers every unassigned task in the company.
-	//
-	// AND IT IS TAKEN OUT OF THE BAG, which is the whole of why it is read
-	// into a variable first. `viewer` is a property of the SURFACE — its
-	// credential, its turn's seat — and not of the grammar: it is absent
-	// from [tracker.QueryKeys], and `checkKeys` refuses a key nothing
-	// parses rather than ignoring it. Handed on inside the map it made
-	// every call that named a viewer a `bad_params` refusal, and took
-	// `preset=my_queue` with it — the preset expands from `viewer.Handle`,
-	// so it is answerable only on a surface that HAS a viewer, and this is
-	// that surface. The comment above described the behaviour this call did
-	// not have.
-	values := p.Values()
-	viewer := strings.TrimSpace(p.String("viewer"))
-	delete(values, "viewer")
-	q, err := s.Work.ExpandedQuery(ctx, values, tracker.Viewer{
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "work_items")
+	}
+	viewer := principal.Seat
+	q, err := s.Work.ExpandedQuery(ctx, p.Values(), tracker.Viewer{
 		Handle:  viewer,
 		Project: s.projectOf(viewer),
 	}, now, time.UTC)
@@ -277,31 +274,22 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 
 // workViews answers one container's view strip.
 //
-// # Why `viewer` is a parameter, and why naming somebody else needs a
-// credential
+// # Why the viewer is the CALLER and not a parameter
 //
 // A personal view is private to its OWNER, and the reader enforces that in
-// SQL. What `viewer=` selects is WHOSE strip to render — their personal views
-// and their pins — so it has to be a parameter: a screen reaches this before
-// it knows who is looking, and `work_views` is asked for a container rather
-// than for a person.
+// SQL. What the viewer selects is WHOSE strip to render — their personal views
+// and their pins — and it used to be a `viewer=` parameter on the reasoning
+// that a screen reaches this before it knows who is looking.
 //
-// It used to be unchecked, on the reasoning that the whole surface is guarded
-// so the caller already holds the company's own credential and can read every
-// task, comment and page in it anyway. That reasoning has the same hole
-// [Sources.workPerson] records: `api.allow_anonymous_read` opens this surface,
-// and then `viewer=` is a free choice of whose record to read. Anybody could
-// walk the org chart — which `org` answers — and page through every seat's
-// pinned views by handle. So the parameter now takes the scope rule the other
-// personal questions take, through [Sources.viewerPins]: your own, or an
-// operator credential for anybody else's.
+// A screen knows now. The principal the guard resolved carries the seat, so
+// the parameter had exactly one honest value and any other was a free choice
+// of whose record to read: anybody could walk the org chart — which `org`
+// answers — and page through every seat's pinned views by handle.
 //
-// Absent is still the SHARED strip: no pins and no personal views but the
-// shared ones, which is what a screen draws before it knows who is looking,
-// and what the sidebar and the board ask for on every poll. That is why the
-// rule is [Sources.viewerPins] rather than [Sources.viewerHandle] — the
-// refusal an absent handle earns on a question ABOUT somebody would refuse a
-// strip that has a perfectly good answer.
+// A CALLER WITH NO SEAT STILL GETS THE SHARED STRIP: no pins and no personal
+// views but the shared ones, which is the documented meaning of an empty
+// [tracker.ViewQuery.Viewer] and what the sidebar and the board ask for on
+// every poll. An unbound person is an ordinary state, not a refusal.
 func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	container, err := viewContainer(p)
 	if err != nil {
@@ -311,10 +299,13 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	viewer, err := s.viewerPins(ctx, strings.TrimSpace(p.String("viewer")))
-	if err != nil {
-		return nil, err
+	// THE CALLER'S OWN STRIP, never a handle they typed. See
+	// [Sources.workItems] for why the parameter is gone.
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "work_views")
 	}
+	viewer := principal.Seat
 	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		Viewer:    viewer,

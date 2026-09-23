@@ -587,9 +587,6 @@
         "atlassian_account_id": {
           "type": "string"
         },
-        "crewlet_operator_id": {
-          "type": "string"
-        },
         "github_login": {
           "type": "string"
         },

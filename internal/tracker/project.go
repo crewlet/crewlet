@@ -63,26 +63,33 @@ func (e ProjectEdit) Empty() bool {
 
 // ProjectAuthority is what a caller may do to a project's policy.
 //
-// TWO AUTHORITIES, EITHER OF WHICH IS ENOUGH for the three facets a lead owns,
-// and this is [PersonAuthority]'s shape rather than a ladder. An OPERATOR is a
-// person acting through their own credential — the founder at the dashboard,
-// or the assistant they run the company through — and they are not a seat at
-// all, so a gate that admitted only the lead refused the one actor the whole
-// operator surface exists for. It was reachable: `/operator/mcp` resolves the
-// lead from the ORG CHART by handle, an operator token carries its own name
-// rather than a seat's, so the lookup answered false and `write_project` was
-// refused for every operator in every company — including the founder
-// declaring the fields a project files work under.
+// A VALUE RATHER THAN A BOOL on the writer, because "may I archive this
+// project" is a question about a PAIR — who is asking and about which
+// project — and the answer for one pair says nothing about another.
+//
+// # It states the DECISION, not its inputs
+//
+// Both fields used to be inputs — `Lead` from an org-chart lookup and
+// `Operator` from "the actor is not a seat" — and every caller re-derived the
+// policy `Lead || Operator` for itself. That is two answers to one question,
+// which is what internal/authz exists to remove: a caller holding
+// fleet:operate was refused here while every HTTP route allowed, because this
+// package's copy consulted no grant at all. Now the caller asks
+// [authz.ActionProjectPolicy] and [authz.ActionProjectArchive] and states what
+// came back, and this package enforces only which FACET each answer unlocks —
+// which is the half a chart cannot know.
 type ProjectAuthority struct {
-	// Lead reports whether the actor leads the project or sits above it.
-	Lead bool
+	// Policy reports a caller authorized to declare this project's
+	// fields and its default assignee: its lead, or the deployment grant
+	// that overrides every relation.
+	Policy bool
 
-	// Operator reports whether the actor is acting through a person's own
-	// credential rather than as a seat. It is authority over the policy in
-	// its own right, and archiving takes it SPECIFICALLY — a lead may say
-	// how their project's work is filed, and only a person may take the
-	// project out of circulation.
-	Operator bool
+	// Archive reports a caller authorized to take the project out of
+	// circulation, which takes the same relation AND a principal that is
+	// not an agent. SEPARATE FROM Policy because a lead who is refused
+	// here did have authority over the other two facets, and the useful
+	// answer is which facet rather than "no".
+	Archive bool
 }
 
 // WriteProject applies one edit to a project's own policy.
@@ -97,12 +104,12 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 		return WriteResult{}, fmt.Errorf("tracker: a project edit of %s sets "+
 			"nothing — the name, purpose and owning unit come from the org "+
 			"chart, and the tags are write_project(tags.add)", key)
-	case !authority.Lead && !authority.Operator:
+	case !authority.Policy:
 		return WriteResult{}, fmt.Errorf("tracker: %s's field declarations "+
 			"and default assignee are the project lead's or a person's own — "+
 			"they decide how everybody's work in it is filed, which is not a "+
 			"call one other seat makes for the team", key)
-	case edit.Archived != nil && !authority.Operator:
+	case edit.Archived != nil && !authority.Archive:
 		// NAMED SEPARATELY FROM THE LEAD GATE, because a lead who hit
 		// this one did have authority over the other two facets and
 		// the useful answer is which facet, not "no".

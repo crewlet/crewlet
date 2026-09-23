@@ -74,8 +74,8 @@ function mount() {
 test("with no handle it shows the viewer's own day, and says it is theirs", async () => {
   serving({
     viewer: {
-      operator_id: "ops-1",
-      operator: true,
+      login: "ops-1",
+      grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
       handle: "ada",
       name: "Ada Okonkwo",
       kind: "human",
@@ -98,8 +98,8 @@ test("an explicit handle names whose day it is, in the third person", async () =
   location.hash = "#/me?handle=rui";
   serving({
     viewer: {
-      operator_id: "ops-1",
-      operator: true,
+      login: "ops-1",
+      grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
       handle: "ada",
       name: "Ada Okonkwo",
       kind: "human",
@@ -118,19 +118,25 @@ test("an explicit handle names whose day it is, in the third person", async () =
 // and a line of company configuration.
 test("an unbound token says what to bind, not that something is broken", async () => {
   serving({
-    viewer: { operator_id: "ops-7", operator: true, handle: "", name: "", kind: "" },
+    viewer: {
+      login: "ops-7",
+      grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
+      handle: "",
+      name: "",
+      kind: "",
+    },
   });
   mount();
-  await waitFor(() => expect(screen.getByText(/not bound to a person/)).toBeTruthy());
-  // The id is NAMED, because it is the value that goes in the config.
+  await waitFor(() => expect(screen.getByText(/not bound to a seat/)).toBeTruthy());
+  // The login is NAMED, because it is the value `crewlet iam bind` takes.
   expect(screen.getByText(/ops-7/)).toBeTruthy();
 });
 
 test("no credential at all is a different sentence from an unbound one", async () => {
-  serving({ viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" } });
+  serving({ viewer: { login: "", grants: [], handle: "", name: "", kind: "" } });
   mount();
   await waitFor(() => expect(screen.getByText(/No credential is presented/)).toBeTruthy());
-  expect(screen.queryByText(/not bound to a person/)).toBeNull();
+  expect(screen.queryByText(/not bound to a seat/)).toBeNull();
 });
 
 /** One notice, with everything a row draws. */
@@ -154,8 +160,8 @@ function notice(over: Partial<WorkInboxNotice> = {}): WorkInboxNotice {
 }
 
 const ada = {
-  operator_id: "ops-1",
-  operator: true,
+  login: "ops-1",
+  grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
   handle: "ada",
   name: "Ada Okonkwo",
   kind: "human",

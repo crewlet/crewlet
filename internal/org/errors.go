@@ -108,10 +108,8 @@ var (
 	// asking: notification registration keys a map on the identity, so the
 	// LAST seat in chart order silently takes it, while every lookup that
 	// walks the chart answers the FIRST. The person who lost the race keeps
-	// a correct-looking config and stops receiving their own mail — and
-	// with `crewlet_operator_id` the two directions disagree outright, so a
-	// token resolves to one seat's dashboard and that person's wakes go to
-	// another's.
+	// a correct-looking config and stops receiving their own mail, while
+	// an inbound message from them still resolves to the seat that lost.
 	//
 	// A RUNNABLE rule (see the class note above [Organization.Validate]),
 	// like the duplicate handle it is the contact-field twin of: an

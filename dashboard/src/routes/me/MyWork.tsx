@@ -106,9 +106,9 @@ export function MyWork() {
   // This fell back to `handles[0]` — the ALPHABETICALLY FIRST SEAT — so a
   // screen titled "My work" rendered a stranger's day to everybody, and the
   // engine had no way to tell it otherwise because `work_my_work` demanded a
-  // handle and was registered operator-only. The `viewer` question walks the
-  // binding that has always existed: a presented token resolves to an operator
-  // id, and a seat names that id in `contact.crewlet_operator_id`.
+  // handle and was registered operator-only. The `viewer` question answers it:
+  // the engine resolves this browser to a principal, and the identity
+  // directory binds that principal to a seat.
   //
   // An explicit choice still wins — an operator reading a report's day is a
   // real thing to do, and the header says whose day it is either way.
@@ -238,8 +238,8 @@ export function MyWork() {
         ) : viewer.unbound ? (
           <EmptyState
             icon={<PersonGlyph size={32} />}
-            title="This token is not bound to a person"
-            description={`Give a human seat contact.crewlet_operator_id: ${viewer.operatorID} in the company configuration and this becomes their day. Until then, pick somebody below.`}
+            title="You are not bound to a seat"
+            description={`${viewer.login} holds no seat in the org chart. Bind it with crewlet iam bind and this becomes their day. Until then, pick somebody below.`}
           />
         ) : (
           <EmptyState

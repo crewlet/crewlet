@@ -6,10 +6,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -64,10 +68,19 @@ func turnFor(t *testing.T, handle string) *turnctx.Turn {
 }
 
 // registered builds a registry over the given deps and returns one tool.
+// registered builds one tool through the real registration path.
+//
+// IT WIRES A REAL AUTHORIZER, over the real table, rather than a helper that
+// allows: every tool is gated at registration now, and a fixture that
+// bypassed the gate would exercise a path production does not have. What the
+// cases here vary is the PRINCIPAL — see [callerHolding] — so a case about a
+// refusal states the grants it is refused for rather than reaching past the
+// decision.
 func registered(t *testing.T, deps builtin.Deps, name string) tools.Callable {
 	t.Helper()
+	deps = gated(deps)
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, deps); err != nil {
+	if _, err := builtin.Register(reg, gated(deps)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	entry, ok := reg.Snapshot().Lookup(name)
@@ -83,11 +96,70 @@ func callFor(t *testing.T, tool tools.Callable, turn *turnctx.Turn, args map[str
 	if !ok {
 		t.Fatalf("%s cannot know who called it", tool.Name())
 	}
-	res, err := seated.CallForTurn(context.Background(), turn, args)
+	res, err := seated.CallForTurn(callerHolding(iam.AllGrants...), turn, args)
 	if err != nil {
 		t.Fatalf("%s: %v", tool.Name(), err)
 	}
 	return res
+}
+
+// gated installs the real authority decision on deps that state none.
+//
+// THE REAL ONE, over the real table, rather than a helper that allows: every
+// tool is gated at registration now, and a fixture that bypassed the gate
+// would exercise a path production does not have. What a case varies is the
+// PRINCIPAL — see [callerHolding].
+func gated(deps builtin.Deps) builtin.Deps {
+	if deps.Authorize == nil {
+		deps.Authorize = builtin.Decide(authz.NoChart{})
+	}
+	return deps
+}
+
+// everyGrant is the caller a case that is not about authority acts as.
+//
+// NAMED FOR WHAT IT IS rather than called `ctx`: a fixture reading
+// `tool.Call(ctx, …)` says nothing about who is calling, and every one of
+// these calls now goes through a real authority decision. The cases that ARE
+// about authority use [callerHolding] and state the grants they are refused
+// for.
+func everyGrant() context.Context { return callerHolding(iam.AllGrants...) }
+
+// colleagueCaller is the caller a case about AUTHORITY acts as: a seat holding the
+// ordinary write grants and NOT fleet:operate.
+//
+// THE ADMIN GRANT IS THE WHOLE POINT of the distinction. Every relation class
+// checks it before it asks the chart, so a case using [everyGrant] against a
+// chart that refuses everything is allowed anyway and asserts nothing at all.
+func colleagueCaller() context.Context {
+	return callerHolding(iam.GrantStateRead, iam.GrantWorkWrite,
+		iam.GrantKnowledgeWrite)
+}
+
+// personHolding is a context carrying a HUMAN, for the cases about a bar an
+// agent does not clear: the human-only verbs read [iam.Principal.Kind], and a
+// seat is refused by them however many grants it holds.
+func personHolding(grants ...iam.Grant) context.Context {
+	p := iam.Principal{
+		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee2"),
+		Kind: iam.KindPerson, Login: "tester", Stage: iam.StageActive,
+		Colleague: iam.ColleagueWrite, Grants: grants,
+	}
+	return iam.WithPrincipal(context.Background(), p)
+}
+
+// callerHolding is a context carrying a seat that holds the named grants.
+//
+// A SEAT rather than a person, because that is what calls a builtin in a
+// turn: [iam.KindSeat] is what the authority table's own-record and colleague
+// classes compare against, and a fixture acting as a person would answer
+// differently on exactly the rules a seat's tools go through.
+func callerHolding(grants ...iam.Grant) context.Context {
+	return iam.WithPrincipal(context.Background(), iam.Principal{
+		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee1"),
+		Kind: iam.KindSeat, Seat: "tester", Stage: iam.StageActive,
+		Colleague: iam.ColleagueWrite, Grants: grants,
+	})
 }
 
 // --- registration --------------------------------------------------------- //
@@ -98,7 +170,7 @@ func TestATooWithNoBackingIsOmittedNotBroken(t *testing.T) {
 	// catalogue, and burns a round finding out each time. A node without a
 	// store gets the tools it can serve and no others.
 	reg := tools.NewRegistry()
-	names, err := builtin.Register(reg, builtin.Deps{})
+	names, err := builtin.Register(reg, gated(builtin.Deps{}))
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -116,7 +188,7 @@ func TestEveryBuiltinDeclaresWhetherItIsARead(t *testing.T) {
 	// read, so a read-only builtin left unannotated makes every recall
 	// look like a delivery.
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, fullDeps(t)); err != nil {
+	if _, err := builtin.Register(reg, gated(fullDeps(t))); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	for _, e := range reg.Snapshot().Entries() {
@@ -207,7 +279,7 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 	}
 
 	reg := tools.NewRegistry()
-	names, err := builtin.Register(reg, fullDeps(t))
+	names, err := builtin.Register(reg, gated(fullDeps(t)))
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -747,11 +819,11 @@ func TestEverySeatScopedToolRefusesWithoutASeat(t *testing.T) {
 	// runner directly — has no seat, and a tool that speaks for one must
 	// refuse rather than act as nobody or panic.
 	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, fullDeps(t)); err != nil {
+	if _, err := builtin.Register(reg, gated(fullDeps(t))); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	for _, e := range reg.Snapshot().Entries() {
-		res, err := e.Tool.Call(context.Background(), map[string]any{
+		res, err := e.Tool.Call(everyGrant(), map[string]any{
 			"query": "x", "target": "agent-cto", "brief": "x",
 			"skill_name": "x", "content": "x",
 		})

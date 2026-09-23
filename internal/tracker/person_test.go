@@ -31,15 +31,19 @@ func TestNobodyElseWritesYourInboxOrYourPins(t *testing.T) {
 	r := newRoundTrip(t)
 	bob := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
 
+	// THE AUTHORITY IS THE ZERO VALUE, which is what a colleague carries:
+	// [authz.ClassOwnRecord] admits the owner and the admin path and has
+	// no lead arm at all, so a caller who is neither arrives here with
+	// nothing and the comparison below is the whole of the refusal.
 	for name, write := range map[string]func() error{
 		"the inbox": func() error {
 			_, err := bob.WriteInbox(t.Context(), "op-inbox", "ana", nil, nil,
-				nil, nil, tracker.Position{})
+				nil, nil, tracker.Position{}, tracker.PersonAuthority{})
 			return err
 		},
 		"the pins": func() error {
 			_, err := bob.WritePins(t.Context(), "op-pins", "ana",
-				[]string{"v-1"}, nil)
+				[]string{"v-1"}, nil, tracker.PersonAuthority{})
 			return err
 		},
 	} {
@@ -55,11 +59,33 @@ func TestNobodyElseWritesYourInboxOrYourPins(t *testing.T) {
 		})
 	}
 
+	// AND AN AGENT THE TABLE ADMITTED STILL DOES NOT, which is the bar
+	// this package keeps of its own: a seat that LEADS somebody is
+	// admitted by [authz.ClassOwnOrLead] and marking their mail read is
+	// still not a gesture anybody asked an agent to make.
+	agent := r.writer.As("pm", tracker.AuthorAgent, tracker.Provenance{})
+	if _, err := agent.WritePins(t.Context(), "op-agent-pins", "ana",
+		[]string{"v-1"}, nil,
+		tracker.PersonAuthority{Authorized: true, Agent: true}); err == nil {
+
+		t.Fatal("an agent rearranged somebody else's pinned views")
+	}
+
+	// AND AN ADMIN THE TABLE ADMITTED DOES, because a departed person's
+	// queue has to be unstickable by somebody.
+	if _, err := bob.WritePins(t.Context(), "op-admin-pins", "ana",
+		[]string{"v-1"}, nil,
+		tracker.PersonAuthority{Authorized: true}); err != nil {
+
+		t.Fatalf("an authorized person could not unstick ana's pins: %v", err)
+	}
+	r.drain()
+
 	// AND HER OWN WRITES LAND, or the guard would be refusing everything.
 	if _, err := r.writer.WriteInbox(t.Context(), "op-own-inbox", "ana",
 		nil, []tracker.InboxEntry{{RecordID: "rec-1", Position: 9}}, nil,
 		[]tracker.Reason{tracker.ReasonAssignee},
-		tracker.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 5}); err != nil {
+		tracker.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 5}, tracker.PersonAuthority{Authorized: true}); err != nil {
 		t.Fatalf("ana's own inbox write: %v", err)
 	}
 	r.drain()
@@ -89,7 +115,7 @@ func TestALeadsPriorityWriteSaysWhoSetIt(t *testing.T) {
 	}
 
 	if _, err := bob.WritePriorities(t.Context(), "op-lead", "ana",
-		[]string{"t-1", "t-2"}, tracker.PersonAuthority{Lead: true}); err != nil {
+		[]string{"t-1", "t-2"}, tracker.PersonAuthority{Authorized: true}); err != nil {
 		t.Fatalf("bob leads ana and was refused: %v", err)
 	}
 	r.drain()
@@ -133,7 +159,7 @@ func TestOnePartOfAPersonDoesNotClearTheOthers(t *testing.T) {
 
 	if _, err := r.writer.WritePins(t.Context(), "op-pins", "ana",
 		[]string{"v-1", "v-2"},
-		[]tracker.Favorite{{Kind: "project", ID: "ENG"}}); err != nil {
+		[]tracker.Favorite{{Kind: "project", ID: "ENG"}}, tracker.PersonAuthority{Authorized: true}); err != nil {
 		t.Fatalf("WritePins: %v", err)
 	}
 	r.drain()
@@ -144,7 +170,7 @@ func TestOnePartOfAPersonDoesNotClearTheOthers(t *testing.T) {
 	r.drain()
 	if _, err := r.writer.WriteInbox(t.Context(), "op-inbox", "ana", nil,
 		[]tracker.InboxEntry{{RecordID: "rec-1", Position: 9}}, nil, nil,
-		tracker.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 3}); err != nil {
+		tracker.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 3}, tracker.PersonAuthority{Authorized: true}); err != nil {
 		t.Fatalf("WriteInbox: %v", err)
 	}
 	r.drain()
@@ -178,7 +204,7 @@ func TestAnInboxPrunesWhatWasReadPast(t *testing.T) {
 	}
 	if _, err := r.writer.WriteInbox(t.Context(), "op-inbox", "ana", nil,
 		entries, nil, nil,
-		tracker.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 5}); err != nil {
+		tracker.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 5}, tracker.PersonAuthority{Authorized: true}); err != nil {
 		t.Fatalf("WriteInbox: %v", err)
 	}
 	r.drain()
@@ -203,7 +229,7 @@ func TestADueSnoozeIsReportedRatherThanPromoted(t *testing.T) {
 	if _, err := r.writer.WriteInbox(t.Context(), "op-inbox", "ana", nil, nil,
 		[]tracker.InboxEntry{
 			{RecordID: "later", Position: 9, Until: &future},
-		}, nil, tracker.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 1}); err != nil {
+		}, nil, tracker.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 1}, tracker.PersonAuthority{Authorized: true}); err != nil {
 		t.Fatalf("WriteInbox: %v", err)
 	}
 	r.drain()
@@ -273,7 +299,7 @@ func TestAPersonsListsAreBounded(t *testing.T) {
 		return out
 	}
 	_, err := r.writer.WritePins(t.Context(), "op-pins", "ana",
-		many(tracker.MaxPinnedViews+1), nil)
+		many(tracker.MaxPinnedViews+1), nil, tracker.PersonAuthority{Authorized: true})
 	if err == nil || !strings.Contains(err.Error(), "pins") {
 		t.Fatalf("an unbounded pin list was accepted: %v", err)
 	}
@@ -289,7 +315,7 @@ func TestAPersonsListsAreBounded(t *testing.T) {
 		})
 	}
 	_, err = r.writer.WriteInbox(t.Context(), "op-inbox", "ana", nil, entries,
-		nil, nil, tracker.Position{})
+		nil, nil, tracker.Position{}, tracker.PersonAuthority{Authorized: true})
 	if err == nil || !strings.Contains(err.Error(), "unread list") {
 		t.Fatalf("an unbounded inbox was accepted: %v", err)
 	}
@@ -297,7 +323,7 @@ func TestAPersonsListsAreBounded(t *testing.T) {
 	far := wednesday.Add(tracker.MaxSnoozeAhead + 24*time.Hour)
 	_, err = r.writer.WriteInbox(t.Context(), "op-far", "ana", nil, nil,
 		[]tracker.InboxEntry{{RecordID: "r-1", Position: 1, Until: &far}},
-		nil, tracker.Position{})
+		nil, tracker.Position{}, tracker.PersonAuthority{Authorized: true})
 	if err == nil || !strings.Contains(err.Error(), "delete that does not say so") {
 		t.Fatalf("a snooze past the horizon was accepted: %v", err)
 	}
@@ -305,13 +331,13 @@ func TestAPersonsListsAreBounded(t *testing.T) {
 	near := wednesday.Add(24 * time.Hour)
 	if _, err := r.writer.WriteInbox(t.Context(), "op-near", "ana", nil, nil,
 		[]tracker.InboxEntry{{RecordID: "r-1", Position: 1, Until: &near}},
-		nil, tracker.Position{}); err != nil {
+		nil, tracker.Position{}, tracker.PersonAuthority{Authorized: true}); err != nil {
 		t.Fatalf("an ordinary snooze was refused: %v", err)
 	}
 
 	// AND A STAR THAT POINTS AT NOTHING is refused too.
 	_, err = r.writer.WritePins(t.Context(), "op-fav", "ana", nil,
-		[]tracker.Favorite{{Kind: "project"}})
+		[]tracker.Favorite{{Kind: "project"}}, tracker.PersonAuthority{Authorized: true})
 	if err == nil || !strings.Contains(err.Error(), "points at nothing") {
 		t.Fatalf("a favourite with no id was accepted: %v", err)
 	}

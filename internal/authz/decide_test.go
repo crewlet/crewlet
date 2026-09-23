@@ -13,10 +13,11 @@ import (
 
 // chart is a fixture hierarchy: who leads whom, and who leads what.
 type chart struct {
-	leads    map[[2]string]bool
-	projects map[[2]string]bool
-	units    map[[2]string]bool
-	err      error
+	leads      map[[2]string]bool
+	projects   map[[2]string]bool
+	units      map[[2]string]bool
+	containers map[[2]string]bool
+	err        error
 }
 
 func (c chart) Leads(_ context.Context, actor, subject string) (bool, error) {
@@ -44,13 +45,23 @@ func (c chart) LeadsUnit(_ context.Context, actor, unit string) (bool, error) {
 	return c.units[[2]string{actor, unit}], nil
 }
 
+// LeadsContainer answers the page-container relation, a FOURTH map for
+// [chart.LeadsUnit]'s reason.
+func (c chart) LeadsContainer(_ context.Context, actor, container string) (bool, error) {
+	if c.err != nil {
+		return false, c.err
+	}
+	return c.containers[[2]string{actor, container}], nil
+}
+
 // nimbus is the fixture every case below decides against: the CTO leads the
 // SRE, leads the PLATFORM project, and leads the `sre` unit.
 func nimbus() chart {
 	return chart{
-		leads:    map[[2]string]bool{{"cto", "sre"}: true},
-		projects: map[[2]string]bool{{"cto", "PLATFORM"}: true},
-		units:    map[[2]string]bool{{"cto", "sre"}: true},
+		leads:      map[[2]string]bool{{"cto", "sre"}: true},
+		projects:   map[[2]string]bool{{"cto", "PLATFORM"}: true},
+		units:      map[[2]string]bool{{"cto", "sre"}: true},
+		containers: map[[2]string]bool{{"cto", "RUNBOOKS"}: true},
 	}
 }
 
@@ -61,6 +72,15 @@ func person(login string, grants ...iam.Grant) iam.Principal {
 }
 
 // seat is an agent principal acting as a seat.
+// personLeading is a HUMAN the chart knows by a seat handle, which is what
+// somebody signed in and bound to a seat is: [authz.actorOf] asks the chart by
+// the seat, and the human-only bar reads the KIND.
+func personLeading(handle string, grants ...iam.Grant) iam.Principal {
+	p := seat(handle, grants...)
+	p.Kind = iam.KindPerson
+	return p
+}
+
 func seat(handle string, grants ...iam.Grant) iam.Principal {
 	return iam.Principal{ID: uuid.New(), Login: handle, Kind: iam.KindSeat,
 		Seat: handle, Stage: iam.StageActive, Grants: grants}
@@ -161,19 +181,102 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 
 		// --- container ------------------------------------------------ //
 		{"a project's lead writes its policy", seat("cto"),
-			authz.ActionProjectWrite,
+			authz.ActionProjectPolicy,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
 			true, authz.ReasonLead},
 		{"a colleague does not", seat("sre"),
-			authz.ActionProjectWrite,
+			authz.ActionProjectPolicy,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
 			false, authz.ReasonNotLead},
 		{"the admin path does", person("jane.doe", iam.GrantFleetOperate),
-			authz.ActionProjectWrite,
+			authz.ActionProjectPolicy,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
 			true, authz.ReasonGrant},
 		{"an unnamed container is refused", seat("cto"),
-			authz.ActionProjectWrite, authz.Object{Kind: authz.KindProject},
+			authz.ActionProjectPolicy, authz.Object{Kind: authz.KindProject},
+			false, authz.ReasonUnnamed},
+		// BUT THE TOOL ITSELF IS A COLLEAGUE WRITE: adding a label is
+		// open to every seat that may write work at all, and gating the
+		// whole verb as the container's refused a colleague the one
+		// facet internal/tracker grants them.
+		{"a colleague declares a label", seat("sre", iam.GrantWorkWrite),
+			authz.ActionProjectWrite,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
+			true, authz.ReasonGrant},
+		// A PAGE CONTAINER IS A THIRD KEY CLASS, and the fixture holds
+		// it apart from the other two for the same reason: the CTO
+		// leads the RUNBOOKS container and neither the project nor the
+		// unit map answers for it. A rule that asked the project
+		// relation with a container key refused the lead of that very
+		// container on every company that does not spell its `space:`
+		// and its `project:` the same — which is what
+		// [authz.ActionContainerWrite] did before it read the kind.
+		{"a container's lead renames a page in it", seat("cto"),
+			authz.ActionPageRename,
+			authz.Object{Kind: authz.KindContainer, Container: "RUNBOOKS"},
+			true, authz.ReasonLead},
+		{"a colleague does not", seat("sre"),
+			authz.ActionPageRename,
+			authz.Object{Kind: authz.KindContainer, Container: "RUNBOOKS"},
+			false, authz.ReasonNotLead},
+		{"and the project relation is not asked for it", seat("cto"),
+			authz.ActionPageRename,
+			authz.Object{Kind: authz.KindContainer, Container: "PLATFORM"},
+			false, authz.ReasonNotLead},
+
+		// --- saved views ---------------------------------------------- //
+		//
+		// ONE VERB, TWO AUTHORITIES, picked by what the view IS. The
+		// payload decides and the caller cannot choose which question
+		// is asked — see [authz.ClassSavedView].
+		{"a seat saves its own personal view", seat("sre"),
+			authz.ActionViewSave,
+			authz.Object{Kind: authz.KindView, Owner: "sre"},
+			true, authz.ReasonSelf},
+		{"a lead does not rearrange a report's own strip", seat("cto"),
+			authz.ActionViewSave,
+			authz.Object{Kind: authz.KindView, Owner: "sre"},
+			false, authz.ReasonNotSelf},
+		{"a project's lead saves a shared view on it", seat("cto"),
+			authz.ActionViewSave,
+			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindProject,
+				Container: "PLATFORM"},
+			true, authz.ReasonLead},
+		{"a colleague does not share one there", seat("sre"),
+			authz.ActionViewSave,
+			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindProject,
+				Container: "PLATFORM"},
+			false, authz.ReasonNotLead},
+		{"a unit's lead shares one on the unit", seat("cto"),
+			authz.ActionViewSave,
+			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindUnit,
+				Container: "sre"},
+			true, authz.ReasonLead},
+		{"a seat shares one on its own page", seat("sre"),
+			authz.ActionViewSave,
+			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindPerson,
+				Container: "sre"},
+			true, authz.ReasonSelf},
+		{"and their lead does too", seat("cto"),
+			authz.ActionViewSave,
+			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindPerson,
+				Container: "sre"},
+			true, authz.ReasonLead},
+		// THE WORKSPACE TAB IS THE ADMIN PATH ALONE: it lands in front
+		// of every person in the company and nobody leads it.
+		{"nobody leads the workspace", seat("cto"),
+			authz.ActionViewSave,
+			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindCompany,
+				Container: "workspace"},
+			false, authz.ReasonNotLead},
+		{"so the admin path saves a workspace tab",
+			person("jane.doe", iam.GrantFleetOperate),
+			authz.ActionViewSave,
+			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindCompany,
+				Container: "workspace"},
+			true, authz.ReasonGrant},
+		{"a view naming neither is refused", seat("cto"),
+			authz.ActionViewSave, authz.Object{Kind: authz.KindView},
 			false, authz.ReasonUnnamed},
 		// A UNIT IS THE OTHER CONTAINER RELATION, and the fixture holds
 		// the two apart: the CTO leads the `sre` UNIT and the PLATFORM
@@ -227,6 +330,19 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"a person without it does not", person("jane.doe"),
 			authz.ActionWorkPurge, authz.Object{Kind: authz.KindTask},
 			false, authz.ReasonNoGrant},
+		// AND THE SAME BAR COMPOSES WITH A RELATION rather than only
+		// with the grant, which is why it is a field on the row and not
+		// a class: a project's own lead archives it, and an agent that
+		// leads one does not — a project nobody can file into again is
+		// a company decision.
+		{"a project's lead archives it", seat("cto"),
+			authz.ActionProjectArchive,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
+			false, authz.ReasonSeatRefused},
+		{"and a person who leads it does",
+			personLeading("cto"), authz.ActionProjectArchive,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
+			true, authz.ReasonLead},
 
 		// --- authored --------------------------------------------------- //
 		{"the author edits their comment", person("jane.doe"),
@@ -294,7 +410,7 @@ func TestFlippingTheChartInvertsEveryLeadAnswer(t *testing.T) {
 	}{
 		{"priorities", "cto", authz.ActionPrioritiesSet,
 			authz.Object{Kind: authz.KindPerson, Owner: "sre"}},
-		{"project policy", "cto", authz.ActionProjectWrite,
+		{"project policy", "cto", authz.ActionProjectPolicy,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}},
 		{"removal", "cto", authz.ActionWorkRemove,
 			authz.Object{Kind: authz.KindTask, Container: "PLATFORM"}},
@@ -332,7 +448,7 @@ func TestAChartReadErrorIsUnknownNotARefusal(t *testing.T) {
 	}{
 		{"priorities", authz.ActionPrioritiesSet,
 			authz.Object{Kind: authz.KindPerson, Owner: "sre"}},
-		{"project policy", authz.ActionProjectWrite,
+		{"project policy", authz.ActionProjectPolicy,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -371,7 +487,7 @@ func TestTheAdminPathDecidesWithNoChartAtAll(t *testing.T) {
 	}{
 		{"priorities", authz.ActionPrioritiesSet,
 			authz.Object{Kind: authz.KindPerson, Owner: "sre"}},
-		{"project policy", authz.ActionProjectWrite,
+		{"project policy", authz.ActionProjectPolicy,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}},
 		{"removal", authz.ActionWorkRemove,
 			authz.Object{Kind: authz.KindTask, Container: "PLATFORM"}},

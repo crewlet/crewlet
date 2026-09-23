@@ -46,6 +46,18 @@ type Chart interface {
 	// refusing the lead of that very unit, silently, with no error to
 	// notice.
 	LeadsUnit(ctx context.Context, actor, unitKey string) (bool, error)
+
+	// LeadsContainer reports whether actor leads the unit that owns a
+	// PAGE CONTAINER, or is the seat whose own container it is.
+	//
+	// THE THIRD RELATION, and it is not [LeadsProject] either: a unit
+	// declares its tracker project and its page container in two separate
+	// fields, so asking the project relation with a container key matches
+	// only a company whose unit files its work and its pages under the
+	// same name — and answers false everywhere else, refusing the lead of
+	// that very container with no error to notice. It is the same mistake
+	// [LeadsUnit] exists to make impossible, one key class further on.
+	LeadsContainer(ctx context.Context, actor, containerKey string) (bool, error)
 }
 
 // NoChart is a chart that can answer nothing, and says so.
@@ -69,5 +81,10 @@ func (NoChart) LeadsProject(context.Context, string, string) (bool, error) {
 
 // LeadsUnit reports that this surface holds no chart.
 func (NoChart) LeadsUnit(context.Context, string, string) (bool, error) {
+	return false, ErrNoChart
+}
+
+// LeadsContainer reports that this surface holds no chart.
+func (NoChart) LeadsContainer(context.Context, string, string) (bool, error) {
 	return false, ErrNoChart
 }
