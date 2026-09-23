@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -355,6 +356,91 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	ifMatch uint64, patch TaskPatch, kind ChangeKind,
 	notify *Notify) (WriteResult, error) {
 
+	return w.updateTask(ctx, opID, id, project, ifMatch, patch, kind, notify, nil)
+}
+
+// amendment settles a patch against the task as the decide snapshot holds it,
+// or refuses the write.
+//
+// THE ONE SEAM INTO [Writer.updateTask]'s decide, for a gesture whose patch
+// cannot be formed until the CURRENT row is in hand — a comment edit is the
+// stored comment with one field changed, and who wrote it is a fact about that
+// row. Formed from a read outside the snapshot, it would be decided against
+// a comment that may since have been edited or removed.
+type amendment func(ctx context.Context, tx *sql.Tx, current Task,
+	patch TaskPatch) (TaskPatch, error)
+
+// ErrNotAuthor reports an edit to a remark by somebody who did not write it.
+var ErrNotAuthor = errors.New("tracker: only its author may edit a comment")
+
+// EditComment rewrites one comment's body, AS ITS AUTHOR.
+//
+// # Only the author, whatever else the caller holds
+//
+// The authority table admits the deployment grant beside the author on this
+// verb, because it answers "may you act on this remark" for removal and edit
+// alike. The WRITE answers the narrower question, and answers it the way
+// internal/pages does: a remark somebody else can rewrite is a remark
+// attributed to a person who did not make it, on a record that outlives the
+// thread and is quoted in the wake it sends. Taking a remark down is visible;
+// rewriting it is not.
+//
+// # Decided inside the snapshot
+//
+// Who wrote the comment, and whether it is still there, are read in the same
+// transaction the expectation is formed in — so an edit racing a removal, or a
+// second edit, contends at the broker on the task's subject rather than
+// landing against a remark that has moved.
+func (w *Writer) EditComment(ctx context.Context, opID, taskID, project,
+	commentID, body string, notify *Notify) (WriteResult, error) {
+
+	body = strings.TrimSpace(body)
+	switch {
+	case strings.TrimSpace(commentID) == "":
+		return WriteResult{}, fmt.Errorf("tracker: an edit names no comment")
+	case body == "":
+		return WriteResult{}, fmt.Errorf("tracker: an edit leaves comment %s "+
+			"with no body — remove it instead", commentID)
+	}
+	at := w.Now()
+	return w.updateTask(ctx, opID, taskID, project, NoIfMatch,
+		TaskPatch{Comment: &Comment{ID: commentID, Body: body}},
+		ChangeCommentEdited, notify,
+		func(ctx context.Context, tx *sql.Tx, _ Task,
+			patch TaskPatch) (TaskPatch, error) {
+
+			held, err := readComment(ctx, tx, taskID, commentID)
+			if err != nil {
+				return TaskPatch{}, err
+			}
+			stored := held[0]
+			switch {
+			case stored.Removed:
+				return TaskPatch{}, fmt.Errorf("%w: comment %s was removed, "+
+					"and a removed remark has no text left to edit",
+					ErrNoComment, commentID)
+			case stored.Author != w.Actor:
+				return TaskPatch{}, fmt.Errorf("%w: comment %s was written by "+
+					"%s — reply to it instead of rewriting it", ErrNotAuthor,
+					commentID, stored.Author)
+			}
+			// THE STORED COMMENT WITH ITS BODY REPLACED, whole, because
+			// the apply is an upsert of the row the record carries: a
+			// patch holding only the id and the body would clear the
+			// question it asked, the answer it closed and the mentions it
+			// woke.
+			edited := stored
+			edited.Body, edited.UpdatedAt = patch.Comment.Body, at
+			patch.Comment = &edited
+			return patch, nil
+		})
+}
+
+// updateTask is [Writer.UpdateTask] with an optional [amendment].
+func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
+	ifMatch uint64, patch TaskPatch, kind ChangeKind,
+	notify *Notify, amend amendment) (WriteResult, error) {
+
 	switch {
 	case id == "":
 		return WriteResult{}, fmt.Errorf("tracker: an update names no task")
@@ -448,6 +534,18 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 					"version %d and the edit was conditioned on %d — re-read "+
 					"it and decide again rather than re-sending this patch",
 					ErrStaleVersion, id, current.Version, ifMatch)
+			}
+			// A COPY, for [settleWatch]'s reason: Decide runs again on a
+			// retry, and an amendment folded into the captured patch would
+			// compound across attempts.
+			patch := patch
+			if amend != nil {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				amended, err := amend(ctx, tx, current, patch)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				patch = amended
 			}
 			if patch.Tags != nil {
 				// AGAINST THE TASK'S OWN PROJECT rather than the
