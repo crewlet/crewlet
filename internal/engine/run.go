@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
@@ -95,6 +96,18 @@ type Engine struct {
 	// value that could change inside a process would make the comparison
 	// meaningless. See [coord.NodeStatus.GrantCeilingHash].
 	grantCeilingHash string
+
+	// identityProvider is the company's OIDC provider as Tier A names it,
+	// or nil on a deployment that signs in some other way. ONE INSTANCE
+	// for the process, shared by the sign-in surface and the deactivation
+	// probe, because it caches the provider's discovery document and keys:
+	// two would be two caches of one provider disagreeing after a rotation,
+	// and two copies of the Tier A mapping that built them.
+	identityProvider *oidc.Provider
+
+	// identity is the four identity duties' loops, or nil on a node that
+	// arms none of them. See identityduties.go.
+	identity *identityDuties
 
 	// configWriter is how a disconnect removes a block, installed by the
 	// wiring that builds the config surface. Atomic because the loop
@@ -871,6 +884,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// a peer's presence row back through.
 	e.externalBase = opts.Bootstrap.API.ExternalBase()
 	e.grantCeilingHash = opts.Bootstrap.API.Auth.CeilingHash()
+	e.identityProvider = identityProvider(opts.Bootstrap)
 	e.profile = opts.Bootstrap.Node.Profile(nodeID)
 	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
 	// BEFORE the node, which registers every seat's mailbox through it on
@@ -1024,6 +1038,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// corpus — which reports as a healthy domain rather than as a
 		// missing one.
 		e.startEmbedding(ctx, e.native.log)
+		// AND THE IDENTITY ESTATE'S FOUR, on a node that runs that
+		// domain: without them a removal's failed key delete lives for
+		// ever, the trail is never swept, a duplicate a restore made is
+		// never named and a person disabled at the provider keeps their
+		// session to its deadline. See identityduties.go.
+		e.startIdentityDuties(ctx, opts.Bootstrap)
 	}
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
@@ -1376,6 +1396,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRetention()
 	e.stopBudgetReports()
 	e.stopEmbedding()
+	e.stopIdentityDuties()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator

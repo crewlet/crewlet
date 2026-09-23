@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -37,14 +38,18 @@ var dutyTTLs = map[string]struct {
 	// sizesCeiling is false for a bound derived from coord.MaxDutyTTL.
 	sizesCeiling bool
 }{
-	"maintenanceDutyTTL":      {maintenanceDutyTTL, true},
-	"retentionDutyTTL":        {retentionDutyTTL, true},
-	"embedDutyTTL":            {embedDutyTTL, true},
-	"integrationDutyTTL":      {integrationDutyTTL, true},
-	"learningDutyTTL":         {learningDutyTTL, true},
-	"setup.LeaseTTL":          {setup.LeaseTTL, true},
-	"schedule.DutyTTL(tick)":  {schedule.DutyTTL(schedule.MaxTick), true},
-	"waiterDutyTTL(interval)": {waiterDutyTTL(coord.MaxDutyTTL / dutyTTLTicks), false},
+	"maintenanceDutyTTL": {maintenanceDutyTTL, true},
+	"retentionDutyTTL":   {retentionDutyTTL, true},
+	"embedDutyTTL":       {embedDutyTTL, true},
+	"integrationDutyTTL": {integrationDutyTTL, true},
+	"learningDutyTTL":    {learningDutyTTL, true},
+	// THE IDENTITY DUTIES' LEASE is three claims, and a claim is at most
+	// an hour apart whatever the interval — so the probe's longest
+	// operator setting, a day, still takes a lease of three hours.
+	"identityDutyTTL(interval)": {identityDutyTTL(config.DeactivationProbeCeiling), true},
+	"setup.LeaseTTL":            {setup.LeaseTTL, true},
+	"schedule.DutyTTL(tick)":    {schedule.DutyTTL(schedule.MaxTick), true},
+	"waiterDutyTTL(interval)":   {waiterDutyTTL(coord.MaxDutyTTL / dutyTTLTicks), false},
 }
 
 // TestEveryDutyTTLFitsTheDutyCeiling ties coord.MaxDutyTTL to the duties that
