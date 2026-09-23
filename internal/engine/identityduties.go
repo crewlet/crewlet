@@ -366,15 +366,8 @@ func claimsPass(ctx context.Context, reader *iamdomain.Reader) {
 		return
 	}
 	for _, dup := range report.Duplicates {
-		// THE TOKEN AS STORED: a login and a seat are in the clear, and
-		// an address is its keyed blind — the address itself is sealed
-		// and this report opens nothing.
 		identityLog.WarnContext(ctx, "iam_claim_duplicated",
-			"claim", string(dup.Kind), "token", dup.Token, "people", dup.People,
-			"at", report.At.String(),
-			"detail", "more than one person holds this claim, which the broker "+
-				"cannot produce and a restore or a reanchor can; decide who keeps "+
-				"it and release it from the others — nothing here picks")
+			duplicateAttrs(dup, report.At.String())...)
 	}
 	for _, orphan := range report.Orphans {
 		identityLog.WarnContext(ctx, "iam_claim_orphaned",
@@ -382,6 +375,30 @@ func claimsPass(ctx context.Context, reader *iamdomain.Reader) {
 			"detail", "an enrolment stopped after taking these claims; "+
 				"`crewlet iam remove` on this id releases them")
 	}
+}
+
+// duplicateAttrs is what one duplicated claim's warning says.
+//
+// THE TOKEN ONLY FOR A CLAIM THAT IS IN THE CLEAR ANYWAY — a login and a seat,
+// which the dashboard prints on every row. An address's token is its keyed
+// BLIND, and a log line is the one copy of it that leaves the estate: it is
+// shipped to whatever aggregates the logs, kept on that system's retention
+// rather than this one's, and it is the same value for the same address for the
+// life of the company — a stable pseudonym anybody holding the log can join
+// across every line and every system that ever wrote it, and one guess away from
+// the address for anybody who ever holds the blind key. The holders' ids are
+// what an operator acts on, so the address is named by its KIND alone, which is
+// the directory report's rule too. A WHITELIST rather than a refusal of the
+// address kind, so a claim kind added later is not logged by default.
+func duplicateAttrs(dup iamdomain.DuplicateClaim, at string) []any {
+	attrs := []any{"claim", string(dup.Kind), "people", dup.People, "at", at}
+	switch dup.Kind {
+	case iamdomain.KindLogin, iamdomain.KindSeat:
+		attrs = append(attrs, "token", dup.Token)
+	}
+	return append(attrs, "detail", "more than one person holds this claim, "+
+		"which the broker cannot produce and a restore or a reanchor can; "+
+		"decide who keeps it and release it from the others — nothing here picks")
 }
 
 // keysPass destroys every key a removal left behind and every key nobody owns,

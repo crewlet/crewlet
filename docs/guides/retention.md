@@ -754,7 +754,7 @@ than an hour later — and then on its interval.
 | `iam_sweep` | 1 hour | Resolves `api.auth.audit.changes` (400 days) and `api.auth.audit.sessions` (90 days) to positions and publishes one sweep record for each bucket that is **due** — one holding something at least a day past its horizon. The day of slack is what bounds the log: a bucket is swept at most about once a day, so the sweep adds at most 64 records a day however often it runs. |
 | `iam_deactivation_probe` | `oidc.deactivation_probe` (1 hour) | Asks the identity provider about every live provider session, with the refresh token kept when the person signed in. Only on a deployment with an `oidc` block. |
 | `iam_key_shred` | 15 minutes | Destroys the key of anybody removed whose key outlived the removal, and every key nobody owns once it is an hour old; collects the refresh token of every provider session that is over. |
-| `iam_claims` | 1 hour | Logs every duplicated claim and every orphaned reservation at WARN, every tick it stands. |
+| `iam_claims` | 1 hour | Logs every duplicated claim and every orphaned reservation at WARN, every tick it stands, naming each holder by id. A login or a seat is logged as it is; an address by its kind alone, never by its keyed blind, which would be a stable pseudonym for it in every system your logs are shipped to. |
 
 The fifth is the operation ledger's sweep, which runs in the ordinary
 maintenance tick on every node.
