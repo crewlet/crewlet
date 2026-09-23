@@ -335,7 +335,9 @@ func rosterHead(report *org.Role) string {
 // Contact identities render generically from the seat's resolved identities
 // (${VAR} references resolved, unresolved ones omitted — never shown
 // verbatim, since a literal "${SLACK_ID}" in a prompt is a mention that can
-// never match an account), so this renderer is tied to no one platform.
+// never match an account), so this renderer is tied to no one platform. A seat
+// whose contact identities the identity directory withholds renders none of
+// them ([Seat.Withheld]).
 func rosterProfile(s Seat, report *org.Role) []string {
 	parts := []string{rosterHead(report)}
 	if report.Backstory != "" {
@@ -349,6 +351,23 @@ func rosterProfile(s Seat, report *org.Role) []string {
 	}
 	if !report.IsHuman() {
 		return parts
+	}
+	if s.withholds(report.Handle()) {
+		// NO IDENTITY AT ALL, and not the "no account" line below either:
+		// that one tells a lead the person reads their queue, and the
+		// person holding this seat is not somebody the company is routing
+		// work to at the moment. The SEAT stays — work filed to it waits
+		// for whoever holds it next — and the reason stays out of the
+		// prompt, because a person's standing is not an agent's business.
+		if report.Availability != "" {
+			parts = append(parts, "  - Availability: "+report.Availability)
+		}
+		return append(parts,
+			"  - Working with them: they cannot be reached on any chat or "+
+				"code-host account right now, so there is nobody to "+
+				"@-mention or message. Work for this seat goes in the PM "+
+				"tool, assigned to the seat, where whoever holds it will "+
+				"find it — don't expect a reply in the meantime.")
 	}
 	addressable := false
 	if report.Contact != nil {

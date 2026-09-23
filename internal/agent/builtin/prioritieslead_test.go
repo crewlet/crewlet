@@ -81,7 +81,7 @@ func TestALeadNamesAReportTheWayAModelTypesThem(t *testing.T) {
 				Work: builtin.WorkDeps{
 					Reader: trk, Writer: trk.as,
 					PersonWriter: func(builtin.Actor) builtin.PersonWriter { return person },
-					Seats:        func() []colleague.Seat { return builtin.Corpus(company) },
+					Seats:        func() []colleague.Seat { return builtin.Corpus(company, nil) },
 					Actor:        builtin.PrincipalActor,
 				},
 				Authorize: builtin.Decide(handleChart{}),

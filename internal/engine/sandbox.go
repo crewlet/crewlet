@@ -534,7 +534,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	}
 	tel := e.describeResume(ctx, company, in)
 	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
-		in.Run.DelegationChain, resumeTask(in), resumedReply)
+		in.Run.DelegationChain, resumeTask(in), resumedReply, e.WithheldContacts())
 	r, err := company.RunnerFor(in.Turn.Handle(),
 		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
 			Task: resumeTask(in),

@@ -2810,7 +2810,7 @@ func nativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 				if c == nil {
 					return nil
 				}
-				return builtin.Corpus(c.Org)
+				return builtin.Corpus(c.Org, e.WithheldContacts())
 			},
 			// AND THE THREE CHART SEAMS THE SEAT SURFACE HAS AND THIS
 			// ONE WENT WITHOUT. Their absence was invisible and not

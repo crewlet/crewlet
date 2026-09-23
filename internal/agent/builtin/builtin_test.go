@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -882,5 +883,46 @@ func fullDeps(t *testing.T) builtin.Deps {
 			Search: newFakeTracker(),
 		},
 		Pages: builtin.PageDeps{Reader: &fakeKB{}, Writer: &fakeKB{}},
+	}
+}
+
+// A WITHHELD HOLDER'S ACCOUNTS NAME NOBODY, and the lookup says the seat
+// cannot be reached — without saying why.
+//
+// The party registry resolves an inbound message from a suspended person to
+// an outside party; a lookup that still resolved their Slack id to the seat,
+// or printed it, would hand an agent the one address the company has stopped
+// routing. The control is the same lookup on a turn that withholds nobody.
+func TestALookupWithholdsWhatTheDirectoryWithholds(t *testing.T) {
+	t.Parallel()
+	tool := registered(t, builtin.Deps{}, builtin.LookupColleagueTool)
+	turn := turnFor(t, "agent-ceo")
+	if res := callFor(t, tool, turn, map[string]any{"query": "U0FOUNDER"}); res.Failed ||
+		!strings.Contains(res.Output, "U0FOUNDER") {
+		t.Fatalf("the control lookup by Slack id did not find the founder:\n%s", res.Output)
+	}
+
+	turn.Withheld = func(handle string) bool { return handle == "founder" }
+	// THE ID NAMES NOBODY: whatever else a query spelled like it matches, it
+	// is no longer the founder's account.
+	for _, c := range colleague.Resolve("U0FOUNDER", builtin.Corpus(turn.Org, turn.WithholdsContacts)) {
+		if c.Method == colleague.MethodExternalID {
+			t.Errorf("a withheld holder's Slack id still names %q by id", c.Seat.Handle)
+		}
+	}
+	res := callFor(t, tool, turn, map[string]any{"query": "Founder"})
+	if res.Failed {
+		t.Fatalf("the seat itself stopped resolving: %s", res.Output)
+	}
+	if strings.Contains(res.Output, "U0FOUNDER") {
+		t.Errorf("the lookup prints a withheld holder's account:\n%s", res.Output)
+	}
+	for _, want := range []string{"founder", "cannot be reached"} {
+		if !strings.Contains(res.Output, want) {
+			t.Errorf("output does not say %q:\n%s", want, res.Output)
+		}
+	}
+	if strings.Contains(res.Output, "suspended") {
+		t.Errorf("the lookup tells an agent a person's standing:\n%s", res.Output)
 	}
 }

@@ -60,3 +60,32 @@ func TestAgentIDIsEmptyWithoutASeatOrAnOrg(t *testing.T) {
 		}
 	}
 }
+
+// A SUB-AGENT SEES THE SAME PEOPLE WITHHELD AS ITS PARENT, and a turn with no
+// reading withholds nobody rather than panicking.
+//
+// The reading is pinned with the org for one reason: a roster and a colleague
+// lookup must leave out the same people for the whole of a turn, and a worker
+// derived from it that lost the reading would hand an agent an address its
+// parent was not shown.
+func TestTheDirectoryReadingTravelsWithTheOrg(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Acme", Roles: []*org.Role{
+		{Name: "Lead", DeclaredHandle: "lead"},
+		{Name: "Worker", DeclaredHandle: "worker"},
+	}}
+	o.Normalize()
+	parent := &turnctx.Turn{Seat: o.Roles[0], Org: o,
+		Withheld: func(handle string) bool { return handle == "sarah-chen" }}
+	child, err := parent.ForSubagent(o.Roles[1], 3)
+	if err != nil {
+		t.Fatalf("ForSubagent: %v", err)
+	}
+	if !child.WithholdsContacts("sarah-chen") || child.WithholdsContacts("lead") {
+		t.Error("a sub-agent does not withhold what its parent withholds")
+	}
+	var none *turnctx.Turn
+	if none.WithholdsContacts("sarah-chen") || (&turnctx.Turn{}).WithholdsContacts("sarah-chen") {
+		t.Error("a turn with no reading withheld somebody")
+	}
+}

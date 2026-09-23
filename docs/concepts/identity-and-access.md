@@ -271,6 +271,7 @@ decided on each of them from that node's own rows:
 | Every session they hold | refused at the next request, `401 session_revoked` | the same stage check, on every request |
 | An open dashboard tab | closed `4401` within a minute | the socket re-checks its credential every 60 seconds |
 | Their seat's contact identities — the Slack member, the Jira account, the GitHub login | withdrawn within one apply, with a 30-second re-read behind it | the identity applier signals after the commit, and the node rebuilds its party registry for the same company from a fresh read of the directory |
+| What agents are shown of them — a lead's roster, `lookup_colleague` | their accounts left out from the next turn | every turn pins the registry's reading beside its org, so the prompt and the tools leave out the same people |
 | Their `inbox_changed` watch | gone with the socket | a watch needs a resolved caller |
 
 So a message the person sends from Slack stops being attributed to their
@@ -291,10 +292,6 @@ suspended can quietly reinstate them.
 - **The seat.** It stays in the chart, work can still be assigned to it, and
   the tracker still writes its notices; whoever is bound to it next reads
   them. Suspending a person is not removing a seat.
-- **What agents are shown.** A seat's `contact` block is chart content, and
-  the roster in an agent's prompt and `lookup_colleague` read it as written,
-  so an agent may still address the person at their own vendor account. Edit
-  the `contact` block to stop that.
 - **Instantly, on a node that runs no identity domain.** A seats-only
   satellite holds no directory of its own, so it asks the nodes that do on its
   thirty-second re-read: its contact routing withdraws the person within that

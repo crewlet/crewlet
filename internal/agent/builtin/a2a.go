@@ -160,7 +160,7 @@ func (t *a2aAsk) resolve(turn *turnctx.Turn, target string) (colleague.Seat, str
 	if turn.Org == nil {
 		return colleague.Seat{}, "No organization is in scope, so there is nobody to ask."
 	}
-	found := colleague.Resolve(target, Corpus(turn.Org))
+	found := colleague.Resolve(target, Corpus(turn.Org, turn.WithholdsContacts))
 	switch len(found) {
 	case 0:
 		return colleague.Seat{}, fmt.Sprintf(

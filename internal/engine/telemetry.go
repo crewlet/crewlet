@@ -146,8 +146,13 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 // Both identities come off the telemetry rather than off arguments, so the
 // events published at the two ends of a turn and the context its tools run
 // under cannot name different runs.
+//
+// withheld is the identity directory's reading this turn pins beside its org —
+// see [turnctx.Turn.Withheld] — taken by the caller from [Engine.WithheldContacts]
+// at the turn's start.
 func (t turnTelemetry) runnerTurn(company *Company,
 	depth int, chain []string, task string, reply turn.Reply,
+	withheld func(handle string) bool,
 ) runner.Turn {
 	return runner.Turn{
 		RunID: t.runID, WorkKey: t.workKey,
@@ -161,9 +166,13 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// colleague lookup mid-turn resolves against the roster this
 			// turn started under rather than one that changed underneath
 			// it.
-			Seat:  company.Org.AgentSeatByHandle(t.handle),
-			Org:   company.Org,
-			Depth: depth,
+			Seat: company.Org.AgentSeatByHandle(t.handle),
+			Org:  company.Org,
+			// AND WHO MAY BE REACHED, pinned with the org: the roster
+			// this turn's prompt renders and every colleague lookup its
+			// tools make leave out the same people.
+			Withheld: withheld,
+			Depth:    depth,
 			// The path that got here, so an ask this turn makes carries
 			// the whole provenance rather than only its immediate asker.
 			// It was set on the sandbox-resume path alone, so every

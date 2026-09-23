@@ -630,10 +630,14 @@ nobody bound (an all-seats fleet, which has no sign-in surface), and a log with
 records is a directory the satellite cannot read — it keeps its last reading,
 or withholds every human seat if it has never had one.
 
-**What it does not withdraw** is what agents are *shown*: the roster in a
-seat's prompt and `lookup_colleague` read the seat's `contact` block, which is
-chart content, so an agent can still address the person on their own vendor
-account. To stop that too, edit or remove the seat's `contact` block.
+**What agents are shown follows the same reading.** Every turn pins the
+registry's reading beside the org it runs under, so a lead's roster renders a
+withheld seat with no identity at all — only that the person cannot be reached
+on any chat or code-host account right now, and that work for the seat goes in
+the tracker — and `lookup_colleague` neither prints their accounts nor resolves
+an id copied from one. Neither says *why*: a person's standing is not an
+agent's business. The seat itself stays a colleague: a mention of it, a
+hand-off to it and a work item assigned to it all still name it.
 
 External-ID resolution is plain index lookups, because it runs on every
 inbound notification for sender attribution. On each surface it consults

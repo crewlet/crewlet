@@ -276,3 +276,43 @@ func TestTheUserMessagesBlocksAreAllPeers(t *testing.T) {
 		}
 	}
 }
+
+// A SEAT WHOSE CONTACT IDENTITIES THE DIRECTORY WITHHOLDS RENDERS NONE.
+//
+// The party registry already resolves a suspended person's Slack message to an
+// outside party; a roster that still printed their Slack id would have a lead's
+// agent DMing somebody the company has off-boarded. The seat stays — work for it
+// waits for whoever holds it next — and the prompt does not say WHY: a
+// person's standing is not an agent's business. The control is the same
+// roster with nothing withheld.
+func TestRosterRendersNoIdentityForAWithheldSeat(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{
+		Name: "Acme",
+		Units: []*org.Unit{{
+			Name: "Eng Team",
+			Type: org.UnitTypeTeam,
+			Lead: "lead",
+			Roles: []*org.Role{
+				{Name: "Lead", DeclaredHandle: "lead"},
+				{
+					Name: "Sarah Chen", Kind: org.KindHuman,
+					Contact:      &org.HumanContact{SlackUserID: "U0HUMAN"},
+					Availability: "CET business hours",
+				},
+			},
+		}},
+	}
+	o.Normalize()
+	seat := seatIn(o, "lead")
+
+	contains(t, BuildExecutor(seat, ExecutorInput{}), "Slack ID: U0HUMAN")
+
+	seat.Withheld = func(handle string) bool { return handle == "sarah-chen" }
+	p := BuildExecutor(seat, ExecutorInput{})
+	contains(t, p, "**Sarah Chen** (sarah-chen) — **human teammate**",
+		"cannot be reached on any chat or code-host account",
+		"Availability: CET business hours")
+	excludes(t, p, "U0HUMAN", "@-mention them on their team's chat",
+		"suspended", "removed", "retired")
+}

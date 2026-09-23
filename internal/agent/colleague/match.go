@@ -96,6 +96,14 @@ type Seat struct {
 	// confluence), for the exact-id tier.
 	External map[string]string
 
+	// Withheld marks a human seat whose contact identities the identity
+	// directory withholds — its holder suspended, retired or removed. Its
+	// External is empty, so an id copied from one of that person's
+	// accounts matches nobody, exactly as an inbound message from them
+	// resolves to nobody; the flag is what lets a caller say the seat
+	// cannot be reached rather than that it has no accounts.
+	Withheld bool
+
 	// Former are the handles this seat used to answer to.
 	//
 	// A MODEL TYPES WHAT IT REMEMBERS, which is this package's whole

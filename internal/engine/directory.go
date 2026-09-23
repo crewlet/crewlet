@@ -140,6 +140,28 @@ func (e *Engine) useDirectory(dir notify.Directory, at func() statelog.Position)
 	e.notify.directory, e.notify.directoryAt = dir, at
 }
 
+// WithheldContacts reports, for the party registry live NOW, whether a human
+// seat's contact identities are withheld — the reading everything an agent is
+// shown takes, so a roster, a colleague lookup and a work assignment by
+// somebody's Slack id all leave out exactly the people an inbound message from
+// them would not be attributed to.
+//
+// PINNED: the answer is the registry live at the call, and a registry is fixed
+// for its life (a directory that moved is a new registry), so a turn that
+// captures this at its start keeps one reading for the whole turn, as it keeps
+// one org. A node with no registry yet has published no company and runs no
+// turn, so it withholds nothing.
+func (e *Engine) WithheldContacts() func(handle string) bool {
+	reg := e.Registry()
+	if reg == nil {
+		return func(string) bool { return false }
+	}
+	return func(handle string) bool {
+		_, withheld := reg.Withholding(handle)
+		return withheld
+	}
+}
+
 // partyDirectory is the directory the registry reads, or nil for chart-only.
 func (e *Engine) partyDirectory() (notify.Directory, func() statelog.Position) {
 	e.notify.mu.Lock()

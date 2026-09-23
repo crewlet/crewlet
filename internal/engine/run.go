@@ -1684,7 +1684,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 
 	reply := ReplyFor(req.Events)
 	turnIdentity := tel.runnerTurn(company, req.Depth, req.DelegationChain,
-		task, reply)
+		task, reply, e.WithheldContacts())
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
 		Context: blocks,

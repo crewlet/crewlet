@@ -322,7 +322,7 @@ func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 		Name:  "Acme",
 		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "swe"}},
 	}}
-	got := tel.runnerTurn(company, 0, nil, "fix the failing test", turn.ToolReply(""))
+	got := tel.runnerTurn(company, 0, nil, "fix the failing test", turn.ToolReply(""), nil)
 	if got.Context == nil {
 		t.Fatal("the runner turn carries no turn context")
 	}

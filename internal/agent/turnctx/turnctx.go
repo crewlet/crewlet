@@ -95,6 +95,20 @@ type Turn struct {
 	// resolve against a roster that changed underneath it.
 	Org *org.Organization
 
+	// Withheld reports whether a human seat's contact identities are
+	// withheld — its holder suspended, retired or removed, by the identity
+	// directory's reading the party registry was built from. Pinned with
+	// the org and for the org's reason: it is what a roster and a colleague
+	// lookup leave out, and a turn that could see a person's accounts on
+	// one tool call and not the next would be addressing a moving target.
+	//
+	// ONE READING FOR THE WHOLE ENGINE: an inbound message from a withheld
+	// holder already resolves to an outside party, and an agent that could
+	// still find their Slack id in its roster would go on DMing somebody the
+	// company has off-boarded. Nil withholds nothing, which is a surface
+	// built outside a turn.
+	Withheld func(handle string) bool
+
 	// Depth is the delegation depth this turn inherited, and Chain is who
 	// it came through. Both travel so a sub-agent or an A2A ask can refuse
 	// past the cap rather than discovering the loop at runtime.
@@ -164,6 +178,14 @@ func (t *Turn) Role() string {
 	return t.Seat.Name
 }
 
+// WithholdsContacts reports whether a human seat's contact identities are
+// withheld on this turn — see [Turn.Withheld]. Nil-safe, and a method value
+// rather than the field so a caller passing it on never hands a nil func to
+// somebody who will call it.
+func (t *Turn) WithholdsContacts(handle string) bool {
+	return t != nil && t.Withheld != nil && t.Withheld(handle)
+}
+
 // AgentID is the acting seat's derived agent id, or "".
 //
 // Derived here rather than carried, because the derivation is a pure function
@@ -203,7 +225,8 @@ func (t *Turn) RequireSeat() (*org.Role, error) {
 
 // ForSubagent derives the context an ephemeral sub-agent runs under.
 //
-// It KEEPS the org (a sub-agent must see the same company its parent does) and
+// It KEEPS the org and the directory reading beside it (a sub-agent must see
+// the same company, and the same people withheld, as its parent) and
 // EXTENDS the delegation chain, refusing past the cap. The seat becomes the
 // child's own: a sub-agent acting as its parent would make the delegation cap
 // unenforceable, because nothing downstream could tell the two apart.
@@ -226,6 +249,6 @@ func (t *Turn) ForSubagent(seat *org.Role, limit int) (*Turn, error) {
 	}
 	return &Turn{
 		RunID: t.RunID, WorkKey: t.WorkKey,
-		Seat: seat, Org: t.Org, Depth: depth, Chain: chain,
+		Seat: seat, Org: t.Org, Withheld: t.Withheld, Depth: depth, Chain: chain,
 	}, nil
 }

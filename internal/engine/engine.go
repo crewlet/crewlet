@@ -237,7 +237,9 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 	te := c.Config.TurnEngine
 	del := te.Delegation
 	return runner.New(runner.Config{
-		Seat:     prompts.Seat{Org: c.Org, Role: role},
+		// THE TURN'S OWN READING of who may be reached, so the roster its
+		// prompt renders leaves out exactly the people its tools do.
+		Seat:     prompts.Seat{Org: c.Org, Role: role, Withheld: in.Turn.Context.WithholdsContacts},
 		Registry: reg,
 		Models:   c.Models,
 		Caps: runner.Caps{

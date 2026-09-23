@@ -87,7 +87,7 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 		return failed("No organization is in scope, so there is nobody to look up."), nil
 	}
 
-	seats := Corpus(turn.Org)
+	seats := Corpus(turn.Org, turn.WithholdsContacts)
 	found := colleague.Resolve(query, seats)
 	safe := clip(query)
 
@@ -128,7 +128,13 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 // human seat is addressable — it just cannot be reached the same way. Leaving
 // humans out would make the tool silently unable to find the people an agent
 // most often needs.
-func Corpus(o *org.Organization) []colleague.Seat {
+//
+// withheld is the identity directory's reading, the one the party registry was
+// built from: a human seat it withholds keeps its place and loses every
+// external id, so an id copied from that person's accounts matches nobody —
+// exactly as an inbound message from them resolves to nobody — and the seat is
+// marked [colleague.Seat.Withheld]. Nil withholds nothing.
+func Corpus(o *org.Organization, withheld func(handle string) bool) []colleague.Seat {
 	if o == nil {
 		return nil
 	}
@@ -145,6 +151,11 @@ func Corpus(o *org.Organization) []colleague.Seat {
 		}
 		if seat.Kind == "" {
 			seat.Kind = string(org.KindAgent)
+		}
+		if role.IsHuman() && withheld != nil && withheld(seat.Handle) {
+			seat.Withheld = true
+			out = append(out, seat)
+			continue
 		}
 		for _, id := range role.Contact.ResolvedIdentities(nil) {
 			// EVERY TRANSPORT HERE IS A PLACE A MESSAGE CAN BE SENT.
@@ -180,7 +191,15 @@ func describe(s colleague.Seat) string {
 			fmt.Fprintf(&b, "  %s: %s\n", transport, s.External[transport])
 		}
 	}
-	if s.Kind == string(org.KindHuman) {
+	switch {
+	case s.Kind == string(org.KindHuman) && s.Withheld:
+		// NOT WHY: a person's standing is not an agent's business, and
+		// what the agent needs is only that nothing it sends will arrive.
+		b.WriteString("  reach them: they cannot be reached on any chat or " +
+			"code-host account right now, so there is nobody to mention or " +
+			"message. Work for this seat goes in the PM tool, assigned to " +
+			"the seat. a2a_ask addresses AGENTS only and will not reach them.\n")
+	case s.Kind == string(org.KindHuman):
 		b.WriteString("  reach them: mention them on a shared surface and " +
 			"continue without waiting — a person answers asynchronously. " +
 			"a2a_ask addresses AGENTS only and will not reach them.\n")
