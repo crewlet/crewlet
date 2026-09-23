@@ -161,8 +161,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		Colleague: iam.ColleagueWrite,
 		OpID:      opID, Reason: "the first operator",
 	}); err != nil {
-		log.ErrorContext(r.Context(), "api_bootstrap_enrol_failed", "error", err)
-		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+		refuseEnrolment(w, r, "api_bootstrap_enrol_failed", err)
 		return
 	}
 

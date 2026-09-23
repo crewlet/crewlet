@@ -233,13 +233,13 @@ func (p Principal) Validate() error {
 				ErrInvalidPrincipal, p.Kind)
 		}
 	case KindPerson:
-		if !ValidLogin(p.Login) {
+		if !ValidLoginFor(p.Kind, p.Login) {
 			return fmt.Errorf(
 				"%w: login %q is not a person login — write it as dotted segments (jane.doe), which is what keeps it out of the seat-handle namespace",
 				ErrInvalidPrincipal, p.Login)
 		}
 	case KindMachine:
-		if !ValidMachineHandle(p.Login) {
+		if !ValidLoginFor(p.Kind, p.Login) {
 			return fmt.Errorf(
 				"%w: login %q is not a machine handle — write it as class:name (ci:release), which is what keeps it out of the seat-handle namespace",
 				ErrInvalidPrincipal, p.Login)

@@ -35,6 +35,12 @@
 // either direction, by construction rather than by a uniqueness check some
 // later writer has to remember to run.
 //
+// AND EACH GRAMMAR BELONGS TO ONE KIND — [ValidLoginFor] — because a name is
+// read back as a claim about the kind that holds it. `token:<id>` is the login
+// a Tier A token acts under, and the identity directory's row under it is what
+// binds that token to a seat, so a person free to choose a coloned login could
+// make the deployment's own credential act as their seat.
+//
 // # Nothing here decides anything
 //
 // A gate asks [Principal.Can]; a route or a query declares an [Access]; a
@@ -118,6 +124,37 @@ func ValidLogin(s string) bool { return loginPattern.MatchString(s) }
 
 // ValidMachineHandle reports whether s is a well-formed machine handle.
 func ValidMachineHandle(s string) bool { return handlePattern.MatchString(s) }
+
+// ValidLoginFor reports whether s is a well-formed login for a principal of
+// kind k: a person's must be dotted and a machine's coloned, and no other kind
+// holds a login at all.
+//
+// # The grammar is PER KIND, and "either one" is the bug this closes
+//
+// The two grammars being disjoint from each other is only half of what keeps
+// the namespaces apart. The other half is that each belongs to ONE kind —
+// because a name is read back as meaning something about the kind that holds
+// it. `token:<id>` is the login a Tier A token acts under, and the identity
+// directory's row under that login is what binds that token to a seat; a
+// PERSON who could choose `token:ops` as their own login would therefore have
+// made the deployment's `ops` credential act as their seat. Accepting either
+// grammar for either kind is how that name became choosable by the one party
+// it must never belong to.
+//
+// A SEAT and the ENGINE answer false for every string. A seat's name is its
+// handle, which internal/org owns and which carries no separator by design; the
+// engine's is the node's own id, minted rather than typed. Neither enrols, so
+// neither has a login for this grammar to admit — and a kind this build cannot
+// name answers false too, which is the direction that fails closed.
+func ValidLoginFor(k Kind, s string) bool {
+	switch k {
+	case KindPerson:
+		return ValidLogin(s)
+	case KindMachine:
+		return ValidMachineHandle(s)
+	}
+	return false
+}
 
 // NormalizeEmail is the form an email address is MATCHED on.
 //

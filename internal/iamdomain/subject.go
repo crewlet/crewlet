@@ -108,6 +108,11 @@ const (
 	// KindLogin is a claim on one LOGIN — a person's `jane.doe` or a
 	// machine's `ci:release`.
 	//
+	// THE SHAPE IS THE HOLDER'S KIND, and a claim is refused in its decide
+	// when the two disagree ([iam.ValidLoginFor]): `token:<id>` is the
+	// login a Tier A token acts under, so a person holding one would make
+	// the deployment's credential act as their seat.
+	//
 	// ITS ID IS THE LOGIN ITSELF, not a blind, and the asymmetry with
 	// [KindEmail] is deliberate. A login is a name the company CHOSE, in a
 	// grammar internal/iam defines, typed into an audit row and read back

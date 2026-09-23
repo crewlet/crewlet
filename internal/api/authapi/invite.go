@@ -2,6 +2,7 @@ package authapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -129,8 +130,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		Colleague: held.Colleague,
 		OpID:      opID, Reason: "redeemed an invitation",
 	}); err != nil {
-		log.ErrorContext(r.Context(), "api_invite_enrol_failed", "error", err)
-		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+		refuseEnrolment(w, r, "api_invite_enrol_failed", err)
 		return
 	}
 	if _, err := s.writer.SpendInvitation(r.Context(), iamdomain.InvitationSpend{
@@ -151,6 +151,52 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		ID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Login: in.Login, Grants: held.Grants, Colleague: held.Colleague,
 	})
+}
+
+// refuseEnrolment answers an enrolment the domain did not land, and it is the
+// one place this surface decides which of those failures are the caller's.
+//
+// # Why this is not one 503
+//
+// Both enrolments this surface performs — the first operator's and an
+// invitation's — used to answer every failure `503 unavailable`, which is the
+// status that says "the engine is having a moment, try again". For a login
+// the domain REFUSED that is false twice over: nothing will change on a
+// retry, and the person is left resubmitting the same name at a form that
+// never says what is wrong with it. So the refusals that are about what was
+// TYPED are 400 naming the rule, a name somebody else already holds is 409,
+// and only what is left — a record that could not be published or applied —
+// is 503.
+//
+// # What the 409 does and does not say
+//
+// It says the login or the address is taken, which the person needs in order
+// to choose another, and it does NOT say by whom. The domain's own refusal
+// names the holder's id, which is right for an administrator and wrong here:
+// the caller is holding an invitation link or a bootstrap code, which is
+// evidence of who THEY are and of nothing about anybody else.
+func refuseEnrolment(w http.ResponseWriter, r *http.Request, event string, err error) {
+	var claimed *iamdomain.ErrClaimed
+	switch {
+	case errors.Is(err, iamdomain.ErrInvalidLogin),
+		errors.Is(err, iamdomain.ErrNotFindable),
+		errors.Is(err, iamdomain.ErrNotEnrollable):
+		log.InfoContext(r.Context(), event, "refused", "invalid", "error", err)
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			map[string]string{"detail": err.Error()})
+	case errors.As(err, &claimed):
+		log.InfoContext(r.Context(), event, "refused", "claimed",
+			"claim", string(claimed.Kind))
+		detail := "that address already belongs to somebody in this company"
+		if claimed.Kind == iamdomain.KindLogin {
+			detail = "that login is already taken — choose another"
+		}
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
+			map[string]string{"detail": detail})
+	default:
+		log.ErrorContext(r.Context(), event, "error", err)
+		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+	}
 }
 
 // invitation resolves the link, answering false once it has written the

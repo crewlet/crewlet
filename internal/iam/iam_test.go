@@ -123,6 +123,64 @@ func TestTheLoginAndHandleRegexesAreDisjoint(t *testing.T) {
 	}
 }
 
+// A LOGIN'S GRAMMAR BELONGS TO ITS KIND, and to no other.
+//
+// Disjointness alone is not enough, which is what this adds to the case above:
+// two disjoint grammars that EITHER kind may use still let a person choose a
+// machine's name. `token:<id>` is the name a Tier A token acts under, and the
+// directory row holding it is what binds that token to a seat — so a person
+// who could enrol as `token:ops` would make the deployment's `ops` credential
+// act as their seat. Over the same generated corpus, because the property is
+// universal: no string is a valid login for two kinds, and a seat or the engine
+// holds none at all.
+func TestALoginsGrammarBelongsToItsKind(t *testing.T) {
+	people, machines := 0, 0
+	for _, s := range nameCorpus() {
+		person, machine := ValidLoginFor(KindPerson, s), ValidLoginFor(KindMachine, s)
+		if person && machine {
+			t.Fatalf("%q is a login for a person AND a machine", s)
+		}
+		if person != ValidLogin(s) {
+			t.Fatalf("%q: a person's login grammar answered %v and the dotted "+
+				"grammar %v — a person may hold exactly the dotted names", s,
+				person, ValidLogin(s))
+		}
+		if machine != ValidMachineHandle(s) {
+			t.Fatalf("%q: a machine's login grammar answered %v and the coloned "+
+				"grammar %v — a machine may hold exactly the coloned names", s,
+				machine, ValidMachineHandle(s))
+		}
+		for _, k := range []Kind{KindSeat, KindEngine, Kind(""), Kind("delegate")} {
+			if ValidLoginFor(k, s) {
+				t.Fatalf("%q is admitted as a %q login; only a person and a "+
+					"machine hold one", s, k)
+			}
+		}
+		if person {
+			people++
+		}
+		if machine {
+			machines++
+		}
+	}
+	// THE NAMED CASE, stated rather than left to the corpus: the Tier A
+	// token namespace is a machine's and never a person's.
+	if ValidLoginFor(KindPerson, "token:ops") {
+		t.Error("a person may choose `token:ops`, so they can make the " +
+			"deployment's ops credential act as their seat")
+	}
+	if !ValidLoginFor(KindMachine, "token:ops") {
+		t.Error("a machine may not hold `token:ops`, so no Tier A token can " +
+			"ever be bound to a seat")
+	}
+	// THE CONTROL: a corpus that admitted nothing would pass every
+	// assertion above.
+	if people < 50 || machines < 50 {
+		t.Fatalf("the corpus admitted %d person and %d machine logins; the "+
+			"assertions above are vacuous", people, machines)
+	}
+}
+
 // nameCorpus is every string of length 1..4 over the characters that decide a
 // name's shape, plus deterministic longer ones over a wider alphabet so the
 // rejection paths are exercised too.

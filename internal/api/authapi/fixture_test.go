@@ -65,6 +65,15 @@ func surface(t *testing.T) *authapi.Service {
 // field they are about.
 func build(t *testing.T, b config.Bootstrap, provider *oidc.Provider) *authapi.Service {
 	t.Helper()
+	return buildWith(t, b, provider, nil)
+}
+
+// buildWith is [build] with one or more of the fakes replaced, for a case whose
+// subject is what a seam ANSWERS rather than which routes exist.
+func buildWith(t *testing.T, b config.Bootstrap, provider *oidc.Provider,
+	replace func(*authapi.Options)) *authapi.Service {
+
+	t.Helper()
 	signer, err := session.New(session.Options{
 		Material: runtoken.Material{
 			ActiveID: "k1",
@@ -86,7 +95,7 @@ func build(t *testing.T, b config.Bootstrap, provider *oidc.Provider) *authapi.S
 	if err != nil {
 		t.Fatalf("credential.NewThrottle: %v", err)
 	}
-	svc, err := authapi.New(authapi.Options{
+	opts := authapi.Options{
 		Bootstrap: &b,
 		Directory: stubDirectory{},
 		Writer:    stubWriter{},
@@ -100,7 +109,11 @@ func build(t *testing.T, b config.Bootstrap, provider *oidc.Provider) *authapi.S
 		Provider:  provider,
 		Cipher:    stubCipher{},
 		Now:       func() time.Time { return clock },
-	})
+	}
+	if replace != nil {
+		replace(&opts)
+	}
+	svc, err := authapi.New(opts)
 	if err != nil {
 		t.Fatalf("authapi.New: %v", err)
 	}

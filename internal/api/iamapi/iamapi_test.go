@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -754,6 +755,32 @@ func TestEveryRouteMountsWithAVerbTheTableKnows(t *testing.T) {
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})); err == nil {
 
 		t.Error("a verb with no rule mounted, so a route can ship ungated")
+	}
+}
+
+// A LOGIN OUTSIDE ITS HOLDER'S KIND IS THE CALLER'S TO FIX, and says so.
+//
+// The domain refuses a person's `token:ops` and a kind it does not enrol with
+// sentinels of their own, and this surface used to fall through to a 500 on
+// both — telling an administrator who typed a login the engine was broken, and
+// sending them looking for an outage instead of at the field.
+func TestARefusedLoginOrKindIsABadRequestAndNotAFault(t *testing.T) {
+	t.Parallel()
+	for _, refusal := range []error{iamdomain.ErrInvalidLogin, iamdomain.ErrNotEnrollable} {
+		r := newRig(t)
+		r.writer.err = fmt.Errorf("%w: the domain's own sentence", refusal)
+		got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
+			"login": "token:ops", "email": "mallory@example.com", "name": "Mallory",
+		})
+		if got.status != http.StatusBadRequest {
+			t.Errorf("%v answered %d, want 400 (body %v)", refusal, got.status,
+				got.body)
+		}
+		if detail, _ := got.body["detail"].(string); !strings.Contains(detail,
+			"the domain's own sentence") {
+			t.Errorf("%v: the detail %q does not carry the domain's reason",
+				refusal, detail)
+		}
 	}
 }
 

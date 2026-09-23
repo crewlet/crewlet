@@ -76,6 +76,15 @@ as a login, and an audit feed filtered on a name matches everything that name
 did and nothing else. A login without a dot, or a machine handle without a
 colon, is refused when it is written rather than discovered later.
 
+**Each shape belongs to its kind, and to no other.** A person's login must be
+dotted and a machine's must be coloned — at enrolment, at an invitation's
+redemption and at every rename. That matters most for one family of names:
+`token:<id>` is the login a Tier A token acts under, so the directory row
+holding it is what binds that token to a seat. A person can never hold one, so
+no person can make the deployment's own credential act as their seat. The
+directory enrols people and machines only; a seat belongs to the chart and the
+engine is the node.
+
 ---
 
 ## Grants: the eleven things there are to allow

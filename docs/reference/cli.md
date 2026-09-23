@@ -502,7 +502,7 @@ machine token with `crewlet iam token`.
 | `people` | The directory, paged. `-q` narrows on the login and the seat; `-stage` on the enrolment stage; `-limit` on the page |
 | `show ID` | One person, in full, with their name and address opened |
 | `invite EMAIL` | Issue an invitation. Prints the link **once** — nothing stores it and no route reads one back |
-| `create` | Create somebody directly, with `-login`, `-email`, `-name` and `-kind`. No password: a person arrives with one by redeeming an invitation, and a machine gets a token from `iam token` |
+| `create` | Create somebody directly, with `-login`, `-email`, `-name` and `-kind` (`person` or `machine`). The login follows the kind: a person's is dotted (`jane.doe`) and a machine's coloned (`ci:release`, or `token:<id>` to bind a Tier A token), and anything else is refused. No password: a person arrives with one by redeeming an invitation, and a machine gets a token from `iam token` |
 | `bind ID SEAT` | Bind a person to a chart seat, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. A Tier A token acts under the login `token:<id>`, so binding one is `create -kind machine -login token:<id>` and then `bind` on the id it prints. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
 | `unbind ID` | Take the binding back |
 | `grant ID` | Change what somebody carries: `-grants`, `-colleague` |

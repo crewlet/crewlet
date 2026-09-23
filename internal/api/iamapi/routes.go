@@ -235,7 +235,13 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request,
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
 			map[string]string{"detail": err.Error()})
 	case errors.Is(err, iamdomain.ErrNotFindable),
-		errors.Is(err, iamdomain.ErrNotFound):
+		errors.Is(err, iamdomain.ErrNotFound),
+		// A LOGIN OUTSIDE ITS KIND'S GRAMMAR and a kind the directory
+		// does not enrol are values the caller typed. Before these were
+		// classified they fell through to the 500 below, which told an
+		// administrator who wrote `jane` the engine was broken.
+		errors.Is(err, iamdomain.ErrInvalidLogin),
+		errors.Is(err, iamdomain.ErrNotEnrollable):
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": err.Error()})
 	case errors.Is(err, statelog.ErrConflict):

@@ -91,13 +91,13 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 		// is the one that should fail before anything else has
 		// happened.
 		if _, err := w.claim(ctx, KindEmail, blind, in.PersonID, sealedEmail,
-			in.OpID+":email"); err != nil {
+			in.OpID+":email", in.Kind); err != nil {
 			return statelog.Position{}, err
 		}
 	}
 	if in.Login != "" {
 		if _, err := w.claim(ctx, KindLogin, in.Login, in.PersonID, "",
-			in.OpID+":login"); err != nil {
+			in.OpID+":login", in.Kind); err != nil {
 			return statelog.Position{}, err
 		}
 	}
@@ -176,8 +176,15 @@ func (e Enrolment) validate() error {
 		return errors.New("iamdomain: an enrolment needs an operation id — it " +
 			"is a sequence of appends, and without a stable id a retry cannot " +
 			"tell which of them already landed")
-	case !e.Kind.Valid():
-		return fmt.Errorf("iamdomain: %q is not a principal kind", e.Kind)
+	case e.Kind != iam.KindPerson && e.Kind != iam.KindMachine:
+		// THE DIRECTORY HOLDS PEOPLE AND MACHINES, and nothing else
+		// enrols. A seat is the chart's and the engine is the node, so
+		// a directory row of either kind is a second answer to who they
+		// are — and neither has a login grammar, so the row would be
+		// findable by an address alone and act as nothing the rest of
+		// the engine can name.
+		return fmt.Errorf("%w: %q is not a kind the directory enrols — want "+
+			"%s or %s", ErrNotEnrollable, e.Kind, iam.KindPerson, iam.KindMachine)
 	case !e.Stage.Valid():
 		return fmt.Errorf("iamdomain: %q is not an enrolment stage", e.Stage)
 	case e.Kind == iam.KindPerson && e.Email == "":
@@ -193,14 +200,45 @@ func (e Enrolment) validate() error {
 		return fmt.Errorf("%w: enrolling a %s needs a login — it has no login "+
 			"page and therefore no address, so the login is the only thing "+
 			"that finds it", ErrNotFindable, e.Kind)
-	case e.Login != "" && !iam.ValidLogin(e.Login) && !iam.ValidMachineHandle(e.Login):
-		return fmt.Errorf("iamdomain: %q is neither a person's login "+
-			"(segments joined by dots) nor a machine's handle (segments "+
-			"joined by a colon) — both require a separator, which is what "+
-			"keeps them apart from a seat handle in one author column", e.Login)
+	case e.Login != "":
+		return loginFits(e.Kind, e.Login)
 	}
 	return nil
 }
+
+// loginFits refuses a login that is not in its holder's kind's grammar.
+//
+// THE GRAMMAR IS THE HOLDER'S, never "either one": [iam.ValidLoginFor] argues
+// the case, and it is the Tier A token namespace. A person who could take
+// `token:ops` would make the deployment's `ops` credential act as their seat,
+// because the directory row under a token's login is what binds it.
+//
+// Checked on the value AS TYPED rather than the folded subject id, so
+// `Sarah.Chen` is refused naming itself instead of being quietly lowered into
+// a login its holder never wrote.
+func loginFits(kind iam.Kind, login string) error {
+	if iam.ValidLoginFor(kind, login) {
+		return nil
+	}
+	shape := "a person's login is lowercase segments joined by DOTS (jane.doe)"
+	if kind == iam.KindMachine {
+		shape = "a machine's login is lowercase segments joined by a COLON " +
+			"(ci:release, or token:<id> for a Tier A token)"
+	}
+	return fmt.Errorf("%w: %q is not a login a %s may hold — %s. Each kind has "+
+		"its own separator, which keeps it apart from a seat handle and from "+
+		"the other kind's names", ErrInvalidLogin, login, kind, shape)
+}
+
+// ErrInvalidLogin reports a login outside its holder's kind's grammar.
+//
+// ITS OWN SENTINEL because it is the caller's to fix and a surface answers it
+// 400 — it is a value somebody typed, and reporting it as a failure of the
+// engine would send them looking for an outage.
+var ErrInvalidLogin = errors.New("iamdomain: that login does not fit its holder's kind")
+
+// ErrNotEnrollable reports an enrolment of a kind the directory does not hold.
+var ErrNotEnrollable = errors.New("iamdomain: the directory enrols people and machines only")
 
 // ErrNotFindable reports an enrolment that would create somebody nothing can
 // look up.
@@ -224,14 +262,25 @@ func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 	if err := w.mayAdminister(OpClaim); err != nil {
 		return statelog.Position{}, err
 	}
-	return w.claim(ctx, kind, token, personID, "", opID)
+	// THE HOLDER'S KIND IS READ INSIDE THE SNAPSHOT, never taken from the
+	// caller: a login's grammar is the kind of whoever holds it, and a
+	// caller stating that kind would be stating what it read in another
+	// transaction — which is the one input this check cannot trust.
+	return w.claim(ctx, kind, token, personID, "", opID, "")
 }
 
 // claim is the shared body, so an enrolment's own claims and an operator's
 // take exactly the same path — a second implementation is where one of them
 // comes to publish at a different pattern.
+//
+// enrolling is the kind of the person an ENROLMENT is creating, and empty
+// everywhere else. It exists because the enrolment's claims run before the
+// person's own record — they are what can be refused — so the row whose kind
+// a login's grammar is judged against does not exist yet; the enrolment
+// validated the kind itself, and it is the one caller that knows it without
+// reading. Every other claim reads its holder's kind inside the snapshot.
 func (w *Writer) claim(ctx context.Context, kind ObjectKind, token, personID,
-	sealed, opID string) (statelog.Position, error) {
+	sealed, opID string, enrolling iam.Kind) (statelog.Position, error) {
 
 	if token == "" || personID == "" || opID == "" {
 		return statelog.Position{}, fmt.Errorf("iamdomain: a %s claim needs a "+
@@ -257,6 +306,25 @@ func (w *Writer) claim(ctx context.Context, kind ObjectKind, token, personID,
 	// create-at-zero exists to settle. What it buys is a better refusal in
 	// the common case, never correctness.
 	decide := func(tx *sql.Tx) error {
+		if kind == KindLogin {
+			// A LOGIN IS JUDGED AGAINST ITS HOLDER'S KIND, read HERE,
+			// in the snapshot the claim is decided in: a rename that
+			// took a person's kind from a caller, or from a read in
+			// another transaction, would let a row whose kind changed
+			// between the two take a name its kind may not hold — and
+			// a person holding `token:<id>` is the deployment's Tier A
+			// credential acting as their seat.
+			holderKind := enrolling
+			if holderKind == "" {
+				var err error
+				if holderKind, err = enrolledKindOf(ctx, tx, personID); err != nil {
+					return err
+				}
+			}
+			if err := loginFits(holderKind, token); err != nil {
+				return err
+			}
+		}
 		holder, held, err := holderOf(ctx, tx, kind, token)
 		if err != nil {
 			return err
@@ -708,6 +776,30 @@ func holderOf(ctx context.Context, tx *sql.Tx, kind ObjectKind, token string) (
 			kind, token, err)
 	}
 	return holder, true, nil
+}
+
+// enrolledKindOf is the kind of an ENROLLED person, read inside a decide's
+// snapshot, or a refusal naming why there is none.
+//
+// A RESERVATION IS NOT ENROLLED. An enrolment's claims land before its content
+// record, and their apply leaves a row with no kind — so a row with an empty
+// kind is somebody whose enrolment has not finished on this node, and a login
+// judged against it would be judged against nothing. Refused rather than
+// guessed, and under [ErrNotFound], because what the caller has to do is the
+// same either way: name somebody this node holds.
+func enrolledKindOf(ctx context.Context, tx *sql.Tx, personID string) (iam.Kind, error) {
+	var kind string
+	err := tx.QueryRowContext(ctx,
+		`SELECT kind FROM iam_people WHERE id = ?`, personID).Scan(&kind)
+	switch {
+	case errors.Is(err, sql.ErrNoRows), err == nil && kind == "":
+		return "", fmt.Errorf("%w: this node holds no enrolled person %s, so it "+
+			"cannot say which grammar their login must follow — a person's is "+
+			"dotted and a machine's is coloned", ErrNotFound, personID)
+	case err != nil:
+		return "", fmt.Errorf("iamdomain: read person %s's kind: %w", personID, err)
+	}
+	return iam.Kind(kind), nil
 }
 
 // seatExists is the ADVISORY chart read, and its doc is the whole of what it

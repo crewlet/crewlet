@@ -239,6 +239,24 @@ func (r *writeRig) drainSafely() {
 // enrol creates one person through the whole path and applies the result.
 func (r *writeRig) enrol(in iamdomain.Enrolment) error {
 	r.t.Helper()
+	return r.draining(func() error {
+		_, err := r.writer.Enrol(r.t.Context(), in)
+		return err
+	})
+}
+
+// claim takes one claim through the whole path and applies the result.
+func (r *writeRig) claim(kind iamdomain.ObjectKind, token, person, opID string) error {
+	r.t.Helper()
+	return r.draining(func() error {
+		_, err := r.writer.Claim(r.t.Context(), kind, token, person, opID)
+		return err
+	})
+}
+
+// draining runs one gesture with this rig's consumer alongside it.
+func (r *writeRig) draining(gesture func() error) error {
+	r.t.Helper()
 	// THE CONSUMER RUNS ALONGSIDE, because an enrolment is a SEQUENCE:
 	// each step waits for this node's applier to reach the step before it,
 	// so a rig that drained only afterwards would deadlock on the second
@@ -257,7 +275,7 @@ func (r *writeRig) enrol(in iamdomain.Enrolment) error {
 			}
 		}
 	}()
-	_, err := r.writer.Enrol(r.t.Context(), in)
+	err := gesture()
 	close(stop)
 	<-done
 	return err

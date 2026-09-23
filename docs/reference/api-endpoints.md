@@ -158,7 +158,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: which backend, whether the first-operator route is still open, the password floor. **Unguarded**, and it carries **no user list and no count of people** |
 | `POST` | `/auth/bootstrap` | **The first person.** Redeems a one-time code this node wrote to a file beside its store, 0600, and creates an operator carrying the whole `max_grants` ceiling — the one stated exemption in the authority model. **Unguarded**, and closed for good the moment anybody is enrolled |
 | `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential |
-| `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants and reach whoever issued it decided. **Unguarded** |
+| `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants and reach whoever issued it decided. **Unguarded**. A login outside a person's grammar (dotted, `jane.doe`) is `400` naming the rule and a login or address somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. Only a record that could not land is `503`. `POST /auth/bootstrap` answers its enrolment the same way |
 | `GET` | `/auth/oidc/start` `/auth/oidc/callback` | The identity-provider round trip, with PKCE and a sealed 10-minute flight cookie so a login begun on one node finishes on another. **Unguarded** — a browser following a redirect carries nothing this engine issued. **Absent** where no provider is configured. Linking is explicit: a subject this estate holds no credential for is refused, never provisioned |
 | `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage, grants, colleague level and whether the next sensitive action will ask you to confirm your identity |
 | `POST` | `/auth/token` | Exchanges a **Tier A bearer** for a one-hour session cookie, carrying the token's own grants and nothing more. Its re-auth clock is zero, so every step-up surface refuses it — a config-file credential must not reach a surface that exists to require a person |
@@ -567,6 +567,11 @@ would defeat the ledger that makes the retry safe.
 
 A lost race on an address, a login or a seat is `409` **naming who holds it**.
 An authority refusal is `403` and will never land however often it is retried.
+A login outside its holder's kind is `400`: a person's is dotted (`jane.doe`)
+and a machine's is coloned (`ci:release`, or `token:<id>` to bind a Tier A
+token), checked on a create and on a rename alike — and so is a `kind` other
+than `person` or `machine`, since a seat belongs to the chart and the engine
+is the node.
 
 #### Values that are shown once
 
