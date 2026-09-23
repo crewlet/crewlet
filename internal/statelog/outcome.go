@@ -101,6 +101,27 @@ type Result struct {
 	// create minted from is the sharp case: the number the earlier copy
 	// took is on the log, and the one this call would have taken is not.
 	Collapsed bool
+
+	// Unvouched says an `unknown` was answered because THIS NODE'S
+	// operation ledger cannot vouch for the operation — it was minted
+	// before the instant the ledger may have lost rows from (its sweep, or
+	// a snapshot adopted from a donor that scrubbed it) and the ledger holds
+	// no row for it — rather than because an acknowledgement was lost.
+	//
+	// # Why a caller has to be able to tell the two apart
+	//
+	// They send a retry opposite ways. A lost acknowledgement is resolved by
+	// the same operation id retried HERE: the ledger writes its row when the
+	// record applies, and the next attempt answers from it. An unvouched
+	// operation meets the same silence on this node every time — the row it
+	// needs is the one the loss took — so the same call repeated here never
+	// finishes it, and the first run may well have landed. What can answer
+	// it is another node, or one whose ledger lost nothing that far back.
+	// Told only "unknown", a walking gesture said "call again" for ever and
+	// a create said "not made" about a task its first run may have filed.
+	//
+	// Always false beside any outcome but unknown.
+	Unvouched bool
 }
 
 // Reason says why a write was refused, and each value names a different thing

@@ -656,7 +656,8 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 					"answered unknown rather than decided a second time; "+
 					"a node whose ledger lost nothing that far back can "+
 					"answer it")
-			return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round}, nil
+			return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round,
+				Unvouched: true}, nil
 		}
 
 		expect, behind, err := p.expectation(ctx, req, snap, gen)
@@ -760,7 +761,8 @@ func (p *Publisher) refusedUnlessUnvouched(ctx context.Context, req Request,
 			"may hold that very application — so it is answered unknown "+
 			"rather than refused; a node whose ledger lost nothing that far "+
 			"back can answer it")
-	return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round}, nil
+	return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round,
+		Unvouched: true}, nil
 }
 
 // snapshot takes one round's snapshot, handing the domain's decision the
@@ -1446,7 +1448,7 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 		// [Result.Position]): the record at `at` is merely the newest on
 		// the subject, and naming it would tell the caller "your write
 		// landed here" — the one thing nobody here can say.
-		return Result{Outcome: OutcomeUnknown, OpID: req.OpID}, nil
+		return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Unvouched: true}, nil
 	}
 
 	// Somebody else won. Re-decide.

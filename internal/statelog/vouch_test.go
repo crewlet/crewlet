@@ -3,6 +3,7 @@ package statelog_test
 import (
 	"database/sql"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,6 +56,13 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		}
 		if res.OpID != op {
 			t.Errorf("unknown carries op id %q, want %q to retry under", res.OpID, op)
+		}
+		// AND SAYS WHY, because the retry it needs is not this node's:
+		// the same id repeated here meets the same scrubbed ledger.
+		if !res.Unvouched {
+			t.Error("an unknown the ledger could not vouch for is not marked " +
+				"unvouched — a caller cannot tell it from a lost " +
+				"acknowledgement, which the same id retried here resolves")
 		}
 	})
 
@@ -158,10 +166,11 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the retry: %v", err)
 		}
-		if res.Outcome != statelog.OutcomeUnknown {
-			t.Fatalf("outcome = %q, want unknown — the row that would say "+
-				"whether the first application landed was swept, and deciding "+
-				"again applies the operation twice", res.Outcome)
+		if res.Outcome != statelog.OutcomeUnknown || !res.Unvouched {
+			t.Fatalf("outcome = %q (unvouched %v), want an unvouched unknown — "+
+				"the row that would say whether the first application landed "+
+				"was swept, and deciding again applies the operation twice",
+				res.Outcome, res.Unvouched)
 		}
 		if got := h.appends.appends.Load() - appended; got != 0 {
 			t.Fatalf("the retry appended %d record(s) past the sweep", got)
@@ -348,9 +357,11 @@ func TestARefusalTheLedgerCannotVouchForIsUnknown(t *testing.T) {
 		h.sweep(minted.Add(time.Minute))
 		op := statelog.NewOpID(minted, "probe")
 		res, err := probe(h, op)
-		if err != nil || res.Outcome != statelog.OutcomeUnknown || res.OpID != op {
+		if err != nil || res.Outcome != statelog.OutcomeUnknown || res.OpID != op ||
+			!res.Unvouched {
 			t.Fatalf("a refusing decision on an operation the ledger cannot "+
-				"vouch for = (%+v, %v), want unknown under %s", res, err, op)
+				"vouch for = (%+v, %v), want an unvouched unknown under %s",
+				res, err, op)
 		}
 		if got := h.appends.appends.Load(); got != 0 {
 			t.Fatalf("appended %d record(s)", got)
@@ -399,6 +410,90 @@ func TestARefusalTheLedgerCannotVouchForIsUnknown(t *testing.T) {
 				"ledger cannot vouch for = %v, want the deleted refusal — it "+
 				"is true whether or not the operation applied, and names the "+
 				"remedy an unknown would hide", err)
+		}
+	})
+}
+
+// A LEDGER LOSS BETWEEN THE DECISION AND ITS RESOLUTION IS UNVOUCHED TOO, AND
+// A LOST ACKNOWLEDGEMENT IS NOT.
+//
+// The resolution of an ambiguous publish is the third place the ledger's
+// silence is weighed: something landed on the subject, the ledger holds no row
+// for this operation, and the ledger has lost rows since the operation was
+// minted — so "somebody else won" cannot be concluded. That is an unvouched
+// unknown, like the other two. A publish nobody could probe at all is a plain
+// lost acknowledgement, which the same id retried here does resolve, and it
+// must not be marked.
+func TestAnUnknownSaysWhetherTheLedgerCouldVouch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a loss between the decision and its resolution", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		first, err := h.write(probeSubject("a"), "op-0", "one")
+		if err != nil {
+			t.Fatalf("the first write: %v", err)
+		}
+		h.anchorAt(probeSubject("a"), first.Position.Seq)
+		minted := time.Now().Add(-time.Hour)
+		op := statelog.NewOpID(minted, "write-a")
+		var once sync.Once
+		h.appends.mu.Lock()
+		h.appends.beforeLastSeq = func() {
+			once.Do(func() {
+				// A PEER'S RECORD LANDS ABOVE THE ANCHOR, so the
+				// resolution has something to weigh...
+				seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a",
+					"peer-op", nil, probeRecord(statelog.Stamp{
+						Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "theirs"))
+				if err != nil {
+					t.Errorf("land the peer's record: %v", err)
+					return
+				}
+				// THIS NODE APPLIES IT, as it would a peer's.
+				h.applier.advance(statelog.Position{
+					Stream: probeStream, Generation: h.gen.Load(), Seq: seq})
+				// ...and the ledger loses everything minted before
+				// now, this operation included.
+				h.sweep(minted.Add(time.Minute))
+			})
+		}
+		h.appends.mu.Unlock()
+		// THIS CALL'S APPEND NEVER LANDS, its answer lost.
+		h.appends.fail(errors.New("no response from stream"), true)
+
+		res, err := h.write(probeSubject("a"), op, "two")
+		if err != nil {
+			t.Fatalf("the write: %v", err)
+		}
+		if res.Outcome != statelog.OutcomeUnknown || !res.Unvouched {
+			t.Fatalf("the resolution answered %+v, want an unvouched unknown", res)
+		}
+	})
+
+	t.Run("a publish nobody could probe", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		first, err := h.write(probeSubject("a"), "op-0", "one")
+		if err != nil {
+			t.Fatalf("the first write: %v", err)
+		}
+		h.anchorAt(probeSubject("a"), first.Position.Seq)
+		h.appends.mu.Lock()
+		h.appends.lastSeqErr = errors.New("nats: no responders")
+		h.appends.mu.Unlock()
+		h.appends.fail(errors.New("no response from stream"), true)
+
+		res, err := h.write(probeSubject("a"), statelog.NewOpID(time.Now(), "write-a"), "two")
+		if err != nil {
+			t.Fatalf("the write: %v", err)
+		}
+		if res.Outcome != statelog.OutcomeUnknown {
+			t.Fatalf("a publish nobody could probe answered %q, want unknown", res.Outcome)
+		}
+		if res.Unvouched {
+			t.Error("a lost acknowledgement is marked unvouched — the same id " +
+				"retried here resolves it, and the mark says it never will")
 		}
 	})
 }

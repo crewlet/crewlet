@@ -515,6 +515,9 @@ type countingAppender struct {
 	// a case moves the log between the write's snapshot and the moment it
 	// learns what the subject holds.
 	beforeLastSeq func()
+	// lastSeqErr, when set, is what that question answers instead: a
+	// broker nobody can probe, which leaves an ambiguous publish unknown.
+	lastSeqErr error
 }
 
 func (c *countingAppender) Append(ctx context.Context, subject, msgID string, expect *uint64, body []byte) (uint64, bool, error) {
@@ -543,10 +546,13 @@ func (c *countingAppender) Append(ctx context.Context, subject, msgID string, ex
 
 func (c *countingAppender) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
 	c.mu.Lock()
-	before := c.beforeLastSeq
+	before, fail := c.beforeLastSeq, c.lastSeqErr
 	c.mu.Unlock()
 	if before != nil {
 		before()
+	}
+	if fail != nil {
+		return 0, false, fail
 	}
 	return c.inner.LastSeq(ctx, subject)
 }
