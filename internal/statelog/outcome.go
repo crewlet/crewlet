@@ -3,6 +3,7 @@ package statelog
 import (
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // Outcome is what a write's caller is told, and there are exactly three
@@ -150,11 +151,6 @@ const (
 	// not permission to recreate it.
 	ReasonDeleted Reason = "deleted"
 
-	// ReasonGated — the record is durable and produced rows on NO node,
-	// because a gate dropped it. Never re-decide: republishing produces
-	// another durable record nothing applies.
-	ReasonGated Reason = "gated"
-
 	// ReasonRetired — the record names a kind the domain once published
 	// and no longer applies, so it produces no rows anywhere.
 	//
@@ -238,6 +234,31 @@ const (
 	// retried under its id after a readmission has taken the node back.
 	ReasonSuperseded Reason = "superseded"
 )
+
+// Reasons is every [Reason] this build names, in declaration order.
+//
+// THE ENUMERATION IS WHAT A SURFACE IS HELD TO. A refusal's reason is a label
+// on the refusal counter and a field in every write route's answer, and each
+// value has its own remedy — so a reference that lists some of them reads as
+// complete and is not, and the operator writing a collector rule from it has
+// no row for the value that fires. The metrics catalogue's refusal instrument
+// is checked against this list ([TestEveryRefusalReasonIsInTheMetricsReference]).
+//
+// A RECORD A GATE DROPPED is refused under the gate that dropped it — evicted,
+// deleted, retired, abandoned or overtaken — rather than under a generic word,
+// because the gate is what says why: which is why there is no `gated` here.
+func Reasons() []Reason {
+	return []Reason{
+		ReasonEvicted, ReasonDeferred, ReasonBehind, ReasonBelowFloor,
+		ReasonFloorUnknown, ReasonDeleted, ReasonRetired, ReasonAbandoned,
+		ReasonOvertaken, ReasonLogFull, ReasonSkew, ReasonOpReused,
+		ReasonLogTruncated, ReasonWrongStream, ReasonSuperseded,
+	}
+}
+
+// Valid reports whether r is a reason this build names — an unknown one off
+// the wire is a value to show rather than one to switch on.
+func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 
 // ErrUnavailable is what a refusal wraps, so a caller can tell a refusal from
 // a conflict with errors.Is before it looks at the reason.

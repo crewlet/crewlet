@@ -135,23 +135,40 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogPublishRefusals, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "reason"},
-			Shows: "Writes refused before or instead of an append, by reason — " +
-				"an evicted node, a deferred record covering the object, a " +
-				"node that has not applied a position the write needs " +
-				"(`behind`: the caller's own previous write, or a trim floor it " +
-				"is replaying up to), a full log, a node below the log or " +
-				"unable to read the floor (`below_floor`, `floor_unknown`), a " +
-				"log that is not the one this node's rows " +
-				"came from (`wrong_stream`: rebuilt, ending below this " +
-				"node's checkpoint, holding another record at it, or " +
-				"re-anchored past it by a peer), a log that lost records a " +
-				"peer's rows hold (`log_truncated`: a broker restored from " +
-				"an older copy, refused until an operator decides which " +
-				"history the fleet keeps) — plus `conflict` for a write that lost " +
-				"every round, which nothing else is counted as. A refusal is " +
-				"not one of the three outcomes: it says the write never " +
-				"happened, and each reason has a different remedy, so one " +
-				"counter with an outcome dimension would hide them all.",
+			Shows: "Writes refused before or instead of an append, by `reason`, and " +
+				"EVERY value it carries is here, each with its remedy. The node: " +
+				"`evicted` (this node is removed from the fleet — run the write " +
+				"on another), `deferred` (it holds a record it cannot decode — a " +
+				"newer build serves it), `behind` (it has not applied a position " +
+				"the write needs — clears on its own), `below_floor` (it is below " +
+				"the log and must adopt a snapshot — another node writes " +
+				"meanwhile), `floor_unknown` (the floor or the log's ends could " +
+				"not be read — clears when coordination answers). The log: " +
+				"`log_full` (at its ceiling — raise it or unblock the trim), " +
+				"`skew` (a store and a stream restored out of step — restore " +
+				"both from one backup), `wrong_stream` (not the log this node's " +
+				"rows came from: rebuilt, ending below its checkpoint, holding " +
+				"another record there, or re-anchored past it by a peer — " +
+				"re-anchor, or adopt where a peer holds the generation), " +
+				"`log_truncated` (it lost records a peer's rows hold — settle " +
+				"which history the fleet keeps). The object: `deleted` (a " +
+				"permanent deletion marker — nothing recreates it). The " +
+				"operation: `op_reused` (its id names a record on another " +
+				"object) and `superseded` (its record landed and a later one " +
+				"undid it) — both answered by a NEW operation under a fresh " +
+				"id, never by a retry. A record that landed and a gate dropped " +
+				"is counted under the gate that dropped it — `evicted`, " +
+				"`deleted`, `retired` (a kind this build no longer applies), " +
+				"`abandoned` (written in a generation a reanchor abandoned) or " +
+				"`overtaken` (written after a restored reanchor, below its " +
+				"generation) — and is never re-decided, because republishing " +
+				"makes another record nothing applies. Beside the refusals: " +
+				"`conflict` for a write that lost every round, `exists` for a " +
+				"create whose object already exists, and `error` for a write " +
+				"that failed before it could answer. A refusal is not one of " +
+				"the three outcomes: it says the write never happened, and each " +
+				"reason has a different remedy, so one counter with an outcome " +
+				"dimension would hide them all.",
 		},
 		{
 			Name: StatelogWriteSessionWait, Kind: KindHistogram, Unit: UnitMilliseconds,
