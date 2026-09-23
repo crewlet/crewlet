@@ -128,8 +128,8 @@ jobs:
   # `go build ./...` and `go install …@latest` must work on a clean checkout
   # with no node, and an embed directive cannot run a bundler — so a bundle
   # that has drifted from its source compiles, embeds, serves and passes every
-  # Go test while running code nobody wrote. This rebuilds it and diffs, the
-  # same way `go mod tidy -diff` and the generated schema/ are gated.
+  # Go test while running code nobody wrote. This rebuilds it and judges the
+  # tree, the same way `go mod tidy -diff` and the generated schema/ are gated.
   dashboard:
     name: dashboard
     runs-on: ubuntu-latest
@@ -164,13 +164,24 @@ jobs:
         working-directory: dashboard
       - run: npm test
         working-directory: dashboard
+      # THE SAME PREDICATE AS `make dashboard-check`, whose comment carries the
+      # reasoning; change the two together. `git diff` sees only the paths
+      # the commit already has, and every emitted name is content-hashed, so
+      # the chunk a commit leaves out (`git commit -a` never stages a new
+      # file) is a path the diff cannot see: `git ls-files --others` is the
+      # half that catches it, and without `--exclude-standard` because the
+      # embed is `all:dashboard`, which ships an ignored file too.
       - name: the committed bundle is what this source builds
         run: |
           npm --prefix dashboard run build
-          if ! git diff --exit-code -- static/dashboard; then
+          untracked="$(git ls-files --others -- static/dashboard)"
+          if ! git diff --exit-code -- static/dashboard || [ -n "$untracked" ]; then
             echo "::error::static/dashboard is not what dashboard/ builds."
-            echo "The diff above is what a rebuild produced. Run:"
-            echo "  make dashboard && git add static/dashboard"
+            echo "What a rebuild changed or wrote that the commit does not carry:"
+            git status --porcelain --untracked-files=all --ignored=matching \
+              -- static/dashboard | grep -v '^. ' || true
+            echo "Run:"
+            echo "  make dashboard && git add -A -- static/dashboard"
             exit 1
           fi
 

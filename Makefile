@@ -242,18 +242,48 @@ dashboard-lint: $(UI)/node_modules ## check the dashboard's formatting (ci: dash
 # nothing else can tell you when it is not: a stale bundle compiles, embeds,
 # serves and passes every Go test — it just runs code nobody wrote.
 #
-# Rebuild, then diff. `git diff --exit-code` prints the drift and fails; it does
-# not repair it, for the same reason `go mod tidy -diff` does not: a gate that
-# rewrites the tree it is judging cannot be trusted about what was committed.
+# Rebuild, then judge. It prints the drift and fails; it does not repair it,
+# for the same reason `go mod tidy -diff` does not: a gate that rewrites the
+# tree it is judging cannot be trusted about what was committed.
+#
+# TWO QUESTIONS, because `git diff --exit-code` alone answers only the first.
+# It compares the working tree with the index over the paths the index
+# already HAS, so a file the rebuild wrote that no commit carries is invisible
+# to it — and that is the file a commit most often leaves out. Every emitted
+# name is content-hashed, so a changed chunk is a NEW path, and `git commit -a`
+# stages modified and deleted files but never a new one: the commit carries
+# the index.html that imports the new chunk and the deletion of the old one,
+# the diff is empty, and the binary serves a shell asking for a module it does
+# not embed. The second question is `git ls-files --others`: is there
+# anything on disk under static/dashboard the index does not hold at all.
+#
+# `--others` WITHOUT `--exclude-standard`, so an ignored file fails too. The
+# embed is `all:dashboard`, which ships every file on disk whatever
+# .gitignore says, and the build empties the directory first (`emptyOutDir`),
+# so everything there afterwards is build output. A file .gitignore hides is
+# one `git add -A` will not stage and a clean checkout never has; it prints as
+# `!!` below, and the fix is the rule `git check-ignore -v` names.
+#
+# AGAINST THE INDEX, not HEAD, which is why the verdict is not an empty
+# `git status --porcelain`: that also reports what is STAGED, so the repair
+# printed below — which stages the rebuild — would leave the gate red until
+# the commit was made, and `make check` could never pass before committing a
+# dashboard change. What a commit will carry is the index; on ci.yml's fresh
+# checkout the index IS HEAD, so the two readings agree there. The listing
+# drops the staged-only lines (`grep -v '^. '`, an unchanged second column)
+# for the same reason: what it prints is the drift and nothing else.
 dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dashboard/ builds (ci: dashboard)
 	cd $(UI) && npm run build
-	@git diff --exit-code -- static/dashboard || { \
+	@untracked="$$(git ls-files --others -- static/dashboard)" || exit 1; \
+	if ! git diff --exit-code -- static/dashboard || [ -n "$$untracked" ]; then \
 	  { echo; \
 	    echo "static/dashboard is not what dashboard/ builds."; \
-	    echo "The diff above is what a rebuild produced."; \
-	    echo "run: make dashboard && git add static/dashboard"; } >&2; \
+	    echo "What a rebuild changed or wrote that the index does not carry:"; \
+	    git status --porcelain --untracked-files=all --ignored=matching \
+	      -- static/dashboard | grep -v '^. '; \
+	    echo "run: make dashboard && git add -A -- static/dashboard"; } >&2; \
 	  exit 1; \
-	}
+	fi
 
 ##@ Gates — `make check` is all of them
 

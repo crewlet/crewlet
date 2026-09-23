@@ -76,7 +76,9 @@ make test-solo   # ... and those, at -p 1, with a runner to themselves
 CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
 # and the dashboard, whose build output is committed:
 cd dashboard && npm run format:check                          # dashboard-lint
-cd dashboard && npm run build && git diff --exit-code -- ../static/dashboard
+cd dashboard && npm run build                                 # dashboard-check:
+git diff --exit-code -- static/dashboard                      #   no tracked file moved
+test -z "$(git ls-files --others -- static/dashboard)"        #   and none is untracked
 cd dashboard && npm run typecheck && npm test                 # dashboard-test
 ```
 
@@ -112,7 +114,23 @@ dashboard's build output is committed — `go build ./...` and
 `go install …@latest` must work on a clean checkout with no Node, and an embed
 directive cannot run a bundler — so a bundle that has drifted from its source
 compiles, embeds, serves and passes every Go test while running code nobody
-wrote. Rebuilding and diffing is the only thing that can tell you.
+wrote. Rebuilding and judging the tree is the only thing that can tell you.
+
+Judging it takes TWO questions, because `git diff` sees only the paths the
+index already has. Every emitted name is content-hashed, so a changed chunk is
+a new path, and `git commit -a` stages modified and deleted files but never a
+new one: a commit made that way carries the `index.html` that imports the new
+chunk and not the chunk, the diff is clean, and the binary serves a shell
+asking for a module it does not embed. So the gate also fails on any file under
+`static/dashboard` the index does not hold (`git ls-files --others`), and it
+prints each drifted path — `??` for one git does not track, `!!` for one
+`.gitignore` hides, which `git add -A` will not stage and the `all:dashboard`
+embed ships anyway. It judges against the INDEX rather than `HEAD`, so the
+repair it prints turns it green before you commit:
+
+```bash
+make dashboard && git add -A -- static/dashboard
+```
 
 **And when two branches have both rebuilt it, REBUILD — never merge.** The
 emitted names are content-hashed, so each side writes a different path for the
@@ -210,8 +228,10 @@ What follows are the prerequisites that legitimately vary by machine.
 
   **The built dashboard is committed**, so building the ENGINE needs neither
   node nor npm. Changing the dashboard does: run `make dashboard` and commit
-  `static/dashboard` with your source change. CI rebuilds and diffs it
-  (`make dashboard-check`), because a bundle that has drifted from its source
+  `static/dashboard` with your source change — `git add -A`, so the new
+  content-hashed chunks go in with it. CI rebuilds it and fails on any
+  difference, an untracked file included (`make dashboard-check`), because a
+  bundle that has drifted from its source
   compiles, embeds, serves and passes every Go test while running code nobody
   wrote — the same failure mode `go mod tidy -diff` and the generated
   `schema/` are gated against.
