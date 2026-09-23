@@ -21,6 +21,21 @@
  *    silence over a store it never reached.
  */
 
+// THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
+// `../contract/`, the one home of every declaration a Go test reads, and this
+// file composes them into the answers and frames it declares. RELATIVE, like
+// every contract import in this directory: it is also built alone as
+// `protocol.js`, where the `~` alias does not exist.
+import type { EngineHealth } from "../contract/health.ts";
+import type {
+  IntegrationsAnswer,
+  ReconcileFinding,
+  ReconcileStatus,
+} from "../contract/integrations.ts";
+import type { AgentMemory } from "../contract/memory.ts";
+import type { PushKind } from "../contract/wire.ts";
+import type { WorkViewShape } from "../contract/work.ts";
+
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
@@ -1043,8 +1058,9 @@ export interface ScheduleRunsAnswer {
  *
  * The richer `api.Health` (node identity, applied epoch, posture, queue,
  * version, whether a company config is even active) is answered by the
- * `stream` query. The two are deliberately different names so a query can
- * never collide with a push kind; they are also deliberately different
+ * `stream` query, and typed as `EngineHealth` in `contract/health.ts`. The
+ * two are deliberately different names so a query can never collide with a
+ * push kind; they are also deliberately different
  * shapes, and reading a `stream` field off a `health` push is how an engine
  * with NO ACTIVE CONFIG — refusing every inbound webhook — came to render
  * identically to a healthy idle one.
@@ -1058,40 +1074,6 @@ export interface HealthPush {
    */
   in_flight?: number;
   shutting_down?: boolean;
-}
-
-export interface EngineHealth {
-  status: string;
-  node?: string;
-  configured?: boolean;
-  version?: string;
-  /**
-   * When this node's ENGINE started, which is when the node started: the API
-   * is served inside the engine's process, and the fleet view reports the same
-   * instant for this node.
-   */
-  started_at?: string;
-  queue?: string;
-  clients?: number;
-  /**
-   * How far back the event log can be read, in SECONDS: the hard bottom of
-   * paging, past which every page is empty for ever.
-   *
-   * `store.EventHistory` is the only thing that decides it, and three screens
-   * restated it as literal copy ("the store keeps 30 days") while nothing on
-   * the wire carried it — so a change to the retention would have left all
-   * three lying with nothing to catch it, and a reader told the wrong floor
-   * stops paging early. Seconds rather than days, because a client that
-   * re-derives the unit is a second place it can be wrong; the sentence is
-   * `eventHistoryLabel` in `lib/format.ts`.
-   */
-  event_history_seconds?: number;
-  in_flight?: number;
-  shutting_down?: boolean;
-  posture?: string;
-  applied_epoch?: number;
-  /** The handles THIS node currently holds. */
-  seats?: string[];
 }
 
 export interface FleetNode {
@@ -1358,224 +1340,9 @@ export interface FleetAnswer {
   target_epoch: number;
 }
 
-/** One observation a reconcile pass made that is not "fine". */
-export interface ReconcileFinding {
-  kind: string;
-  subject?: string;
-  /**
-   * What is wrong, in one sentence — and only that.
-   *
-   * What to do about it is `remedy` and which things it is about is
-   * `subjects`. Three fields because a reader wants them in three different
-   * moments and one string cannot be laid out: glued, they arrived as one
-   * unbroken paragraph carrying a problem, a name and an instruction, with
-   * the disclosure summary running straight into its last word.
-   */
-  detail?: string;
-  /** What to do about it, rendered as its own line at a quieter weight. */
-  remedy?: string;
-  action_url?: string;
-  /**
-   * What this finding MEANS, from the engine's own per-kind verdict table
-   * (integration.FindingKind.Verdict) rather than from a second copy of the
-   * closed set kept here.
-   *
-   * Two kinds are advisory — their phase is `ready`: something the engine did
-   * not do and cannot undo, on an integration that is working. A reader that
-   * treats every finding as a fault reports those as broken; one that keeps
-   * its own list of which kinds are advisory reports a kind it has not heard
-   * of as fine, which is worse. Optional because a node older than the field
-   * sends neither — treat an absent phase as "cannot say", never as ready.
-   */
-  phase?: string;
-  actor?: string;
-  /**
-   * Everything this finding is about, when there are many and `subject`
-   * cannot name them all.
-   *
-   * `detail` is the card's status line and the engine caps it, so a finding
-   * that listed its subjects inline arrived as a wall cut off mid-item —
-   * thirty-six Datadog service accounts ending `…@agents.cr…`. The engine
-   * now puts the COUNT in `detail` and the whole list here, so a reader with
-   * room lays them out and one without is still correct.
-   *
-   * It named three of them in the sentence too, which put every short list
-   * on screen twice: once as prose and once as the list, a centimetre apart.
-   *
-   * Absent on the ordinary finding about one thing.
-   */
-  subjects?: string[];
-}
-
-/**
- * What the reconcile loop last found for one surface.
- *
- * The row's `reconcile` is THREE-VALUED like every count beside it: an object
- * is a real finding, and `null` is either a node that could not read the
- * fleet's rows or a surface the loop has not reached yet. Neither is a claim
- * that the surface is healthy.
- */
-export interface ReconcileStatus {
-  /** unconfigured | awaiting_admin | provisioning | activating | degraded | ready */
-  phase: string;
-  /**
-   * The phase in a reader's words, from [integration.Phase.Label] in Go.
-   *
-   * Optional because a node older than the field sends none, not because a
-   * screen may skip it: derive nothing from `phase` that this can answer.
-   */
-  phase_label?: string;
-  /**
-   * Whether a disconnect has been ASKED FOR, which is a fact the phase
-   * cannot carry on its own: between the request and the first teardown pass
-   * the stored phase is still whatever the last reconcile concluded.
-   */
-  disconnecting?: boolean;
-  /** "" | engine | provider | admin | operator — who has to act. */
-  actor?: string;
-  detail?: string;
-  action_url?: string;
-  /** settled | waiting | blocked */
-  outcome?: string;
-  attempts?: number;
-  last_error?: string;
-  last_attempt_at?: string | null;
-  settled_at?: string | null;
-  next_attempt_at?: string | null;
-  /** Everything the pass saw, not only what the phase was derived from. */
-  findings?: ReconcileFinding[];
-}
-
-export interface IntegrationRow {
-  key: string;
-  label?: string;
-  configured: boolean;
-  detail?: string;
-  /** Deliveries the edge accepted. */
-  inbound?: number | null;
-  /**
-   * The two OUTCOME counts, three-valued: a number, or null when this process
-   * could not read its event log. Reporting that as 0 would claim every
-   * delivery woke a seat on a node that cannot tell.
-   *
-   * They are read together with `inbound` and are misleading apart: "128
-   * arrived" alone cannot tell a working integration from one whose every
-   * delivery reaches nobody, and a seat draining a thread's backlog as one
-   * turn looks like a seat that ignored twelve messages.
-   */
-  skipped?: number | null;
-  coalesced?: number | null;
-  /** Null means "nothing here can say", never "this surface is fine". */
-  reconcile?: ReconcileStatus | null;
-  /**
-   * The public base URL this surface's registration at the third-party app
-   * points at, and whether it is still the one in force.
-   *
-   * `endpoint_current` is three-valued: null is "nothing has recorded an
-   * address for this surface", which is not the same claim as "the address
-   * moved". False is a delivery route pointing somewhere that no longer
-   * answers, which for a surface no pass converges only a person can fix.
-   */
-  endpoint?: string | null;
-  endpoint_current?: boolean | null;
-  [key: string]: unknown;
-}
-
-export interface IntegrationsAnswer {
-  integrations: IntegrationRow[];
-  traffic_known: boolean;
-  traffic_since: string;
-}
-
 // ---------------------------------------------------------------------------
 // Learning, conversations, knowledge
 // ---------------------------------------------------------------------------
-
-export interface DiaryEntry {
-  id?: string;
-  scope?: string;
-  retention?: string;
-  content: string;
-  created_at: string;
-  ttl_until?: string;
-  tags?: string[];
-}
-
-export interface Episode {
-  id?: string;
-  turn_id?: string;
-  agent_handle?: string;
-  conversation_key?: string;
-  task_summary?: string;
-  outcome?: string;
-  review_outcome?: string;
-  duration_ms?: number;
-  created_at: string;
-  content?: string;
-  compacted?: boolean;
-}
-
-export interface SynthesizedSkill {
-  id?: string;
-  key?: string;
-  title: string;
-  summary?: string;
-  body?: string;
-  version?: number;
-  updated_at?: string;
-  uses?: number;
-}
-
-/** Who a counterparty IS, which is two identities and not one string.
- *
- *  A profile's subject is either a seat in this company or an unmapped person
- *  on some surface — a chat account, an issue reporter — and the name is
- *  DISPLAY ONLY: somebody renaming themselves on Slack must not orphan what
- *  this seat learned about them. */
-export interface CounterpartySubject {
-  handle?: string;
-  external_id?: string;
-  platform?: string;
-  name: string;
-}
-
-/** What one seat has learned about one colleague.
- *
- *  THE TWO INSTANTS MEASURE DIFFERENT CADENCES and both are carried, because
- *  the difference is the interesting one: `last_updated_at` moves on every
- *  interaction and `last_corroborated_at` only when the traits actually
- *  changed. A colleague seen daily whose profile has not moved in months is
- *  one this seat has stopped learning about — which is the state the Plan
- *  phase's own prefetch demotes on, so a screen showing one number would
- *  disagree with the prompt. */
-export interface CounterpartyProfile {
-  subject: CounterpartySubject;
-  /** Whether the subject resolved to a seat in this company. */
-  resolved: boolean;
-  /** A bag whose keys the model invents — never a fixed schema. */
-  traits: Record<string, unknown>;
-  interactions: number;
-  first_seen_at: string;
-  last_updated_at: string;
-  last_corroborated_at: string;
-}
-
-export interface AgentMemoryAnswer {
-  id: string;
-  diary: DiaryEntry[];
-  episodes: Episode[];
-  skills: SynthesizedSkill[];
-  /** How many the seat HAS, which is not how many `skills` carries: the
-   *  listing is cut at the page limit, and this is what says so. ALWAYS
-   *  PRESENT — `queries.Sources.agentMemory` seeds it in the answer's
-   *  default map, so it is `0` for a seat that has learned nothing rather
-   *  than absent. Optional here, a reader had to fall back to
-   *  `skills.length`, which is the page size and therefore silently
-   *  under-reports exactly the seat this count exists for. */
-  skills_total: number;
-  counterparties: CounterpartyProfile[];
-  onboarded_at: string;
-}
 
 /** One recorded turn in one conversation, from the conversation ledger. */
 export interface ConversationEntry {
@@ -1627,7 +1394,18 @@ export interface A2AChannel {
 
 export interface A2AAnswer {
   channels: A2AChannel[];
+  /** False when this node could not read the channel record at all — which
+   *  is not the same fact as a record with no channels in it. */
   available: boolean;
+  /** Which channels were asked for (`open`, `closed` or `all`). Absent on an
+   *  answer that is not available. */
+  state?: string;
+  /** True when the record held more channels than one answer carries, so
+   *  `channels` is the most recently active of them rather than all of them.
+   *  Absent on an answer that is not available. */
+  truncated?: boolean;
+  /** Why the record could not be read, on an answer that is not available. */
+  note?: string;
 }
 
 export interface KnowledgeHit {
@@ -1910,29 +1688,6 @@ export interface WorkItemsAnswer {
  *  a timeline without anybody saving one — they are not objects, so there is
  *  nothing to rename, protect, rank or pin — and a screen renders them from
  *  `key`. */
-/**
- * The renderings a view may be drawn in, and there are no others.
- *
- * HELD AGAINST THE ENGINE'S OWN CLOSED SET by a Go gate —
- * `internal/tracker/viewshape_client_test.go` — because this is a copy the
- * dashboard has to keep: it is a separate build in a separate language and
- * cannot import `tracker.ViewTypes`. A shape the engine mints that this union
- * does not name is a tab that renders a blank body, and one named here the
- * engine refuses is a branch nothing can reach. Both are silent.
- *
- * `timeline` draws the rows against a DATE AXIS, which is the one arrangement
- * the others cannot express: a list orders by a column, a board groups by one,
- * and a calendar puts a task on the day it is due — none of them can show that
- * a task spans three weeks, or that it cannot start until another finishes.
- * `table` puts one field per column, which is what a question about a FIELD
- * rather than about a task needs.
- *
- * THE TRASH IS NOT ONE OF THESE. It is a table carrying `removed=true`,
- * because what makes a listing the trash is the query rather than the drawing
- * — so every view saved with that parameter is one.
- */
-export type WorkViewShape = "list" | "board" | "calendar" | "timeline" | "table";
-
 export interface WorkView {
   id?: string;
   key: string;
@@ -3068,22 +2823,6 @@ export interface Snapshot {
   schedules?: ScheduleRow[];
 }
 
-export type PushKind =
-  | "snapshot"
-  | "event"
-  | "agents"
-  | "seats"
-  | "sandboxes"
-  | "tokens"
-  | "budget"
-  | "schedules"
-  | "org"
-  | "tools"
-  | "health"
-  | "result"
-  | "error"
-  | "pong";
-
 export interface Frame {
   kind: PushKind;
   data?: unknown;
@@ -3428,7 +3167,7 @@ export interface QueryMap {
   viewer: Viewer;
   work_inbox: WorkInboxAnswer;
   agent: AgentAnswer;
-  agent_memory: AgentMemoryAnswer;
+  agent_memory: AgentMemory;
   events: EventsPage;
   event_series: EventSeries;
   event: EventRecord;
@@ -3473,23 +3212,3 @@ export interface QueryMap {
 }
 
 export type QueryName = keyof QueryMap;
-
-/** The machine-readable codes a rejected query carries. */
-export type QueryErrorCode =
-  | "unknown_query"
-  | "unauthorized"
-  | "query_failed"
-  /** This node understood the question and REFUSED it: a parameter missing,
-   *  malformed, or outside the set the field accepts. The caller's fault, not
-   *  the engine's — retrying sends the same bad request again. */
-  | "bad_params"
-  | "not_found"
-  /** This node understood the question and cannot answer it YET: a
-   *  projection still catching up after a restart or a fresh join, or a
-   *  coordination store it could not reach. A screen asks again in a moment
-   *  (`useQuery` does so itself), and never says "there is nothing": the
-   *  second is an answer a person acts on. A source this node does not have
-   *  at all is `unknown_query`, which waiting never changes. */
-  | "unavailable"
-  | "timeout"
-  | "closed";

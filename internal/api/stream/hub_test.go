@@ -243,7 +243,7 @@ func TestAPushEncodesAsTheClientExpects(t *testing.T) {
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got["kind"] != stream.KindAgents {
+	if got["kind"] != string(stream.KindAgents) {
 		t.Errorf("kind = %v", got["kind"])
 	}
 	if got["ts"] != "2026-06-14T12:00:00Z" {

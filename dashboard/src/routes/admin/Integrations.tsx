@@ -70,13 +70,8 @@ import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
-import type {
-  EventRecord,
-  IntegrationRow,
-  ReconcileFinding,
-  ReconcileStatus,
-  SetupRun,
-} from "~/protocol/types.ts";
+import type { EventRecord, SetupRun } from "~/protocol/types.ts";
+import type { IntegrationRow, ReconcileFinding, ReconcileStatus } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -648,12 +643,9 @@ export function withoutHeadline<T extends { kind: string; subject?: string; deta
  */
 export function Reconcile({
   status,
-  detail,
   appName,
 }: {
   status: ReconcileStatus | null | undefined;
-  /** The surface's own one-line summary, when the loop has nothing to add. */
-  detail?: string | null;
   /**
    * The app this surface belongs to, for naming the link a finding carries.
    *
@@ -668,15 +660,12 @@ export function Reconcile({
    */
   appName?: string;
 }) {
-  if (!status) {
-    // A surface with no loop still has a sentence worth showing, and dropping
-    // it here is what left a paused integration explaining nothing at all.
-    return detail ? (
-      <div className="int-row-note">
-        <span className="int-row-note-text">{detail}</span>
-      </div>
-    ) : null;
-  }
+  // NOTHING TO SAY WITHOUT A REPORT. This once fell back to the row's own
+  // `detail`, which the engine has never sent, so the fallback drew nothing on
+  // every surface it was written for. What a surface with no loop CAN say —
+  // paused, a secret that does not resolve, nothing routing — is on the
+  // badges its row draws beside this.
+  if (!status) return null;
 
   const actor = actorLabel(status.actor);
   // The findings the phase was NOT derived from. The report says what to do
@@ -1042,7 +1031,7 @@ function SurfaceRow({
         </div>
       )}
 
-      <Reconcile status={row.reconcile} detail={row.detail} appName={surface.name} />
+      <Reconcile status={row.reconcile} appName={surface.name} />
     </li>
   );
 }
@@ -2829,7 +2818,6 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                                 show. */}
                             {row
                               ? row.reconcile?.detail ||
-                                row.detail ||
                                 (row.reconcile
                                   ? "nothing outstanding"
                                   : "no pass has reported on this surface")

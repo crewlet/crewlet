@@ -80,8 +80,8 @@ func envelope(etype string, payload map[string]any) livestate.Envelope {
 }
 
 // kindsOf lists the push kinds a client received, in order.
-func kindsOf(c *stream.Client) []string {
-	var out []string
+func kindsOf(c *stream.Client) []stream.Kind {
+	var out []stream.Kind
 	for _, env := range drain(c) {
 		out = append(out, env.Kind)
 	}
@@ -263,7 +263,7 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	}
 }
 
-func contains(haystack []string, needle string) bool {
+func contains(haystack []stream.Kind, needle stream.Kind) bool {
 	return slices.Contains(haystack, needle)
 }
 

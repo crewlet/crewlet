@@ -56,7 +56,9 @@ const (
 	// derive from it. They used to be three (400 retained, 150 sent, 250 kept
 	// client-side), so a tab streamed its feed up to 250 rows and then a
 	// refresh visibly snapped it back to 150, while 250 of the server's
-	// rows could never be delivered at all.
+	// rows could never be delivered at all. The dashboard's own copy is
+	// `MAX_EVENTS` in `contract/wire.ts`, held to this one by
+	// TestTheDashboardKeepsTheFeedTheEngineKeeps.
 	EventFeedLimit = 400
 
 	// dedupeLimit caps the finished-call guard, whose keys are phase

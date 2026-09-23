@@ -1,15 +1,3 @@
-//#region src/protocol/store.ts
-/**
-* Longest activity feed a tab keeps.
-*
-* Matches the server's own retention (`livestate.EventFeedLimit`) so a
-* reconnect's snapshot neither truncates the feed nor leaves rows the server
-* cannot resend. Exported because it is also the limit of what anything derived
-* from the feed can HONESTLY claim to know: a busy company fills 400 events in
-* minutes, and a panel covering an hour has to say where the record actually
-* starts rather than drawing the gap as quiet.
-*/
-var MAX_EVENTS = 400;
 var ALL_DATA_SLICES = [
 	"agents",
 	"events",
@@ -943,4 +931,4 @@ var rest = {
 	})
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };
+export { LiveSocket, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };

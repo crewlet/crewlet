@@ -42,8 +42,8 @@ import type {
   WorkSummary,
   WorkTypeDef,
   WorkView,
-  WorkViewShape,
 } from "~/protocol/index.ts";
+import { CHANGES, GROUP_AXES, type WorkViewShape } from "~/contract/work.ts";
 
 export type Tone = "neutral" | "positive" | "caution" | "critical" | "info";
 
@@ -125,70 +125,21 @@ export function typeName(slug: string | undefined, types?: WorkTypeDef[]): strin
 }
 
 /**
- * The engine's twenty-seven change kinds, each with the mark it is drawn as and
- * the phrase a person reads.
- *
- * A MARK RATHER THAN A HUE, which is this file's own rule for a task type a few
- * declarations above: a kind is identity, and identity is carried by a name, a
- * mark and a position. The item's history drew ONE mark on every row, so a
- * comment and a field edit were the same picture — while the cross-item feed,
- * which renders the kind as a tag in a column of its own, never had the problem.
- * This is that column, in the only form a dense one-line row has room for.
- *
- * AND A PHRASE, because `kind.replaceAll("_", " ")` after an actor's name reads
- * "ada watchers". A kind carries deltas exactly when an APPLY CAN COMPARE TWO
- * DOCUMENTS for it, and `tracker.TaskDeltas` now compares every field a patch
- * can move — so `watchers`, `checklist`, `archived` and `reparented` say what
- * moved and this phrase says what happened. What still reaches the reader
- * through this column ALONE is what no comparison can produce: the comment
- * family, which is a thread rather than a field of the task; `purged`, whose
- * subject no longer exists to compare; and a plain `removed` or `restored`,
- * where the only delta a tombstone holds is `removed_with` and a task removed
- * on its own went with nothing. The count is deliberately not stated — the
- * rule is, because a field added to the comparison tomorrow would falsify a
- * number nothing here gates.
- *
- * ONE DECLARATION, held against `tracker.ChangeKinds` by
- * `internal/tracker/client_gate_test.go`: this is a closed set the engine owns
- * and the dashboard cannot import, and a kind that lands in Go without landing
- * here draws the fallback mark and a bare word for ever, silently.
+ * [CHANGES] by kind — keyed on `string`, because what a history row carries
+ * is whatever a peer wrote, a kind this build has never heard of included.
  */
-export const CHANGES: { kind: string; mark: MarkName; phrase: string }[] = [
-  { kind: "created", mark: "add", phrase: "created it" },
-  { kind: "fields", mark: "tune", phrase: "changed a field" },
-  { kind: "status", mark: "cached", phrase: "moved it" },
-  { kind: "assignee", mark: "person", phrase: "reassigned it" },
-  { kind: "collaborators", mark: "group", phrase: "changed the collaborators" },
-  { kind: "watchers", mark: "visibility", phrase: "changed the watchers" },
-  { kind: "tags", mark: "tag", phrase: "changed the tags" },
-  { kind: "relations", mark: "link", phrase: "changed a relation" },
-  { kind: "routed", mark: "fork_right", phrase: "routed it" },
-  { kind: "moved", mark: "move_item", phrase: "moved it to another project" },
-  { kind: "reparented", mark: "account_tree", phrase: "changed its parent" },
-  { kind: "checklist", mark: "list", phrase: "changed a checklist" },
-  { kind: "archived", mark: "package_2", phrase: "archived it" },
-  { kind: "comment", mark: "chat", phrase: "commented" },
-  { kind: "comment_edited", mark: "edit", phrase: "edited a comment" },
-  { kind: "comment_resolved", mark: "check", phrase: "resolved a comment" },
-  { kind: "comment_removed", mark: "close", phrase: "removed a comment" },
-  { kind: "removed", mark: "remove", phrase: "removed it" },
-  { kind: "restored", mark: "settings_backup_restore", phrase: "restored it" },
-  { kind: "purged", mark: "delete", phrase: "purged it" },
-  { kind: "project_created", mark: "create_new_folder", phrase: "created the project" },
-  { kind: "project_updated", mark: "folder", phrase: "changed the project" },
-  { kind: "policy_changed", mark: "shield", phrase: "changed the project's policy" },
-  { kind: "view_saved", mark: "save", phrase: "saved a view" },
-  { kind: "catalogue_updated", mark: "settings", phrase: "changed the catalogue" },
-  { kind: "prioritised", mark: "arrow_upward", phrase: "reordered somebody's priorities" },
-  { kind: "person_updated", mark: "inbox", phrase: "changed their own bookkeeping" },
-];
-
-const BY_KIND = new Map(CHANGES.map((change) => [change.kind, change]));
+const BY_KIND = new Map<string, (typeof CHANGES)[number]>(
+  CHANGES.map((change) => [change.kind, change]),
+);
 
 /**
  * The mark a change of this kind is drawn as.
  *
- * `difference` — "something changed", claimed by none of the twenty-seven — for a
+ * TYPED HERE, which is where a mark the glyph set does not draw fails to
+ * compile: the contract declares its marks as literals and cannot import the
+ * glyph type to check them itself.
+ *
+ * `difference` — "something changed", claimed by no kind in [CHANGES] — for a
  * kind a NEWER PEER wrote. The event envelope evolves additive-only, so a
  * rolling upgrade puts kinds this build has never heard of on the wire, and a
  * row that drew nothing for one would read as a rendering fault.
@@ -385,37 +336,6 @@ export function effectiveArrangement(asked: string, inherited: unknown): string 
   if (asked) return asked;
   return typeof inherited === "string" ? inherited : "";
 }
-
-/**
- * The axes a board may be cut on, with what each is called in the picker.
- *
- * A COPY OF THE ENGINE'S `groupKeys`, held against it by
- * `internal/tracker/client_gate_test.go` in both directions: a value here the
- * grammar refuses takes the whole board down with a refusal, and a key the
- * engine takes that this list never names is an arrangement only a hand-edited
- * URL can reach — which is what `project` was until the gate named it. The
- * keys the menu deliberately leaves out are listed THERE, each with its
- * reason, so a grouping added to the grammar lands here or in that list.
- *
- * `workspace` marks an axis the engine takes only at workspace scope: inside a
- * project every row is in one project, and the grammar refuses the question.
- */
-export const GROUP_AXES: { value: string; label: string; workspace?: boolean }[] = [
-  { value: "status", label: "Status" },
-  { value: "status_group", label: "Status group" },
-  { value: "assignee", label: "Assignee" },
-  { value: "priority", label: "Priority" },
-  { value: "type", label: "Type" },
-  { value: "tag", label: "Tag" },
-  { value: "project", label: "Project", workspace: true },
-  { value: "unit", label: "Unit" },
-  // WHEN THE WORK IS DUE, which is the one axis that is not a stored value:
-  // the engine cuts it against the COMPANY's day rather than the reader's, so
-  // the bands, a row's overdue flag and every `due=` filter agree about a
-  // task. Offered on every shape — "what is late, what is today" is a
-  // question somebody asks of a list as readily as of a board.
-  { value: "due:bucket", label: "Due" },
-];
 
 /**
  * The axes the Display menu's Group by offers, for one shape at one scope.
@@ -814,8 +734,9 @@ export function fieldValueState(field: WorkFieldValue): string {
 // ---------------------------------------------------------------------------
 
 /**
- * The renderings, which are the WIRE's — [WorkViewShape], where the gate that
- * holds them against the engine's closed set reads them.
+ * The renderings, which are the WIRE's — [WorkViewShape] in
+ * `contract/work.ts`, where the gate that holds them against the engine's
+ * closed set reads them.
  *
  * An alias rather than a second union: a view's `type` IS the shape, so two
  * spellings of one closed set would be two lists that can disagree, in one

@@ -279,6 +279,23 @@ function ChannelBody({
 }
 
 /**
+ * Why a channel the reader was sent to is not in the listing, as far as the
+ * answer can say.
+ *
+ * THE LISTING IS CUT, AND IT SAYS WHEN. The engine answers the most recently
+ * active channels up to a limit and reports `truncated` when the record held
+ * more, so a missing channel is either one older than every channel the page
+ * holds — or, on a page that holds the whole record, one that is not in it.
+ * This used to name the limit as a number, which is the engine's to change,
+ * and to offer "older than the page" whether or not the page was cut.
+ */
+function missingChannel(truncated: boolean | undefined): string {
+  return truncated
+    ? "This listing holds the most recently active channels and the record has more, so it may be older than all of them. It may have been purged, or the id may be wrong."
+    : "A channel is kept until the retention horizon, and this listing holds every one in the record. It may have been purged, or the id may be wrong.";
+}
+
+/**
  * One agent-to-agent channel, beside the list it was found in.
  *
  * # It asks for the whole record
@@ -319,7 +336,7 @@ export function ChannelPeek({ id }: { id: string }) {
             size="compact"
             icon={<LinkGlyph size={32} />}
             title="No such channel in the record"
-            description="A channel is kept until the retention horizon and this listing holds the 200 most recent. It may have been purged, or the id may be wrong."
+            description={missingChannel(data?.truncated)}
           />
         )}
         {channel && (
@@ -348,6 +365,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
   const seatName = useSeatName();
   const channels = useQuery("a2a_channels", WHOLE_RECORD, { pollMs: POLL_MS });
   const rows = useMemo(() => channels.data?.channels ?? [], [channels.data]);
+  const cut = channels.data?.truncated === true;
 
   // THE ORDER `[` AND `]` WALK. Published from the rows this screen holds, so
   // the stepper walks the record as the reader sorted it rather than the order
@@ -398,23 +416,32 @@ export function Conversations({ channelId }: { channelId?: string }) {
           and the tiles inside it are flush, so wrapping it would be two
           surfaces around one row. */}
       <StatGroup columns={3}>
+        {/* WHAT THE COUNTS COVER, said on each. A cut listing is the most
+            recently active channels, so every number here is over that page
+            rather than over the record — and an open channel nobody has
+            touched in a week, the one this screen exists to surface, is the
+            first to fall off the end. */}
         <StatCard
           icon={<LinkGlyph size="xs" />}
           label="Open channels"
           value={rows.filter((c) => !c.closed_at).length}
-          sub="one ask, one answer, then closed"
+          sub={
+            cut
+              ? "among the most recent — the record holds more"
+              : "one ask, one answer, then closed"
+          }
         />
         <StatCard
           icon={<ChatGlyph size="xs" />}
           label="Messages"
           value={rows.reduce((n, c) => n + c.messages, 0)}
-          sub="across every channel in the record"
+          sub={cut ? "across the most recent channels only" : "across every channel in the record"}
         />
         <StatCard
           icon={<GroupGlyph size="xs" />}
           label="Pairs"
           value={new Set(rows.map((c) => `${c.requester}->${c.target}`)).size}
-          sub="distinct requester/target pairs"
+          sub={cut ? "among the most recent channels only" : "distinct requester/target pairs"}
         />
       </StatGroup>
 
@@ -534,7 +561,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
         <EmptyState
           icon={<LinkGlyph size={32} />}
           title="No such channel in the record"
-          description="A channel is kept until the retention horizon and this listing holds the 200 most recent. It may have been purged, or the id may be wrong."
+          description={missingChannel(channels.data?.truncated)}
         />
       )}
 

@@ -73,6 +73,15 @@ func next(t *testing.T, conn *websocket.Conn) map[string]any {
 	return got
 }
 
+// kindOf is a decoded frame's kind, typed. Compared as they come out of the
+// decode, the JSON string "snapshot" is never equal to [stream.KindSnapshot]:
+// an `any` holding a string and one holding a Kind differ in dynamic type, so
+// `frame["kind"] != stream.KindSnapshot` is true of every frame there is.
+func kindOf(frame map[string]any) stream.Kind {
+	kind, _ := frame["kind"].(string)
+	return stream.Kind(kind)
+}
+
 func write(t *testing.T, conn *websocket.Conn, frame map[string]any) {
 	t.Helper()
 	raw, err := json.Marshal(frame)
@@ -96,7 +105,7 @@ func TestASocketOpensAndGetsItsSnapshotImmediately(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	got := next(t, conn)
-	if got["kind"] != stream.KindSnapshot {
+	if kindOf(got) != stream.KindSnapshot {
 		t.Fatalf("first frame = %v, want a snapshot", got["kind"])
 	}
 	data, _ := got["data"].(map[string]any)
@@ -207,7 +216,7 @@ func TestAClosedPostureRefusesAnUnauthenticatedSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a valid token was refused: %v", err)
 	}
-	if got := next(t, conn); got["kind"] != stream.KindSnapshot {
+	if got := next(t, conn); kindOf(got) != stream.KindSnapshot {
 		t.Errorf("first frame = %v", got["kind"])
 	}
 }
@@ -221,7 +230,7 @@ func TestAnAnonymousReadPostureOpensWithoutACredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	if got := next(t, conn); got["kind"] != stream.KindSnapshot {
+	if got := next(t, conn); kindOf(got) != stream.KindSnapshot {
 		t.Errorf("first frame = %v", got["kind"])
 	}
 }
@@ -235,7 +244,7 @@ func TestAnIngestedEventReachesTheSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	if got := next(t, conn); got["kind"] != stream.KindSnapshot {
+	if got := next(t, conn); kindOf(got) != stream.KindSnapshot {
 		t.Fatalf("first frame = %v", got["kind"])
 	}
 
@@ -244,9 +253,9 @@ func TestAnIngestedEventReachesTheSocket(t *testing.T) {
 		Category: "system", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
 	})
 
-	kinds := map[string]bool{}
+	kinds := map[stream.Kind]bool{}
 	for range 2 {
-		kinds[next(t, conn)["kind"].(string)] = true
+		kinds[kindOf(next(t, conn))] = true
 	}
 	if !kinds[stream.KindEvent] || !kinds[stream.KindAgents] {
 		t.Errorf("kinds = %v, want the event and the derived overlay", kinds)
@@ -263,7 +272,7 @@ func TestAPingIsAnswered(t *testing.T) {
 	next(t, conn) // snapshot
 
 	write(t, conn, map[string]any{"kind": "ping"})
-	if got := next(t, conn); got["kind"] != stream.KindPong {
+	if got := next(t, conn); kindOf(got) != stream.KindPong {
 		t.Errorf("frame = %v, want a pong", got)
 	}
 }
@@ -281,7 +290,7 @@ func TestAnUnknownFrameKindIsIgnored(t *testing.T) {
 
 	write(t, conn, map[string]any{"kind": "from-the-future"})
 	write(t, conn, map[string]any{"kind": "ping"})
-	if got := next(t, conn); got["kind"] != stream.KindPong {
+	if got := next(t, conn); kindOf(got) != stream.KindPong {
 		t.Errorf("an unknown kind broke the socket: %v", got)
 	}
 }
@@ -301,7 +310,7 @@ func TestAMalformedFrameDoesNotDropTheSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, conn, map[string]any{"kind": "ping"})
-	if got := next(t, conn); got["kind"] != stream.KindPong {
+	if got := next(t, conn); kindOf(got) != stream.KindPong {
 		t.Errorf("a malformed frame broke the socket: %v", got)
 	}
 }
@@ -324,7 +333,7 @@ func TestAQueryIsAnsweredWithItsCorrelationID(t *testing.T) {
 		"params": map[string]any{"role": "Lead"},
 	})
 	got := next(t, conn)
-	if got["kind"] != stream.KindResult || got["id"] != float64(7) || got["what"] != "agent" {
+	if kindOf(got) != stream.KindResult || got["id"] != float64(7) || got["what"] != "agent" {
 		t.Fatalf("answer = %v", got)
 	}
 	data, _ := got["data"].(map[string]any)
@@ -361,7 +370,7 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 
 		write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "config"})
 		got := next(t, conn)
-		if got["kind"] != stream.KindError || got["error"] != tc.want {
+		if kindOf(got) != stream.KindError || got["error"] != tc.want {
 			t.Errorf("%v: answer = %v, want %q", tc.err, got, tc.want)
 		}
 		// The reason reaches the log, not the client: a failure can
@@ -559,7 +568,7 @@ func TestASlowQueryDoesNotStallTheLiveFeed(t *testing.T) {
 		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
 		Category: "system", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
 	})
-	if got := next(t, conn); got["kind"] != stream.KindEvent {
+	if got := next(t, conn); kindOf(got) != stream.KindEvent {
 		t.Errorf("frame = %v, want the live event through a blocked query", got["kind"])
 	}
 }

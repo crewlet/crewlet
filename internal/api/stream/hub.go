@@ -48,28 +48,39 @@ const writeTimeout = 30 * time.Second
 // doing nothing.
 const QueueDepth = 512
 
-// The push kinds. Frozen — the dashboard ships unchanged and is the
-// compatibility reference, so a renamed kind is a broken client, not a
-// refactor.
+// Kind is what a frame from the socket is: a push, one of the two answers to a
+// query, or the pong.
+//
+// A NAMED TYPE, so the one place a kind is spelled is a constant below and
+// every frame is built from one. The dashboard's `PushKind` union is its copy
+// of exactly these constants — `contract/wire.ts`, held both ways by
+// `TestTheDashboardKnowsExactlyThePushKindsTheEngineSends`, which reads every
+// constant of this type from this package's source — and the socket's
+// dispatch falls silently through a kind that union does not name. So a kind
+// is frozen once a dashboard renders it: renaming one is a broken client, not
+// a refactor.
+type Kind string
+
+// The push kinds.
 const (
-	KindSnapshot  = "snapshot"
-	KindEvent     = "event"
-	KindAgents    = "agents"
-	KindSeats     = "seats"
-	KindSandboxes = "sandboxes"
-	KindTokens    = "tokens"
-	KindBudget    = "budget"
-	KindSchedules = "schedules"
-	KindOrg       = "org"
-	KindTools     = "tools"
-	KindHealth    = "health"
+	KindSnapshot  Kind = "snapshot"
+	KindEvent     Kind = "event"
+	KindAgents    Kind = "agents"
+	KindSeats     Kind = "seats"
+	KindSandboxes Kind = "sandboxes"
+	KindTokens    Kind = "tokens"
+	KindBudget    Kind = "budget"
+	KindSchedules Kind = "schedules"
+	KindOrg       Kind = "org"
+	KindTools     Kind = "tools"
+	KindHealth    Kind = "health"
 
 	// KindResult and KindError answer one query, correlated by the
 	// client-minted id it was asked under.
-	KindResult = "result"
-	KindError  = "error"
+	KindResult Kind = "result"
+	KindError  Kind = "error"
 
-	KindPong = "pong"
+	KindPong Kind = "pong"
 )
 
 // Envelope is one server-to-client frame.
@@ -78,7 +89,7 @@ const (
 // is what lets one type carry both directions of the protocol without a client
 // having to know which shape to expect from which kind.
 type Envelope struct {
-	Kind  string `json:"kind"`
+	Kind  Kind   `json:"kind"`
 	Data  any    `json:"data,omitempty"`
 	TS    string `json:"ts,omitempty"`
 	ID    int64  `json:"id,omitempty"`
@@ -87,7 +98,7 @@ type Envelope struct {
 }
 
 // Push builds a broadcast envelope stamped now.
-func Push(kind string, data any, now time.Time) Envelope {
+func Push(kind Kind, data any, now time.Time) Envelope {
 	return Envelope{Kind: kind, Data: data, TS: now.UTC().Format(time.RFC3339Nano)}
 }
 

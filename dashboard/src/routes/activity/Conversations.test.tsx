@@ -132,3 +132,37 @@ test("a tick of the clock does not rebuild the channel body", async () => {
   });
   expect(code()[0]).toBe(before);
 });
+
+// A CUT LISTING SAYS IT IS CUT.
+//
+// The engine answers the most recently active channels up to a limit and says
+// `truncated` when the record held more. The screen's counts were captioned
+// "across every channel in the record" over exactly that page, and a channel
+// missing from it was offered "the 200 most recent" — a number that is the
+// engine's to change — whether or not anything had been cut.
+test("a cut listing says its counts cover the most recent channels", async () => {
+  mount(() =>
+    Promise.resolve({
+      channels: [channel({ id: "chan-other" })],
+      available: true,
+      state: "all",
+      truncated: true,
+    }),
+  );
+  expect(await screen.findByText(/may be older than all of them/)).toBeTruthy();
+  expect(screen.getByText("across the most recent channels only")).toBeTruthy();
+  expect(screen.queryByText("across every channel in the record")).toBeNull();
+});
+
+test("a whole listing says it is the whole record", async () => {
+  mount(() =>
+    Promise.resolve({
+      channels: [channel({ id: "chan-other" })],
+      available: true,
+      state: "all",
+      truncated: false,
+    }),
+  );
+  expect(await screen.findByText(/holds every one in the record/)).toBeTruthy();
+  expect(screen.getByText("across every channel in the record")).toBeTruthy();
+});

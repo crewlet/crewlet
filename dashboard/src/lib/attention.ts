@@ -22,13 +22,8 @@
  * minutes were all inside a silence that claimed to have measured them.
  */
 
-import type {
-  AgentRow,
-  EngineHealth,
-  OrgBudget,
-  SandboxEntry,
-  SandboxRun,
-} from "~/protocol/index.ts";
+import type { AgentRow, OrgBudget, SandboxEntry, SandboxRun } from "~/protocol/index.ts";
+import type { EngineHealth } from "~/contract/health.ts";
 import type { MarkName } from "~/ui/glyph.tsx";
 import { roundLabel, runState, staleness } from "./seats.ts";
 

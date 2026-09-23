@@ -119,9 +119,9 @@ import type {
   CompanyDocument,
   ConfigRole,
   ConversationEntry,
-  CounterpartyProfile,
   EventRecord,
 } from "~/protocol/index.ts";
+import type { CounterpartyProfile } from "~/contract/memory.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
@@ -1771,7 +1771,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       {memory.data.diary.map((d, i) => (
                         <div key={d.id ?? i} className="thread-entry">
                           <div className="row gap-1">
-                            <Tag appearance="outline">{d.retention || d.scope || "note"}</Tag>
+                            <Tag appearance="outline">{d.retention || "note"}</Tag>
                             <span className="spacer" />
                             <span className="t-caption">{fmtDateTime(d.created_at)}</span>
                           </div>
@@ -1826,8 +1826,8 @@ export function SeatScreen({ handle }: { handle: string }) {
                         // EMPTY summary has none, and a dash that says so
                         // beats a blank cell nobody can tell from a fault.
                         cell: (e) =>
-                          e.task_summary || e.content ? (
-                            <TextCell>{e.task_summary || e.content}</TextCell>
+                          e.task_summary ? (
+                            <TextCell>{e.task_summary}</TextCell>
                           ) : (
                             <EmptyValue label="The episode recorded no summary" />
                           ),
@@ -1839,16 +1839,14 @@ export function SeatScreen({ handle }: { handle: string }) {
                         // NULL, not "": an outcome nothing recorded sorts
                         // last in both directions rather than ahead of every
                         // recorded one, which is what the grid does with an
-                        // absent value and what the dash below claims.
-                        sortValue: (e) => e.review_outcome ?? e.outcome ?? null,
+                        // absent value and what the dash below claims. `||`,
+                        // because the engine sends "" for none — `??` let the
+                        // empty string through and sorted it first.
+                        sortValue: (e) => e.review_outcome || null,
                         cell: (e) =>
-                          e.review_outcome || e.outcome ? (
-                            <Tag
-                              variant={
-                                (e.review_outcome ?? e.outcome) === "done" ? "success" : "warning"
-                              }
-                            >
-                              {e.review_outcome ?? e.outcome}
+                          e.review_outcome ? (
+                            <Tag variant={e.review_outcome === "done" ? "success" : "warning"}>
+                              {e.review_outcome}
                             </Tag>
                           ) : (
                             <EmptyValue label="The turn ended without a review outcome" />

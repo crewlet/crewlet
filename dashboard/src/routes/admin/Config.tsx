@@ -62,6 +62,7 @@ import type { FleetNode, RevisionMeta } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
+import { ENTITY_KINDS } from "~/contract/config.ts";
 
 const LENSES = ["active", "entities", "audit", "diff"] as const;
 type Lens = (typeof LENSES)[number];
@@ -85,22 +86,6 @@ const HISTORY_LIMIT = 100;
  * disagree while sitting side by side.
  */
 const FLEET_POLL_MS = 15_000;
-
-/**
- * The addressable collections of the active revision, as `configapi` names
- * them.
- *
- * FOUR NAMES THE ENGINE OWNS, held against `configapi.EntityKinds()` by
- * `internal/api/configapi/entities_client_test.go` — a kind this list spells
- * differently asks for a collection that does not exist, and the answer is a
- * bad-params refusal rather than anything a reader could act on.
- */
-const ENTITY_KINDS = [
-  { kind: "roles", label: "Seats" },
-  { kind: "units", label: "Units" },
-  { kind: "llm-providers", label: "LLM providers" },
-  { kind: "mcp-servers", label: "MCP servers" },
-] as const;
 
 /**
  * What "no active revision" means, written ONCE.

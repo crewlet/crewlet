@@ -48,7 +48,8 @@ import {
   ViewColumnGlyph,
   VisibilityGlyph,
 } from "@crewlethq/icons/glyphs";
-import { GROUP_AXES, SORTS, groupAxisOptions, secondAxisOptions, type Shape } from "~/lib/work.ts";
+import { SORTS, groupAxisOptions, secondAxisOptions, type Shape } from "~/lib/work.ts";
+import { GROUP_AXES } from "~/contract/work.ts";
 import { ColumnChooser } from "~/app/frame/DataGrid.tsx";
 import { columnChoices, isGridShape } from "../shapes/Grid.tsx";
 

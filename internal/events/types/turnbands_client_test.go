@@ -14,7 +14,9 @@ import (
 // # What a band entry actually is
 //
 // The dashboard's `lib/turnstory.ts` sorts one turn's non-phase events into
-// the four panels the Turn screen draws, by naming event types in four sets.
+// the four panels the Turn screen draws, by naming event types in four sets —
+// declared in `contract/turnbands.ts`, the one home of every declaration an
+// engine gate holds.
 // Every row it sorts came from ONE read — `EventLog.Turn`, which is
 // `WHERE turn_id = ?` — and that column is filled from the event's own
 // top-level `turn_id` FIELD: `store.ExtractTags` pulls it out of the
@@ -62,7 +64,7 @@ import (
 // and an oversight look identical from the outside, and writing the reason
 // down is what lets the next reader tell them apart.
 
-// turnBands are the declarations in `lib/turnstory.ts` whose members are
+// turnBands are the declarations in `contract/turnbands.ts` whose members are
 // matched against a turn's rows.
 //
 // TURN_STOP rides along although it draws nothing: it is the subset the Turn
@@ -283,7 +285,7 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 		if stamped[name] && persisted[name] {
 			t.Errorf("%q now declares a `turn_id` key, so the Turn screen CAN "+
 				"draw it and this roster entry is stale. Put the type back in "+
-				"its band in dashboard/src/lib/turnstory.ts and drop the entry, "+
+				"its band in dashboard/src/contract/turnbands.ts and drop the entry, "+
 				"or say here why it stays out anyway. It was kept out because: "+
 				"%s", name, reason)
 		}

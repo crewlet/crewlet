@@ -113,13 +113,13 @@ import {
   collapseRuns,
   isFailed,
   tellStory,
-  TURN_STOP,
   type AbsorbedGroup,
   type PrefetchBlock,
   type PromptWeight,
   type Run,
   type Story,
 } from "~/lib/turnstory.ts";
+import { TURN_STOP } from "~/contract/turnbands.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, TurnRow } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";

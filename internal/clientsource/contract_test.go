@@ -31,26 +31,7 @@ func TestEveryContractRowIsDeclaredOnceInTheDashboard(t *testing.T) {
 		t.Fatal("the contract names no declarations, so it certifies nothing")
 	}
 	for _, row := range rows {
-		var n int
-		var err error
-		switch row.Reader {
-		case clientsource.ReadLiteral:
-			var body clientsource.Body
-			if body, err = clientsource.Literal(clientsource.Tree, row.Name); err == nil {
-				n = len(clientsource.Strings(body))
-			}
-		case clientsource.ReadUnion:
-			var members []string
-			members, err = clientsource.Union(clientsource.Tree, row.Name)
-			n = len(members)
-		case clientsource.ReadInterface:
-			var members []clientsource.Member
-			members, err = clientsource.Interface(clientsource.Tree, row.Name)
-			n = len(members)
-		default:
-			t.Errorf("%s is read with %q, which is not a reader", row.Name, row.Reader)
-			continue
-		}
+		n, err := readRow(clientsource.Tree, row)
 		switch {
 		case err != nil:
 			t.Errorf("%s: %v", row.Name, err)
@@ -58,6 +39,74 @@ func TestEveryContractRowIsDeclaredOnceInTheDashboard(t *testing.T) {
 			t.Errorf("%s reads as empty, so the gate that owns it certifies nothing", row.Name)
 		}
 	}
+}
+
+// THE CONTRACT DIRECTORY HOLDS THE CONTRACT, AND NOTHING ELSE.
+//
+// Both ways. Every row is declared in `dashboard/src/contract/` — read there
+// with its own reader, so a declaration that moved back beside a screen fails
+// here by name rather than going on passing its gate from a file nobody
+// thinks of as the engine's. And every name the directory EXPORTS is a row:
+// a declaration put there without a gate is a module claiming the engine
+// holds it, which nothing does, and a reader who trusts the directory's name
+// trusts a copy that can drift. (What a module declares without exporting —
+// a row type composed into the one interface a screen names — is held by the
+// first half: it is a row because a gate reads it.)
+//
+// The walk refuses what it cannot see through — a re-export, a default
+// export, two names in one statement — for the reason every reader here
+// does: a walk that returned the names it could see would report the
+// directory as exporting less than it does.
+func TestTheContractDirectoryHoldsExactlyTheContract(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(clientsource.Tree, clientsource.ContractDir)
+	rows := map[string]bool{}
+	for _, row := range clientsource.Contract() {
+		rows[row.Name] = true
+		if _, err := readRow(dir, row); err != nil {
+			t.Errorf("%s is in the contract and not declared once in "+
+				"dashboard/src/%s/: %v", row.Name, clientsource.ContractDir, err)
+		}
+	}
+	exported, err := clientsource.Exports(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exported) == 0 {
+		t.Fatalf("dashboard/src/%s/ exports nothing, so this certifies nothing",
+			clientsource.ContractDir)
+	}
+	for name, files := range exported {
+		if !rows[name] {
+			t.Errorf("%v exports %s, which is not in the contract "+
+				"(internal/clientsource/contract.go) — a declaration in the "+
+				"contract directory is one a gate holds against the engine; "+
+				"register it with its reader and gate, or move it out", files, name)
+		}
+	}
+}
+
+// readRow reads one row out of `tree` with its own reader, and reports how
+// many members, strings or values it holds.
+func readRow(tree string, row clientsource.Entry) (int, error) {
+	switch row.Reader {
+	case clientsource.ReadLiteral:
+		body, err := clientsource.Literal(tree, row.Name)
+		return len(clientsource.Strings(body)), err
+	case clientsource.ReadUnion:
+		members, err := clientsource.Union(tree, row.Name)
+		return len(members), err
+	case clientsource.ReadInterface:
+		members, err := clientsource.Interface(tree, row.Name)
+		return len(members), err
+	case clientsource.ReadScalar:
+		value, err := clientsource.Scalar(tree, row.Name)
+		if value == "" {
+			return 0, err
+		}
+		return 1, err
+	}
+	return 0, fmt.Errorf("%s is read with %q, which is not a reader", row.Name, row.Reader)
 }
 
 // AND EVERY ROW NAMES A GATE THAT EXISTS AND READS IT.

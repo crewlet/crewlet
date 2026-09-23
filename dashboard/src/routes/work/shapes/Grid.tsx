@@ -109,6 +109,7 @@ import {
 } from "~/components/work.tsx";
 import { GroupMark, headingOf } from "./group.tsx";
 import { type Shape } from "~/lib/work.ts";
+import { COLUMN_SORT_KEYS } from "~/contract/work.ts";
 import { fmtDuration } from "~/lib/format.ts";
 import { callText } from "~/lib/toolcall.ts";
 import type {
@@ -151,33 +152,6 @@ export function isGridShape(shape: Shape): shape is GridShape {
 export function colsParam(shape: GridShape): string {
   return `cols.${shape}`;
 }
-
-/**
- * Every column a header click orders by — and each name IS one of the query
- * grammar's own sort keys.
- *
- * [DataGrid] writes the column's key straight into `sort=`, which this screen
- * sends to the engine, and `ParseQuery` REFUSES a sort key it does not know
- * rather than ignoring it. So one wrong header does not mis-sort a column: it
- * takes the whole board down with a refusal, on the click.
- *
- * Held against the grammar by `internal/tracker/client_gate_test.go`, because
- * this is a copy the dashboard has to keep — a separate build in a separate
- * language cannot import a Go identifier. The union makes a typo a compile
- * error; the gate makes a RENAME in the engine one. It covers BOTH sets, which
- * is what collapsing them bought: the list's heads are sortable now, and they
- * are the same declaration the table's are held against.
- */
-const COLUMN_SORT_KEYS = [
-  "title",
-  "priority",
-  "due",
-  "start",
-  "points",
-  "estimate",
-  "updated",
-  "removed",
-] as const;
 
 type SortKey = (typeof COLUMN_SORT_KEYS)[number];
 

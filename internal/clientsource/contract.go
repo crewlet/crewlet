@@ -17,16 +17,30 @@ const (
 	ReadUnion Reader = "union"
 	// ReadInterface reads an `interface`'s members, through [Interface].
 	ReadInterface Reader = "interface"
+	// ReadScalar reads a `const` initialised with one number or string,
+	// through [Scalar].
+	ReadScalar Reader = "scalar"
 )
 
 // Valid reports whether r is a reader this package has.
 func (r Reader) Valid() bool {
 	switch r {
-	case ReadLiteral, ReadUnion, ReadInterface:
+	case ReadLiteral, ReadUnion, ReadInterface, ReadScalar:
 		return true
 	}
 	return false
 }
+
+// ContractDir is the directory, under [Tree], that holds every declaration in
+// the contract and nothing else: `dashboard/src/contract/`.
+//
+// ONE HOME, because a declaration the engine owns that a screen keeps beside
+// its own code is one a reader of that screen edits without knowing a Go gate
+// holds it — and moves without knowing the move is invisible to the gate but
+// not to the next person who greps for it. `contract_test.go` holds the
+// directory both ways: every row is declared there, and everything the
+// directory exports is a row.
+const ContractDir = "contract"
 
 // Entry is one row of the contract: a declaration the dashboard makes because
 // the engine owns the value, how it is read, and the gate that holds it
@@ -42,15 +56,22 @@ type Entry struct {
 	Gate string
 }
 
-// contract is every declaration the engine's gates read out of the dashboard.
+// contract is every declaration the engine's gates read out of the dashboard,
+// grouped by the `dashboard/src/contract/` module that declares it.
 //
 // ONE OWNER PER DECLARATION. Two gates over one list is how the event
 // categories came to be held twice, by two tests that agreed with each other
 // and would have gone on agreeing while one of them was edited; a second
 // question about a declaration belongs in the gate that already owns it.
+//
+// A declaration NO SCREEN IMPORTS is still a row when a gate reads it: the
+// memory answer's row types are declared once and composed into the one
+// interface a screen names, and each of them is a shape the engine sends.
 var contract = []Entry{
+	// categories.ts
 	{"CATEGORIES", ReadLiteral, "internal/events.TestCategoryChipsAreTheEngines"},
 
+	// turnbands.ts
 	{"WENT_WRONG", ReadLiteral, "internal/events/types.TestTurnBandsNameOnlyTurnScopedEvents"},
 	{"GIVEN", ReadLiteral, "internal/events/types.TestTurnBandsNameOnlyTurnScopedEvents"},
 	{"DID", ReadLiteral, "internal/events/types.TestTurnBandsNameOnlyTurnScopedEvents"},
@@ -58,23 +79,50 @@ var contract = []Entry{
 	{"TURN_STOP", ReadLiteral, "internal/events/types.TestTurnBandsNameOnlyTurnScopedEvents"},
 	{"ABSORBED", ReadLiteral, "internal/events/types.TestTurnBandsNameOnlyTurnScopedEvents"},
 
+	// reasons.ts
+	{"PHRASES", ReadLiteral, "internal/api/queries.TestEveryWakeReasonReadsAsEnglishOnTheClient"},
+
+	// spend.ts
+	{"GROUPS", ReadLiteral, "internal/api/queries.TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts"},
+
+	// work.ts
 	{"WorkViewShape", ReadUnion, "internal/tracker.TestEveryViewShapeTheEngineMintsHasARenderer"},
 	{"COLUMN_SORT_KEYS", ReadLiteral, "internal/tracker.TestEveryGridSortKeyIsOneTheGrammarTakes"},
 	{"PROJECT_SORT_KEYS", ReadLiteral,
 		"internal/tracker.TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes"},
 	{"CHANGES", ReadLiteral, "internal/tracker.TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase"},
 	{"GROUP_AXES", ReadLiteral, "internal/tracker.TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes"},
+
+	// attribution.ts
 	{"CHANGE_FIELDS", ReadLiteral, "internal/tracker.TestAttributionFieldsAreTheEngines"},
 
+	// config.ts
 	{"ENTITY_KINDS", ReadLiteral, "internal/api/configapi.TestEntityKindsMatchTheClient"},
 
+	// errors.ts
 	{"QueryErrorCode", ReadUnion,
 		"internal/api/stream.TestTheDashboardKnowsExactlyTheQueryErrorCodesTheEngineSends"},
 
+	// integrations.ts
 	{"IntegrationRow", ReadInterface, "internal/api/queries.TestTheIntegrationsRoomReadsWhatThisAnswerSends"},
 	{"IntegrationsAnswer", ReadInterface, "internal/api/queries.TestTheIntegrationsRoomReadsWhatThisAnswerSends"},
-	{"PHRASES", ReadLiteral, "internal/api/queries.TestEveryWakeReasonReadsAsEnglishOnTheClient"},
-	{"GROUPS", ReadLiteral, "internal/api/queries.TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts"},
+	{"ReconcileStatus", ReadInterface, "internal/api/queries.TestTheIntegrationsRoomReadsWhatThisAnswerSends"},
+	{"ReconcileFinding", ReadInterface, "internal/api/queries.TestTheIntegrationsRoomReadsWhatThisAnswerSends"},
+
+	// memory.ts
+	{"AgentMemory", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
+	{"DiaryEntry", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
+	{"Episode", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
+	{"SynthesizedSkill", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
+	{"CounterpartyProfile", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
+	{"CounterpartySubject", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
+
+	// health.ts
+	{"EngineHealth", ReadInterface, "internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports"},
+
+	// wire.ts
+	{"PushKind", ReadUnion, "internal/api/stream.TestTheDashboardKnowsExactlyThePushKindsTheEngineSends"},
+	{"MAX_EVENTS", ReadScalar, "internal/api/livestate.TestTheDashboardKeepsTheFeedTheEngineKeeps"},
 }
 
 // Contract is every declaration the engine's gates read out of the

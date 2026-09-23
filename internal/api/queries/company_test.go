@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -997,9 +998,16 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 // a blank inbound path, and both sides' tests passed, because each was
 // checked against its own idea of the other.
 //
-// This reads the FIELD NAMES out of the client's own declaration and asserts
-// the answer carries each. It is the cheap half of the gate `internal/e2e`
+// This reads the FIELD NAMES out of the client's own declarations — the row,
+// the answer around it, the reconcile report and its findings, all in
+// `contract/integrations.ts` — and holds the answer to each in both
+// directions ([holdShape]). It is the cheap half of the gate `internal/e2e`
 // gives the push protocol; the query channel had none at all.
+//
+// IT USED TO ONLY LOG a declared field no row carried, and two sat there for
+// as long as the room existed: `label` and `detail`, both read by the
+// dashboard — the sidebar's row name and a card's fallback summary — and
+// neither ever sent. A log line in a passing test is read by nobody.
 //
 // TWICE NOW THIS GATE HAS POINTED AT A PATH THAT DOES NOT EXIST, so it is
 // worth saying what it reads and why. It read
@@ -1029,6 +1037,9 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	// EVERY third-party app, because the per-integration detail fields (url,
 	// seats) only appear on the rows that have them: a fixture missing one
 	// reports its field as a mismatch that is really a gap in the fixture.
+	// And ONE RECONCILE REPORT whose finding carries everything a finding can
+	// — a remedy and a list of subjects are both conditional — because the
+	// report and its findings are shapes the room reads too.
 	cfg := company(t)
 	cfg.Integrations.Jira = &config.Jira{
 		URL: "https://jira.example.com", Token: "t", WebhookSecret: "jr",
@@ -1036,58 +1047,116 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
 		Routed:  func(context.Context) []string { return []string{"gitlab"} },
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{{
+				Kind: integration.KindGitLab,
+				Report: integration.Report{
+					Phase: integration.PhaseDegraded, Actor: integration.ActorAdmin,
+					Detail:    "2 seats need maintainer on api-gateway",
+					ActionURL: "https://gitlab.example.com/api-gateway/-/settings",
+				},
+				Findings: []integration.Finding{{
+					Kind: integration.FindingGrantShort, Subject: "ceo",
+					Detail:    "2 seats need maintainer on api-gateway",
+					Remedy:    "grant maintainer on api-gateway",
+					ActionURL: "https://gitlab.example.com/api-gateway/-/project_members",
+					Subjects:  []string{"ceo", "cto"},
+				}},
+				Outcome:       integration.OutcomeBlocked,
+				Attempts:      2,
+				LastError:     "403 from /projects/api-gateway/members",
+				LastAttemptAt: pinned.Add(-time.Minute),
+				NextAttemptAt: pinned.Add(time.Minute),
+			}}
+		},
 	}, "integrations", nil))
 
-	rows, _ := body["integrations"].([]any)
-	if len(rows) == 0 {
-		t.Fatal("the answer carried no integrations, so this proves nothing")
+	rows := rowsOf(t, body["integrations"])
+	holdShape(t, "IntegrationsAnswer", []map[string]any{body}, false)
+	// OPEN, because the interface is: a row's per-surface detail (`url`,
+	// `seats`, `org_id`, …) rides its index signature, and which of them a
+	// row carries depends on the surface.
+	holdShape(t, "IntegrationRow", rows, true)
+
+	var reports, findings []map[string]any
+	for _, row := range rows {
+		if report, ok := row["reconcile"].(map[string]any); ok {
+			reports = append(reports, report)
+			findings = append(findings, rowsOf(t, report["findings"])...)
+		}
 	}
-	// TWO READINGS, because the two halves of the contract are different.
-	//
-	// A REQUIRED field is required of EVERY row — the TypeScript interface
-	// describes each element, not the set — so it is checked per entry. The
-	// union was wrong for this: one integration carrying `endpoint` made the
-	// gate accept another that omitted it, which is precisely the card
-	// rendering undefined that this exists to catch.
-	//
-	// An OPTIONAL field is the other way round: `url` and `seats` are
-	// per-integration detail, so a field carried by ANY row is one the answer
-	// knows how to send, and only a field NO row carries is worth reporting.
+	holdShape(t, "ReconcileStatus", reports, false)
+	holdShape(t, "ReconcileFinding", findings, false)
+}
+
+// rowsOf is a JSON array of objects, as a client decodes it.
+func rowsOf(t *testing.T, value any) []map[string]any {
+	t.Helper()
+	list, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%v is not a list", value)
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		row, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("%v is not an object", item)
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// holdShape holds rows an answer sent against one interface the client
+// declares for them, in both directions.
+//
+// A DECLARED member is one some row carries — FAILING, not logged: a member
+// no row carries is a field every screen that trusts the type reads as
+// undefined, and a gate that only noted it left `label` and `detail` on the
+// integrations row for as long as the room existed, both read, neither ever
+// sent. A REQUIRED member is on every row, since the interface describes each
+// element rather than the set. And a key the answer sends is a declared
+// member — unless the interface is `open`, with an index signature standing
+// for the keys that vary by row — because a field no declaration names is one
+// no screen can read without first finding out it exists.
+//
+// The fixture is what makes the first half fair: it has to exercise every
+// branch that adds an optional key, or a gap in the fixture reads as a drift.
+func holdShape(t *testing.T, iface string, rows []map[string]any, open bool) {
+	t.Helper()
+	if len(rows) == 0 {
+		t.Fatalf("the answer carried no %s, so this proves nothing about it", iface)
+	}
+	declared := declaredFields(t, iface)
 	sent := map[string]bool{}
-	for _, r := range rows {
-		entry, _ := r.(map[string]any)
-		for field := range entry {
+	for _, row := range rows {
+		for field := range row {
 			sent[field] = true
 		}
 	}
-
-	// Every field the client declares on a row, and on the answer around it.
-	for field, required := range declaredFields(t, "IntegrationRow") {
-		if required {
-			for _, r := range rows {
-				entry, _ := r.(map[string]any)
-				if _, ok := entry[field]; !ok {
-					t.Errorf("IntegrationRow declares %s as REQUIRED and the row "+
-						"for %v does not send it — that field renders as undefined "+
-						"on that card", field, entry["key"])
-				}
-			}
+	for _, field := range slices.Sorted(maps.Keys(declared)) {
+		if !sent[field] {
+			t.Errorf("%s declares %s and no row the answer sent carries it — every "+
+				"screen that trusts the type reads it as undefined", iface, field)
 			continue
 		}
-		switch {
-		case sent[field]:
-		default:
-			// An optional field no row carries is within the type's contract,
-			// so it is not a failure — but it is either dead client code or a
-			// server that stopped sending something, and both are worth
-			// seeing. The required half above is what fails.
-			t.Logf("IntegrationRow declares %s (optional) and no row carries it", field)
+		if !declared[field] {
+			continue
+		}
+		for _, row := range rows {
+			if _, ok := row[field]; !ok {
+				t.Errorf("%s declares %s as REQUIRED and a row does not send it: %v",
+					iface, field, row)
+			}
 		}
 	}
-	for field, required := range declaredFields(t, "IntegrationsAnswer") {
-		if _, ok := body[field]; !ok && required {
-			t.Errorf("IntegrationsAnswer declares %s as REQUIRED and the "+
-				"answer never sends it", field)
+	if open {
+		return
+	}
+	for _, field := range slices.Sorted(maps.Keys(sent)) {
+		if _, ok := declared[field]; !ok {
+			t.Errorf("the answer sends %s on a %s and the client does not declare it, "+
+				"so no screen can read it without first finding out it exists", field, iface)
 		}
 	}
 }
@@ -1120,6 +1189,84 @@ func declaredFields(t *testing.T, iface string) map[string]bool {
 		t.Fatalf("interface %s declares no fields, so this gate asserts about nothing", iface)
 	}
 	return out
+}
+
+// THE MEMORY SCREEN READS WHAT THIS ANSWER SENDS.
+//
+// The seat page's memory tab is typed by `AgentMemory` and the row shapes
+// composed into it (`contract/memory.ts`), and nothing held them to the
+// answer. They had drifted both ways: a diary entry declared a `scope` and
+// `tags`, an episode an `outcome` and a `content`, and a skill a `body`, none
+// of which the engine has ever sent — so the tab's fallbacks read fields that
+// were always undefined — while a diary entry's `source` and `retrievals` and
+// an episode's plan, tool sequence and work key were sent to a client with no
+// name for them.
+//
+// Every row shape is held both ways over an answer whose fixture fills every
+// half — a diary entry, an episode, a skill, and two counterparties, one a
+// seat and one an unmapped person on a surface, because a subject's `handle`
+// and its `external_id` are each sent only for its own kind.
+func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	diary := learning.NewDiary(db)
+	episodes := learning.NewEpisodes(db)
+	skills := learning.NewSkills(db)
+	if err := diary.Write(t.Context(), learning.DiaryEntry{
+		ID: "d-1", AgentID: "ceo", Kind: learning.DiaryShort,
+		Content:  "the release window moved to Thursday",
+		TTLUntil: pinned.Add(time.Hour), Source: "tool:reflect_and_persist",
+		TurnID: "turn-1", CreatedAt: pinned,
+	}); err != nil {
+		t.Fatalf("diary: %v", err)
+	}
+	if _, err := episodes.Append(t.Context(), learning.Episode{
+		ID: "ep-1", Handle: "ceo", TurnID: "turn-1",
+		TaskSummary: "answered the on-call page", PlanSummary: "read the alert, then paged",
+		ToolSequence: []string{"read_alert", "page"}, SkillsUsed: []string{"triage"},
+		ReviewOutcome: "done", WorkKey: "native:OPS-7", ConversationKey: "slack:C1",
+		StartedAt: pinned, EndedAt: pinned.Add(time.Minute), Duration: time.Minute,
+	}); err != nil {
+		t.Fatalf("episode: %v", err)
+	}
+	if err := skills.Insert(t.Context(), learning.Skill{
+		ID: "sk-1", AgentHandle: "ceo", Name: "triage",
+		Description: "read the alert before paging", CreatedAt: pinned, UpdatedAt: pinned,
+	}); err != nil {
+		t.Fatalf("skill: %v", err)
+	}
+	counterparties := &stubCounterparties{profiles: []learning.Profile{
+		{
+			Observer: "ceo", Subject: learning.Subject{Handle: "cto", Name: "Cy"},
+			Traits: map[string]any{"prefers": "async"}, InteractionCount: 3,
+			FirstSeenAt: pinned, LastUpdatedAt: pinned, LastCorroboratedAt: pinned,
+		},
+		{
+			Observer: "ceo",
+			Subject: learning.Subject{
+				ExternalID: "U0FOUNDER", Platform: "slack", Name: "Ada",
+			},
+			InteractionCount: 1,
+			FirstSeenAt:      pinned, LastUpdatedAt: pinned, LastCorroboratedAt: pinned,
+		},
+	}}
+
+	body := asMap(t, answer(t, queries.Sources{
+		Diary: diary, Episodes: episodes, Skills: skills, Counterparties: counterparties,
+	}, "agent_memory", map[string]any{"id": "ceo"}))
+
+	holdShape(t, "AgentMemory", []map[string]any{body}, false)
+	holdShape(t, "DiaryEntry", rowsOf(t, body["diary"]), false)
+	holdShape(t, "Episode", rowsOf(t, body["episodes"]), false)
+	holdShape(t, "SynthesizedSkill", rowsOf(t, body["skills"]), false)
+	profiles := rowsOf(t, body["counterparties"])
+	holdShape(t, "CounterpartyProfile", profiles, false)
+	var subjects []map[string]any
+	for _, profile := range profiles {
+		subject, _ := profile["subject"].(map[string]any)
+		subjects = append(subjects, subject)
+	}
+	holdShape(t, "CounterpartySubject", subjects, false)
 }
 
 // brokenPlane is a config plane that answers nothing, for the case where the

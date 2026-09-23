@@ -37,6 +37,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
@@ -1812,10 +1813,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// Registered after the app exists, which is the whole reason it is a
 	// setter — see Engine.SetOnApplied.
 	e.SetOnApplied(func(context.Context) {
-		app.Stream().Broadcast("seats", app.Stream().Roster())
-		app.Stream().Broadcast("org", app.Stream().Org())
-		app.Stream().Broadcast("tools", app.Stream().Tools())
-		app.Stream().Broadcast("schedules", app.Stream().Schedules())
+		app.Stream().Broadcast(stream.KindSeats, app.Stream().Roster())
+		app.Stream().Broadcast(stream.KindOrg, app.Stream().Org())
+		app.Stream().Broadcast(stream.KindTools, app.Stream().Tools())
+		app.Stream().Broadcast(stream.KindSchedules, app.Stream().Schedules())
 	})
 
 	return &httpSurface{app: app, server: server, projector: projector}, nil

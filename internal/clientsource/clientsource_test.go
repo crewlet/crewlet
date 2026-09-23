@@ -555,3 +555,116 @@ func TestCallsIgnoresAVariableFirstArgument(t *testing.T) {
 		t.Errorf("calls = %v, want none", got)
 	}
 }
+
+// A SCALAR IS ITS ONE LITERAL, WHATEVER THE LAYOUT.
+//
+// A number is answered as the text it is written in — the gate parses it, so
+// a separator or a radix prefix is the value it spells — and a string as its
+// value, in either quote or a template.
+func TestAScalarIsItsOneLiteral(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]string{
+		"export const MAX_EVENTS = 400;":                      "400",
+		"const MAX_EVENTS: number = 4_00\nexport const X = 1": "4_00",
+		"export const MAX_EVENTS = 400 as const;":             "400",
+		"const MAX_EVENTS = -1":                               "-1",
+		"const MAX_EVENTS = 0x190 // the feed\n":              "0x190",
+		"const MAX_EVENTS = 'feed';":                          "feed",
+		"const MAX_EVENTS = `feed`\n\"use strict\";":          "feed",
+		"{\n  /** The feed. */\n  const MAX_EVENTS = 400\n}":  "400",
+	} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			got, err := clientsource.Scalar(tree(t, map[string]string{"protocol/wire.ts": source}),
+				"MAX_EVENTS")
+			if err != nil {
+				t.Fatalf("Scalar: %v", err)
+			}
+			if got != want {
+				t.Errorf("Scalar = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// AND AN EXPRESSION IS NOT ONE, however it starts.
+//
+// `200 * 2` begins with a number, and so does `400\n  * 2` — which is one
+// expression across two lines, not a literal followed by a statement. A reader
+// that took the first token would hand a gate the part of the arithmetic it
+// happens to see, and the gate would compare the engine's value against half
+// of the client's.
+func TestAScalarThatIsAnExpressionIsRefused(t *testing.T) {
+	t.Parallel()
+	for name, source := range map[string]string{
+		"arithmetic":         "const MAX_EVENTS = 200 * 2;",
+		"across a line":      "const MAX_EVENTS = 400\n  * 2;",
+		"a call on the next": "const MAX_EVENTS = 400\n(feed)",
+		"a name":             "const MAX_EVENTS = LIMIT;",
+		"a member":           "const MAX_EVENTS = limits.feed;",
+		"a template chunk":   "const MAX_EVENTS = `f${x}`;",
+		"a negative string":  "const MAX_EVENTS = -\"1\";",
+		"an array":           "const MAX_EVENTS = [400];",
+		"no value":           "declare const MAX_EVENTS: number;",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got, err := clientsource.Scalar(tree(t, map[string]string{"protocol/wire.ts": source}),
+				"MAX_EVENTS"); err == nil {
+				t.Errorf("Scalar = %q, want the expression refused", got)
+			}
+		})
+	}
+}
+
+// THE EXPORTS WALK SEES EVERY NAME, OR REFUSES.
+//
+// Every declaration form answers its own name — a `const` whatever its
+// annotation's commas, a type, an interface, a function, a class, an enum —
+// and `export` as a key or a member is not a statement. What it cannot see
+// through is refused rather than skipped: a re-export, a default, a star, and
+// a `const` naming two things, because the contract's "every export is a row"
+// half would pass a module exporting more than the walk returned.
+func TestTheExportsWalkSeesEveryNameOrRefuses(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{
+		"contract/a.ts": "import { type B } from \"./b.ts\";\n" +
+			"export const A: ReadonlyMap<string, number> = new Map<string, number>([[\"x\", 1]]);\n" +
+			"export type U = \"a\" | \"b\";\nexport interface I { export: string }\n" +
+			"const local = { export: 1 };\n",
+		"contract/b.ts": "/** export const NOT = 1 */\nexport function f() {}\n" +
+			"export declare const D: number;\nexport enum E { A }\nexport class C {}\n" +
+			"export const S = new Set([\"a\", \"b\"])\nexport interface B {}\n",
+	})
+	got, err := clientsource.Exports(root)
+	if err != nil {
+		t.Fatalf("Exports: %v", err)
+	}
+	want := []string{"A", "B", "C", "D", "E", "I", "S", "U", "f"}
+	var names []string
+	for name := range got {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, want) {
+		t.Errorf("exports = %v, want %v", names, want)
+	}
+
+	for name, source := range map[string]string{
+		"an export list":     "const a = 1;\nexport { a };\n",
+		"a re-export":        "export { a } from \"./b.ts\";\n",
+		"a star":             "export * from \"./b.ts\";\n",
+		"a type re-export":   "export type { A } from \"./b.ts\";\n",
+		"a default":          "export default [\"a\"];\n",
+		"two names":          "export const a = 1, b = 2;\n",
+		"two names, wrapped": "export const a = [\n  1,\n],\n  b = 2;\n",
+		"a destructuring":    "export const { a, b } = values;\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got, err := clientsource.Exports(tree(t, map[string]string{"contract/x.ts": source})); err == nil {
+				t.Errorf("exports = %v, want the module refused", got)
+			}
+		})
+	}
+}

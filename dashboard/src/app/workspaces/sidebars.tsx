@@ -274,7 +274,9 @@ export function useAdminSidebar(here: boolean): SidebarSection[] {
     // dot beside a green one reads as "something is wrong here".
     const kinds: SidebarRow[] = (integrations.data?.integrations ?? []).map((i) => ({
       key: i.key,
-      label: i.label || i.key,
+      // The key, because it is all the row carries: a `label` was read here
+      // that the engine has never sent.
+      label: i.key,
       path: ["admin", "integrations", i.key],
       tone: i.configured ? ("positive" as const) : undefined,
     }));

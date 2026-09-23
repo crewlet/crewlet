@@ -46,9 +46,10 @@
 // So the source is SCANNED ([lex]) — strings, comments, template literals,
 // regular expressions and JSX prose each recognised for what they are — and
 // every reader works on tokens: [Literal] returns the balanced bracket a
-// `const` is initialised with, [Union] the string members of a type alias,
-// [Interface] the members of an interface and whether each is optional, and
-// [Calls] the string each call to a named function is handed first. The same
+// `const` is initialised with, [Scalar] the one number or string one is,
+// [Union] the string members of a type alias, [Interface] the members of an
+// interface and whether each is optional, and [Calls] the string each call to
+// a named function is handed first. The same
 // declaration laid out on one line or forty, with or without a trailing comma,
 // in single quotes or double, with comments between its members, reads the
 // same. What is not a literal — a spread, a member computed from something
@@ -64,6 +65,18 @@
 // resolves to exactly one declaration in the real tree, and names a gate that
 // exists and reads it. A declaration with two gates, or a gate reading a
 // declaration under the wrong reader, fails there rather than drifting.
+//
+// # One home: `dashboard/src/contract/`
+//
+// Every declaration in the table lives in [ContractDir], and that directory
+// holds nothing else. A copy of an engine-owned set kept beside the screen
+// that draws it is one a reader of that screen edits without knowing a Go gate
+// holds it, so the dashboard keeps them in PURE modules of their own — data
+// and types, importing nothing but each other, which the dashboard's own
+// suite enforces — and `contract_test.go` holds the directory both ways: every
+// row is declared there, and every name the directory exports is a row. A
+// reader still walks the WHOLE tree, so a second copy declared in a screen is
+// two declarations rather than one the gate cannot see.
 //
 // # One reader, for the same reason as everything else here
 //
@@ -241,6 +254,87 @@ func Union(tree, name string) ([]string, error) {
 			toks[j].text())
 	}
 	return members, nil
+}
+
+// Scalar returns the one value the ONE `const <name>` under `tree` is
+// initialised with: a string's value, or a number's source text, a leading
+// minus included. The gate parses the number, so a numeric separator or a
+// radix prefix reads as the value it spells rather than as a mismatch.
+//
+// ONE LITERAL AND NOTHING ELSE, bar a type annotation before the `=` and an
+// `as const` after the value. `200 * 2`, `LIMIT` and `limits.feed` are each a
+// value somewhere else, and reading the first token of an expression would
+// hand a gate the one part of the arithmetic it can see.
+func Scalar(tree, name string) (string, error) {
+	if err := registered(name, ReadScalar); err != nil {
+		return "", err
+	}
+	found, err := declaration(tree, headConst, name)
+	if err != nil {
+		return "", err
+	}
+	toks := found.toks
+	j := found.at + 1
+	if j < len(toks) && toks[j].is(":") {
+		if j, err = skipType(toks, j+1, found, "="); err != nil {
+			return "", err
+		}
+	}
+	if j >= len(toks) || !toks[j].is("=") {
+		return "", found.errorf("const %s has no initialiser to read", name)
+	}
+	j++
+	negative := j < len(toks) && toks[j].is("-")
+	if negative {
+		j++
+	}
+	if j >= len(toks) {
+		return "", found.errorf("const %s ends before its value", name)
+	}
+	var value string
+	switch t := toks[j]; {
+	case t.kind == kNumber:
+		value = t.text()
+		if negative {
+			value = "-" + value
+		}
+	case !negative && (t.kind == kString || t.kind == kTemplate && complete(t.text())):
+		value, _ = t.literal()
+	default:
+		return "", found.errorfAt(t, "const %s is initialised with %q, where one "+
+			"number or string was expected", name, t.text())
+	}
+	j++
+	if j+1 < len(toks) && toks[j].word("as") && toks[j+1].word("const") {
+		j += 2
+	}
+	// The statement must END here: at a semicolon, the end of the file or of
+	// the block it is in, or a line break that begins the next statement. A
+	// line break alone does not end one — `400\n  * 2` is one expression, and
+	// so is a value followed on the next line by `(` or a template — so the
+	// next token has to be one that can only start a statement of its own.
+	if j < len(toks) && !toks[j].is(";", "}") && !startsStatement(toks[j]) {
+		return "", found.errorfAt(toks[j], "const %s continues past its value "+
+			"with %q, so it is an expression rather than one literal", name,
+			toks[j].text())
+	}
+	return value, nil
+}
+
+// startsStatement is a token that, after a line break, begins the next
+// statement rather than continuing the expression before it.
+func startsStatement(t token) bool {
+	if !t.nl {
+		return false
+	}
+	switch t.kind {
+	case kIdent:
+		return !t.word("as") && !t.word("satisfies") && !t.word("in") &&
+			!t.word("instanceof")
+	case kString, kNumber:
+		return true
+	}
+	return false
 }
 
 // Interface returns the members of the ONE `interface <name>` under `tree`,
@@ -849,3 +943,130 @@ type lexResult struct {
 }
 
 var lexCache sync.Map // lexKey → lexResult
+
+// exports is every name the source files under `tree` export, mapped to the
+// files (relative to the tree, slash-separated) that export it.
+//
+// A DECLARATION PER NAME, and everything else refused: a re-export
+// (`export { x } from …`, `export * from …`), a default export, and a
+// destructuring or multi-name `const` each export a name this walk would have
+// to resolve somewhere else to see — and a walk that returned the names it
+// could see would report a module as exporting less than it does, which is
+// the one failure the contract's "every export is a row" direction cannot
+// afford. `export` as an object key or a member name is not a statement.
+func exports(tree string) (map[string][]string, error) {
+	files, err := scan(tree)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, f := range files {
+		toks := f.toks
+		for i, t := range toks {
+			if !t.word("export") || i > 0 && toks[i-1].is(".", "?.") {
+				continue
+			}
+			found := decl{file: f, at: i}
+			name, err := exported(toks, i+1, found)
+			if err != nil {
+				return nil, err
+			}
+			if name != "" {
+				out[name] = append(out[name], f.rel)
+			}
+		}
+	}
+	return out, nil
+}
+
+// exported is the name an `export` whose next token is at j declares, or ""
+// when the `export` is not a statement at all.
+func exported(toks []token, j int, found decl) (string, error) {
+	refuse := func(what string) (string, error) {
+		return "", found.errorf("this exports through %s, which a walk of "+
+			"the module's exports cannot see — declare the name here, one per "+
+			"statement", what)
+	}
+	for j < len(toks) && (toks[j].word("declare") || toks[j].word("abstract") ||
+		toks[j].word("async")) {
+		j++
+	}
+	if j >= len(toks) {
+		return refuse("nothing")
+	}
+	t := toks[j]
+	switch {
+	case t.is(":", "(", ",", ")", "}", "?", "?."):
+		// A key or a member named `export`, not a statement.
+		return "", nil
+	case t.word("const"), t.word("let"), t.word("var"):
+		if j+1 >= len(toks) || toks[j+1].kind != kIdent {
+			return refuse("a destructuring pattern")
+		}
+		if err := oneDeclarator(toks, j+2, found); err != nil {
+			return "", err
+		}
+		return toks[j+1].text(), nil
+	case t.word("function"):
+		j++
+		if j < len(toks) && toks[j].is("*") {
+			j++
+		}
+	case t.word("type"):
+		j++
+		if j < len(toks) && toks[j].is("{", "*") {
+			return refuse("a type re-export")
+		}
+	case t.word("class"), t.word("interface"), t.word("enum"), t.word("namespace"),
+		t.word("module"):
+		j++
+	case t.word("default"):
+		return refuse("a default export")
+	case t.is("{"):
+		return refuse("an export list")
+	case t.is("*"):
+		return refuse("a star re-export")
+	default:
+		return refuse(fmt.Sprintf("%q", t.text()))
+	}
+	if j >= len(toks) || toks[j].kind != kIdent {
+		return refuse("an unnamed declaration")
+	}
+	return toks[j].text(), nil
+}
+
+// oneDeclarator refuses a `const` statement that declares a second name after
+// the one whose annotation or initialiser starts at j.
+func oneDeclarator(toks []token, j int, found decl) error {
+	if j < len(toks) && toks[j].is(":") {
+		end, err := skipType(toks, j+1, found, "=")
+		if err != nil {
+			return err
+		}
+		j = end
+	}
+	depth := 0
+	for ; j < len(toks); j++ {
+		t := toks[j]
+		if depth == 0 && (t.is(";", "}") || startsStatement(t)) {
+			return nil
+		}
+		switch {
+		case t.is("(", "[", "{"):
+			depth++
+		case t.is(")", "]", "}"):
+			depth--
+		case t.is("<") && j > 0 && toks[j-1].kind == kIdent:
+			// Type arguments (`new Set<string>(…)`), whose commas are not
+			// declarators — or a comparison, which has none to skip.
+			if end, err := skipAngles(toks, j, found); err == nil {
+				j = end - 1
+			}
+		case depth == 0 && t.is(","):
+			return found.errorfAt(t, "a second name in one exported "+
+				"statement, which a walk of the module's exports would miss — "+
+				"declare one name per statement")
+		}
+	}
+	return nil
+}

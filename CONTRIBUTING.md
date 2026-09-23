@@ -220,11 +220,24 @@ What follows are the prerequisites that legitimately vary by machine.
   in most of the places it appears.
 
 - **`npm`** builds and tests the dashboard itself. Its assertions — the
-  wire protocol, the router's history rules, the ordering comparators, and the
-  MEASURED contrast of every colour token over every surface it can land on,
-  in both themes and for protan and deutan vision — run under Vitest:
-  `make dashboard-test`. None of that is checkable by looking at the
-  stylesheet, which is why it is computed from the file that actually ships.
+  wire protocol, the router's history rules, the ordering comparators, the
+  purity of `src/contract/`, and the MEASURED contrast of every colour token
+  over every surface it can land on, in both themes and for protan and deutan
+  vision — run under Vitest: `make dashboard-test`. None of that is checkable
+  by looking at the stylesheet, which is why it is computed from the file that
+  actually ships.
+
+  **A set the engine owns is declared in `dashboard/src/contract/`**, one
+  module per concern, and held against the engine by one Go test that reads
+  it through `internal/clientsource`. Adding one means three things in one
+  change: the declaration in a contract module, a row in
+  `internal/clientsource/contract.go` naming its reader and its gate, and the
+  gate itself. The Go side holds that directory both ways — every row is
+  declared there, every name it exports is a row — and
+  `contract/contract.test.ts` holds what a module there may be: data and
+  shapes, importing only its siblings, every export read outside it.
+  `protocol/` imports it by a relative path, because `protocol.js` is built
+  without the `~` alias.
 
   **The built dashboard is committed**, so building the ENGINE needs neither
   node nor npm. Changing the dashboard does: run `make dashboard` and commit

@@ -2989,7 +2989,7 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   engine understood the question and refused it, so retrying sends the same bad
   request again. `unavailable` is the opposite: the node will answer in a
   moment, so `useQuery` asks again on its own rather than leaving a person to
-  reload. The table is keyed on the protocol's `QueryErrorCode` union, so a
+  reload. The table is keyed on the contract's `QueryErrorCode` union, so a
   code added to the union without a sentence here is a compile error, and a Go
   test in `internal/api/stream` pins that union to the codes the engine sends.
 - **Zero** vs **unknown.** The integrations answer's `skipped` and `coalesced`
@@ -3104,6 +3104,8 @@ to send.
 
 ```
 dashboard/                  the source — React 19 + TypeScript, built by Vite
+  src/contract/             every declaration an engine test holds against the
+                            engine — data and shapes, importing nothing else
   src/protocol/             the wire, typed. NO React, NO DOM at module scope
   src/app/                  shell, hash router, IA, command palette
   src/lib/                  store bindings, one clock, formatting, derivations
@@ -3139,6 +3141,30 @@ emitted name is content-hashed, so a changed chunk is a new path, which
 | develop against a running engine | `make dashboard-dev` (proxies to `localhost:8000`) |
 | run its suites | `make dashboard-test` |
 | check the committed bundle is current | `make dashboard-check` |
+
+**What the engine owns is declared once, in `src/contract/`.** Several lists
+exist on both sides by necessity — the dashboard is a separate build in a
+separate language and cannot import a Go identifier — so where a screen must
+know a set the engine owns (the event categories, the turn bands, the wake
+reasons, the work tracker's sort keys, change kinds and grouping axes, the
+config kinds, the query error codes, the push kinds, the feed length) or read
+an answer an engine test holds it to (the integrations row, a seat's memory,
+the health envelope), the declaration lives in one module per concern there,
+and nowhere else. Each is held against the engine by ONE Go test, through
+`internal/clientsource`, which finds a declaration by its name and reads it by
+its syntax, and whose `Contract()` table names every one with its reader and
+its owning gate. The table is held both ways: every row is declared in
+`src/contract/`, and every name that directory exports is a row. A second copy
+declared in a screen is two declarations, which the reader refuses.
+
+A contract module is PURE, and `contract/contract.test.ts` is what says so: it
+imports nothing but its siblings — not React, not the design system, not a
+screen's helper — declares no behaviour, loads under plain `node` exporting
+only plain data, and every name it exports is imported by something outside
+the directory. That is what lets `protocol/` compose the contract's shapes
+into `protocol.js`, and it imports them by a RELATIVE path, because that second
+build has no `~` alias and an import through one is left unresolved there
+rather than failing it.
 
 `static/dashboard/protocol.js` is a **second** build target: the protocol layer
 alone, unminified, importable by plain `node`. `internal/e2e/golden_test.go`

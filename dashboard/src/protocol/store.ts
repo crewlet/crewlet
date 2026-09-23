@@ -30,18 +30,9 @@ import type {
   Snapshot,
   ToolRow,
 } from "./types.ts";
-
-/**
- * Longest activity feed a tab keeps.
- *
- * Matches the server's own retention (`livestate.EventFeedLimit`) so a
- * reconnect's snapshot neither truncates the feed nor leaves rows the server
- * cannot resend. Exported because it is also the limit of what anything derived
- * from the feed can HONESTLY claim to know: a busy company fills 400 events in
- * minutes, and a panel covering an hour has to say where the record actually
- * starts rather than drawing the gap as quiet.
- */
-export const MAX_EVENTS = 400;
+// RELATIVE, like every contract import in this directory: it is also built
+// alone as `protocol.js`, where the `~` alias does not exist.
+import { MAX_EVENTS } from "../contract/wire.ts";
 
 /**
  * How many completed-phase envelopes a tab keeps, PAYLOAD AND ALL.
