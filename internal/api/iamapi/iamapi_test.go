@@ -62,8 +62,9 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 	opts := iamapi.Options{
 		Audit:     audit,
 		Directory: directory,
-		Authority: func(actor string, kind iam.Kind, grants []iam.Grant) iamapi.Writer {
-			writer.actor, writer.kind, writer.grants = actor, kind, grants
+		Authority: func(actor iam.Actor, kind iam.Kind, grants []iam.Grant) iamapi.Writer {
+			writer.actor, writer.operator = actor.Name, actor.OperatorID
+			writer.kind, writer.grants = kind, grants
 			return writer
 		},
 		Opener:       fakeOpener{},
@@ -262,6 +263,7 @@ func (d *fakeDirectory) KeyCensus(_ context.Context, keys iamdomain.KeyIndex) (
 // fakeWriter records what the surface asked of it.
 type fakeWriter struct {
 	actor    string
+	operator string
 	kind     iam.Kind
 	grants   []iam.Grant
 	calls    []string
@@ -1053,7 +1055,7 @@ func TestEveryRouteMountsWithAVerbTheTableKnows(t *testing.T) {
 	t.Parallel()
 	service, err := iamapi.New(iamapi.Options{
 		Directory: &fakeDirectory{},
-		Authority: func(string, iam.Kind, []iam.Grant) iamapi.Writer {
+		Authority: func(iam.Actor, iam.Kind, []iam.Grant) iamapi.Writer {
 			return &fakeWriter{}
 		},
 		Audit:        &recordingAudit{},

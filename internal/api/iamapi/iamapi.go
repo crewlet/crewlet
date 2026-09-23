@@ -131,7 +131,12 @@ type Writer interface {
 // internal/iamdomain refuses a record the party may not author and refuses
 // conferring a grant the party does not hold, so a handler that somehow
 // skipped its own check still cannot make somebody an administrator.
-type Authority func(actor string, kind iam.Kind, grants []iam.Grant) Writer
+//
+// THE ACTOR IS [iam.ActorFor]'s WHOLE ANSWER — the name and the credential it
+// acted through — because the writer announces events beside its records, and
+// a gesture a machine token made has to say so there: the token acts as its
+// owner, so the name alone reads as the owner's own.
+type Authority func(actor iam.Actor, kind iam.Kind, grants []iam.Grant) Writer
 
 // Opener opens one sealed value for the caller this surface is answering.
 //
@@ -315,8 +320,7 @@ func (s *Service) writerFor(ctx context.Context) (Writer, bool) {
 	if how != iam.Resolved {
 		return nil, false
 	}
-	actor := iam.ActorFor(principal)
-	return s.authority(actor.Name, principal.Kind, principal.Grants), true
+	return s.authority(iam.ActorFor(principal), principal.Kind, principal.Grants), true
 }
 
 // open opens one sealed value into something a screen can render.

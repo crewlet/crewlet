@@ -166,8 +166,8 @@ func wireAPI(
 	chartSurface, err := chartapi.New(chartapi.Options{
 		Reader: e.Chart(),
 		Authority: func(actor string, kind chart.AuthorKind,
-			grants []iam.Grant) chartapi.Writer {
-			return e.ChartWriter().As(actor, kind, grants)
+			grants []iam.Grant, provenance chart.Provenance) chartapi.Writer {
+			return e.ChartWriter().As(actor, kind, grants, provenance)
 		},
 		// WHO IS ASKING, THREE-VALUED, straight from what the guard
 		// resolved. It used to be a blunt translation beside the

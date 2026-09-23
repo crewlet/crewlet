@@ -4,6 +4,8 @@ import (
 	"math/rand/v2"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // TestTheZeroValueOfEveryNamedTypeIsInvalid protects the property the whole
@@ -221,6 +223,51 @@ func TestALoginIsBoundedInItsGrammar(t *testing.T) {
 	if ValidTokenID(idAt + "a") {
 		t.Errorf("a Tier A token id whose login is %d bytes is admitted",
 			len(TokenLogin(idAt+"a")))
+	}
+}
+
+// A MACHINE TOKEN'S NAME IS NOBODY'S LOGIN.
+//
+// `pat:<credential id>` is what the operator column records when a machine
+// token acts as its owner, and on a single-column trail (`created_by`) it is
+// the whole record — so a service account enrolled under the same class would
+// be a principal whose name reads as a credential nobody minted. Mutation:
+// drop the class from the machine grammar's refusal and `pat:…` enrols.
+func TestAMachineTokensNameIsNobodysLogin(t *testing.T) {
+	t.Parallel()
+	const id = "0192f00d-0000-7000-8000-00000000000a"
+	name := MachineTokenName(id)
+	if !ValidMachineTokenName(name) {
+		t.Fatalf("%q does not name the machine token it was built from", name)
+	}
+	for _, s := range []string{name, "pat:ci", "pat:" + strings.ToUpper(id)} {
+		if ValidLoginFor(KindMachine, s) || ValidLoginFor(KindPerson, s) {
+			t.Errorf("%q may be enrolled as somebody's login", s)
+		}
+	}
+	for _, s := range []string{"pat:", "pat:ci", "token:" + id, id,
+		"pat:" + strings.ToUpper(id)} {
+		if ValidMachineTokenName(s) {
+			t.Errorf("%q is taken for a machine token's name", s)
+		}
+	}
+	// THE CONTROL: the same shape under another class is an ordinary
+	// machine handle, so the refusal above is the class and not the shape.
+	if !ValidLoginFor(KindMachine, "svc:"+id) {
+		t.Fatalf("svc:%s is refused, so the case cannot tell the class "+
+			"from the shape", id)
+	}
+	// AND A PRINCIPAL CARRYING ONE VALIDATES, while one carrying anything
+	// else in that field does not.
+	p := Principal{ID: uuid.New(), Kind: KindPerson, Login: "jane.doe",
+		Stage: StageActive, Via: name}
+	if err := p.Validate(); err != nil {
+		t.Errorf("a person acting through their token: %v", err)
+	}
+	p.Via = "token:ops"
+	if err := p.Validate(); err == nil {
+		t.Error("a principal acting through a credential no machine token " +
+			"names validated")
 	}
 }
 

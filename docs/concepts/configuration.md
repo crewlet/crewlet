@@ -606,7 +606,8 @@ CREATE TABLE company_config (
     revision_id        TEXT    NOT NULL PRIMARY KEY,
     parent_revision_id TEXT    REFERENCES company_config(revision_id),
     created_at         INTEGER NOT NULL,          -- unix seconds, UTC
-    created_by         TEXT    NOT NULL,          -- token id, e.g. "founder"
+    created_by         TEXT    NOT NULL,          -- the credential: a token id ("founder"),
+                                                  -- a login, or a machine token's pat:<id>
     source             TEXT    NOT NULL,          -- "api" | "cli" | "api.revert" | "api.entity"
     summary            TEXT    NOT NULL,          -- short human-readable change note
     payload            TEXT    NOT NULL,          -- the whole document as JSON, or the
@@ -701,9 +702,12 @@ A written document is refused for breaking one. A stored revision that breaks on
 the handful that authenticate by other means or must be reachable to obtain a
 credential at all, listed below. Tokens are listed in Tier A under
 `api.auth.tokens` and resolved from environment variables at API startup. The
-matched token's `id` is recorded as `created_by` on each revision the request
-produces, so revision history carries meaningful attribution (`alice`,
-`ci-pipeline`, `ops`) rather than generic strings.
+credential a request presented is recorded as `created_by` on each revision it
+produces — a Tier A token's `id` (`ci-pipeline`, `ops`), a signed-in person's
+login (`jane.doe`), a machine token's `pat:<credential id>` — so revision
+history carries meaningful attribution rather than generic strings, and a
+revision somebody's token wrote is never mistaken for one they wrote
+themselves.
 
 ### What `allow_anonymous_read` was, and why deleting it was the only fix
 

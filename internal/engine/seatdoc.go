@@ -120,8 +120,12 @@ func (e *Engine) SetSeatDocument(ctx context.Context, handle string, body []byte
 	// which internal/chart refuses below the grant that writes the company
 	// document. Every caller of this method has already been authorized at
 	// its own door; what this says is which party the record records.
+	//
+	// THE OPERATOR IS ALSO THE CREDENTIAL, because this surface is handed
+	// one name and it is the credential's: a Tier A token's id, a machine
+	// token's `pat:<id>`, a signed-in person's login.
 	party := writer.As(operator, chart.AuthorOperator,
-		[]iam.Grant{iam.GrantConfigWrite})
+		[]iam.Grant{iam.GrantConfigWrite}, chart.Provenance{OperatorID: operator})
 	result, err := party.WriteSeat(ctx, uuid.NewString(), chart.SeatContent{
 		Handle: detail.Seat.Handle, Kind: detail.Seat.Kind,
 		Unit: detail.Seat.UnitKey,

@@ -1523,10 +1523,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// author is a property of the writer and never of the call — a
 		// chart whose author field is chosen by the caller is not an
 		// audit trail — and the party's GRANTS travel with it, because
-		// internal/chart refuses a record the party may not author.
+		// internal/chart refuses a record the party may not author — and
+		// so does the credential it acted through, which is the only
+		// thing telling a write made through somebody's token from one
+		// they made themselves.
 		Authority: func(actor string, kind chart.AuthorKind,
-			grants []iam.Grant) chartapi.Writer {
-			return e.ChartWriter().As(actor, kind, grants)
+			grants []iam.Grant, provenance chart.Provenance) chartapi.Writer {
+			return e.ChartWriter().As(actor, kind, grants, provenance)
 		},
 		// WHO IS ASKING, THREE-VALUED, straight from what the guard
 		// resolved. It used to be a blunt translation beside the

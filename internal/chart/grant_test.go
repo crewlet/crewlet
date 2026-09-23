@@ -26,7 +26,7 @@ func TestAContentRecordWithAPrivilegedFieldIsRefusedBelowItsGrant(t *testing.T) 
 
 	// A LEAD'S PARTY: no capability at all, which is the ordinary state of
 	// somebody who runs a team and does not hold the deployment.
-	lead := r.writer.As("mira", chart.AuthorHuman, nil)
+	lead := r.writer.As("mira", chart.AuthorHuman, nil, chart.Provenance{})
 
 	// The public half lands, because a public edit is a RELATION and this
 	// package deliberately decides none of it.
@@ -130,7 +130,7 @@ func TestClearingTheRuntimeHalfIsStillAPrivilegedWrite(t *testing.T) {
 			t.Parallel()
 			r := newWriteRig(t)
 			c.seed(r)
-			err := c.wipe(r.writer.As("mira", chart.AuthorHuman, nil))
+			err := c.wipe(r.writer.As("mira", chart.AuthorHuman, nil, chart.Provenance{}))
 			if !errors.Is(err, chart.ErrRefused) {
 				t.Fatalf("clearing %s's runtime half with no grants: err = %v, "+
 					"want a refusal — a write that omits it SETS it to empty",
@@ -147,7 +147,7 @@ func TestStructureIsNeverOneTeamsToChange(t *testing.T) {
 	r := newWriteRig(t)
 	r.batch("op-unit", op(chart.OpCreateUnit, chart.KindUnit, "eng", ""))
 	r.batch("op-seat", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", "eng"))
-	lead := r.writer.As("mira", chart.AuthorHuman, nil)
+	lead := r.writer.As("mira", chart.AuthorHuman, nil, chart.Provenance{})
 
 	cases := []struct {
 		name string
@@ -201,11 +201,11 @@ func TestStructureIsNeverOneTeamsToChange(t *testing.T) {
 func TestAsReplacesAPartysGrantsRatherThanCarryingThemForward(t *testing.T) {
 	t.Parallel()
 	r := newWriteRig(t)
-	if got := r.writer.As("mira", chart.AuthorHuman, nil).Grants; len(got) != 0 {
+	if got := r.writer.As("mira", chart.AuthorHuman, nil, chart.Provenance{}).Grants; len(got) != 0 {
 		t.Fatalf("a clone with no grants carries %v", got)
 	}
 	back := r.writer.As("ops", chart.AuthorOperator,
-		[]iam.Grant{iam.GrantConfigWrite}).Grants
+		[]iam.Grant{iam.GrantConfigWrite}, chart.Provenance{}).Grants
 	if len(back) != 1 || back[0] != iam.GrantConfigWrite {
 		t.Fatalf("a clone's grants = %v, want exactly what was stated", back)
 	}
@@ -214,6 +214,42 @@ func TestAsReplacesAPartysGrantsRatherThanCarryingThemForward(t *testing.T) {
 	if len(r.writer.Grants) != 1 {
 		t.Fatalf("deriving a party changed the writer it came from: %v",
 			r.writer.Grants)
+	}
+}
+
+// A PARTY'S PROVENANCE IS ITS OWN, and it lands on the history row.
+//
+// The operator a write was made through travels with the party through As
+// and is REPLACED there: a party derived from one that carried a machine token
+// must not inherit it, and one that states its token must have it on the row
+// the chart's history keeps. As took no provenance at all, so every write a
+// person made through `/chart` recorded no credential, and one made through
+// somebody's token read as theirs. Mutation: carry the source writer's
+// operator in As and the second party's row names the first party's token.
+func TestAPartysProvenanceIsItsOwnAndLandsOnTheRow(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-unit", op(chart.OpCreateUnit, chart.KindUnit, "platform", ""))
+	const via = "pat:0192f00d-0000-7000-8000-00000000000a"
+	through := r.writer.As("mira", chart.AuthorHuman,
+		[]iam.Grant{iam.GrantConfigWrite}, chart.Provenance{OperatorID: via})
+	if through.OperatorID != via {
+		t.Fatalf("the party acts through %q, want %q", through.OperatorID, via)
+	}
+	if again := through.As("dana", chart.AuthorHuman, nil,
+		chart.Provenance{}); again.OperatorID != "" || again.TurnID != "" {
+		t.Errorf("a party derived from one acting through a token inherited "+
+			"operator %q and turn %q", again.OperatorID, again.TurnID)
+	}
+	if _, err := through.WriteUnit(t.Context(), "op-unit-via", chart.UnitContent{
+		Key: "platform", Name: "Platform",
+	}); err != nil {
+		t.Fatalf("write through the token: %v", err)
+	}
+	r.drain()
+	got := r.column(`SELECT operator_id FROM chart_history ORDER BY version DESC LIMIT 1`)
+	if len(got) != 1 || got[0] != via {
+		t.Errorf("the history row names the operator %v, want %q", got, via)
 	}
 }
 

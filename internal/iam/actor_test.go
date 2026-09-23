@@ -13,6 +13,7 @@ import (
 // the four author kinds three stores already hold, under a name that is never
 // empty. There is nowhere for this function to return an error to.
 func TestActorForIsTotalOverFourCases(t *testing.T) {
+	const patID = "0192f00d-0000-7000-8000-00000000000a"
 	cases := []struct {
 		name string
 		in   Principal
@@ -31,7 +32,7 @@ func TestActorForIsTotalOverFourCases(t *testing.T) {
 	}, {
 		name: "a person bound to a seat acts as themselves",
 		in:   Principal{Kind: KindPerson, Login: "jane.doe", Seat: "founder"},
-		want: Actor{Name: "founder", Kind: ActorHuman},
+		want: Actor{Name: "founder", Kind: ActorHuman, OperatorID: "jane.doe"},
 	}, {
 		// THE SEATLESS LOGIN, which carries a dot: an operator who is
 		// not in the org chart acts as the credential, under its own
@@ -39,13 +40,13 @@ func TestActorForIsTotalOverFourCases(t *testing.T) {
 		// seat handle.
 		name: "a person with no seat acts as the credential",
 		in:   Principal{Kind: KindPerson, Login: "jane.doe"},
-		want: Actor{Name: "jane.doe", Kind: ActorOperator},
+		want: Actor{Name: "jane.doe", Kind: ActorOperator, OperatorID: "jane.doe"},
 	}, {
 		// THE MACHINE HANDLE, which carries a colon, for the same
 		// reason and into the same column.
 		name: "a machine is an operator under its own handle",
 		in:   Principal{Kind: KindMachine, Login: "ci:release"},
-		want: Actor{Name: "ci:release", Kind: ActorOperator},
+		want: Actor{Name: "ci:release", Kind: ActorOperator, OperatorID: "ci:release"},
 	}, {
 		name: "a machine with no handle is still an operator",
 		in:   Principal{Kind: KindMachine},
@@ -53,7 +54,7 @@ func TestActorForIsTotalOverFourCases(t *testing.T) {
 	}, {
 		name: "the engine names itself with the node id",
 		in:   Principal{Kind: KindEngine, Login: "node-7"},
-		want: Actor{Name: "node-7", Kind: ActorSystem},
+		want: Actor{Name: "node-7", Kind: ActorSystem, OperatorID: "node-7"},
 	}, {
 		name: "the engine with no node id is still the system",
 		in:   Principal{Kind: KindEngine},
@@ -67,7 +68,23 @@ func TestActorForIsTotalOverFourCases(t *testing.T) {
 	}, {
 		name: "a newer peer's kind is an operator nobody can name",
 		in:   Principal{Kind: Kind("delegate-swarm"), Seat: "backend-lead", Login: "ci:release"},
-		want: Actor{Name: AnonymousActor, Kind: ActorOperator},
+		want: Actor{Name: AnonymousActor, Kind: ActorOperator, OperatorID: "ci:release"},
+	}, {
+		// A MACHINE TOKEN ACTING AS ITS OWNER: the author is the owner,
+		// because it is their authority being exercised, and the
+		// operator is the TOKEN — which is the only thing that keeps its
+		// write apart from one the owner made themselves.
+		name: "a person acting through their machine token",
+		in: Principal{Kind: KindPerson, Login: "jane.doe", Seat: "founder",
+			Via: MachineTokenName(patID)},
+		want: Actor{Name: "founder", Kind: ActorHuman,
+			OperatorID: MachineTokenName(patID)},
+	}, {
+		name: "a service account acting through its token",
+		in: Principal{Kind: KindMachine, Login: "svc:ci",
+			Via: MachineTokenName(patID)},
+		want: Actor{Name: "svc:ci", Kind: ActorOperator,
+			OperatorID: MachineTokenName(patID)},
 	}}
 
 	produced := map[ActorKind]bool{}

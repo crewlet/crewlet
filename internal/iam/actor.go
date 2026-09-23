@@ -65,6 +65,16 @@ type Actor struct {
 
 	// Kind is which of the four this author is.
 	Kind ActorKind
+
+	// OperatorID is the CREDENTIAL the write was made through, recorded
+	// BESIDE the author rather than instead of it — the `operator_id`
+	// column the tracker, the knowledge base, the chart and the identity
+	// trail each carry. It is the principal's [Principal.Via] where it acts
+	// through something other than itself (`pat:<id>` for a machine token
+	// acting as its owner) and its login otherwise, so "what did this
+	// credential do" is a question an audit answers without reasoning about
+	// kinds — for a person bound to a seat too, whose author is the seat.
+	OperatorID string
 }
 
 // ActorFor is how a principal is written down.
@@ -99,22 +109,33 @@ type Actor struct {
 // [AnonymousActor] beside every change they made; the identity directory now
 // refuses an enrolment that names none, so the degradation above is reached
 // only by a principal no enrolment produced.
+//
+// AND THE OPERATOR IS WHAT IT PRESENTED: [Actor.OperatorID] is the
+// credential beside the name — the machine token a principal acts through
+// ([Principal.Via]) or, where it is its own credential, its login. A token
+// acting as its owner is the owner's AUTHORITY being exercised, so the author
+// is the owner; the operator column is what keeps that write distinguishable
+// from one the owner made themselves.
 func ActorFor(p Principal) Actor {
 	name := nameOr(RecordOwner(p))
+	operator := p.Login
+	if p.Via != "" {
+		operator = p.Via
+	}
 	switch p.Kind {
 	case KindSeat:
-		return Actor{Name: name, Kind: ActorAgent}
+		return Actor{Name: name, Kind: ActorAgent, OperatorID: operator}
 	case KindPerson:
 		if p.Seat != "" {
-			return Actor{Name: name, Kind: ActorHuman}
+			return Actor{Name: name, Kind: ActorHuman, OperatorID: operator}
 		}
-		return Actor{Name: name, Kind: ActorOperator}
+		return Actor{Name: name, Kind: ActorOperator, OperatorID: operator}
 	case KindMachine:
-		return Actor{Name: name, Kind: ActorOperator}
+		return Actor{Name: name, Kind: ActorOperator, OperatorID: operator}
 	case KindEngine:
-		return Actor{Name: name, Kind: ActorSystem}
+		return Actor{Name: name, Kind: ActorSystem, OperatorID: operator}
 	default:
-		return Actor{Name: AnonymousActor, Kind: ActorOperator}
+		return Actor{Name: AnonymousActor, Kind: ActorOperator, OperatorID: operator}
 	}
 }
 

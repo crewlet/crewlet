@@ -74,6 +74,24 @@ type Writer struct {
 	Actor     string
 	ActorKind iam.Kind
 
+	// OperatorID is the credential this writer's party acts THROUGH —
+	// [iam.Actor.OperatorID], a machine token's `pat:<id>` beside the owner
+	// it acts as — announced beside Actor on every event this writer
+	// publishes, so a token's gesture is told apart from its owner's on the
+	// audit feed.
+	//
+	// ON THE EVENTS AND NOT ON THE RECORD. The record carries its actor
+	// alone, because `iam_history` is re-encoded from the record and is in
+	// this domain's identity claim — a field an older build carries rather
+	// than knows re-encodes to different bytes on the two builds mid-upgrade
+	// — and the three gate records are pinned at [GateRecordVersion] for
+	// ever. Carrying it on the log is a record version of its own, with the
+	// deferral on older nodes that buys.
+	//
+	// Set on a party [Writer.As] derived, and never carried by As from the
+	// writer it cloned: it is the party's, like the grants.
+	OperatorID string
+
 	// Grants is what this writer's party is entitled to. A writer with
 	// none is a REAL PARTY rather than a misconfiguration — a person
 	// changing their own password holds no administrative capability —
@@ -203,7 +221,9 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 //
 // THE GRANTS REPLACE rather than accumulate, which is the whole point: a
 // surface serving many parties derives one writer per request, and grants that
-// carried forward would hand the next caller the last one's authority.
+// carried forward would hand the next caller the last one's authority. The
+// [Writer.OperatorID] is CLEARED for the same reason — the last party's token
+// named on the next party's events — and the surface states this party's own.
 //
 // THE SEQUENCE IS FRESH, and deriving one is safe from any goroutine: nothing
 // it copies is ever written after construction, so a sign-in publishing
@@ -217,6 +237,7 @@ func (w *Writer) As(actor string, kind iam.Kind, grants []iam.Grant) *Writer {
 	next.Actor = actor
 	next.ActorKind = kind
 	next.Grants = grants
+	next.OperatorID = ""
 	next.seq = &sequence{}
 	return &next
 }

@@ -40,14 +40,17 @@ import (
 // ActorOf is how a principal is written down on a work record.
 //
 // TOTAL, as [iam.ActorFor] is: every principal comes back as one of the
-// tracker's four kinds. The credential is recorded again as OperatorID, the
-// login it acted under, so "what did this credential do" is a question an
-// audit answers without reasoning about kinds — for a bound person too, whose
-// author is the seat.
+// tracker's four kinds. The credential is recorded again as OperatorID —
+// [iam.ActorFor]'s own: the machine token a principal acts through
+// (`pat:<id>`), or the login it acted under — so "what did this credential
+// do" is a question an audit answers without reasoning about kinds, for a
+// bound person too, whose author is the seat. It used to be the login alone,
+// which recorded a person's own token as the person: every item their
+// assistant filed was indistinguishable from one they filed themselves.
 func ActorOf(p iam.Principal) Actor {
 	a := iam.ActorFor(p)
 	return Actor{
-		Handle: a.Name, Kind: tracker.AuthorKind(a.Kind), OperatorID: p.Login,
+		Handle: a.Name, Kind: tracker.AuthorKind(a.Kind), OperatorID: a.OperatorID,
 	}
 }
 
@@ -65,7 +68,7 @@ func PageActorOf(p iam.Principal) (pages.Actor, error) {
 		return pages.Actor{}, fmt.Errorf("builtin: a %s cannot author a page — "+
 			"the knowledge base records agents, people and operators", a.Kind)
 	}
-	return pages.Actor{Handle: a.Name, Kind: kind, OperatorID: p.Login}, nil
+	return pages.Actor{Handle: a.Name, Kind: kind, OperatorID: a.OperatorID}, nil
 }
 
 // PrincipalActor is [WorkDeps.Actor] for a surface whose caller is on the

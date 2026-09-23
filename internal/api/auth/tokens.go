@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -104,16 +105,23 @@ func (g *Guard) WithTokens(t *Tokens) *Guard {
 	return g
 }
 
-// tokenKey carries the id of the machine token a request presented.
-type tokenKey struct{}
-
 // PresentedToken is the id of the machine token this request carried as its
 // bearer, if it carried one.
 //
-// ASKED BY THE ONE ROUTE THAT MUST KNOW: minting a token from a token would let
-// whoever holds one extend it for ever, a year at a time, with nobody present.
+// ASKED BY THE ROUTES THAT MUST KNOW: minting a token from a token would let
+// whoever holds one extend it for ever, a year at a time, with nobody present,
+// and a token may manage none of its owner's proof.
+//
+// READ OFF THE PRINCIPAL'S [iam.Principal.Via], which is the one place the
+// arm records it: a second carrier on the context beside it was a second
+// answer to "through what", and the audit trail and these refusals would have
+// asked different ones.
 func PresentedToken(ctx context.Context) (string, bool) {
-	id, ok := ctx.Value(tokenKey{}).(string)
+	principal, how := iam.From(ctx)
+	if how != iam.Resolved {
+		return "", false
+	}
+	id, ok := strings.CutPrefix(principal.Via, iam.MachineTokenPrefix)
 	return id, ok && id != ""
 }
 
@@ -167,6 +175,12 @@ func (g *Guard) token(r *http.Request, presented credential.Token,
 		// ceiling on this request.
 		Grants:    intersect(row.EffectiveGrants(), g.ceiling),
 		Colleague: row.EffectiveColleague(),
+		// AND THROUGH WHAT. The token acts as its owner, so without this
+		// every write it made was recorded exactly as the owner's own —
+		// and a token minted on somebody's account could file, edit and
+		// close their work with no row saying a token was used. The
+		// author stays the owner; the operator column names the token.
+		Via: iam.MachineTokenName(presented.ID),
 	}
 	// STEPPED UP BY CONSTRUCTION for the grants it carries, in both windows,
 	// as every non-interactive credential is: there is nothing else it could
@@ -176,7 +190,6 @@ func (g *Guard) token(r *http.Request, presented credential.Token,
 	// onto one (internal/iamdomain refuses them at the mint, and it is
 	// asserted there).
 	g.proof.stamp(&p, now)
-	ctx = context.WithValue(ctx, tokenKey{}, presented.ID)
 	if owner.Seat == "" {
 		return r.WithContext(iam.WithPrincipal(ctx, p)), nil
 	}

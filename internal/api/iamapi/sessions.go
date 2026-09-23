@@ -80,6 +80,7 @@ func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		s.audit.Emit(r.Context(), types.IAMSessionEnded{
 			Person: id, Reason: why, By: callerName(r.Context()),
+			OperatorID: callerOperator(r.Context()),
 		})
 	}
 	s.answerWrite(w, r, opID, revoked, err, map[string]any{"id": id})

@@ -281,6 +281,7 @@ func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 		s.audit.Emit(r.Context(), types.IAMSessionEnded{
 			Person: bearer.Person, Lineage: lineage,
 			Reason: types.EndLogout, By: callerName(r),
+			OperatorID: callerOperator(r),
 		})
 	}
 	log.InfoContext(r.Context(), "api_sign_out", "lineage", lineage)
@@ -297,6 +298,17 @@ func callerName(r *http.Request) string {
 		return ""
 	}
 	return iam.ActorFor(principal).Name
+}
+
+// callerOperator is the credential [callerName] acted through — a machine
+// token's `pat:<id>`, which acts as its owner, or the caller's own login — so
+// an event can tell a token's gesture from its owner's.
+func callerOperator(r *http.Request) string {
+	principal, resolution := iam.From(r.Context())
+	if resolution != iam.Resolved {
+		return ""
+	}
+	return iam.ActorFor(principal).OperatorID
 }
 
 // LogoutEverywhere ends every session this person holds, by bumping their own
@@ -339,7 +351,8 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit.Emit(r.Context(), types.IAMSessionEnded{
 		Person: person, Reason: types.EndLogoutAll,
-		By: iam.ActorFor(principal).Name,
+		By:         iam.ActorFor(principal).Name,
+		OperatorID: iam.ActorFor(principal).OperatorID,
 	})
 	log.InfoContext(r.Context(), "api_sign_out_all", "person", person)
 	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out everywhere"})
@@ -473,7 +486,8 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit.Emit(r.Context(), types.IAMSessionEnded{
 		Person: owner, Lineage: lineage, Reason: reason,
-		By: iam.ActorFor(principal).Name,
+		By:         iam.ActorFor(principal).Name,
+		OperatorID: iam.ActorFor(principal).OperatorID,
 	})
 	s.clearIfPresented(w, r, lineage)
 	log.InfoContext(r.Context(), "api_sign_out_one",

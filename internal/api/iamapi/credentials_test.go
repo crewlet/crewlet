@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -263,6 +264,35 @@ func TestATokenRevokesTokensAndNotItsOwnersProof(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A TOKEN'S GESTURE HERE SAYS IT WAS THE TOKEN.
+//
+// A token acts as its owner, so the event a revocation announces names the
+// owner as who did it — and without the credential beside it, a leaked token
+// withdrawing its owner's other tokens reads on the audit feed exactly as the
+// owner doing so. The writer's party carries it too, for the events the domain
+// announces itself. Mutation: stop stamping the operator on the revocation and
+// the event carries the owner's login.
+func TestATokensRevocationSaysItWasTheToken(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.writer.held = []iamdomain.Credential{{ID: tokenID, Method: iamdomain.MethodToken}}
+	presented, row := aliceToken(t)
+	if rec := throughTheGuard(t, r, row, http.MethodDelete,
+		"/iam/credentials/"+tokenID, presented); rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	via := iam.MachineTokenName(tokenID)
+	revoked := only[types.IAMCredentialRevoked](t, r.audit)
+	if revoked.By != "alice.admin" || revoked.OperatorID != via {
+		t.Errorf("the revocation was announced as by %q through %q, want the "+
+			"owner through %q", revoked.By, revoked.OperatorID, via)
+	}
+	if r.writer.actor != "alice.admin" || r.writer.operator != via {
+		t.Errorf("the writer acts as %q through %q, want the owner through %q",
+			r.writer.actor, r.writer.operator, via)
 	}
 }
 

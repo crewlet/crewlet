@@ -149,6 +149,49 @@ func TestAnUnboundCredentialWritesAsItsLogin(t *testing.T) {
 	}
 }
 
+// A WRITE MADE THROUGH A MACHINE TOKEN NAMES THE TOKEN.
+//
+// The guard composes a machine token as its OWNER, and the owner is the
+// author — it is their authority being exercised, and the tracker's "do not
+// wake the author" rule has to recognise them. What tells the write apart
+// from one the owner made themselves is the operator column: `pat:<id>` on the
+// work record and on the page record alike, for a person bound to a seat and
+// for a service account. It used to be the owner's login, so an item a
+// person's assistant filed and one they filed themselves were the same row.
+// Mutation: record the login again and the operator is the owner's.
+func TestAWriteThroughAMachineTokenNamesTheToken(t *testing.T) {
+	t.Parallel()
+	const token = "0192f00d-0000-7000-8000-00000000000a"
+	via := iam.MachineTokenName(token)
+	for name, c := range map[string]struct {
+		p      iam.Principal
+		author string
+		kind   tracker.AuthorKind
+	}{
+		"a person's own token": {func() iam.Principal {
+			p := boundPerson("sarah.chen", "sarah")
+			p.Via = via
+			return p
+		}(), "sarah", tracker.AuthorHuman},
+		"a service account's token": {iam.Principal{ID: uuid.New(),
+			Login: "svc:ci", Kind: iam.KindMachine, Stage: iam.StageActive,
+			Via: via}, "svc:ci", tracker.AuthorOperator},
+	} {
+		work := builtin.ActorOf(c.p)
+		if work.Handle != c.author || work.Kind != c.kind || work.OperatorID != via {
+			t.Errorf("%s: a work record is written as %q (%s) through %q, "+
+				"want %q (%s) through %q", name, work.Handle, work.Kind,
+				work.OperatorID, c.author, c.kind, via)
+		}
+		page, err := builtin.PageActorOf(c.p)
+		if err != nil || page.Handle != c.author || page.OperatorID != via {
+			t.Errorf("%s: a page record is written as %q through %q (%v), "+
+				"want %q through %q", name, page.Handle, page.OperatorID, err,
+				c.author, via)
+		}
+	}
+}
+
 // A REQUEST NOBODY RESOLVED IS REFUSED, not written as nobody.
 func TestAWriteWithNobodyBehindItIsRefused(t *testing.T) {
 	t.Parallel()

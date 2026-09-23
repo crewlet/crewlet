@@ -160,7 +160,8 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit.Emit(r.Context(), types.IAMCredentialMinted{
 		Credential: id, Kind: types.CredentialTOTP, Owner: person,
-		By: iam.ActorFor(principal).Name, Reason: reason,
+		By:         iam.ActorFor(principal).Name,
+		OperatorID: iam.ActorFor(principal).OperatorID, Reason: reason,
 	})
 	log.InfoContext(r.Context(), "api_totp_enrolled", "person", person)
 	httpjson.Write(w, http.StatusOK, map[string]string{"status": "enrolled"})
@@ -208,7 +209,8 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit.Emit(r.Context(), types.IAMCredentialMinted{
 		Credential: id, Kind: types.CredentialRecovery, Owner: person,
-		By: iam.ActorFor(principal).Name, Reason: reason,
+		By:         iam.ActorFor(principal).Name,
+		OperatorID: iam.ActorFor(principal).OperatorID, Reason: reason,
 	})
 	log.InfoContext(r.Context(), "api_recovery_regenerated", "person", person)
 	// ANSWERED ONCE AND NEVER AGAIN. What is stored is the hashes, so a

@@ -89,6 +89,12 @@ acts under `token:<id>`; and an address whose proposed login would run past the
 bound proposes none, leaving the person to type one rather than handing them a
 name cut at an arbitrary letter.
 
+**One machine class is nobody's: `pat`.** `pat:<credential id>` is how a
+[machine token](#machine-tokens-a-persons-own-and-a-service-accounts) is named
+in the operator column beside the owner it acts as, so a service account
+enrolled as `pat:something` would be a principal whose name reads as a
+credential nobody minted. The machine grammar refuses the class.
+
 **Each shape belongs to its kind, and to no other.** A person's login must be
 dotted and a machine's must be coloned — at enrolment, at an invitation's
 redemption and at every rename. That matters most for one family of names:
@@ -687,6 +693,17 @@ SHA-256 over the prefix, the id and the secret.
 directory binds them to one, exactly as their session would be — and a service
 account's is that machine, or the seat it is bound to. There is no way to mint
 one that acts as anybody else.
+
+**And every write it makes says it was the token.** The owner is the author —
+it is their authority being exercised — and the credential rides beside them
+as `operator_id: pat:<credential id>` on every work item, page and chart change
+it writes, so what somebody's assistant filed is never mistaken for what they
+filed themselves. The trails with room for one name (a configuration revision's
+`created_by`, a secret's `set_by`) record `pat:<credential id>`, and the
+identity estate's audit events carry it beside `by`. The `pat` class is
+reserved for exactly this: no service account may enrol under a login that
+starts `pat:`, so the name always means a machine token. See [who a write is
+attributed to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
 
 **It carries what it was minted with that its owner still holds.** The grants
 and the reach are named at the mint (`-grants`, `-colleague`); left out, the

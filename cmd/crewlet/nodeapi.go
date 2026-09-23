@@ -361,8 +361,13 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 		// DEPLOYMENT, which is right for a bootstrap and wrong for
 		// everything here: a directory whose author field is the node
 		// is not an audit trail.
-		Authority: func(actor string, kind iam.Kind, grants []iam.Grant) iamapi.Writer {
-			return writer.As(actor, kind, grants)
+		// And the credential it acted through rides beside the name, on
+		// every event the writer announces — a machine token acts as its
+		// owner, so the name alone is the owner's.
+		Authority: func(actor iam.Actor, kind iam.Kind, grants []iam.Grant) iamapi.Writer {
+			party := writer.As(actor.Name, kind, grants)
+			party.OperatorID = actor.OperatorID
+			return party
 		},
 		Opener:       e.PersonSealer(),
 		Bootstrap:    bootstrapReissue(nodeID, auth),

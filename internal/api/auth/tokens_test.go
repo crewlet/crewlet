@@ -335,6 +335,60 @@ func TestABoundOwnersTokenActsAsTheirSeat(t *testing.T) {
 	}
 }
 
+// A TOKEN'S WRITE SAYS IT WAS THE TOKEN.
+//
+// The arm composes a token as its OWNER — so without the credential riding
+// the principal, every row a token wrote was recorded exactly as the owner's
+// own, and a token minted on somebody's account filed, edited and closed
+// their work with nothing saying a token was used. The author stays the owner
+// (their seat, bound), and the operator is `pat:<id>` — through the one
+// conversion every row-writer asks, and through the single-column one config
+// revisions and secrets take. Mutation: drop Via from the arm and the operator
+// is the owner's login.
+func TestATokensWriteIsAttributedToTheToken(t *testing.T) {
+	t.Parallel()
+	for _, bound := range []bool{false, true} {
+		m := newMachineRig(t)
+		want := iam.MachineTokenName(m.presented.ID)
+		author := "sarah.chen"
+		if bound {
+			m.row.Owner.Seat, m.row.Owner.SeatAt = sessionSeat, 900
+			author = sessionSeat
+		}
+		got, _ := present(t, m.guard(nil), http.MethodPost, "/work/items",
+			m.presented.Value())
+		if got.how != iam.Resolved {
+			t.Fatalf("bound=%v: resolution %v (status %d)", bound, got.how,
+				got.status)
+		}
+		if got.principal.Via != want {
+			t.Errorf("bound=%v: the principal acts through %q, want %q", bound,
+				got.principal.Via, want)
+		}
+		actor := iam.ActorFor(got.principal)
+		if actor.Name != author || actor.OperatorID != want {
+			t.Errorf("bound=%v: a write is recorded as %q through %q, want %q "+
+				"through %q", bound, actor.Name, actor.OperatorID, author, want)
+		}
+		if op := auth.OperatorID(got.principal); op != want {
+			t.Errorf("bound=%v: a single-column trail records %q, want the "+
+				"token %q", bound, op, want)
+		}
+	}
+	// THE CONTROL: a Tier A bearer is its own credential, and a trail keeps
+	// recording it under the id it always has.
+	b := config.Bootstrap{}
+	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "ops-token-value-long-enough-26",
+		Grants: []iam.Grant{iam.GrantStateRead}}}
+	got, _ := present(t, auth.New(&b), http.MethodGet, "/agents",
+		"ops-token-value-long-enough-26")
+	if got.how != iam.Resolved || got.principal.Via != "" ||
+		auth.OperatorID(got.principal) != "ops" {
+		t.Errorf("a Tier A bearer resolved %v through %q, recorded as %q",
+			got.how, got.principal.Via, auth.OperatorID(got.principal))
+	}
+}
+
 // A TOKEN WHOSE SEAT IS GONE IS REFUSED NAMING IT, and one whose seat this
 // node cannot resolve is 503 — the two answers every bound credential gets.
 func TestABoundOwnersTokenIsHeldToTheirSeatsStanding(t *testing.T) {

@@ -230,7 +230,7 @@ func TestTheContinuousReportAndChartCheckNeverDisagree(t *testing.T) {
 	w := &writer{}
 	svc, err := chartapi.New(chartapi.Options{
 		Reader:    &reader{},
-		Authority: func(string, chart.AuthorKind, []iam.Grant) chartapi.Writer { return w },
+		Authority: func(string, chart.AuthorKind, []iam.Grant, chart.Provenance) chartapi.Writer { return w },
 		Principal: resolved(func() iam.Principal { return leadOf(iam.GrantStateRead) }),
 		Chart:     leads(),
 		Company:   company(view, settings),

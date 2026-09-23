@@ -74,6 +74,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // Kind is what sort of thing a principal is.
@@ -167,8 +169,13 @@ const MaxLogin = 64
 func ValidLogin(s string) bool { return len(s) <= MaxLogin && loginPattern.MatchString(s) }
 
 // ValidMachineHandle reports whether s is a well-formed machine handle.
+//
+// THE `pat` CLASS IS NOBODY'S: it is how a machine token is named in the
+// operator column ([MachineTokenPrefix]), so a handle in it would be a
+// principal indistinguishable from a credential.
 func ValidMachineHandle(s string) bool {
-	return len(s) <= MaxLogin && handlePattern.MatchString(s)
+	return len(s) <= MaxLogin && handlePattern.MatchString(s) &&
+		!strings.HasPrefix(s, MachineTokenPrefix)
 }
 
 // TokenLoginPrefix is the class segment a Tier A token's login carries.
@@ -189,6 +196,35 @@ const TokenLoginPrefix = "token:"
 
 // TokenLogin is the login a Tier A token acts under.
 func TokenLogin(id string) string { return TokenLoginPrefix + id }
+
+// MachineTokenPrefix is the class a machine token's NAME carries where the
+// audit trail records which credential a write was made through: every row
+// its owner's work lands in says `pat:<credential id>` in the operator column,
+// beside the owner as the author.
+//
+// A CLASS NO LOGIN MAY TAKE. It is coloned like a machine handle, so without a
+// reservation a service account enrolled as `pat:<something>` would be a
+// principal whose NAME reads as a credential in every single-column trail —
+// `created_by`, `set_by` — and a reader resolving it would look for a token
+// that never existed. [ValidMachineHandle] refuses the class for exactly that,
+// so the name is a machine token's and nothing else's.
+const MachineTokenPrefix = "pat:"
+
+// MachineTokenName is how a machine token is recorded as the credential a
+// write was made through ([Principal.Via]).
+func MachineTokenName(id string) string { return MachineTokenPrefix + id }
+
+// ValidMachineTokenName reports whether s names a machine token: the class and
+// a credential id in its canonical form, which is the only form one is minted
+// in.
+func ValidMachineTokenName(s string) bool {
+	id, ok := strings.CutPrefix(s, MachineTokenPrefix)
+	if !ok {
+		return false
+	}
+	parsed, err := uuid.Parse(id)
+	return err == nil && parsed.String() == id
+}
 
 // ValidTokenID reports whether a Tier A token id composes a login in the
 // machine grammar.

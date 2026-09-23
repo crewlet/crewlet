@@ -316,6 +316,13 @@ type IAMSessionEnded struct {
 	// revocation or a removal, and EMPTY for a deadline or a provider
 	// verdict, which nobody authored.
 	By string `json:"by"`
+
+	// OperatorID is the CREDENTIAL By acted through: a machine token's
+	// `pat:<id>` when it was one — which acts as its owner, so By alone
+	// cannot tell a token's gesture from its owner's — and By's own login
+	// otherwise. Empty wherever By is. The same value, under the same name,
+	// as the `operator_id` column every work, page and chart record carries.
+	OperatorID string `json:"operator_id,omitempty"`
 }
 
 // EventType is the "iam_session_ended" wire type.
@@ -513,8 +520,11 @@ type IAMCredentialMinted struct {
 	// deadline of its own.
 	ExpiresAt time.Time `json:"expires_at"`
 
-	By     string `json:"by"`
-	Reason string `json:"reason"`
+	By string `json:"by"`
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID].
+	OperatorID string `json:"operator_id,omitempty"`
+	Reason     string `json:"reason"`
 }
 
 // EventType is the "iam_credential_minted" wire type.
@@ -537,7 +547,11 @@ type IAMCredentialRevoked struct {
 	Kind       CredentialKind `json:"kind"`
 	Owner      string         `json:"owner"`
 	By         string         `json:"by"`
-	Reason     string         `json:"reason"`
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID]. A token revoking its owner's other
+	// tokens is the case it exists for.
+	OperatorID string `json:"operator_id,omitempty"`
+	Reason     string `json:"reason"`
 }
 
 // EventType is the "iam_credential_revoked" wire type.
@@ -564,6 +578,10 @@ type IAMGrantsChanged struct {
 	Added   []string `json:"added,omitempty"`
 	Removed []string `json:"removed,omitempty"`
 	By      string   `json:"by"`
+
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID].
+	OperatorID string `json:"operator_id,omitempty"`
 
 	// Version is the record's position, packed — the same number the
 	// person's row carries afterwards, so a reader can find the write in
@@ -690,7 +708,10 @@ func (e IAMRecoveryCodeUsed) Summary() string {
 type IAMMFAReset struct {
 	Person string `json:"person"`
 	By     string `json:"by"`
-	Reason string `json:"reason"`
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID].
+	OperatorID string `json:"operator_id,omitempty"`
+	Reason     string `json:"reason"`
 }
 
 // EventType is the "iam_mfa_reset" wire type.
@@ -789,6 +810,9 @@ type IAMSessionGenerationBumped struct {
 	// Generation is the new value; every bearer minted below it is over.
 	Generation uint64 `json:"generation"`
 	By         string `json:"by"`
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID].
+	OperatorID string `json:"operator_id,omitempty"`
 	Reason     string `json:"reason"`
 }
 

@@ -147,19 +147,6 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 	}, nil
 }
 
-// As is this writer acting as somebody else, and it is the ONLY way the actor
-// ever changes.
-//
-// A COPY RATHER THAN AN ARGUMENT, for the reason this file's header gives: a
-// writer acts as one party, and a surface serving many takes one writer each.
-//
-// THE GRANTS TRAVEL WITH THE ACTOR AND ARE NOT OPTIONAL, because they are a
-// property of the party rather than of the writer this one was cloned from.
-// Carrying the previous party's grants forward is the defect this signature
-// exists to make unwritable: a surface resolving an anonymous caller would
-// hand them whatever the node itself holds. A party with no capabilities
-// passes nil and may author the public half, which is the honest answer for
-// an agent editing its own team.
 // WithHolders installs the identity directory this writer consults before a
 // seat removal, and returns the writer for chaining.
 //
@@ -175,10 +162,40 @@ func (w *Writer) WithHolders(h Holders) *Writer {
 	return w
 }
 
-func (w *Writer) As(actor string, kind AuthorKind, grants []iam.Grant) *Writer {
+// Provenance is what an audit walks from a chart record back to what produced
+// it: the CREDENTIAL the write was made through — a machine token's `pat:<id>`
+// beside the owner it acts as, a Tier A token's login — and the turn behind it.
+type Provenance struct {
+	OperatorID string
+	TurnID     string
+}
+
+// As is this writer acting as somebody else, and it is the ONLY way the actor
+// ever changes.
+//
+// A COPY RATHER THAN AN ARGUMENT, for the reason this file's header gives: a
+// writer acts as one party, and a surface serving many takes one writer each.
+//
+// THE GRANTS TRAVEL WITH THE ACTOR AND ARE NOT OPTIONAL, because they are a
+// property of the party rather than of the writer this one was cloned from.
+// Carrying the previous party's grants forward is the defect this signature
+// exists to make unwritable: a surface resolving an anonymous caller would
+// hand them whatever the node itself holds. A party with no capabilities
+// passes nil and may author the public half, which is the honest answer for
+// an agent editing its own team.
+//
+// AND SO DOES THE PROVENANCE, replaced rather than carried, for the same
+// reason: the operator and the turn are the party's. As took neither, so a
+// derived writer kept whatever the writer it was cloned from carried — and
+// every chart write a person made through `/chart` recorded no credential at
+// all, so one made through somebody's machine token read exactly as theirs.
+func (w *Writer) As(actor string, kind AuthorKind, grants []iam.Grant,
+	provenance Provenance) *Writer {
+
 	next := *w
 	next.Actor, next.ActorKind = actor, kind
 	next.Grants = slices.Clone(grants)
+	next.OperatorID, next.TurnID = provenance.OperatorID, provenance.TurnID
 	return &next
 }
 

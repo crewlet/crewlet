@@ -48,8 +48,10 @@ func chartPatterns(t *testing.T) []string {
 	t.Helper()
 	seen := &patternMux{}
 	svc, err := chartapi.New(chartapi.Options{
-		Reader:    chartReaderStub{},
-		Authority: func(string, chart.AuthorKind, []iam.Grant) chartapi.Writer { return nil },
+		Reader: chartReaderStub{},
+		Authority: func(string, chart.AuthorKind, []iam.Grant, chart.Provenance) chartapi.Writer {
+			return nil
+		},
 		Principal: resolved(func() iam.Principal { return iam.Principal{} }),
 		Chart:     authz.NoChart{},
 	})

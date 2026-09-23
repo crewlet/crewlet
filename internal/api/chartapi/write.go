@@ -308,7 +308,8 @@ func (s *Service) writerFor(r *http.Request) Writer {
 	// question with more context than the domain has; passing them on is
 	// what makes the two answers one answer rather than two that could
 	// drift.
-	return s.authority(actor.Name, authorKindOf(actor.Kind), p.Grants)
+	return s.authority(actor.Name, authorKindOf(actor.Kind), p.Grants,
+		chart.Provenance{OperatorID: actor.OperatorID})
 }
 
 // authorKindOf maps the identity vocabulary's four actor kinds onto the

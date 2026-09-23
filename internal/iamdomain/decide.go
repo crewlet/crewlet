@@ -265,7 +265,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	if added, _ := grantDelta(nil, in.Grants); len(added) > 0 {
 		w.announce(ctx, result, err, types.IAMGrantsChanged{
 			Person: in.PersonID, Added: added, By: w.Actor,
-			Version: result.Position.Packed(),
+			OperatorID: w.OperatorID, Version: result.Position.Packed(),
 		})
 	}
 	// THE LINK IS ANNOUNCED ONCE THE PERSON IT PINS EXISTS, and not when
@@ -1175,7 +1175,8 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 	result, err := w.publish(ctx,
 		w.request(&rec, opID, statelog.PatternArbitrated, decide))
 	w.announce(ctx, result, err, types.IAMSessionGenerationBumped{
-		Generation: generation, By: w.Actor, Reason: reason,
+		Generation: generation, By: w.Actor, OperatorID: w.OperatorID,
+		Reason: reason,
 	})
 	return result, err
 }
@@ -2414,7 +2415,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	if added, removed := grantDelta(before, after); len(added)+len(removed) > 0 {
 		w.announce(ctx, result, err, types.IAMGrantsChanged{
 			Person: in.PersonID, Added: added, Removed: removed, By: w.Actor,
-			Version: result.Position.Packed(),
+			OperatorID: w.OperatorID, Version: result.Position.Packed(),
 		})
 	}
 	return result, err

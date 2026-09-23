@@ -229,7 +229,7 @@ func serve(t *testing.T, r *reader, who iam.Principal, relation rel) rig {
 	w := &writer{}
 	svc, err := chartapi.New(chartapi.Options{
 		Reader:    r,
-		Authority: func(string, chart.AuthorKind, []iam.Grant) chartapi.Writer { return w },
+		Authority: func(string, chart.AuthorKind, []iam.Grant, chart.Provenance) chartapi.Writer { return w },
 		Principal: resolved(func() iam.Principal { return who }),
 		Chart:     relation,
 	})
@@ -410,6 +410,48 @@ func TestAnUnauthenticatedRequestIsRefused(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("answered %d, want the table to refuse a principal with no "+
 			"stage at all", rec.Code)
+	}
+}
+
+// A CHART WRITE MADE THROUGH A MACHINE TOKEN NAMES THE TOKEN.
+//
+// The party this surface asks for is the principal's author AND the
+// credential it acted through: a lead's own token acts as the lead, so the
+// author is their seat, and the provenance is `pat:<id>`. The authority took
+// no provenance before, so a chart change made through somebody's token was
+// recorded exactly as one they made themselves. Mutation: pass an empty
+// provenance from writerFor and the party carries no operator.
+func TestAChartWriteThroughATokenNamesTheToken(t *testing.T) {
+	t.Parallel()
+	const via = "pat:0192f00d-0000-7000-8000-00000000000a"
+	who := leadOf()
+	who.Via = via
+	var author string
+	var through chart.Provenance
+	w := &writer{}
+	svc, err := chartapi.New(chartapi.Options{
+		Reader: &reader{},
+		Authority: func(actor string, _ chart.AuthorKind, _ []iam.Grant,
+			p chart.Provenance) chartapi.Writer {
+			author, through = actor, p
+			return w
+		},
+		Principal: resolved(func() iam.Principal { return who }),
+		Chart:     leads(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	mux := http.NewServeMux()
+	if err := svc.Routes(mux); err != nil {
+		t.Fatalf("Routes: %v", err)
+	}
+	if rec := patch(mux, "/chart/units/engineering", `{"name":"E"}`); rec.Code/100 != 2 {
+		t.Fatalf("the lead's write answered %d: %s", rec.Code, rec.Body.String())
+	}
+	if author != "cto" || through.OperatorID != via {
+		t.Errorf("the chart party is %q through %q, want the lead's seat "+
+			"through %q", author, through.OperatorID, via)
 	}
 }
 
@@ -744,7 +786,7 @@ func TestEveryChartRouteIsMountedThroughTheAuthorityTable(t *testing.T) {
 	seen := &recordingMux{}
 	svc, err := chartapi.New(chartapi.Options{
 		Reader:    &reader{},
-		Authority: func(string, chart.AuthorKind, []iam.Grant) chartapi.Writer { return &writer{} },
+		Authority: func(string, chart.AuthorKind, []iam.Grant, chart.Provenance) chartapi.Writer { return &writer{} },
 		Principal: resolved(nobody),
 		Chart:     rel{},
 	})
@@ -785,7 +827,7 @@ func TestASurfaceBuiltWithoutItsPartsIsRefused(t *testing.T) {
 	t.Parallel()
 	full := chartapi.Options{
 		Reader:    &reader{},
-		Authority: func(string, chart.AuthorKind, []iam.Grant) chartapi.Writer { return &writer{} },
+		Authority: func(string, chart.AuthorKind, []iam.Grant, chart.Provenance) chartapi.Writer { return &writer{} },
 		Principal: resolved(nobody),
 		Chart:     rel{},
 	}
@@ -929,7 +971,7 @@ func TestAnImportIsRefusedWhileTheFleetIsMixedVersion(t *testing.T) {
 			w := &writer{}
 			svc, err := chartapi.New(chartapi.Options{
 				Reader:    &reader{},
-				Authority: func(string, chart.AuthorKind, []iam.Grant) chartapi.Writer { return w },
+				Authority: func(string, chart.AuthorKind, []iam.Grant, chart.Provenance) chartapi.Writer { return w },
 				Principal: resolved(func() iam.Principal {
 					return leadOf(iam.GrantConfigWrite)
 				}),

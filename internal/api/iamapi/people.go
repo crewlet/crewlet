@@ -548,7 +548,7 @@ func (s *Service) DeletePerson(w http.ResponseWriter, r *http.Request) {
 		// record is durable, and never beside one nothing can confirm.
 		s.audit.Emit(r.Context(), types.IAMSessionEnded{
 			Person: id, Reason: types.EndPersonRemoved,
-			By: callerName(r.Context()),
+			By: callerName(r.Context()), OperatorID: callerOperator(r.Context()),
 		})
 	}
 	s.answerWrite(w, r, opID, removed, err, map[string]any{"id": id})
@@ -593,7 +593,8 @@ func (s *Service) PostMFAReset(w http.ResponseWriter, r *http.Request) {
 	// needs, and a failed revocation is reported to the administrator on
 	// this very answer.
 	s.audit.Emit(r.Context(), types.IAMMFAReset{
-		Person: id, By: callerName(r.Context()), Reason: reason,
+		Person: id, By: callerName(r.Context()),
+		OperatorID: callerOperator(r.Context()), Reason: reason,
 	})
 	revoked, err := writer.Revoke(r.Context(), id, opID+":revoke", reason)
 	if err != nil || !landed(revoked) {
@@ -624,6 +625,17 @@ func callerName(ctx context.Context) string {
 		return iam.AnonymousActor
 	}
 	return iam.ActorFor(principal).Name
+}
+
+// callerOperator is the credential [callerName] acted through, as an event
+// beside it records it: a machine token's `pat:<id>` — which acts as its owner,
+// so the name alone says the owner did it — or the caller's login.
+func callerOperator(ctx context.Context) string {
+	principal, how := iam.From(ctx)
+	if how != iam.Resolved {
+		return ""
+	}
+	return iam.ActorFor(principal).OperatorID
 }
 
 // answerRead answers a write that turned out to change nothing by reading the

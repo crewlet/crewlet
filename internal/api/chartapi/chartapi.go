@@ -108,7 +108,12 @@ type Writer interface {
 // THE GRANTS TRAVEL WITH THE PARTY, and they are not this package's opinion:
 // internal/chart refuses a record the party may not author, so a handler that
 // somehow skipped its own check still cannot write a seat's credentials.
-type Authority func(actor string, kind chart.AuthorKind, grants []iam.Grant) Writer
+//
+// AND SO DOES THE CREDENTIAL IT ACTED THROUGH, in the provenance: a person's
+// machine token acts as them, so without it a chart change made through
+// somebody's token was recorded exactly as one they made themselves.
+type Authority func(actor string, kind chart.AuthorKind, grants []iam.Grant,
+	provenance chart.Provenance) Writer
 
 // Fleet answers whether this fleet is uniform enough to accept a
 // whole-company import.

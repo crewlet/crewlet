@@ -168,6 +168,25 @@ type Principal struct {
 
 	// Stage is how far through enrolment this principal is.
 	Stage Stage
+
+	// Via is the credential this principal is acting THROUGH, named as the
+	// audit trail records it, when that credential is not the principal
+	// itself: `pat:<id>` for a machine token acting as its owner
+	// ([MachineTokenName]).
+	//
+	// EMPTY FOR A PRINCIPAL THAT IS ITS OWN CREDENTIAL — a Tier A token's
+	// login already names the token, a session's person signed in as
+	// themselves, a seat is its own turn — and that is the meaningful zero:
+	// [ActorFor] then records the login as the operator, which is what every
+	// one of those rows has always carried.
+	//
+	// WHY IT EXISTS: a machine token is composed as its OWNER, so without
+	// this every write one made was recorded exactly as the owner's own, and
+	// a token minted on somebody's account could file, edit and close their
+	// work with no row saying a token was used, let alone which. The author
+	// stays the owner — it is their authority being exercised — and this is
+	// the column beside it that says through what.
+	Via string
 }
 
 // Can reports whether this principal carries g.
@@ -289,6 +308,14 @@ func (p Principal) Validate() error {
 			return fmt.Errorf("%w: an %s principal must carry its node id in `login`",
 				ErrInvalidPrincipal, p.Kind)
 		}
+	}
+	// A CREDENTIAL IT ACTS THROUGH IS ONE THIS BUILD NAMES. Via is written
+	// into every row the principal authors, so a value in no namespace would
+	// be an operator column no reader can resolve back to anything.
+	if p.Via != "" && !ValidMachineTokenName(p.Via) {
+		return fmt.Errorf("%w: via %q does not name a machine token — it is "+
+			"%s followed by the credential's id", ErrInvalidPrincipal, p.Via,
+			MachineTokenPrefix)
 	}
 	return nil
 }

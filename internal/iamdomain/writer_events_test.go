@@ -175,3 +175,36 @@ func TestInvalidatingEverySessionIsAnnouncedWithItsGeneration(t *testing.T) {
 		}
 	}
 }
+
+// A GESTURE MADE THROUGH A TOKEN IS ANNOUNCED AS ONE.
+//
+// A machine token acts as its owner, so the name on an announced event is the
+// owner's; the party's OperatorID is what says a token made it, and it is the
+// PARTY's — As clears it, so the next party derived from this writer never
+// announces somebody else's token. Mutation: announce the actor alone, or
+// carry the operator through As, and one of the two rows is wrong.
+func TestAGestureMadeThroughATokenIsAnnouncedAsOne(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	const via = "pat:0192f00d-0000-7000-8000-00000000000a"
+	party := rig.writer.As("ana.admin", iam.KindPerson, iam.AllGrants)
+	party.OperatorID = via
+	if _, err := party.InvalidateAll(rig.t.Context(), "op-through-token",
+		"restored from a backup"); err != nil {
+		t.Fatalf("invalidate: %v", err)
+	}
+	rig.drain()
+	seen := rig.events.take()
+	if len(seen) != 1 {
+		t.Fatalf("announced %d events, want 1", len(seen))
+	}
+	if row, _ := seen[0].(types.IAMSessionGenerationBumped); row.By != "ana.admin" ||
+		row.OperatorID != via {
+		t.Errorf("announced as by %q through %q, want the owner through %q",
+			row.By, row.OperatorID, via)
+	}
+	if next := party.As("dana.sre", iam.KindPerson, nil); next.OperatorID != "" {
+		t.Errorf("a party derived from one acting through a token carries "+
+			"its operator %q", next.OperatorID)
+	}
+}

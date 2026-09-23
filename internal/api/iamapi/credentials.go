@@ -247,8 +247,9 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	s.audit.Emit(r.Context(), types.IAMCredentialMinted{
 		Credential: id, Kind: types.CredentialToken, Owner: owner,
 		Grants: granted, Colleague: string(minted.Colleague),
-		ExpiresAt: minted.ExpiresAt,
-		By:        iam.ActorFor(principal).Name, Reason: reason,
+		ExpiresAt:  minted.ExpiresAt,
+		By:         iam.ActorFor(principal).Name,
+		OperatorID: iam.ActorFor(principal).OperatorID, Reason: reason,
 	})
 	// THE VALUE IS IN THIS ANSWER AND IN NOTHING ELSE. It is not logged,
 	// not stored, and not readable back — a second route that returned it
@@ -397,7 +398,8 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		"person", person, "credential", id)
 	s.audit.Emit(r.Context(), types.IAMCredentialRevoked{
 		Credential: id, Kind: types.CredentialKind(method), Owner: person,
-		By: callerName(r.Context()), Reason: reason,
+		By: callerName(r.Context()), OperatorID: callerOperator(r.Context()),
+		Reason: reason,
 	})
 	s.answerWrite(w, r, opID, revoked, nil, map[string]any{"id": id})
 }

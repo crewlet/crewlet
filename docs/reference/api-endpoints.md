@@ -2972,11 +2972,13 @@ The **person or credential the request resolved to**, converted once for every
 surface that has a request rather than a turn — this one and the
 [write surface](#the-human-write-surface) below:
 
-| Who is calling | Recorded as | Author kind |
-|---|---|---|
-| A person the identity directory binds to a seat | the **seat's handle** | `human` |
-| A person bound to no seat | their **login** (`jane.doe`) | `operator` |
-| A Tier A token or a machine credential | its **whole login** (`token:ops`) | `operator` |
+| Who is calling | Recorded as | Author kind | `operator_id` |
+|---|---|---|---|
+| A person the identity directory binds to a seat | the **seat's handle** | `human` | their login |
+| A person bound to no seat | their **login** (`jane.doe`) | `operator` | their login |
+| A person's own [machine token](#post-iamcredentials-mints-a-machine-token) | the **owner**, as above — their seat when bound | `human` or `operator` | **`pat:<credential id>`** |
+| A service account's machine token | the account's **login** (`svc:ci`), or its seat when bound | `operator` | **`pat:<credential id>`** |
+| A Tier A token | its **whole login** (`token:ops`) | `operator` | its login |
 
 The seat half is what lets the tracker leave you out of the wake your own
 change sends: nobody is woken about what they just did, and the tracker
@@ -2984,9 +2986,24 @@ recognises the author by the name the record carries — so a person recorded
 under a token's id was woken about every edit they made. The login half keeps
 the colon: `token:ops` can never be a seat's handle, where the bare `ops` could
 be, and an own-record rule comparing names would then admit a credential into
-the record of the seat that shares its spelling. The credential is recorded
-again beside the author, so an audit can ask what one token did without
-reasoning about kinds.
+the record of the seat that shares its spelling.
+
+**The credential is recorded again beside the author**, as `operator_id` on
+every work, page and chart record, so an audit can ask what one credential did
+without reasoning about kinds. A machine token acts as its owner — it is their
+authority being exercised, so they are the author — and `operator_id` is what
+tells a write their assistant made through it from one they made themselves;
+before it carried `pat:<id>` the two were the same row, and a token minted on
+somebody's account could file, edit and close their work with nothing saying a
+token was used. The trails with room for one name — a configuration revision's
+`created_by`, a secret's `set_by` — record the credential for the same reason:
+`pat:<id>` for a machine token, whose owner the credential listing and the
+identity trail's mint row name. The identity estate's own audit events
+(`iam_credential_revoked`, `iam_session_ended`,
+`iam_session_generation_bumped`, …) carry it as `operator_id` beside `by`; the
+`iam_history` rows `GET /iam/audit` reads name the actor alone, because they
+are re-encoded from the identity log's own records and those carry no
+`operator_id`.
 
 There is deliberately **no way for the caller to name a seat to act as**. That
 would let anybody holding the token write as anybody, and a tracker whose

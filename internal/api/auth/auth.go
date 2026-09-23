@@ -482,16 +482,24 @@ func OperatorOf(ctx context.Context) string {
 }
 
 // OperatorID is the id a principal is recorded under on the surfaces that key
-// on one: the bare token id, without the `token:` class its login carries,
-// because that is the string a stored revision's `created_by` and a secret's
-// `set_by` already hold.
+// on one: the CREDENTIAL — the bare token id, without the `token:` class its
+// login carries, because that is the string a stored revision's `created_by`
+// and a secret's `set_by` already hold; a machine token's `pat:<id>`; and a
+// signed-in person's login.
 //
-// A CONVERSION RATHER THAN A SECOND IDENTITY. What a row should carry in the
-// long run is [iam.ActorFor]'s answer — a name AND a kind — and this exists
-// for the columns that predate it, so the day those two tables take their
-// author kind from that function nothing migrates.
+// THE CREDENTIAL AND NOT THE OWNER, for a machine token too, because these
+// columns have room for one name and it has to be the one that tells a
+// token's write from its owner's: a revision written through somebody's token
+// and recorded under their login is indistinguishable from one they wrote
+// themselves, and the token names its owner in the credential listing and in
+// the identity trail's mint row. [iam.ActorFor] is where the owner and the
+// credential sit side by side, which is what these columns predate.
+//
+// A CONVERSION RATHER THAN A SECOND IDENTITY — it is [iam.ActorFor]'s own
+// operator, with the Tier A class stripped — so the day those two tables take
+// their author and kind from that function nothing migrates.
 func OperatorID(p iam.Principal) string {
-	return strings.TrimPrefix(p.Login, iam.TokenLoginPrefix)
+	return strings.TrimPrefix(iam.ActorFor(p).OperatorID, iam.TokenLoginPrefix)
 }
 
 // WithOperator attaches a principal carrying one operator id and NO GRANTS.
