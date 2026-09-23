@@ -1028,28 +1028,42 @@ func (h *held) release(ctx context.Context) {
 //	refuse archived, refuse a required field the task lacks → A the tags
 //	the subtree carries that the target lacks → A the alias on the former
 //	key at expectation 0 → A the counter, a RANGE mint for the whole
-//	subtree → A the root task, carrying the range's BASE and its length →
-//	per batch of ≤64 descendants, A per descendant on its own subject →
+//	subtree → A the root task on the range's first number → per
+//	descendant, in (depth, id) order, A on its own subject on the next →
 //	release.
-//
-// # Why the base rides the root record
-//
-// The range's base is NOT recoverable afterwards. By the time a duty completes
-// an abandoned walk, other creates have advanced the counter — so a duty that
-// recomputed the base would assign a different key to the same descendant on a
-// different node, and the walk would stop being idempotent. The ordering by
-// (depth, id) fixes the ORDER; only the base fixes the ORIGIN.
 //
 // THE SOURCE PROJECT'S ORDER IS NOT REWRITTEN. The rows leave it entirely, so
 // there is nothing to place; what covers a reader whose closure names the
 // source is this sequence's own scope, which carries BOTH containers.
 //
+// # Re-running it
+//
+// Under the SAME operation id — what a caller told `unknown` does, and what a
+// turn re-run after a crash does — and every step answers for itself: the
+// tags, the alias and each task's move are answered from the ledger where they
+// landed. A ROOT ALREADY IN THE TARGET that this operation moved is the move's
+// answer, `applied`, and whatever descendants have not followed it are moved
+// now ([Writer.finishMove]); one this operation did NOT move is refused, since
+// somebody else moved it. It used to be refused either way — "already in" the
+// project the move itself had put it in.
+//
+// The descendants left behind are moved on a FRESH range, and the numbers the
+// first run minted for them are a gap. Nothing records which number was meant
+// for which task, and a range re-derived from the subtree as it stands now
+// would pair numbers with tasks differently: its membership moves as tasks are
+// filed and re-parented, so the (depth, id) order fixes a walk's order and not
+// a key assignment anybody can reproduce.
+//
+// Each descendant's step is named by the DESCENDANT, never by its place in the
+// walk, for the reason [Writer.UpdateTasks] gives: the ledger answers a step's
+// id with whatever it recorded under it, and a re-run's walk is shorter than
+// the first run's.
+//
 // CRASH RESIDUE: a tag declared with no task yet (harmless); an alias for a key
-// still held (harmless — the apply never lowers `current`); a numbering gap of
-// at most 64; descendants still keyed in the old project. REPAIRER: the tracker
-// duty, on a claim whose heartbeat aged past [ClaimStale], completes the walk
-// idempotently — a descendant whose row already carries the target project
-// writes nothing.
+// still held (harmless — the apply never lowers `current`); a numbering gap;
+// descendants still keyed in the old project. REPAIRER: the re-run above, and
+// nothing else — no duty completes an abandoned walk, which is why a walk that
+// stops says to re-run it.
 func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target string,
 	newTags []Tag) (WriteResult, error) {
 
@@ -1065,11 +1079,12 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	}
 	defer claim.release(ctx)
 
-	// The subtree, read ONCE and ordered by (depth, id) — the ordering the
-	// range assignment is a pure function of, so a duty completing this
-	// walk on another node assigns every descendant the same key.
-	var root Task
-	var subtree []Task
+	// The subtree, read ONCE and ordered by (depth, id) — see [readSubtree].
+	var (
+		root    Task
+		subtree []Task
+		arrived bool
+	)
 	if w.db == nil {
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
 			"so it cannot read the subtree a cross-project move re-keys")
@@ -1087,10 +1102,15 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			return fmt.Errorf("tracker: task %s has a parent, and only a ROOT "+
 				"task moves between projects — moving a subtask alone would "+
 				"leave it in a project its parent is not in", taskID)
-		case current.Project == target:
-			return fmt.Errorf("tracker: task %s is already in %s", taskID, target)
 		}
 		root = current
+		if current.Project == target {
+			// ALREADY THERE: a re-run of this move, or somebody else's
+			// — which of the two is the ledger's to say, not this read.
+			arrived = true
+			subtree, err = readSubtree(ctx, tx, taskID)
+			return err
+		}
 		project, held, err := readProject(ctx, tx, target)
 		switch {
 		case err != nil:
@@ -1110,6 +1130,9 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return err
 	}); err != nil {
 		return WriteResult{}, err
+	}
+	if arrived {
+		return w.finishMove(ctx, opID, root, target, subtree)
 	}
 	if len(subtree) > MaxDescendants {
 		return WriteResult{}, fmt.Errorf("tracker: task %s has %d descendants "+
@@ -1140,35 +1163,119 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	}
 
 	base, _, err := w.mintKey(ctx, stepID(opID, "counter"), target, 1+len(subtree), nil)
+	if errors.Is(err, errMintLanded) {
+		// THE COUNTER STEP LANDED UNDER AN EARLIER COPY and the root has
+		// not moved — this node read it in its old project — so the range
+		// that copy took is on the log and not here. This run takes one
+		// of its own, and the earlier one is the gap.
+		base, _, err = w.mintKey(ctx,
+			stepID(statelog.NewOpID(time.Now(), "remint"), "counter"),
+			target, 1+len(subtree), nil)
+	}
 	if err != nil {
 		return WriteResult{}, err
 	}
 
 	former := append(append([]string{}, root.FormerKeys...), root.Key)
-	rootKey := fmt.Sprintf("%s-%d", target, base)
-	rootRank, err := IntegerAt(base)
-	if err != nil {
-		return WriteResult{}, err
-	}
 	result, err := w.moveOne(ctx, stepID(opID, "root"), root, target, former,
-		&KeyMint{N: base, Base: base, Length: 1 + len(subtree)})
+		&KeyMint{N: base})
 	if err != nil {
 		return result, err
 	}
+	if err = w.moveDescendants(ctx, opID, target, subtree, base+1); err != nil {
+		return result, err
+	}
+	if result.Collapsed {
+		// THE ROOT MOVED UNDER AN EARLIER COPY that this node had not
+		// applied when it read it, so its key is that copy's number,
+		// read off its row, and base is the gap.
+		return w.landedTask(ctx, result.Result, taskID)
+	}
+	rootRank, err := IntegerAt(base)
+	if err != nil {
+		return result, err
+	}
+	result.Key, result.Rank = fmt.Sprintf("%s-%d", target, base), rootRank
+	return result, nil
+}
 
-	for i, descendant := range subtree {
-		n := base + uint64(i) + 1
-		step := stepID(opID, fmt.Sprintf("d%d", i))
-		if _, err := w.moveOne(ctx, step, descendant, target,
-			append(append([]string{}, descendant.FormerKeys...), descendant.Key),
-			&KeyMint{N: n}); err != nil {
-			return result, fmt.Errorf("tracker: %d of %d descendants moved; the "+
-				"tracker duty completes the rest idempotently: %w",
-				i, len(subtree), err)
+// finishMove answers a move whose root is already in the target project: a
+// re-run of a move that got at least as far as its root.
+//
+// THE ROOT'S STEP IS ASKED FOR, AND ONLY ANSWERED, the way [Writer.resumeCreate]
+// asks for a create's task: the ledger answers it before the Decide runs if
+// THIS operation moved the root, and a Decide that does run means somebody
+// else did, which is a refusal. Then every descendant still outside the target
+// follows it, on a fresh range — see [Writer.MoveTaskToProject] for why never
+// the first run's.
+func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
+	target string, subtree []Task) (WriteResult, error) {
+
+	subject := TaskSubject(root.ID)
+	scope := ScopeSet{Subject: true, Container: target}
+	answered, err := w.publish(ctx, statelog.Request{
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    stepID(opID, "root"),
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(*sql.Tx, statelog.Stamp) (statelog.Decision, error) {
+			return statelog.Decision{}, fmt.Errorf("tracker: task %s is already "+
+				"in %s, and this node's operation ledger holds no record of "+
+				"this move putting it there", root.ID, target)
+		},
+	})
+	switch {
+	case err != nil:
+		return WriteResult{Result: answered}, err
+	case answered.Outcome == statelog.OutcomeUnknown:
+		// THE LEDGER CANNOT SAY, so neither can this call — and moving
+		// the rest on a root that another operation may have moved would
+		// finish somebody else's walk under this one's name.
+		return WriteResult{Result: answered}, nil
+	}
+	var left []Task
+	for _, descendant := range subtree {
+		if descendant.Project != target {
+			left = append(left, descendant)
 		}
 	}
-	result.Key, result.Rank = rootKey, rootRank
-	return result, nil
+	if len(left) > MaxDescendants {
+		return WriteResult{Result: answered}, fmt.Errorf("tracker: task %s has "+
+			"%d descendants still to move and a move carries at most %d",
+			root.ID, len(left), MaxDescendants)
+	}
+	if len(left) > 0 {
+		base, _, err := w.mintKey(ctx,
+			stepID(statelog.NewOpID(time.Now(), "remint"), "counter"),
+			target, len(left), nil)
+		if err != nil {
+			return WriteResult{Result: answered}, err
+		}
+		if err := w.moveDescendants(ctx, opID, target, left, base); err != nil {
+			return WriteResult{Result: answered}, err
+		}
+	}
+	out := WriteResult{Result: answered}
+	out.Key, out.Rank = root.Key, root.Rank
+	return out, nil
+}
+
+// moveDescendants moves each of a subtree's descendants, in order, on the
+// consecutive numbers from base.
+func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
+	descendants []Task, base uint64) error {
+
+	for i, descendant := range descendants {
+		if _, err := w.moveOne(ctx, stepID(opID, "task-"+descendant.ID),
+			descendant, target,
+			append(append([]string{}, descendant.FormerKeys...), descendant.Key),
+			&KeyMint{N: base + uint64(i)}); err != nil {
+			return fmt.Errorf("tracker: %d of %d descendants moved; re-run the "+
+				"move under the same operation id, which moves the rest: %w",
+				i, len(descendants), err)
+		}
+	}
+	return nil
 }
 
 // moveOne re-homes one task of a moving subtree.

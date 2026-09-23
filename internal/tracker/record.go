@@ -1326,22 +1326,15 @@ const MaxCommitBytes = 1_279_262
 
 // KeyMint is a counter value a record took, carried on the record that uses it.
 //
-// # Why the RANGE rides the record and is not recomputed
-//
-// A cross-project move re-keys a whole subtree from one range mint, and the
-// base is NOT recoverable afterwards: by the time a duty completes an
-// abandoned walk, other creates have advanced the counter, so a duty that
-// recomputed the base would assign a different key to the same descendant on a
-// different node. The ordering by (depth, id) fixes the ORDER; only the base on
-// the record fixes the ORIGIN — which is what makes the walk's completion a
-// pure function of the record rather than of when it runs.
+// ONE NUMBER, even on the root of a moving subtree. The root's record carried
+// the whole range's base and length once, for a duty that would complete an
+// abandoned walk by re-deriving every descendant's number from them; no such
+// duty was ever written, nothing read the two fields, and the re-derivation
+// could not have worked — the subtree's membership moves while a walk is
+// stopped. A move that stopped is finished by its re-run, on a fresh range
+// ([Writer.MoveTaskToProject]).
 type KeyMint struct {
 	// N is the counter value this task took. Its key is "<PROJECT>-<n>"
 	// and its rank is the n-th key of the create lattice.
 	N uint64 `json:"n"`
-
-	// Base and Length describe the whole range, on the ROOT record of a
-	// moving subtree alone. Zero on every other mint.
-	Base   uint64 `json:"base,omitempty"`
-	Length int    `json:"length,omitempty"`
 }

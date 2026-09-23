@@ -265,17 +265,6 @@ func readAlias(ctx context.Context, tx *sql.Tx, key string) (string, bool, error
 	return task, true, nil
 }
 
-// readSubtree is every descendant of a root task, ORDERED BY (depth, id).
-//
-// # Why the order is part of the answer
-//
-// A cross-project move assigns each descendant a key from one minted range,
-// and a duty completing an abandoned walk on another node has to assign the
-// SAME key to the same descendant. The base rides the root's record; this
-// ordering is the other half, and it is by (depth, id) because both are
-// stable: a depth is a fact about the tree and an id never changes, while
-// anything ordered by a rank or a title would re-order under an edit somebody
-// made while the walk ran.
 // readChildBatch is one batch of a task's DIRECT children.
 //
 // # Why direct children rather than the subtree
@@ -317,6 +306,16 @@ func readChildBatch(ctx context.Context, tx *sql.Tx, parent, after string,
 	return scanSubtree(rows, parent)
 }
 
+// readSubtree is every descendant of a root task, ORDERED BY (depth, id).
+//
+// A STABLE ORDER, because both of its readers — a cross-project move and a
+// subtree's removal — walk it one append at a time: a depth is a fact about
+// the tree and an id never changes, while anything ordered by a rank or a
+// title would re-order under an edit somebody made while the walk ran. It is
+// a walk's order and NOT a key assignment a later run can reproduce, since the
+// membership itself moves as tasks are filed and re-parented — which is why a
+// move's re-run mints a fresh range for what is left rather than re-deriving
+// the first run's.
 func readSubtree(ctx context.Context, tx *sql.Tx, root string) ([]Task, error) {
 	rows, err := tx.QueryContext(ctx, `
 		WITH RECURSIVE descendants(id, depth) AS (
