@@ -497,6 +497,18 @@ the token's own name rather than to a seat — so an audit can tell your edit
 from an agent's. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
+Once you sign in as a person, give the assistant **your own** token rather than
+the deployment's. It acts as you — your seat, your grants — and every write it
+makes also records `pat:<its id>`, so what the assistant did stays tellable
+from what you did. Nobody else can mint it, an administrator included; you mint
+it yourself, and the command signs in as you for that one request:
+
+```bash
+crewlet iam token -login jane.doe -label "my assistant"   # asks for your password
+```
+
+See [machine tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts).
+
 The same picture is available over the API:
 
 ```bash

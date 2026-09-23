@@ -178,7 +178,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "config":
 		return runConfig(rest, stdout, stderr)
 	case "iam":
-		return runIAM(rest, stdout, stderr)
+		return runIAM(rest, os.Stdin, stdout, stderr)
 	case "chart":
 		return runChart(rest, stdout, stderr)
 	case "migrate":

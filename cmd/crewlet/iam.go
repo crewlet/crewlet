@@ -58,8 +58,10 @@ Usage:
   crewlet iam revoke ID                                End every session and token they hold
   crewlet iam sessions ID                              Their sessions, newest first
   crewlet iam credentials [-person ID]                 What somebody proves themselves with
-  crewlet iam token [-person ID] [-label L] [-days N] [-grants G,...] [-colleague L]
-                                                       Mint a machine token, shown ONCE
+  crewlet iam token -login L [-code C] [-label L] [-days N] [-grants G,...] [-colleague L]
+                                                       Mint YOUR OWN machine token, shown ONCE
+  crewlet iam token -person ID [-label L] [-days N] [-grants G,...] [-colleague L]
+                                                       Mint a service account's, shown ONCE
   crewlet iam revoke-credential CREDENTIAL_ID [-person ID]
                                                        Withdraw one credential
   crewlet iam reset-mfa ID                             Clear the second factor and end sessions
@@ -88,10 +90,21 @@ A token minted by "iam token" acts as the person or service account it names,
 carrying at most what they hold now, for at most a year (90 days unless -days
 says otherwise). It is itself a CREWLET_API_TOKEN for every other command — but
 it cannot mint another token, and it cannot change how its owner signs in.
+
+A person's token is theirs alone to mint: whoever mints one sees its value, and
+it acts as them. So "iam token -login" signs you in for the one request — the
+password from the terminal without echo, or the first line piped in, with the
+second-factor code from -code or the next line — mints, and signs out, reading
+no CREWLET_API_TOKEN. An administrator mints with -person for SERVICE ACCOUNTS
+only; every write the token makes is recorded as its owner's, through
+pat:<credential id>.
 `
 
 // runIAM dispatches `crewlet iam`.
-func runIAM(args []string, stdout, stderr io.Writer) error {
+//
+// STDIN IS AN ARGUMENT for the one subcommand that reads it — `token -login`,
+// whose password is never a flag — so a suite can pipe one in.
+func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, iamUsage, defaultBootstrapPath)
@@ -120,7 +133,10 @@ func runIAM(args []string, stdout, stderr io.Writer) error {
 	stage := fs.String("stage", "", "narrow the directory to one enrolment stage")
 	term := fs.String("q", "", "narrow the directory on a login or a seat")
 	limit := fs.Int("limit", 0, "how many rows at most")
-	login := fs.String("login", "", "the login to create somebody under")
+	login := fs.String("login", "",
+		"the login to create somebody under, or to sign in as to mint your own token")
+	code := fs.String("code", "",
+		"a second-factor code, for `token -login` (else read after the password)")
 	email := fs.String("email", "", "the address to create somebody under")
 	kind := fs.String("kind", "", "person or machine (create only)")
 	name := fs.String("name", "", "the person's own name")
@@ -154,16 +170,44 @@ func runIAM(args []string, stdout, stderr io.Writer) error {
 			"jane.doe for a person, -login ci:release (or token:<id>) for a " +
 			"machine — every principal enrols with one")
 	}
+	// A TOKEN HAS AN OWNER, and which kind decides who may mint it: a
+	// person mints their own, signed in (-login), and a service account's
+	// is minted by whoever manages people (-person). Naming both, or
+	// neither, is told so here rather than by the node.
+	if sub == "token" {
+		owner := strings.TrimSpace(orSubject(*person, subject))
+		switch self := strings.TrimSpace(*login); {
+		case self != "" && owner != "":
+			return errors.New("name one owner: -login signs in to mint your " +
+				"own token, -person names the service account an " +
+				"administrator mints one for")
+		case self == "" && owner == "":
+			return errors.New("name the owner: -login <your login> to mint " +
+				"your own token, or -person <service account id> to mint one " +
+				"for a pipeline")
+		}
+	}
 	boot, err := config.LoadBootstrap(*bootstrapPath, config.EnvOnly())
 	if err != nil {
 		return fmt.Errorf("read %s: %w", *bootstrapPath, err)
+	}
+	ctx := context.Background()
+	out := &iamPrinter{w: stdout, raw: *asJSON}
+	if sub == "token" && strings.TrimSpace(*login) != "" {
+		// YOUR OWN TOKEN, which only your own session may mint: this
+		// signs in for the one request and never reads
+		// CREWLET_API_TOKEN. See iamself.go.
+		body, err := iamTokenBody(*grants, *colleague, *label, *days)
+		if err != nil {
+			return err
+		}
+		return out.token(mintOwnToken(ctx, boot, *apiURL,
+			strings.TrimSpace(*login), *code, body, stdin, stderr))
 	}
 	client, err := newIAMClient(boot, *apiURL)
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
-	out := &iamPrinter{w: stdout, raw: *asJSON}
 
 	switch sub {
 	case "people":
@@ -235,19 +279,14 @@ func runIAM(args []string, stdout, stderr io.Writer) error {
 		return out.credentials(client.get(ctx, "/iam/credentials",
 			withPerson(orSubject(*person, subject))))
 	case "token":
+		// A SERVICE ACCOUNT'S, the one kind an administrator mints for.
 		// THE OWNER IS A QUERY PARAMETER, never a body field: it is the
 		// value the authority table decides on, and a body naming
 		// somebody else is a second answer to "whose" the route no
-		// longer reads. Omitted, the owner is whoever this credential
-		// resolves to — which for the deployment's Tier A token is
-		// nobody, and the node says so.
-		body, err := iamGrantsBody(*grants, *colleague)
+		// longer reads.
+		body, err := iamTokenBody(*grants, *colleague, *label, *days)
 		if err != nil {
 			return err
-		}
-		body["label"] = *label
-		if *days > 0 {
-			body["expires_in_days"] = *days
 		}
 		return out.token(client.call(ctx, http.MethodPost, "/iam/credentials",
 			withPerson(orSubject(*person, subject)), body))
@@ -375,6 +414,20 @@ func iamGrantsBody(grants, colleague string) (map[string]any, error) {
 	default:
 		return nil, fmt.Errorf("%q is not a colleague level: none, read or write",
 			level)
+	}
+	return body, nil
+}
+
+// iamTokenBody is a mint's request: what the token carries, what it is called
+// and how long it lasts — the same whoever the owner is.
+func iamTokenBody(grants, colleague, label string, days int) (map[string]any, error) {
+	body, err := iamGrantsBody(grants, colleague)
+	if err != nil {
+		return nil, err
+	}
+	body["label"] = label
+	if days > 0 {
+		body["expires_in_days"] = days
 	}
 	return body, nil
 }

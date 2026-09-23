@@ -497,7 +497,9 @@ listener. A second process cannot publish one.
 command helps itself from. Export one of its values, or a machine token
 minted with `crewlet iam token` — which acts as the person or service account
 it was minted for, and is refused only `iam token` itself and the gestures
-about how its owner signs in.
+about how its owner signs in. The one exception is `iam token -login`, which
+mints **your own** token and therefore signs in as you instead of reading the
+variable at all.
 
 | Command | What it does |
 |---|---|
@@ -515,7 +517,7 @@ about how its owner signs in.
 | `revoke ID` | End every session and token they hold, by bumping their revocation epoch |
 | `sessions ID` | Their sessions, newest first, ended ones included |
 | `credentials` | What somebody proves themselves with. `-person` names them; without it, yourself |
-| `token` | Mint a machine token for `-person` — a person's own, or a service account's. Prints the value **once**; the estate holds a hash. It acts as that owner, carrying `-grants` (default: everything the owner holds a token may carry) cut to what they still hold on every request, reaching the work at `-colleague` or narrower, for `-days` (90, at most 365). Never `secrets:read` or `people:manage`. See [Machine tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts) |
+| `token` | Mint a machine token, naming exactly one owner. **`-login L` mints your own**: a person's token is theirs alone to mint, so the command signs in as `L` for the one request — the password read from the terminal without echo, or the first line piped in; a second-factor code from `-code` or the next line — mints from that session, and signs out, reading no `CREWLET_API_TOKEN`. A deployment that signs in only through an identity provider has no password route, so this cannot sign in there: the mint is `POST /iam/credentials` from a session the provider's round trip opened in a browser. **`-person ID` mints a service account's**, and takes `people:manage`; it is refused for a person's id, whoever asks. Either way the value is printed **once** and the estate holds a hash. It acts as that owner, carrying `-grants` (default: everything the owner holds a token may carry) cut to what they still hold on every request, reaching the work at `-colleague` or narrower, for `-days` (90, at most 365). Never `secrets:read` or `people:manage`. See [Machine tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts) |
 | `revoke-credential ID` | Withdraw one credential, naming its owner with `-person`. Run with a machine token, it withdraws machine tokens only |
 | `reset-mfa ID` | Clear the second factor **and** end every session, because clearing alone leaves the ones opened with it live |
 | `invalidate-all` | Invalidate every session and every machine token in the company. The restore runbook's last step; the Tier A tokens in the config file are untouched |
@@ -533,7 +535,9 @@ about how its owner signs in.
 | `-reason TEXT` | the surface's own | Recorded on the change, and read by whoever audits it |
 | `-grants G,...` | leave alone | A comma-separated grant list, or the word `none` for an empty one. On `token`, what the token carries |
 | `-colleague L` | leave alone | `none`, `read` or `write`. On `token`, how far the token reaches — never further than its owner |
-| `-person ID` | yourself | Whose credentials or sessions, and whom a minted token is for. A Tier A token owns no tokens, so `token` run with one needs it |
+| `-person ID` | yourself | Whose credentials or sessions, and — on `token` — the **service account** a minted token is for; a person's id is refused there, whoever asks |
+| `-login L` | — | On `create`, the login to enrol under. On `token`, **your own** login: the command signs in as you for the one request, mints, and signs out |
+| `-code C` | read after the password | On `token -login`, the second-factor code — the current six digits or a recovery code — when your account holds one. Never the password, which no flag takes |
 | `-label L` | — | What to call a minted token, for somebody holding four |
 | `-days N` | 90 | How long a minted token lasts, at most 365 — "forever" is deliberately unexpressible |
 | `-q TERM` | — | Narrow the directory on a login or a seat |
@@ -808,7 +812,9 @@ shell history, in `ps`, and in any CI log that echoes the command, so
 `-token` is refused as an unknown flag. And it is never read out of the
 config's own `api.auth.tokens`: that list is what the node *accepts*, and a
 write authored by whichever entry came first landed under a name nobody
-chose. A `401` therefore has one thing to check — the value exported in
+chose. The one command that reads no token is `iam token -login`, which mints
+your own and so signs in as you for that request instead — a person's token is
+theirs alone to mint. A `401` therefore has one thing to check — the value exported in
 `CREWLET_API_TOKEN`.
 
 The **caps** are not stored here — they come from the active company config

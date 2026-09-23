@@ -1884,6 +1884,10 @@ type CredentialSet struct {
 //   - A grant the MINTING PARTY does not hold, for [Writer.mayConfer]'s rule:
 //     whoever mints a token sees its value once, so minting one for somebody
 //     else is holding their grants oneself.
+//   - A PERSON's token minted by anybody but that person, and a service
+//     account's minted without `people:manage` — [Writer.mayMintFor]: the
+//     token acts as its owner, so minting one on a person's account is
+//     holding a credential that acts as them.
 //   - An owner who may not act, a kind that is neither a person nor a
 //     machine, and a machine row that binds a Tier A token to a seat — that
 //     row IS the deployment's credential's place in the directory, not an
@@ -1961,6 +1965,9 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 				"account, and a token minted on it would act under the "+
 				"configuration file's name", ErrRefused, login)
 		}
+		if err := w.mayMintFor(in, owner); err != nil {
+			return err
+		}
 		grants, err := w.tokenGrants(in.Grants, owner.Grants)
 		if err != nil {
 			return err
@@ -2019,6 +2026,14 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 type TokenMint struct {
 	// PersonID is the owner: the person or machine the token acts as.
 	PersonID string
+
+	// Minter is the PRINCIPAL ID of the party minting — the resolved
+	// caller, from the surface, never a body — which is what a person's own
+	// token is decided on: it is theirs to mint and nobody else's. See
+	// [Writer.mayMintFor]. Empty for a party that is nobody in the
+	// directory, which may mint for a service account and never for a
+	// person.
+	Minter string
 
 	// ID is the credential's own id, minted by the caller because it is
 	// inside the verifier and the value — both formed before this runs.
@@ -2112,6 +2127,42 @@ func tokenOwnable(personID string, owner Person) error {
 	case !owner.Stage.MayAct():
 		return fmt.Errorf("%w: %s is %q, and a token acts only as somebody "+
 			"who may act", ErrRefused, personID, owner.Stage)
+	}
+	return nil
+}
+
+// mayMintFor refuses a mint the minting party may not make on this owner's
+// account, decided on the owner as the snapshot holds them.
+//
+// A PERSON'S TOKEN IS MINTED BY THAT PERSON ALONE. Whoever mints a token is
+// shown its value once, and the token acts as its owner — so one minted on
+// somebody else's account is a credential that acts as them in the hands of
+// somebody who is not them. `people:manage` was enough to do it, which let any
+// administrator act as anybody, leaving no trail but the mint. The grant
+// covers the one kind of account that has nobody behind it to mint for itself.
+// Compared by ID and never by name, because a login is something a rename
+// moves between people.
+//
+// A SERVICE ACCOUNT'S IS MINTED BY WHOEVER HOLDS `people:manage`: it has no
+// login page, so nobody could ever mint for it as itself.
+func (w *Writer) mayMintFor(in TokenMint, owner Person) error {
+	switch owner.Kind {
+	case iam.KindPerson:
+		if in.Minter == "" || in.Minter != in.PersonID {
+			return fmt.Errorf("%w: %s is a person, and a person's own access "+
+				"token is minted by that person alone — whoever mints one sees "+
+				"its value, and it acts as them. They mint their own while "+
+				"signed in (`crewlet iam token -login <their login>`); an "+
+				"administrator mints tokens for service accounts only",
+				ErrRefused, in.PersonID)
+		}
+	case iam.KindMachine:
+		if !w.Can(iam.GrantPeopleManage) {
+			return fmt.Errorf("%w: minting a token for the service account %s "+
+				"takes %s — it has no login page, so the token is minted "+
+				"for it by whoever manages people", ErrRefused, in.PersonID,
+				iam.GrantPeopleManage)
+		}
 	}
 	return nil
 }

@@ -666,7 +666,7 @@ list and nothing ever will be.
 | `DELETE /iam/people/{id}/sessions` | the person themselves or `people:manage` |
 | `POST /iam/people/{id}/mfa/reset` | `people:manage` |
 | `GET /iam/credentials[?person=]` | the person themselves, `people:manage` or `audit:read` |
-| `POST /iam/credentials[?person=]` | the person themselves or `people:manage`; never a request presenting a machine token |
+| `POST /iam/credentials[?person=]` | the person themselves, from their own session; `people:manage` for a **service account** only; never a request presenting a machine token |
 | `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; a machine token revokes machine tokens only. An id naming a provider **link** unlinks it, which the record layer admits only with `people:manage` |
 | `POST /iam/invalidate-all` | `fleet:operate`. Ends every session **and every machine token** |
 | `GET /iam/check` | `people:manage` or `audit:read` |
@@ -753,6 +753,11 @@ address or the login and the corrected retry lands.
 
 The owner is the person the **route** names — `?person=`, or the caller — and
 never a body field, because that is the value the authority table decided on.
+**A person's token is minted by that person alone**: it acts as them and its
+value is shown to whoever minted it, so `people:manage` mints for service
+accounts and never on a person's account. A person mints their own with no
+`?person=` from their own session — `crewlet iam token -login` makes exactly
+that request, signing in for it and signing out after.
 The body is `{"label", "expires_in_days", "grants", "colleague"}`, every field
 optional: omitted, the token carries every grant its owner holds that a token
 may carry, at the owner's own reach, for 90 days. The answer is `201` with
@@ -760,9 +765,9 @@ may carry, at the owner's own reach, for 90 days. The answer is `201` with
 
 | Answer | When |
 |---|---|
-| `400 bad_params` | No owner: a Tier A token owns no machine tokens, so it names one with `?person=` |
+| `400 bad_params` | No owner: a Tier A token owns no machine tokens, so it names the service account with `?person=` |
 | `400 invalid_body` | An expiry in the past or more than 365 days away, a label past 128 bytes, a reach that is no level |
-| `403` | The request presented a machine token; a grant the owner does not hold, or `secrets:read` / `people:manage`; a grant the caller does not hold; a reach wider than the owner's; an owner who may not act |
+| `403` | The request presented a machine token; a **person's** token asked for by anybody but that person; a service account's asked for without `people:manage`; a grant the owner does not hold, or `secrets:read` / `people:manage`; a grant the caller does not hold; a reach wider than the owner's; an owner who may not act |
 | `404` | Nobody by that id |
 
 **`Idempotency-Key` is ignored here, deliberately.** A retry that landed once

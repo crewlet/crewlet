@@ -679,9 +679,32 @@ login such as `ci:release`) presents from a pipeline. It is what
 `crewlet iam token` prints, and it is a `CREWLET_API_TOKEN` like any other:
 
 ```bash
-crewlet iam token -person <id> -label "release pipeline" -grants state:read,work:write -days 30
+# Your own, for the assistant you work through: signs in as you for the one
+# request (the password is read without echo), mints, and signs out.
+crewlet iam token -login jane.doe -label "my assistant" -grants state:read,work:write
+
+# A service account's, minted by whoever holds people:manage.
+crewlet iam token -person <service account id> -label "release pipeline" -grants state:read,work:write -days 30
+
 export CREWLET_API_TOKEN=cwl_pat_…
 ```
+
+**A person's token is theirs alone to mint.** Whoever mints a token is shown
+its value, and the token acts as its owner — so one minted on somebody else's
+account is a credential that acts as them, held by somebody who is not them.
+`people:manage` therefore mints for **service accounts** and for nobody else;
+a person mints their own from their own session, which is `POST
+/iam/credentials` with no `?person=` — and `crewlet iam token -login` is that
+request, signing in for it exactly as the dashboard does —
+the password from the terminal without echo or the first line piped in, a
+second-factor code from `-code` or the line after it — and signs out after,
+so the session it opened does not outlive the command. It reads no
+`CREWLET_API_TOKEN`. A deployment that signs in only through an identity
+provider serves no password route, so the command cannot sign in there: the
+request has to be made from a session the provider's round trip opened in a
+browser, and the dashboard has no screen that makes it. The decision is made in the owner's own snapshot, on the
+**id** of the party minting rather than its login, because a login is a name a
+rename moves between people.
 
 The value is `cwl_pat_<credential id>_<log position>_<secret>` and is shown
 **once**. The prefix is what a secret scanner matches on; the id and the
@@ -720,12 +743,15 @@ widens one.
 | `secrets:read` and `people:manage`, whatever the owner holds | Revealing a credential and deciding who may do anything are gestures that need a person present, and a token is what an attacker holding a pipeline's environment already has |
 | A grant the owner does not hold, or a reach wider than theirs | A token narrows its owner and never widens them |
 | A grant the **minting party** does not hold | Whoever mints a token sees its value once, so minting one for somebody else is holding their grants oneself — the same rule as an enrolment |
+| A **person's** token minted by anybody but that person — an administrator included | It acts as them, and its value is shown to whoever minted it |
+| A **service account's** token minted without `people:manage` | It has no login page, so nobody can mint for it as itself; minting for it is managing people |
 | An owner who is not active, and the machine row that binds a Tier A token (`token:<id>`) | That row is the deployment's credential's place in the directory, not an account |
 | No expiry, one already past, or one more than a year away | Ninety days by default and 365 at most: "forever" is deliberately unexpressible |
 | A request that presented a machine token | A token minted from a token is one whoever holds a pipeline's environment can renew for ever, a year at a time, with nobody present |
 
-A Tier A token minting one names the owner (`?person=`, or `-person` on the
-CLI): it is the deployment's credential and owns no tokens itself.
+A Tier A token minting one names the service account (`?person=`, or
+`-person` on the CLI): it is the deployment's credential and owns no tokens
+itself, and a person's are theirs to mint.
 
 **What ends one.** Revoking it (`crewlet iam revoke-credential <id> -person
 <owner>`, or `DELETE /iam/credentials/{id}`) — on each node the moment the

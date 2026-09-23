@@ -122,6 +122,17 @@ type mintBody struct {
 // A request carrying a machine token is refused here, whoever it acts as: a
 // token minted from a token is one whoever holds a pipeline's environment can
 // extend for ever, a year at a time, with nobody present.
+//
+// # A person's token is theirs alone to mint
+//
+// The authority table admits the person themselves or `people:manage`, and
+// the second is for SERVICE ACCOUNTS: whoever mints a token is shown its value
+// and it acts as its owner, so an administrator minting on a person's account
+// is an administrator holding a credential that acts as them. The domain
+// refuses it in the owner's snapshot, on the minting party's id this handler
+// states from the resolved principal. What a person needs instead is THIS
+// ROUTE with no `?person=` from their own session, which is the request
+// `crewlet iam token -login` signs in to make.
 func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	// BEFORE THE BODY: what the request presented decides this whatever it
 	// asked for, so a token is told it may not mint rather than how to
@@ -141,8 +152,9 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		strings.TrimSpace(r.URL.Query().Get("person")) == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			map[string]string{"detail": "a Tier A token is the deployment's " +
-				"credential and owns no machine tokens: name the person or " +
-				"service account the token is for with ?person="})
+				"credential and owns no machine tokens: name the service " +
+				"account the token is for with ?person= (a person mints their " +
+				"own, signed in)"})
 		return
 	}
 	in, ok := readBody[mintBody](w, r)
@@ -191,6 +203,7 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return
 	}
+	principal, _ := iam.From(r.Context())
 
 	id := uuid.Must(uuid.NewV7()).String()
 	secret, err := credential.NewTokenSecret()
@@ -202,6 +215,10 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	const reason = "a machine token was minted"
 	minted, err := writer.MintToken(r.Context(), iamdomain.TokenMint{
 		PersonID: owner, ID: id,
+		// WHO IS MINTING, off the resolved principal: a person's own
+		// token is theirs alone to mint, which the domain decides on
+		// this id in the owner's snapshot.
+		Minter:    principal.ID.String(),
 		Verifier:  credential.TokenVerifier(id, secret),
 		Label:     strings.TrimSpace(in.Label),
 		Grants:    in.Grants,
@@ -237,7 +254,6 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	token := credential.Token{
 		ID: id, Position: uint64(minted.Result.Position.Packed()), Secret: secret,
 	}
-	principal, _ := iam.From(r.Context())
 	log.InfoContext(r.Context(), "iam_token_minted",
 		"person", owner, "credential", id, "expires_at", minted.ExpiresAt)
 	granted := make([]string, 0, len(minted.Grants))

@@ -10,13 +10,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // THE MINT SURFACE: what `POST /iam/credentials` hands the domain, and what it
@@ -46,6 +51,12 @@ func TestATokenIsMintedForThePersonTheRouteNames(t *testing.T) {
 		t.Errorf("the token was minted for %q, want the caller %s — a body "+
 			"naming somebody else is not who the route decided on",
 			r.writer.minted.PersonID, caller.ID)
+	}
+	// AND THE DOMAIN IS TOLD WHO MINTED IT, off the resolved principal:
+	// that is what a person's own token is decided on.
+	if r.writer.minted.Minter != caller.ID.String() {
+		t.Errorf("the domain was told %q minted it, want the caller %s",
+			r.writer.minted.Minter, caller.ID)
 	}
 	// AND NAMING SOMEBODY ELSE WHERE IT COUNTS is decided by the table:
 	// an ordinary caller may not mint on the administrator's account.
@@ -197,6 +208,13 @@ func TestATokenCannotMintAToken(t *testing.T) {
 func TestATierATokenNamesWhoATokenIsFor(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
+	// A SERVICE ACCOUNT is what a Tier A token mints for — a person's
+	// own token is theirs alone, which the domain decides.
+	service := uuid.MustParse("018f3a9c-0000-7000-8000-0000000005e1")
+	r.directory.people[service.String()] = iamdomain.PersonRow{
+		ID: service.String(), Kind: iam.KindMachine, Stage: iam.StageActive,
+		Login: "svc:release", Grants: []iam.Grant{iam.GrantStateRead},
+	}
 	const value = "a-tier-a-token-long-enough-to-pass"
 	b := config.DefaultBootstrap()
 	b.API.Auth.MaxGrants = iam.AllGrants
@@ -208,7 +226,7 @@ func TestATierATokenNamesWhoATokenIsFor(t *testing.T) {
 		want int
 	}{
 		{"/iam/credentials", http.StatusBadRequest},
-		{"/iam/credentials?person=" + alice.String(), http.StatusCreated},
+		{"/iam/credentials?person=" + service.String(), http.StatusCreated},
 	} {
 		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(`{}`))
 		req.Header.Set("Authorization", "Bearer "+value)
@@ -295,6 +313,87 @@ func TestATokensRevocationSaysItWasTheToken(t *testing.T) {
 			r.writer.actor, r.writer.operator, via)
 	}
 }
+
+// A PERSON MINTS THEIR OWN TOKEN FROM THEIR SESSION, and only that way.
+//
+// The self-service path: a signed-in person, through the REAL guard's session
+// arm, posting with no `?person=` — so the owner is the caller and the domain
+// is told the caller minted it, which is the one mint a person's account
+// admits. The other two parties are the halves around it: an administrator
+// naming somebody else's account is told by the domain that a person's token
+// is theirs alone (the writer's refusal renders as 403), and a request
+// presenting a token is refused before the body ([TestATokenCannotMintAToken]).
+// Mutation: drop the minter from the handler and the domain is told nobody.
+func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	signer, err := session.New(session.Options{
+		Material: runtoken.Material{ActiveID: "k1",
+			Keys: []runtoken.KeyMaterial{{ID: "k1", Material: "the-active-key-material"}}},
+		RotateAfter: time.Hour, Now: func() time.Time { return at },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lineage := uuid.Must(uuid.NewV7())
+	for i := range 6 {
+		lineage[i] = byte(at.UnixMilli() >> (8 * (5 - i)))
+	}
+	cookie, err := signer.Mint(session.Mint{Lineage: lineage,
+		Person: bob.String(), Epoch: 1, StartPosition: 5,
+		AbsoluteExpiresAt: at.Add(8 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := config.DefaultBootstrap()
+	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.ExternalURL = "http://127.0.0.1:8080"
+	arm, err := auth.NewSessions(auth.SessionsDeps{
+		Signer: signer, Chart: noSeats{}, External: b.API.ExternalBase(),
+		Audit: quietAudit{}, Now: func() time.Time { return at },
+		Directory: sessionRows{session.Identity{Applied: 10,
+			Session: session.SessionRow{Found: true, Epoch: 1, ProvedAt: at},
+			Person: session.PersonRow{Found: true, Epoch: 1,
+				Stage: iam.StageActive, Login: "bob.sre",
+				Grants: []iam.Grant{iam.GrantStateRead}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/iam/credentials",
+		strings.NewReader(`{"label":"my laptop"}`))
+	req.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: cookie})
+	req.Header.Set("Origin", "http://127.0.0.1:8080")
+	rec := httptest.NewRecorder()
+	auth.New(&b).WithSessions(arm).Middleware(r.mux).ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("a person minting their own token answered %d: %s", rec.Code,
+			rec.Body.String())
+	}
+	if got := r.writer.minted; got.PersonID != bob.String() || got.Minter != bob.String() {
+		t.Errorf("the domain was asked for a token owned by %q minted by %q, "+
+			"want bob minting his own", got.PersonID, got.Minter)
+	}
+}
+
+// sessionRows is a session directory answering one identity for every bearer.
+type sessionRows struct{ identity session.Identity }
+
+func (d sessionRows) Resolve(context.Context, string, string) (session.Identity, error) {
+	return d.identity, nil
+}
+
+// quietAudit is a guard trail that keeps nothing.
+type quietAudit struct{}
+
+func (quietAudit) Emit(context.Context, events.Payload) {}
+
+func (quietAudit) EmitOnce(context.Context, string, time.Duration, events.Payload) bool {
+	return true
+}
+
+func (quietAudit) Failed(context.Context, authevents.Failure) {}
 
 const tokenID = "018f3a9c-0000-7000-8000-0000000000f1"
 

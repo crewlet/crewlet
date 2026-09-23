@@ -67,6 +67,12 @@ func mintFor(t *testing.T, rig *writeRig, w *iamdomain.Writer,
 	if in.ExpiresAt.IsZero() {
 		in.ExpiresAt = brokerAt.Add(credential.DefaultTokenLifetime)
 	}
+	// THE OWNER MINTING THEIR OWN unless a case says who else is: every
+	// case but the one about WHO may mint is about what a token carries,
+	// and a person's token is theirs alone to mint.
+	if in.Minter == "" {
+		in.Minter = in.PersonID
+	}
 	in.Verifier = credential.TokenVerifier(in.ID, secret)
 	var minted iamdomain.TokenMinted
 	err = rig.draining(func() error {
@@ -193,6 +199,70 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 		PersonID: binding}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("a token was minted on the row that binds a Tier A token "+
 			"(%v)", err)
+	}
+}
+
+// A PERSON'S TOKEN IS THEIRS ALONE TO MINT, AND A SERVICE ACCOUNT'S IS WHOEVER
+// MANAGES PEOPLE'S.
+//
+// Whoever mints a token is shown its value, and the token acts as its owner —
+// so `people:manage` minting on a person's account was an administrator
+// holding a credential that acts as them, with nothing but the mint to say
+// so. The grant covers the accounts nobody can mint for as themselves: a
+// service account has no login page. Decided in the owner's snapshot, on the
+// minting party's id. Mutation: drop the person arm and the administrator's
+// mint lands; drop the machine arm and a party without the grant mints for a
+// pipeline.
+func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	owner := tokenOwner(t, rig, "jane.doe")
+	administrator := uuid.Must(uuid.NewV7()).String()
+
+	// AN ADMINISTRATOR HOLDING EVERY GRANT, minting on jane's account.
+	if _, _, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{
+		PersonID: owner, Minter: administrator}); !errors.Is(err, iamdomain.ErrRefused) {
+		t.Fatalf("an administrator minting a person's token answered %v, "+
+			"want a refusal", err)
+	}
+	held, err := rig.reader(t).Credentials(t.Context(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(held) != 0 {
+		t.Errorf("the refused mint left %d credentials on jane's account", len(held))
+	}
+	// JANE HERSELF.
+	if _, token, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{
+		PersonID: owner, Minter: owner}); err != nil {
+		t.Fatalf("jane minting her own token: %v", err)
+	} else if got := checked(t, rig, token); got.Answer != credential.TokenValid {
+		t.Errorf("jane's own token answered %q (%s)", got.Answer, got.Detail)
+	}
+
+	// A SERVICE ACCOUNT: the administrator mints for it, and a party
+	// without people:manage may not.
+	service := uuid.Must(uuid.NewV7()).String()
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: service, Kind: iam.KindMachine, Stage: iam.StageActive,
+		Name: "Release pipeline", Login: "svc:release",
+		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
+		OpID:   "op-enrol-svc", Reason: "a pipeline",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rig.drain()
+	if _, _, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{
+		PersonID: service, Minter: administrator}); err != nil {
+		t.Errorf("an administrator minting a service account's token: %v", err)
+	}
+	colleague := rig.writer.As("dana.sre", iam.KindPerson,
+		[]iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite})
+	if _, _, err := mintFor(t, rig, colleague, iamdomain.TokenMint{
+		PersonID: service, Minter: uuid.Must(uuid.NewV7()).String(),
+		Grants: []iam.Grant{iam.GrantStateRead}}); !errors.Is(err, iamdomain.ErrRefused) {
+		t.Errorf("a party without %s minting for a service account answered "+
+			"%v, want a refusal", iam.GrantPeopleManage, err)
 	}
 }
 
