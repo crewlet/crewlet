@@ -809,12 +809,17 @@ key behind. Nothing else would ever name those keys, and what they sealed would
 stay readable from every backup for the life of the deployment. The duty
 destroys one only once it is **an hour old** — the gestures that mint a key
 finish within one request, so an hour is long past any of them — and only on a
-node that has applied **everything the identity log held** when it asked, because
-on a node that is behind, somebody whose enrolment has not arrived owns nothing
-there either, and destroying their key would be an irreversible shred of a
-person nobody removed. A node that is behind says so (`iam_keys_unjudged`) and
-leaves them for the next pass; a removal's key does not wait for that, because
-a removal is definitive wherever it has been applied. `crewlet iam check` names
+node whose rows have **applied everything the identity log held** when it asked,
+because on a node that has not, somebody whose enrolment has not been applied
+owns nothing there either, and destroying their key would be an irreversible
+shred of a person nobody removed. *Applied* is the word that matters: a node
+holding a record it cannot apply yet — a newer build's during a rollout, or one
+signed under a keyring key it was not restarted with during a key rotation —
+has consumed the log past that record while its rows lack it, and it judges no
+unowned key until it can apply it. Such a node, and one that is simply behind,
+says so (`iam_keys_unjudged`) and leaves them for a pass that can; a removal's
+key does not wait for that, because a removal is definitive wherever it has been
+applied. `crewlet iam check` names
 each unowned key past the hour as `key_unowned`.
 
 **And it collects every refresh token whose session is over** — by logout,

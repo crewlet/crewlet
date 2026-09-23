@@ -390,10 +390,11 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 		// AND WHICH PERSON KEYS EXIST, so a removal whose key outlived it
 		// and a key nobody owns are named while the key duty has yet to
 		// destroy them — nil on a node with no fleet store, which skips
-		// both arms — and whether this node is current, without which a
-		// key whose owner has not arrived here reads as nobody's.
-		Keys:    e.PersonKeyIndex(),
-		Current: e.IdentityCaughtUp,
+		// both arms — and how far the identity log goes, which the
+		// report proves an owner's absence against: without it a key
+		// whose owner has not been applied here reads as nobody's.
+		Keys:   e.PersonKeyIndex(),
+		LogEnd: e.IdentityLogEnd,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: the identity directory: %w", err)

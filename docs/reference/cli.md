@@ -582,10 +582,12 @@ read the claims answers 503 rather than a clean bill, because it is the only
 place a duplicate is ever named. `removal_key_live` and `key_unowned` are left
 out on a node with no company secret store, which cannot tell a surviving key
 from no key. `key_unowned` is also left out on a node that has not applied the
-whole identity log — somebody whose enrolment has not arrived there owns
-nothing there either — and the report's `keys_unchecked` counts the keys it
-could therefore not judge, so a node that could not tell never reads as a
-clean one.
+whole identity log — somebody whose enrolment has not been applied there owns
+nothing there either, and a node holding a record it cannot apply (a newer
+build's, or one signed under a keyring key it was not restarted with) has not
+applied it however far its checkpoint has moved — and the report's
+`keys_unchecked` counts the keys it could therefore not judge, so a node that
+could not tell never reads as a clean one.
 
 ## `crewlet secrets`
 

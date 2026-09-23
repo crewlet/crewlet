@@ -96,7 +96,8 @@ func (e *ErrClaimed) Error() string {
 // handed may be a LIVE person's (a retry, or a caller that reused an id), and a
 // refusal that shredded "its" key would destroy theirs. Only a pass that has
 // proved nobody owns the id may destroy it, which is [ShredKeys]: past
-// [OrphanKeyGrace], on a node that has applied everything the log held.
+// [OrphanKeyGrace], on rows that have applied everything the log held
+// ([CoversLog]).
 //
 // EVERY BASIS IS CHECKED BEFORE THE FIRST CLAIM TOO, read-only, exactly as the
 // writer's own grants are: the claims go first because they are what can be

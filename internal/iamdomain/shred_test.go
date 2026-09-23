@@ -80,7 +80,7 @@ func TestTheDekDeleteIsRetriedUntilItLands(t *testing.T) {
 
 	// 2. A PASS DURING THE BLIP SAYS IT DID NOT FINISH.
 	report, err := iamdomain.ShredKeys(t.Context(), reader, rig.keys, sealer,
-		brokerAt, caughtUp)
+		brokerAt, rig.end)
 	if err == nil {
 		t.Fatal("a pass that could destroy nothing reported success")
 	}
@@ -93,7 +93,7 @@ func TestTheDekDeleteIsRetriedUntilItLands(t *testing.T) {
 	// 3. THE FIRST PASS AFTER IT LANDS.
 	rig.keys.blip(nil)
 	report, err = iamdomain.ShredKeys(t.Context(), reader, rig.keys, sealer,
-		brokerAt, caughtUp)
+		brokerAt, rig.end)
 	if err != nil {
 		t.Fatalf("ShredKeys: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestTheDekDeleteIsRetriedUntilItLands(t *testing.T) {
 			"the duty ran (err %v)", err)
 	}
 	if again, err := iamdomain.ShredKeys(t.Context(), reader, rig.keys,
-		sealer, brokerAt, caughtUp); err != nil || len(again.Pending) != 0 {
+		sealer, brokerAt, rig.end); err != nil || len(again.Pending) != 0 {
 		t.Errorf("a pass after the key landed still found work: %+v, %v", again, err)
 	}
 
@@ -118,13 +118,16 @@ func TestTheDekDeleteIsRetriedUntilItLands(t *testing.T) {
 	}
 }
 
-// caughtUp is a node that has applied everything the identity log held.
-func caughtUp(context.Context) error { return nil }
+// end is the identity log's last sequence as the broker holds it, which is what
+// a node that has drained the log is proved against.
+func (r *writeRig) end(ctx context.Context) (uint64, error) { return r.log.End(ctx) }
 
-// behind is a node that has not, which is the state every node is in for a
-// moment after it boots.
-func behind(context.Context) error {
-	return errors.New("this node has not applied the identity log's tail")
+// behind is the log's end as a node that has not applied its tail sees it —
+// the state every node is in for a moment after it boots: records past what
+// this rig drained.
+func (r *writeRig) behind(ctx context.Context) (uint64, error) {
+	end, err := r.log.End(ctx)
+	return end + 3, err
 }
 
 // A KEY NOBODY OWNS IS DESTROYED ONLY WHEN IT IS CERTAINLY NOBODY'S.
@@ -175,7 +178,7 @@ func TestAKeyNobodyOwnsIsDestroyedOnlyWhenItIsCertainlyNobodys(t *testing.T) {
 
 	// 1. INSIDE THE GRACE.
 	report, err := iamdomain.ShredKeys(t.Context(), reader, rig.keys, sealer,
-		brokerAt.Add(iamdomain.OrphanKeyGrace/2), caughtUp)
+		brokerAt.Add(iamdomain.OrphanKeyGrace/2), rig.end)
 	if err != nil {
 		t.Fatalf("ShredKeys inside the grace: %v", err)
 	}
@@ -188,7 +191,7 @@ func TestAKeyNobodyOwnsIsDestroyedOnlyWhenItIsCertainlyNobodys(t *testing.T) {
 	// 2. PAST THE GRACE, ON A NODE THAT IS BEHIND.
 	past := brokerAt.Add(2 * iamdomain.OrphanKeyGrace)
 	report, err = iamdomain.ShredKeys(t.Context(), reader, rig.keys, sealer,
-		past, behind)
+		past, rig.behind)
 	if err != nil {
 		t.Fatalf("ShredKeys behind the log: %v", err)
 	}
@@ -196,14 +199,14 @@ func TestAKeyNobodyOwnsIsDestroyedOnlyWhenItIsCertainlyNobodys(t *testing.T) {
 		t.Fatalf("behind the log: %+v — a node that cannot tell an absent "+
 			"row from an unapplied one destroyed a key", report)
 	}
-	if report.Unjudged == nil || report.Waiting != 1 {
+	if !errors.Is(report.Unjudged, iamdomain.ErrNotCurrent) || report.Unproven != 1 {
 		t.Errorf("behind the log the pass reported %+v, want it to say it "+
 			"could not judge the one unowned key", report)
 	}
 
 	// 3. PAST THE GRACE, ON A NODE THAT IS CURRENT.
 	report, err = iamdomain.ShredKeys(t.Context(), reader, rig.keys, sealer,
-		past, caughtUp)
+		past, rig.end)
 	if err != nil {
 		t.Fatalf("ShredKeys: %v", err)
 	}
@@ -261,7 +264,7 @@ func TestARemovalsKeyIsDestroyedOnANodeBehindTheLog(t *testing.T) {
 	}
 
 	report, err := iamdomain.ShredKeys(t.Context(), reader, rig.keys, sealer,
-		brokerAt, behind)
+		brokerAt, rig.behind)
 	if err != nil {
 		t.Fatalf("ShredKeys: %v", err)
 	}
@@ -312,7 +315,7 @@ func TestAnInvitationsKeyLivesExactlyAsLongAsItsRow(t *testing.T) {
 	}
 	past := brokerAt.Add(2 * iamdomain.OrphanKeyGrace)
 	report, err := iamdomain.ShredKeys(t.Context(), reader, rig.keys, sealer,
-		past, caughtUp)
+		past, rig.end)
 	if err != nil {
 		t.Fatalf("ShredKeys: %v", err)
 	}
@@ -339,7 +342,7 @@ func TestAnInvitationsKeyLivesExactlyAsLongAsItsRow(t *testing.T) {
 			"cannot show its key following it", rows)
 	}
 	report, err = iamdomain.ShredKeys(t.Context(), reader, rig.keys, sealer,
-		past, caughtUp)
+		past, rig.end)
 	if err != nil {
 		t.Fatalf("ShredKeys after the sweep: %v", err)
 	}

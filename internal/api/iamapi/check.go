@@ -72,8 +72,9 @@ const (
 	// invitation the sweep collected. Whatever it sealed is readable from
 	// every backup until the key duty destroys it, which its next pass on
 	// a node that has applied the whole log does. Reported only by such a
-	// node, because on one behind the log a person whose enrolment has not
-	// arrived owns nothing yet.
+	// node, because on one behind the log — or holding a record it
+	// retained, which moves its checkpoint past rows it never wrote — a
+	// person whose enrolment has not been applied owns nothing yet.
 	KindKeyUnowned FindingKind = "key_unowned"
 )
 
@@ -297,23 +298,27 @@ func (s *Service) claimFindings(r *http.Request) ([]Finding, error) {
 }
 
 // keyFindings is every removed person whose key outlived the removal and every
-// key nobody owns past the grace, and how many keys nobody owns this node could
-// not judge.
+// key this node proves nobody owns, and how many keys nobody owns here this
+// node could not judge.
 //
-// THE UNOWNED ARM IS THE KEY DUTY'S OWN RULE, stated by [iamdomain.ShredKeys]:
-// past [iamdomain.OrphanKeyGrace], on a node that has applied everything the
-// log held when it was asked — asked BEFORE the census, so a key older than
-// the grace was minted before the question and its owner's record is inside
-// what the answer covers. A key inside the grace is a gesture that may be
-// running and is no finding at all. A key with no recorded write time has no
-// provable age and is counted as unchecked with the rest, for the duty's reason.
+// THE UNOWNED ARM IS THE KEY DUTY'S OWN RULE, [iamdomain.KeyCensus.Judge], and
+// never a restatement of it: the log's end is read BEFORE the census, and a key
+// is named only when the census's own snapshot has applied everything that end
+// covers and the key is past [iamdomain.OrphanKeyGrace]. A key inside the grace
+// is a gesture that may be running and is no finding at all; one this node's
+// rows cannot vouch for — behind, holding a record they retained, or a key with
+// no recorded write time — is counted as unchecked. A report that restated the
+// rule had drifted from the duty once already: it read the node as current off
+// the applier's checkpoint, which moves past a record the node retained, and
+// named live people's keys as nobody's.
 func (s *Service) keyFindings(r *http.Request) (out []Finding, unchecked int,
 	err error) {
 
-	current := errors.New("this surface was given no way to tell whether " +
-		"this node is current")
-	if s.current != nil {
-		current = s.current(r.Context())
+	var end uint64
+	endErr := errors.New("this surface was given no way to read how far the " +
+		"identity log goes, which an absence is proved against")
+	if s.logEnd != nil {
+		end, endErr = s.logEnd(r.Context())
 	}
 	census, err := s.directory.KeyCensus(r.Context(), s.keys)
 	if err != nil {
@@ -327,27 +332,22 @@ func (s *Service) keyFindings(r *http.Request) (out []Finding, unchecked int,
 				"before the removal; the key duty retries until it is destroyed",
 		})
 	}
-	cutoff := s.now().Add(-iamdomain.OrphanKeyGrace)
-	for _, key := range census.Unowned {
-		switch {
-		case key.WrittenAt.IsZero() || current != nil:
-			unchecked++
-		case key.WrittenAt.Before(cutoff):
-			out = append(out, Finding{
-				Kind: KindKeyUnowned, Person: key.ID,
-				Detail: "no person, reservation, invitation or removal owns " +
-					"this key — an enrolment or an invitation refused after " +
-					"it was minted, or an invitation the sweep collected — so " +
-					"what it sealed is readable from every backup; the key " +
-					"duty destroys it on its next pass",
-			})
-		}
+	judged := census.Judge(end, endErr, s.now())
+	for _, key := range judged.Nobodys {
+		out = append(out, Finding{
+			Kind: KindKeyUnowned, Person: key.ID,
+			Detail: "no person, reservation, invitation or removal owns " +
+				"this key — an enrolment or an invitation refused after " +
+				"it was minted, or an invitation the sweep collected — so " +
+				"what it sealed is readable from every backup; the key " +
+				"duty destroys it on its next pass",
+		})
 	}
-	if current != nil && len(census.Unowned) > 0 {
+	if judged.Why != nil {
 		log.DebugContext(r.Context(), "api_iam_check_keys_unjudged",
-			"unowned", len(census.Unowned), "reason", current.Error())
+			"unowned", judged.Unproven, "reason", judged.Why.Error())
 	}
-	return out, unchecked, nil
+	return out, judged.Unproven, nil
 }
 
 // hasCredential reports whether somebody can prove themselves at all.

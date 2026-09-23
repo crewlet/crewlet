@@ -752,9 +752,25 @@ func anybodyEnrolled(ctx context.Context, tx *sql.Tx, besides string) (bool, err
 // one that did, the old key was DELETED, and a new one would orphan every
 // address the estate holds and let a second person claim each of them, since
 // the claim arbitrates on the blind and the new blind is a new subject.
-func (r *Reader) HoldsBlinds(ctx context.Context) (bool, error) {
+//
+// THREE-VALUED, and "none" is an ABSENCE that has to be proved: end is the
+// identity log's last sequence read BEFORE this call, and a snapshot that has
+// not applied every record through it — behind, or holding a record it
+// RETAINED — cannot say whether a blinded row is among what it has not applied.
+// So (true, nil) is a blind held, (false, nil) is none on rows that hold the
+// whole log, and an error wrapping [ErrNotCurrent] is this node being unable to
+// say, which refuses the mint exactly as an unreadable store does.
+func (r *Reader) HoldsBlinds(ctx context.Context, end uint64) (bool, error) {
 	var held bool
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		prefix, err := statelog.PrefixIn(ctx, tx, Domain{})
+		if err != nil {
+			return fmt.Errorf("iamdomain: read how much of the log these rows "+
+				"hold: %w", err)
+		}
+		if err := CoversLog(prefix, end); err != nil {
+			return err
+		}
 		var count int
 		if err := tx.QueryRowContext(ctx, `
 			SELECT EXISTS(SELECT 1 FROM iam_people WHERE email_blind != '')

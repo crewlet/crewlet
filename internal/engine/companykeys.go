@@ -64,19 +64,6 @@ const companyKeyHoldTTL = seat.SeatLeaseTTL / seat.HeartbeatRatio
 // and faster would buy nothing but reads against a store that is mid-write.
 const companyKeyPoll = 250 * time.Millisecond
 
-// errIdentityBehind is a node asked a question only a caught-up identity estate
-// can answer — whether a missing key was ever in use, whether a key still
-// belongs to somebody — when it has not applied everything the log held at the
-// moment it was asked.
-//
-// BEHIND IS NOT ABSENT. A row this node has not applied reads exactly like a
-// row that does not exist, and both questions it guards are answered by an
-// absence: a key minted over one still in use, or destroyed while somebody
-// still holds it, cannot be taken back.
-var errIdentityBehind = errors.New("engine: this node has not applied the " +
-	"whole identity log yet, so its rows cannot say whether a key is in use; " +
-	"retry once it has caught up")
-
 // mintGate is the in-process half of the mint's exclusion. Its zero value is
 // ready, so an engine a test built by hand holds one too.
 type mintGate struct {
@@ -256,64 +243,59 @@ func (s personBlindSource) Blinder(ctx context.Context) (*iamdomain.Blinder, err
 // person claim each of them, since a claim arbitrates on the blind and a new
 // key is a new subject. So the remedy is the operator's: restore the key.
 //
-// THE ANSWER IS ONLY AS GOOD AS THIS NODE'S ROWS, so it is asked only once
-// this node has applied everything the log held when it asked. Behind that, an
-// estate with no blinded row may simply be one whose blinded rows have not
-// arrived yet.
+// "NO BLIND HERE" IS AN ABSENCE, and the rows asked prove it only when their
+// own snapshot has APPLIED everything the log held when the question was asked
+// — see [iamdomain.CoversLog]. A node behind the log, or holding a record it
+// retained, may simply not have the blinded rows yet.
 func (e *Engine) mayMintPersonBlindKey(ctx context.Context) error {
 	if e.native == nil || e.native.iamReader == nil || e.native.log == nil {
 		return fmt.Errorf("%w: this node runs no identity domain, so it "+
 			"cannot tell whether %s was ever in use", iamdomain.ErrNoBlindKey,
 			iamdomain.BlindKeyName)
 	}
-	return judgeBlindKeyMint(ctx, e.IdentityCaughtUp, e.native.iamReader.HoldsBlinds)
+	return judgeBlindKeyMint(ctx, e.IdentityLogEnd, e.native.iamReader.HoldsBlinds)
 }
 
-// IdentityCaughtUp answers whether this node has applied everything the
-// identity log held when it was asked, and [errIdentityBehind] when it has not.
+// IdentityLogEnd is the identity log's last sequence, as the broker holds it
+// now — what an answer read from this node's rows afterwards is proved against
+// ([iamdomain.CoversLog]).
 //
-// THE LOG'S END IS READ FIRST and this node's position after it, so a record
-// that lands between the two can only make the answer "behind" — never let a
-// node that missed it answer as though it had not.
-func (e *Engine) IdentityCaughtUp(ctx context.Context) error {
+// THE END ONLY, and never a verdict of "caught up" beside it: whether the rows
+// hold the log is a fact about the SNAPSHOT that reads them, which says how
+// much it applied in the same transaction as the rows. A verdict formed here,
+// from the applier's checkpoint, is the one that moved past a record the node
+// retained and called the node current while that record's rows were missing.
+func (e *Engine) IdentityLogEnd(ctx context.Context) (uint64, error) {
 	if e.native == nil || e.native.log == nil {
-		return fmt.Errorf("%w: this node runs no identity domain", errIdentityBehind)
+		return 0, errors.New("engine: this node runs no identity domain, so " +
+			"there is no identity log to read the end of")
 	}
 	running := e.native.log.Domain(iamdomain.Domain{}.Name())
 	if running == nil {
-		return fmt.Errorf("%w: the identity log is not running on this node",
-			errIdentityBehind)
+		return 0, errors.New("engine: the identity log is not running on this node")
 	}
 	end, err := running.log.End(ctx)
 	if err != nil {
-		return fmt.Errorf("engine: read how far the identity log goes: %w", err)
+		return 0, fmt.Errorf("engine: read how far the identity log goes: %w", err)
 	}
-	return caughtUp(running.runner.Committed().Seq, end)
+	return end, nil
 }
 
-// caughtUp is the one comparison both identity questions turn on.
-func caughtUp(applied, end uint64) error {
-	if applied < end {
-		return fmt.Errorf("%w (applied %d of %d)", errIdentityBehind, applied, end)
-	}
-	return nil
-}
-
-// judgeBlindKeyMint is the mint decision over its two seams: whether this node
-// has caught up with the identity log, and whether its rows hold a blind.
+// judgeBlindKeyMint is the mint decision over its two seams: the identity log's
+// end, and whether this node's rows — proved against it — hold a blind.
 //
-// SEPARATE FROM THE ENGINE so every arm is a case of its own — the one that
-// matters most, a node behind the log, is the one no running fleet can be
-// arranged into on demand. THE ROWS ARE NOT ASKED WHILE BEHIND: an estate that
-// holds no blind yet may be one whose blinded rows have not arrived, and a
-// "no" read then is the answer that mints over a deleted key.
-func judgeBlindKeyMint(ctx context.Context, caughtUp func(context.Context) error,
-	holdsBlinds func(context.Context) (bool, error)) error {
+// SEPARATE FROM THE ENGINE so every arm is a case of its own. THE END IS READ
+// FIRST: rows asked afterwards can only have more of the log than the end they
+// are proved against, so a record landing between the two makes the answer
+// "cannot say" rather than letting a snapshot that missed it say "none".
+func judgeBlindKeyMint(ctx context.Context, logEnd func(context.Context) (uint64, error),
+	holdsBlinds func(context.Context, uint64) (bool, error)) error {
 
-	if err := caughtUp(ctx); err != nil {
+	end, err := logEnd(ctx)
+	if err != nil {
 		return err
 	}
-	holds, err := holdsBlinds(ctx)
+	holds, err := holdsBlinds(ctx, end)
 	if err != nil {
 		return err
 	}

@@ -350,7 +350,11 @@ func TestTheEstateSaysWhetherItEverUsedTheBlindKey(t *testing.T) {
 	reader := rig.reader(t)
 	holds := func() bool {
 		t.Helper()
-		held, err := reader.HoldsBlinds(t.Context())
+		end, err := rig.end(t.Context())
+		if err != nil {
+			t.Fatalf("read the log's end: %v", err)
+		}
+		held, err := reader.HoldsBlinds(t.Context(), end)
 		if err != nil {
 			t.Fatalf("HoldsBlinds: %v", err)
 		}
@@ -383,6 +387,19 @@ func TestTheEstateSaysWhetherItEverUsedTheBlindKey(t *testing.T) {
 	if !holds() {
 		t.Error("an estate holding an address reports none, so a deleted key " +
 			"would be minted over and every address orphaned")
+	}
+
+	// AND "NONE" IS PROVED OR NOT SAID: rows that have not applied the
+	// log's end cannot say a blinded row is not among what they are
+	// missing, so they answer that they cannot say.
+	end, err := rig.behind(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	if held, err := reader.HoldsBlinds(t.Context(), end); !errors.Is(err,
+		iamdomain.ErrNotCurrent) {
+		t.Errorf("rows behind the log answered (%v, %v), want ErrNotCurrent — "+
+			"their \"none\" is the answer that mints over a deleted key", held, err)
 	}
 }
 

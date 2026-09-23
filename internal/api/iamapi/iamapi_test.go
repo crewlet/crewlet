@@ -177,6 +177,8 @@ type fakeDirectory struct {
 	claimsErr error
 	liveKeys  []string
 	unowned   []iamdomain.UnownedKey
+	// prefix is how much of the identity log the census's snapshot holds.
+	prefix statelog.Prefix
 }
 
 func (d *fakeDirectory) People(_ context.Context, q iamdomain.PeopleQuery) (
@@ -256,7 +258,7 @@ func (d *fakeDirectory) KeyCensus(_ context.Context, keys iamdomain.KeyIndex) (
 	}
 	return iamdomain.KeyCensus{
 		Keys:            len(d.liveKeys) + len(d.unowned),
-		OutlivedRemoval: d.liveKeys, Unowned: d.unowned,
+		OutlivedRemoval: d.liveKeys, Unowned: d.unowned, Prefix: d.prefix,
 	}, d.err
 }
 
@@ -946,16 +948,21 @@ func TestTheReportNamesALiveKeyOfARemovedPersonWhereItCanAsk(t *testing.T) {
 	}
 }
 
-// A KEY NOBODY OWNS IS NAMED ONLY BY A NODE THAT CAN TELL.
+// A KEY NOBODY OWNS IS NAMED ONLY BY A NODE THAT CAN PROVE IT.
 //
 // A key no row owns is either a refused gesture's residue — its sealed value
 // readable from every backup until the key duty destroys it — or the key of
-// somebody whose enrolment this node has not applied yet. Only a node that has
-// applied the whole log can tell those apart, so the report names one only
+// somebody whose enrolment this node has not applied. Only rows that have
+// APPLIED the whole log can tell those apart, so the report names one only
 // there, and only past the grace a running gesture needs; everywhere else it
 // COUNTS what it could not judge rather than printing a clean report, and it
 // never calls a young key a finding.
-func TestTheReportNamesAnUnownedKeyOnlyWhereTheNodeIsCurrent(t *testing.T) {
+//
+// The retained case is the one the report used to get wrong: its checkpoint is
+// at the log's end, because the applier moves past a record it retains, and it
+// read that as current — naming as nobody's the key of a person whose
+// enrolment it had merely retained.
+func TestTheReportNamesAnUnownedKeyOnlyWhereTheNodeCanProveIt(t *testing.T) {
 	t.Parallel()
 	const (
 		old   = "018f3a9c-0000-7000-8000-0000000000e1"
@@ -965,26 +972,38 @@ func TestTheReportNamesAnUnownedKeyOnlyWhereTheNodeIsCurrent(t *testing.T) {
 		{ID: old, WrittenAt: at.Add(-2 * iamdomain.OrphanKeyGrace)},
 		{ID: young, WrittenAt: at.Add(-iamdomain.OrphanKeyGrace / 4)},
 	}
+	settled := func(seq uint64) statelog.Prefix {
+		return statelog.Prefix{Settled: statelog.Position{Seq: seq}}
+	}
+	retained := settled(9)
+	retained.Retains = true
+	retained.Retained = statelog.Deferral{Position: statelog.Position{Seq: 6}, Version: 3}
+	end := func(seq uint64, err error) func(context.Context) (uint64, error) {
+		return func(context.Context) (uint64, error) { return seq, err }
+	}
 	for _, tc := range []struct {
 		name      string
-		current   func(context.Context) error
+		logEnd    func(context.Context) (uint64, error)
+		prefix    statelog.Prefix
 		wantNamed bool
 		unchecked float64
 	}{
-		{"a node given no way to tell", nil, false, 2},
-		{"a node behind the log", func(context.Context) error {
-			return errors.New("applied 4 of 9")
-		}, false, 2},
-		{"a node that is current", func(context.Context) error { return nil },
-			true, 0},
+		{"a node given no way to read the log's end", nil, settled(9), false, 2},
+		{"a node that could not read the log's end",
+			end(0, errors.New("no responders")), settled(9), false, 2},
+		{"a node behind the log", end(9, nil), settled(4), false, 2},
+		{"a node at the log's end holding a record it retained", end(9, nil),
+			retained, false, 2},
+		{"a node that has applied the whole log", end(9, nil), settled(9), true, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t, func(o *iamapi.Options) {
 				o.Keys = listedKeys{}
-				o.Current = tc.current
+				o.LogEnd = tc.logEnd
 			})
 			r.directory.unowned = unowned
+			r.directory.prefix = tc.prefix
 			got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
 			if got.status != http.StatusOK {
 				t.Fatalf("status %d: %v", got.status, got.body)
@@ -998,7 +1017,7 @@ func TestTheReportNamesAnUnownedKeyOnlyWhereTheNodeIsCurrent(t *testing.T) {
 				t.Errorf("named %v, want exactly the key past the grace", named)
 			case !tc.wantNamed && len(named) != 0:
 				t.Errorf("named %v on a node that cannot tell an absent "+
-					"owner from one that has not arrived", named)
+					"owner from one it has not applied", named)
 			}
 			if got.body["keys_unchecked"] != tc.unchecked {
 				t.Errorf("keys_unchecked = %v, want %v", got.body["keys_unchecked"],

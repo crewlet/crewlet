@@ -31,8 +31,8 @@ import (
 //     post-commit shred failed, and retries until it lands; destroys a key
 //     NOBODY owns — minted for an enrolment or an invitation refused after
 //     the mint, or left by an invitation the sweep collected — once it is past
-//     the grace on a node that has applied the whole log
-//     ([iamdomain.ShredKeys]); and collects the refresh token of every OIDC
+//     the grace on a node whose rows have APPLIED the whole log, not merely
+//     consumed it ([iamdomain.ShredKeys]); and collects the refresh token of every OIDC
 //     session that is over ([iamdomain.Refreshes.CollectEnded]). Until each
 //     lands, what the key sealed is readable from every backup, and a grant
 //     is a live credential at somebody else's provider.
@@ -261,7 +261,7 @@ func (e *Engine) identityDutiesFor(boot *config.Bootstrap) []identityDuty {
 			custody := e.RefreshCustody()
 			out = append(out, duty(identityKeysDuty, IdentityKeysInterval,
 				func(ctx context.Context) {
-					keysPass(ctx, reader, store, sealer, e.IdentityCaughtUp, custody)
+					keysPass(ctx, reader, store, sealer, e.IdentityLogEnd, custody)
 				}))
 		}
 	}
@@ -424,11 +424,11 @@ func duplicateAttrs(dup iamdomain.DuplicateClaim, at string) []any {
 // NO PERSON'S ID REACHES A WARNING about a key nobody owns: such a key is by
 // definition not a person's, and the count is what an operator acts on.
 func keysPass(ctx context.Context, reader *iamdomain.Reader, keys iamdomain.KeyIndex,
-	shredder iamdomain.Shredder, caughtUp func(context.Context) error,
+	shredder iamdomain.Shredder, logEnd func(context.Context) (uint64, error),
 	custody *iamdomain.Refreshes) {
 
 	report, err := iamdomain.ShredKeys(ctx, reader, keys, shredder, time.Now(),
-		caughtUp)
+		logEnd)
 	if len(report.Destroyed) > 0 {
 		identityLog.InfoContext(ctx, "iam_keys_shredded",
 			"people", report.Destroyed,
@@ -442,11 +442,13 @@ func keysPass(ctx context.Context, reader *iamdomain.Reader, keys iamdomain.KeyI
 				"it claimed anything, or for an invitation the sweep collected, "+
 				"and no row owned it")
 	}
-	if report.Unjudged != nil && report.Waiting > 0 {
+	if report.Unjudged != nil && report.Unproven > 0 {
 		// INFO AND NOT A WARNING: a node behind the log is the ordinary
-		// state of one that has just booted, and the next pass judges.
+		// state of one that has just booted, and one holding a record it
+		// retained is the ordinary state of a rolling upgrade or a keyring
+		// rotation half done — the next pass on a node that can judges.
 		identityLog.InfoContext(ctx, "iam_keys_unjudged",
-			"unowned", report.Waiting, "reason", report.Unjudged.Error())
+			"unowned", report.Unproven, "reason", report.Unjudged.Error())
 	}
 	if err != nil {
 		identityLog.WarnContext(ctx, "iam_keys_pending", "error", err.Error(),

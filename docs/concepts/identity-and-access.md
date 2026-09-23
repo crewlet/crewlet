@@ -1903,9 +1903,14 @@ Two consequences worth knowing before you see them:
   who never existed, and an invitation the sweep collects leaves its key
   behind. The same duty destroys a key **nobody owns** — no person, no
   reservation, no invitation, no removal — once it is an hour old and only
-  on a node that has applied the whole identity log, because on a node that
-  is behind, somebody whose enrolment has not arrived yet owns nothing
-  either. `crewlet iam check` names each one past the hour as `key_unowned`.
+  on a node whose rows have **applied** the whole identity log, because on
+  a node that has not, somebody whose enrolment has not been applied there
+  owns nothing either. Applied is not the same as *consumed*: a node holding
+  a record it cannot apply — a newer build's during a rollout, or one signed
+  under a keyring key it was not restarted with during a key rotation —
+  moves past it and keeps it aside, and until it can apply it that node
+  judges no key at all. `crewlet iam check` names each one past the hour as
+  `key_unowned`.
   A refused enrolment does not destroy its own key: the id it was handed may
   be a live person's, and only a pass that has proved nobody owns it may.
 - **A value that will not decrypt is not the same as an outage.** The one

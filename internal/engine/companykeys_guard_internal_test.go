@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -33,34 +35,43 @@ func TestACompanyKeyWithNoGuardIsNotMinted(t *testing.T) {
 	}
 }
 
-// A NODE BEHIND THE IDENTITY LOG DOES NOT JUDGE A MISSING KEY, AND DOES NOT
-// ASK ITS ROWS.
+// A MISSING KEY IS JUDGED ON ROWS PROVED AGAINST THE LOG'S END, READ FIRST.
 //
 // Whether a missing blind-index key was deleted or never minted is answered by
-// the rows — an estate holding a blind had a key — and a node that has not
-// applied the whole log may simply not have those rows yet. Its "no blind
-// here" is the answer that mints over a deleted key and orphans every address
-// in the directory, so behind is a refusal of its own, and the rows are not
-// consulted at all until the node has caught up.
-func TestANodeBehindTheIdentityLogDoesNotJudgeAMissingKey(t *testing.T) {
+// the rows — an estate holding a blind had a key — and "no blind here" is an
+// ABSENCE, which proves nothing on rows that have not applied the whole log.
+// So the log's end is read BEFORE the rows are asked, and handed to them to be
+// proved against: an end that cannot be read refuses without asking, and rows
+// that cannot vouch for the end — behind, or holding a record they retained,
+// which the applier's checkpoint moves past — refuse as surely as an
+// unreadable store. The one answer that mints is "none", proved.
+func TestAMissingKeyIsJudgedOnRowsProvedAgainstTheLogsEnd(t *testing.T) {
 	t.Parallel()
-	asked := false
-	holds := func(held bool, err error) func(context.Context) (bool, error) {
-		return func(context.Context) (bool, error) {
-			asked = true
+	var order []string
+	var provedAgainst uint64
+	logEnd := func(end uint64, err error) func(context.Context) (uint64, error) {
+		return func(context.Context) (uint64, error) {
+			order = append(order, "end")
+			return end, err
+		}
+	}
+	holds := func(held bool, err error) func(context.Context, uint64) (bool, error) {
+		return func(_ context.Context, end uint64) (bool, error) {
+			order = append(order, "rows")
+			provedAgainst = end
 			return held, err
 		}
 	}
-	behind := func(context.Context) error { return caughtUp(5, 7) }
-	current := func(context.Context) error { return caughtUp(7, 7) }
 
-	err := judgeBlindKeyMint(t.Context(), behind, holds(false, nil))
-	if !errors.Is(err, errIdentityBehind) {
-		t.Fatalf("a node two records behind answered %v, want errIdentityBehind", err)
+	order = nil
+	err := judgeBlindKeyMint(t.Context(), logEnd(0, errors.New("no responders")),
+		holds(false, nil))
+	if err == nil {
+		t.Fatal("a node that could not read the log's end allowed the mint")
 	}
-	if asked {
-		t.Error("a node behind the log asked its rows whether a key was in use, " +
-			"and rows that have not arrived answer no")
+	if slices.Contains(order, "rows") {
+		t.Error("a node that could not read the log's end asked its rows, " +
+			"and rows with nothing to be proved against answer no")
 	}
 
 	for _, tc := range []struct {
@@ -68,31 +79,35 @@ func TestANodeBehindTheIdentityLogDoesNotJudgeAMissingKey(t *testing.T) {
 		held    bool
 		readErr error
 		want    error
+		allowed bool
 	}{
-		{"an estate holding a blind", true, nil, iamdomain.ErrNoBlindKey},
-		{"an estate holding none", false, nil, nil},
-		{"rows that could not be read", false, errors.New("disk"), nil},
+		{"an estate holding a blind", true, nil, iamdomain.ErrNoBlindKey, false},
+		{"an estate proved to hold none", false, nil, nil, true},
+		{"rows that cannot vouch for the log's end", false,
+			fmt.Errorf("%w: it holds a record it could not apply", iamdomain.ErrNotCurrent),
+			iamdomain.ErrNotCurrent, false},
+		{"rows that could not be read", false, errors.New("disk"), nil, false},
 	} {
-		err := judgeBlindKeyMint(t.Context(), current, holds(tc.held, tc.readErr))
-		switch {
-		case tc.readErr != nil:
-			if err == nil {
-				t.Errorf("%s: the mint was allowed on rows nobody read", tc.name)
-			}
-		case tc.want == nil:
-			if err != nil {
-				t.Errorf("%s: a caught-up node refused a fresh company's key: %v",
-					tc.name, err)
-			}
-		case !errors.Is(err, tc.want):
-			t.Errorf("%s: answered %v, want %v", tc.name, err, tc.want)
+		order, provedAgainst = nil, 0
+		err := judgeBlindKeyMint(t.Context(), logEnd(7, nil), holds(tc.held, tc.readErr))
+		if !slices.Equal(order, []string{"end", "rows"}) {
+			t.Errorf("%s: asked %v, want the log's end first and the rows after "+
+				"— rows asked first can be proved against an end they never saw",
+				tc.name, order)
 		}
-	}
-
-	// THE ARITHMETIC: at the end, and past it, is caught up.
-	for _, tc := range []struct{ applied, end uint64 }{{7, 7}, {8, 7}, {0, 0}} {
-		if err := caughtUp(tc.applied, tc.end); err != nil {
-			t.Errorf("applied %d of %d answered %v", tc.applied, tc.end, err)
+		if provedAgainst != 7 {
+			t.Errorf("%s: the rows were proved against %d, want the end just read (7)",
+				tc.name, provedAgainst)
+		}
+		switch {
+		case tc.allowed:
+			if err != nil {
+				t.Errorf("%s: a fresh company's key was refused: %v", tc.name, err)
+			}
+		case err == nil:
+			t.Errorf("%s: the mint was allowed", tc.name)
+		case tc.want != nil && !errors.Is(err, tc.want):
+			t.Errorf("%s: answered %v, want %v", tc.name, err, tc.want)
 		}
 	}
 }

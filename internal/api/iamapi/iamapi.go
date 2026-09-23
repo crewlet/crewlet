@@ -258,14 +258,14 @@ type Options struct {
 	// value — see [Keys].
 	Keys Keys
 
-	// Current answers whether this node has applied everything the
-	// identity log held when it was asked — the engine's
-	// `IdentityCaughtUp` — and gates the report's UNOWNED-KEY arm, because
-	// on a node behind the log a person whose enrolment has not arrived
-	// owns nothing here and their key reads as nobody's. NIL-ABLE: absent,
-	// or answering an error, the arm is counted as unchecked rather than
-	// answered.
-	Current func(ctx context.Context) error
+	// LogEnd reads the identity log's last sequence — the engine's
+	// `IdentityLogEnd` — which the report's UNOWNED-KEY arm proves an
+	// absence against ([iamdomain.KeyCensus.Judge]): on rows that have not
+	// applied the whole log, behind or holding a record they retained, a
+	// person whose enrolment has not been applied owns nothing here and
+	// their key reads as nobody's. NIL-ABLE: absent, or answering an
+	// error, the arm is counted as unchecked rather than answered.
+	LogEnd func(ctx context.Context) (uint64, error)
 
 	// Now is the clock, injectable so a case can pin an expiry.
 	Now func() time.Time
@@ -284,7 +284,7 @@ type Service struct {
 	ceiling   []iam.Grant
 	audit     Audit
 	keys      Keys
-	current   func(ctx context.Context) error
+	logEnd    func(ctx context.Context) (uint64, error)
 	now       func() time.Time
 }
 
@@ -310,8 +310,8 @@ func New(opts Options) (*Service, error) {
 		external: opts.ExternalBase, bindings: opts.Bindings,
 		issuer: opts.Issuer, blinds: opts.Blinds,
 		ceiling: slices.Clone(opts.Ceiling), audit: opts.Audit, keys: opts.Keys,
-		current: opts.Current,
-		now:     opts.Now,
+		logEnd: opts.LogEnd,
+		now:    opts.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }

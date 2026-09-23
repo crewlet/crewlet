@@ -910,10 +910,14 @@ store and are left out on a node without one; the table in
 what to do.
 
 `keys_unchecked` counts the keys no row on this node owns that it **could not
-judge**, because it has not applied the whole identity log: somebody whose
-enrolment has not arrived here owns nothing here either, so such a node names
-no `key_unowned` and counts instead, and a report from it does not read as a
-clean one.
+judge**, because its rows have not applied the whole identity log — it is
+behind, or it holds a record it cannot apply yet (a newer build's, or one
+signed under a keyring key it was not restarted with), which moves its
+checkpoint without writing the record's rows: somebody whose enrolment has not
+been applied here owns nothing here either, so such a node names no
+`key_unowned` and counts instead, and a report from it does not read as a clean
+one. A key with no recorded write time is counted here too, having no provable
+age.
 
 `binding_dangling` is decided by the **request path's own seat table**, so it
 names exactly the people a request would refuse or hold off for want of their
