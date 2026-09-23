@@ -299,7 +299,7 @@ func askAsSeat(t *testing.T, s queries.Sources, handle, what string,
 }
 
 // askHolding is [askAsSeat] for a case about AUTHORITY, which states the
-// grants rather than taking every one: [iam.AllGrants] carries people:manage,
+// grants rather than taking every one: [iam.AllGrants] carries fleet:operate,
 // which every personal class admits before it asks the chart — so a case using
 // it against a chart that reports no relation is allowed anyway and asserts
 // nothing.

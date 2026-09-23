@@ -315,7 +315,7 @@ as the first, which tells them to go and get a new credential.
 | Grant | What it reaches |
 |---|---|
 | `state:read` | The company's working state: `/agents`, `/org`, `/tools`, `/schedules`, `/budgets`, `/sandbox-runs`, the reads under `/work/*` and `/pages/*`, `/containers`, `/viewer`, `/stream/snapshot`, `/tokens/*`, `/ws/stream` |
-| `audit:read` | The record of what happened: `/events*`, the socket's `event` push and the snapshot's `events` section, `/agents/{id}/memory`, the turn, phase, trace, A2A-channel and conversation questions on the socket, and `/iam/audit`. Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
+| `audit:read` | The record of what happened: `/events*`, the socket's `event` push and the snapshot's `events` section, any seat's `/agents/{id}/memory` and `/agents/{id}/conversations`, the turn, phase, trace and A2A-channel questions on the socket, and `/iam/audit`. Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
 | `config:read` | `/config*`, `/company/export`, `/integrations`, and the org chart's **runtime half** (`/chart?runtime=true`) — a seat's model chain, its credentials, its sandbox cell and its `mcp_env` |
 | `secrets:read` | `/secrets*`. The listing carries no values and still says which credentials a company holds and when each last changed |
 | `people:manage` | `/iam/*` — inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them. **The grant that can grant**, and it bounds itself: a caller may not confer a grant they do not hold |
@@ -2101,7 +2101,7 @@ REST route calls, so the two surfaces cannot diverge:
 |--------|----------|--------------|
 | `agent` | `{id}` | `GET /agents/{id}` — config + live state + `llm_history` |
 | `agent_memory` | `{id}` | `GET /agents/{id}/memory`. Four collections: the diary, the episodes, the synthesized skills (with `skills_total` beside them, because the listing is a page of a set), and the COUNTERPARTY PROFILES — what this seat has learned about the colleagues it works with. Each profile carries both instants and they measure different cadences: `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits actually changed, so a colleague seen daily whose profile has not moved in months is one this seat has stopped learning about. `traits` is a bag whose keys the model invents, never a fixed schema. The diary is keyed on the derived agent id and the other three on the HANDLE; both are asked with the one identifier a caller has, and the half that does not recognise it answers nothing |
-| `conversations` | `{handle, conversation, limit}` | `GET /agents/{id}/conversations`. The seat's own thread ledger — the engine's only account of what a seat said on a surface it does not own, and what stops it replying twice in one thread. TWO SHAPES IN ONE ANSWER, because a screen asks two questions with one navigation: `conversations` is every thread this seat holds entries in, and naming one in `conversation` adds that thread's turns as `entries`. Each turn's `reply` and `unsent` carry the same artifact and WHICH ONE HOLDS IT is the whole record of whether anybody received it — a turn can end with real work done and no way to say so. Same scope rule as `work_my_work` |
+| `conversations` | `{handle, conversation, limit}` | `GET /agents/{id}/conversations`. The seat's own thread ledger — the engine's only account of what a seat said on a surface it does not own, and what stops it replying twice in one thread. TWO SHAPES IN ONE ANSWER, because a screen asks two questions with one navigation: `conversations` is every thread this seat holds entries in, and naming one in `conversation` adds that thread's turns as `entries`. Each turn's `reply` and `unsent` carry the same artifact and WHICH ONE HOLDS IT is the whole record of whether anybody received it — a turn can end with real work done and no way to say so. An absent `handle` is the caller's own seat, as on `work_my_work`; a named one is a seat's TRAIL rather than a person's queue, so it takes `audit:read` whoever's seat it is — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for) |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload |
 | `events` | `{limit, type, source, category, trace_id, actor, agent, turn_id, work_key, since, until, before_id, before_time}` | `GET /events`. `turn_id` selects ONE RUN of a turn; `work_key` selects every run of one unit of work — the attempts at a trigger that was redelivered. Rows written before migration `0029` carry the work key in `turn_id`, and that migration backfills it into the COLUMN, so history answers both. Every row answers with its own `work_key` read off that column rather than out of its `tags`, which is the one promoted value that is not a copy of a tag: the backfill deliberately does not rewrite a stored tags blob, since those record what the writer extracted from an event whose JSON carried no such field |
 | `event_series` | `{bucket, since, until, type, source, category, trace_id, actor, turn_id, work_key}` | `GET /events/series`. THE SAME ROWS WITH A TIME AXIS, which a page of rows has no dimension for: a burst at four in the morning and a steady trickle across a week are the same hundred rows in the same column. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back — the same split `tokens` and `token_series` carry. Both halves compile their filters through ONE predicate in the store, so a bar can never claim rows the listing beside it would not show |
@@ -2199,16 +2199,28 @@ that renders `read_level` and swallows `complete` looks confidently right.
 
 ### Whose record a personal question answers for
 
-Four questions answer about **one person** rather than about the company:
-`work_my_work`, `work_inbox`, `work_person` and `conversations`. Every one of
-them takes a `handle`, and the rule for whose is the same, in one place:
+Four questions answer about **one person or seat** rather than about the
+company: `work_my_work`, `work_inbox`, `work_person` and `conversations`. Every
+one of them takes a `handle`, and the rule for whose is the same, in one place:
 
 1. **No handle** answers for the seat the caller is bound to.
 2. **Your own handle** is the same thing said explicitly.
-3. **Anybody else's handle** is the authority table's owner-or-lead rule:
-   whoever leads that person, or a caller holding `fleet:operate`. A node that
-   cannot read the chart to tell answers `503`, never a refusal — a lead told
-   they lead nobody goes looking for an authority they already hold.
+3. **Anybody else's handle** is decided by the authority table, each question
+   asking its own verb. The first three are somebody's QUEUE, and take the
+   owner-or-lead rule: whoever leads that person, or a caller holding
+   `fleet:operate`. A node that cannot read the chart to tell answers `503`,
+   never a refusal — a lead told they lead nobody goes looking for an
+   authority they already hold. `conversations` is a seat's TRAIL — what it
+   said on a surface the engine does not own — and takes `audit:read`, the
+   grant `/events` and `/agents/{id}/memory` already take for every seat at
+   once; a lead does not read it by leading, and `fleet:operate` does not
+   open it either.
+
+A refusal on authority is `403 unauthorized` naming the rule that decided in
+`reason` and, in `grants`, the capabilities any one of which would have
+admitted the caller — `fleet:operate` for a colleague's queue, `audit:read`
+for a seat's threads. An empty `grants` means no capability would: the answer
+is a relation the chart does not hold.
 
 The binding is the **identity directory's**: a person's row names the seat they
 hold, and a Tier A token acts as a seat when the directory binds its login to

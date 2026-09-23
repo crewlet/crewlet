@@ -147,6 +147,17 @@ const (
 	ActionAuditRead    Action = "audit.read"
 	ActionSandboxRun   Action = "run_sandbox"
 
+	// --- one seat's own trail, read by somebody else ----------------- //
+	//
+	// A SEAT'S MEMORY AND ITS THREADS, read over the API: what it wrote in
+	// its diary, what it learned, who it has worked with, and what it said
+	// on a chat surface this engine does not own. DOTTED, because no tool
+	// reads another seat's trail — a seat's own memory tools take no
+	// handle at all ([ClassSelf]) — and it is ITS OWN VERB rather than
+	// [ActionAuditRead] because the object is a seat: a question naming
+	// one asks this, and the identity estate's trail asks the other.
+	ActionSeatTrailRead Action = "audit.seat.read"
+
 	// --- the identity directory -------------------------------------- //
 	//
 	// FOUR VERBS FOR SIXTEEN ROUTES, because the routes differ in what
@@ -357,6 +368,17 @@ var rules = map[Action]rule{
 	ActionFleetOperate: {class: ClassOperator, grant: iam.GrantFleetOperate},
 	ActionAuditRead:    {class: ClassOperator, grant: iam.GrantAuditRead},
 	ActionSandboxRun:   {class: ClassOperator, grant: iam.GrantSandboxRun},
+
+	// A SEAT'S TRAIL IS THE AUDIT READ, whoever's seat it is, and NOT the
+	// owner-or-lead rule a person's queue takes. Its diary carries what its
+	// prompts decided and its threads what it said on the company's behalf
+	// — the record of what happened, which is exactly what `audit:read`
+	// opens on `/events` for every seat at once. Decided by the lead
+	// relation instead, an auditor holding that grant was refused one
+	// seat's threads while reading every phase record the seat ever wrote;
+	// and a lead holding only `state:read` would have read a trail the
+	// grant that governs it was never given to them.
+	ActionSeatTrailRead: {class: ClassOperator, grant: iam.GrantAuditRead},
 
 	// A DIRECTORY READ IS THREE PARTIES' — the person it is about, the
 	// party that writes it, and the party that audits it. The class holds

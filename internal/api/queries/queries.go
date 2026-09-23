@@ -17,8 +17,10 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -31,10 +33,12 @@ var (
 	ErrUnknown = errors.New("queries: unknown query")
 
 	// ErrUnauthorized is a question asked by somebody this node KNOWS,
-	// who does not carry the grant it declares. Returned rather than
-	// decided here, so the refusal reaches a client as a code it already
-	// handles.
-	ErrUnauthorized = errors.New("queries: principal does not carry the grant this query needs")
+	// who does not carry the grant it declares — or, for a question naming
+	// somebody's record, whose relation to that record does not reach it.
+	// Every such refusal is a [*Refusal], which carries the rule's reason
+	// and the grants that would have admitted the caller; this sentinel is
+	// what a transport branches on.
+	ErrUnauthorized = errors.New("queries: refused on authority")
 
 	// ErrUnauthenticated is a question asked by nobody: a resolver ran and
 	// found no credential.
@@ -58,6 +62,56 @@ var (
 	// ErrBadParams is a request this surface understood and refused.
 	ErrBadParams = errors.New("queries: bad parameters")
 )
+
+// Refusal is a question refused on AUTHORITY: a caller this node knows, whose
+// grants — or, for a personal question, whose relation to the record it named
+// — do not reach what they asked. It is [ErrUnauthorized] to [errors.Is].
+//
+// A TYPE RATHER THAN A WRAPPED SENTENCE, because a surface renders what it
+// carries: the rule's own reason and the grants that would have admitted the
+// caller, as values a client branches on. A sentence written beside the rule
+// — "needs the lead relation or fleet:operate" — is a second statement of the
+// rule, and it is the copy that goes stale the day the rule's admin grant
+// moves.
+type Refusal struct {
+	// What is what was refused: the question, or — where the question was
+	// admitted and the record it named was not — the verb asked of that
+	// record, which is the more useful half to a reader of the log.
+	What string
+
+	// Reason is the rule that decided, in the authority table's own words:
+	// [authz.ReasonNoGrant] for a question's declared grant, and whatever
+	// [authz.Decide] concluded for a record a personal question named.
+	Reason authz.Reason
+
+	// Grants are the capabilities any one of which would have admitted the
+	// caller — [authz.Decision.Grants], or the one grant a question is
+	// registered as needing. Empty where no capability would.
+	Grants []iam.Grant
+}
+
+// refused is the refusal an [authz.Decision] makes of one question.
+func refused(what string, d authz.Decision) *Refusal {
+	return &Refusal{What: what, Reason: d.Reason, Grants: d.Grants}
+}
+
+// Error renders the refusal from its own values, so the sentence in a log can
+// never say something the reason and the grants do not.
+func (r *Refusal) Error() string {
+	var remedy string
+	if len(r.Grants) > 0 {
+		names := make([]string, 0, len(r.Grants))
+		for _, g := range r.Grants {
+			names = append(names, string(g))
+		}
+		remedy = "; carrying " + strings.Join(names, " or ") + " would admit it"
+	}
+	return fmt.Sprintf("queries: %q refused (%s)%s", r.What, r.Reason, remedy)
+}
+
+// Unwrap makes a refusal [ErrUnauthorized], which is what every transport
+// already maps.
+func (r *Refusal) Unwrap() error { return ErrUnauthorized }
 
 // Params are one query's arguments.
 //
@@ -330,7 +384,8 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, 
 		// principal who lacks the grant — see [ErrUnauthenticated].
 		return nil, fmt.Errorf("%w: %q needs %s", ErrUnauthenticated, what, e.needs)
 	case !principal.Can(e.needs):
-		return nil, fmt.Errorf("%w: %q needs %s", ErrUnauthorized, what, e.needs)
+		return nil, &Refusal{What: what, Reason: authz.ReasonNoGrant,
+			Grants: []iam.Grant{e.needs}}
 	}
 	data, err := e.answer(ctx, p)
 	return data, unavailableIfTransient(err)

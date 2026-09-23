@@ -11,20 +11,19 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// The two refusals a personal question makes, told apart because the remedies
-// are different: one is a row in the identity directory, the other authority.
+// errNoSeat is the refusal a personal question makes of a caller bound to no
+// seat who named none. It is NOT an authorization failure — nobody was refused
+// anything — and its remedy is a row in the identity directory rather than a
+// different credential, which is why it is [ErrBadParams] and the authority
+// refusal beside it is a [Refusal] carrying the rule's own reason.
 //
 // THE BINDING IS NAMED WHERE IT LIVES. It used to say "in the org chart", which
 // was true while a seat's contact block carried the credential it was held by;
 // the directory holds that now, and a remedy pointing at the chart sends
 // somebody to edit a document that has no field for it.
-var (
-	errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind "+
-		"its row in the identity directory to one (`crewlet iam bind`), or "+
-		"name a handle", ErrBadParams)
-	errNotYours = fmt.Errorf("%w: reading another seat's record needs the "+
-		"lead relation or fleet:operate", ErrUnauthorized)
-)
+var errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind "+
+	"its row in the identity directory to one (`crewlet iam bind`), or "+
+	"name a handle", ErrBadParams)
 
 // viewer answers who this caller is.
 //
@@ -99,15 +98,21 @@ func (s Sources) seatOf(p iam.Principal) *org.Role {
 // viewerHandle is the handle a personal question answers for when the caller
 // named none, and the authority check when they named one.
 //
-// THE SCOPE RULE, in one place because four questions share it — and it is the
-// authority TABLE's rule rather than a second copy of it: the caller reads
-// their own record, whoever leads them, or anybody's with fleet:operate, which
-// is exactly [authz.ClassOwnOrLead]. It used to be "your own, or ANY operator
-// credential for anybody else's", which made every token in Tier A a reader of
-// every seat's inbox.
+// THE SCOPE RULE IS THE AUTHORITY TABLE'S, asked with the question's OWN verb:
+// `work_inbox` asks [authz.ActionInboxRead], `work_my_work`
+// [authz.ActionMyWork], `work_person` [authz.ActionPersonRead] — somebody's
+// queue, which is theirs, their lead's, or the deployment's admin grant's —
+// and `conversations` asks [authz.ActionSeatTrailRead], a seat's trail, which
+// is the audit read. It used to decide every one of them as a person's record,
+// so an auditor holding `audit:read` was refused the one seat's threads while
+// reading every phase record it had ever written; and before that it was "any
+// operator credential for anybody else's", which made every token in Tier A a
+// reader of every seat's inbox.
 //
 // Returns the handle to read and an error to refuse with.
-func (s Sources) viewerHandle(ctx context.Context, asked string) (string, error) {
+func (s Sources) viewerHandle(ctx context.Context, action authz.Action,
+	asked string) (string, error) {
+
 	principal, how := iam.From(ctx)
 	if how == iam.Unknown {
 		return "", unresolved(ctx, "viewer")
@@ -125,17 +130,33 @@ func (s Sources) viewerHandle(ctx context.Context, asked string) (string, error)
 	if asked == own {
 		return asked, nil
 	}
-	d := authz.Decide(ctx, principal, authz.ActionPersonRead,
-		authz.Object{Kind: authz.KindPerson, Owner: asked}, s.Chart)
+	if err := s.mayRead(ctx, principal, action, asked); err != nil {
+		return "", err
+	}
+	return asked, nil
+}
+
+// mayRead decides whether principal may take action on the record one seat
+// holds, and renders the answer as the error this surface refuses with.
+//
+// THE REFUSAL IS THE DECISION'S OWN — its reason and the grants that would
+// have admitted the caller — and never a sentence written here, which is how
+// the one this replaced came to name an admin grant for a rule that did not
+// govern the question asking it.
+func (s Sources) mayRead(ctx context.Context, principal iam.Principal,
+	action authz.Action, handle string) error {
+
+	d := authz.Decide(ctx, principal, action,
+		authz.Object{Kind: authz.KindPerson, ID: handle, Owner: handle}, s.Chart)
 	switch {
 	case d.Unknown():
 		// THIS NODE COULD NOT TELL, which a surface renders as 503 and
 		// never as a refusal: a node behind the chart log telling a lead
 		// they lead nobody sends them to ask for authority they hold.
-		return "", fmt.Errorf("%w: this node cannot say who leads %s yet: %w",
-			ErrUnavailable, asked, d.Err)
+		return fmt.Errorf("%w: this node cannot decide %s on %s's record "+
+			"yet: %w", ErrUnavailable, action, handle, d.Err)
 	case !d.Allowed:
-		return "", errNotYours
+		return refused(string(action)+" of "+handle, d)
 	}
-	return asked, nil
+	return nil
 }

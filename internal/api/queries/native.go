@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -390,7 +391,8 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 //
 // SCOPED BY [Sources.viewerHandle], the same rule `work_my_work` and
 // `work_inbox` take: an absent handle is the caller's own seat, and naming
-// anybody else's needs an operator credential.
+// anybody else's is [authz.ActionPersonRead] — theirs, whoever leads them, or
+// the deployment's admin grant.
 //
 // It DEMANDED a handle and checked nothing, on the reasoning that the whole
 // surface is guarded so the caller already holds the company's credential.
@@ -400,7 +402,8 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // to work on next, and who set that order. The parameter selected whose. A
 // scope rule two of the three personal questions follow is not a rule.
 func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
-	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	handle, err := s.viewerHandle(ctx, authz.ActionPersonRead,
+		strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
@@ -770,7 +773,8 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 	// was registered operator-only and demanded a handle, which is why
 	// routes/MyWork.tsx picked the alphabetically first seat: there was no
 	// way for the screen to know whose day it was drawing.
-	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	handle, err := s.viewerHandle(ctx, authz.ActionMyWork,
+		strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}

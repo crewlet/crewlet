@@ -455,10 +455,10 @@ func Register(r *Registry, s Sources) {
 		// AND ONE PERSON'S DAY, plus the notices that reached them.
 		//
 		// SCOPED RATHER THAN OPERATOR-ONLY — see [Sources.viewerHandle].
-		// A caller reads the seat their own token is bound to, and
-		// naming anybody else's needs an operator credential, which is
-		// the same authority the tools that WRITE these records
-		// enforce. Registered operator-only, as `work_my_work` was, the
+		// A caller reads the seat they are bound to, and naming anybody
+		// else's is the owner-or-lead rule the tools that WRITE these
+		// records are decided by: theirs, whoever leads them, or the
+		// deployment's admin grant. Registered operator-only, as `work_my_work` was, the
 		// landing screen becomes the most-gated screen in the product
 		// and the human teammate — one of the two readers this
 		// dashboard is for — is fictional. `work_person` has always
@@ -515,8 +515,11 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_search", iam.GrantStateRead, s.workSearch)
 	}
 	if s.Conversations != nil {
-		// SCOPED, like every other per-seat question — see
-		// [Sources.viewerHandle].
+		// A SEAT'S TRAIL, registered on the audit read and decided per
+		// seat by [authz.ActionSeatTrailRead] — the same verb
+		// `agent_memory` asks, so the two halves of what a seat has said
+		// and remembered cannot answer one reader differently. An absent
+		// handle is the caller's own seat; see [Sources.viewerHandle].
 		r.Register("conversations", iam.GrantAuditRead, s.conversations)
 	}
 	if s.Config != nil {

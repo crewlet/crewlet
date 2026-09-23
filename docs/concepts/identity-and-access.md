@@ -131,7 +131,7 @@ opinion, and a blank must not read as a ceiling of nothing.
 | Grant | What it opens |
 |---|---|
 | `state:read` | What the company is doing: the board, the pages, the roster, the org chart, the fleet, budgets, schedules — the ordinary dashboard read |
-| `audit:read` | The *record* of what happened: `/events`, `/agents/{id}/memory` and the turn frames on `/ws/stream` carry full prompts, tool arguments and diary entries, and `/iam/audit` carries the identity estate's own trail beside them |
+| `audit:read` | The *record* of what happened: `/events`, any seat's `/agents/{id}/memory` and `/agents/{id}/conversations`, and the turn frames on `/ws/stream` carry full prompts, tool arguments, diary entries and what a seat said on a chat surface, and `/iam/audit` carries the identity estate's own trail beside them. A seat's trail is the audit read whoever's seat it is — not its lead's by leading it, and not `fleet:operate`'s |
 | `config:read` | The company document — the org chart, every integration, and the *names* of every credential the company holds or has not set yet |
 | `secrets:read` | Revealing a stored credential's value (the one `/secrets` route that returns one, which needs an explicit `?reveal=true` and logs the access) |
 
@@ -942,8 +942,9 @@ keys the same, and refuses a lead everywhere else with no error to notice.
 tools take no handle at all, because an agent recalling another's episodes
 would make the per-seat memory a shared one. An operator *reading* a seat's
 memory is a different surface with a grant of its own (`audit:read` over
-`/agents/{id}/memory`), and admitting it here too would be a second answer to
-one question.
+`/agents/{id}/memory` and `/agents/{id}/conversations`, decided per seat by a
+verb of its own), and admitting it here too would be a second answer to one
+question.
 
 **Asking a colleague is a write.** It files no row, which is why it looks like
 it belongs nowhere — but it spends somebody else's turn and somebody else's

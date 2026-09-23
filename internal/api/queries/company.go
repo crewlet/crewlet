@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
@@ -742,10 +744,26 @@ func (s Sources) agentIDOf(handle string) string {
 	return handle
 }
 
+// agentMemory answers one seat's memory: its diary, its episodes, the skills
+// it drafted, who it has worked with.
+//
+// DECIDED PER SEAT by [authz.ActionSeatTrailRead], the verb `conversations`
+// asks too — the other half of a seat's trail — so the two cannot come to
+// answer one reader differently. The question is registered on `audit:read`
+// and that verb's rule is the same grant today, which makes the second check
+// look redundant; it is there so the rule for reading one seat's trail is
+// stated once, in the authority table, rather than once per question.
 func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	id := p.String("id")
 	if id == "" {
 		return nil, fmt.Errorf("%w: agent_memory needs an id", ErrBadParams)
+	}
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "agent_memory")
+	}
+	if err := s.mayRead(ctx, principal, authz.ActionSeatTrailRead, id); err != nil {
+		return nil, err
 	}
 	// EVERY key is present on every answer, as an empty list rather than an
 	// absent one. A client cannot tell "this seat has learned nothing" from

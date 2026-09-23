@@ -1021,7 +1021,18 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// The refusal a 401 is right for still happens, one layer up:
 		// the guard answers it for a credential that is absent or
 		// refused, before this function is reached at all.
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": stream.CodeUnauthorized})
+		//
+		// AND IT SAYS WHY: the rule's reason and the grants that would
+		// have admitted the caller, carried on the registry's refusal
+		// rather than rewritten here — the same two fields every other
+		// refusal on authority answers with.
+		var refusal *queries.Refusal
+		if !errors.As(err, &refusal) {
+			httpjson.Fail(w, http.StatusForbidden, httpjson.CodeUnauthorized)
+			return
+		}
+		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+			authz.RefusalDetail(refusal.Reason, refusal.Grants))
 	case errors.Is(err, queries.ErrBadParams):
 		// 400 AND ITS OWN CODE. The status was already right; the code
 		// said `query_failed`, which names a fault of this node for a

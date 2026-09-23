@@ -7,6 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // The named read routes — the public REST API.
@@ -164,9 +166,12 @@ func (a *App) serveFrom(kind string, build func(stream.Audience) any) http.Handl
 		}
 		audience := stream.AudienceOf(principal.Grants)
 		if !audience.Receives(kind) {
+			// THE SAME TWO FIELDS every refusal on authority carries,
+			// rather than a sentence naming the grant: a client reading
+			// `grants` off a refused question reads it off this too.
 			grant, _ := stream.GrantFor(kind)
-			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				map[string]string{"detail": "this needs " + string(grant)})
+			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+				authz.RefusalDetail(authz.ReasonNoGrant, []iam.Grant{grant}))
 			return
 		}
 		writeJSON(w, http.StatusOK, build(audience))

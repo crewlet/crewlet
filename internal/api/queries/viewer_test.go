@@ -5,6 +5,7 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -154,9 +155,9 @@ func TestAnAnonymousReaderIsNeitherBoundNorSeated(t *testing.T) {
 //
 // `work_my_work` was registered operator-only and demanded a handle, which
 // made the one screen a human teammate would live on both unreachable to them
-// and, for an operator, a stranger's day. The rule that replaces it is the
-// smallest one that is safe: your own seat without a credential, anybody
-// else's with one.
+// and, for an operator, a stranger's day. The rule that replaces it: your own
+// seat when you name none, and anybody else's by the authority table's
+// owner-or-lead rule.
 func TestAPersonalQuestionDefaultsToTheCallersOwnSeat(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
@@ -191,6 +192,21 @@ func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	if work.myWorkQuery.Handle != "" {
 		t.Errorf("the reader was called with %q anyway", work.myWorkQuery.Handle)
 	}
+	// AND THE REFUSAL IS THE DECISION'S OWN: the rule's reason and the
+	// grant that would have admitted the caller, read off the decision
+	// rather than written beside it. The literal this replaced named an
+	// admin grant in a sentence nothing held against the table.
+	var refusal *queries.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("refused with %T (%v), want the decision carried whole", err, err)
+	}
+	if refusal.Reason != authz.ReasonNotSelf {
+		t.Errorf("reason = %q, want the owner-or-lead rule's own", refusal.Reason)
+	}
+	if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantFleetOperate}) {
+		t.Errorf("grants = %v, want the admin grant that would have admitted it",
+			refusal.Grants)
+	}
 
 	// AND THEIR LEAD MAY, which the refusal above must not be mistaken
 	// for: "handles other than your own are refused" would make a lead's
@@ -218,6 +234,38 @@ func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 		iam.GrantStateRead); !errors.Is(err, queries.ErrUnavailable) {
 
 		t.Errorf("an unreadable chart answered %v, want unavailable", err)
+	}
+}
+
+// EACH PERSONAL QUESTION ASKS ITS OWN VERB, rather than all of them asking
+// whether the caller may read a person record.
+//
+// They are the same class today, so the answers agree; what a shared verb
+// would cost is the day they stop agreeing. `conversations` is the case that
+// proved it: it asked the person-record verb for a seat's audit trail, and an
+// auditor holding the grant that governs that trail was refused it — see
+// TestASeatsThreadsAreReadOnTheAuditGrant.
+func TestEachPersonalQuestionAsksItsOwnVerb(t *testing.T) {
+	t.Parallel()
+	for what, verb := range map[string]authz.Action{
+		"work_my_work": authz.ActionMyWork,
+		"work_inbox":   authz.ActionInboxRead,
+		"work_person":  authz.ActionPersonRead,
+	} {
+		// The question's own grant and nothing else, against a chart
+		// reporting no relation: admitted to ASK, refused the record —
+		// so the refusal is the verb's rather than the registration's.
+		_, err := askHolding(t, viewerSources(t, &stubWork{}), "ana", what,
+			map[string]any{"handle": "bo"}, iam.GrantStateRead)
+		var refusal *queries.Refusal
+		if !errors.As(err, &refusal) {
+			t.Errorf("%s naming bo = %v, want a refusal", what, err)
+			continue
+		}
+		if !strings.HasPrefix(refusal.What, string(verb)+" ") {
+			t.Errorf("%s was decided as %q, want its own verb %s", what,
+				refusal.What, verb)
+		}
 	}
 }
 

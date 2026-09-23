@@ -5,12 +5,14 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -210,31 +212,102 @@ func (s *stubConversations) History(_ context.Context, handle, key string, _ int
 	return s.entries, s.err
 }
 
-// SCOPED LIKE EVERY OTHER PER-SEAT QUESTION. A caller reads their own seat;
-// naming somebody else's takes the lead relation or fleet:operate.
-func TestTheThreadLedgerIsScopedToTheCallersOwnSeat(t *testing.T) {
+// A SEAT'S THREADS ARE ITS TRAIL, AND THE AUDIT READ OPENS EVERY SEAT'S.
+//
+// What a seat said on a chat surface is the record of what happened, which is
+// what `audit:read` opens on `/events` for every seat at once — so the one
+// question that answers it per seat must not decide it by a different rule.
+// It did: registered on `audit:read`, it then asked the owner-or-lead rule a
+// person's QUEUE takes, and an auditor holding the grant was refused every
+// seat's threads but their own while reading every phase record those seats
+// ever wrote. Four rows, because the rule has four edges:
+//
+//   - no handle is the caller's own seat, as on every personal question;
+//   - an auditor with no relation to the seat reads it;
+//   - the deployment's admin grant WITHOUT the audit read does not, because
+//     the admin path of the relation rules is not the audit grant;
+//   - and neither does a lead, for the same reason.
+func TestASeatsThreadsAreReadOnTheAuditGrant(t *testing.T) {
 	t.Parallel()
-	ledgerStub := &stubConversations{
-		threads: []ledgerstore.Thread{{Key: "slack:C1", Entries: 3, LastAt: time.Now().UTC()}},
-	}
+	threads := []ledgerstore.Thread{{Key: "slack:C1", Entries: 3, LastAt: time.Now().UTC()}}
+
+	own := &stubConversations{threads: threads}
 	s := viewerSources(t, &stubWork{})
-	s.Conversations = ledgerStub
-
-	// The caller's own seat, with no handle named.
+	s.Conversations = own
 	got := answeredAsAna(t, s, "conversations", nil)
-	if got["handle"] != "ana" {
-		t.Errorf("handle = %v, want the caller's own seat", got["handle"])
-	}
-	if ledgerStub.handle != "ana" {
-		t.Errorf("the ledger was asked about %q", ledgerStub.handle)
+	if got["handle"] != "ana" || own.handle != "ana" {
+		t.Errorf("no handle read %v (ledger asked %q), want the caller's own seat",
+			got["handle"], own.handle)
 	}
 
-	// Somebody else's, as a colleague the chart reports no relation for.
+	auditor := &stubConversations{threads: threads}
+	s = viewerSources(t, &stubWork{})
+	s.Conversations = auditor
 	if _, err := askHolding(t, s, "ana", "conversations",
-		map[string]any{"handle": "bo"},
-		iam.GrantStateRead, iam.GrantAuditRead); err == nil {
+		map[string]any{"handle": "bo"}, iam.GrantAuditRead); err != nil {
+		t.Fatalf("an auditor with no relation to bo was refused bo's threads: %v", err)
+	}
+	if auditor.handle != "bo" {
+		t.Errorf("the ledger was asked about %q, want the seat the auditor named",
+			auditor.handle)
+	}
 
-		t.Error("a colleague read another seat's threads")
+	for _, c := range []struct {
+		name   string
+		chart  authz.Chart
+		grants []iam.Grant
+	}{
+		{"the admin grant without the audit read", flatChart{},
+			[]iam.Grant{iam.GrantStateRead, iam.GrantFleetOperate}},
+		{"a lead without the audit read", leadsChart{lead: "ana", report: "bo"},
+			[]iam.Grant{iam.GrantStateRead}},
+	} {
+		refusedStub := &stubConversations{threads: threads}
+		s := viewerSources(t, &stubWork{})
+		s.Conversations = refusedStub
+		s.Chart = c.chart
+		_, err := askHolding(t, s, "ana", "conversations",
+			map[string]any{"handle": "bo"}, c.grants...)
+		var refusal *queries.Refusal
+		if !errors.As(err, &refusal) || !errors.Is(err, queries.ErrUnauthorized) {
+			t.Errorf("%s read bo's threads: %v", c.name, err)
+			continue
+		}
+		if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantAuditRead}) {
+			t.Errorf("%s was refused naming %v, want the audit read that "+
+				"would have admitted them", c.name, refusal.Grants)
+		}
+		if refusedStub.handle != "" {
+			t.Errorf("%s: the ledger was asked about %q anyway", c.name,
+				refusedStub.handle)
+		}
+	}
+}
+
+// AND A SEAT'S MEMORY IS THE SAME TRAIL, decided by the same verb: an auditor
+// with no relation to a seat reads its memory exactly as they read its
+// threads, and a caller holding everything BUT the audit read is refused
+// naming it. The verb's rule changing — to the owner-or-lead rule a person's
+// queue takes, say — fails this and the threads case together, which is what
+// asking one verb from both questions is for.
+func TestASeatsMemoryIsReadOnTheSameVerbAsItsThreads(t *testing.T) {
+	t.Parallel()
+	s := viewerSources(t, &stubWork{})
+	s.Counterparties = &stubCounterparties{}
+	if _, err := askHolding(t, s, "ana", "agent_memory",
+		map[string]any{"id": "bo"}, iam.GrantAuditRead); err != nil {
+		t.Fatalf("an auditor with no relation to bo was refused bo's memory: %v", err)
+	}
+	everythingElse := slices.DeleteFunc(slices.Clone(iam.AllGrants),
+		func(g iam.Grant) bool { return g == iam.GrantAuditRead })
+	_, err := askHolding(t, s, "ana", "agent_memory",
+		map[string]any{"id": "bo"}, everythingElse...)
+	var refusal *queries.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("a caller without the audit read reached bo's memory: %v", err)
+	}
+	if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantAuditRead}) {
+		t.Errorf("refused naming %v, want the audit read", refusal.Grants)
 	}
 }
 

@@ -2,8 +2,10 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api"
@@ -64,6 +66,68 @@ func TestALeadReadsAReportsInboxThroughTheApp(t *testing.T) {
 					rec.Code, c.want, rec.Body.String())
 			}
 		})
+	}
+}
+
+// A REFUSAL ON AUTHORITY SAYS WHY, over REST as it does everywhere else: the
+// rule's reason and the grants that would have admitted the caller, in the
+// envelope beside the code. It said `{"error":"unauthorized"}` and nothing
+// more, so a person refused a colleague's queue could not tell a missing
+// relation from a missing grant — and the sentence that was meant to name the
+// remedy existed only in a log line, naming a grant in words nothing held
+// against the rule.
+func TestARefusedPersonalQuestionNamesItsReasonAndItsGrants(t *testing.T) {
+	t.Parallel()
+	const token = "a-colleague-holding-state-read-and-nothing-else"
+	b := config.DefaultBootstrap()
+	authorize(&b, config.APIToken{ID: "colleague", Token: token,
+		Grants: []iam.Grant{iam.GrantStateRead}})
+	a := newApp(t, api.Options{
+		Bootstrap: &b,
+		BoundSeat: func(login string) string {
+			if login == auth.TokenLogin("colleague") {
+				return "ana"
+			}
+			return ""
+		},
+		Sources: queries.Sources{Work: stubWorkReader{},
+			Chart: leadOf{lead: "ana", report: "cy"}},
+	})
+	for _, c := range []struct {
+		path   string
+		reason string
+		grants []any
+	}{
+		// Somebody else's queue: no relation, and the admin grant would
+		// have admitted it.
+		{"/work/inbox?handle=bo", string(authz.ReasonNotSelf),
+			[]any{string(iam.GrantFleetOperate)}},
+		// A question whose own grant the caller does not carry.
+		{"/events", string(authz.ReasonNoGrant), []any{string(iam.GrantAuditRead)}},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, c.path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		a.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("GET %s = %d, want 403\n%s", c.path, rec.Code, rec.Body.String())
+			continue
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("GET %s: decode: %v", c.path, err)
+		}
+		if body["error"] != "unauthorized" || body["message"] == nil {
+			t.Errorf("GET %s answered %v, want the unauthorized envelope", c.path, body)
+		}
+		if body[authz.DetailReason] != c.reason {
+			t.Errorf("GET %s: reason = %v, want %q", c.path,
+				body[authz.DetailReason], c.reason)
+		}
+		if !reflect.DeepEqual(body[authz.DetailGrants], c.grants) {
+			t.Errorf("GET %s: grants = %v, want %v", c.path,
+				body[authz.DetailGrants], c.grants)
+		}
 	}
 }
 
