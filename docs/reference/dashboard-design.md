@@ -3149,6 +3149,21 @@ turn's worth of `agents` pushes being sent as an object keyed by role while the
 client guarded on `Array.isArray`: both sides' own suites passed and the seat
 rendered idle from the first phase to the last.
 
+**The engine's own suite loads the shell the way a browser does.**
+`internal/api` fetches `/dashboard` from the server, never from disk, and
+follows every file a browser is sent to: the shell's script, preload and
+stylesheet links, every static `import`, every lazy `import()`, the preload list
+Vite writes beside one (`__vite__mapDeps`, the only place a lazy chunk's own
+stylesheet is named, its entries relative to `base`), each stylesheet's `url()`s
+and any `/static/` path a module holds. A file that does not answer 200 with the
+type a browser requires fails the build, and the failure names the file still
+asking for it, because that is where the fix is. The converse fails too: a file
+under `assets/` that nothing reached. The build writes nothing there that the
+page does not load, so an unreached file is either dead weight in every binary
+or a reference the crawl cannot read — and a crawl that silently skipped a lazy
+chunk would certify a screen nobody can open. Every stylesheet the crawl
+reaches, a lazy one included, is also held to the Content-Security-Policy.
+
 ### What the client half guarantees
 
 - **The store derives nothing.** The server computes the projection once and
