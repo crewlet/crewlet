@@ -1,6 +1,12 @@
 package stream
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/iam"
+)
 
 // THE IN-FLIGHT QUERY BUDGET IS PER PRINCIPAL, not per socket.
 //
@@ -25,6 +31,18 @@ import "sync"
 // full dashboards, and a second operator's burst is unaffected by the first's
 // — which is the property a shared cap could never have.
 //
+// # Keyed on the principal's ID, never its login
+//
+// A login is OPTIONAL: a person the directory enrolled by address alone —
+// every invitation redeemed without one, every person an administrator created
+// with an email and nothing else — carries an empty login. Keyed on the login,
+// every one of them shared ONE four-slot budget, so the second such person to
+// open a dashboard queued behind the first, and a burst from any of them was an
+// outage for all of them. The id is what every row keys a principal on: it is
+// never empty for a resolved one and never shared between two, and a person
+// keeps it through a rename, so their tabs go on sharing one budget across
+// the change.
+//
 // # Why a map with a refcount rather than a bare map of channels
 //
 // The key is a principal, so entries are created by anybody who can
@@ -47,6 +65,15 @@ import "sync"
 // stall the live feed.
 const MaxInFlightQueries = 4
 
+// budgetKeyOf is the key a principal's in-flight budget is held under: its ID.
+//
+// A FUNCTION RATHER THAN A FIELD READ AT THE CALL SITE, so the rule has one
+// place to be asserted — the socket is the only caller, and the property that
+// went wrong (two people enrolled by address alone sharing a budget because
+// both had an empty login) is invisible through a socket unless a suite signs
+// two such people in.
+func budgetKeyOf(p iam.Principal) uuid.UUID { return p.ID }
+
 // budgets hands out one in-flight budget per principal.
 //
 // The zero value is not usable; build one with [newBudgets]. It is held by the
@@ -54,7 +81,7 @@ const MaxInFlightQueries = 4
 // reaches the same slots channel.
 type budgets struct {
 	mu   sync.Mutex
-	held map[string]*budget
+	held map[uuid.UUID]*budget
 }
 
 // budget is one principal's slots, and how many sockets are holding them.
@@ -64,17 +91,21 @@ type budget struct {
 }
 
 func newBudgets() *budgets {
-	return &budgets{held: make(map[string]*budget)}
+	return &budgets{held: make(map[uuid.UUID]*budget)}
 }
 
 // acquire returns the principal's slots channel and the release to call when
 // this socket closes.
 //
-// AN EMPTY PRINCIPAL GETS ITS OWN BUDGET rather than sharing one keyed on "".
-// No socket reaches here without authenticating today, so the case is
-// unreachable — but if the socket path ever became exempt, every anonymous
-// reader in the world sharing one four-slot budget would be a denial of
-// service against the dashboard rather than a bound on one.
+// THE NIL ID GETS A BUDGET OF ITS OWN, PER SOCKET, rather than sharing one
+// keyed on the nil uuid — which is what this used to promise for an empty
+// login and did not do: the map simply held one entry for "" that everybody
+// without a login shared. A resolved principal always carries an id, so the
+// case should be unreachable; but a socket that reached here with none is one
+// this package cannot tell from any other, and pooling every such socket
+// behind four slots would make them a denial of service against each other
+// rather than a bound on any one. It is not entered in the map, so there is
+// nothing to leak and nothing for a release to evict.
 //
 // THE RELEASE IS ONCE-ONLY, and that is not defensive tidiness. serveSocket
 // defers it, and a second path unwinding through the same socket — a panic, a
@@ -87,7 +118,10 @@ func newBudgets() *budgets {
 // against zero does not reach it — the entry at that point is a legitimate
 // one with a legitimate count — so the fix has to be that a release cannot
 // happen twice at all.
-func (b *budgets) acquire(principal string) (chan struct{}, func()) {
+func (b *budgets) acquire(principal uuid.UUID) (chan struct{}, func()) {
+	if principal == uuid.Nil {
+		return make(chan struct{}, MaxInFlightQueries), func() {}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	held, ok := b.held[principal]
@@ -105,7 +139,7 @@ func (b *budgets) acquire(principal string) (chan struct{}, func()) {
 // returns, because the count is what keeps a live principal's budget alive and
 // a caller holding the key rather than the closure could decrement one it
 // never acquired.
-func (b *budgets) release(principal string) {
+func (b *budgets) release(principal uuid.UUID) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	held, ok := b.held[principal]

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -237,11 +238,12 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 					string(iam.GrantStateRead)})
 			return
 		}
-		// THE BUDGET IS THE PRINCIPAL'S, keyed on the login: the same
-		// person across their tabs, and a login is stable across every
-		// request a credential makes where a principal's session id is
-		// not.
-		budgetKey := principal.Login
+		// THE BUDGET IS THE PRINCIPAL'S, keyed on its ID: the same
+		// person across their tabs, and never shared between two. Not
+		// the login, which a person enrolled by address alone does not
+		// have — keyed on it, every such person shared one budget. See
+		// budget.go.
+		budgetKey := budgetKeyOf(principal)
 		who := &asking{principal: principal}
 		check := checkerFor(guard, r)
 
@@ -285,7 +287,7 @@ func resolved(guard *auth.Guard, w http.ResponseWriter,
 
 // serveSocket runs one connection until it closes.
 func serveSocket(ctx context.Context, conn *websocket.Conn,
-	svc *Service, query Query, budgetKey string, who *asking, check checkFunc,
+	svc *Service, query Query, budgetKey uuid.UUID, who *asking, check checkFunc,
 ) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
