@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -88,43 +90,142 @@ func TestBothSlotsCloseTogether(t *testing.T) {
 	back.Close(t.Context())
 }
 
-func TestAnEmbeddedKVStoreRidesTheStreamsOwnConnection(t *testing.T) {
+// COORDINATION RIDES THE QUEUE'S OWN CONNECTION, on every topology.
+//
+// A second connection would work and would be worse: two connections to one
+// broker fail independently, so a node could hold live leases over the one
+// that still works while the one carrying its inbox has dropped — alive to its
+// peers, deaf to its work. That is as true of the embedded broker as of an
+// external one, since a connection to a server inside this process can close
+// on its own like any other.
+//
+// OBSERVED THE ONE WAY THAT TELLS ONE CONNECTION FROM TWO: close the queue's,
+// then ask the lease store and the fleet store something. Riding it, both
+// fail with it. On a connection of their own they would go on answering —
+// and so would an in-process lease table standing in for the KV, which is
+// why the lease half is asked too.
+func TestCoordinationRidesTheQueuesOwnConnection(t *testing.T) {
 	t.Parallel()
-	// A second dial would work and would be worse: two connections to one
-	// broker fail independently, so a node could hold live leases over a
-	// connection that still works while the one carrying its inbox has
-	// dropped — alive to its peers, deaf to its work.
-	//
-	// Observable as: the KV slot builds at all on an embedded stream, which
-	// it can only do by reaching the in-process server.
-	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-		b.Coordination.Type = config.CoordinationEmbeddedKV
-	})
-	back, err := openBackends(t, b)
-	if err != nil {
-		t.Fatalf("OpenBackends: %v", err)
-	}
-	t.Cleanup(func() { back.Close(t.Context()) })
+	for _, tc := range []struct {
+		name string
+		// topology shapes the bootstrap into one of the two stream
+		// branches, both with the KV holding the leases.
+		topology func(t *testing.T, b *config.Bootstrap)
+		// embedded is whether this node's own process runs the broker,
+		// which is the one case Backends.Conn names the connection in.
+		embedded bool
+	}{
+		{
+			name: "an embedded broker",
+			topology: func(t *testing.T, b *config.Bootstrap) {
+				b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			},
+			embedded: true,
+		},
+		{
+			name: "an external broker",
+			topology: func(t *testing.T, b *config.Bootstrap) {
+				b.Stream.Type = config.StreamNATS
+				b.Stream.URL = externalBroker(t)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := bootstrap(t, func(b *config.Bootstrap) {
+				tc.topology(t, b)
+				b.Coordination.Type = config.CoordinationEmbeddedKV
+			})
+			back, err := openBackends(t, b)
+			if err != nil {
+				t.Fatalf("OpenBackends: %v", err)
+			}
+			t.Cleanup(func() { back.Close(context.Background()) })
+			ctx := t.Context()
 
-	// It is a real store: a lease acquired through it is held.
-	lease, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
-		coord.AcquireOptions{Owner: "owner-1", TTL: 30 * time.Second})
+			broker, ok := back.Queue.(interface{ Conn() *nats.Conn })
+			if !ok || broker.Conn() == nil {
+				t.Fatalf("the stream is %T with no connection to close, and "+
+					"this case needs the JetStream backend's", back.Queue)
+			}
+			conn := broker.Conn()
+
+			// WHAT THE BACKUP IS HANDED. It snapshots the streams over
+			// this connection, and reads nil as "the stream estate is a
+			// cluster somebody else runs and backs up".
+			if got := back.Conn(); tc.embedded && got != conn {
+				t.Errorf("Backends.Conn() = %p on an embedded broker, want the "+
+					"queue's own connection %p", got, conn)
+			} else if !tc.embedded && got != nil {
+				t.Errorf("Backends.Conn() = %p on a dialled broker, want nil: "+
+					"the backup would snapshot a cluster it does not own", got)
+			}
+
+			// A REAL LEASE STORE while the connection is open: a first
+			// acquire is held, and a second owner is refused.
+			lease, err := back.Coord.TryAcquire(ctx, "seat:ceo",
+				coord.AcquireOptions{Owner: "owner-1", TTL: 30 * time.Second})
+			if err != nil || lease == nil {
+				t.Fatalf("a first acquire = (%v, %v), want a held lease", lease, err)
+			}
+			if got, err := back.Coord.TryAcquire(ctx, "seat:ceo",
+				coord.AcquireOptions{Owner: "owner-2", TTL: 30 * time.Second}); err != nil {
+				t.Fatalf("a second owner's acquire: %v", err)
+			} else if got != nil {
+				t.Fatal("two owners held one seat")
+			}
+			if _, err := back.Fleet.Used(ctx, coord.OrgScope); err != nil {
+				t.Fatalf("the fleet store did not answer: %v", err)
+			}
+
+			conn.Close()
+
+			if lease, err := back.Coord.TryAcquire(ctx, "seat:cto",
+				coord.AcquireOptions{Owner: "owner-1", TTL: 30 * time.Second}); err == nil {
+				t.Errorf("the lease store answered (%v) after the queue's "+
+					"connection closed: it is not riding that connection, so "+
+					"this node could go on holding seats whose inbox it can no "+
+					"longer read", lease)
+			}
+			if used, err := back.Fleet.Used(ctx, coord.OrgScope); err == nil {
+				t.Errorf("the fleet store answered (%d) after the queue's "+
+					"connection closed: it holds a connection of its own", used)
+			}
+		})
+	}
+}
+
+// externalBroker starts a NATS server this node DIALS, which is what
+// `stream.type: nats` means: a broker somebody else runs, listening on a
+// socket. It answers the URL to put in stream.url.
+//
+// Its max_payload is the contract's own, because the fleet store refuses to
+// open on a server below it — and a case failing on that would be testing the
+// refusal rather than the topology.
+func externalBroker(t *testing.T) string {
+	t.Helper()
+	ns, err := natsserver.NewServer(&natsserver.Options{
+		ServerName: "external-broker",
+		Host:       "127.0.0.1",
+		Port:       -1,
+		JetStream:  true,
+		StoreDir:   t.TempDir(),
+		MaxPayload: queue.MaxPayloadBytes,
+		NoSigs:     true,
+	})
 	if err != nil {
-		t.Fatalf("Acquire: %v", err)
+		t.Fatalf("configure the external broker: %v", err)
 	}
-	if lease == nil {
-		t.Fatal("the coordination slot refused a first acquire")
+	go ns.Start()
+	if !ns.ReadyForConnections(30 * time.Second) {
+		ns.Shutdown()
+		t.Fatal("the external broker did not accept connections")
 	}
-	// And it is EXCLUSIVE, which a memory backend standing in for it would
-	// also be — so the test above is what says it is the KV store, and this
-	// is what says it works.
-	if got, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
-		coord.AcquireOptions{Owner: "owner-2", TTL: 30 * time.Second}); err != nil {
-		t.Fatalf("second Acquire: %v", err)
-	} else if got != nil {
-		t.Error("two owners held one seat")
-	}
+	t.Cleanup(func() {
+		ns.Shutdown()
+		ns.WaitForShutdown()
+	})
+	return ns.ClientURL()
 }
 
 func TestLocalCoordinationNeedsNoBroker(t *testing.T) {
@@ -174,14 +275,15 @@ func TestAnUnknownStreamTypeNamesItself(t *testing.T) {
 
 func TestAnEmbeddedStreamPersistsAcrossARestart(t *testing.T) {
 	t.Parallel()
-	// Two properties in one round trip, and both were unasserted:
+	// StoreDir is actually USED. Ignoring it selects an in-memory server,
+	// which starts and works and loses everything on restart — the failure
+	// a company only discovers the first time it restarts.
 	//
-	//   - Close actually SHUTS THE SERVER DOWN. A leaked embedded server
-	//     holds its store directory, so the second open below fails outright
-	//     if the first one is still running.
-	//   - StoreDir is actually USED. Ignoring it selects an in-memory
-	//     server, which starts and works and loses everything on restart —
-	//     the failure a company only discovers the first time it restarts.
+	// It does NOT show that Close shuts the first server down. Two embedded
+	// servers share one store directory without complaint, so the second
+	// open below succeeds with the first still running — measured, by
+	// taking the shutdown out of Close and watching this case stay green.
+	// TestAStoreThatCannotOpenTakesTheBrokerDownWithIt is what covers it.
 	dir := filepath.Join(t.TempDir(), "stream")
 	mk := func() *engine.Backends {
 		t.Helper()
@@ -205,12 +307,11 @@ func TestAnEmbeddedStreamPersistsAcrossARestart(t *testing.T) {
 	// stopping it here as well would hide whether it does.
 	first.Close(t.Context())
 
-	// A second server on the same directory: it can only start if the first
-	// let go of it.
+	// A second server on the same directory, which is what a restart is.
 	second := mk()
 	t.Cleanup(func() { second.Close(t.Context()) })
 	if err := second.Queue.Start(t.Context()); err != nil {
-		t.Fatalf("the second open could not start — the first server is still holding %s: %v", dir, err)
+		t.Fatalf("the second open on %s could not start: %v", dir, err)
 	}
 
 	// And the published event is still there, which an in-memory server
@@ -247,22 +348,18 @@ func init() { events.Register[marker]() }
 
 // NOTE ON WHAT THIS SUITE CANNOT SEE.
 //
-// Two of Close's three steps have effects outside this package's reach, and
-// mutation confirms it: removing either leaves every test here green.
+// One effect of Close is outside this package's reach: stopping the QUEUE
+// before the server hands a consumer's in-flight message back at once, rather
+// than leaving it to wait out the broker's ack timeout, and that buys a PEER a
+// fast handoff. In one process the shut-down server kills the connection
+// either way, so there is nothing to observe; two nodes and one broker would
+// show it, which is the fleet suite's shape.
 //
-//   - Stopping the QUEUE before the server buys a peer a fast handoff. In one
-//     process the shut-down server kills the connection either way, so there
-//     is nothing to observe; two nodes and one broker would show it, which is
-//     the fleet suite's shape.
-//   - Shutting the SERVER down releases its resources. A solo embedded server
-//     runs with DontListen and binds no port at all, so there is no socket to
-//     probe; a clustered one does bind, but a single member never reaches
-//     JetStream quorum (measured: it waits the full 60 s and fails), so
-//     standing one up here is not possible either.
-//
-// Both are stated at their site in backends.go rather than left as apparent
-// coverage. Writing a test that passes without exercising them would be worse
-// than having none.
+// The rest of both steps IS seen here, and mutation confirms it: taking the
+// queue stop out of Close turns TestTheStoreOutlivesTheHandlersThatWriteToIt
+// red, and taking the server shutdown out turns
+// TestAStoreThatCannotOpenTakesTheBrokerDownWithIt red. Each is stated at its
+// site in backends.go.
 
 // --- the store slot -------------------------------------------------------- //
 

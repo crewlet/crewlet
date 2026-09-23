@@ -172,6 +172,7 @@ func (x *Indexer) Search(ctx context.Context, q LexicalQuery) ([]LexicalHit, err
 
 	lists := make([]termList, 0, len(terms))
 	for _, term := range terms {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		list, err := x.postings(ctx, term, q, corpus, maxPostingScan)
 		if err != nil {
 			return nil, err
@@ -184,6 +185,7 @@ func (x *Indexer) Search(ctx context.Context, q LexicalQuery) ([]LexicalHit, err
 	}
 	if ranking.capped() {
 		for i, ids := range ranking.contenders(limit) {
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			found, err := x.lookup(ctx, lists[i].term, ids)
 			if err != nil {
 				return nil, err

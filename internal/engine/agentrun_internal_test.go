@@ -196,8 +196,8 @@ func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	if got[1].Name != "jira_create" || !got[1].Failed {
 		t.Errorf("a call with bad arguments was dropped or reshaped: %+v", got[1])
 	}
-	if got[1].Args != nil {
-		t.Errorf("undecodable arguments became %v, want nil", got[1].Args)
+	if len(got[1].Args) != 0 {
+		t.Errorf("undecodable arguments became %v, want none rather than a partial decode", got[1].Args)
 	}
 }
 

@@ -1,26 +1,35 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // publishedPhases runs rec through an emitter over the in-memory queue — which
 // refuses what the real broker refuses, at the same ceiling — and returns the
-// phase records that were accepted.
-func publishedPhases(t *testing.T, rec phaseRecord) []*types.AgentPhaseCompleted {
+// phase records and the record parts that were accepted.
+func publishedPhases(t *testing.T, rec phaseRecord) ([]*types.AgentPhaseCompleted, []*types.AgentPhaseRecordPart) {
 	t.Helper()
 	q := memory.New()
 	if err := q.Start(t.Context()); err != nil {
@@ -28,35 +37,31 @@ func publishedPhases(t *testing.T, rec phaseRecord) []*types.AgentPhaseCompleted
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 	var mu sync.Mutex
-	var got []*types.AgentPhaseCompleted
+	var records []*types.AgentPhaseCompleted
+	var parts []*types.AgentPhaseRecordPart
 	q.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
-		if done, ok := ev.Data.(*types.AgentPhaseCompleted); ok {
-			mu.Lock()
-			got = append(got, done)
-			mu.Unlock()
+		mu.Lock()
+		defer mu.Unlock()
+		switch data := ev.Data.(type) {
+		case *types.AgentPhaseCompleted:
+			records = append(records, data)
+		case *types.AgentPhaseRecordPart:
+			parts = append(parts, data)
 		}
 	})
 	var emu sync.Mutex
 	e := emitter{pub: q, turn: Turn{RunID: "tn-1", AgentID: "agent-1"}, role: "Lead",
 		tally: &Spend{}, mu: &emu}
 	e.completed(t.Context(), rec)
-	return got
+	return records, parts
 }
 
-// A PHASE RECORD TOO LARGE FOR ONE EVENT IS FIT, NOT DROPPED.
-//
-// Past the transport's ceiling an event is refused whole, so a phase whose
-// tool calls returned more than the ceiling in total had no record at all —
-// the event store and every screen lost exactly the phases that did the most.
-// Fit, it keeps every call: the small results whole, the large ones cut to a
-// common level, each cut marked and its whole length on its row.
-func TestAPhaseRecordTooLargeForOneEventIsFitNotDropped(t *testing.T) {
-	t.Parallel()
-	const heavy = 300
-	// Three-byte characters, so a cut through one would show.
-	big := strings.Repeat("あ", 14_000)
-	res := toolloop.Result{RoundsUsed: 1}
-	for range heavy {
+// heavyResult is a phase whose tool results total past one event: three-byte
+// characters, so a cut through one would show.
+func heavyResult(calls, each int) toolloop.Result {
+	big := strings.Repeat("あ", each/3)
+	res := toolloop.Result{RoundsUsed: 1, Model: "claude-sonnet-5", InputTokens: 9100, OutputTokens: 420}
+	for range calls {
 		res.Executions = append(res.Executions, toolloop.Execution{
 			Round: 1, Name: "read_page", Args: map[string]any{"id": 1}, Output: big,
 		})
@@ -64,17 +69,54 @@ func TestAPhaseRecordTooLargeForOneEventIsFitNotDropped(t *testing.T) {
 	res.Executions = append(res.Executions, toolloop.Execution{
 		Round: 1, Name: "slack_post", Args: map[string]any{"channel": "C1"}, Output: "posted",
 	})
+	return res
+}
+
+// reassemble puts parts back together in index order, failing the test on a
+// part that does not continue the whole — the same checks a reader of them
+// makes.
+func reassemble(t *testing.T, parts []*types.AgentPhaseRecordPart) []byte {
+	t.Helper()
+	sorted := slices.Clone(parts)
+	slices.SortFunc(sorted, func(a, b *types.AgentPhaseRecordPart) int { return a.Index - b.Index })
+	var whole []byte
+	for i, part := range sorted {
+		if part.Index != i || part.Offset != len(whole) || len(part.Data) == 0 {
+			t.Fatalf("part %d (index %d) starts at %d with %d bytes where the whole continues "+
+				"at %d: the parts are not contiguous", i, part.Index, part.Offset, len(part.Data), len(whole))
+		}
+		whole = append(whole, part.Data...)
+	}
+	if len(sorted) > 0 && len(whole) != sorted[0].WholeBytes {
+		t.Fatalf("the parts reassemble to %d bytes and state a whole of %d", len(whole), sorted[0].WholeBytes)
+	}
+	return whole
+}
+
+// A PHASE RECORD TOO LARGE FOR ONE EVENT IS FIT, NOT DROPPED — AND ITS WHOLE
+// IS KEPT.
+//
+// Past the transport's ceiling an event is refused whole, so a phase whose
+// tool calls returned more than the ceiling in total had no record at all —
+// the event store and every screen lost exactly the phases that did the most.
+// Fit, it keeps every call: the small results whole, the large ones cut to a
+// common level, each cut marked and its whole length on its row. And the
+// whole of every one of them is published first, as parts the record names.
+func TestAPhaseRecordTooLargeForOneEventIsFitAndItsWholeKept(t *testing.T) {
+	t.Parallel()
+	const heavy = 300
+	res := heavyResult(heavy, 42_000)
 	// The premise: whole, this record is past the ceiling.
-	if heavy*len(big) <= queue.MaxPayloadBytes {
+	if heavy*42_000 <= queue.MaxPayloadBytes {
 		t.Fatalf("the fixture is %d bytes of results, not past the %d-byte ceiling",
-			heavy*len(big), queue.MaxPayloadBytes)
+			heavy*42_000, queue.MaxPayloadBytes)
 	}
 
-	got := publishedPhases(t, phaseRecord{Phase: phase.Execute, Iteration: 1, Result: res})
-	if len(got) != 1 {
-		t.Fatalf("%d phase records were published, want the one — fit rather than dropped", len(got))
+	records, parts := publishedPhases(t, phaseRecord{Phase: phase.Execute, Iteration: 1, Result: res})
+	if len(records) != 1 {
+		t.Fatalf("%d phase records were published, want the one — fit rather than dropped", len(records))
 	}
-	rec := got[0]
+	rec := records[0]
 	if len(rec.ToolExecutions) != heavy+1 {
 		t.Fatalf("the record carries %d tool calls, want every one of the %d", len(rec.ToolExecutions), heavy+1)
 	}
@@ -85,6 +127,7 @@ func TestAPhaseRecordTooLargeForOneEventIsFitNotDropped(t *testing.T) {
 	if _, marked := small["result_bytes"]; marked {
 		t.Error("a whole result is marked as cut")
 	}
+	big := res.Executions[0].Output
 	for i, row := range rec.ToolExecutions[:heavy] {
 		result, _ := row["result"].(string)
 		if !strings.HasSuffix(result, "…") || !utf8.ValidString(result) {
@@ -103,12 +146,44 @@ func TestAPhaseRecordTooLargeForOneEventIsFitNotDropped(t *testing.T) {
 	if !strings.Contains(rec.Notes, "record cut to fit one event") {
 		t.Errorf("notes = %q, want the record to say it was fit", rec.Notes)
 	}
+	if rec.InputTokens != 9100 || rec.OutputTokens != 420 || rec.TotalTokens != 9520 || rec.Model != "claude-sonnet-5" {
+		t.Errorf("the cut record's spend = %d/%d/%d on %q, want the phase's own 9100/420/9520 on "+
+			"claude-sonnet-5", rec.InputTokens, rec.OutputTokens, rec.TotalTokens, rec.Model)
+	}
 	raw, err := json.Marshal(events.New(*rec, events.TraceContext{}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(raw) > queue.MaxPayloadBytes {
 		t.Errorf("the fitted record is %d bytes, past the %d-byte ceiling", len(raw), queue.MaxPayloadBytes)
+	}
+
+	// THE WHOLE, IN PARTS, NAMED BY THE RECORD.
+	if len(parts) < 2 || rec.WholeParts != len(parts) {
+		t.Fatalf("%d parts were published and the record names %d; want the whole of a record past "+
+			"one event in two or more, every one of them named", len(parts), rec.WholeParts)
+	}
+	whole := reassemble(t, parts)
+	if rec.WholeBytes != len(whole) {
+		t.Errorf("whole_bytes = %d, and the parts reassemble to %d", rec.WholeBytes, len(whole))
+	}
+	var back events.Event
+	if err := json.Unmarshal(whole, &back); err != nil {
+		t.Fatalf("the reassembled whole is not an event: %v", err)
+	}
+	full, ok := back.Data.(*types.AgentPhaseCompleted)
+	if !ok || back.ID.String() != parts[0].RecordID {
+		t.Fatalf("the whole is a %T with id %s; want the phase record %s", back.Data, back.ID, parts[0].RecordID)
+	}
+	for i, row := range full.ToolExecutions[:heavy] {
+		if row["result"] != big {
+			t.Fatalf("call %d in the whole is %d bytes, want its result whole (%d)", i,
+				len(fmt.Sprint(row["result"])), len(big))
+		}
+	}
+	if full.WholeParts != 0 || full.WholeBytes != 0 {
+		t.Errorf("the whole names a whole of its own (%d parts, %d bytes); it IS the whole",
+			full.WholeParts, full.WholeBytes)
 	}
 }
 
@@ -119,48 +194,54 @@ func TestAPhaseRecordTooLargeForOneEventIsFitNotDropped(t *testing.T) {
 // closest to the ceiling: one text cut to the highest level that sheds the
 // excess leaves the record a few dozen bytes under it. The note that says the
 // record was cut is part of the record, so a note written after the level was
-// chosen pushed it back over, and the record the fit had saved was refused.
+// chosen would push it back over, and the record the fit had saved would be
+// refused.
 func TestOneTextPastTheCeilingIsFitWithTheNoteSayingSo(t *testing.T) {
 	t.Parallel()
 	whole := strings.Repeat("x", queue.MaxPayloadBytes+1<<20)
 	res := toolloop.Result{RoundsUsed: 1, Executions: []toolloop.Execution{
 		{Round: 1, Name: "read_file", Args: map[string]any{"path": "dump.log"}, Output: whole},
 	}}
-	got := publishedPhases(t, phaseRecord{Phase: phase.Execute, Iteration: 1, Result: res})
-	if len(got) != 1 {
-		t.Fatalf("%d phase records were published, want the one, fit", len(got))
+	records, _ := publishedPhases(t, phaseRecord{Phase: phase.Execute, Iteration: 1, Result: res})
+	if len(records) != 1 {
+		t.Fatalf("%d phase records were published, want the one, fit", len(records))
 	}
-	row := got[0].ToolExecutions[0]
+	row := records[0].ToolExecutions[0]
 	result, _ := row["result"].(string)
 	if !strings.HasSuffix(result, "…") || row["result_bytes"] != len(whole) {
 		t.Errorf("the result is not marked as cut: …%q, result_bytes = %v",
 			result[max(0, len(result)-9):], row["result_bytes"])
 	}
-	if !strings.Contains(got[0].Notes, "record cut to fit one event") {
-		t.Errorf("notes = %q, want the record to say it was fit", got[0].Notes)
+	if !strings.Contains(records[0].Notes, "record cut to fit one event") {
+		t.Errorf("notes = %q, want the record to say it was fit", records[0].Notes)
 	}
 }
 
-// A RECORD THAT FITS IS PUBLISHED EXACTLY AS IT WAS: the fit runs only when
-// the transport refuses the whole.
+// A RECORD THAT FITS IS PUBLISHED EXACTLY AS IT WAS: nothing is cut and no
+// part is published unless the transport refuses the whole.
 func TestAPhaseRecordThatFitsIsNotTouched(t *testing.T) {
 	t.Parallel()
 	res := toolloop.Result{RoundsUsed: 1, Executions: []toolloop.Execution{
 		{Round: 1, Name: "read_page", Output: strings.Repeat("x", 100_000)},
 	}}
-	got := publishedPhases(t, phaseRecord{Phase: phase.Execute, Iteration: 1, Result: res, Notes: "missing: jira"})
-	if len(got) != 1 {
-		t.Fatalf("%d records published", len(got))
+	records, parts := publishedPhases(t, phaseRecord{Phase: phase.Execute, Iteration: 1, Result: res,
+		Notes: "missing: jira"})
+	if len(records) != 1 {
+		t.Fatalf("%d records published", len(records))
 	}
-	row := got[0].ToolExecutions[0]
+	row := records[0].ToolExecutions[0]
 	if row["result"] != strings.Repeat("x", 100_000) {
 		t.Error("a record that fits had a result cut")
 	}
 	if _, marked := row["result_bytes"]; marked {
 		t.Error("a record that fits carries a cut mark")
 	}
-	if got[0].Notes != "missing: jira" {
-		t.Errorf("notes = %q, want the phase's own", got[0].Notes)
+	if records[0].Notes != "missing: jira" {
+		t.Errorf("notes = %q, want the phase's own", records[0].Notes)
+	}
+	if len(parts) != 0 || records[0].WholeBytes != 0 || records[0].WholeParts != 0 {
+		t.Errorf("a record that went whole has %d parts, whole_bytes %d, whole_parts %d; want none",
+			len(parts), records[0].WholeBytes, records[0].WholeParts)
 	}
 }
 
@@ -199,80 +280,604 @@ func TestTheWaterLevelCutsOnlyTheLongest(t *testing.T) {
 	}
 }
 
-// cappedPublisher refuses as too large every event whose encoding is longer
-// than limit — what a NATS server whose max_payload is set below the
-// contract's ceiling does to an event within it — and counts every attempt.
-type cappedPublisher struct {
-	limit int
+// transport is a publisher that refuses what refuse says to and keeps every
+// attempt: its type, its encoded size, the event decoded back as a consumer
+// would read it, and the bytes of the first — the whole a record went out as.
+type transport struct {
+	refuse func(ev *events.Event, raw []byte) error
 
 	mu       sync.Mutex
-	attempts int
+	attempts []sent
+	first    []byte
 }
 
-func (p *cappedPublisher) Publish(_ context.Context, _ string, ev *events.Event) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.attempts++
+// sent is one attempt a transport saw.
+type sent struct {
+	typ   string
+	bytes int
+	err   error
+	ev    *events.Event
+}
+
+func (p *transport) Publish(_ context.Context, _ string, ev *events.Event) error {
 	raw, err := json.Marshal(ev)
 	if err != nil {
 		return err
 	}
-	if len(raw) > p.limit {
-		return fmt.Errorf("publish: %d bytes, and the server accepts %d: %w", len(raw), p.limit, queue.ErrTooLarge)
+	var refused error
+	if p.refuse != nil {
+		refused = p.refuse(ev, raw)
 	}
-	return nil
+	// Decoded as a consumer would read it — every accepted event, and every
+	// attempt at a phase record, so a test can say what form each one was.
+	var back *events.Event
+	if refused == nil || ev.Type == (types.AgentPhaseCompleted{}).EventType() {
+		back = new(events.Event)
+		if err := json.Unmarshal(raw, back); err != nil {
+			return err
+		}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.first == nil {
+		p.first = raw
+	}
+	p.attempts = append(p.attempts, sent{typ: ev.Type, bytes: len(raw), err: refused, ev: back})
+	return refused
 }
 
-// cappedEmitter is an emitter publishing through pub.
-func cappedEmitter(pub *cappedPublisher) emitter {
+// accepted is what the transport took: the phase records and the parts.
+func (p *transport) accepted() ([]*types.AgentPhaseCompleted, []*types.AgentPhaseRecordPart) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var records []*types.AgentPhaseCompleted
+	var parts []*types.AgentPhaseRecordPart
+	for _, a := range p.attempts {
+		if a.err != nil {
+			continue
+		}
+		switch data := a.ev.Data.(type) {
+		case *types.AgentPhaseCompleted:
+			records = append(records, data)
+		case *types.AgentPhaseRecordPart:
+			parts = append(parts, data)
+		}
+	}
+	return records, parts
+}
+
+// tooLargeAbove refuses as too large every event encoded past limit — what a
+// NATS server whose max_payload is below the contract does to one within it.
+func tooLargeAbove(limit int) func(*events.Event, []byte) error {
+	return func(_ *events.Event, raw []byte) error {
+		if len(raw) > limit {
+			return fmt.Errorf("publish: %d bytes, and the server accepts %d: %w", len(raw), limit, queue.ErrTooLarge)
+		}
+		return nil
+	}
+}
+
+// assertTheWalkHalves holds the attempts at a record to the walk's rule: after
+// a refusal within the ceiling, each form tried is at most half the size
+// refused, and after one past it, at most the ceiling — with two exceptions
+// that are each still smaller than what was refused: the least form, where no
+// form that small carries every row, and the form carrying no row at all,
+// which is as small as the record gets.
+func assertTheWalkHalves(t *testing.T, pub *transport) {
+	t.Helper()
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	var records []sent
+	for _, a := range pub.attempts {
+		if a.typ == (types.AgentPhaseCompleted{}).EventType() {
+			records = append(records, a)
+		}
+	}
+	for i := 1; i < len(records); i++ {
+		prev, next := records[i-1], records[i]
+		target := prev.bytes / 2
+		if prev.bytes > queue.MaxPayloadBytes {
+			target = queue.MaxPayloadBytes
+		}
+		if next.bytes <= target {
+			continue
+		}
+		rec, _ := next.ev.Data.(*types.AgentPhaseCompleted)
+		least := rec != nil && rec.ToolExecutionsOmitted == 0
+		for _, row := range rec.ToolExecutions {
+			if result, _ := row["result"].(string); len(result) > len("…") {
+				least = false
+			}
+		}
+		rowless := rec != nil && len(rec.ToolExecutions) == 0 && len(rec.RoundNarration) == 0
+		if (!least && !rowless) || next.bytes >= prev.bytes {
+			t.Fatalf("attempt %d weighs %d bytes after one of %d was refused: past the %d-byte "+
+				"target, and neither the least form nor the smallest", i, next.bytes, prev.bytes, target)
+		}
+	}
+}
+
+// emitterOver is an emitter publishing through pub.
+func emitterOver(pub queue.Publisher) emitter {
 	return emitter{pub: pub, turn: Turn{RunID: "tn-1", AgentID: "agent-1"}, role: "Lead",
 		tally: &Spend{}, mu: &sync.Mutex{}}
 }
 
-// A RECORD REFUSED WITHIN THE CEILING IS NOT "FIT".
-//
-// A record that already fits the contract's ceiling and is refused anyway was
-// refused by a server configured below it. No cut answers that: the fit finds
-// nothing over the ceiling, cuts nothing, and publishing the same bytes again
-// is refused the same way — reported as a fit that cut no text, which is the
-// one account of the loss that points nowhere near its cause.
-func TestARecordRefusedWithinTheCeilingIsNotSentAgainAsFit(t *testing.T) {
-	t.Parallel()
-	pub := &cappedPublisher{limit: 0}
-	got := cappedEmitter(pub).publishPhase(t.Context(), types.AgentPhaseCompleted{
-		Phase: types.PhaseExecute, Iteration: 1,
-		ToolExecutions: []types.ToolExecution{{"name": "read_page", "result": "a page"}},
-	})
-	if pub.attempts != 1 {
-		t.Errorf("the record was published %d times, want once: a record within the ceiling has "+
-			"nothing a fit can cut", pub.attempts)
-	}
-	if got != phaseRefusedWithinCeiling {
-		t.Errorf("the refusal was reported as %q, want %q", got, phaseRefusedWithinCeiling)
+// phaseEvent is the wire record completed() would publish for res.
+func phaseEvent(res toolloop.Result) types.AgentPhaseCompleted {
+	return types.AgentPhaseCompleted{
+		Phase: types.PhaseExecute, Iteration: 1, Model: res.Model,
+		ToolExecutions: toolExecutions(res.Executions),
+		InputTokens:    res.InputTokens, OutputTokens: res.OutputTokens,
+		TotalTokens: res.InputTokens + res.OutputTokens,
+		CostUSD:     0.25, Decision: "delivered", Backend: types.BackendNative,
 	}
 }
 
-// A RECORD FIT TO THE CEILING AND REFUSED ANYWAY IS THE SAME REFUSAL.
+// A PART REFUSED BELOW THE CONTRACT IS SPLIT, AND THE WHOLE STILL REASSEMBLES
+// BYTE FOR BYTE.
 //
-// A record past the ceiling is fit to it and published again, and a server
-// that accepts less than the ceiling refuses the fitted record too. That is
-// the refusal of a record within the ceiling, met one step later, and it is
-// reported as one — the account that names the server's setting — rather than
-// as a publish that failed, which names nothing an operator can change.
-func TestAFitRecordRefusedAnywayIsReportedAsRefusedWithinTheCeiling(t *testing.T) {
+// The server a node reaches after a failover can accept less than the
+// contract's ceiling. A part it refuses as too large is split in two and each
+// half published — and the parts after it go at the size it took — so one
+// whole ends up in parts of more than one size, which reassemble because each
+// carries its offset. Byte for byte: the whole is the record exactly as the
+// transport refused it, not a re-encoding of it.
+func TestAPartRefusedBelowTheContractIsSplitAndTheWholeStillReassembles(t *testing.T) {
 	t.Parallel()
-	pub := &cappedPublisher{limit: 1 << 20}
-	got := cappedEmitter(pub).publishPhase(t.Context(), types.AgentPhaseCompleted{
-		Phase: types.PhaseExecute, Iteration: 1,
-		ToolExecutions: []types.ToolExecution{
-			{"name": "read_file", "result": strings.Repeat("x", queue.MaxPayloadBytes+1<<20)},
-		},
-	})
-	if pub.attempts != 2 {
-		t.Errorf("the record was published %d times, want twice: whole, then fit", pub.attempts)
+	// The server shrinks after the first part lands, as after a failover.
+	pub := &transport{}
+	landed := 0
+	pub.refuse = func(ev *events.Event, raw []byte) error {
+		if err := tooLargeAbove(queue.MaxPayloadBytes)(ev, raw); err != nil {
+			return err
+		}
+		if landed >= 1 {
+			return tooLargeAbove(3<<20)(ev, raw)
+		}
+		landed++
+		return nil
 	}
-	if got != phaseRefusedWithinCeiling {
-		t.Errorf("the fitted record's refusal was reported as %q, want %q",
-			got, phaseRefusedWithinCeiling)
+	account := emitterOver(pub).publishPhase(t.Context(), phaseEvent(heavyResult(400, 42_000)))
+
+	records, parts := pub.accepted()
+	if len(records) != 1 || account.Form == "" {
+		t.Fatalf("%d records published (account %+v); want the record, cut", len(records), account)
+	}
+	sizes := map[int]bool{}
+	for _, part := range parts {
+		sizes[len(part.Data)] = true
+	}
+	if len(sizes) < 2 {
+		t.Errorf("the parts are all one size (%v): the refused part was not split", sizes)
+	}
+	whole := reassemble(t, parts)
+	if !bytes.Equal(whole, pub.first) {
+		t.Fatalf("the parts reassemble to %d bytes that differ from the %d the transport refused",
+			len(whole), len(pub.first))
+	}
+	if records[0].WholeParts != len(parts) || account.Parts != len(parts) {
+		t.Errorf("the record names %d parts and the account %d, of the %d published",
+			records[0].WholeParts, account.Parts, len(parts))
+	}
+}
+
+// A REFUSED PART GOES OUT AS TWO PARTS, WHATEVER ITS LENGTH.
+//
+// The last part of a whole is whatever is left, so its length can be odd, and
+// halving that rounding down leaves a byte over — a third publish, broadcast
+// to every node serving the API, to carry one byte.
+func TestARefusedPartOfOddLengthGoesOutAsTwoParts(t *testing.T) {
+	t.Parallel()
+	whole := bytes.Repeat([]byte("x"), 2*phasePartFloor+1)
+	half := (len(whole) + 1) / 2
+	pub := &transport{refuse: func(ev *events.Event, _ []byte) error {
+		if part, ok := ev.Data.(*types.AgentPhaseRecordPart); ok && len(part.Data) > half {
+			return fmt.Errorf("publish: a part of %d bytes: %w", len(part.Data), queue.ErrTooLarge)
+		}
+		return nil
+	}}
+	env := events.New(types.AgentPhaseCompleted{}, events.TraceContext{})
+	kept := emitterOver(pub).publishParts(t.Context(), env, whole)
+
+	_, parts := pub.accepted()
+	if kept.parts != 2 || len(parts) != 2 {
+		t.Fatalf("a refused part of %d bytes went out as %d parts (%d kept); want its two halves",
+			len(whole), len(parts), kept.parts)
+	}
+	if !bytes.Equal(reassemble(t, parts), whole) {
+		t.Error("the two halves do not reassemble to the whole")
+	}
+}
+
+// A FULL PART FITS ONE EVENT, WITH ITS RESERVE TO SPARE.
+//
+// A part's data is base64 on the wire, so what it costs is a function of its
+// length: four bytes for every three, none of them escaped. What is left is
+// the envelope — the ids, the trace, three numbers — and the reserve is sized
+// against it, so this measures it with every field at its widest.
+func TestAFullPartFitsOneEventWithItsReserveToSpare(t *testing.T) {
+	t.Parallel()
+	record := uuid.New()
+	data := bytes.Repeat([]byte{0xff, '<', '"'}, phasePartBytes/3)
+	part := events.New(types.AgentPhaseRecordPart{
+		RecordID: record.String(), Index: 999_999, Offset: 1 << 40, WholeBytes: 1 << 41, Data: data,
+	}, events.NewTrace())
+	part.ID = types.PhaseRecordPartID(record, 999_999)
+	part.Source = strings.Repeat("r", 200)
+	raw, err := json.Marshal(part)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := len(raw) - 4*phasePartBytes/3
+	if envelope >= 1<<10 {
+		t.Errorf("a part's envelope measures %d bytes; the reserve's reason says well under a kilobyte",
+			envelope)
+	}
+	if spare := queue.MaxPayloadBytes - len(raw); spare < phasePartReserve-1<<10 {
+		t.Errorf("a full part is %d bytes, leaving %d of the %d-byte ceiling: the reserve is gone",
+			len(raw), spare, queue.MaxPayloadBytes)
+	}
+}
+
+// A RECORD REFUSED WITHIN THE CEILING GOES OUT IN ITS LEAST FORM, WITH ITS
+// WHOLE AND ITS SPEND.
+//
+// Refused although it is within the contract's ceiling, the record was
+// refused by a server set below it, and no cut to the contract's number
+// answers that. The target is halved on each refusal instead, down through the
+// fitted forms to the least one — every text reduced to its mark, every call
+// still carried — and the record goes out carrying its tokens, its cost and a
+// reference to its whole, which went first as parts the smaller server takes.
+func TestARecordRefusedWithinTheCeilingGoesOutInItsLeastFormWithItsWhole(t *testing.T) {
+	t.Parallel()
+	const calls = 1500
+	rec := phaseEvent(heavyResult(calls, 2_000))
+	// THE SERVER TAKES THE LEAST FORM AND NOTHING LARGER: its limit is the
+	// least form's own size, measured on a cutter built as publishPhase
+	// builds one — the same source, the same whole, a part count of the same
+	// digits. What still varies is the envelope's timestamp, a few bytes, so
+	// the limit allows a few more; every fitted form the walk tries weighs
+	// tens of kilobytes above it.
+	env := events.New(rec, events.TraceContext{})
+	env.Source = "Lead"
+	whole, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	least, err := (&phaseCutter{env: env, original: env.Data.(*types.AgentPhaseCompleted),
+		whole: len(whole), kept: wholeKept{parts: 10}}).leastForm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if least.bytes < 140<<10 || len(whole) > queue.MaxPayloadBytes {
+		t.Fatalf("the fixture's least form is %d bytes and its whole %d: it must be within the "+
+			"ceiling, with a least form a part at the floor fits under", least.bytes, len(whole))
+	}
+	pub := &transport{refuse: tooLargeAbove(least.bytes + 32)}
+	account := emitterOver(pub).publishPhase(t.Context(), rec)
+
+	records, parts := pub.accepted()
+	if len(records) != 1 || account.Form != phaseLeast {
+		t.Fatalf("%d records published in form %q (account %+v); want the least form",
+			len(records), account.Form, account)
+	}
+	got := records[0]
+	if len(got.ToolExecutions) != calls+1 || got.ToolExecutionsOmitted != 0 {
+		t.Errorf("the least form carries %d calls and counts %d omitted; want every one of the %d carried",
+			len(got.ToolExecutions), got.ToolExecutionsOmitted, calls+1)
+	}
+	for i, row := range got.ToolExecutions[:calls] {
+		// A number read back off the wire into a map is a float64.
+		if row["result"] != "…" || row["result_bytes"] != float64(2_000/3*3) {
+			t.Fatalf("call %d's result is %q (result_bytes %v), want its mark and its whole length",
+				i, row["result"], row["result_bytes"])
+		}
+	}
+	if got.InputTokens != 9100 || got.TotalTokens != 9520 || got.CostUSD != 0.25 || got.Decision != "delivered" {
+		t.Errorf("the least form's scalars are %d/%d, $%v, %q; want the phase's own",
+			got.InputTokens, got.TotalTokens, got.CostUSD, got.Decision)
+	}
+	if got.WholeParts == 0 || got.WholeParts != len(parts) || account.Parts != len(parts) {
+		t.Fatalf("the record names %d parts, the account %d, and %d were published: the whole "+
+			"of a record refused within the ceiling must be kept", got.WholeParts, account.Parts, len(parts))
+	}
+	if whole := reassemble(t, parts); !bytes.Equal(whole, pub.first) {
+		t.Errorf("the parts reassemble to %d bytes that differ from the %d refused", len(whole), len(pub.first))
+	}
+	if !strings.Contains(got.Notes, "is kept in") {
+		t.Errorf("notes = %q, want them to say where the whole is", got.Notes)
+	}
+	assertTheWalkHalves(t, pub)
+}
+
+// EVERY FORM TRIED IS SMALLER THAN EVERY FORM REFUSED, AND THE LARGEST SUCH.
+//
+// The walk's one rule, asked of the cutter directly: a target the least form
+// fits is answered by a fit to it; one it does not is answered by the least
+// form while that is smaller than what was refused, and by the rows that fit
+// once it is not; and when even no row at all is smaller than what was
+// refused, there is nothing left to try.
+func TestAFormIsOnlyEverSmallerThanWhatWasRefused(t *testing.T) {
+	t.Parallel()
+	rec := phaseEvent(heavyResult(400, 2_000))
+	env := events.New(rec, events.TraceContext{})
+	cut := &phaseCutter{env: env, original: env.Data.(*types.AgentPhaseCompleted), whole: 1 << 20,
+		kept: wholeKept{parts: 1}}
+	least, err := cut.leastForm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name            string
+		target, refused int
+		want            phaseForm
+	}{
+		{"a target the least form fits", least.bytes + 20_000, 1 << 30, phaseFitted},
+		{"a target under it, the least form not yet refused", least.bytes - 1, least.bytes + 1, phaseLeast},
+		{"the least form refused", least.bytes / 2, least.bytes, phaseRowsOmitted},
+	} {
+		got, ok, err := cut.shapeBelow(tc.target, tc.refused)
+		if err != nil || !ok {
+			t.Fatalf("%s: no form (%v)", tc.name, err)
+		}
+		if got.form != tc.want || got.bytes >= tc.refused {
+			t.Errorf("%s: a %s form of %d bytes, want a %s form under the %d refused",
+				tc.name, got.form, got.bytes, tc.want, tc.refused)
+		}
+		if tc.want != phaseLeast && got.bytes > tc.target {
+			t.Errorf("%s: %d bytes, past the %d-byte target", tc.name, got.bytes, tc.target)
+		}
+	}
+	// NOTHING SMALLER: every row given up, and still no smaller than a form
+	// already refused.
+	none, err := cut.rowsFitting(0)
+	if err != nil || none.calls != len(rec.ToolExecutions) {
+		t.Fatalf("the smallest form carries %d of %d calls (%v)", len(rec.ToolExecutions)-none.calls,
+			len(rec.ToolExecutions), err)
+	}
+	if _, ok, err := cut.shapeBelow(0, none.bytes); ok || err != nil {
+		t.Errorf("a form was offered below the smallest one this record has (%v)", err)
+	}
+}
+
+// PAST THE LEAST FORM, THE FIRST ROWS GO OUT AND THE REST ARE COUNTED.
+//
+// A record whose every text is already its mark can still be too large — an
+// agent-mode run's bridge log holds every call the run made — and then its
+// later rows are left off, counted rather than dropped, because the whole
+// holds them. The rows it keeps are its FIRST, in order.
+func TestPastTheLeastFormTheFirstRowsGoOutAndTheRestAreCounted(t *testing.T) {
+	t.Parallel()
+	const calls = 3000
+	rec := phaseEvent(heavyResult(calls, 2_000))
+	for i := range rec.ToolExecutions {
+		rec.ToolExecutions[i]["name"] = fmt.Sprintf("call_%04d", i)
+	}
+	pub := &transport{refuse: tooLargeAbove(200 << 10)}
+	account := emitterOver(pub).publishPhase(t.Context(), rec)
+
+	records, parts := pub.accepted()
+	if len(records) != 1 || account.Form != phaseRowsOmitted {
+		t.Fatalf("%d records published in form %q; want its first rows", len(records), account.Form)
+	}
+	got := records[0]
+	kept := len(got.ToolExecutions)
+	if kept == 0 || kept+got.ToolExecutionsOmitted != calls+1 {
+		t.Fatalf("the record carries %d calls and counts %d omitted, of %d", kept,
+			got.ToolExecutionsOmitted, calls+1)
+	}
+	for i, row := range got.ToolExecutions {
+		if row["name"] != fmt.Sprintf("call_%04d", i) {
+			t.Fatalf("carried call %d is %v: the rows kept are not the first ones", i, row["name"])
+		}
+	}
+	if !strings.Contains(got.Notes, fmt.Sprintf("%d tool calls", got.ToolExecutionsOmitted)) {
+		t.Errorf("notes = %q, want them to count the calls not carried", got.Notes)
+	}
+	if got.WholeParts == 0 || got.WholeParts != len(parts) {
+		t.Errorf("the record names %d parts of the %d published", got.WholeParts, len(parts))
+	}
+	if got.InputTokens != 9100 {
+		t.Errorf("input tokens = %d, want the phase's own 9100", got.InputTokens)
+	}
+}
+
+// A LEAST FORM PAST THE CEILING IS CUT TO THE CEILING, NOT TO HALF OF ITSELF.
+//
+// A record of enough rows is past one event even with every text at its mark.
+// The transport refusing that is the contract working, not a server below it,
+// so the rows are cut to what every connection carries — halving instead would
+// throw away rows the transport takes.
+func TestALeastFormPastTheCeilingKeepsTheRowsTheCeilingTakes(t *testing.T) {
+	t.Parallel()
+	const calls = 90_000
+	rec := phaseEvent(heavyResult(calls, 300))
+	pub := &transport{refuse: tooLargeAbove(queue.MaxPayloadBytes)}
+	account := emitterOver(pub).publishPhase(t.Context(), rec)
+
+	records, parts := pub.accepted()
+	if len(records) != 1 || account.Form != phaseRowsOmitted || len(parts) == 0 {
+		t.Fatalf("%d records in form %q with %d parts; want the first rows, and the whole in parts",
+			len(records), account.Form, len(parts))
+	}
+	var published int
+	for _, a := range pub.attempts {
+		if a.err == nil && a.typ == (types.AgentPhaseCompleted{}).EventType() {
+			published = a.bytes
+		}
+	}
+	if published > queue.MaxPayloadBytes || published <= queue.MaxPayloadBytes*3/4 {
+		t.Errorf("the record went out at %d bytes; want the rows the %d-byte ceiling takes, not a "+
+			"target halved below it", published, queue.MaxPayloadBytes)
+	}
+	assertTheWalkHalves(t, pub)
+}
+
+// A PART THAT FAILS FOR ANOTHER REASON ENDS THE PARTS, AND THE RECORD SAYS SO.
+//
+// Only a size refusal is answered by splitting. Any other failure means this
+// whole will not be kept, so the record must name no whole — one it named
+// would be a reference to parts that are not there — and its notes say why.
+func TestAPartThatFailsForAnotherReasonLeavesTheRecordWithNoWhole(t *testing.T) {
+	t.Parallel()
+	pub := &transport{}
+	// The first part lands; the connection goes before the second.
+	partsSeen := 0
+	pub.refuse = func(ev *events.Event, raw []byte) error {
+		if ev.Type == (types.AgentPhaseRecordPart{}).EventType() {
+			if partsSeen++; partsSeen > 1 {
+				return errors.New("nats: connection closed")
+			}
+			return nil
+		}
+		return tooLargeAbove(queue.MaxPayloadBytes)(ev, raw)
+	}
+	account := emitterOver(pub).publishPhase(t.Context(), phaseEvent(heavyResult(300, 42_000)))
+
+	records, parts := pub.accepted()
+	if len(records) != 1 || len(parts) != 1 {
+		t.Fatalf("%d records and %d parts published; want the record and the one part that landed",
+			len(records), len(parts))
+	}
+	got := records[0]
+	if got.WholeParts != 0 || account.Parts != 0 {
+		t.Errorf("the record names %d parts (account %d) of a whole that was not all published: a "+
+			"reference to parts that are not all there", got.WholeParts, account.Parts)
+	}
+	if got.WholeBytes == 0 {
+		t.Error("whole_bytes is zero, so the record reads as whole though it was cut")
+	}
+	if !strings.Contains(got.Notes, "was not kept") || !strings.Contains(got.Notes, "connection closed") {
+		t.Errorf("notes = %q, want them to say the whole was not kept and why", got.Notes)
+	}
+}
+
+// THE ONE FLOOR: A LEAST FORM THE TRANSPORT REFUSES LEAVES NO RECORD — AND ITS
+// WHOLE STILL READS BACK.
+//
+// When even the smallest form of a record is refused there is nothing smaller
+// to send, and the account says no record was published. The parts went
+// first, so the whole is kept all the same.
+func TestTheSmallestFormRefusedLeavesNoRecordAndTheWholeInParts(t *testing.T) {
+	t.Parallel()
+	pub := &transport{}
+	pub.refuse = func(ev *events.Event, raw []byte) error {
+		if ev.Type == (types.AgentPhaseCompleted{}).EventType() {
+			return tooLargeAbove(100)(ev, raw)
+		}
+		return tooLargeAbove(queue.MaxPayloadBytes)(ev, raw)
+	}
+	account := emitterOver(pub).publishPhase(t.Context(), phaseEvent(heavyResult(300, 42_000)))
+
+	records, parts := pub.accepted()
+	if len(records) != 0 || account.Form != "" || !errors.Is(account.Err, queue.ErrTooLarge) {
+		t.Fatalf("%d records published, account %+v; want none, refused as too large", len(records), account)
+	}
+	if whole := reassemble(t, parts); !bytes.Equal(whole, pub.first) {
+		t.Errorf("the parts reassemble to %d bytes that differ from the %d refused", len(whole), len(pub.first))
+	}
+	assertTheWalkHalves(t, pub)
+	// Every form tried was smaller than the one refused before it, which is
+	// what ends the walk.
+	previous := len(pub.first) + 1
+	for _, a := range pub.attempts {
+		if a.typ != (types.AgentPhaseCompleted{}).EventType() {
+			continue
+		}
+		if a.bytes >= previous {
+			t.Fatalf("a form of %d bytes was tried after one of %d was refused", a.bytes, previous)
+		}
+		previous = a.bytes
+	}
+}
+
+// THE JUDGE'S RECORD GOES THROUGH THE SAME PATH.
+//
+// Every agent_phase_completed publisher shares the one that keeps a refused
+// record's whole. A judge record refused as too large is published as a part
+// before anything else — which a plain publish, giving up on the refusal,
+// never does.
+func TestTheJudgesRecordKeepsItsWholeWhenRefused(t *testing.T) {
+	t.Parallel()
+	pub := &transport{}
+	refusedOnce := false
+	pub.refuse = func(ev *events.Event, raw []byte) error {
+		if ev.Type == (types.AgentPhaseCompleted{}).EventType() && !refusedOnce {
+			refusedOnce = true
+			return fmt.Errorf("publish: %d bytes: %w", len(raw), queue.ErrTooLarge)
+		}
+		return nil
+	}
+	e := emitterOver(pub)
+	e.judged(t.Context(), phase.Execute, 1, 4, extension.Decision{
+		Extend: true, Reason: "still making progress", Asked: true,
+		Model: "claude-haiku-5", InputTokens: 300, OutputTokens: 20,
+	}, 0)
+
+	_, parts := pub.accepted()
+	if len(parts) != 1 {
+		t.Fatalf("%d parts published after the judge's record was refused; want its whole, as one part",
+			len(parts))
+	}
+	var back events.Event
+	if err := json.Unmarshal(reassemble(t, parts), &back); err != nil {
+		t.Fatal(err)
+	}
+	if judged, ok := back.Data.(*types.AgentPhaseCompleted); !ok || judged.Phase != types.PhaseJudge {
+		t.Errorf("the part holds %T, want the judge's phase record", back.Data)
+	}
+}
+
+// A WHOLE TOO LARGE FOR ONE EVENT READS BACK WHOLE FROM THE EVENT STORE.
+//
+// End to end: the engine's own writer persists what this node publishes, the
+// parts included, and the store reassembles them by the record's id — while
+// no listing of the log ever shows one.
+func TestAWholeTooLargeForOneEventReadsBackWholeFromTheStore(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	q := memory.New()
+	q.AddPublishListener(observe.NewWriter(db.Events()).Listen())
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+
+	res := heavyResult(300, 42_000)
+	emitterOver(q).completed(t.Context(), phaseRecord{Phase: phase.Execute, Iteration: 1, Result: res})
+
+	phases, _, err := db.Events().Phases(t.Context(), "", 0, nil)
+	if err != nil || len(phases) != 1 {
+		t.Fatalf("Phases = %d rows, %v; want the one phase record and no part", len(phases), err)
+	}
+	listed, err := db.Events().List(t.Context(), store.ListQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range listed {
+		if row.Type == (types.AgentPhaseRecordPart{}).EventType() {
+			t.Fatalf("the event listing returned a part: %s", row.ID)
+		}
+	}
+	got, err := db.Events().PhaseRecordWhole(t.Context(), phases[0].ID)
+	if err != nil {
+		t.Fatalf("PhaseRecordWhole: %v", err)
+	}
+	var back events.Event
+	if err := json.Unmarshal(got.Payload, &back); err != nil {
+		t.Fatal(err)
+	}
+	full, ok := back.Data.(*types.AgentPhaseCompleted)
+	if !ok || back.ID.String() != phases[0].ID || got.Parts < 2 {
+		t.Fatalf("the whole is a %T with id %s from %d parts; want the record %s from its parts",
+			back.Data, back.ID, got.Parts, phases[0].ID)
+	}
+	if full.ToolExecutions[0]["result"] != res.Executions[0].Output {
+		t.Error("the whole read back from the store carries a cut result")
 	}
 }

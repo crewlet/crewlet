@@ -817,8 +817,9 @@ func (q *Queue) ackWait() time.Duration {
 }
 
 // Conn exposes this client's NATS connection, for subsystems that ride the
-// same broker outside the queue contract (the KV coordination backend).
-// The queue keeps ownership: closing it is Stop's job, not the caller's.
+// same broker outside the queue contract — the engine's coordination store
+// rides it on every topology (internal/engine's openNATS). The queue keeps
+// ownership: closing it is Stop's job, not the caller's.
 func (q *Queue) Conn() *nats.Conn { return q.nc }
 
 // DialOwned opens a SECOND connection to the same broker, which the caller
@@ -892,11 +893,9 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		// failure a producer must not retry, and nats.ErrMaxPayload is
 		// this backend's private word for it — a caller matching on that
 		// would be branching on which backend is running, which the
-		// contract forbids. Wrapped rather than replaced so the original
-		// still reads in a log.
+		// contract forbids.
 		if errors.Is(err, nats.ErrMaxPayload) {
-			return fmt.Errorf("publish %s: %d bytes exceeds the %d-byte limit: %w: %w",
-				topic, len(data), queue.MaxPayloadBytes, queue.ErrTooLarge, err)
+			return q.tooLarge("publish", topic, len(data), err)
 		}
 		return fmt.Errorf("publish %s: %w", topic, err)
 	}
@@ -909,6 +908,42 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		q.callListener(ctx, l, topic, ev)
 	}
 	return nil
+}
+
+// tooLarge is the client's own too-large refusal, translated into the
+// contract's sentinel and naming the ceiling that refused it. Wrapped rather
+// than replaced, so the client's words still read in a log.
+//
+// THE CONNECTION'S CEILING, because it is the one the client enforced: nats.go
+// compares a message against the max_payload the server this connection is on
+// announced, and refuses it before anything is sent. On the embedded broker
+// that is the contract's own number. Against an external cluster it is
+// whatever that server's operator set, and a connection that failed over to a
+// server set lower refuses messages the contract says fit — so the contract's
+// number alone would send a reader looking for an oversized producer when the
+// fault is a server's setting. Where the two differ both are named, and where
+// the server's is the lower, so is the setting to change.
+//
+// Read after the refusal, off the live connection: a reconnect in between
+// names the server the connection is on now.
+//
+// size is what the client measured, which for every caller of this is the
+// payload alone: none of the messages they send carries a header.
+func (q *Queue) tooLarge(op, subject string, size int, cause error) error {
+	accepts := q.nc.MaxPayload()
+	limit := fmt.Sprintf("the %d-byte max_payload of the NATS server this "+
+		"connection is on", accepts)
+	switch {
+	case accepts < queue.MaxPayloadBytes:
+		limit += fmt.Sprintf(", which is below the %d bytes the queue contract "+
+			"carries (queue.MaxPayloadBytes): set max_payload to at least %d on "+
+			"every server of the cluster", queue.MaxPayloadBytes, queue.MaxPayloadBytes)
+	case accepts > queue.MaxPayloadBytes:
+		limit += fmt.Sprintf(" and the %d bytes the queue contract carries "+
+			"(queue.MaxPayloadBytes)", queue.MaxPayloadBytes)
+	}
+	return fmt.Errorf("%s %s: %d bytes exceeds %s: %w: %w",
+		op, subject, size, limit, queue.ErrTooLarge, cause)
 }
 
 func (q *Queue) callListener(ctx context.Context, l queue.PublishListener, topic string, ev *events.Event) {
@@ -1491,6 +1526,13 @@ func (q *Queue) deadLetter(ctx context.Context, topic, group string, data []byte
 		return
 	}
 	if _, err := q.js.Publish(ctx, subject, data); err != nil {
+		// The message was carried once already, so a refusal for its size
+		// means the server this connection is on accepts less than the one
+		// it was published through — a setting to name, rather than the
+		// client's bare words.
+		if errors.Is(err, nats.ErrMaxPayload) {
+			err = q.tooLarge("dead-letter", subject, len(data), err)
+		}
 		q.log.Error("dead_letter_failed", "topic", topic, "group", group, "error", err.Error())
 	}
 }

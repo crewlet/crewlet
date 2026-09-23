@@ -21,7 +21,7 @@ package observe
 
 import "github.com/crewlet/crewlet/internal/events"
 
-// The taxonomy is [events]'s, and these three are the thinnest possible view
+// The taxonomy is [events]'s, and these four are the thinnest possible view
 // of it.
 //
 // It used to be a map HERE and an identical map in internal/store, with
@@ -43,6 +43,10 @@ func Category(eventType string) string {
 func LiveOnly(eventType string) bool { return events.LiveOnly(eventType) }
 
 // Excluded reports why a type is kept out of the event store, or "" if it is
-// not deliberately excluded — which, for a type with no category either, means
-// nobody has placed it.
+// not deliberately excluded — which, for a type with no category and not
+// [Unlisted] either, means nobody has placed it.
 func Excluded(eventType string) string { return events.Excluded(eventType) }
+
+// Unlisted reports why a type is written to the event store and never listed,
+// or "" for every other type.
+func Unlisted(eventType string) string { return events.Unlisted(eventType) }

@@ -1,5 +1,6 @@
-// The event-type taxonomy: which category each type is filed under, and which
-// types are deliberately kept out of the durable log.
+// The event-type taxonomy: which category each type is filed under, which
+// types are deliberately kept out of the durable log, and which are kept in it
+// without ever being listed.
 //
 // IT LIVES HERE, in the package that owns the type registry, because two
 // packages consume it and neither may import the other: internal/store writes
@@ -18,12 +19,12 @@ import (
 
 // categories maps an event type to its dashboard category.
 //
-// THE MAP IS THE ADMISSION LIST. A type that is not here is not written to the
-// event store and does not reach the activity feed — the live projection keys
-// "is this a persisted event" on the category being non-empty, so an absent
-// entry is a silent drop in both places at once. That is how the sandbox panel
-// once ended up showing rows that vanished on the next reload and 404'd when
-// clicked.
+// THE MAP IS THE ADMISSION LIST for everything a person reads. A type that is
+// not here does not reach the activity feed — the live projection keys "is
+// this a persisted event" on the category being non-empty — and is not written
+// to the event store unless [unlisted] names it, so an absent entry is a
+// silent drop in both places at once. That is how the sandbox panel once ended
+// up showing rows that vanished on the next reload and 404'd when clicked.
 //
 // So the exclusions below are deliberate, and stated, rather than left as gaps.
 var categories = map[string]string{
@@ -162,6 +163,27 @@ var excluded = map[string]string{
 		"thing under a different id",
 }
 
+// unlisted are the types written to the event store as STORAGE for another
+// row, each with the reason it is kept and why nothing lists it.
+//
+// A THIRD PLACEMENT, because neither of the other two describes them. They are
+// not events a person reads — so no category, and nothing that lists, counts,
+// projects or pushes events ever returns one — and they are not excluded
+// either, because the row they belong to is incomplete without them. The
+// store writes such a row with its identity and its bytes and nothing a
+// listing filters on, so a read keyed on a trace, a turn, a seat or a party
+// cannot reach it, and the unkeyed listings refuse the type by name; a reader
+// reaches one by its own id, or through the row it belongs to.
+var unlisted = map[string]string{
+	"agent_phase_record_part": "one piece of the WHOLE of a phase record the " +
+		"transport refused as too large: the record is published cut and names " +
+		"its parts, and the event store reassembles them for a reader who asks " +
+		"for that record whole. A part can be nearly as large as one event may be, " +
+		"all of it another row's bytes, so listing one would put that on a " +
+		"feed that shows a summary line, and pushing one would send it to " +
+		"every open dashboard",
+}
+
 // liveOnly is the subset of [excluded] that still drives the live projection.
 //
 // A subset rather than the same set: agent_turn_progress, the two seat
@@ -176,9 +198,9 @@ var liveOnly = map[string]bool{
 	"budget_reported":     true,
 }
 
-// Category names an event type's dashboard category and reports whether the
-// type is placed at all. An unplaced type is neither persisted nor fed to the
-// activity feed.
+// Category names an event type's dashboard category and reports whether it has
+// one. A type with none is never fed to the activity feed, and is persisted
+// only when [Unlisted] names it.
 func Category(eventType string) (string, bool) {
 	c, ok := categories[eventType]
 	return c, ok
@@ -189,9 +211,17 @@ func Category(eventType string) (string, bool) {
 func LiveOnly(eventType string) bool { return liveOnly[eventType] }
 
 // Excluded reports why a type is kept out of the event store, or "" if it is
-// not deliberately excluded — which, for a type with no category either, means
-// nobody has placed it.
+// not deliberately excluded — which, for a type with no category and not
+// [Unlisted] either, means nobody has placed it.
 func Excluded(eventType string) string { return excluded[eventType] }
+
+// Unlisted reports why a type is written to the event store without ever
+// being listed, or "" for every other type. See [unlisted].
+func Unlisted(eventType string) string { return unlisted[eventType] }
+
+// UnlistedTypes is every type [Unlisted] names, sorted — what the store's
+// listings refuse by name.
+func UnlistedTypes() []string { return slices.Sorted(maps.Keys(unlisted)) }
 
 // WebhookCategory is the one category no event TYPE carries.
 //

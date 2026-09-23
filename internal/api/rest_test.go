@@ -5,13 +5,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -383,5 +389,46 @@ func TestTheInboxIsServedAtThePathTheTableDocuments(t *testing.T) {
 	if body["error"] != "bad_params" {
 		t.Errorf("error = %q, want bad_params; `not_found` is the wildcard "+
 			"answering about a task called \"inbox\"", body["error"])
+	}
+}
+
+// A PHASE RECORD IS ANSWERED WHOLE AT ITS OWN PATH, and the listing it belongs
+// to at the path above it.
+//
+// /phases/{id} is the `phase_record` question with the path's id as its own:
+// a route that captured the id and dropped it would answer every record with
+// a refusal for a missing one, which is why this reads the body rather than
+// the status.
+func TestAPhaseRecordIsAnsweredWholeAtItsOwnPath(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ev := events.New(types.AgentPhaseCompleted{RoleName: "PM", Phase: types.PhaseExecute,
+		Response: "the whole answer"}, events.TraceContext{})
+	rec, _, err := store.RecordFor(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Events().Append(t.Context(), rec); err != nil {
+		t.Fatal(err)
+	}
+	a := newApp(t, api.Options{Sources: queries.Sources{Events: db.Events()}})
+
+	status, body := get(t, a, "/phases/"+ev.ID.String())
+	payload, _ := body["payload"].(map[string]any)
+	if status != http.StatusOK || body["id"] != ev.ID.String() || body["whole"] != true ||
+		payload["response"] != "the whole answer" {
+		t.Errorf("GET /phases/{id} = %d %v; want the record, whole", status, body)
+	}
+	status, body = get(t, a, "/phases")
+	if listed, _ := body["phases"].([]any); status != http.StatusOK || len(listed) != 1 {
+		t.Errorf("GET /phases = %d %v; want the one phase record", status, body)
+	}
+	if status, body := get(t, a, "/phases/"+uuid.NewString()); status != http.StatusNotFound ||
+		body["error"] != "not_found" {
+		t.Errorf("GET /phases/{unknown} = %d %v; want 404 not_found", status, body)
 	}
 }

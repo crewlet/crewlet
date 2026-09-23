@@ -2,8 +2,11 @@ package types
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -20,6 +23,7 @@ func init() {
 	events.Register[TurnCompleted]()
 	events.Register[AgentPhaseStarted]()
 	events.Register[AgentPhaseCompleted]()
+	events.Register[AgentPhaseRecordPart]()
 	events.Register[AgentTurnProgress]()
 	events.Register[SubagentBatched]()
 }
@@ -376,8 +380,11 @@ type AgentPhaseCompleted struct {
 	Model       string  `json:"model"`
 	ProviderKey string  `json:"provider_key"`
 	Trigger     Trigger `json:"trigger"`
-	// The prompt and response are VERBATIM, not truncated: this telemetry is
-	// what shows the operator what the model actually saw. Only Error is capped.
+	// The prompts, the response and every tool call are VERBATIM on a record
+	// published whole: this telemetry is what shows the operator what the model
+	// actually saw. Error is bounded at events.MaxDiagnosticBytes. A record
+	// past what one event carries is published CUT, and [AgentPhaseCompleted.WholeBytes]
+	// and [AgentPhaseCompleted.WholeParts] say so and where its whole is.
 	SystemPrompt   string          `json:"system_prompt"`
 	UserPrompt     string          `json:"user_prompt"`
 	Response       string          `json:"response"`
@@ -488,6 +495,36 @@ type AgentPhaseCompleted struct {
 	// by agent id and time: the store tags a channel id for A2A events alone,
 	// so no query could ask for one thread's phases.
 	ConversationKey string `json:"conversation_key"`
+
+	// WholeBytes is how long this record's WHOLE encoding is, on a record
+	// that was published CUT, and zero on one published whole.
+	//
+	// A record the transport refuses as too large is published in the largest
+	// form it accepts: its longest texts shortened to a common level, each
+	// ending in "…" and, on a tool call or a round, with its whole length
+	// beside it as `<field>_bytes`; past that every text reduced to its mark;
+	// and past that its later rows counted rather than carried
+	// ([AgentPhaseCompleted.ToolExecutionsOmitted],
+	// [AgentPhaseCompleted.RoundNarrationOmitted]). Every form carries the
+	// scalars whole — the tokens, the cost, the model, the decision — and
+	// Notes says which cut was made.
+	//
+	// Set whether or not the whole was kept, which is WholeParts' to say.
+	WholeBytes int `json:"whole_bytes"`
+
+	// WholeParts is how many [AgentPhaseRecordPart] events hold this record's
+	// whole, published before it under its own event id — what the event
+	// store's PhaseRecordWhole reassembles. Zero on a record published whole,
+	// and on a cut one whose whole was not kept, whose Notes say why.
+	WholeParts int `json:"whole_parts"`
+
+	// ToolExecutionsOmitted and RoundNarrationOmitted count the rows of each
+	// list a cut record does not carry: it keeps the FIRST rows, as many as
+	// fit, and counts the rest here. The whole, when WholeParts says it was
+	// kept, holds every one of them. Zero on every record whose lists are
+	// complete.
+	ToolExecutionsOmitted int `json:"tool_executions_omitted"`
+	RoundNarrationOmitted int `json:"round_narration_omitted"`
 }
 
 // EventType is the "agent_phase_completed" wire type.
@@ -529,6 +566,69 @@ func (e AgentPhaseCompleted) SummaryFor(actor string) string {
 		parts = append(parts, fmt.Sprintf("(%s, %d tokens)", e.Model, e.TotalTokens))
 	}
 	return strings.Join(parts, " ")
+}
+
+// AgentPhaseRecordPart is one piece of the WHOLE of a phase record the
+// transport refused as too large.
+//
+// Such a record is published cut (see [AgentPhaseCompleted.WholeBytes]), and
+// its whole is published FIRST, as these: the record's event exactly as it
+// would have been encoded had it gone whole, split into consecutive byte
+// ranges. The record then names them with WholeParts, and the event store's
+// PhaseRecordWhole reassembles them by the record's own event id.
+//
+// STORED AND NEVER LISTED. A part is written to the event store and read back
+// only through the record it belongs to; no listing, count, projection or
+// socket push carries one. See events.Unlisted.
+//
+// DATA IS BYTES, base64 on the wire, so what a part costs encoded is a
+// function of its length alone: base64 writes four ASCII bytes for every three
+// and JSON escapes none of them, where a string field would cost whatever its
+// content's escaping costs — six bytes for every `<`.
+type AgentPhaseRecordPart struct {
+	// RecordID is the phase record's own event id: the id its
+	// agent_phase_completed is published under, and the one every part's
+	// own id is derived from ([PhaseRecordPartID]).
+	RecordID string `json:"record_id"`
+
+	// Index is this part's place in the sequence, from 0.
+	Index int `json:"index"`
+
+	// Offset is where Data starts in the whole, in bytes. Parts are
+	// contiguous but not of one size — a part refused as too large is
+	// published again as two halves — so a reader assembles by offset.
+	Offset int `json:"offset"`
+
+	// WholeBytes is the whole's length, the same on every part.
+	WholeBytes int `json:"whole_bytes"`
+
+	// Data is the whole's bytes from Offset.
+	Data []byte `json:"data,omitempty"`
+}
+
+// EventType is the "agent_phase_record_part" wire type.
+func (AgentPhaseRecordPart) EventType() string { return "agent_phase_record_part" }
+
+// Summary names the record the part belongs to and the bytes it carries. No
+// list shows it; it is what a point read of the row says it is.
+func (e AgentPhaseRecordPart) Summary() string {
+	return fmt.Sprintf("Part %d of phase record %s: bytes %d to %d of %d",
+		e.Index, e.RecordID, e.Offset, e.Offset+len(e.Data), e.WholeBytes)
+}
+
+// PhaseRecordPartID is the event id of part index of the phase record whose
+// own event id is record.
+//
+// DERIVED rather than minted, so a reader holding only the record's id reaches
+// every part through the event store's id index, with no index of its own and
+// no second record listing them. A name-based UUID in the record's OWN id as
+// the namespace, so two records' parts cannot share an id and a part id says
+// nothing a reader could mistake for an event of its own.
+//
+// A WIRE CONTRACT like the type string: the build that answers for a part may
+// not be the build that published it, so this derivation never changes.
+func PhaseRecordPartID(record uuid.UUID, index int) uuid.UUID {
+	return uuid.NewSHA1(record, []byte("agent_phase_record_part/"+strconv.Itoa(index)))
 }
 
 // AgentTurnProgress reports one tool-call round while the phase is still

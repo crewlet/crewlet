@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/observe"
@@ -21,12 +23,13 @@ func TestEveryRegisteredTypeIsPlaced(t *testing.T) {
 	// and discarded — which is how the sandbox panel came to show rows
 	// that vanished on the next reload and 404'd when clicked.
 	//
-	// So a new event type has to be PLACED: given a category, or named in
-	// the live-only list with the reason it is excluded. This is the test
-	// that makes forgetting a build failure rather than a mystery.
+	// So a new event type has to be PLACED: given a category, named in the
+	// exclusions with the reason it stays out, or named unlisted with the
+	// reason it is stored and never shown. This is the test that makes
+	// forgetting a build failure rather than a mystery.
 	var unplaced []string
 	for _, name := range events.RegisteredTypes() {
-		if observe.Category(name) == "" && observe.Excluded(name) == "" {
+		if observe.Category(name) == "" && observe.Excluded(name) == "" && observe.Unlisted(name) == "" {
 			unplaced = append(unplaced, name)
 		}
 	}
@@ -50,10 +53,74 @@ func TestEveryExclusionStatesItsReason(t *testing.T) {
 		if observe.Category(name) != "" {
 			continue
 		}
+		if reason := observe.Unlisted(name); reason != "" {
+			if len(reason) < 40 {
+				t.Errorf("%s is stored unlisted with reason %q; say why nothing may list it",
+					name, reason)
+			}
+			continue
+		}
 		if reason := observe.Excluded(name); len(reason) < 40 {
 			t.Errorf("%s is excluded with reason %q; say why it must stay out",
 				name, reason)
 		}
+	}
+}
+
+// AN UNLISTED TYPE IS IN NO OTHER PLACEMENT.
+//
+// The three placements answer one question three ways — shown, kept out, kept
+// and never shown — so a type in two of them is a contradiction each reader
+// resolves its own way: a category would put it on the feed the unlisted
+// placement exists to keep it off, and an exclusion would stop the writer
+// storing the row another row is incomplete without.
+func TestAnUnlistedTypeIsInNoOtherPlacement(t *testing.T) {
+	t.Parallel()
+	unlisted := events.UnlistedTypes()
+	if len(unlisted) == 0 {
+		t.Fatal("no type is unlisted, so this certifies nothing")
+	}
+	for _, name := range unlisted {
+		if category := observe.Category(name); category != "" {
+			t.Errorf("%s is unlisted and filed under %q", name, category)
+		}
+		if observe.Excluded(name) != "" || observe.LiveOnly(name) {
+			t.Errorf("%s is unlisted and excluded from the store as well", name)
+		}
+	}
+}
+
+// A PART OF A PHASE RECORD IS STORED AND NEVER PROJECTED.
+//
+// The writer keeps it, because the record it belongs to is incomplete without
+// it; the projection gets nothing, which is what keeps a part — nearly as
+// large as one event — off every dashboard socket. And the row names nothing a
+// listing filters on, so no read keyed on a trace, a turn, a seat or a party
+// reaches it.
+func TestAPartIsStoredAndNeverProjected(t *testing.T) {
+	t.Parallel()
+	record := uuid.New()
+	ev := events.New(types.AgentPhaseRecordPart{
+		RecordID: record.String(), Index: 1, Offset: 6, WholeBytes: 12, Data: []byte("second"),
+	}, events.TraceContext{TraceID: "tr", SpanID: "sp"})
+	ev.ID = types.PhaseRecordPartID(record, 1)
+	ev.Source = "Lead"
+
+	rec, ok := observe.Record(ev)
+	if !ok {
+		t.Fatal("a part was not persisted, so its record's whole can never be read back")
+	}
+	if rec.ID != ev.ID.String() || rec.Type != "agent_phase_record_part" || len(rec.Payload) == 0 {
+		t.Errorf("row = %s %s with %d payload bytes; want the part's own id, type and bytes",
+			rec.ID, rec.Type, len(rec.Payload))
+	}
+	if rec.Category != "" || rec.Source != "" || rec.Actor != "" || rec.TraceID != "" ||
+		len(rec.Tags) != 0 || rec.Spend != nil {
+		t.Errorf("the part's row names what a listing filters on: category %q, source %q, actor %q, "+
+			"trace %q, tags %v, spend %v", rec.Category, rec.Source, rec.Actor, rec.TraceID, rec.Tags, rec.Spend)
+	}
+	if _, projected := observe.Envelope(ev); projected {
+		t.Error("a part produced an envelope, so the projection — and every socket it feeds — gets it")
 	}
 }
 

@@ -394,6 +394,7 @@ func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) 
 		return nil, nil
 	}
 	if resp.StatusCode >= 400 {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		detail, err := httpx.ReadBody(resp.Body, httpx.RefusalBytes)
 		return nil, fmt.Errorf("e2b: read %s: %d: %s", path,
 			resp.StatusCode, httpx.RefusalOf(resp.Header.Get("Content-Type"), detail, err))

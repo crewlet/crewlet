@@ -276,12 +276,14 @@ type BridgeCallSweeper interface {
 // SandboxJobs is the sweep for bridged coding runs' call logs.
 //
 // Each call a bridged run makes is its own record in the coordination store,
-// in a bucket with no age, and a run's own lifecycle purges them — when the
-// run finishes, and when a second launch replaces the first. This job is what
-// ends the records the lifecycle missed: a run finished on a node that died
-// between its delete and its purge, a purge that failed, a late call that
-// landed after one, a run finished by a build that knows nothing of the
-// records. Without it each is kept for the life of the deployment.
+// in a bucket with no age — and a call too large for one record keeps its
+// whole in part records filed under it, which go wherever the call goes. A
+// run's own lifecycle purges them — when the run finishes, and when a second
+// launch replaces the first. This job is what ends the records the lifecycle
+// missed: a run finished on a node that died between its delete and its purge,
+// a purge that failed, a late call or part that landed after one, a run
+// finished by a build that knows nothing of the records. Without it each is
+// kept for the life of the deployment.
 //
 // No Horizon, because the question is not an age: a launch's calls are
 // garbage exactly when no run names the launch, and a parked run's calls can

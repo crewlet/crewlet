@@ -79,11 +79,21 @@ func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (
 				"subject", subject, "error", err.Error())
 			return
 		}
+		// AN ASKER THAT LEFT IS NOT AN ERROR HERE: a core NATS publish to
+		// a mailbox nobody is subscribed to succeeds and goes nowhere. So
+		// a failure below is this node's own connection refusing to send,
+		// and the asker counts this node as one that did not answer.
 		if err := msg.Respond(reply); err != nil {
+			if errors.Is(err, nats.ErrMaxPayload) {
+				// A WARNING, because nothing else will say it: the
+				// asker sees an absent node, and only this side knows
+				// the answer existed and was too large to carry.
+				q.log.Warn("scatter_reply_too_large", "subject", subject,
+					"error", q.tooLarge("reply", subject, len(reply), err).Error())
+				return
+			}
 			q.log.Debug("scatter_reply_failed",
-				"subject", subject, "error", err.Error(),
-				"detail", "the asker's reply mailbox is gone, which is what "+
-					"a deadline that passed looks like from here")
+				"subject", subject, "error", err.Error())
 		}
 	})
 	if err != nil {
@@ -134,8 +144,16 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 	if q.isClosed() {
 		return nil, ErrClosed
 	}
+	// THE CONTRACT'S CEILING, checked here whatever the connected server
+	// accepts. Against a server whose max_payload is at or below it the
+	// client's own refusal below would say the same, and this answers first;
+	// against one set above it, this is the only bound — and a request goes
+	// to every answerer at once, each of which buffers it whole, so a scatter
+	// is where a message larger than the ceiling every backend shares costs
+	// the most. The in-memory twin refuses at the same number.
 	if len(request) > queue.MaxPayloadBytes {
-		return nil, fmt.Errorf("ask %s: %d bytes exceeds the %d-byte limit: %w",
+		return nil, fmt.Errorf("ask %s: %d bytes exceeds the %d bytes the queue "+
+			"contract carries (queue.MaxPayloadBytes): %w",
 			subject, len(request), queue.MaxPayloadBytes, queue.ErrTooLarge)
 	}
 
@@ -150,6 +168,12 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 	}
 	defer func() { _ = replies.Unsubscribe() }()
 	if err := q.nc.PublishRequest(subject, inbox, request); err != nil {
+		// TRANSLATED like Publish's, for Publish's reason: a server set
+		// below the contract's ceiling refuses a request the check above
+		// let through, and that refusal is as permanent as any other.
+		if errors.Is(err, nats.ErrMaxPayload) {
+			return nil, q.tooLarge("ask", subject, len(request), err)
+		}
 		return nil, fmt.Errorf("ask %s: %w", subject, err)
 	}
 	if err := q.nc.Flush(); err != nil {

@@ -2,8 +2,8 @@
 
 **Crewlet requires no infrastructure services.** The engine is one
 binary: its event stream is a NATS JetStream server it embeds, and its store
-is a local file it creates and owns exclusively. A single host runs a whole
-company with nothing else installed.
+is two local database files it creates and owns exclusively. A single host
+runs a whole company with nothing else installed.
 
 One slot changes when a deployment outgrows one node — the stream, which
 becomes either a cluster of the members the nodes already embed or a NATS
@@ -12,9 +12,10 @@ coordination KV is not a second address: it rides the stream's own
 connection, deliberately, so that a node cannot end up holding live leases
 over a link that still works while the one carrying its inbox has dropped —
 alive to its peers, deaf to its work. The store never becomes shared either:
-it stays one file per node, which is why everything genuinely shared between
-nodes lives in the KV instead. See [Running a Fleet](fleet.md) and
-[Scaling Out](../concepts/scaling.md).
+each node keeps its own two files — its own records, and its own copy of the
+replicated state every node derives from ordered logs on the stream — which is
+why what the fleet has to agree on lives on the broker instead. See
+[Running a Fleet](fleet.md) and [Scaling Out](../concepts/scaling.md).
 
 ---
 
@@ -329,15 +330,27 @@ coordination:
 > **Every server, not only the one a node reaches first.** The check runs
 > against the server this node is connected to when it starts. The client
 > moves to another server when that one goes away, and a server set lower
-> that it reaches then refuses the engine's large messages there. A phase
-> record larger than that server accepts is not published
-> (`phase_record_refused_within_ceiling`), and a coding run's bridged call
-> larger than it accepts is kept with only its name and outcome
-> (`sandbox_bridge_call_refused_within_ceiling`). Both log lines name
-> `max_payload`. A payload limit on the NATS account or user the engine
-> connects as caps the same messages, so where one is set (`max_payload` in
-> an account's `limits`, or `payload` in an account or user JWT's limits) it
-> must be at least 8 MiB too.
+> that it reaches then refuses the engine's large messages there. Its refusal
+> of an event names that server's own `max_payload`, the 8 MiB the engine
+> sizes against, and the setting to raise. A phase record
+> larger than that server accepts is published cut to what the server takes:
+> the node halves what it cuts the record to on each such refusal, splits each
+> refused part of the record's whole in two while the halves stay at least
+> 64 KiB, and logs `phase_record_refused_within_ceiling`. If the server
+> refuses a part too small to split again, the record goes out with no whole
+> behind it (`phase_record_whole_not_kept`), and if it refuses even the
+> record's smallest form the phase has no record at all
+> (`phase_record_not_published`). A coding run's bridged call larger than that
+> server accepts keeps its record in its least form — its name and outcome,
+> both texts replaced by their marks — and its whole in parts split the same
+> way (`sandbox_bridge_call_refused_within_ceiling`, and
+> `sandbox_bridge_call_whole_not_kept` when a part is refused too small to
+> split again). The two `…_refused_within_ceiling` lines name `max_payload`,
+> and so does a `…_whole_not_kept` line whose part was refused for its size.
+> A payload limit on the NATS account or user the engine connects as caps the
+> same messages, so where one is set (`max_payload` in an account's `limits`,
+> or `payload` in an account or user JWT's limits) it must be at least 8 MiB
+> too.
 
 **The URL goes to the NATS client verbatim**, so a comma-separated list of a
 cluster's members is one value as far as this config is concerned and the
@@ -548,8 +561,8 @@ Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing
 If any seat runs in [agent mode](../concepts/subscription-llm-backends.md), give the seats node a port instead of `-api-port 0`, and set its `CREWLET_MCP_BRIDGE_URL` to that port as a sandbox reaches it. Without the `ingress` role that listener serves the `/mcp/{token}` tool bridge and nothing else (`api_bridge_listening`); with `-api-port 0` the node refuses every agent-mode launch, naming `api.port`.
 
 `crewlet migrate` is idempotent and safe to re-run. Each node also
-auto-migrates its own store file on boot, and two nodes starting together
-cannot race, because they are not migrating the same file — every node owns
+auto-migrates its own store files on boot, and two nodes starting together
+cannot race, because they are not migrating the same files — every node owns
 its own. Running the explicit step first turns a schema change into an
 observable step rather than a side effect of startup.
 
@@ -557,7 +570,7 @@ Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned c
 
 - **`-roles seats`** runs the agents — claims seat leases, boots the instances, processes their turns
 - **`-roles ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
-- **`-roles workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter and the rest of the [singleton duties](../concepts/seat-ownership.md#singleton-duties)
+- **`-roles workers`** runs the company-wide duties — the scheduler tick, the sandbox waiter, the maintenance duty's fleet jobs and the rest of the [singleton duties](../concepts/seat-ownership.md#singleton-duties). The retention sweeps of the tables each node keeps its own copy of are not among them: they run on every node, whatever its roles
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory, and signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key, logs `sandbox_otel_signing_key_ephemeral`, and every token one process mints is forged as far as the other is concerned. `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
 
@@ -664,7 +677,7 @@ Give each node a distinct id — `node.id` in the Tier A file, or the
 injects a pod name without templating the config. Two nodes sharing an id
 miscount the fleet and each compute too small a share.
 
-Each node migrates its **own** store file at boot; there is no shared schema
+Each node migrates its **own** store files at boot; there is no shared schema
 to bring up first, and no migration lock, because no two processes share a
 file. [`crewlet migrate`](../reference/cli.md#crewlet-migrate) applies them
 ahead of time when you would rather not do it on the startup path.
@@ -675,7 +688,7 @@ What a fleet gets right, each of which was a real defect before:
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* A shared counter in the coordination slot, so an org cap of 500 k is 500 k across the fleet — and it covers **every** completion the engine makes on a seat's behalf, the turn loop, the coding sandbox and the auxiliary learning passes alike.
-- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the integration reconcile, the embedding pass, the state log's trim and the retention sweeps. The seat-mailbox walk is deliberately not one of them: every node creates every seat's mailbox, because creating one is idempotent and a seat whose mailbox waited on a duty's holder would lose its mail meanwhile. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the retention sweep, three hours for the curator).
+- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the integration reconcile, the embedding pass, the state log's trim and the maintenance duty's fleet jobs: the agent-to-agent channel sweep, a removed seat's mailbox retirement, the purge of bridged calls no run names, and the native tracker's repairs. The seat-mailbox walk is deliberately not one of them: every node creates every seat's mailbox, because creating one is idempotent and a seat whose mailbox waited on a duty's holder would lose its mail meanwhile. Nor are the retention sweeps of the tables each node keeps its own copy of, which the next item covers. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the maintenance duty and the trim, three hours for the curator).
 - *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, in the `maintenance` worker, and runs on every node whether or not that node holds the duty, because each node keeps its own copy of both tables. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. A bucket with no age is the exception: nothing expires its records, so something has to end them, and for these it is the duty — agent-to-agent channels, because a bucket age cannot tell an open ask from an answered one; a removed seat's mailbox record; and a coding run's bridged calls that its own lifecycle failed to purge, because a parked run's calls can be days old and still be what its resume is judged on. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 The one thing that is still per-process: `max_concurrent`. Tier A's
@@ -691,12 +704,22 @@ and where the constants come from — see
 
 ## The store
 
-One local file per node, opened by **Turso** — the only driver. There was a
-second, mainline SQLite behind `store.driver` / `CREWLET_STORE_DRIVER`, and
-both the field and the variable are retired: a config that still sets the field
-is refused with a message saying so, and the variable is read by nothing. The
-file format did not change, so an existing store opens untouched and any
-SQLite-compatible client still reads it.
+Two local files per node, both opened by **Turso** — the only driver. The
+**node estate**, at `store.path`, is this node's own record: the event store,
+its agents' memory, the config revisions. The **replicated estate** beside it
+(`store.replicated_path`, by default `crewlet-replicated.db` in the same
+directory) is what a state log's applier writes: the tracker, the pages and
+their vectors, derived on every node from the ordered logs on the stream. Two
+files rather than one because a snapshot is a copy of one of them: a node too
+far behind to replay installs a peer's replicated file wholesale, and that file
+must not carry the peer's own records. [Architecture § Where state
+lives](../concepts/architecture.md#5-where-state-lives) lists what each holds.
+
+There was a second driver, mainline SQLite behind `store.driver` /
+`CREWLET_STORE_DRIVER`, and both the field and the variable are retired: a
+config that still sets the field is refused with a message saying so, and the
+variable is read by nothing. The file format did not change, so an existing
+store opens untouched and any SQLite-compatible client still reads it.
 
 **Turso keeps a native library cache, and the engine prepares it before the
 first query.** The driver is pure Go in the sense that matters — no cgo, no C
@@ -724,14 +747,14 @@ re-extracts a cache entry that will not verify. Two consequences worth knowing:
   exactly this reason — or run the engine on a glibc host. macOS is
   unaffected.
 
-**The engine owns the file exclusively.** A second process pointed at the same
+**The engine owns both files exclusively.** A second process pointed at either
 path is not a degraded configuration, it is corruption waiting for a schedule
 to collide — so nothing that genuinely needs to be shared between nodes lives
 here. Seat leases, the activation pointer and per-node apply status, the
 completion ledger, webhook dedupe, the rate valve and credential cooldowns are
 all in the [coordination slot](../concepts/coordination.md) instead.
 
-The load-bearing tables:
+The load-bearing tables of the node estate:
 
 - **`agent_diary`** — vector-indexed, each agent's private observation log. Written by the reflect path, which embeds content on write. The `## Personal memory` prefetch reads it via hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is **not** stored here — natively it is rows in the replicated estate beside the vectors derived from them, and a Confluence knowledge base has no local copy at all; see [knowledge system](../concepts/knowledge-system.md).
 - **`episodes`** — vector-indexed, one row per completed turn, raw and LLM-compacted shapes in the same table. Drained by the episode-lifecycle duty.
@@ -744,13 +767,13 @@ The load-bearing tables:
 - **`company_config`** — the revision payloads. Which one is *current* is the fleet's business, and lives in coordination; see the [control plane](../concepts/control-plane.md).
 - **`secret_values`** — the bootstrap half of the [secret store](../concepts/secret-store.md). The company's credentials live on the coordination KV; rows written here while the engine was stopped are migrated there at its next start.
 
-Migrations are **forward-only**: each file in `internal/store/schema/` is applied once and recorded by filename, and there are no downgrade scripts. Downgrading the binary below the schema it already migrated is not supported; restore a [backup](backup.md) instead. There is no migration lock and no advisory-lock protocol, because one process owns the file — the whole idiom disappears.
+Migrations are **forward-only**: each estate has its own sequence, `internal/store/schema/node/` and `internal/store/schema/replicated/`, and each file in it is applied once and recorded by filename, with no downgrade scripts. Downgrading the binary below the schema it already migrated is not supported; restore a [backup](backup.md) instead. There is no migration lock and no advisory-lock protocol, because one process owns each file — the whole idiom disappears.
 
 Everything else is either:
 
 - **YAML config** — the org structure and every seat's definition
-- **In-memory** — agent runtime state, the execution tracker
-- **An external tool** — task state (Jira, GitLab issues)
+- **In-memory** — agent runtime state
+- **An external tool** — task state, on a company whose `tracker.backend` is `jira`
 - **The event stream** — routing, with a durable per-subscription backlog
 
 ---
@@ -760,7 +783,8 @@ Everything else is either:
 ### The event store
 
 Crewlet persists every engine event (LLM invocations, task lifecycle, agent
-states) to the `crewlet_events` table in the same file as everything else.
+states) to the `crewlet_events` table in the node estate, the store file at
+`store.path`.
 
 There is **nothing to set up**: the table is created by the engine's own
 migrations on first start, on whichever path `store.path` names. No extension
@@ -785,8 +809,8 @@ file ownership rules out by construction.
 
 `category` is the one column with a closed vocabulary, and it is what the
 dashboard's filter and `GET /events?category=` group by. It is a property of
-the **event type**, fixed in `internal/events`, and this table is generated
-from that map — a guard test fails if the two drift.
+the **event type**, fixed in `internal/events`, and this table is kept against
+that map by hand — a guard test fails if the two drift.
 
 | Category | Event types |
 |---|---|
@@ -814,6 +838,18 @@ test rather than vanishing quietly.
 | `a2a_message` | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
 | `tool_skill_page_changed` | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
 | `budget_reported` | A **snapshot** of the shared token counter, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
+
+**One type is stored and never listed.** `agent_phase_record_part` is a piece
+of the whole of a phase record the transport refused as too large for one
+event: the record is published cut and names its parts, which went out first,
+and `GET /phases/{id}` reassembles them (see
+[API Endpoints](../reference/api-endpoints.md#ws-wsstream)). A part's row
+carries its bytes and nothing a listing filters on, and the listing refuses its
+type by name, so no listing, count or series returns one; the activity feed
+never shows one and no dashboard socket carries one. A point read by its own id
+returns it as it does any row. An operator reading the events table with SQL
+meets them, each up to about 8 MiB, and the retention sweep removes them on the
+same horizon as every row.
 
 #### Querying events
 

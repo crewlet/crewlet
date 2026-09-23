@@ -354,12 +354,15 @@ func (h *applyHarness) boot(want int64) error {
 }
 
 // counter is one instrument's total across every attribute set.
+//
+// A whole number, because every counter this harness reads counts events:
+// their totals are integral floats and the conversion is exact.
 func (h *applyHarness) counter(name string) uint64 {
 	h.t.Helper()
 	var total uint64
 	for _, snapshot := range h.metrics.Read() {
 		if snapshot.Name == name {
-			total += snapshot.Total
+			total += uint64(snapshot.Total)
 		}
 	}
 	return total

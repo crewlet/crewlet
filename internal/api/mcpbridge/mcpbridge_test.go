@@ -8,11 +8,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
@@ -84,6 +86,24 @@ func (a *activator) Call(context.Context, map[string]any) (tools.Result, error) 
 	return tools.Result{Output: "no such tool", Failed: true}, nil
 }
 
+// detachedTool is a tool whose call SUSPENDS its caller's loop, which is what
+// run_sandbox is: its work outlives the call. It counts every call that
+// reached it, by either entry point.
+type detachedTool struct{ calls atomic.Int32 }
+
+func (d *detachedTool) Name() string               { return "run_detached" }
+func (d *detachedTool) Description() string        { return "starts work that outlives the call" }
+func (d *detachedTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (d *detachedTool) Call(context.Context, map[string]any) (tools.Result, error) {
+	d.calls.Add(1)
+	return tools.Result{Output: "only a loop that can suspend may call this", Failed: true}, nil
+}
+
+func (d *detachedTool) CallDetached(context.Context, *turnctx.Turn, map[string]any) (tools.DetachedResult, error) {
+	d.calls.Add(1)
+	return tools.DetachedResult{Result: tools.Result{Output: "started"}, Suspend: true}, nil
+}
+
 // ledger records what a resume would read back.
 type ledger struct {
 	mu    sync.Mutex
@@ -122,12 +142,13 @@ func (g denyGuard) Observe(string, map[string]any) {}
 // --- fixture ---------------------------------------------------------------
 
 type fixture struct {
-	bridge  *mcpbridge.Bridge
-	server  *httptest.Server
-	session *mcpbridge.Session
-	surface *tools.Surface
-	ledger  *ledger
-	byName  map[string]*stubTool
+	bridge   *mcpbridge.Bridge
+	server   *httptest.Server
+	session  *mcpbridge.Session
+	surface  *tools.Surface
+	ledger   *ledger
+	byName   map[string]*stubTool
+	detached *detachedTool
 }
 
 // newFixture wires a bridge over a two-tool surface and serves it.
@@ -154,11 +175,14 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 		}
 		byName[name] = tool
 	}
-	f := &fixture{ledger: &ledger{}, byName: byName}
+	f := &fixture{ledger: &ledger{}, byName: byName, detached: &detachedTool{}}
 	// In the universe for every case, offered only where a case names it.
 	widen := &activator{surface: func() *tools.Surface { return f.surface }, target: "post_message"}
 	if err := reg.Register(widen, tools.OriginBuiltin); err != nil {
 		t.Fatalf("Register(activate): %v", err)
+	}
+	if err := reg.Register(f.detached, tools.OriginBuiltin); err != nil {
+		t.Fatalf("Register(run_detached): %v", err)
 	}
 	if len(offer) == 0 {
 		offer = []string{"read_page", "post_message"}
@@ -440,6 +464,45 @@ func TestAToolTheSeatDoesNotOfferIsRefusedAsAResult(t *testing.T) {
 	}
 	if len(f.byName["post_message"].seen()) != 0 {
 		t.Error("the tool ran despite not being offered")
+	}
+}
+
+// A TOOL THAT SUSPENDS ITS CALLER IS NEVER OFFERED OVER THE BRIDGE, AND NEVER
+// RUNS, even when the surface offers it.
+//
+// Its call stops the caller's own loop with the call unanswered, and there is
+// no engine loop behind the bridge. Running it and refusing the suspension
+// afterwards is too late: run_sandbox launches under the turn's own run id,
+// and for a bridged run that resets its own record to a new launch before the
+// call returns. The executor leaves such a tool out of an agent-mode run's
+// active set, but a bridged activate_tool can put it back — this surface is
+// that case, offering it outright.
+func TestADetachedToolIsNeverOfferedOrRunOverTheBridge(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "read_page", "run_detached")
+	sess := dial(t, f.open(t))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	listed, err := sess.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var names []string
+	for _, tool := range listed.Tools {
+		names = append(names, tool.Name)
+	}
+	if !slices.Equal(names, []string{"read_page"}) {
+		t.Errorf("the bridge advertises %q, want read_page and not the tool that suspends", names)
+	}
+	if res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "run_detached"}); err == nil && !res.IsError {
+		t.Error("a call to the tool that suspends was answered as a success")
+	}
+	if n := f.detached.calls.Load(); n != 0 {
+		t.Errorf("the tool that suspends ran %d times over the bridge", n)
+	}
+	if rows := f.ledger.rows(); len(rows) != 0 {
+		t.Errorf("the ledger recorded %d calls of a tool that never ran", len(rows))
 	}
 }
 

@@ -433,7 +433,7 @@ func TestOneBulkEditAppliesAtATimeOnOneNode(t *testing.T) {
 	// drain projects from: the admitted bulk's two seconds, and nothing for
 	// the one refused.
 	if got := bulkOccupancy(r); got != 2 {
-		t.Errorf("the occupancy counter reads %d seconds, want the admitted "+
+		t.Errorf("the occupancy counter reads %v seconds, want the admitted "+
 			"bulk's 2", got)
 	}
 	// AND THE CLAIM WAS GIVEN BACK: the next bulk here is admitted.
@@ -445,8 +445,8 @@ func TestOneBulkEditAppliesAtATimeOnOneNode(t *testing.T) {
 
 // bulkOccupancy is the projected applier seconds this rig's bulk edits were
 // admitted for.
-func bulkOccupancy(r *roundTrip) uint64 {
-	var total uint64
+func bulkOccupancy(r *roundTrip) float64 {
+	var total float64
 	for _, snap := range r.metrics.Read() {
 		if snap.Name == metrics.TrackerBulkApplySeconds {
 			total += snap.Total

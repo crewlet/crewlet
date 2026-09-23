@@ -121,6 +121,7 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 	// record carried, inside this same transaction. No provider call, no
 	// second stream, no second cursor and no coverage number of its own —
 	// which is the entire reason the first stage costs nothing to maintain.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO kb_vectors_bin
 			(source, source_id, chunk, container, search_shard, model, dim, bits)

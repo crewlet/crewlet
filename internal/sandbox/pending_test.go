@@ -1,6 +1,7 @@
 package sandbox_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,7 +11,10 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -89,6 +93,29 @@ func appended(t *testing.T, store *sandbox.CoordStore, turnID, name string) {
 	t.Helper()
 	if ok, err := store.AppendBridgeCall(t.Context(), turnID, sandbox.BridgeCall{Name: name}); err != nil || !ok {
 		t.Fatalf("AppendBridgeCall(%s, %s) = %v, %v", turnID, name, ok, err)
+	}
+}
+
+// appendedWhole records a call too large for one record, so its whole goes to
+// parts filed under its record, and fails the test unless it did.
+func appendedWhole(t *testing.T, store *sandbox.CoordStore, turnID string) {
+	t.Helper()
+	if ok, err := store.AppendBridgeCall(t.Context(), turnID, sandbox.BridgeCall{
+		Name: "read_file", Output: strings.Repeat("z", sandbox.MaxBridgeCallBytes+10),
+	}); err != nil || !ok {
+		t.Fatalf("AppendBridgeCall(%s, the whole of a large read) = %v, %v", turnID, ok, err)
+	}
+	run, _, err := store.Get(t.Context(), turnID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.BridgeCallPage(t.Context(), run, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := append(page.Calls, page.End...)
+	if last := calls[len(calls)-1]; last.WholeParts == 0 {
+		t.Fatalf("the large call's record names no parts; the case would test nothing: %+v", last.Name)
 	}
 }
 
@@ -221,15 +248,18 @@ func TestAFullRowsDroppedMiddleIsPlacedAfterItsFirstHalf(t *testing.T) {
 	}
 }
 
-// A FINISHED RUN TAKES ITS CALLS WITH IT. Nothing asks about a run that has
-// ended, and in a bucket with no age a log left behind is kept for the life of
-// the deployment.
+// A FINISHED RUN TAKES ITS CALLS WITH IT, and the parts of every whole filed
+// under them. Nothing asks about a run that has ended, and in a bucket with no
+// age a log left behind — or a whole of megabytes under it — is kept for the
+// life of the deployment. The twin lists a launch for any key it still holds,
+// a lone part included, so an empty listing is nothing left at all.
 func TestFinishingARunPurgesItsCalls(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
 	store := sandbox.NewCoordStore(fleet)
-	begun(t, store, "t-finish")
+	run := begun(t, store, "t-finish")
 	appended(t, store, "t-finish", "read_page")
+	appendedWhole(t, store, "t-finish")
 
 	if gone, err := store.Finish(t.Context(), "t-finish", sandbox.Fence{}); err != nil || !gone {
 		t.Fatalf("Finish = %v, %v", gone, err)
@@ -237,17 +267,21 @@ func TestFinishingARunPurgesItsCalls(t *testing.T) {
 	if got := launchesOf(t, fleet); len(got) != 0 {
 		t.Errorf("the finished run's calls survived it: %+v", got)
 	}
+	if records, err := fleet.BridgeCalls(t.Context(), run.TurnID, run.LaunchID); err != nil || len(records) != 0 {
+		t.Errorf("the finished run's launch still holds %d records, %v", len(records), err)
+	}
 }
 
-// A RELAUNCH TAKES THE REPLACED LAUNCH'S CALLS, and nothing else. The new
-// launch's log is its own from the first call, and the old one is read by
-// nothing once the row names the new launch.
+// A RELAUNCH TAKES THE REPLACED LAUNCH'S CALLS, their parts with them, and
+// nothing else. The new launch's log is its own from the first call, and the
+// old one is read by nothing once the row names the new launch.
 func TestARelaunchPurgesTheReplacedLaunchsCalls(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
 	store := sandbox.NewCoordStore(fleet)
 	first := begun(t, store, "t-relaunch")
 	appended(t, store, "t-relaunch", "submit_work")
+	appendedWhole(t, store, "t-relaunch")
 
 	second := begun(t, store, "t-relaunch")
 	if second.LaunchID == first.LaunchID {
@@ -273,6 +307,7 @@ func TestTheSweepPurgesOnlyTheLaunchesNoRunNames(t *testing.T) {
 	store := sandbox.NewCoordStore(fleet)
 	live := begun(t, store, "t-live")
 	appended(t, store, "t-live", "read_page")
+	appendedWhole(t, store, "t-live")
 	// A run that finished on a node that died before its purge.
 	if _, err := fleet.AppendBridgeCall(ctx, "t-gone", "launch-gone", []byte(`{"name":"x"}`)); err != nil {
 		t.Fatal(err)
@@ -281,20 +316,26 @@ func TestTheSweepPurgesOnlyTheLaunchesNoRunNames(t *testing.T) {
 	if _, err := fleet.AppendBridgeCall(ctx, "t-live", "launch-replaced", []byte(`{"name":"x"}`)); err != nil {
 		t.Fatal(err)
 	}
+	// Nothing but a part: one a call filed after its launch was purged.
+	if _, err := fleet.CreateBridgeCallPart(ctx, "t-late", "launch-late", 1, 1, []byte("piece")); err != nil {
+		t.Fatal(err)
+	}
 
 	purged, err := store.SweepBridgeCalls(ctx)
 	if err != nil {
 		t.Fatalf("SweepBridgeCalls: %v", err)
 	}
-	if purged != 2 {
-		t.Errorf("purged %d launches, want the 2 no run names", purged)
+	if purged != 3 {
+		t.Errorf("purged %d launches, want the 3 no run names", purged)
 	}
 	want := []coord.BridgeLaunch{{TurnID: "t-live", LaunchID: live.LaunchID}}
 	if got := launchesOf(t, fleet); !slices.Equal(got, want) {
 		t.Errorf("launches after the sweep = %+v, want only the live run's", got)
 	}
-	if log, err := store.BridgeCalls(ctx, live); err != nil || len(log.Calls) != 1 {
-		t.Errorf("the live run's log = %+v, %v; want its one call", log, err)
+	// And the live run's log, whole in parts included, is untouched.
+	log, err := store.BridgeCalls(ctx, live)
+	if err != nil || len(log.Calls) != 2 || len(log.Calls[1].Output) != sandbox.MaxBridgeCallBytes+10 {
+		t.Errorf("the live run's log = %d calls, %v; want its two, the second whole", len(log.Calls), err)
 	}
 }
 
@@ -430,59 +471,327 @@ func TestARowWithRoomForOneCallKeepsTheNewest(t *testing.T) {
 }
 
 // lowServer is a coordination store behind a server configured below the
-// contract's ceiling: it refuses a call record past one kilobyte as too large,
-// the way a NATS server with a small max_payload refuses one.
-type lowServer struct{ *memory.Fleet }
+// contract's ceiling: it refuses every record and every part past its limit
+// as too large, the way a NATS server with a small max_payload refuses any
+// message past it.
+type lowServer struct {
+	*memory.Fleet
+	limit int
+}
+
+func (l lowServer) refuses(value []byte) error {
+	if len(value) > l.limit {
+		return fmt.Errorf("the server accepts %d bytes: %w", l.limit, coord.ErrTooLarge)
+	}
+	return nil
+}
 
 func (l lowServer) AppendBridgeCall(ctx context.Context, turnID, launchID string, value []byte) (uint64, error) {
-	if len(value) > 1<<10 {
-		return 0, fmt.Errorf("the server accepts less: %w", coord.ErrTooLarge)
+	if err := l.refuses(value); err != nil {
+		return 0, err
 	}
 	return l.Fleet.AppendBridgeCall(ctx, turnID, launchID, value)
 }
 
-// A SERVER BELOW THE CEILING DOES NOT LOSE THE CALL.
+func (l lowServer) CreateBridgeCall(ctx context.Context, turnID, launchID string, seq uint64, value []byte) (bool, error) {
+	if err := l.refuses(value); err != nil {
+		return false, err
+	}
+	return l.Fleet.CreateBridgeCall(ctx, turnID, launchID, seq, value)
+}
+
+func (l lowServer) CreateBridgeCallPart(ctx context.Context, turnID, launchID string, seq uint64, part int, value []byte) (bool, error) {
+	if err := l.refuses(value); err != nil {
+		return false, err
+	}
+	return l.Fleet.CreateBridgeCallPart(ctx, turnID, launchID, seq, part, value)
+}
+
+// A SERVER BELOW THE CEILING DOES NOT LOSE THE CALL, NOR ITS WHOLE.
 //
 // A node is refused at boot by a server announcing less than the contract's
-// ceiling, but a reconnect can reach one, and it refuses a record the fit
-// already sized to the contract. Dropped, the call would leave a gap in the one
+// ceiling, but a reconnect can reach one, and it refuses a record the
+// contract's ceiling admits. Dropped, the call would leave a gap in the one
 // log a resume reads with nothing to say it is there — a post that the
-// delivery check never counts. Kept in its least form, the call is still
-// there: its name and outcome, both texts replaced by their marks.
-func TestACallAServerBelowTheCeilingRefusesIsKeptInItsLeastForm(t *testing.T) {
+// delivery check never counts. Instead its whole goes to parts SPLIT until the
+// server takes them, and its record is its least form beside the reference, so
+// the resume still reads every byte of it.
+func TestACallAServerBelowTheCeilingRefusesIsKeptWholeInPartsItTakes(t *testing.T) {
 	t.Parallel()
-	store := sandbox.NewCoordStore(lowServer{memory.NewFleet()})
+	const limit = 100 << 10
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(lowServer{Fleet: fleet, limit: limit})
 	run := begun(t, store, "t-low")
+	sent := sandbox.BridgeCall{
+		Name: "slack_post", Args: `{"channel":"C1","text":"` + strings.Repeat("x", 4<<10) + `"}`,
+		Output: strings.Repeat("y", 300<<10), At: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
+	}
+	if ok, err := store.AppendBridgeCall(t.Context(), "t-low", sent); err != nil || !ok {
+		t.Fatalf("a call the server refused as too large was not recorded: %v, %v", ok, err)
+	}
+	if got := mustBridgeCalls(t, store, run); len(got) != 1 || got[0].Output != sent.Output || got[0].Args != sent.Args {
+		t.Fatalf("the call read back = %d calls, want the one call whole", len(got))
+	}
+
+	page, err := store.BridgeCallPage(t.Context(), run, 0, 10)
+	if err != nil || len(page.Calls) != 1 {
+		t.Fatalf("BridgeCallPage = %+v, %v", page, err)
+	}
+	record := page.Calls[0]
+	if record.Args != sandbox.ArgsInParts(len(sent.Args)) || record.Output != "…" {
+		t.Errorf("the record = args %.60q, output %.40q; want its least form, both texts marked as "+
+			"kept in its parts", record.Args, record.Output)
+	}
+	if record.WholeParts < 4 {
+		t.Errorf("the whole is in %d parts: a part the server refused was not split", record.WholeParts)
+	}
+	records, err := fleet.BridgeCalls(t.Context(), run.TurnID, run.LaunchID)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("the fleet holds %d records, %v", len(records), err)
+	}
+	for _, part := range records[0].Parts {
+		if len(part.Value) > limit {
+			t.Errorf("part %d is %d bytes, past the %d the server takes", part.Part, len(part.Value), limit)
+		}
+	}
+}
+
+// A SERVER BELOW EVEN THE SPLIT'S FLOOR keeps the call in its least form, and
+// the record SAYS the whole was not kept: arguments by their marker, the output
+// by a note after its mark, and no reference to parts that are not there.
+func TestACallAServerBelowTheFloorRefusesSaysItsWholeWasNotKept(t *testing.T) {
+	t.Parallel()
+	store := sandbox.NewCoordStore(lowServer{Fleet: memory.NewFleet(), limit: 1 << 10})
+	run := begun(t, store, "t-lower")
 	args := `{"channel":"C1","text":"` + strings.Repeat("x", 4<<10) + `"}`
-	ok, err := store.AppendBridgeCall(t.Context(), "t-low", sandbox.BridgeCall{
+	ok, err := store.AppendBridgeCall(t.Context(), "t-lower", sandbox.BridgeCall{
 		Name: "slack_post", Args: args, Output: strings.Repeat("y", 4<<10),
 	})
 	if err != nil || !ok {
 		t.Fatalf("a call the server refused as too large was not recorded: %v, %v", ok, err)
 	}
-	log, err := store.BridgeCalls(t.Context(), run)
-	if err != nil || len(log.Calls) != 1 {
-		t.Fatalf("the log = %+v, %v; want the one call", log, err)
-	}
-	call := log.Calls[0]
+	call := mustBridgeCalls(t, store, run)[0]
 	if call.Name != "slack_post" || call.Failed {
 		t.Errorf("the call kept as %q (failed %v), want the post and its outcome", call.Name, call.Failed)
 	}
-	if call.Args != sandbox.ArgsNotKept(len(args)) || call.Output != "…" {
-		t.Errorf("the least form = args %.60q, output %.20q; want both replaced by their marks",
+	if call.Args != sandbox.ArgsNotKept(len(args)) || !strings.HasPrefix(call.Output, "…\n[") ||
+		!strings.Contains(call.Output, "could not be kept anywhere else") {
+		t.Errorf("the least form = args %.60q, output %q; want both saying they were not kept",
 			call.Args, call.Output)
+	}
+	if call.WholeBytes != 0 || call.WholeParts != 0 {
+		t.Errorf("a record whose parts were refused refers to %d bytes in %d parts", call.WholeBytes, call.WholeParts)
 	}
 
 	// A text the call did not have gets no mark: arguments that were never
 	// passed read as none, not as arguments that were not kept.
-	if ok, err := store.AppendBridgeCall(t.Context(), "t-low", sandbox.BridgeCall{
+	if ok, err := store.AppendBridgeCall(t.Context(), "t-lower", sandbox.BridgeCall{
 		Name: "read_page", Output: strings.Repeat("y", 4<<10),
 	}); err != nil || !ok {
 		t.Fatalf("append: %v, %v", ok, err)
 	}
-	if bare := mustBridgeCalls(t, store, run)[1]; bare.Args != "" || bare.Output != "…" {
-		t.Errorf("the least form of a call with no arguments = args %q, output %.20q; want none, and "+
-			"the output's mark", bare.Args, bare.Output)
+	if bare := mustBridgeCalls(t, store, run)[1]; bare.Args != "" || !strings.HasPrefix(bare.Output, "…\n[") {
+		t.Errorf("the least form of a call with no arguments = args %q, output %.40q; want none, and "+
+			"the output's mark and note", bare.Args, bare.Output)
+	}
+}
+
+// partsFail is a coordination store that takes the first `take` parts it is
+// asked to file and then cannot be reached.
+type partsFail struct {
+	*memory.Fleet
+	take  int
+	mu    sync.Mutex
+	taken int
+}
+
+func (p *partsFail) CreateBridgeCallPart(ctx context.Context, turnID, launchID string, seq uint64, part int, value []byte) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.taken >= p.take {
+		return false, coord.ErrUnavailable
+	}
+	p.taken++
+	return p.Fleet.CreateBridgeCallPart(ctx, turnID, launchID, seq, part, value)
+}
+
+// PARTS THAT CANNOT BE WRITTEN LEAVE NO REFERENCE TO THEM.
+//
+// The parts are filed before the record, so a store that fails between two
+// parts leaves some parts written and the rest not. A record naming them would
+// hand the resume a whole that does not reassemble; one naming none, and
+// saying its whole was not kept, is the truth. The call is still recorded:
+// the tool ran, and its fitted form is evidence of that.
+func TestAPartWriteFailureLeavesNoDanglingReference(t *testing.T) {
+	t.Parallel()
+	fleet := &partsFail{Fleet: memory.NewFleet(), take: 1}
+	store := sandbox.NewCoordStore(fleet)
+	run := begun(t, store, "t-parts-fail")
+	sent := sandbox.BridgeCall{
+		Name: "read_file", Output: strings.Repeat("z", sandbox.MaxBridgeCallBytes*2),
+		At: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
+	}
+	if ok, err := store.AppendBridgeCall(t.Context(), "t-parts-fail", sent); err != nil || !ok {
+		t.Fatalf("a call whose parts could not be written was not recorded: %v, %v", ok, err)
+	}
+	page, err := store.BridgeCallPage(t.Context(), run, 0, 10)
+	if err != nil || len(page.Calls) != 1 {
+		t.Fatalf("BridgeCallPage = %+v, %v", page, err)
+	}
+	record := page.Calls[0]
+	if record.WholeBytes != 0 || record.WholeParts != 0 {
+		t.Fatalf("the record refers to %d bytes in %d parts, of which one was written",
+			record.WholeBytes, record.WholeParts)
+	}
+	// The note names the whole's length encoded, which for a call of plain
+	// letters is what the standard encoder writes.
+	whole, err := json.Marshal(sent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	note := sandbox.WholeNotKept(len(whole))
+	if !strings.HasSuffix(record.Output, "…"+note) {
+		t.Errorf("the record's output ends %q, want the cut's mark and the note saying the whole "+
+			"was not kept", record.Output[max(0, len(record.Output)-160):])
+	}
+	// The resume reads that fitted form as it is, note and all: nothing
+	// refers to parts, so nothing is reassembled from the one left behind.
+	if got := mustBridgeCalls(t, store, run); len(got) != 1 || got[0].Output != record.Output {
+		t.Errorf("the log read whole = %d calls; want the one call, as its record holds it", len(got))
+	}
+}
+
+// changesParts is a coordination store whose whole-log read hands back what
+// is filed under the calls changed: what a part purged under a reader, lost,
+// or filed by somebody else looks like to the store reading it.
+type changesParts struct {
+	*memory.Fleet
+	change func([]coord.BridgeCallRecord)
+}
+
+func (c changesParts) BridgeCalls(ctx context.Context, turnID, launchID string) ([]coord.BridgeCallRecord, error) {
+	records, err := c.Fleet.BridgeCalls(ctx, turnID, launchID)
+	if err == nil {
+		c.change(records)
+	}
+	return records, err
+}
+
+// A WHOLE THAT DOES NOT REASSEMBLE IS NEVER HANDED OVER AS THE CALL.
+//
+// A missing part, a part that is short, a part that is not what was filed,
+// parts that make a whole call but ANOTHER one: each would make a "whole" that
+// is shorter or other than what the run did. The resume gets the record's
+// fitted form instead — honest about being cut — with a note in its output
+// saying the whole could not be read back and why.
+func TestAWholeThatDoesNotReassembleIsReadAsItsRecordWithANote(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		change func([]coord.BridgeCallRecord)
+		why    string
+	}{
+		"a part is missing": {
+			change: func(r []coord.BridgeCallRecord) { r[0].Parts = slices.Delete(r[0].Parts, 1, 2) },
+			why:    "part 2 of 3 is missing",
+		},
+		"a part is short": {
+			change: func(r []coord.BridgeCallRecord) {
+				r[0].Parts[2].Value = r[0].Parts[2].Value[:len(r[0].Parts[2].Value)-1]
+			},
+			why: "its parts hold",
+		},
+		"a part is not what was filed": {
+			change: func(r []coord.BridgeCallRecord) {
+				r[0].Parts[0].Value = bytes.Repeat([]byte("#"), len(r[0].Parts[0].Value))
+			},
+			why: "do not decode",
+		},
+		"the parts make another call": {
+			change: func(r []coord.BridgeCallRecord) { r[0].Parts, r[1].Parts = r[1].Parts, r[0].Parts },
+			why:    "a different call",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fleet := memory.NewFleet()
+			store := sandbox.NewCoordStore(fleet)
+			run := begun(t, store, "t-unreadable")
+			// Two calls whose wholes are the same length, so that the
+			// parts of one fit the other's reference to the byte.
+			at := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+			output := strings.Repeat("z", sandbox.MaxBridgeCallBytes*2+10)
+			sent := sandbox.BridgeCall{Name: "read_file", Output: output, At: at}
+			for _, call := range []sandbox.BridgeCall{sent, {Name: "read_fill", Output: output, At: at}} {
+				if ok, err := store.AppendBridgeCall(t.Context(), "t-unreadable", call); err != nil || !ok {
+					t.Fatalf("append: %v, %v", ok, err)
+				}
+			}
+			record := mustBridgeCallPage(t, store, run)[0]
+			if record.WholeParts != 3 {
+				t.Fatalf("the whole is in %d parts; the case needs 3", record.WholeParts)
+			}
+
+			reader := sandbox.NewCoordStore(changesParts{Fleet: fleet, change: tc.change})
+			got := mustBridgeCalls(t, reader, run)[0]
+			if got.Name != sent.Name || got.Output == sent.Output {
+				t.Fatalf("a whole that does not reassemble was handed over as the call (%s)", got.Name)
+			}
+			if !strings.HasPrefix(got.Output, record.Output) || !strings.Contains(got.Output, "could not be read back") ||
+				!strings.Contains(got.Output, tc.why) {
+				t.Errorf("the call read back ends %q; want the record's fitted output and a note saying %q",
+					got.Output[max(0, len(got.Output)-200):], tc.why)
+			}
+		})
+	}
+}
+
+func mustBridgeCallPage(t *testing.T, store *sandbox.CoordStore, run sandbox.PendingRun) []sandbox.BridgeCall {
+	t.Helper()
+	page, err := store.BridgeCallPage(t.Context(), run, 0, 100)
+	if err != nil {
+		t.Fatalf("BridgeCallPage: %v", err)
+	}
+	return append(page.Calls, page.End...)
+}
+
+// strayAt is a coordination store in which the first number a call reserves
+// already holds a part: what a write that landed after its launch was purged
+// leaves, under the numbering the purge reset.
+type strayAt struct {
+	*memory.Fleet
+	once sync.Once
+	hit  atomic.Bool
+}
+
+func (s *strayAt) CreateBridgeCallPart(ctx context.Context, turnID, launchID string, seq uint64, part int, value []byte) (bool, error) {
+	stray := false
+	s.once.Do(func() { stray = true })
+	if stray {
+		s.hit.Store(true)
+		return false, nil
+	}
+	return s.Fleet.CreateBridgeCallPart(ctx, turnID, launchID, seq, part, value)
+}
+
+// AN ADDRESS ALREADY TAKEN IS NEVER SHARED. A stray at the number a call
+// reserved is somebody else's; parts mixed with it would reassemble into
+// neither call. The call takes another number and is read back whole.
+func TestACallMeetingAStrayTakesAnotherNumber(t *testing.T) {
+	t.Parallel()
+	fleet := &strayAt{Fleet: memory.NewFleet()}
+	store := sandbox.NewCoordStore(fleet)
+	run := begun(t, store, "t-stray")
+	sent := sandbox.BridgeCall{Name: "read_file", Output: strings.Repeat("z", sandbox.MaxBridgeCallBytes+10)}
+	if ok, err := store.AppendBridgeCall(t.Context(), "t-stray", sent); err != nil || !ok {
+		t.Fatalf("append: %v, %v", ok, err)
+	}
+	if !fleet.hit.Load() {
+		t.Fatal("the stray was never met; the case tests nothing")
+	}
+	got := mustBridgeCalls(t, store, run)
+	if len(got) != 1 || got[0].Output != sent.Output || got[0].Seq != 2 {
+		t.Errorf("the log = %d calls, the first numbered %d; want the call whole at the next number",
+			len(got), got[0].Seq)
 	}
 }
 

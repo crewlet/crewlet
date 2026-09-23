@@ -636,6 +636,10 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 				"turn_id", run.TurnID, "error", err.Error(),
 				"detail", "the run is settled rather than un-claimed, so the completion is "+
 					"not redelivered into a conversation a retry must not re-enter")
+			// Its bridged calls outlive this finish only in what the broken
+			// turn published before it broke: an executor pass that finished
+			// published them in its record, and a turn that broke before its
+			// pass did loses them to the purge, lost with the turn.
 			if settle, ok := c.current(ctx, run); ok {
 				c.finish(ctx, settle, fenceOf(run))
 			}
@@ -673,6 +677,10 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			"turn_id", run.TurnID, "status", latest.Status, "launch_id", latest.LaunchID)
 		return nil
 	}
+	// The resume has returned, and it read every bridged call of this
+	// launch whole before it re-entered the turn: the resumed phase's
+	// published record is where those calls outlive the purge this finish
+	// makes of them.
 	c.finish(ctx, latest, fenceOf(run))
 	// RECOUNTED, not assumed free. The count was cleared before the resume,
 	// but a start event redelivered while the turn ran recomputes it from
@@ -785,6 +793,11 @@ func claimedFrom(run PendingRun) string {
 // Announced only when this call ended the run. One that a newer lease owns,
 // or that somebody else ended first, is that party's to settle and to explain,
 // and a second announcement would name a reason the run did not end for.
+//
+// A FAILED RUN'S BRIDGED CALLS ARE LOST WITH IT. No resume collected them, so
+// no phase record carries them, and the finish purges its log unread: what
+// the run did survives only as the effects its calls had where they reached,
+// and the announcement is the record that it ran and was lost.
 func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, detail string) {
 	ended := c.finish(ctx, run, fenceOf(run))
 	c.clearBusy(run.AgentHandle)
@@ -997,7 +1010,10 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 				"sandbox_id", run.SandboxID, "status", run.Status)
 			// Fenced on the lease this node just took, so a record a
 			// newer owner has already claimed is left to that owner, and
-			// neither ended nor announced here.
+			// neither ended nor announced here. Its bridged calls go with
+			// it: a launching run was never resumed, and a resumed one's
+			// turn died with the previous owner, whose phase record — if
+			// it published one before dying — is the only place they are.
 			if !c.finish(ctx, run, Fence{Owner: owner, Epoch: epoch}) {
 				continue
 			}
@@ -1077,6 +1093,9 @@ func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoc
 				run.TurnID, handle, err))
 			continue
 		}
+		// The run's bridged calls go with it, unread: its seat has left the
+		// company, so no resume will ever collect them, and the loss is
+		// announced below.
 		ended, err := c.pending.Finish(ctx, run.TurnID, fence)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("sandbox: finishing run %s of retired seat %q: %w",

@@ -3,6 +3,7 @@ package queries
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -340,6 +341,79 @@ func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 
 // DefaultPhasePage is one screenful of phase records.
 const DefaultPhasePage = 30
+
+// phaseRecord answers one phase record WHOLE.
+//
+// A record the transport refused as too large is published cut — its longest
+// texts shortened, its later rows counted — with `whole_bytes` saying so, and
+// its whole was published first, in parts, under the record's own id. This is
+// the read that puts it back together; a record published whole is answered
+// with its own row, so a reader can ask for the whole of any phase record
+// without first working out whether it was cut.
+//
+// A WHOLE THAT IS NOT ALL HERE IS ANSWERED, NOT FAILED: `whole` is false and
+// the answer says how much of it this node holds, of how much, and why the
+// rest is not here — which is the one thing a reader of a cut record needs
+// when the whole cannot be shown. Nothing at all by the id is `not_found`.
+//
+// THIS NODE'S STORE, like every event read: the parts are written by the node
+// that published them, beside the record they belong to.
+func (s Sources) phaseRecord(ctx context.Context, p Params) (any, error) {
+	id := p.String("id")
+	if id == "" {
+		return nil, fmt.Errorf("%w: phase_record needs an id", ErrBadParams)
+	}
+	whole, err := s.Events.PhaseRecordWhole(ctx, id)
+	var missing *store.MissingWholeError
+	switch {
+	case errors.As(err, &missing):
+		return map[string]any{
+			"id":          id,
+			"whole":       false,
+			"whole_bytes": missing.WholeBytes,
+			"found_bytes": missing.FoundBytes,
+			"parts":       missing.Parts,
+			"note":        missingWholeNote(missing),
+		}, nil
+	case errors.Is(err, store.ErrNotFound):
+		return nil, fmt.Errorf("%w: phase record %s", ErrNotFound, id)
+	case err != nil:
+		return nil, err
+	}
+	return map[string]any{
+		"id":          id,
+		"whole":       true,
+		"whole_bytes": len(whole.Payload),
+		"found_bytes": len(whole.Payload),
+		"parts":       whole.Parts,
+		// The record's event exactly as the event store holds a record
+		// published whole: the shape an `event` answer's payload has.
+		"payload": whole.Payload,
+	}, nil
+}
+
+// missingWholeNote says, for a person, why a record's whole is not all here.
+//
+// Built from the typed fields rather than the store's error text, which names
+// the package it came from and is written for a log.
+func missingWholeNote(m *store.MissingWholeError) string {
+	switch {
+	case m.Kept:
+		return fmt.Sprintf("this node holds %d of the %d bytes of the record's whole: the record "+
+			"says every part was published, so the rest is not in this node's event store — a "+
+			"part whose write failed here is logged as event_write_failed, and the retention "+
+			"sweep removes parts on the same horizon as every row", m.FoundBytes, m.WholeBytes)
+	case m.Recorded:
+		return fmt.Sprintf("the record's whole (%d bytes) was not kept, and its notes say why; "+
+			"%d bytes of it are here", m.WholeBytes, m.FoundBytes)
+	default:
+		return fmt.Sprintf("no record by this id is in this node's event store, and the parts of "+
+			"its whole here stop at byte %d of %d: either a part failed to publish, which this "+
+			"node logged as phase_record_whole_not_kept, or the rest is not in its event store — "+
+			"a part whose write failed here is logged as event_write_failed, and the retention "+
+			"sweep removes parts on the same horizon as every row", m.FoundBytes, m.WholeBytes)
+	}
+}
 
 // MaxA2AChannels bounds one page of the channel record.
 //

@@ -189,16 +189,33 @@ func shutdownMeter(ctx context.Context, mp *sdkmetric.MeterProvider) error {
 func registerInstruments(mp otelmetric.MeterProvider, rec *metrics.Recorder) error {
 	meter := mp.Meter("github.com/crewlet/crewlet")
 
+	// TWO COUNTER TYPES, chosen per instrument by the catalogue's
+	// [metrics.Instrument.Fractional]. A counter that counts events is an
+	// integer on the wire, which is what it is. A fractional one is a
+	// float, because an integer counter is observed as an int64 and a total
+	// of 0.9 seconds converted to one reaches the collector as 0.
 	counters := map[string]otelmetric.Int64ObservableCounter{}
+	fractional := map[string]otelmetric.Float64ObservableCounter{}
 	gauges := map[string]otelmetric.Float64ObservableGauge{}
 	// Histograms are the exception: a distribution cannot be observed
 	// after the fact, so the SDK needs the observations as they happen.
-	// They are registered here and recorded through [Bridge].
+	// They are registered here and bound to the recorder with
+	// [metrics.Recorder.BindHistogram], which forwards every observation
+	// to the sink [histogramFor] returns.
 	var observables []otelmetric.Observable
 
 	for _, inst := range metrics.Catalogue() {
-		switch inst.Kind {
-		case metrics.KindCounter:
+		switch {
+		case inst.Kind == metrics.KindCounter && inst.Fractional:
+			c, err := meter.Float64ObservableCounter(inst.Name,
+				otelmetric.WithUnit(inst.Unit),
+				otelmetric.WithDescription(inst.Shows))
+			if err != nil {
+				return fmt.Errorf("tracing: register %s: %w", inst.Name, err)
+			}
+			fractional[inst.Name] = c
+			observables = append(observables, c)
+		case inst.Kind == metrics.KindCounter:
 			c, err := meter.Int64ObservableCounter(inst.Name,
 				otelmetric.WithUnit(inst.Unit),
 				otelmetric.WithDescription(inst.Shows))
@@ -207,7 +224,7 @@ func registerInstruments(mp otelmetric.MeterProvider, rec *metrics.Recorder) err
 			}
 			counters[inst.Name] = c
 			observables = append(observables, c)
-		case metrics.KindGauge:
+		case inst.Kind == metrics.KindGauge:
 			g, err := meter.Float64ObservableGauge(inst.Name,
 				otelmetric.WithUnit(inst.Unit),
 				otelmetric.WithDescription(inst.Shows))
@@ -216,7 +233,7 @@ func registerInstruments(mp otelmetric.MeterProvider, rec *metrics.Recorder) err
 			}
 			gauges[inst.Name] = g
 			observables = append(observables, g)
-		case metrics.KindHistogram:
+		case inst.Kind == metrics.KindHistogram:
 			// Registered by the bridge below, which needs the synchronous
 			// instrument rather than an observable one.
 			if err := rec.BindHistogram(inst.Name, histogramFor(meter, inst)); err != nil {
@@ -233,7 +250,13 @@ func registerInstruments(mp otelmetric.MeterProvider, rec *metrics.Recorder) err
 			attrs := otelmetric.WithAttributeSet(attribute.NewSet(attrSet(s.Attrs)...))
 			switch s.Kind {
 			case metrics.KindCounter:
+				if c, ok := fractional[s.Name]; ok {
+					o.ObserveFloat64(c, s.Total, attrs)
+				}
 				if c, ok := counters[s.Name]; ok {
+					// EXACT, not a truncation: the recorder refuses a
+					// fraction into a counter that is not fractional,
+					// so this total is a whole number.
 					o.ObserveInt64(c, int64(s.Total), attrs)
 				}
 			case metrics.KindGauge:

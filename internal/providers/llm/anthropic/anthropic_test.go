@@ -942,8 +942,8 @@ func TestTheDefaultOutputCapClearsTheOldestServedModel(t *testing.T) {
 func TestTheThinkingBudgetIsAddedToTheCapAtEverySize(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name         string
-		budget, cap_ int
+		name              string
+		budget, maxTokens int
 	}{
 		{"the cap is under the budget", 10000, 4096},
 		{"the cap is over the budget", 10000, 20000},
@@ -957,17 +957,17 @@ func TestTheThinkingBudgetIsAddedToTheCapAtEverySize(t *testing.T) {
 			p := newProvider(t, url, func(c *Config) {
 				c.Reasoning = true
 				c.ThinkingBudget = tc.budget
-				c.MaxTokens = tc.cap_
+				c.MaxTokens = tc.maxTokens
 			})
 			if _, err := p.Complete(context.Background(), userTurn("hi")); err != nil {
 				t.Fatalf("Complete: %v", err)
 			}
 			body := api.seen()[0].body
-			if want := float64(tc.budget + tc.cap_); body["max_tokens"] != want {
+			if want := float64(tc.budget + tc.maxTokens); body["max_tokens"] != want {
 				t.Errorf("max_tokens = %v, want %v — the wire field covers "+
 					"thinking and output, so a cap of %d buys %d of answer "+
 					"only when the budget rides on top of it",
-					body["max_tokens"], want, tc.cap_, tc.cap_)
+					body["max_tokens"], want, tc.maxTokens, tc.maxTokens)
 			}
 			// AND THE VENDOR'S FLOOR STILL HOLDS, which is what the old
 			// conditional was for: max_tokens must be strictly greater

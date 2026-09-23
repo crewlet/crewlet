@@ -45,7 +45,7 @@ func walkRelated(t *testing.T, log *store.EventLog, q store.ListQuery, pages int
 		}
 		last := rows[len(rows)-1]
 		if q.Before != nil && !last.Time.Before(q.Before.Time) &&
-			!(last.Time.Equal(q.Before.Time) && last.ID < q.Before.ID) {
+			(!last.Time.Equal(q.Before.Time) || last.ID >= q.Before.ID) {
 			t.Fatalf("page %d ends at %s/%s, which is not older than the cursor "+
 				"%s/%s it was asked from — the walk cannot advance",
 				page, last.ID, last.Time.Format(time.RFC3339Nano),

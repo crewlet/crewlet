@@ -49,6 +49,15 @@ import (
 // there is more. A run an older build recorded has calls that build did not
 // keep, which no cursor reaches; its row counts them the same way and carries
 // no cursor.
+//
+// Each call is AS ITS RECORD HOLDS IT. A call too large for one record is its
+// record's fitted form — its output ending in "…", arguments that did not fit
+// replaced by a one-member object keyed "…" — and says where the rest is: it
+// carries `whole_bytes` and `whole_parts`, the length of its whole and the
+// number of parts it is kept in under the call's record, which is what the
+// run's resume reads it back whole from. A fitted call without them is one
+// whose whole was not kept, and its output's note says so. The answer never
+// carries a part, nor counts one.
 
 // PendingRuns is the durable record a sandbox-runs answer reads.
 //

@@ -815,6 +815,27 @@ type BridgeCallRecord struct {
 	Seq uint64
 
 	Value []byte
+
+	// Parts are the part records filed under this call's own address, in
+	// part order: the pieces of a whole that Value, the call's own record,
+	// was too large to hold (see [BridgeCalls]). How many there should be,
+	// and what they reassemble into, is the value's business; coordination
+	// owns only where they are filed.
+	//
+	// Read by [BridgeCalls.BridgeCalls], the read that returns every call,
+	// and never by [BridgeCalls.BridgeCallPage], whose byte budget bounds
+	// the records it reads and has no room for a whole: a page's records
+	// carry none.
+	Parts []BridgeCallPart
+}
+
+// BridgeCallPart is one piece of a call's whole, filed under the call's own
+// address.
+type BridgeCallPart struct {
+	// Part is its place in the whole, from 1.
+	Part int
+
+	Value []byte
 }
 
 // BridgeLaunch names one launch that holds at least one key in the call log.
@@ -924,6 +945,25 @@ const bridgeCallHeadroom = 64 << 10
 // one run can land concurrently: a box may run tools in parallel, and two
 // appends numbering themselves from what each last read would collide.
 //
+// # A call too large for one record keeps its whole in PARTS
+//
+// A record is one message, so a call's value is bounded by [MaxBridgeCallBytes]
+// and what a tool returns is not. Such a call's record holds the form it was
+// fitted to, and its whole is filed in PART records UNDER THE CALL'S OWN
+// ADDRESS: numbered from 1 beneath the call's number. That placement is the
+// whole design. Every purge of a launch removes the launch's calls and so the
+// parts beneath them, and a reader of a launch's calls is never handed a part
+// as a call or counts one, on this build or on a build that predates parts:
+// on the KV backend a part's key is one segment longer than its call's, and
+// every build decodes a call's key at exactly its call's depth
+// (internal/coord/kv/bridgecalls.go).
+//
+// THE PARTS ARE FILED FIRST and the record after them, so a record that names
+// parts is never visible before they are, and a record whose parts could not
+// all be filed can still be written without naming any. That is why a number
+// can be reserved with nothing filed at it ([BridgeCalls.ReserveBridgeCall]),
+// and the record then created at it ([BridgeCalls.CreateBridgeCall]).
+//
 // # No retention
 //
 // The bucket has no age, for the sandbox runs' reason: a run parked on a
@@ -947,22 +987,51 @@ type BridgeCalls interface {
 	// neither is ever cut.
 	AppendBridgeCall(ctx context.Context, turnID, launchID string, value []byte) (uint64, error)
 
-	// BridgeCalls returns every call of one launch, in Seq order. A launch
-	// with none answers an empty slice and no error.
+	// ReserveBridgeCall takes the launch's next number and files nothing at
+	// it, for a call whose parts are filed before its record (see the type
+	// doc). A number reserved and never filed is left unused, like one an
+	// append failed after taking.
+	ReserveBridgeCall(ctx context.Context, turnID, launchID string) (uint64, error)
+
+	// CreateBridgeCall files a call's record at a number ReserveBridgeCall
+	// took, reporting false when that address already holds a record — one a
+	// late append left after a purge reset the numbering — which is never
+	// overwritten: the caller reserves another number.
+	//
+	// Addressed and bounded as [BridgeCalls.AppendBridgeCall] is, and a
+	// Seq of zero is an error: no number is ever reserved as zero.
+	CreateBridgeCall(ctx context.Context, turnID, launchID string, seq uint64, value []byte) (bool, error)
+
+	// CreateBridgeCallPart files one part of the whole of call seq, under
+	// that call's own address, reporting false when that part is already
+	// filed — never overwritten, for the reason a call's record is not.
+	//
+	// A part is numbered from 1, so a part or a Seq of zero is an error, as
+	// is an empty turn id or launch id; a value longer than
+	// [MaxBridgeCallBytes] is [ErrTooLarge], stored neither whole nor cut.
+	CreateBridgeCallPart(ctx context.Context, turnID, launchID string, seq uint64, part int, value []byte) (bool, error)
+
+	// BridgeCalls returns every call of one launch, in Seq order, each with
+	// the parts filed under it in [BridgeCallRecord.Parts]. A launch with
+	// none answers an empty slice and no error. A part filed under a number
+	// that holds no record belongs to no call and is not returned.
 	BridgeCalls(ctx context.Context, turnID, launchID string) ([]BridgeCallRecord, error)
 
 	// BridgeCallPage returns one page of one launch's calls. See
-	// [BridgeCallQuery] for what bounds it.
+	// [BridgeCallQuery] for what bounds it. A page reads no parts, and
+	// neither carries one nor counts one in its Total.
 	BridgeCallPage(ctx context.Context, q BridgeCallQuery) (BridgeCallPage, error)
 
-	// BridgeLaunches returns every launch that holds any key in the log,
-	// ordered by turn id and then launch id — the orphan sweep's read.
+	// BridgeLaunches returns every launch that holds any key in the log — a
+	// call, a part or its numbering — ordered by turn id and then launch id:
+	// the orphan sweep's read. A launch holding only parts is listed too, so
+	// a part filed after its launch was purged is found and purged again.
 	BridgeLaunches(ctx context.Context) ([]BridgeLaunch, error)
 
-	// PurgeBridgeCalls removes every record of one launch, and with them
-	// the launch's numbering: an append that lands afterwards starts again at
-	// 1, which is harmless because a purged launch is one no reader asks
-	// about, and the sweep purges what such an append leaves.
+	// PurgeBridgeCalls removes every record of one launch, every part filed
+	// under them, and the launch's numbering: an append that lands afterwards
+	// starts again at 1, which is harmless because a purged launch is one no
+	// reader asks about, and the sweep purges what such an append leaves.
 	PurgeBridgeCalls(ctx context.Context, turnID, launchID string) error
 }
 

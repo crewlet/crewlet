@@ -41,7 +41,8 @@ func catalogue() []events.Payload {
 		LLMUnavailable{}, ProviderFallback{},
 		// agent.go
 		AgentTurnCompleted{}, TurnCompleted{}, AgentPhaseStarted{},
-		AgentPhaseCompleted{}, AgentTurnProgress{}, SubagentBatched{},
+		AgentPhaseCompleted{}, AgentPhaseRecordPart{}, AgentTurnProgress{},
+		SubagentBatched{},
 		// learning.go
 		EpisodeWritten{}, PersistDeciderCompleted{}, SkillUsed{},
 		PrefetchSummary{},
@@ -71,6 +72,7 @@ var wireTypes = []string{
 	"a2a_message_sent",
 	"a2a_request",
 	"agent_phase_completed",
+	"agent_phase_record_part",
 	"agent_phase_started",
 	"agent_spawned",
 	"agent_terminated",
@@ -289,7 +291,8 @@ var wireTags = map[string][]string{
 	"agent_turn_completed":            {"a2a_context", "agent_id", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "plan_model", "prompt", "prompt_messages", "response", "review_model", "role", "subagent_count", "subagent_tokens", "tool_executions", "total_tokens", "trigger", "turn_id", "work_key"},
 	"turn_completed":                  {"agent_handle", "agent_id", "all_tool_names", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_decision", "plan_summary", "plan_tool_sequence", "review_outcome", "role", "skills_used", "started_at", "task_id", "task_summary", "tool_sequence", "turn_id", "work_key"},
 	"agent_phase_started":             {"agent_id", "iteration", "phase", "role", "trigger", "turn_id", "work_key"},
-	"agent_phase_completed":           {"agent_id", "backend", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "input_tokens", "iteration", "model", "notes", "output_tokens", "output_truncated", "phase", "provider_key", "rescue_fired", "response", "role", "round_narration", "rounds_used", "sandbox_id", "system_prompt", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "work_key", "worker"},
+	"agent_phase_completed":           {"agent_id", "backend", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "input_tokens", "iteration", "model", "notes", "output_tokens", "output_truncated", "phase", "provider_key", "rescue_fired", "response", "role", "round_narration", "round_narration_omitted", "rounds_used", "sandbox_id", "system_prompt", "task_id", "tool_catalogue", "tool_executions", "tool_executions_omitted", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "whole_bytes", "whole_parts", "work_key", "worker"},
+	"agent_phase_record_part":         {"data", "index", "offset", "record_id", "whole_bytes"},
 	"agent_turn_progress":             {"a2a_context", "agent_id", "input_tokens", "iteration", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_narration", "round_num", "tool_executions", "total_tokens", "trigger", "turn_id", "work_key"},
 	"subagent_batched":                {"failures", "graph", "parent_handle", "statuses", "successes", "task_count", "total_tokens", "turn_id", "work_key"},
 	"episode_written":                 {"agent_handle", "agent_id", "duration_ms", "review_outcome", "role", "tool_count", "turn_id", "work_key"},
@@ -815,5 +818,34 @@ func TestASummaryLeadIsUpperCasedByRuneNotByte(t *testing.T) {
 		if !utf8.ValidString(got) {
 			t.Errorf("lead(\"\", %q) produced invalid UTF-8", tc.in)
 		}
+	}
+}
+
+// A PART'S ID IS A WIRE CONTRACT, PINNED BY VALUE.
+//
+// The build that reads a phase record's parts back may not be the build that
+// published them, and it finds them only by deriving their ids from the
+// record's. A derivation that moved would find none of what an older build
+// wrote and report a whole that was never kept — so the values are pinned
+// here, where changing the derivation has to edit a literal a reviewer reads.
+func TestAPartsIDIsPinnedByValue(t *testing.T) {
+	t.Parallel()
+	record := uuid.MustParse("6f1c3d2e-0000-4000-8000-000000000001")
+	for index, want := range []string{
+		"704d9608-d15f-513e-a123-11345cee7594",
+		"e5f293f0-ee29-5b94-9d13-98f94172fe60",
+	} {
+		if got := PhaseRecordPartID(record, index).String(); got != want {
+			t.Errorf("part %d of record %s has id %s, want %s", index, record, got, want)
+		}
+	}
+	// And an id is one part's alone: not another record's part at the same
+	// index, and not the record's own id.
+	other := uuid.MustParse("6f1c3d2e-0000-4000-8000-000000000002")
+	if PhaseRecordPartID(record, 0) == PhaseRecordPartID(other, 0) {
+		t.Error("two records' first parts share an id")
+	}
+	if PhaseRecordPartID(record, 0) == record {
+		t.Error("a part's id is its record's own")
 	}
 }

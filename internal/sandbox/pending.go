@@ -199,52 +199,107 @@ type BridgeCall struct {
 	// map: the map's values would round-trip through the store's own
 	// encoder a second time, and a large id survives one pass and not two.
 	//
-	// Arguments too large for the call's record are not kept, and Args then
-	// holds the marker [ArgsNotKept] writes in their place — still JSON, so
-	// every reader that decodes Args shows the marker where the arguments
-	// would be. See [MaxBridgeCallBytes].
+	// Arguments too large for the call's record are held there as a marker
+	// in their place — still JSON, so every reader that decodes Args shows
+	// the marker where the arguments would be: [ArgsInParts] when the call's
+	// whole is kept in parts, [ArgsNotKept] when it is not. See
+	// [MaxBridgeCallBytes].
 	Args string `json:"args,omitempty"`
 
-	// Output is what the tool returned. Cut to fit the call's record when it
-	// could not be kept whole, and then it ends in "…"; see
-	// [MaxBridgeCallBytes].
+	// Output is what the tool returned. Cut to fit the call's record when
+	// the record could not hold it whole, and then it ends in "…" — and, when
+	// the call's whole could not be kept in parts either, in a note after
+	// the mark saying so. See [MaxBridgeCallBytes].
 	Output string `json:"output,omitempty"`
 
 	Failed bool      `json:"failed,omitempty"`
 	At     time.Time `json:"at"`
+
+	// WholeBytes and WholeParts are the REFERENCE a record holding a call's
+	// fitted form carries to the call's whole: how long the call's record is
+	// encoded whole, and how many part records filed under this one hold
+	// those bytes (see [MaxBridgeCallBytes]).
+	//
+	// Both zero on a call its record holds whole, and on a fitted call whose
+	// parts could not all be written: a record never names parts that are not
+	// there. A call read back whole ([PendingStore.BridgeCalls]) carries
+	// neither, being the whole itself. A build that predates parts reads a
+	// record carrying them as the fitted call alone, and this build reads a
+	// fitted record an older build wrote, which carries neither, as exactly
+	// that.
+	WholeBytes int `json:"whole_bytes,omitempty"`
+	WholeParts int `json:"whole_parts,omitempty"`
 }
 
-// MaxBridgeCallBytes bounds one bridged call as the store keeps it: the whole
-// record, encoded, in bytes.
+// MaxBridgeCallBytes bounds one bridged call's RECORD: the record, encoded, in
+// bytes.
 //
 // It is [coord.MaxBridgeCallBytes], the most one coordination record may hold,
-// because each call is one record. A call the record cannot hold whole is FIT
-// rather than refused: refusing it would leave the call out of the only log a
-// resume reads, which is the failure the per-call records exist to end.
+// because each call is one record. A call that record cannot hold whole is
+// neither refused nor cut away: refused, it would be missing from the only log
+// a resume reads, which is the failure the per-call records exist to end.
 //
-// THE ARGUMENTS ARE DECIDED FIRST, whole or not at all, because they are JSON
-// and a cut through JSON is text no reader can parse. They are kept unless the
-// record would be over the ceiling with them and an output of nothing but its
-// mark; only then does [ArgsNotKept] take their place. THE OUTPUT IS FIT TO
-// WHAT IS LEFT, from the whole of it — cut on a character boundary and ending
-// in "…" when it does not fit, and left exactly as it was when it does.
+// ITS WHOLE IS KEPT IN PARTS. The call's record exactly as it would have been
+// encoded whole is split into part records of at most [bridgeCallPartBytes],
+// filed in the same bucket under the call's own record ([coord.BridgeCalls]),
+// FIRST; the record is filed after them, holding the call FIT to this ceiling
+// and a reference to the parts ([BridgeCall.WholeBytes]). What reads a call
+// whole — [PendingStore.BridgeCalls], which a resume rebuilds its phase from —
+// reassembles it from the parts, so the resumed phase's own record carries it
+// whole. What reads the record alone — a page of the run board, a build that
+// predates parts — shows the fitted form. The parts go with the launch's
+// calls, by every purge of them (see [PendingStore.Finish]).
 //
-// WHERE THE WHOLE OF IT WENT: the bridge returns the tool's whole output to
-// the coding agent inside the box, which is what called the tool, and the
-// arguments reached the tool whole. Neither is kept whole anywhere the engine
-// can read back — everything downstream of the record, the resumed phase's own
-// event included, is built from the record — which is why the cut is marked
-// in the record's own fields, where every reader of them sees it.
+// THE FIT decides the arguments first, whole or not at all, because they are
+// JSON and a cut through JSON is text no reader can parse. They are kept unless
+// the record would be over the ceiling with them and an output of nothing but
+// its mark; only then does a marker take their place — [ArgsInParts], or
+// [ArgsNotKept] when the parts could not be written. THE OUTPUT IS FIT TO WHAT
+// IS LEFT, from the whole of it: cut on a character boundary and ending in "…"
+// when it does not fit, and left exactly as it was when it does.
 //
-// A SERVER THAT REFUSES A FITTED RECORD accepts less than this ceiling: a
-// node does not boot against one, but can meet one later, after a reconnect.
-// The call is then kept in its least form — its name and outcome, both texts
-// replaced by their marks — rather than lost from the log.
+// PARTS THAT CANNOT BE WRITTEN — the bucket refuses them, the store cannot be
+// reached — leave the record in its fitted form with no reference, and the
+// whole is then kept nowhere the engine can read back: only the coding agent
+// in the box, which was handed the whole output, and the tool, which took the
+// whole arguments, ever had it. The record says so where each reader looks —
+// [ArgsNotKept] in place of arguments, [WholeNotKept] after a cut output's
+// mark — and the node logs `sandbox_bridge_call_whole_not_kept` at ERROR.
+//
+// A SERVER THAT REFUSES A RECORD WITHIN THIS CEILING accepts less than the
+// contract: a node does not boot against one, but can meet one later, after a
+// reconnect. The call's whole then goes to parts that server does take — a
+// part it refuses is split in two, down to [bridgeCallPartFloorBytes] — and
+// its record holds its least form: its name and outcome, both texts replaced
+// by their marks, beside the reference.
 const MaxBridgeCallBytes = coord.MaxBridgeCallBytes
 
+// bridgeCallPartBytes is the most one part of a call's whole holds, measured on
+// the part record's value, which is the part's own bytes stored as they are.
+//
+// ONE RECORD'S CEILING, because a part is one record: it is the most either
+// backend stores in one, and so the fewest parts a whole splits into — and
+// every part is one write the bridge makes before it answers the box's call
+// (internal/api/mcpbridge appends a call before returning its result).
+const bridgeCallPartBytes = MaxBridgeCallBytes
+
+// bridgeCallPartFloorBytes is the smallest a refused part is split down to:
+// a part the server refuses is split in two while each half is at least this.
+//
+// Only a server below the contract's ceiling refuses a part (see
+// [MaxBridgeCallBytes]). Halving from [bridgeCallPartBytes] passes below
+// nats-server's own default max_payload of 1 MiB — MAX_PAYLOAD_SIZE in its
+// server/const.go, what a server with none configured announces — on the third
+// split, and this floor, sixteen times below that default, still takes parts
+// through a server set lower. A server refusing parts smaller than this is not
+// one a size can chase: the refusal is a setting to fix, which the log line
+// beside it names, and the call's record says its whole was not kept.
+const bridgeCallPartFloorBytes = 64 << 10
+
 // ArgsNotKept is the [BridgeCall.Args] a call is recorded with when its
-// arguments were too large for its record: a JSON object whose one member,
-// keyed "…", says how many bytes of arguments were not kept.
+// arguments were too large for its record and its whole could not be kept in
+// parts either: a JSON object whose one member, keyed "…", says how many bytes
+// of arguments were not kept.
 //
 // JSON rather than an empty string, because empty arguments are what a call
 // made with none looks like, and every reader — the resumed phase, the
@@ -256,13 +311,36 @@ func ArgsNotKept(bytes int) string {
 		`this call is kept in, and were not kept"}`
 }
 
+// ArgsInParts is the [BridgeCall.Args] a call's record holds when its
+// arguments were too large for it and the call's whole IS kept in parts: the
+// same one-member object as [ArgsNotKept], saying where the arguments are
+// rather than that they are gone. A reader of the record alone shows it; a
+// reader of the call whole never sees it.
+func ArgsInParts(bytes int) string {
+	return `{"…":"` + strconv.Itoa(bytes) + ` bytes of arguments were too large for the record ` +
+		`this call is kept in, and are kept whole in its parts"}`
+}
+
+// WholeNotKept is the note a record's cut [BridgeCall.Output] ends with,
+// after its "…", when the call's whole — bytes long, encoded — could not be
+// kept in parts either.
+//
+// IN THE OUTPUT, for the reason [ArgsNotKept] is in the arguments: every
+// reader of a record renders the output as it finds it, and a cut that ended
+// in "…" alone would read the same whether its whole was kept or lost.
+func WholeNotKept(bytes int) string {
+	return "\n[the whole of this call, " + strconv.Itoa(bytes) + " bytes, was too large for its " +
+		"record and could not be kept anywhere else]"
+}
+
 // BridgeCallPageBytes bounds the calls one page of a run's log carries, by
 // what their records weigh.
 //
 // ONE RECORD'S CEILING, so the heaviest page is no heavier than the heaviest
-// single call, which already had to be carried whole to be recorded at all. A
-// count alone cannot bound a page: a call's output can be megabytes, and a
-// page bounded only by a count weighs whatever its calls sum to. No record is
+// single record, which is all a page reads of a call: a call whose whole is
+// kept in parts is paged as its record, and its parts are not read. A count
+// alone cannot bound a page: a call's output can be megabytes, and a page
+// bounded only by a count weighs whatever its calls sum to. No record is
 // heavier than this, so a page always carries at least the call it starts at.
 // A first page that also carries the log's end ([BridgeCallPage.End]) is two
 // such pages, each bounded by this.
@@ -302,7 +380,14 @@ type BridgeCallPage struct {
 
 // BridgeLog is a run's whole bridged-call log, as a resume reads it.
 type BridgeLog struct {
-	// Calls are every call the log holds, in the order the run made them.
+	// Calls are every call the log holds, in the order the run made them,
+	// each WHOLE: a call its record could hold only fitted is reassembled
+	// from its parts. The one exception is a call whose whole was not kept,
+	// or whose parts cannot be read back whole. That call is its record's
+	// fitted form and says so — a whole that was not kept by its record's
+	// own marks (see [MaxBridgeCallBytes]), parts that cannot be read back
+	// by a note at the end of its output — never a short text passed off as
+	// the whole.
 	Calls []BridgeCall
 
 	// Dropped is how many calls the run made that Calls does not hold, and
@@ -637,6 +722,13 @@ type PendingStore interface {
 	// a delete racing a write sees that write before it deletes. FALSE IS
 	// NOT AN ERROR: the run is already gone, which is the ordinary shape of
 	// two parties reaching the end of one run, or a newer lease owns it.
+	//
+	// THE RUN'S BRIDGED CALLS END WITH IT: once the record is deleted, its
+	// launch's calls and every part filed under them are purged. So what
+	// has to outlive the run is read from them BEFORE it is finished — a
+	// resume carries every call, whole, into the resumed phase's record —
+	// and every caller that finishes a run no resume collected says where
+	// that run's calls went.
 	Finish(ctx context.Context, turnID string, fence Fence) (bool, error)
 
 	// ExpirePause flips a run parked on a clarification to reseed AND
@@ -689,12 +781,15 @@ type PendingStore interface {
 	// MCP bridge, so the resume of a run that outlived its process still
 	// has every call it made. See [BridgeCall].
 	//
-	// The call becomes its own record under the run's CURRENT launch,
-	// fitted to [MaxBridgeCallBytes], and that record is the authoritative
-	// copy. The run row's bounded list ([PendingRun.BridgeCalls]) is
-	// written after it for older builds; a failure there is logged and
-	// does not fail the append, because the call is already recorded
-	// everywhere this build reads.
+	// The call becomes its own record under the run's CURRENT launch, and
+	// that record is the authoritative copy. A call too large for one
+	// record keeps its whole in parts filed under the record before it, and
+	// the record holds its fitted form with a reference to them — or, when
+	// the parts could not be written, its fitted form saying the whole was
+	// not kept (see [MaxBridgeCallBytes]). The run row's bounded list
+	// ([PendingRun.BridgeCalls]) is written after the record, for older
+	// builds; a failure there is logged and does not fail the append,
+	// because the call is already recorded everywhere this build reads.
 	//
 	// NO FENCE, unlike every other mutation here: this is a log append
 	// rather than an ownership decision, and refusing to record a call that
@@ -710,6 +805,12 @@ type PendingStore interface {
 	// BridgeCalls returns the run's current launch's log, in the order the
 	// calls were made: the whole record an agent-mode resume rebuilds its
 	// phase from.
+	//
+	// EVERY CALL WHOLE: a call whose record holds a fitted form and a
+	// reference to its parts is reassembled from them, and a part that is
+	// missing or a whole that does not reassemble yields the fitted form
+	// with a note in its output saying so — never a short "whole" (see
+	// [BridgeLog.Calls]).
 	//
 	// From the per-call records, which hold EVERY call the launch made.
 	// From the row's list only when the launch has NO records — which is a
@@ -728,7 +829,10 @@ type PendingStore interface {
 	// BridgeCallPage returns one page of the same log: the calls after the
 	// cursor `after` (zero for the first page), at most limit of them, and
 	// stopping before a call whose record would take the page past
-	// [BridgeCallPageBytes] — the first call always carried. A FIRST page
+	// [BridgeCallPageBytes] — the first call always carried. Each call is AS
+	// ITS RECORD HOLDS IT: a call whose whole is kept in parts is its fitted
+	// form and its reference ([BridgeCall.WholeBytes]), which a page never
+	// reassembles, and no part is ever paged or counted. A FIRST page
 	// that does not reach the end of the log also carries the log's newest
 	// calls, at most limit of them and bounded the same way, in
 	// [BridgeCallPage.End], and counts the calls between the two. A limit
