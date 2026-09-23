@@ -570,11 +570,30 @@ func (w *Writer) WriteRekey(ctx context.Context, opID string, object ObjectRef,
 				because := fmt.Sprintf("%q already holds it", holder)
 				if holder != key {
 					because = fmt.Sprintf("%q still answers to it, having "+
-						"been renamed from it", holder)
+						"been created under it or renamed from it", holder)
 				}
 				return statelog.Decision{}, fmt.Errorf("chart: %q cannot take "+
 					"the address %q: %s — rename or remove %s first, or pick "+
 					"another address: %w", was, key, because, holder, ErrRefused)
+			}
+			// AND A REMOVED ADDRESS COUNTS AS HELD FOR EVER. The
+			// tombstone that stops a removed object's old records
+			// applying is keyed on the address, so an object renamed
+			// onto it would have every later record on its own subject
+			// dropped as the removed one's — a seat nobody could edit
+			// again, refused by nothing and reported by nothing.
+			// ([Applier.rekeySeat] declines the same case at the apply.)
+			gone, err := objectRemoved(ctx, tx, ObjectRef{Kind: object.Kind, ID: key})
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			if gone {
+				return statelog.Decision{}, fmt.Errorf("chart: %q cannot take "+
+					"the address %q: a %s was removed from it, and a removed "+
+					"address never resolves again — its tombstone would drop "+
+					"every later change to %q as a change to the removed one. "+
+					"Pick another address: %w", was, key, object.Kind, was,
+					ErrRefused)
 			}
 			return w.record(subject, OpRekey, opID, at, scope, RekeyPayload{
 				V: DocumentVersion, Key: key, FormerKey: was,

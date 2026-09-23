@@ -235,6 +235,30 @@ a reference somebody typed resolving, and a reference nobody has followed in
 sixteen renames is not worth a row growing for ever. The origin is uncapped and
 is one value, because an identity a cap could drop would be no identity at all.
 
+**An identity is never issued twice.** The address an object was created under
+resolves to it for ever — however many renames ago it was retired, and after its
+alias has fallen off the capped list — and nothing else may take it:
+
+- **No rename onto it.** Another seat renamed onto a retired identity would
+  answer to the address the first one's mailbox and diary are named by.
+- **No creation onto it**, through any of the three paths that create an object:
+  a structural batch refuses it at its decide (`the key is taken`, naming the
+  seat that holds it), a lone content write refuses it at its decide, and an
+  import — which decides nothing at its decide — has the placement skipped at
+  the apply. A new object's identity is the address it is created under, so a
+  seat created on another's identity would be a second seat sharing the first
+  one's mailbox, lease and diary.
+- **A removal tombstones it** beside the address the object held, under the same
+  record. A removed seat's identity therefore stays unavailable exactly as its
+  last address does, rather than becoming free the moment the seat is gone.
+
+A retired alias that is *not* an identity is different and stays takeable by a
+new object — the claimant then wins every reference written with it, which is
+the rule below. And **a rename onto a removed address is refused** too: the
+tombstone that stops the removed object's old records applying is keyed on the
+address, so an object renamed onto it would have every later change to it
+dropped as a change to the removed one.
+
 **An address somebody still answers to cannot be taken, retired or not.** A
 rename onto a key another unit holds is refused, and so is one onto a key
 another unit merely *used* to hold — because a retired key still resolves, so
@@ -331,7 +355,9 @@ P, then require your next read to include P.
   the claimant wins. A key is pasted into chat and typed into `manages:`
   entries, so one that stopped resolving would break every reference anybody
   had already written; but a unit created under a retired name must not
-  silently resolve to the old object for ever.
+  silently resolve to the old object for ever. The one retired key nothing
+  else can claim is the one an object was **created** under — its identity —
+  which resolves to it for ever.
 - **"Removed" is a different answer from "no such thing."** A tombstone reads
   back with when, by whom and why, so a person asking where their team went is
   told it was dissolved in March and merged into infrastructure, rather than

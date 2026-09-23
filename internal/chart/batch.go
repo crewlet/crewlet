@@ -295,6 +295,13 @@ type working struct {
 	// removed is what this batch has taken out, so a later operation on it
 	// is refused rather than applied against a row the applier will delete.
 	removed map[string]bool
+
+	// identities maps the composed reference of every address that is a
+	// RENAMED object's identity — the key it was created under — to the
+	// object's current key, so a create onto one is refused. See
+	// [identityHolder] for why a create may take a retired alias and never
+	// a retired identity.
+	identities map[string]string
 }
 
 // refKey composes an object reference into the working copy's own key.
@@ -554,6 +561,13 @@ func (w *working) checkCreate(refuse refuseFunc, op Operation, id, key string) *
 		return refuse(RuleKeyTaken, "%s %q is already in the chart",
 			op.Object.Kind, id)
 	}
+	if holder, held := w.identities[key]; held {
+		return refuse(RuleKeyTaken, "%q is the address %s %q was created "+
+			"under — its identity, which everything durable it owns and every "+
+			"person bound to it is keyed on, and which it keeps however often "+
+			"it is renamed. An identity is never issued twice; pick another "+
+			"address", id, op.Object.Kind, holder)
+	}
 	// AND THE OTHER NAMESPACE'S CREATE IN THIS BATCH. Two operations
 	// creating one address in two kinds are legal — a unit and a seat may
 	// share a spelling — so this checks only the kind's own map, which the
@@ -664,9 +678,10 @@ func (w *working) holders(unit string) []string {
 // this store's only writer — and the cycle check is a walk by construction.
 func readWorking(ctx context.Context, tx *sql.Tx) (*working, error) {
 	state := &working{
-		parents: map[string]string{},
-		kinds:   map[string]ObjectKind{},
-		removed: map[string]bool{},
+		parents:    map[string]string{},
+		kinds:      map[string]ObjectKind{},
+		removed:    map[string]bool{},
+		identities: map[string]string{},
 	}
 	if err := scanInto(ctx, tx,
 		`SELECT key, parent_key FROM chart_units`, KindUnit, state); err != nil {
@@ -674,6 +689,17 @@ func readWorking(ctx context.Context, tx *sql.Tx) (*working, error) {
 	}
 	if err := scanInto(ctx, tx,
 		`SELECT handle, unit_key FROM chart_seats`, KindSeat, state); err != nil {
+		return nil, err
+	}
+	// THE RENAMED OBJECTS' IDENTITIES, because a create onto one would be a
+	// second object with the first one's identity. Only a renamed row has an
+	// identity other than its key, so this decodes those rows and no other.
+	if err := scanIdentities(ctx, tx, "chart_units", KindUnit, DecodeUnit,
+		Unit.Origin, func(u Unit) string { return u.Key }, state); err != nil {
+		return nil, err
+	}
+	if err := scanIdentities(ctx, tx, "chart_seats", KindSeat, DecodeSeat,
+		Seat.Origin, func(s Seat) string { return s.Handle }, state); err != nil {
 		return nil, err
 	}
 	// THE TOMBSTONES TOO, because a removed address never resolves again
@@ -696,6 +722,41 @@ func readWorking(ctx context.Context, tx *sql.Tx) (*working, error) {
 		return nil, fmt.Errorf("chart: read the removed objects: %w", err)
 	}
 	return state, nil
+}
+
+// scanIdentities reads every renamed object's identity into the working copy.
+//
+// A ROW WHOSE DOCUMENT WILL NOT DECODE FAILS THE BATCH rather than being
+// stepped over: a batch validated without it could create a second object with
+// that row's identity, and a refusal naming an unreadable row is one somebody
+// can act on.
+func scanIdentities[T any](ctx context.Context, tx *sql.Tx, table string,
+	kind ObjectKind, decode func([]byte) (T, error), origin, key func(T) string,
+	state *working) error {
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT document FROM `+table+` WHERE former_keys_json <> '[]'`)
+	if err != nil {
+		return fmt.Errorf("chart: read the renamed %ss: %w", kind, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var document []byte
+		if err := rows.Scan(&document); err != nil {
+			return fmt.Errorf("chart: read a renamed %s: %w", kind, err)
+		}
+		object, err := decode(document)
+		if err != nil {
+			return fmt.Errorf("chart: decode a renamed %s: %w", kind, err)
+		}
+		if identity, current := origin(object), key(object); identity != current {
+			state.identities[refKey(ObjectRef{Kind: kind, ID: identity})] = current
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("chart: read the renamed %ss: %w", kind, err)
+	}
+	return nil
 }
 
 // scanInto reads one object table's structure into the working copy.

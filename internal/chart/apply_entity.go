@@ -66,6 +66,14 @@ func (a *Applier) applyUnit(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return 0, err
 	}
 	if !found {
+		// A CONTENT RECORD CAN CREATE A ROW — an import's content follows
+		// its structure, and a lone content write is legal — so it is
+		// held to the rule every creation is: never onto another object's
+		// identity. Declined rather than raised, for [Applier.rekeyUnit]'s
+		// reason; [Writer.WriteUnit] is where an operator is told.
+		if _, taken, err := identityHolder(ctx, tx, KindUnit, key); err != nil || taken {
+			return 0, err
+		}
 		unit = Unit{V: DocumentVersion, Key: key, CreatedAt: at.brokerAt}
 	}
 	// THE CONTENT HALF ONLY. Everything the structure owns — ParentKey,
@@ -121,6 +129,10 @@ func (a *Applier) applySeat(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return 0, err
 	}
 	if !found {
+		// Held to every creation's rule, for [Applier.applyUnit]'s reason.
+		if _, taken, err := identityHolder(ctx, tx, KindSeat, handle); err != nil || taken {
+			return 0, err
+		}
 		seat = Seat{V: DocumentVersion, Handle: handle, CreatedAt: at.brokerAt}
 	}
 	seat.V = DocumentVersion
@@ -239,12 +251,8 @@ func (a *Applier) rekeyUnit(ctx context.Context, tx *sql.Tx, at applyContext,
 	// Every node reaches the same verdict from the same rows, which is what
 	// keeps the copies identical — the same reason [Applier.rekeyUnit]'s
 	// absent-object case above returns nothing rather than raising.
-	holder, held, err := addressHolder(ctx, tx, KindUnit, key)
-	if err != nil {
+	if taken, err := rekeyTaken(ctx, tx, KindUnit, key, former); err != nil || taken {
 		return 0, err
-	}
-	if held && holder != former {
-		return 0, nil
 	}
 	// THE ORIGIN IS FROZEN BY THE FIRST REKEY AND NEVER AGAIN, which is the
 	// one moment the create address is still known: a unit that has been
@@ -349,12 +357,8 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 	// reason [Applier.rekeyUnit] gives at the same point: `handle` is this
 	// table's PRIMARY KEY, and an apply that raises is a record every node
 	// fails on identically and for ever.
-	holder, held, err := addressHolder(ctx, tx, KindSeat, handle)
-	if err != nil {
+	if taken, err := rekeyTaken(ctx, tx, KindSeat, handle, former); err != nil || taken {
 		return 0, err
-	}
-	if held && holder != former {
-		return 0, nil
 	}
 	// FROZEN BY THE FIRST REKEY, for the reason [Applier.rekeyUnit] gives —
 	// and here it is what keeps the seat's mailbox, lease, diary and
@@ -421,6 +425,31 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	a.note(ObjectRef{Kind: KindSeat, ID: handle})
 	return int(n+m+l+u) + rows, nil
+}
+
+// rekeyTaken is whether a rekey's apply must DECLINE its new address, which is
+// [Writer.WriteRekey]'s two refusals asked again at the apply: somebody else
+// answers to it — as a key, a retired key or the key they were created under —
+// or an object was REMOVED from it.
+//
+// ASKED AGAIN because the decide cannot refuse all of it: a create files under
+// the tree's subject, a removal too, and a claim under the address's own, so
+// the log may legally order either after the claim was decided. Declined
+// rather than raised for [Applier.rekeyUnit]'s reason — every node reaches the
+// same verdict from the same rows — and a removed address is declined because
+// its tombstone would drop every later record on the object's own subject as a
+// record about the removed one.
+func rekeyTaken(ctx context.Context, tx *sql.Tx, kind ObjectKind, key,
+	former string) (bool, error) {
+
+	holder, held, err := addressHolder(ctx, tx, kind, key)
+	if err != nil {
+		return false, err
+	}
+	if held && holder != former {
+		return true, nil
+	}
+	return objectRemoved(ctx, tx, ObjectRef{Kind: kind, ID: key})
 }
 
 // retire puts a former key at the FRONT of the list and caps it.

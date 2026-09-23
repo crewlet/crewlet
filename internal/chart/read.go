@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -336,22 +337,34 @@ var ErrNotFound = errors.New("chart: no such object")
 
 // --- resolving an address ---------------------------------------------------- //
 
-// resolveUnit answers a unit by its key or by a key it used to answer to.
+// resolveUnit answers a unit by its key, by a key it used to answer to, or by
+// the key it was created under.
 //
 // THE CURRENT KEY FIRST, ALWAYS. A former key goes on resolving until something
 // else claims it, and when something has, the claimant wins: the alternative is
 // that creating a unit named after a retired one silently resolves to the old
 // object, for ever, on every node.
+//
+// AND THE ORIGIN NEVER STOPS. The key an object was created under is its
+// IDENTITY ([Unit.OriginKey], [Seat.OriginHandle]) — everything durable a seat
+// owns is keyed on it (ADR-0019) — while the alias list is capped at
+// [MaxFormerKeys]. An object renamed once too often used to stop answering to
+// the address it was created under, which is the one address nothing else may
+// ever take; resolving it for ever is what lets [addressHolder] refuse a
+// rename onto it however long ago it was retired.
 func resolveUnit(ctx context.Context, tx *sql.Tx, key string) (Unit, bool, error) {
 	unit, found, err := readUnit(ctx, tx, key)
 	if err != nil || found {
 		return unit, found, err
 	}
-	return byFormerKey(ctx, tx, "chart_units", key, DecodeUnit)
+	unit, match, err := byRetiredAddress(ctx, tx, "chart_units", key,
+		DecodeUnit, Unit.Origin)
+	return unit, match != retiredNone, err
 }
 
-// addressHolder is the object that ALREADY answers to this address — live or
-// retired — named as it is addressed now, or empty when nothing does.
+// addressHolder is the object that ALREADY answers to this address — as its
+// key, as one it used to hold, or as the one it was created under — named as
+// it is addressed now, or empty when nothing does.
 //
 // TWO CALLERS THAT MUST AGREE: the claim's decide, which refuses an address
 // somebody else holds, and the apply, which declines one. Written twice they
@@ -376,16 +389,66 @@ func addressHolder(ctx context.Context, tx *sql.Tx, kind ObjectKind,
 	return "", false, nil
 }
 
+// identityHolder names the OTHER object this address is the identity of — the
+// key it was created under and has since been renamed away from — for a
+// caller that has already found nothing holding the address as its live key.
+//
+// # Why a creation asks this and not [addressHolder]
+//
+// A CREATION MAY TAKE A RETIRED ALIAS and may never take a retired IDENTITY,
+// and the difference is what a creation's own identity is. A new object's
+// identity is the address it is created under, so creating onto another
+// object's identity makes two objects with one: one mailbox, one lease, one
+// diary and one schedule ledger between two seats (ADR-0019). A retired alias
+// carries none of that — a creation onto one only
+// re-points the references somebody wrote with it, which is the claimant-wins
+// rule [resolveUnit] states.
+//
+// A REMOVED object's identity is not answered here: a removal tombstones it
+// ([Applier.applyRemoval]), and every creation path already refuses or skips a
+// tombstoned address.
+func identityHolder(ctx context.Context, tx *sql.Tx, kind ObjectKind,
+	address string) (string, bool, error) {
+
+	switch kind {
+	case KindUnit:
+		unit, match, err := byRetiredAddress(ctx, tx, "chart_units", address,
+			DecodeUnit, Unit.Origin)
+		return unit.Key, match == retiredOrigin, err
+	case KindSeat:
+		seat, match, err := byRetiredAddress(ctx, tx, "chart_seats", address,
+			DecodeSeat, Seat.Origin)
+		return seat.Handle, match == retiredOrigin, err
+	}
+	return "", false, nil
+}
+
 // resolveSeat is [resolveUnit] for a seat.
 func resolveSeat(ctx context.Context, tx *sql.Tx, handle string) (Seat, bool, error) {
 	seat, found, err := readSeat(ctx, tx, handle)
 	if err != nil || found {
 		return seat, found, err
 	}
-	return byFormerKey(ctx, tx, "chart_seats", handle, DecodeSeat)
+	seat, match, err := byRetiredAddress(ctx, tx, "chart_seats", handle,
+		DecodeSeat, Seat.Origin)
+	return seat, match != retiredNone, err
 }
 
-// byFormerKey scans for an object that used to answer to this address.
+// retiredMatch is how a renamed object answers to an address it no longer
+// holds as its key.
+type retiredMatch int
+
+const (
+	// retiredNone is no renamed object answering to it at all.
+	retiredNone retiredMatch = iota
+	// retiredAlias is one of an object's capped former keys.
+	retiredAlias
+	// retiredOrigin is the key an object was created under — its identity.
+	retiredOrigin
+)
+
+// byRetiredAddress scans the RENAMED objects for one that answers to an address
+// it no longer holds as its key.
 //
 // A SCAN, DELIBERATELY, and it is what [Unit.FormerKeys]'s own doc argues for:
 // a company has tens or hundreds of objects, not the hundreds of thousands the
@@ -395,23 +458,35 @@ func resolveSeat(ctx context.Context, tx *sql.Tx, handle string) (Seat, bool, er
 //
 // IT RUNS ONLY AFTER THE DIRECT LOOKUP MISSED, so the ordinary read pays
 // nothing for it at all.
-func byFormerKey[T any](ctx context.Context, tx *sql.Tx, table, key string,
-	decode func([]byte) (T, error)) (T, bool, error) {
+//
+// ONLY A RENAMED ROW CAN MATCH, and the filter is exactly them: an object's
+// identity differs from its key only once a rekey has frozen it, and a rekey
+// always leaves at least one retired key in the list the cap holds.
+//
+// THE IDENTITY OUTRANKS AN ALIAS. An address that is one object's origin and
+// another's retired alias names the first, because the identity is what the
+// object IS and the alias only what somebody once called it — and nothing
+// this build writes can produce the pair any more, since a rename onto an
+// address that resolves is refused ([addressHolder]).
+func byRetiredAddress[T any](ctx context.Context, tx *sql.Tx, table, key string,
+	decode func([]byte) (T, error), origin func(T) string) (T, retiredMatch, error) {
 
 	var zero T
 	rows, err := tx.QueryContext(ctx,
 		`SELECT former_keys_json, document FROM `+table+
 			` WHERE former_keys_json <> '[]'`)
 	if err != nil {
-		return zero, false, fmt.Errorf("chart: scan %s for a retired address "+
-			"%q: %w", table, key, err)
+		return zero, retiredNone, fmt.Errorf("chart: scan %s for a retired "+
+			"address %q: %w", table, key, err)
 	}
 	defer func() { _ = rows.Close() }()
+	alias, aliased := zero, false
 	for rows.Next() {
 		var raw string
 		var document []byte
 		if err := rows.Scan(&raw, &document); err != nil {
-			return zero, false, fmt.Errorf("chart: read a %s row: %w", table, err)
+			return zero, retiredNone, fmt.Errorf("chart: read a %s row: %w",
+				table, err)
 		}
 		var former []string
 		if err := json.Unmarshal([]byte(raw), &former); err != nil {
@@ -421,21 +496,31 @@ func byFormerKey[T any](ctx context.Context, tx *sql.Tx, table, key string,
 			// every resolution on the node.
 			continue
 		}
-		for _, was := range former {
-			if was != key {
-				continue
+		named := slices.Contains(former, key)
+		out, err := decode(document)
+		if err != nil {
+			if named {
+				// THE ROW DOES ANSWER TO IT, so an unreadable
+				// document is a failure of this lookup rather
+				// than a row to step over.
+				return zero, retiredNone, err
 			}
-			out, err := decode(document)
-			if err != nil {
-				return zero, false, err
-			}
-			return out, true, nil
+			continue
+		}
+		if origin(out) == key {
+			return out, retiredOrigin, nil
+		}
+		if named && !aliased {
+			alias, aliased = out, true
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return zero, false, fmt.Errorf("chart: scan %s: %w", table, err)
+		return zero, retiredNone, fmt.Errorf("chart: scan %s: %w", table, err)
 	}
-	return zero, false, nil
+	if aliased {
+		return alias, retiredAlias, nil
+	}
+	return zero, retiredNone, nil
 }
 
 // --- the row readers ---------------------------------------------------------- //

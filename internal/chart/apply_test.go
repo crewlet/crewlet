@@ -792,3 +792,78 @@ func TestAUnitWithNoAuthoredLeadHoldsNoLeadRow(t *testing.T) {
 			"nobody lead\", which is a question no caller asks", got)
 	}
 }
+
+// seatRekey is a rekey record moving one seat onto a new handle.
+func seatRekey(opID, handle, former string) chart.MutationRecord {
+	return record(chart.RekeySubject(handle), chart.OpRekey, opID,
+		chart.RekeyPayload{V: chart.DocumentVersion, Key: handle,
+			FormerKey: former,
+			Object:    chart.ObjectRef{Kind: chart.KindSeat, ID: handle}},
+		chart.BatchScope([]chart.ScopeTerm{{Kind: chart.TermSeat, ID: handle}}))
+}
+
+// A CREATION THE DECIDE COULD NOT SEE IS DECLINED BY THE APPLY, and so is a
+// rename onto a removed address.
+//
+// A content record can create a seat, and a rename arbitrates on the address's
+// own subject rather than the structure's — so a node whose view lagged the log
+// can decide either against a snapshot in which a renamed seat's identity, or a
+// removed seat's address, looked free. Applied, the first is a second seat with
+// the first one's identity; the second is a seat whose every later record the
+// removal gate drops. Declined — not raised, because every node reaches the
+// same verdict and an apply error would stall the domain on all of them.
+func TestTheApplyDeclinesAnIdentityOrARemovedAddressItIsHandedAnyway(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.must(seatRecord("op-founder", "founder", "", nil))
+	h.must(seatRecord("op-lena", "lena", "", nil))
+	h.must(seatRekey("op-rename", "dana", "founder"))
+
+	// ONTO THE RENAMED SEAT'S IDENTITY: nothing is created.
+	h.must(seatRecord("op-stranger", "founder", "", nil))
+	if got := h.column(`SELECT handle FROM chart_seats ORDER BY handle`); !slices.Equal(
+		got, []string{"dana", "lena"}) {
+		t.Errorf("the seats are %v, want [dana lena] — a content record created "+
+			"a second seat with dana's identity", got)
+	}
+
+	// ONTO A REMOVED ADDRESS: the rename is dropped.
+	h.must(record(chart.TreeSubject(), chart.OpRemove, "op-remove",
+		chart.RemovePayload{V: chart.GateRecordVersion, Reason: "left",
+			Objects: []chart.ObjectRef{{Kind: chart.KindSeat, ID: "dana"}}},
+		chart.BatchScope([]chart.ScopeTerm{{Kind: chart.TermSeat, ID: "dana"}})))
+	h.must(seatRekey("op-take", "dana", "lena"))
+	if got := h.column(`SELECT handle FROM chart_seats ORDER BY handle`); !slices.Equal(
+		got, []string{"lena"}) {
+		t.Errorf("the seats are %v, want [lena] — a rename landed on a removed "+
+			"address, where the removal gate drops every record about it", got)
+	}
+
+	// THE CONTROL: a content record on a free handle still creates, and a
+	// rename onto a free address still lands.
+	h.must(seatRecord("op-new", "omar", "", nil))
+	h.must(seatRekey("op-free", "lena-ops", "lena"))
+	if got := h.column(`SELECT handle FROM chart_seats ORDER BY handle`); !slices.Equal(
+		got, []string{"lena-ops", "omar"}) {
+		t.Errorf("the seats are %v, want [lena-ops omar]", got)
+	}
+}
+
+// A REMOVAL TOMBSTONES THE ADDRESS THE SEAT WAS CREATED UNDER, beside the one it
+// held — under the same record, so the gate's one exception covers both.
+func TestARemovalTombstonesTheIdentityBesideTheAddress(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.must(seatRecord("op-omar", "omar", "", nil))
+	h.must(seatRekey("op-rename", "ops-head", "omar"))
+	h.must(record(chart.TreeSubject(), chart.OpRemove, "op-remove",
+		chart.RemovePayload{V: chart.GateRecordVersion, Reason: "left",
+			Objects: []chart.ObjectRef{{Kind: chart.KindSeat, ID: "ops-head"}}},
+		chart.BatchScope([]chart.ScopeTerm{{Kind: chart.TermSeat, ID: "ops-head"}})))
+
+	got := h.column(`SELECT object_id || '/' || record_id FROM chart_removed
+		ORDER BY object_id`)
+	if want := []string{"omar/op-remove", "ops-head/op-remove"}; !slices.Equal(got, want) {
+		t.Errorf("the tombstones are %v, want %v", got, want)
+	}
+}

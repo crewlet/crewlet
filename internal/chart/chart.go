@@ -68,9 +68,16 @@
 //
 //   - NOT THAT A KEY IS AN IDENTITY. A unit's key and a seat's handle are
 //     ADDRESSES people type, and both can be reassigned — see [KindRekey] and
-//     `former_keys_json`. The identity is the row, and a key that moved goes on
-//     resolving to the object that used to hold it until something else claims
-//     it.
+//     `former_keys_json` — and a key that moved goes on resolving to the object
+//     that used to hold it until something else claims it. The IDENTITY is the
+//     address the object was CREATED under (`origin_key`, `origin_handle`,
+//     frozen by the first rename), and it is the one address never issued
+//     twice: it resolves to its object however many renames ago it was
+//     retired, no rename and no creation may take it, and a removal tombstones
+//     it beside the address the object held. Everything durable a seat owns is
+//     keyed on the id derived from it (ADR-0019), so a second object created
+//     under it would share the first one's mailbox, lease and diary. See
+//     [identityHolder].
 //   - NOT THAT THE CHART IS THE ORGANISATION. [internal/org] builds the
 //     runtime tree a turn reads — normalised, with lead inheritance and
 //     manages-expansion applied. This package holds what was AUTHORED. Every

@@ -2,6 +2,9 @@ package chart_test
 
 import (
 	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chart"
@@ -301,4 +304,144 @@ func TestTheSeatRowResolvesAnAddressAsTheSeatReadDoes(t *testing.T) {
 	if _, err := reader.SeatRow(t.Context(), "nobody", session()); !errors.Is(err, chart.ErrNotFound) {
 		t.Errorf("an address nothing answers to read as %v, want ErrNotFound", err)
 	}
+}
+
+// renameTimes renames one seat n times, from its handle through h1, h2, ….
+func (r *writeRig) renameTimes(handle string, n int) string {
+	r.t.Helper()
+	current := handle
+	for i := range n {
+		next := fmt.Sprintf("%s-%d", handle, i+1)
+		r.applySeatRekey(fmt.Sprintf("op-rename-%d", i+1), next, current)
+		current = next
+	}
+	return current
+}
+
+// THE IDENTITY OUTLIVES THE ALIAS CAP.
+//
+// The retired-handle list is capped at [chart.MaxFormerKeys], and the handle a
+// seat was created under used to fall off it: after one rename too many it
+// stopped resolving, and a rename of ANOTHER seat onto it was accepted — a
+// second seat answering to the address the first one's mailbox, diary and
+// every person bound to it are keyed on. The origin is resolved for ever,
+// which is what makes that rename a refusal however long ago it was retired.
+func TestTheIdentityOutlivesTheAliasCap(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-hire", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""),
+		op(chart.OpCreateSeat, chart.KindSeat, "dana-okafor", ""))
+	current := r.renameTimes("sarah-chen", chart.MaxFormerKeys+1)
+
+	// THE PRECONDITION, or nothing below is about the cap.
+	if slices.Contains(r.mustSeat(current).FormerHandles, "sarah-chen") {
+		t.Fatalf("the alias list still holds the origin after %d renames",
+			chart.MaxFormerKeys+1)
+	}
+	if got := r.mustSeat("sarah-chen"); got.Handle != current {
+		t.Errorf("the origin resolves to %q, want %q — an identity a cap can "+
+			"drop is no identity", got.Handle, current)
+	}
+	_, err := r.writer.WriteRekey(t.Context(), "op-steal",
+		chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"}, "dana-okafor")
+	if !errors.Is(err, chart.ErrRefused) {
+		t.Errorf("a second seat took the first one's identity (%v)", err)
+	}
+	// THE CONTROL: the seat itself may still go back to it.
+	if _, err := r.writer.WriteRekey(t.Context(), "op-back",
+		chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"}, current); err != nil {
+		t.Errorf("the seat could not take back the handle it was created "+
+			"under: %v", err)
+	}
+}
+
+// A CREATION NEVER TAKES ANOTHER SEAT'S IDENTITY, AND MAY TAKE A RETIRED ALIAS.
+//
+// A new seat's identity is the handle it is created under, so a seat created on
+// a renamed seat's origin is a second seat with the first one's identity: one
+// mailbox, one lease and one diary between two agents (ADR-0019). All three
+// creation paths refuse or skip it — a batch at its decide, a lone content
+// write at its decide, and an import, which decides nothing, at its apply.
+//
+// A retired alias that is NOT an identity stays takeable: it carries no
+// durable state, and the claimant-wins rule for references is the chart's own.
+func TestACreationNeverTakesAnotherSeatsIdentity(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-hire", op(chart.OpCreateSeat, chart.KindSeat, "founder", ""))
+	r.applySeatRekey("op-rename-1", "dana-founder", "founder")
+	r.applySeatRekey("op-rename-2", "dana", "dana-founder")
+
+	_, err := r.writer.WriteBatch(t.Context(), "op-steal", chart.Batch{
+		Operations: []chart.Operation{
+			op(chart.OpCreateSeat, chart.KindSeat, "founder", ""),
+		}})
+	if ref := refusal(t, err); ref.Rule != chart.RuleKeyTaken ||
+		!strings.Contains(ref.Detail, `"dana"`) {
+		t.Errorf("a batch created a seat on another seat's identity: %+v", ref)
+	}
+	_, err = r.writer.WriteSeat(t.Context(), "op-steal-content", chart.SeatContent{
+		Handle: "founder", Kind: chart.SeatHuman, Name: "A Stranger",
+	})
+	if !errors.Is(err, chart.ErrRefused) {
+		t.Errorf("a content write created a seat on another seat's identity: %v", err)
+	}
+	r.mustImport("op-steal-import", "rev-1", chart.Edge{
+		Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "founder"},
+	})
+	if got := r.mustSeat("founder"); got.Handle != "dana" {
+		t.Errorf("an import placed a new seat on another seat's identity: "+
+			"%q now answers to it", got.Handle)
+	}
+
+	// THE CONTROL: the retired alias that is nobody's identity is taken.
+	r.batch("op-alias", op(chart.OpCreateSeat, chart.KindSeat, "dana-founder", ""))
+	if got := r.mustSeat("dana-founder"); got.Handle != "dana-founder" ||
+		got.Origin() != "dana-founder" {
+		t.Errorf("the retired alias was not taken by the new seat: %+v", got)
+	}
+}
+
+// A REMOVED SEAT'S IDENTITY IS NEVER ISSUED AGAIN, and neither is its address.
+//
+// The removal tombstones the handle the seat held; it now tombstones the one it
+// was created under as well, because a creation onto that one would hand a
+// stranger the removed seat's mailbox and diary. And a RENAME onto a removed address is refused: the tombstone that
+// drops the removed seat's old records would drop every later record on the
+// renamed seat's own subject too, leaving a seat nobody could edit.
+func TestARemovedSeatsIdentityIsNeverIssuedAgain(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-hire", op(chart.OpCreateSeat, chart.KindSeat, "omar", ""),
+		op(chart.OpCreateSeat, chart.KindSeat, "lena", ""))
+	r.applySeatRekey("op-rename", "ops-head", "omar")
+	if _, err := r.writer.WithHolders(noHolders{}).WriteRemoval(t.Context(),
+		"op-remove", chart.Batch{Reason: "left", Operations: []chart.Operation{
+			op(chart.OpRemoveObject, chart.KindSeat, "ops-head", ""),
+		}}); err != nil {
+		t.Fatalf("remove the seat: %v", err)
+	}
+	r.drain()
+	reader := r.reader()
+
+	for _, address := range []string{"ops-head", "omar"} {
+		if _, found, _, err := reader.Removed(t.Context(), chart.ObjectRef{
+			Kind: chart.KindSeat, ID: address}, session()); err != nil || !found {
+			t.Errorf("%q carries no tombstone (%v, %v)", address, found, err)
+		}
+		_, err := r.writer.WriteBatch(t.Context(), "op-recreate-"+address,
+			chart.Batch{Operations: []chart.Operation{
+				op(chart.OpCreateSeat, chart.KindSeat, address, ""),
+			}})
+		if ref := refusal(t, err); ref.Rule != chart.RuleKeyRemoved {
+			t.Errorf("a seat was created on the removed seat's %q: %+v", address, ref)
+		}
+		_, err = r.writer.WriteRekey(t.Context(), "op-take-"+address,
+			chart.ObjectRef{Kind: chart.KindSeat, ID: address}, "lena")
+		if !errors.Is(err, chart.ErrRefused) {
+			t.Errorf("a seat was renamed onto the removed seat's %q: %v", address, err)
+		}
+	}
+	// THE CONTROL: the survivor can still be renamed somewhere free.
+	r.applySeatRekey("op-free", "lena-ops", "lena")
 }

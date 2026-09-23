@@ -71,6 +71,19 @@ func (a *Applier) applyPlacement(ctx context.Context, tx *sql.Tx, at applyContex
 		if removed {
 			continue
 		}
+		// AND A NEW OBJECT ONTO ANOTHER'S IDENTITY IS SKIPPED TOO. A
+		// batch's decide refuses it ([working.checkCreate]), but an
+		// import decides nothing at its decide — the ledger is read here
+		// — so this is the one place every placement passes. Placed, it
+		// would be a second object with the first one's identity: see
+		// [identityHolder].
+		taken, err := placementTakesIdentity(ctx, tx, edge.Object)
+		if err != nil {
+			return 0, err
+		}
+		if taken {
+			continue
+		}
 		n, err := a.placeOne(ctx, tx, at, edge, kind)
 		if err != nil {
 			return 0, err
@@ -85,6 +98,21 @@ func (a *Applier) applyPlacement(ctx context.Context, tx *sql.Tx, at applyContex
 		rows += n
 	}
 	return rows, nil
+}
+
+// placementTakesIdentity reports a placement that would CREATE an object on
+// an address that is another object's identity.
+//
+// ONLY A CREATION CAN: placing an object that is already there is a move, and
+// its own identity is not in question.
+func placementTakesIdentity(ctx context.Context, tx *sql.Tx, ref ObjectRef) (bool, error) {
+	id := NormalizeKey(ref.ID)
+	present, err := objectPresent(ctx, tx, ObjectRef{Kind: ref.Kind, ID: id})
+	if err != nil || present {
+		return false, err
+	}
+	_, taken, err := identityHolder(ctx, tx, ref.Kind, id)
+	return taken, err
 }
 
 // placeOne writes one object's placement.
@@ -374,6 +402,19 @@ func (a *Applier) applyRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 		n, _ := res.RowsAffected()
 		rows += int(n)
 
+		// AND THE ADDRESS IT WAS CREATED UNDER, when a rename moved it
+		// off that one. The origin is the object's identity (ADR-0019)
+		// and the one address nothing else may ever take — a creation
+		// onto it would inherit the removed seat's mailbox, its lease and
+		// its diary — and a tombstone is what every creation path already
+		// refuses. Read
+		// BEFORE the delete, which is the last moment the row can say it.
+		identity, err := a.tombstoneIdentity(ctx, tx, at, object.Kind, id, p.Reason)
+		if err != nil {
+			return 0, err
+		}
+		rows += identity
+
 		gone, err := a.deleteObject(ctx, tx, at, object.Kind, id)
 		if err != nil {
 			return 0, err
@@ -389,6 +430,64 @@ func (a *Applier) applyRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 		rows += n
 	}
 	return rows, nil
+}
+
+// tombstoneIdentity writes a removed object's IDENTITY tombstone beside the
+// one on the address it held, when the two differ.
+//
+// THE SAME RECORD ID as the address's own tombstone, so the removal gate's one
+// exception — the record that wrote the tombstone — covers both.
+//
+// NOT WHILE SOMETHING LIVE ANSWERS TO IT AS ITS KEY. Nothing this build writes
+// can put another object on a retired identity ([addressHolder] and
+// [identityHolder] refuse it), but a tombstone on a live object's key would
+// drop every later record on that object's own subject for ever, so the guard
+// is the difference between a residue and an object nobody can edit. Every
+// node reaches the same answer from the same rows, and a removal is a gate
+// record no node defers.
+func (a *Applier) tombstoneIdentity(ctx context.Context, tx *sql.Tx,
+	at applyContext, kind ObjectKind, id, reason string) (int, error) {
+
+	var identity string
+	switch kind {
+	case KindUnit:
+		unit, found, err := readUnit(ctx, tx, id)
+		if err != nil || !found {
+			return 0, err
+		}
+		identity = unit.Origin()
+	case KindSeat:
+		seat, found, err := readSeat(ctx, tx, id)
+		if err != nil || !found {
+			return 0, err
+		}
+		identity = seat.Origin()
+	default:
+		return 0, nil
+	}
+	identity = NormalizeKey(identity)
+	if identity == "" || identity == id {
+		return 0, nil
+	}
+	live, err := objectPresent(ctx, tx, ObjectRef{Kind: kind, ID: identity})
+	if err != nil || live {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO chart_removed
+			(object_kind, object_id, at, record_id, actor, actor_kind,
+			 reason, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (object_kind, object_id) DO NOTHING`,
+		string(kind), identity, store.EncodeTime(at.brokerAt),
+		at.record.OpID, at.record.Actor, string(at.record.ActorKind),
+		reason, at.packed)
+	if err != nil {
+		return 0, fmt.Errorf("chart: tombstone the identity %s of %s %s at %s: %w",
+			identity, kind, id, at.position, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // deleteObject removes one object's row and every edge it owns.

@@ -81,6 +81,35 @@ func TestARetiredHandleResolvesAndALiveOneAlwaysWins(t *testing.T) {
 	}
 }
 
+// THE HANDLE A SEAT WAS CREATED UNDER RESOLVES FOR EVER, AND SO DOES A UNIT'S.
+//
+// The alias list is capped and the origin is not, which is ADR-0019's own
+// argument: an identity a cap can drop is no identity. So once a seat has been
+// renamed often enough that the address it was created under fell off the
+// list, that address still names it — as it does in the chart, whose rows this
+// tree is built from, so the two never disagree about what an address names.
+func TestTheAddressAnObjectWasCreatedUnderResolvesAfterTheCapDropsIt(t *testing.T) {
+	t.Parallel()
+	seat := &Role{Name: "Sarah O", DeclaredHandle: "sarah-o",
+		OriginHandle: "sarah-chen", FormerHandles: []string{"sarah-okonkwo"}}
+	team := &Unit{ID: "core", OriginKey: "platform",
+		FormerKeys: []string{"infrastructure"}}
+	o := &Organization{Name: "Acme", Roles: []*Role{seat},
+		Units: []*Unit{team}}
+
+	if got := o.Role("sarah-chen"); got != seat {
+		t.Errorf("the handle the seat was created under resolves to %v", got)
+	}
+	if got := o.Unit("platform"); got != team {
+		t.Errorf("the key the unit was created under resolves to %v", got)
+	}
+	// THE CONTROL: an address nothing was created under and nothing retired
+	// resolves to nothing, so the two above are about the origin.
+	if got := o.Role("sam-chen"); got != nil {
+		t.Errorf("an unknown handle resolves to %v", got)
+	}
+}
+
 // A RENAMED UNIT STILL PLACES ITS SEATS AND STILL CASCADES ITS LEAD.
 //
 // Every `unit:` reference is a KEY, so a rename with no alias silently drops

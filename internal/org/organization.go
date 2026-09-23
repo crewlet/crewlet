@@ -107,12 +107,23 @@ func (o *Organization) AllUnits() iter.Seq[*Unit] {
 // order is the rule rather than an optimisation: a live handle must never
 // lose to some other seat's retired one, which is exactly what one merged
 // pass over both would allow.
+//
+// AND THE HANDLE A SEAT WAS CREATED UNDER NEVER STOPS, ahead of any alias.
+// It is the seat's IDENTITY ([Role.Origin]): the chart never issues it to
+// another seat, so it cannot be anybody else's alias, and it resolves after
+// the capped alias list has let it go — the chart's own resolution rule, so the
+// runtime tree and the chart never disagree about what an address names.
 func (o *Organization) Role(handle string) *Role {
 	if handle == "" {
 		return nil
 	}
 	for r := range o.AllRoles() {
 		if r.Handle() == handle {
+			return r
+		}
+	}
+	for r := range o.AllRoles() {
+		if r.OriginHandle == handle {
 			return r
 		}
 	}
@@ -144,7 +155,13 @@ func (o *Organization) Unit(key string) *Unit {
 	// A RETIRED KEY, after every live one has missed — see
 	// [Organization.Role], and here it is what keeps a root seat's `unit:`
 	// and a `manages:` entry naming a renamed team resolving to that team
-	// rather than silently placing the seat at the root.
+	// rather than silently placing the seat at the root. The key the unit was
+	// created under first, for the reason Role gives.
+	for u := range o.AllUnits() {
+		if u.OriginKey == key {
+			return u
+		}
+	}
 	for u := range o.AllUnits() {
 		if slices.Contains(u.FormerKeys, key) {
 			return u
