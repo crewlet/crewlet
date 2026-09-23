@@ -1836,7 +1836,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// under the answer and the other half is this node's own
 			// loops.
 			Retention: nativeRetention(ctx, e),
-			NodeID:    nodeID,
+			// WHO LEADS WHOM, for the personal questions a lead asks about
+			// a report — the SAME seam every chart and work route decides
+			// by. It was never set here, so every lead's read of a report's
+			// inbox, queue or pins answered "this node cannot say who leads"
+			// for the life of the process.
+			Chart:  engine.ChartAuthorityOf(e),
+			NodeID: nodeID,
 		},
 		// The WRITE half of the counter, for POST /budgets/reset. On the
 		// default topology the coordination store is this engine's own

@@ -150,6 +150,11 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.Sources.NodeID == "" {
 		opts.Sources.NodeID = config.DefaultNodeID
 	}
+	if opts.Sources.Chart == nil {
+		// NO CHART, which every lead relation reads as UNKNOWN: a case
+		// about who leads whom names the chart it means.
+		opts.Sources.Chart = authz.NoChart{}
+	}
 	fleet := coordmemory.NewFleet()
 	if opts.Inbound.Publisher == nil {
 		opts.Inbound.Publisher = queuememory.New()
@@ -218,7 +223,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		t.Fatal("an app wired to nothing was built")
 	}
 	for _, field := range []string{
-		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
+		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID", "Sources.Chart",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Budgets", "Retention", "Capacity", "Backup",
 		"AuthEvents",

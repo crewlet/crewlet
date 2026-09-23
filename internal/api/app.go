@@ -258,10 +258,14 @@ type Options struct {
 	// State is the projection to serve. Nil builds an empty one.
 	State *livestate.LiveState
 
-	// Sources are what the read surface answers from. Company, Events and
-	// NodeID are required; see above. NodeID is the node's RESOLVED id, and
-	// it names this node on the health body as well as in the fleet answer,
-	// so the two cannot disagree about who answered. Any other source left
+	// Sources are what the read surface answers from. Company, Events,
+	// NodeID and Chart are required; see above. NodeID is the node's
+	// RESOLVED id, and it names this node on the health body as well as in
+	// the fleet answer, so the two cannot disagree about who answered. Chart
+	// is who leads whom, which every personal question a lead asks about a
+	// report is decided by — left nil it answered UNKNOWN to every one of
+	// them for the life of the process, which is a 503 that never clears
+	// rather than a narrower node. Any other source left
 	// nil makes its questions UNREGISTERED rather than failing, which is the
 	// honest answer for a node that does not have that surface at all (no
 	// knowledge backend, no native tracker) and distinct from an empty one.
@@ -653,6 +657,7 @@ func (o Options) missing() error {
 		{"Sources.Company", o.Sources.Company == nil},
 		{"Sources.Events", o.Sources.Events == nil},
 		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},
+		{"Sources.Chart", o.Sources.Chart == nil},
 		{"Inbound.Publisher", o.Inbound.Publisher == nil},
 		{"Inbound.Claims", o.Inbound.Claims == nil},
 		{"Inbound.Secrets", o.Inbound.Secrets == nil},

@@ -86,6 +86,13 @@ type Sources struct {
 	// chart, which [authz.NoChart] reports as UNKNOWN rather than as
 	// "leads nobody": a 503 a caller retries, never a 403 that sends them
 	// to ask for authority they already hold.
+	//
+	// internal/api REQUIRES it, because a node serving the API always has
+	// a chart and the unknown answer never clears by waiting: `crewlet
+	// run` built these sources without one, so every lead reading a
+	// report's inbox, queue or pins was told "this node cannot say who
+	// leads" for the life of the process, and the live socket's `watch`
+	// decides by the same seam.
 	Chart authz.Chart
 
 	// Coord is the lease table: the fleet's one shared answer to "which

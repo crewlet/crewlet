@@ -199,6 +199,7 @@ func wireAPI(
 			Events:  backends.Store.Events(),
 			Company: company,
 			NodeID:  nodeID,
+			Chart:   engine.ChartAuthorityOf(e),
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,
