@@ -2061,12 +2061,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	//
 	// Registered after the app exists, which is the whole reason it is a
 	// setter — see Engine.SetOnCompanyPublished.
-	e.SetOnCompanyPublished(func(context.Context) {
-		app.Stream().Broadcast("seats", app.Stream().Roster())
-		app.Stream().Broadcast("org", app.Stream().Org())
-		app.Stream().Broadcast("tools", app.Stream().Tools())
-		app.Stream().Broadcast("schedules", app.Stream().Schedules())
-	})
+	e.SetOnCompanyPublished(func(context.Context) { app.Stream().CompanyPublished() })
 
 	return &httpSurface{app: app, server: server, projector: projector}, nil
 }

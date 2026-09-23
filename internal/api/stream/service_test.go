@@ -420,3 +420,32 @@ func TestACancelledContextEndsTheTick(t *testing.T) {
 		t.Fatal("Stop hung after the tick's context was cancelled")
 	}
 }
+
+// A PUBLISHED COMPANY RE-SENDS EVERY COMPANY-DERIVED PUSH, by the kinds this
+// package declares.
+//
+// The roster, the org tree, the tool catalogue and the schedules come from the
+// company and no event ever corrects them, so each is sent whole on every
+// publish. The kinds are this package's own constants: the one caller used to
+// spell all four as literals in another package, which compiles cleanly the
+// day a constant here is renamed and sends a frame the dashboard drops.
+func TestAPublishedCompanyReSendsEveryCompanyDerivedPush(t *testing.T) {
+	t.Parallel()
+	s, c := newService(t, stream.Options{})
+	s.CompanyPublished()
+	var got []string
+	for range 4 {
+		select {
+		case frame := <-c.Out():
+			got = append(got, frame.Kind())
+		case <-time.After(5 * time.Second):
+			t.Fatalf("a published company re-sent %v, want four pushes", got)
+		}
+	}
+	slices.Sort(got)
+	want := []string{stream.KindOrg, stream.KindSchedules, stream.KindSeats, stream.KindTools}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("a published company re-sent %v, want %v", got, want)
+	}
+}

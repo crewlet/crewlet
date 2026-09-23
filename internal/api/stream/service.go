@@ -404,10 +404,32 @@ func (s *Service) currentSchedules() any { return s.schedules() }
 
 func (s *Service) currentTools() []map[string]any { return s.tools() }
 
-// Broadcast pushes an envelope to every client, for the surfaces that own their
-// own data — the roster, the org tree, the tool catalogue, the schedules.
-func (s *Service) Broadcast(kind string, data any) {
-	s.hub.Broadcast(Push(kind, data, s.now()))
+// CompanyPublished re-sends every push a published company changes — the
+// roster, the org tree, the tool catalogue and the schedules — to every client
+// whose audience receives it.
+//
+// WHOLE PAYLOADS, each replacing its predecessor: none of these is ever
+// corrected by an event, and an overlay merge cannot express a deletion, so a
+// screen that got a delta and lost it to backpressure would render a removed
+// seat until it reloaded.
+//
+// ONE METHOD NAMING ITS OWN KINDS, where there used to be a Broadcast(kind,
+// data) whose one caller spelled all four kinds as string literals in another
+// package: a constant renamed here would have compiled cleanly there and sent a
+// kind the dashboard's dispatch has no case for.
+func (s *Service) CompanyPublished() {
+	now := s.now()
+	for _, push := range []struct {
+		kind string
+		data any
+	}{
+		{KindSeats, s.Roster()},
+		{KindOrg, s.Org()},
+		{KindTools, s.Tools()},
+		{KindSchedules, s.Schedules()},
+	} {
+		s.hub.Broadcast(Push(push.kind, push.data, now))
+	}
 }
 
 // InboxChange is the payload of an `inbox_changed` frame: whose inbox moved,
