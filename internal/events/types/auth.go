@@ -195,9 +195,14 @@ const (
 	// FailBootstrap is a wrong one-time founder code.
 	FailBootstrap FailureMethod = "bootstrap"
 
-	// FailInvite is an invitation redemption the throttle refused. A link
-	// that does not resolve answers 410 to whoever holds it and is not a
-	// guess at a credential, so nothing else about a redemption counts.
+	// FailInvite is an invitation link refused: one nobody issued, one
+	// already redeemed or aged out, one whose address somebody is already
+	// enrolled under — each a 410 — and a view or a redemption the
+	// throttle turned away. THE ID IN THE LINK IS THE CREDENTIAL, so a
+	// source presenting ids that resolve to nothing is guessing at one;
+	// counted, the per-source ceiling stops the walk as it stops a guessed
+	// password. It used to count only the throttle's own refusals, so a
+	// source could present a new id on every request for ever.
 	FailInvite FailureMethod = "invite"
 
 	// FailBearer is a credential presented on a request and refused: an

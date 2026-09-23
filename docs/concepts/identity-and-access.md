@@ -1271,8 +1271,10 @@ free, with no credential to revoke and no identity on the row. A row per
 attempt would hand the size of every node's event store — and of every backup
 and snapshot taken from it — to whoever is making the attempts. So a failed
 sign-in, a refused second factor, an identity-provider round trip that did not
-verify, a wrong bootstrap or invitation code and a refused bearer credential
-each do two things and publish nothing:
+verify, a wrong bootstrap code, an invitation link that answers `410` (nobody
+issued it, it was redeemed or aged out, or its address is already enrolled —
+the id in the link is the credential, so a source walking ids is guessing at
+one) and a refused bearer credential each do two things and publish nothing:
 
 - add one to the `crewlet.auth.attempts.failed` counter, by `method` and
   whether the throttle turned it away — the per-attempt number, for a

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -78,6 +80,51 @@ func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 	if view["login"] != "dana.sre" {
 		t.Errorf("the form proposes login %v, want dana.sre — the address's "+
 			"own local part, folded into the person grammar", view["login"])
+	}
+}
+
+// AN INVITATION ID THAT RESOLVES TO NOTHING IS A FAILED ATTEMPT, COUNTED.
+//
+// The id in the link is the credential. Admission ran before the lookup, but a
+// 410 recorded nothing, so the per-source ceiling that stops a guessing run at
+// a password never filled here: a source could present a new invitation id on
+// every request for ever. Each 410 now counts against the source and reaches
+// the audit trail's failure tally, so the walk is turned away at the same
+// ceiling as any other guess.
+func TestAnInvitationIDThatResolvesToNothingIsCounted(t *testing.T) {
+	t.Parallel()
+	audit := &recordingAudit{}
+	mux := http.NewServeMux()
+	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+		o.Audit = audit
+	}).Routes(mux)
+	var statuses []int
+	for i := range credential.AdmitLimit + 1 {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+			fmt.Sprintf("/auth/invite/018f3a9c-4d2e-7000-8000-0000000002%02d", i),
+			nil))
+		statuses = append(statuses, rec.Code)
+	}
+	for i, status := range statuses[:credential.AdmitLimit] {
+		if status != http.StatusGone {
+			t.Errorf("attempt %d answered %d, want 410", i+1, status)
+		}
+	}
+	if last := statuses[credential.AdmitLimit]; last != http.StatusTooManyRequests {
+		t.Errorf("after %d ids that resolved to nothing the source was answered "+
+			"%d, want 429 — the walk was never counted", credential.AdmitLimit, last)
+	}
+	_, failures := audit.snapshot()
+	counted := 0
+	for _, f := range failures {
+		if f.Method == types.FailInvite && !f.Throttled {
+			counted++
+		}
+	}
+	if counted != credential.AdmitLimit {
+		t.Errorf("the trail tallied %d refused invitation ids, want %d", counted,
+			credential.AdmitLimit)
 	}
 }
 

@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -67,11 +69,12 @@ type inviteRedeem struct {
 // UNGUARDED, because holding the link IS the credential — and throttled per
 // source, because the id is a value somebody could otherwise walk.
 func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
+	arrived := s.now()
 	source := s.sourceOf(r)
 	if !s.admit(w, r, source, types.FailInvite) {
 		return
 	}
-	held, ok := s.invitation(w, r)
+	held, ok := s.invitation(w, r, arrived, source)
 	if !ok {
 		return
 	}
@@ -89,11 +92,12 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 
 // RedeemInvite creates the person an invitation was issued for.
 func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
+	arrived := s.now()
 	source := s.sourceOf(r)
 	if !s.admit(w, r, source, types.FailInvite) {
 		return
 	}
-	held, ok := s.invitation(w, r)
+	held, ok := s.invitation(w, r, arrived, source)
 	if !ok {
 		return
 	}
@@ -150,7 +154,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 			// as the first attempt's, so the ledger collapses the two.
 			s.spendInvitation(r, held, person, opID)
 		}
-		s.refuseSpentInvitation(w, r)
+		s.refuseSpentInvitation(w, r, arrived, source)
 		return
 	}
 	email, err := s.openSealed(r, held)
@@ -262,9 +266,9 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event string, err e
 // ONE REFUSAL FOR ABSENT, REDEEMED AND EXPIRED, because the three have one
 // remedy — ask for a new one — and telling them apart would say "this was
 // already used" to somebody whose link merely aged out, sending them to find
-// out who used it.
-func (s *Service) invitation(w http.ResponseWriter, r *http.Request) (
-	iamdomain.InvitationRow, bool) {
+// out who used it — and a counted one: see [Service.refuseSpentInvitation].
+func (s *Service) invitation(w http.ResponseWriter, r *http.Request,
+	arrived time.Time, source string) (iamdomain.InvitationRow, bool) {
 
 	held, err := s.directory.InvitationByID(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -273,7 +277,7 @@ func (s *Service) invitation(w http.ResponseWriter, r *http.Request) (
 		return iamdomain.InvitationRow{}, false
 	}
 	if held.ID == "" || held.Spent(s.now()) {
-		s.refuseSpentInvitation(w, r)
+		s.refuseSpentInvitation(w, r, arrived, source)
 		return iamdomain.InvitationRow{}, false
 	}
 	return held, true
@@ -283,7 +287,29 @@ func (s *Service) invitation(w http.ResponseWriter, r *http.Request) (
 // nobody issued, one redeemed, one aged out, and one whose address somebody is
 // already enrolled under. ONE ANSWER for all of them, for [Service.invitation]'s
 // reason.
-func (s *Service) refuseSpentInvitation(w http.ResponseWriter, _ *http.Request) {
+//
+// # It is a FAILED ATTEMPT, counted like every other
+//
+// The id in the link is the credential, and walking ids is how somebody
+// without one looks for one. Admission ran before the lookup, but a 410 used to
+// record nothing, so the per-source ceiling that stops a guessing run at a
+// password never filled here: a source could present a new invitation id on
+// every request for as long as it liked. So the refusal is counted against the
+// SOURCE — which is what fills the ceiling — reaches the audit trail's
+// failure tally, and is padded to the deadline measured from arrival, because
+// an absent id and a spent one are one refusal and must not be two timings.
+func (s *Service) refuseSpentInvitation(w http.ResponseWriter, r *http.Request,
+	arrived time.Time, source string) {
+
+	s.throttle.Fail(r.Context(), source)
+	s.audit.Failed(r.Context(), authevents.Failure{
+		Client: source, Method: types.FailInvite,
+		// THE ID PRESENTED, keyed in memory and never kept: how many
+		// DIFFERENT links one client tried in a minute is the difference
+		// between a stale bookmark and a walk.
+		Subject: r.PathValue("id"),
+	})
+	s.throttle.Pad(r.Context(), arrived)
 	httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
 }
 
