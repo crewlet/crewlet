@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -47,6 +49,15 @@ import (
 // missing authority decision means nobody decided, and a surface that shipped
 // without wiring one would serve every verb to every caller while looking
 // exactly like a surface that had.
+//
+// # The arguments are decided here too, and first
+//
+// For the same reason the authority is: this wrapper is the one place every
+// call of every builtin passes, whichever of the three callers made it. A
+// call carrying an argument its tool does not declare is refused by name
+// before anybody's authority is asked ([ErrUndeclaredArgument]) — the HTTP
+// surface used to check that at its routes alone, so the other callers
+// dropped what it refused.
 
 // Authorizer decides whether the party behind a call may make it.
 //
@@ -429,18 +440,18 @@ func (g *gatedDetached) CallDetached(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.DetachedResult, error) {
 
 	ctx = turnctx.WithPrincipal(ctx, turn)
-	if refusal := g.check(ctx, args); refusal != nil {
+	if refusal := g.admit(ctx, args); refusal != nil {
 		// NO SUSPENSION ON A REFUSAL, which is the whole reason this arm
 		// exists: a suspended loop is re-entered when detached work
 		// finishes, and work that never started never finishes.
-		return tools.DetachedResult{Result: refused(g.Name(), refusal)}, nil
+		return tools.DetachedResult{Result: *refusal}, nil
 	}
 	return g.detached.CallDetached(ctx, turn, args)
 }
 
 func (g *gated) Call(ctx context.Context, args map[string]any) (mcp.Result, error) {
-	if refusal := g.check(ctx, args); refusal != nil {
-		return refused(g.Name(), refusal), nil
+	if refusal := g.admit(ctx, args); refusal != nil {
+		return *refusal, nil
 	}
 	return g.Callable.Call(ctx, args)
 }
@@ -460,10 +471,91 @@ func (g *gatedSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (mcp.Result, error) {
 
 	ctx = turnctx.WithPrincipal(ctx, turn)
-	if refusal := g.check(ctx, args); refusal != nil {
-		return refused(g.Name(), refusal), nil
+	if refusal := g.admit(ctx, args); refusal != nil {
+		return *refusal, nil
 	}
 	return g.seat.CallForTurn(ctx, turn, args)
+}
+
+// admit is what every call of a gated tool passes, on all three of its
+// paths — the ARGUMENTS, then the AUTHORITY — answering nil to run the tool
+// or the result it is answered with instead.
+//
+// THE ARGUMENTS HERE, at the one place every call of every builtin passes:
+// a seat's turn, a worker's slice of it, a sandbox's bridge, the operator's
+// assistant and the HTTP write surface all reach a builtin through this
+// wrapper. The HTTP surface used to check them at its routes alone, so the
+// other four dropped what the route refused — see [ErrUndeclaredArgument].
+func (g *gated) admit(ctx context.Context, args map[string]any) *mcp.Result {
+	if unread := undeclared(g.Callable, args); len(unread) > 0 {
+		refusal := undeclaredRefusal(g.Callable, unread)
+		return &refusal
+	}
+	if refusal := g.check(ctx, args); refusal != nil {
+		result := refused(g.Name(), refusal)
+		return &result
+	}
+	return nil
+}
+
+// ErrUndeclaredArgument reports a call carrying an argument its tool does not
+// declare.
+//
+// REFUSED, NEVER DROPPED. A builtin reads the arguments its schema declares
+// and nothing else, so an undeclared one was DROPPED — and a dropped argument
+// is not a no-op, it is a call answered as though somebody had asked for
+// less. `save_work_view` lost its free `owner` when a personal view became
+// the caller's own (`personal: true`), and an assistant still sending the old
+// shape had its PERSONAL view saved as a SHARED tab on the container,
+// visible to everybody on it, under an answer saying it had worked. The
+// model, the assistant and the client each fix a misspelt or retired argument
+// the moment they are told its name; told nothing, none of them can.
+//
+// ITS OWN SENTINEL, not [ErrRefused]: nobody's authority was asked, and a
+// surface answering in status codes answers it 400 — the request is the
+// caller's to change — where a refusal is 403.
+var ErrUndeclaredArgument = errors.New("builtin: this call carries an " +
+	"argument its tool does not read")
+
+// undeclared is the arguments a call carries that its tool's schema does not
+// declare, quoted and sorted — nil when there are none.
+//
+// THE SCHEMA IS THE LIST, read off the tool rather than typed beside it, so an
+// argument a tool gains is accepted the moment it can be read and one it loses
+// is refused the moment it cannot. A second list anywhere would be the copy
+// that drifts — which is what the HTTP surface's own copy of this check was,
+// until it became this one.
+func undeclared(tool tools.Callable, args map[string]any) []string {
+	properties, _ := tool.Parameters()["properties"].(map[string]any)
+	var unread []string
+	for field := range args {
+		if _, held := properties[field]; !held {
+			unread = append(unread, fmt.Sprintf("%q", field))
+		}
+	}
+	slices.Sort(unread)
+	return unread
+}
+
+// undeclaredRefusal is what a call carrying unread arguments is answered:
+// every one named, and what the tool does read, so one round fixes all of
+// them.
+func undeclaredRefusal(tool tools.Callable, unread []string) mcp.Result {
+	properties, _ := tool.Parameters()["properties"].(map[string]any)
+	takes := slices.Sorted(maps.Keys(properties))
+	reads := "nothing"
+	if len(takes) > 0 {
+		reads = strings.Join(takes, ", ")
+	}
+	names := strings.Join(unread, ", ")
+	return mcp.Result{
+		Failed: true,
+		Cause:  fmt.Errorf("%w: %s takes no %s", ErrUndeclaredArgument, tool.Name(), names),
+		Output: fmt.Sprintf("%s takes no argument %s — it reads %s, and one it "+
+			"does not read is refused rather than ignored, because ignoring it "+
+			"answers a different request from the one you sent", tool.Name(),
+			names, reads),
+	}
 }
 
 // check runs the decision for one call.

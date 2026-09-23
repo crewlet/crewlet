@@ -2,6 +2,8 @@ package builtin_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -54,7 +56,9 @@ func (s *recordSpy) WritePriorities(_ context.Context, _, handle string, _ []str
 // the operator's assistant — rendered another person's personal views and
 // pins by naming them. The strip is the caller's own now, under the SAME name
 // their pins and personal views are written with, so it shows exactly what
-// they arranged; a `viewer` sent anyway names nothing the tool reads.
+// they arranged — and a `viewer` sent anyway is REFUSED by name rather than
+// dropped, so a caller who meant somebody else's strip is told it is not
+// theirs to name instead of being shown their own as if it were.
 func TestAViewStripIsTheCallersOwn(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -89,8 +93,22 @@ func TestAViewStripIsTheCallersOwn(t *testing.T) {
 					t.Error("list_work_views still declares a `viewer`, so a " +
 						"caller can still name whose strip to render")
 				}
-				res, err := tool.Call(iam.WithPrincipal(context.Background(), caller),
+				ctx := iam.WithPrincipal(context.Background(), caller)
+				named, err := tool.Call(ctx,
 					map[string]any{"container": "project:ENG", "viewer": "bob"})
+				if err != nil {
+					t.Fatalf("list_work_views: %v", err)
+				}
+				if !named.Failed || !errors.Is(named.Cause, builtin.ErrUndeclaredArgument) ||
+					!strings.Contains(named.Output, `"viewer"`) {
+					t.Fatalf("list_work_views naming bob's strip answered %q "+
+						"(cause %v), want the argument refused by name",
+						named.Output, named.Cause)
+				}
+				if got := trk.viewQuery.Viewer; got != "" {
+					t.Fatalf("the refused call rendered %q's strip", got)
+				}
+				res, err := tool.Call(ctx, map[string]any{"container": "project:ENG"})
 				if err != nil {
 					t.Fatalf("list_work_views: %v", err)
 				}

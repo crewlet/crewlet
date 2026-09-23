@@ -487,15 +487,35 @@ func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 
 // IDENTITY COMES FROM THE TURN, NEVER FROM ARGUMENTS. A model that could name
 // its own actor could file work as anybody.
+//
+// AND A MODEL THAT TRIES IS TOLD, rather than filing under the turn's seat as
+// though it had asked for that: an argument the tool does not read is refused
+// by name, so the forged call writes nothing at all.
 func TestAWriteIsAttributedToTheTurnsSeat(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
-	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+	forged := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
 		"title": "new work", "project": "ENG",
 		// A model trying to act as somebody else.
 		"actor": "ceo", "reporter": "ceo", "handle": "ceo",
+	})
+	if !forged.Failed || !errors.Is(forged.Cause, builtin.ErrUndeclaredArgument) {
+		t.Fatalf("a create naming its own actor answered %q (cause %v), want "+
+			"the arguments refused by name", forged.Output, forged.Cause)
+	}
+	for _, named := range []string{`"actor"`, `"reporter"`, `"handle"`} {
+		if !strings.Contains(forged.Output, named) {
+			t.Errorf("the refusal does not name %s: %s", named, forged.Output)
+		}
+	}
+	if len(trk.actors) != 0 {
+		t.Fatalf("the forged create wrote as %v", trk.actors)
+	}
+
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "new work", "project": "ENG",
 	})
 	if got.Failed {
 		t.Fatalf("create failed: %s", got.Output)
@@ -564,7 +584,8 @@ func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is not registered", name)
 		}
-		got, err := entry.Tool.Call(everyGrant(), map[string]any{"item": "ENG-1", "title": "x", "body": "y"})
+		got, err := entry.Tool.Call(everyGrant(), declaredOf(entry.Tool,
+			map[string]any{"item": "ENG-1", "title": "x", "body": "y"}))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -671,7 +692,12 @@ func TestAFailedReadIsNotAnEmptyResult(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
 	for _, name := range []string{builtin.ListWorkItemsTool, builtin.GetWorkItemTool} {
-		got := callWork(t, reg, name, map[string]any{"item": "ENG-1"})
+		entry, ok := reg.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is not registered", name)
+		}
+		got := callWork(t, reg, name, declaredOf(entry.Tool,
+			map[string]any{"item": "ENG-1"}))
 		if !got.Failed {
 			t.Errorf("%s reported success on a failed read", name)
 		}
@@ -1814,4 +1840,19 @@ func TestACreateRetriedUnderOneSeedFilesOnce(t *testing.T) {
 	if len(plain.created) != 2 || plain.created[0].ID == plain.created[1].ID {
 		t.Errorf("two unseeded creates were given one id: %+v", plain.created)
 	}
+}
+
+// declaredOf is args cut to the ones tool declares, for a case that calls
+// every tool with one set of arguments and is about something other than
+// what an undeclared one is answered — which the gate refuses by name before
+// anything else is decided.
+func declaredOf(tool tools.Callable, args map[string]any) map[string]any {
+	properties, _ := tool.Parameters()["properties"].(map[string]any)
+	out := map[string]any{}
+	for name, value := range args {
+		if _, held := properties[name]; held {
+			out[name] = value
+		}
+	}
+	return out
 }

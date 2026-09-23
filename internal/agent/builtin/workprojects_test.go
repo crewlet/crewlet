@@ -158,7 +158,18 @@ func TestMyWorkIsAlwaysTheTurnsOwnSeat(t *testing.T) {
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
-	callWork(t, reg, tracker.MyWorkTool, map[string]any{"handle": "somebody-else"})
+	// A HANDLE SENT ANYWAY IS REFUSED BY NAME and reads nobody's day: a
+	// model that tried to read a colleague's is told it cannot name one,
+	// rather than being shown its own as if it had asked for that.
+	named := callWork(t, reg, tracker.MyWorkTool, map[string]any{"handle": "somebody-else"})
+	if !named.Failed || !errors.Is(named.Cause, builtin.ErrUndeclaredArgument) {
+		t.Errorf("my_work naming a handle answered %q (cause %v), want the "+
+			"argument refused by name", named.Output, named.Cause)
+	}
+	if trk.myWorkQuery.Handle != "" {
+		t.Fatalf("my_work naming a handle read %q's day", trk.myWorkQuery.Handle)
+	}
+	callWork(t, reg, tracker.MyWorkTool, map[string]any{})
 	if trk.myWorkQuery.Handle != "eng" {
 		t.Errorf("my_work read %q's day, want the turn's own seat — a tool "+
 			"that took a handle would hand one agent a colleague's queue",

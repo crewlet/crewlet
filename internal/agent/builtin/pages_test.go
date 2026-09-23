@@ -339,7 +339,12 @@ func TestPageWritesAreAttributedAndFailuresAreHonest(t *testing.T) {
 
 	kb.readErr = errors.New("the projection is not hydrated yet")
 	for _, name := range []string{builtin.ListPagesTool, builtin.GetPageTool} {
-		got := callWork(t, reg, name, map[string]any{"page": "p1"})
+		entry, ok := reg.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is not registered", name)
+		}
+		got := callWork(t, reg, name, declaredOf(entry.Tool,
+			map[string]any{"page": "p1"}))
 		if !got.Failed || !strings.Contains(got.Output, "NOT an empty result") {
 			t.Errorf("%s on a failed read gave %q", name, got.Output)
 		}

@@ -2971,6 +2971,13 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 refusal are each written once — two copies of "file an item" drift on exactly
 the parts nobody looks at, and only one of the two is ever tested.
 
+**An argument a tool does not take is refused, naming it** and the arguments
+the tool does read, rather than dropped. A tool reads what its schema declares
+and nothing else, so an assistant still sending an argument a tool has retired
+— `save_work_view`'s old `owner` is the one that saved a personal view as a
+shared tab on the project, under an answer saying it had worked — or one it
+misspelt was answered as though it had asked for less, and never told which.
+
 Every write's answer carries its three-valued `outcome`, the object's new
 `version`, and **`position`** — where the record landed, as
 `<stream>@<generation>:<sequence>`, or `null` on an `unknown` outcome, where
@@ -3185,7 +3192,11 @@ take: the tool reads what its schema declares and nothing else, so an
 undeclared argument would be DROPPED — and a request answered as though it had
 asked for less is not a no-op. A client still sending `save_work_view`'s old
 `owner` had a personal view saved as a shared tab on the project, under a
-`200`. A body over 1 MiB (twice a page at its own cap, for JSON escaping) is
+`200`. The refusal is the **tools' own**, made where every call of every tool
+passes, so a seat's turn and your assistant over
+[`/operator/mcp`](#operatormcp--your-own-assistant) are told exactly what a
+route answers here — it used to be this surface's alone, and the same
+argument sent through either of the other two was dropped. A body over 1 MiB (twice a page at its own cap, for JSON escaping) is
 refused `413` before it is read.
 
 **Not here, and deliberately:** sprints and goals. The tracker has neither —

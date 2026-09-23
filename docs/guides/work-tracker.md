@@ -657,9 +657,18 @@ binds them to — so a person bound to the seat that leads `ENG` may re-route
 `ENG`'s work and declare its fields, and an unbound caller reaches those only
 through `fleet:operate`.
 
+**An argument a tool does not take is refused, naming it** — on this surface,
+in a seat's turn and on the HTTP routes alike, because the refusal is the
+tools' own rather than any one surface's. A tool reads what its schema
+declares and nothing else, so an argument it does not declare used to be
+dropped: an assistant still sending `save_work_view`'s retired `owner` had a
+personal view saved as a shared tab under an answer saying it had worked, and
+a model that misspelt an argument was never told which one.
+
 **The REST API** serves the read side at `/work`, `/work/{id}` and
-`/work/views`. Writes go through a seat's tools or the operator MCP, both of
-which are attributed to somebody. `/work` and `/work/views` answer their
+`/work/views`. Writes go through a seat's tools, the operator MCP or [the human
+write surface](../reference/api-endpoints.md#the-human-write-surface), every
+one of which is attributed to somebody. `/work` and `/work/views` answer their
 personal parts — `preset=my_queue`, `preset=priorities`, the pins and personal
 views that order a strip — for the **caller's own record**, and take no
 parameter naming anybody else's: the engine already knows who is asking. A

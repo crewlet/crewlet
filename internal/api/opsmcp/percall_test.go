@@ -258,3 +258,38 @@ func TestTheOperatorSurfaceServesOnlyPOST(t *testing.T) {
 		}
 	}
 }
+
+// AN ARGUMENT THE TOOL DOES NOT READ IS REFUSED BY NAME, over MCP too.
+//
+// The HTTP routes refused one and this surface dropped it: the tool reads what
+// its schema declares and nothing else, so an assistant still sending an
+// argument a tool has retired — `save_work_view`'s `owner` was the one that
+// saved a personal view as a shared tab — or one it misspelt was answered as
+// though it had asked for less, and never told which. The tools' own gate
+// refuses it, on this surface as on every other.
+func TestAnArgumentTheToolDoesNotReadIsRefusedOverMCP(t *testing.T) {
+	t.Parallel()
+	dir := &directory{people: map[string]iam.Principal{
+		"ops": machine("token:ops", iam.GrantStateRead),
+	}}
+	server := operatorServer(t, dir)
+	sess := connectAs(t, server.URL+opsmcp.Path, "ops")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: tracker.ListWorkItemsTool, Arguments: map[string]any{"stauts": "todo"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	var out strings.Builder
+	for _, c := range res.Content {
+		if text, ok := c.(*mcp.TextContent); ok {
+			out.WriteString(text.Text)
+		}
+	}
+	if !res.IsError || !strings.Contains(out.String(), `"stauts"`) {
+		t.Errorf("a misspelt argument answered isError=%v %q, want it refused "+
+			"by name", res.IsError, out.String())
+	}
+}

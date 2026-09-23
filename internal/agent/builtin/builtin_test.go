@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -376,12 +377,25 @@ func (a *asker) Open(_ context.Context, ask a2a.Ask) (string, error) {
 func TestAnAskCarriesTheCallingSeatNotAnArgument(t *testing.T) {
 	t.Parallel()
 	// The requester comes from the surface. A model that wrote a different
-	// handle in its arguments cannot become somebody else.
+	// handle in its arguments cannot become somebody else — and is told so,
+	// by name, rather than asking under its own seat as though it had meant
+	// to: the forged ask sends nothing.
 	svc := &asker{}
 	tool := registered(t, builtin.Deps{A2A: svc}, builtin.A2AAskTool)
+	forged := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{
+		"target": "agent-cto", "brief": "What broke last night?",
+		"requester": "agent-cto",
+	})
+	if !forged.Failed || !errors.Is(forged.Cause, builtin.ErrUndeclaredArgument) ||
+		!strings.Contains(forged.Output, `"requester"`) {
+		t.Fatalf("an ask naming its own requester answered %q (cause %v), want "+
+			"the argument refused by name", forged.Output, forged.Cause)
+	}
+	if len(svc.asks) != 0 {
+		t.Fatalf("the forged ask was sent: %+v", svc.asks)
+	}
 	res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{
 		"target": "agent-cto", "brief": "What broke last night?",
-		"requester": "agent-cto", // ignored, and must be
 	})
 	if res.Failed {
 		t.Fatalf("failed: %s", res.Output)
