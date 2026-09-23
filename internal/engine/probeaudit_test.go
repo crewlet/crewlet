@@ -28,10 +28,10 @@ type deactivatedSessions struct {
 	ended []string
 }
 
-func (s *deactivatedSessions) LiveOIDC(context.Context) ([]oidc.LiveSession, error) {
+func (s *deactivatedSessions) LiveOIDC(context.Context) (oidc.Listing, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]oidc.LiveSession(nil), s.live...), nil
+	return oidc.Listing{Sessions: append([]oidc.LiveSession(nil), s.live...)}, nil
 }
 
 func (s *deactivatedSessions) End(_ context.Context, session oidc.LiveSession, _ string) error {
@@ -102,10 +102,10 @@ func TestTheNodesDeactivationProbeAnnouncesWhatItEnds(t *testing.T) {
 		Refresh: "a-refresh-token-the-provider-retired",
 	}}}
 	prober := engine.ProberForTest(e, offboardingProvider(t), sessions)
-	_, ended, err := prober.Run(t.Context())
-	if err != nil || ended != 1 {
+	pass, err := prober.Run(t.Context())
+	if err != nil || pass.Ended != 1 {
 		t.Fatalf("the pass ended %d sessions (%v), want the one the provider "+
-			"off-boarded", ended, err)
+			"off-boarded", pass.Ended, err)
 	}
 
 	kind := (types.IAMSessionEnded{}).EventType()
