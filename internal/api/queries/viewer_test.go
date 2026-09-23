@@ -168,17 +168,17 @@ func TestAPersonalQuestionDefaultsToTheCallersOwnSeat(t *testing.T) {
 	}
 }
 
-// NAMING SOMEBODY ELSE TAKES THE LEAD RELATION OR people:manage, and the
+// NAMING SOMEBODY ELSE TAKES THE LEAD RELATION OR fleet:operate, and the
 // whole scope rule is decoration without it: any reader could name any handle.
 //
 // It used to be "any operator credential", which made every token in Tier A a
 // reader of every seat's day. It is [authz.ClassOwnOrLead]'s answer now —
-// the owner, whoever leads them, or the grant that can grant — which is the
+// the owner, whoever leads them, or the deployment's admin grant — which is the
 // same rule the tracker's own writer enforces at the record.
 func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	// A COLLEAGUE, holding every grant BUT people:manage, against a chart
+	// A COLLEAGUE, holding every grant BUT fleet:operate, against a chart
 	// that reports no relation: the most authority a caller can have and
 	// still be refused, which is what makes the refusal about the rule.
 	colleague := viewerSources(t, work)
@@ -331,5 +331,50 @@ func TestTheInboxResumeTakesTheWholePosition(t *testing.T) {
 	if _, err := askAsSeat(t, viewerSources(t, work), "ana", "work_inbox",
 		map[string]any{"since": "41"}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a bare sequence = %v, want bad_params", err)
+	}
+}
+
+// MY WORK, MY INBOX AND MY PERSON RECORD ARE THE CALLER'S WHEN THEY NAME NOBODY.
+//
+// `viewer=` is gone from the query surface: the viewer is the caller's own
+// seat, and every personal question that names no handle is about them. One
+// table over the three, because they are one rule — and the one that went
+// untested was the third: `work_person` defaulted through the same function
+// the other two do, and nothing said so.
+//
+// Each is asked as a caller holding every grant, so the answer is whose record
+// was READ rather than whether the read was allowed; the handle a stub was
+// asked for is the whole assertion. The control is naming somebody else, which
+// must reach them — a default that ignored the argument would pass the first
+// half and fail this.
+func TestMyWorkAndPeopleDefaultToTheCaller(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		what  string
+		asked func(*stubWork) string
+	}{
+		{"work_my_work", func(w *stubWork) string { return w.myWorkQuery.Handle }},
+		{"work_inbox", func(w *stubWork) string { return w.inboxQuery.Handle }},
+		{"work_person", func(w *stubWork) string { return w.personQuery.Handle }},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			t.Parallel()
+			work := &stubWork{}
+			if _, err := askAsSeat(t, viewerSources(t, work), "ana", c.what, nil); err != nil {
+				t.Fatalf("%s with no handle: %v", c.what, err)
+			}
+			if got := c.asked(work); got != "ana" {
+				t.Errorf("%s with no handle read %q, want the caller's own seat",
+					c.what, got)
+			}
+			if _, err := askAsSeat(t, viewerSources(t, work), "ana", c.what,
+				map[string]any{"handle": "bo"}); err != nil {
+				t.Fatalf("%s naming bo: %v", c.what, err)
+			}
+			if got := c.asked(work); got != "bo" {
+				t.Errorf("%s naming bo read %q — the default is overriding the "+
+					"argument", c.what, got)
+			}
+		})
 	}
 }

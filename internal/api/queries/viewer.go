@@ -17,7 +17,7 @@ var (
 	errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind "+
 		"the person to one in the org chart, or name a handle", ErrBadParams)
 	errNotYours = fmt.Errorf("%w: reading another seat's record needs the "+
-		"lead relation or people:manage", ErrUnauthorized)
+		"lead relation or fleet:operate", ErrUnauthorized)
 )
 
 // viewer answers who this caller is.
@@ -95,7 +95,7 @@ func (s Sources) seatOf(p iam.Principal) *org.Role {
 //
 // THE SCOPE RULE, in one place because four questions share it — and it is the
 // authority TABLE's rule rather than a second copy of it: the caller reads
-// their own record, whoever leads them, or anybody's with people:manage, which
+// their own record, whoever leads them, or anybody's with fleet:operate, which
 // is exactly [authz.ClassOwnOrLead]. It used to be "your own, or ANY operator
 // credential for anybody else's", which made every token in Tier A a reader of
 // every seat's inbox.
@@ -132,22 +132,4 @@ func (s Sources) viewerHandle(ctx context.Context, asked string) (string, error)
 		return "", errNotYours
 	}
 	return asked, nil
-}
-
-// viewerPins is the authority rule over the viewer a view STRIP is
-// personalised by.
-//
-// The same check as [Sources.viewerHandle] over a different ABSENCE, which is
-// why the named case delegates rather than restating it. A personal question
-// is ABOUT somebody, so naming nobody with no seat to fall back on has no
-// answer and [errNoSeat] says so. A view strip is about a CONTAINER and the
-// viewer only decides whose pins order it, so naming nobody is the SHARED
-// strip — a real answer, the documented meaning of an empty
-// [tracker.ViewQuery.Viewer], and the one an unbound caller must keep getting,
-// because the sidebar and the board ask for exactly that.
-func (s Sources) viewerPins(ctx context.Context, asked string) (string, error) {
-	if asked == "" {
-		return "", nil
-	}
-	return s.viewerHandle(ctx, asked)
 }

@@ -211,7 +211,7 @@ func (s *stubConversations) History(_ context.Context, handle, key string, _ int
 }
 
 // SCOPED LIKE EVERY OTHER PER-SEAT QUESTION. A caller reads their own seat;
-// naming somebody else's takes the lead relation or people:manage.
+// naming somebody else's takes the lead relation or fleet:operate.
 func TestTheThreadLedgerIsScopedToTheCallersOwnSeat(t *testing.T) {
 	t.Parallel()
 	ledgerStub := &stubConversations{
