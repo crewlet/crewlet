@@ -2522,6 +2522,9 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			Merges: func(actor builtin.Actor) builtin.WorkMerger {
 				return operatorWriter(writer, actor)
 			},
+			Moves: func(actor builtin.Actor) builtin.WorkMover {
+				return operatorWriter(writer, actor)
+			},
 			// AND THE RANKED SEARCH. It reads, so it takes no actor —
 			// the corpus is the same for everybody and there is nothing
 			// to attribute — and without it the operator catalogue

@@ -1980,7 +1980,7 @@ Point any MCP client at it:
 
 The **same tools a seat holds**, not a parallel implementation: `list_work_items`,
 `get_work_item`, `create_work_item`, `update_work_item`, `comment_on_work_item`,
-`merge_work_item`, `search_work_items`, `get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
+`merge_work_item`, `move_work_item`, `search_work_items`, `get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
 `task_activity`, `my_work`,
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`, and
 `search_knowledge`. A schema, a default, a trimmed field and the wording of a
@@ -2006,7 +2006,7 @@ same operation again, a created item or a new comment or saved view included,
 answered from the ledger where it landed and finished where it did not. A call
 without one is a new operation: repeated, a create files a second item. The
 argument is offered by `create_work_item`, `update_work_item`,
-`comment_on_work_item`, `merge_work_item`, `remove_work_item`,
+`comment_on_work_item`, `merge_work_item`, `move_work_item`, `remove_work_item`,
 `restore_work_item`, `set_priorities`, `set_pins`, `mark_inbox` and
 `save_work_view`, and held to the rule the purge and gate routes hold theirs
 to: an id this engine minted, at most 128 bytes of visible ASCII — anything

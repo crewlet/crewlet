@@ -46,6 +46,7 @@ type fakeTracker struct {
 
 	created []tracker.Task
 	merged  []mergeCall
+	moved   []moveCall
 
 	// createAnswer overrides what CreateTask answers, for the cases about
 	// what the TOOL makes of an outcome rather than about the task it
@@ -337,6 +338,35 @@ func (f *fakeTracker) MergeDuplicates(_ context.Context, _ string,
 	}}, nil
 }
 
+// moves is its sixth, for the cross-project move.
+func (f *fakeTracker) moves(actor builtin.Actor) builtin.WorkMover {
+	f.actors = append(f.actors, actor)
+	return f
+}
+
+// moveCall is one move as the tool composed it.
+type moveCall struct {
+	task, target string
+	notify       *tracker.Notify
+}
+
+// MoveTaskToProject records the move — the sequence itself is certified
+// against a real store in the tracker's own suite.
+func (f *fakeTracker) MoveTaskToProject(_ context.Context, opID, taskID, target string,
+	notify *tracker.Notify) (tracker.WriteResult, error) {
+
+	f.moved = append(f.moved, moveCall{task: taskID, target: target, notify: notify})
+	f.opIDs = append(f.opIDs, opID)
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	return tracker.WriteResult{Key: target + "-3", Result: statelog.Result{
+		Outcome:  statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 71},
+		Version:  71,
+	}}, nil
+}
+
 func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Task,
 	notify *tracker.Notify) (tracker.WriteResult, error) {
 
@@ -459,7 +489,7 @@ type fakeMentions []string
 
 func (f fakeMentions) Mentions(string) []string { return f }
 
-// workRegistry registers the five tools over a fake tracker.
+// workRegistry registers a seat's tracker tools over a fake tracker.
 func workRegistry(t *testing.T, deps builtin.WorkDeps) *tools.Registry {
 	t.Helper()
 	reg := tools.NewRegistry()
@@ -509,7 +539,7 @@ func callWork(t *testing.T, reg *tools.Registry, name string, args map[string]an
 func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges})
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves})
 
 	deliveries := reg.Deliveries()
 	for _, name := range builtin.WorkWrites() {
@@ -604,7 +634,7 @@ func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{
-		Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
+		Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves, Search: trk,
 		ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
 	})
 	for _, name := range builtin.WorkTools() {
@@ -1009,7 +1039,7 @@ func TestAStaleVersionSaysToReadItAgain(t *testing.T) {
 func TestTheTrackerWritesAreClassifiedAsSharedWrites(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges})
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves})
 
 	for _, name := range builtin.WorkWrites() {
 		entry, ok := reg.Lookup(name)
@@ -1116,7 +1146,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	// is missing because the registry does not offer it rather than
 	// because its dependency was nil.
 	reg := workRegistry(t, builtin.WorkDeps{
-		Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
+		Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves, Search: trk,
 		ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
@@ -1135,7 +1165,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	operator := map[string]bool{}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: builtin.WorkDeps{
-			Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
+			Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves, Search: trk,
 			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 			PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },

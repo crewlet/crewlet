@@ -160,8 +160,12 @@ func TestAnOperatorsCommentAndViewBroughtBackAreTheSameObject(t *testing.T) {
 func TestOpIDIsOfferedOnlyOnTheOperatorsWrites(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
+	// EVERY WRITE SEAM WIRED — the move included, which this fixture lacked,
+	// so nothing asserted the one tool the API reference lists as taking an
+	// op_id that no case here ever registered.
 	operator := builtin.OperatorTools(builtin.OperatorDeps{Work: builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Dependencies: trk.depends, Merges: trk.merges,
+		Moves: trk.moves,
 		Inbox: trk, TrashWriter: func(builtin.Actor) builtin.TrashWriter { return nil },
 		PersonWriter: func(builtin.Actor) builtin.PersonWriter { return nil },
 		ViewWriter:   func(builtin.Actor) builtin.ViewWriter { return nil },
@@ -169,7 +173,8 @@ func TestOpIDIsOfferedOnlyOnTheOperatorsWrites(t *testing.T) {
 	}})
 	writes := []string{
 		builtin.CreateWorkItemTool, builtin.UpdateWorkItemTool, builtin.CommentOnWorkTool,
-		tracker.MergeWorkItemTool, tracker.RemoveWorkItemTool, tracker.RestoreWorkItemTool,
+		tracker.MergeWorkItemTool, tracker.MoveWorkItemTool,
+		tracker.RemoveWorkItemTool, tracker.RestoreWorkItemTool,
 		tracker.SetPrioritiesTool, tracker.SetPinsTool, tracker.MarkInboxTool,
 		tracker.SaveWorkViewTool,
 	}
@@ -191,9 +196,10 @@ func TestOpIDIsOfferedOnlyOnTheOperatorsWrites(t *testing.T) {
 		}
 	}
 
-	seat := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Dependencies: trk.depends})
+	seat := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as,
+		Dependencies: trk.depends, Merges: trk.merges, Moves: trk.moves})
 	for _, name := range []string{builtin.CreateWorkItemTool, builtin.UpdateWorkItemTool,
-		builtin.CommentOnWorkTool} {
+		builtin.CommentOnWorkTool, tracker.MergeWorkItemTool, tracker.MoveWorkItemTool} {
 
 		entry, _ := seat.Lookup(name)
 		props, _ := entry.Tool.Parameters()["properties"].(map[string]any)

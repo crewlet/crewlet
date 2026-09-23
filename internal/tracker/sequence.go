@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -1271,6 +1272,25 @@ func (h *held) release(ctx context.Context) {
 // subtree stayed split across two projects until somebody re-ran the gesture
 // under an operation id nobody had kept.
 //
+// # Who hears about it
+//
+// The people on the ROOT, through notify — the root's own move carries it, and
+// nothing beneath it does: a subtree that moved is one thing that happened, and
+// forty subtasks would otherwise wake everybody watching any of them for it.
+// The root's step was published with no notification at all, so a move woke
+// nobody, although the kind routes and falls back to a lead like a status
+// change does.
+//
+// # The tags the subtree carries
+//
+// ARE READ HERE, from the subtree and its own project's declarations, and
+// declared in the target as an ADD ([Writer.WriteTags]) resolved inside that
+// write's own snapshot. The caller used to hand them in, which every caller
+// did as nil — so the step never ran and a moved task arrived carrying labels
+// its new project had never declared — and the step itself wrote the target's
+// WHOLE set composed from a read outside any snapshot, which a tag a colleague
+// declared in between would have been overwritten by.
+//
 // # What it refuses before the first append
 //
 // A task in the TRASH anywhere in the subtree, the root included. A tombstoned
@@ -1286,7 +1306,7 @@ func (h *held) release(ctx context.Context) {
 // REPAIRER: the re-run above or the tracker duty, whichever comes first — the
 // other then finds nothing left to move.
 func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target string,
-	newTags []Tag) (WriteResult, error) {
+	notify *Notify) (WriteResult, error) {
 
 	switch {
 	case taskID == "":
@@ -1304,6 +1324,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	var (
 		root    Task
 		subtree []Task
+		carried []Tag
 		arrived bool
 	)
 	if w.db == nil {
@@ -1363,7 +1384,8 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 					current.Project, target)
 			}
 		}
-		return nil
+		carried, err = carriedTags(ctx, tx, current, subtree)
+		return err
 	}); err != nil {
 		return WriteResult{}, err
 	}
@@ -1376,20 +1398,17 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	}
 
 	at := w.Now()
-	if len(newTags) > 0 {
+	if len(carried) > 0 {
+		// AN ADD, NEVER A WHOLE SET: a tag the target already declares is
+		// left as it is, and one a colleague declared a moment ago is not
+		// overwritten by a set this call read before it.
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		set, err := w.tagsOf(ctx, target)
-		if err != nil {
-			return WriteResult{}, err
-		}
-		if merged, changed := mergeTags(set, newTags); changed {
-			declared, err := w.WriteDocument(ctx, stepID(opID, "tags"),
-				TagsSubject(target), "", merged, ChangeTags, nil)
-			if err = resolved("the moving subtree's tags in "+target,
-				declared, err); err != nil {
-				return declared, fmt.Errorf("tracker: declare the moving "+
-					"subtree's tags in %s: %w", target, err)
-			}
+		declared, err := w.WriteTags(ctx, stepID(opID, "tags"), target,
+			TagEdit{Add: carried}, TagAuthority{})
+		if err = resolved("the moving subtree's tags in "+target,
+			declared, err); err != nil {
+			return declared, fmt.Errorf("tracker: declare the moving "+
+				"subtree's tags in %s: %w", target, err)
 		}
 	}
 
@@ -1426,7 +1445,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	// and a mark on it would be one more append to take it down.
 	former := append(append([]string{}, root.FormerKeys...), root.Key)
 	result, err := w.moveOne(ctx, stepID(opID, "root"), root, target, former,
-		&KeyMint{N: base}, len(subtree) > 0)
+		&KeyMint{N: base}, len(subtree) > 0, notify)
 	// A ROOT WHOSE MOVE IS UNKNOWN HAS NO SUBTREE TO FOLLOW IT: moving the
 	// descendants under a root that may still be in its old project splits
 	// the subtree the other way round.
@@ -1628,7 +1647,7 @@ func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
 		moved, err := w.moveOne(ctx, stepID(opID, "task-"+descendant.ID),
 			descendant, target,
 			append(append([]string{}, descendant.FormerKeys...), descendant.Key),
-			&KeyMint{N: base + uint64(i)}, false)
+			&KeyMint{N: base + uint64(i)}, false, nil)
 		// AN UNKNOWN DESCENDANT STOPS THE WALK like a refused one, and
 		// the root's mark stays up over it: lowering the mark past a
 		// task that may still be in the old project is the split subtree
@@ -1651,17 +1670,63 @@ func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
 // is in another project by the time its step decides, and [Writer.UpdateTask]
 // refuses a write naming the wrong one rather than re-keying it again.
 func (w *Writer) moveOne(ctx context.Context, opID string, task Task,
-	target string, former []string, mint *KeyMint, mark bool) (WriteResult, error) {
+	target string, former []string, mint *KeyMint, mark bool,
+	notify *Notify) (WriteResult, error) {
 
 	patch := TaskPatch{Project: &target, FormerKeys: &former, Mint: mint}
 	if mark {
 		patch.Moving = &mark
 	}
-	// NO NOTIFICATION AND NO HISTORY BUMP on a descendant: a subtree that
-	// moved wakes the people watching the root, not everybody watching
-	// every task beneath it.
+	// NO NOTIFICATION AND NO HISTORY BUMP on a descendant, whose caller
+	// passes none: a subtree that moved wakes the people watching the
+	// root, not everybody watching every task beneath it.
 	return w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch, patch,
-		ChangeMoved, nil)
+		ChangeMoved, notify)
+}
+
+// carriedTags is every tag the moving subtree carries, as its own project
+// declares it — the label, colour and description a person chose — so the
+// target is given the same grouping rather than a bare slug. A slug the source
+// no longer declares (a set somebody edited after tagging) is carried as
+// itself.
+//
+// INSIDE THE MOVE'S PRE-FLIGHT READ, beside the subtree it describes, and in
+// the source set's own order so two moves of the same subtree declare the same
+// list.
+func carriedTags(ctx context.Context, tx *sql.Tx, root Task,
+	subtree []Task) ([]Tag, error) {
+
+	wanted := map[string]bool{}
+	for _, task := range append([]Task{root}, subtree...) {
+		for _, slug := range task.Tags {
+			wanted[slug] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return nil, nil
+	}
+	source, _, err := readTagSet(ctx, tx, root.Project)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read %s's tags for the move: %w",
+			root.Project, err)
+	}
+	var out []Tag
+	for _, tag := range source.Tags {
+		if wanted[tag.Slug] {
+			out = append(out, Tag{Slug: tag.Slug, Label: tag.Label,
+				Color: tag.Color, Description: tag.Description})
+			delete(wanted, tag.Slug)
+		}
+	}
+	rest := make([]string, 0, len(wanted))
+	for slug := range wanted {
+		rest = append(rest, slug)
+	}
+	slices.Sort(rest)
+	for _, slug := range rest {
+		out = append(out, Tag{Slug: slug, Label: slug})
+	}
+	return out, nil
 }
 
 // claimAlias takes a former key, create-only, so the key keeps resolving.
@@ -1712,31 +1777,6 @@ func (w *Writer) tagsOf(ctx context.Context, project string) (TagSet, error) {
 		return nil
 	})
 	return set, err
-}
-
-// mergeTags adds the tags a moving subtree carries that the target lacks.
-//
-// BY SLUG AND NEVER BY LABEL, because a slug is what a stored value points at
-// and a label is what somebody renamed last week. Reports whether anything
-// changed, so a move that brings no new tag publishes no record at all.
-func mergeTags(set TagSet, incoming []Tag) (TagSet, bool) {
-	have := make(map[string]bool, len(set.Tags))
-	for _, t := range set.Tags {
-		have[t.Slug] = true
-	}
-	changed := false
-	for _, t := range incoming {
-		if t.Slug == "" || have[t.Slug] {
-			continue
-		}
-		have[t.Slug] = true
-		set.Tags = append(set.Tags, t)
-		changed = true
-	}
-	if changed {
-		set.TagsVersion++
-	}
-	return set, changed
 }
 
 // MergeDuplicates folds one task into another. SEQUENCE 13.
@@ -1795,11 +1835,33 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 				current.Removed.By, current.Removed.At.Format(time.RFC3339))
 		}
 		task = current
-		if _, held, err := readTask(ctx, tx, into); err != nil {
+		survivor, held, err := readTask(ctx, tx, into)
+		switch {
+		case err != nil:
 			return err
-		} else if !held {
+		case !held:
 			return fmt.Errorf("tracker: task %s is not on this node: %w",
 				into, statelog.ErrUnavailable)
+		case !reparent || survivor.Project == current.Project:
+			return nil
+		}
+		// A SUBTASK UNDER AN ITEM IN ANOTHER PROJECT is drawn under that
+		// item on neither board and sits in the attention queue as
+		// `inconsistent_project` — a state only a move of its root
+		// clears, and a merge is not a move. Refused before the first
+		// append, naming both ways out, rather than left for somebody to
+		// find.
+		kids, err := readChildBatch(ctx, tx, duplicate, current.Project, "", 1)
+		if err != nil {
+			return err
+		}
+		if len(kids) > 0 {
+			return fmt.Errorf("tracker: task %s's subtasks are in %s and %s is "+
+				"in %s, so re-parenting them onto it would file subtasks under "+
+				"an item in another project: move %s into %s first — its "+
+				"subtasks go with it — or merge without re-parenting them: %w",
+				current.Key, current.Project, survivor.Key, survivor.Project,
+				current.Key, survivor.Project, ErrReparentAcrossProjects)
 		}
 		return nil
 	}); err != nil {
@@ -1862,14 +1924,26 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 // gone from the selection, so an index would give a different child the same
 // operation id and the ledger would answer one move's question with another's
 // row.
+//
+// ONLY A CHILD IN THE CANONICAL TASK'S OWN PROJECT IS SELECTED. The sequence
+// refuses a merge that would carry one across ([ErrReparentAcrossProjects]),
+// and this is what makes that an invariant rather than a check at the door: a
+// subtask filed under the duplicate after that check, or a walk the duty
+// finishes, never files a subtask under an item in another project. One that
+// is not selected stays under the duplicate, where the trash's frozen children
+// stay too.
 func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string) (int, error) {
+	project, err := w.taskProject(ctx, into)
+	if err != nil {
+		return 0, err
+	}
 	var moved int
 	var after string
 	for {
 		var batch []Task
 		if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 			var err error
-			batch, err = readChildBatch(ctx, tx, duplicate, after, WalkBatch)
+			batch, err = readChildBatch(ctx, tx, duplicate, project, after, WalkBatch)
 			return err
 		}); err != nil {
 			return moved, err
@@ -1895,6 +1969,11 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 		}
 	}
 }
+
+// ErrReparentAcrossProjects refuses a merge that would re-parent a duplicate's
+// subtasks onto an item in another project. See [Writer.MergeDuplicates].
+var ErrReparentAcrossProjects = errors.New("tracker: a merge cannot carry " +
+	"subtasks into another project")
 
 // ErrBulkInFlight refuses a bulk gesture while another is applying.
 var ErrBulkInFlight = errors.New("tracker: a bulk edit is already applying")

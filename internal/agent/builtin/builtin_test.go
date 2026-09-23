@@ -199,6 +199,10 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// board and moves its subtasks to another.
 		tracker.MergeWorkItemTool: true,
 
+		// SO IS A MOVE: an item and its subtree leave one board for
+		// another, and every key in it changes.
+		tracker.MoveWorkItemTool: true,
+
 		// AND THE RANKED SEARCH IS A READ. It sat on the default arm,
 		// whose ReadOnly=No with OpenWorld unset is exactly what
 		// WritesToSharedSurface reads as TRUE — so a worker granted it
@@ -807,6 +811,10 @@ func fullDeps(t *testing.T) builtin.Deps {
 			// snapshot — which is how a pure READ came to sit on the
 			// default arm's shared-write verdict unnoticed.
 			Merges: newFakeTracker().merges,
+			// AND THE MOVE, which this list lacked from the day the
+			// tool arrived — so the table below never saw it, and its
+			// shared-write verdict was checked by nothing.
+			Moves:  newFakeTracker().moves,
 			Search: newFakeTracker(),
 		},
 		Pages: builtin.PageDeps{Reader: &fakeKB{}, Writer: &fakeKB{}},

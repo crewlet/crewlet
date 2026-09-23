@@ -1283,6 +1283,11 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 				TurnID: actor.TurnID, Chain: actor.Chain,
 			})
 		},
+		Moves: func(actor builtin.Actor) builtin.WorkMover {
+			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
+				TurnID: actor.TurnID, Chain: actor.Chain,
+			})
+		},
 		// THE RANKED SEARCH, which reads and therefore takes no actor:
 		// the corpus is the same for everybody and there is nothing to
 		// attribute. Nil where this node has no index, and the tool is

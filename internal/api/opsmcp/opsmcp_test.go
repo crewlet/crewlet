@@ -37,7 +37,7 @@ func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 	only := opsmcp.New(opsmcp.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor(nil),
+			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: opsmcp.WorkActor(nil),
 		},
 	})
 	if only == nil {
@@ -269,7 +269,7 @@ func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	s := opsmcp.New(opsmcp.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor(nil),
+			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: opsmcp.WorkActor(nil),
 		},
 		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: opsmcp.PageActor},
 	})
@@ -344,6 +344,15 @@ func (stubWorkWriterT) MergeDuplicates(context.Context, string, string, string,
 	return tracker.WriteResult{}, nil
 }
 
+// stubWorkMover is its third shape, for the cross-project move.
+func stubWorkMover(builtin.Actor) builtin.WorkMover { return stubWorkWriterT{} }
+
+func (stubWorkWriterT) MoveTaskToProject(context.Context, string, string, string,
+	*tracker.Notify) (tracker.WriteResult, error) {
+
+	return tracker.WriteResult{}, nil
+}
+
 func (stubWorkWriterT) CreateTask(context.Context, string, tracker.Task,
 	*tracker.Notify) (tracker.WriteResult, error) {
 
@@ -403,7 +412,7 @@ func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
 	s := opsmcp.New(opsmcp.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor(nil),
+			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: opsmcp.WorkActor(nil),
 		},
 		Pages: builtin.PageDeps{
 			Reader: stubPageReader{}, Writer: stubPageWriter{},

@@ -26,15 +26,15 @@ The engine registers these into each epoch's tool registry with the origin `buil
 
 ### The native tracker and knowledge base
 
-Eighteen more, registered **only where the company runs the engine's own backends**
+Nineteen more, registered **only where the company runs the engine's own backends**
 (`tracker.backend: native` / `knowledge.backend: native`, which are the
 defaults). A company on Jira and Confluence gets none of them, and that is the
 point: a seat offered a tool against a tracker its company does not run would
 reach for it and fail at the call, and a model shown a tool that always fails
-learns to distrust the whole catalogue. The twelve below are the item and page
+learns to distrust the whole catalogue. The thirteen below are the item and page
 tools; the other six read the catalogue, the projects and the activity feed,
 and [The Work Tracker](work-tracker.md#what-a-seat-can-do) lists the tracker's
-thirteen in full.
+fourteen in full.
 
 | Tool | Description |
 |------|-------------|
@@ -44,6 +44,7 @@ thirteen in full.
 | `update_work_item` | Move it — status, assignee, priority, labels, links — with an optional `if_match` that refuses on a concurrent edit |
 | `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once |
 | `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
+| `move_work_item` | Move a top-level item and its subtasks to another project, re-keyed there with the old keys still resolving — the project lead's or a person's own |
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |

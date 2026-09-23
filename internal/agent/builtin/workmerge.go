@@ -140,6 +140,15 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		moveSubtasks(args), tracker.Wake{
 			Kind: tracker.ChangeStatus, Before: before.Task, After: cancelled,
 		}.Notify(t.deps.Leads))
+	if errors.Is(err, tracker.ErrReparentAcrossProjects) {
+		// THE REFUSAL NAMES BOTH WAYS OUT, in this surface's own words:
+		// the tracker knows the gesture that clears it and not the tool
+		// or the argument a caller reaches it by.
+		return failed(fmt.Sprintf("merge_work_item was refused: %v. Move %s "+
+			"into the surviving item's project with move_work_item first — its "+
+			"subtasks go with it — or merge with `move_subtasks: false`, which "+
+			"leaves them under the duplicate.", err, before.Task.Key)), nil
+	}
 	if err != nil {
 		return failed(writeFailure(actor, tracker.MergeWorkItemTool, err)), nil
 	}

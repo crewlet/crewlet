@@ -40,7 +40,7 @@ const (
 // one thing.
 func WorkTools() []string { return tracker.Tools() }
 
-// WorkWrites are the four that count as a DELIVERY.
+// WorkWrites are the five that count as a DELIVERY.
 //
 // A turn woken by an assignment answers by moving the item, commenting on it,
 // or filing the follow-up work — and the delivery gate has to know that, or
@@ -110,6 +110,14 @@ type WorkMerger interface {
 		reparent bool, notify *tracker.Notify) (tracker.WriteResult, error)
 }
 
+// WorkMover moves a top-level item, and its whole subtree, to another
+// project — the third SEQUENCE here, and its own seam for [WorkMerger]'s
+// reason: it reads the subtree and takes a fleet claim before its first append.
+type WorkMover interface {
+	MoveTaskToProject(ctx context.Context, opID, taskID, target string,
+		notify *tracker.Notify) (tracker.WriteResult, error)
+}
+
 // WorkDeps are the tracker halves plus what a write needs to attribute itself.
 type WorkDeps struct {
 	Reader WorkReader
@@ -139,6 +147,10 @@ type WorkDeps struct {
 	// verb rather than an argument on one, and a catalogue advertising a
 	// tool that always fails is how a model learns to distrust all of them.
 	Merges func(actor Actor) WorkMerger
+
+	// Moves resolves the cross-project move FOR ONE ACTOR, in the shape
+	// and for the reason [WorkDeps.Merges] is; nil omits the tool.
+	Moves func(actor Actor) WorkMover
 
 	// Search ranks work items by text — see worksearch.go for why that is
 	// a verb of its own beside the board.
@@ -246,7 +258,7 @@ type WorkDeps struct {
 	//
 	// The OPERATOR surface sets it, because there is no turn there and the
 	// writer is a person's credential rather than a seat. That is the
-	// whole reason it is a seam and not a second copy of these five tools:
+	// whole reason it is a seam and not a second copy of these tools:
 	// two implementations of "file an item" would drift on the parts that
 	// matter least visibly — which fields are trimmed, which default
 	// applies, what a refusal says — and only one of them would be tested.

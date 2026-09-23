@@ -293,7 +293,10 @@ func readAlias(ctx context.Context, tx *sql.Tx, key string) (string, bool, error
 // sixty-four of two hundred children and leaving the rest to a duty that
 // should never have been needed. An id cursor advances on what was PUBLISHED,
 // which is the fact this walk actually knows.
-func readChildBatch(ctx context.Context, tx *sql.Tx, parent, after string,
+//
+// AND ONLY A CHILD IN project — the project the walk is carrying children
+// into; see [Writer.reparentOnto].
+func readChildBatch(ctx context.Context, tx *sql.Tx, parent, project, after string,
 	limit int) ([]Task, error) {
 
 	// NOT A REMOVED CHILD. A tombstoned task is frozen — every write to it
@@ -304,8 +307,8 @@ func readChildBatch(ctx context.Context, tx *sql.Tx, parent, after string,
 	// restore finds it.
 	rows, err := tx.QueryContext(ctx, `
 		SELECT document, version, 0 FROM tracker_tasks
-		WHERE parent_id = ? AND id > ? AND removed_at IS NULL
-		ORDER BY id LIMIT ?`, parent, after, limit)
+		WHERE parent_id = ? AND project_key = ? AND id > ? AND removed_at IS NULL
+		ORDER BY id LIMIT ?`, parent, project, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: read the children of %s: %w", parent, err)
 	}
