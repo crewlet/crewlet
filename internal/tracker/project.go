@@ -127,11 +127,10 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 	scope := ScopeSet{Subject: true, Container: key}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readProject(ctx, tx, key)
 			switch {

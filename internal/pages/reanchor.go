@@ -46,8 +46,11 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	if err := scope.Validate(); err != nil {
 		return statelog.GenerationRecord{}, false, err
 	}
-	opID := fmt.Sprintf("reanchor:%d:%d", f.Generation,
-		f.Inputs.StreamCreatedAt.UTC().UnixNano())
+	// THE STATE LOG'S OWN GRAMMAR ([statelog.GenerationFacts.OpID]), so
+	// the record's id carries the instant a retry is judged by and two
+	// operators deriving this generation from this stream name one
+	// operation.
+	opID := f.OpID()
 	actor := Actor{Kind: AuthorOperator, OperatorID: f.By}
 	body, err := json.Marshal(Generation{
 		V:               GateRecordVersion,

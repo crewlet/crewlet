@@ -614,9 +614,10 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 
 	in := pages.NewComment{
-		Body:    body,
-		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
-		TurnKey: turnKey(turn),
+		Body:      body,
+		ReplyTo:   strings.TrimSpace(argString(args, "reply_to")),
+		TurnKey:   turnKey(turn),
+		TurnSince: turnSince(turn),
 	}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)

@@ -2,6 +2,7 @@ package inbox_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -346,5 +347,40 @@ func TestDegradingAnEmptyPartitionIsNotAPanic(t *testing.T) {
 	head, tail, key := inbox.Degraded(nil, always)
 	if head != nil || tail != nil || key != "" {
 		t.Errorf("got %v / %v / %q, want nothing", head, tail, key)
+	}
+}
+
+// THE INSTANT A UNIT OF WORK BEGAN IS DERIVED FROM THE SAME EVENTS AS ITS KEY,
+// and it is the EARLIEST of them.
+//
+// Every operation id a turn derives from the key carries this instant as its
+// mint time, and the state log refuses to decide again an operation minted
+// before its node adopted a donated snapshot — so the instant is read as a
+// lower bound on when the work could first have written anything. A later one
+// reads a re-run after an adoption as a new operation and decides it twice; an
+// event the key does not count cannot move it, or two dispatches of one unit of
+// work would carry two instants for one key.
+func TestWhenAUnitOfWorkBeganIsItsEarliestKeyedEvent(t *testing.T) {
+	t.Parallel()
+	at := func(e *events.Event, minutes int) *events.Event {
+		e.Timestamp = time.Date(2026, 9, 1, 8, minutes, 0, 0, time.UTC)
+		return e
+	}
+	first := at(ev(t, "notification"), 10)
+	later := at(ev(t, "notification"), 20)
+	unkeyed := at(ev(t, "chatter"), 1)
+	keyed := func(kind string) bool { return kind == "notification" }
+
+	got := inbox.WorkSinceFor([]*events.Event{later, unkeyed, first}, keyed)
+	if !got.Equal(first.Timestamp) {
+		t.Fatalf("the work began at %s, want the earliest keyed event's %s — "+
+			"an event the key does not count must not move it", got, first.Timestamp)
+	}
+	if routed := inbox.Route([]*events.Event{later, first}, keyed); !routed.WorkSince.Equal(first.Timestamp) {
+		t.Fatalf("Route carries %s, want %s", routed.WorkSince, first.Timestamp)
+	}
+	if none := inbox.WorkSinceFor([]*events.Event{unkeyed}, keyed); !none.IsZero() {
+		t.Fatalf("a dispatch with no keyed event began at %s, want the zero "+
+			"instant beside its empty key", none)
 	}
 }

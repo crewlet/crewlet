@@ -615,11 +615,10 @@ func (e *Embedder) append(ctx context.Context, subject Subject, rec VectorRecord
 	}
 	opID := env.OpID
 	res, err := e.deps.Publisher.Publish(ctx, statelog.Request{
-		Subject:  env.Subject,
-		Scope:    env.Scope,
-		OpID:     opID,
-		MintedAt: e.deps.Now().UTC(),
-		Pattern:  statelog.PatternAdditive,
+		Subject: env.Subject,
+		Scope:   env.Scope,
+		OpID:    opID,
+		Pattern: statelog.PatternAdditive,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			// THE FRAMEWORK'S STAMP, on this record as on every other
 			// domain's. This domain's gates are open, so nothing here

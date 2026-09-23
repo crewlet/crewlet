@@ -104,11 +104,10 @@ func (w *Writer) WriteTypes(ctx context.Context, opID string, types []TaskType) 
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			post := TypeCatalogue{
 				V: DocumentVersion, Types: clean, UpdatedAt: at,
@@ -135,11 +134,10 @@ func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readFieldCatalogue(ctx, tx)
 			if err != nil {

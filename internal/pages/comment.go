@@ -8,8 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/google/uuid"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -43,11 +42,21 @@ type NewComment struct {
 	// TurnKey makes a comment made from a turn idempotent: a re-run turn
 	// posts once.
 	//
-	// IT DERIVES THE OPERATION ID rather than only the comment's own,
-	// which is the upgrade the log brings: the operation ledger collapses
-	// the whole record, so a retried turn does not even append — where the
-	// bucket could only make the second write land on the same key.
+	// IT DERIVES THE OPERATION ID rather than only the comment's own, so a
+	// re-run is the SAME operation: inside the log's duplicate window the
+	// broker collapses its append, past it the comment's own id makes the
+	// apply an upsert of the row the first run wrote, and after this node
+	// adopts a donated snapshot the state log answers it `unknown` rather
+	// than deciding it again — which is what TurnSince is for.
 	TurnKey string
+
+	// TurnSince is when the unit of work TurnKey names began, and it is the
+	// instant the derived operation id carries (see statelog.DeriveOpID).
+	// It must be the key's own — reproduced by every re-run — and never the
+	// instant of this call: the state log refuses to decide again an
+	// operation minted before its node's latest adoption, and a call's own
+	// clock is always after it.
+	TurnSince time.Time
 
 	Quiet bool
 }
@@ -80,11 +89,10 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 	}
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, _, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
@@ -145,11 +153,10 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 	var read uint64
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
@@ -209,11 +216,10 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 	subject := PageSubject(pageID)
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, _, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
@@ -286,22 +292,26 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 // commentOpID is the operation this comment belongs to.
 //
 // DERIVED FROM THE TURN when one is named, so a re-run turn is one operation
-// the ledger collapses rather than a second comment. The comment's own id is
-// the same value: one comment is one operation here, and two identifiers for
-// one thing is two places for a retry to disagree with itself.
+// rather than a second comment. The comment's own id is the same value: one
+// comment is one operation here, and two identifiers for one thing is two
+// places for a retry to disagree with itself.
+//
+// AND IT CARRIES THE INSTANT THE TURN'S WORK BEGAN, never this call's, for the
+// reason [NewComment.TurnSince] gives.
 func (s *Store) commentOpID(pageID string, in NewComment) string {
 	if strings.TrimSpace(in.TurnKey) == "" {
 		return s.newSeqID()
 	}
 	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Body)))
-	name := pageID + "\x00" + strings.TrimSpace(in.TurnKey) + "\x00" +
-		hex.EncodeToString(sum[:])
-	return uuid.NewSHA1(commentNamespace, []byte(name)).String()
+	// UNNAMED, because this is the comment's own id as well and a reader
+	// addresses it: the page and the turn it came from are on the row.
+	return statelog.DeriveOpID(in.TurnSince, "", commentNamespace, pageID,
+		strings.TrimSpace(in.TurnKey), hex.EncodeToString(sum[:]))
 }
 
 // commentNamespace scopes the derived operation ids. FIXED for the life of the
 // deployment: a new one would make every re-run turn post a duplicate.
-var commentNamespace = uuid.MustParse("9c1d2e3f-4a5b-5c6d-8e7f-0a1b2c3d4e5f")
+const commentNamespace = "crewlet.pages.comment"
 
 // Thread is one page's comments, oldest first.
 //

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/maintenance"
@@ -505,11 +506,16 @@ func (d *duty) clearProbe(ctx context.Context, project string) error {
 
 // opID is one duty run's operation id.
 //
-// DERIVED FROM THE TICK rather than minted fresh, so a tick that failed
-// halfway and is retried on the next one dedupes against its own earlier
-// records rather than publishing a second copy of each.
+// DERIVED FROM THE TICK rather than minted fresh, so every append one tick makes
+// for one subject is one operation however often the tick retries it.
+//
+// THE TICK'S OWN INSTANT is the instant the id carries (see
+// [statelog.DeriveOpID]), truncated to the second exactly as the tick's
+// identity always was, so it is the moment the operation came to exist.
 func (d *duty) opID(job, subject string, now time.Time) string {
-	return fmt.Sprintf("duty.%s.%s.%s.%d", d.deps.NodeID, job, subject, now.Unix())
+	tick := now.Truncate(time.Second)
+	return statelog.DeriveOpID(tick, job+"-"+subject, "crewlet.tracker.duty",
+		d.deps.NodeID, job, subject, strconv.FormatInt(tick.Unix(), 10))
 }
 
 // pendingOneSided is the gate: one indexed read against the partial index the

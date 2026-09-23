@@ -121,11 +121,10 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 	at := w.Now()
 	var warnings, declared []string
 	result, err := w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readTagSet(ctx, tx, project)
 			if err != nil {

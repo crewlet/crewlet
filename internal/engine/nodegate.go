@@ -203,12 +203,18 @@ func livePresences(ctx context.Context, leases liveLeases) ([]statelog.Presence,
 // an operator carried from an eviction to the readmission after it would
 // otherwise be answered "applied" out of the eviction's own entry — every log
 // reporting the node back while every applier still drops its records.
+//
+// THE STATE LOG'S OWN GRAMMAR ([statelog.StepOpID]), so each log's id carries
+// the gesture's mint instant: the ledger's vouching reads it off the id, and
+// one spelled here in a shape that grammar did not recognise would be read as
+// minted at the zero instant — answered `unknown` on any node that ever
+// adopted a snapshot.
 func domainOpID(gesture string, readmit bool, domain string) string {
 	verb := "evict"
 	if readmit {
 		verb = "readmit"
 	}
-	return gesture + "." + verb + "." + domain
+	return statelog.StepOpID(gesture, verb, domain)
 }
 
 // newNodeGate builds the gesture over every identity-claiming log in the

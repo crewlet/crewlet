@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -287,7 +285,7 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 	// and a retry with a FRESH id would append a second purge of a task the
 	// first one may already have destroyed. The gate routes beside this
 	// take one for the same reason.
-	opID := callerOpID(r)
+	opID := callerOpID(r, "purge-"+id)
 	result, err := a.purger.PurgeAs(r.Context(), operator, opID, id, project, reason)
 	if err != nil {
 		log.Warn("api_purge_failed", "task", id, "operator", operator,
@@ -309,16 +307,33 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 }
 
 // callerOpID is the operation id a caller brought in `?op_id=`, or a fresh one
-// where it brought none.
+// named name where it brought none.
 //
 // A retry is only a retry under the SAME id: a gesture that came back `unknown`
 // or partial is finished by sending the id it answered with, and one sent with
 // a fresh id is a second gesture.
-func callerOpID(r *http.Request) string {
+//
+// THE ID CARRIES THE INSTANT IT WAS MINTED, which is what the state log reads
+// to decide whether its ledger can vouch for the retry — so the one minted here
+// is [statelog.NewOpID]'s, and the id a caller brings back is the one the route
+// answered with, instant and all. An id the engine did not mint carries none
+// and is read as minted before every adoption: on a node that has adopted a
+// donated snapshot since, a retry under it is answered `unknown` rather than
+// applied a second time, and a node that never adopted answers it as it would
+// any other.
+func callerOpID(r *http.Request, name string) string {
 	if opID := strings.TrimSpace(r.URL.Query().Get("op_id")); opID != "" {
 		return opID
 	}
-	return uuid.NewString()
+	return statelog.NewOpID(time.Now(), name)
+}
+
+// gateVerb names a gate gesture in the fresh operation id it is minted under.
+func gateVerb(evict bool) string {
+	if evict {
+		return "evict"
+	}
+	return "readmit"
 }
 
 // gate answers the eviction and readmission routes.
@@ -380,7 +395,7 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 			return
 		}
 		req := engine.GateRequest{
-			Node: node, OpID: callerOpID(r), By: operator,
+			Node: node, OpID: callerOpID(r, gateVerb(evict)+"-"+node), By: operator,
 			Force: evict && r.URL.Query().Get("force") == "true",
 		}
 		var result engine.GateResult

@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -30,11 +29,10 @@ func TestEveryRecordNamesItsWriterAndTheGenerationItWasDecidedIn(t *testing.T) {
 
 	var handed []statelog.Stamp
 	res, err := h.pub.Publish(t.Context(), statelog.Request{
-		Subject:  probeSubject("a"),
-		Scope:    statelog.ScopeSet{Paths: []string{"object.a"}},
-		OpID:     "op-stamp",
-		MintedAt: time.Now(),
-		Pattern:  statelog.PatternArbitrated,
+		Subject: probeSubject("a"),
+		Scope:   statelog.ScopeSet{Paths: []string{"object.a"}},
+		OpID:    "op-stamp",
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			handed = append(handed, stamp)
 			return statelog.Decision{Payload: probeRecord(stamp, "op-stamp", "x")}, nil
@@ -114,11 +112,10 @@ func TestARecordWithoutItsStampIsRefusedBeforeItIsAppended(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t)
 			_, err := h.pub.Publish(t.Context(), statelog.Request{
-				Subject:  probeSubject("a"),
-				Scope:    statelog.ScopeSet{Paths: []string{"object.a"}},
-				OpID:     "op-1",
-				MintedAt: time.Now(),
-				Pattern:  statelog.PatternArbitrated,
+				Subject: probeSubject("a"),
+				Scope:   statelog.ScopeSet{Paths: []string{"object.a"}},
+				OpID:    "op-1",
+				Pattern: statelog.PatternArbitrated,
 				Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 					return statelog.Decision{Payload: tc.record(stamp)}, nil
 				},

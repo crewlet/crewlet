@@ -262,11 +262,14 @@ type Request struct {
 	// itself — a rejection means nothing landed — so the only case a
 	// stable id collapses is a retry after a copy that landed, which is
 	// the case it is for.
+	//
+	// AND IT CARRIES THE INSTANT IT WAS MINTED AT, in its own bytes —
+	// see [NewOpID], [DeriveOpID] and [OpMintedAt]. There is deliberately
+	// no field beside it for that instant: a retry reuses the id, so the
+	// instant is the id's, and a value the caller stamps is the CALL's —
+	// later than the mint on every retry, which is exactly the case the
+	// ledger cannot vouch for.
 	OpID string
-
-	// MintedAt is when the op id was minted, which is what the
-	// pre-adoption arm compares against.
-	MintedAt time.Time
 
 	// Session is this caller's own high-water mark on the stream. The
 	// publisher waits for its own applier to reach it BEFORE it opens a
@@ -557,6 +560,26 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 		// could take it back.
 		if err = p.stamped(req, snap); err != nil {
 			return Result{Rounds: round}, err
+		}
+		// A DECISION THIS NODE'S LEDGER CANNOT VOUCH FOR IS NEVER
+		// PUBLISHED. See [Publisher.vouches]; it is read AFTER the
+		// snapshot, so an adoption that replaced the rows this decision
+		// read is one it sees.
+		vouched, err := p.vouches(ctx, req)
+		if err != nil {
+			return Result{Rounds: round}, err
+		}
+		if !vouched {
+			p.logger.WarnContext(ctx, "statelog_write_unvouched",
+				"domain", p.domain.Name(), "subject", req.Subject.String(),
+				"op_id", req.OpID, "minted_at", mintedAt(req.OpID),
+				"detail", "this operation was minted before this node "+
+					"adopted a donated snapshot, and the snapshot arrived "+
+					"without the ledger that says whether it already "+
+					"applied — so it is answered unknown rather than "+
+					"decided a second time; another node that did not "+
+					"adopt since can answer it")
+			return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round}, nil
 		}
 
 		expect, behind, err := p.expectation(ctx, req, snap, gen)
@@ -1116,33 +1139,116 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 		}, nil
 	}
 
+	// THE LEDGER'S SILENCE MEANS SOMETHING ONLY WHERE IT CAN VOUCH, and
+	// that is asked before either reading of it below — the mine arm's
+	// included, because an adoption during this very write is exactly
+	// what scrubs the row of a record this node was acknowledged for.
+	vouched, err := p.vouches(ctx, req)
+	if err != nil {
+		return Result{}, err
+	}
+
 	if mine {
+		if !vouched {
+			// THE ACKNOWLEDGEMENT IS THE PROOF, and the adoption is why
+			// the row is missing. The broker named this operation's own
+			// record at `at`, this node's rows are past it and no gate
+			// dropped it — so it applied, in the donated snapshot this
+			// node installed rather than under its own applier, which is
+			// the one applier that writes a ledger row here.
+			return Result{
+				Outcome:  OutcomeApplied,
+				Position: at,
+				OpID:     req.OpID,
+				Version:  at.Packed(),
+			}, nil
+		}
 		// THE BROKER ACKNOWLEDGED THIS RECORD, this node applied past
-		// it, and no gate dropped it — so the applier applied it and
-		// wrote no ledger row. That is a contract violation rather than
-		// a race, and re-deciding would republish a record that already
-		// landed, so it is reported instead of guessed at.
+		// it, no gate dropped it, and its ledger has lost nothing since
+		// the operation was minted — so the applier applied it and wrote
+		// no ledger row. That is a contract violation rather than a race,
+		// and re-deciding would republish a record that already landed,
+		// so it is reported instead of guessed at.
 		return Result{}, fmt.Errorf("statelog: %s applied the record at %s but "+
 			"wrote no %s row for operation %q — that ledger is what an ambiguous "+
 			"publish is resolved by, and a record applied without one cannot be "+
 			"answered for", p.domain.Name(), at, p.domain.OpsTable(), req.OpID)
 	}
 
-	adopted, ever, err := p.gates.AdoptedAt(ctx)
-	if err != nil {
-		return Result{}, fmt.Errorf("statelog: read the adoption record: %w", err)
-	}
-	if ever && !req.MintedAt.IsZero() && req.MintedAt.Before(adopted) {
+	if !vouched {
 		// THE LEDGER CANNOT ANSWER FOR THIS OPERATION ON THIS NODE. It
 		// is scrubbed from every donated snapshot, so a node that
 		// adopted one arrives with an empty table — and reading that
 		// absence as "somebody else won" would re-decide against a row
 		// that moved because of this very write.
-		return Result{Outcome: OutcomeUnknown, Position: at, OpID: req.OpID}, nil
+		//
+		// NO POSITION, which is the whole content of unknown (see
+		// [Result.Position]): the record at `at` is merely the newest on
+		// the subject, and naming it would tell the caller "your write
+		// landed here" — the one thing nobody here can say.
+		return Result{Outcome: OutcomeUnknown, OpID: req.OpID}, nil
 	}
 
 	// Somebody else won. Re-decide.
 	return Result{}, nil
+}
+
+// vouches reports whether this node's operation ledger can answer for req's
+// operation — whether "its row is absent" means "it has not applied here".
+//
+// # Why the ledger can lose a row, and what that costs a retry
+//
+// The ledger is this node's own and is SCRUBBED out of every donated
+// snapshot, so a node that adopted one holds no row for any operation the
+// donor applied — [AdoptedAt] is the instant before which that loss reaches.
+// An operation minted at or after it was published after every artefact the
+// adoption could have installed, so its every copy is one this node's own
+// applier applies and writes a row for: absence is conclusive. An operation
+// minted before it may have landed inside the artefact with its row scrubbed,
+// and absence says nothing.
+//
+// That is why this runs BEFORE A DECISION IS PUBLISHED and not only in the
+// resolution of an ambiguous one. A retry — a turn re-run after a crash, a
+// caller repeating an `unknown` under the same operation id — takes a fresh
+// snapshot whose rows already hold the first application, decides again on
+// top of them, and publishes a second copy of the operation the broker has no
+// reason to refuse: its expectation is current, and the duplicate window
+// that might have collapsed it is two minutes wide. The resolution never runs
+// on that path at all, because the append is acknowledged cleanly.
+//
+// # The instant is the operation id's own
+//
+// Read off the id with [OpMintedAt], never off a field the caller fills, for
+// the reason [Request.OpID] gives. An id that carries none is read as minted
+// at the zero instant, so a node that has adopted vouches for it only by
+// holding its row — see opid.go.
+//
+// # Where it is cheap
+//
+// The adoption record is one aggregate over a table with a row per join this
+// node ever made, and the ledger row is read only for an operation minted
+// before the bound — which on a node that never adopted is no operation at
+// all. A domain with no ledger has nothing to vouch with and nothing that
+// reads it, so it is answered without either read.
+func (p *Publisher) vouches(ctx context.Context, req Request) (bool, error) {
+	if p.domain.OpsTable() == "" {
+		return true, nil
+	}
+	adopted, ever, err := p.gates.AdoptedAt(ctx)
+	if err != nil {
+		return false, fmt.Errorf("statelog: read the adoption record: %w", err)
+	}
+	if !ever || !mintedAt(req.OpID).Before(adopted) {
+		return true, nil
+	}
+	// MINTED BEFORE THE ADOPTION, so only the row itself can speak — and
+	// it is read AFTER the bound, so an adoption landing between the two
+	// reads is one whose scrubbed table this read sees.
+	_, held, err := p.rows.Op(ctx, req.OpID)
+	if err != nil {
+		return false, fmt.Errorf("statelog: read the operation ledger: %w", err)
+	}
+	return held, nil
 }
 
 // fence0 is every refusal this node can make from what it already knows,

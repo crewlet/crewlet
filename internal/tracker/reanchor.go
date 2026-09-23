@@ -75,8 +75,11 @@ func generationReason(c statelog.ReanchorCase) string {
 func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.GenerationRecord, bool, error) {
 	subject := GenerationSubject(f.Generation)
 	scope := ScopeSet{Subject: true}
-	opID := fmt.Sprintf("reanchor:%d:%d", f.Generation,
-		f.Inputs.StreamCreatedAt.UTC().UnixNano())
+	// THE STATE LOG'S OWN GRAMMAR ([statelog.GenerationFacts.OpID]), so
+	// the record's id carries the instant a retry is judged by and two
+	// operators deriving this generation from this stream name one
+	// operation.
+	opID := f.OpID()
 	author, kind, operator := f.By, AuthorOperator, f.By
 	if author == "" {
 		author, kind, operator = f.Writer, AuthorSystem, ""

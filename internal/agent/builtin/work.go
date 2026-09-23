@@ -338,6 +338,13 @@ type Actor struct {
 	// twice. See [Actor.OperationSeed] and ADR-0017.
 	WorkKey string
 
+	// WorkSince is when that unit of work BEGAN — see
+	// [turnctx.Turn.WorkSince] — and it travels beside WorkKey for the
+	// reason the key does: a re-run must reproduce it exactly, because it
+	// is the instant every operation id derived from the key carries. See
+	// [Actor.OperationSince].
+	WorkSince time.Time
+
 	Chain []string
 }
 
@@ -362,6 +369,31 @@ func (a Actor) OperationSeed() string {
 		return a.WorkKey
 	}
 	return a.TurnID
+}
+
+// OperationSince is the instant an operation id derived from
+// [Actor.OperationSeed] carries: when the identity it is seeded from BEGAN.
+//
+// THE SAME CHOICE AS THE SEED, made in the same order, because the two are one
+// identity: the unit of work's own start where the seed is the work key, and
+// the run's where it is the run — which its id carries, run ids being minted
+// time-ordered for exactly this reader.
+//
+// NEVER THE INSTANT OF THE CALL. The ledger that collapses a retry cannot
+// vouch for an operation minted before this node's latest adoption of a
+// donated snapshot, and a re-run's call is always after the adoption it has
+// to be judged against — so an id stamped with its call's clock is one a
+// re-run after an adoption decides a second time. See [statelog.OpMintedAt].
+//
+// The zero instant where neither is known — a run parked by a build whose run
+// ids carried none — which reads as older than every adoption: a node that
+// adopted answers such a write `unknown` rather than risking it twice.
+func (a Actor) OperationSince() time.Time {
+	if a.WorkKey != "" {
+		return a.WorkSince
+	}
+	at, _ := statelog.OpMintedAt(a.TurnID)
+	return at
 }
 
 // Record is WHOSE OWN STATE this actor writes and reads: the seat the
@@ -429,11 +461,12 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 		return Actor{}, err
 	}
 	return Actor{
-		Handle:  seat.Handle(),
-		Kind:    tracker.AuthorAgent,
-		TurnID:  turn.RunID,
-		WorkKey: turn.WorkKey,
-		Chain:   turn.Chain,
+		Handle:    seat.Handle(),
+		Kind:      tracker.AuthorAgent,
+		TurnID:    turn.RunID,
+		WorkKey:   turn.WorkKey,
+		WorkSince: turn.WorkSince,
+		Chain:     turn.Chain,
 	}, nil
 }
 
@@ -472,10 +505,27 @@ func (d WorkDeps) partyOf(handle string) tracker.Party {
 // twice, free to disagree — the shape internal/whsec and internal/textcut
 // exist because of.
 func turnKey(turn *turnctx.Turn) string {
+	return turnIdentity(turn).OperationSeed()
+}
+
+// turnSince is the instant an id derived from [turnKey] carries — see
+// [Actor.OperationSince] — and the zero instant outside a turn, where nothing
+// is derived.
+func turnSince(turn *turnctx.Turn) time.Time {
 	if turn == nil {
-		return ""
+		return time.Time{}
 	}
-	return Actor{TurnID: turn.RunID, WorkKey: turn.WorkKey}.OperationSeed()
+	return turnIdentity(turn).OperationSince()
+}
+
+// turnIdentity is the part of a turn a derived id is built from, as an
+// [Actor], so the seed and its instant are chosen by the one rule the actor
+// states rather than by a second copy of it here.
+func turnIdentity(turn *turnctx.Turn) Actor {
+	if turn == nil {
+		return Actor{}
+	}
+	return Actor{TurnID: turn.RunID, WorkKey: turn.WorkKey, WorkSince: turn.WorkSince}
 }
 
 // notInATurn is the refusal every one of these tools gives outside a turn.
@@ -1563,19 +1613,36 @@ func handles(all ...string) []string {
 // nothing and answered `outcome: "applied"` with the FIRST write's position —
 // the worst shape a write surface has, because the caller is told it worked.
 // The same held for a dependency change, a re-removal after a restore, a
-// merge, and (through [callKey]) a priority list, a pin set and an inbox
-// mark.
+// merge, a priority list, a pin set and an inbox mark.
 //
 // [commentID] three hundred lines below has always had this right, and is
-// where the shape comes from: the turn's key where there is one, a fresh uuid
+// where the shape comes from: the turn's key where there is one, a fresh id
 // where there is not.
+//
+// # And it carries the instant the unit of work began
+//
+// Both branches mint through [statelog], whose ids carry their own mint
+// instant: a fresh id the instant of this call, which is the instant it was
+// minted, and a derived one [Actor.OperationSince] — the start of the work it
+// is derived from, which is what a re-run reproduces. The state log refuses to
+// decide a second time an operation its ledger cannot vouch for, and "cannot
+// vouch" is "minted before this node adopted a donated snapshot"; an id that
+// carried this CALL's instant instead read every re-run after an adoption as
+// minted after it, and published the operation again.
 func opIDFor(actor Actor, verb, object string) string {
 	seed := actor.OperationSeed()
 	if seed == "" {
-		return verb + "-" + object + "-" + uuid.NewString()
+		return statelog.NewOpID(time.Now(), verb+"-"+object)
 	}
-	return seed + "-" + verb + "-" + object
+	return statelog.DeriveOpID(actor.OperationSince(), verb+"-"+object,
+		opIDNamespace, seed, verb, object)
 }
+
+// opIDNamespace keeps a derived operation id from colliding with one another
+// package derives from the same turn — a page comment is seeded from the same
+// work key. FIXED for the life of the format: changing it makes every re-run
+// straddling the change write twice.
+const opIDNamespace = "crewlet.builtin.work"
 
 // ---- update_work_item -------------------------------------------------- //
 
@@ -1917,7 +1984,7 @@ func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
 			"project lead to declare it, or file without the label."
 	}
 	created, warnings, err := d.ProjectWriter(actor).EnsureTags(ctx,
-		"tags-"+uuid.NewString(), project, labels)
+		statelog.NewOpID(time.Now(), "tags-"+project), project, labels)
 	if err != nil {
 		return nil, writeFailure(tracker.WriteProjectTool, err)
 	}

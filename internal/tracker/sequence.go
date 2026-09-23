@@ -122,7 +122,13 @@ func mergeClaim(task string) string  { return classMerge.Resource(task) }
 // that never happened. A freshly minted id per attempt would defeat the ledger
 // for exactly the lost-acknowledgement case it exists for, which is contract
 // 2's own rule about why an operation id is minted once.
-func stepID(opID, step string) string { return opID + "." + step }
+//
+// THE STATE LOG'S OWN GRAMMAR ([statelog.StepOpID]), so a step carries the
+// gesture's mint instant: the ledger's vouching reads it off the step's id,
+// and a step spelled here in a shape that grammar did not recognise would be
+// read as minted at the zero instant — answered `unknown` on any node that
+// ever adopted a snapshot.
+func stepID(opID, step string) string { return statelog.StepOpID(opID, step) }
 
 // WriteResult is what a tracker write returns.
 //
@@ -307,11 +313,10 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 	subject := TaskSubject(task.ID)
 	scope := ScopeSet{Subject: true, Container: task.Project}
 	result, err := w.publish(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternCreate,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternCreate,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			// THE GUARD ROW IS READ INSIDE THE SNAPSHOT, because a task
 			// below the trim floor has no record left on the log to
@@ -367,11 +372,10 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 	// since minted.
 	var base uint64
 	result, err := w.publish(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			if guard != nil {
 				if err := guard(tx); err != nil {
@@ -985,11 +989,10 @@ func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 	subject := AliasSubject(key, 1)
 	scope := ScopeSet{Subject: true}
 	result, err := w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternCreate,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternCreate,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			if owner, claimed, err := readAlias(ctx, tx, key); err != nil {
 				return statelog.Decision{}, err

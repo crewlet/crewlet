@@ -72,6 +72,14 @@ const NoIfMatch uint64 = 0
 const ReassignmentBudget = 8
 
 // Writer is the tracker's write authority.
+//
+// Every write takes the OPERATION ID it publishes under from its caller, and
+// the id carries the instant it was minted: a caller mints it with
+// [statelog.NewOpID], or derives it with [statelog.DeriveOpID] when a retry
+// must reproduce it. There is no instant beside it to stamp, because the
+// state log reads that one to decide whether this node's ledger can vouch for
+// a retry — see [statelog.OpMintedAt] — and the writer's own clock at the call
+// is always later than the mint on exactly the retry that question is for.
 type Writer struct {
 	publisher *statelog.Publisher
 
@@ -484,11 +492,10 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	// the slice is replaced rather than appended to.
 	var fieldWarnings []string
 	result, err := w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			current, held, err := readTask(ctx, tx, id)
@@ -764,11 +771,10 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 	at := w.Now()
 
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			for _, placement := range placements {
 				if !placement.Rank.Valid() {
@@ -812,11 +818,10 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 	scope := ScopeSet{Subject: true, Container: container}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return w.decide(stamp, subject, OpPatch, kind, scope, opID, document, notify, at)
 		},
@@ -840,11 +845,10 @@ func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
 	scope := ScopeSet{Subject: true, Container: project}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternAdditive,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternAdditive,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return w.decide(stamp, subject, OpTurn, "", scope, opID, payload, nil, at)
 		},

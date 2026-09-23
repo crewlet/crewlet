@@ -49,6 +49,7 @@ package turnctx
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -83,6 +84,19 @@ type Turn struct {
 	// means "a turn with no ledgerable trigger" — a scheduled fire, a
 	// sub-agent — which has no cross-run duplicate to collapse.
 	WorkKey string
+
+	// WorkSince is when that unit of work BEGAN: the earliest instant at
+	// which any trigger event the key is derived from was created. Zero
+	// exactly when WorkKey is empty.
+	//
+	// It travels with the key because it is half of the same identity. An
+	// idempotent write derived from the key carries this instant as its
+	// mint time, and the state log answers `unknown` rather than deciding
+	// again an operation minted before its node adopted a donated snapshot
+	// — so a re-run must reproduce the instant exactly, as it reproduces
+	// the key, and neither may move with the run. It is derived from the
+	// SAME events the key is, for that reason (inbox.WorkSinceFor).
+	WorkSince time.Time
 
 	// Seat is who is acting. THE authorization fact: a tool that speaks
 	// for a seat — asking a colleague, marking an onboarding step, writing
@@ -225,7 +239,7 @@ func (t *Turn) ForSubagent(seat *org.Role, limit int) (*Turn, error) {
 		chain = append(chain, h)
 	}
 	return &Turn{
-		RunID: t.RunID, WorkKey: t.WorkKey,
+		RunID: t.RunID, WorkKey: t.WorkKey, WorkSince: t.WorkSince,
 		Seat: seat, Org: t.Org, Depth: depth, Chain: chain,
 	}, nil
 }

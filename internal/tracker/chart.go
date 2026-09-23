@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -90,11 +91,10 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 	var changed bool
 
 	_, err := w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     chartOpID(epoch, p.Key),
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    chartOpID(epoch, p.Key),
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readProject(ctx, tx, p.Key)
 			if err != nil {
@@ -152,11 +152,16 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 // DERIVED FROM THE EPOCH AND THE KEY, so every node applying one revision
 // mints the same id for one project: the ledger then collapses the N-1 that
 // lost the broker's arbitration into a no-op rather than leaving each node to
-// discover it separately. It is deliberately NOT time-based — a reconcile runs
+// discover it separately. It is deliberately NOT a fresh id — a reconcile runs
 // on every apply and on every boot, and a fresh id per run would make each of
 // those a new operation to be deduped by nothing.
+//
+// ITS INSTANT IS THE EPOCH, which is the revision's own activation instant and
+// so the moment the operation came to exist — never the apply's clock. See
+// [statelog.DeriveOpID] for why the instant is part of the id.
 func chartOpID(epoch int64, key string) string {
-	return fmt.Sprintf("chart:%d:%s", epoch, key)
+	return statelog.DeriveOpID(time.Unix(epoch, 0), "chart-"+key,
+		"crewlet.tracker.chart", strconv.FormatInt(epoch, 10), key)
 }
 
 // ChartEpochOf is the epoch a config revision's chart apply stamps.

@@ -342,6 +342,16 @@ below the published floor whose missing records the log still holds reports
    the artefact's position. `crewlet retention verify --restore` is what tells
    you in advance that it does.
 
+**After an adoption, retries of older work answer `unknown` on that node.** A
+donor's snapshot arrives without its operation ledger — the table that says
+which operations this node has already applied — so for any operation minted
+before the adoption, the node cannot tell a first attempt from a retry of one
+that already landed. Rather than risk applying it twice it answers the write
+`unknown` (and logs `statelog_write_unvouched`): a turn re-run whose work began
+before the join, or an operator repeating an older `-op-id`, gets that answer
+here until the operation is retried on a node that did not adopt since. New
+work is unaffected. See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted).
+
 ### A node a peer re-anchored past
 
 When one node [re-anchors](#re-anchoring-a-recreated-or-restored-log) the
@@ -806,7 +816,11 @@ It answers the same three-valued outcome every write here has. `pending` means
 the record is on the log and each node's rows go as it reaches them; do not run
 it again. `unknown` is the one to retry, and the printed operation id goes back
 in `-op-id` so the retry cannot append a second purge of a task the first one
-may already have destroyed.
+may already have destroyed. Pass it back exactly as printed: the id carries the
+instant it was minted, which is what a node that has since adopted a snapshot
+judges the retry by — there it answers `unknown` again rather than purging
+twice. An id of your own making carries no instant and is read as older than
+any adoption.
 
 A purge names **one** task, so its **children are moved, not destroyed** —
 each direct child re-parents onto the purged task's own parent, or becomes a

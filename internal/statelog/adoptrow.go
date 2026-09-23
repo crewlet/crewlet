@@ -107,10 +107,14 @@ func RecordAdoption(ctx context.Context, db *store.DB, startedAt time.Time,
 // the file it never replaced. An operation minted before the stamp resolves
 // `unknown` rather than being re-decided, which a caller retries under the
 // same operation id, and which is safe whichever side of the install the join
-// stopped on. Both instants are read off this node's own wall clock, so no
-// skew between nodes enters the comparison — what it does assume, as the row
-// has since it was keyed on a wall-clock instant, is a clock not stepped
-// backwards between a mint and the stamp.
+// stopped on. The stamp is read off this node's own wall clock and the mint
+// off the clock of whichever node minted the operation id — which a retry
+// carries across nodes, since the instant is the id's own ([OpMintedAt]). For
+// an operation minted HERE no skew enters the comparison, and what it assumes
+// is a clock not stepped backwards between a mint and the stamp; for one
+// minted elsewhere it also assumes the two clocks agree to within the time
+// between a donor finishing its artefact and this stamp, which opid.go states
+// as the one place the assumption is spent.
 //
 // No EARLIER instant is a bound, which is why the start is not stamped when
 // the join begins. A donor's snapshotter runs on its own schedule and can

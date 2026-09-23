@@ -191,11 +191,10 @@ func TestEvictedNodeRefusesBeforeTheAppend(t *testing.T) {
 			h := newHarness(t)
 			h.fence.evicted = true
 			_, err := h.pub.Publish(t.Context(), statelog.Request{
-				Subject:  probeSubject("a"),
-				Scope:    statelog.ScopeSet{Paths: []string{"object.a"}},
-				OpID:     "op-1",
-				MintedAt: time.Now(),
-				Pattern:  pattern,
+				Subject: probeSubject("a"),
+				Scope:   statelog.ScopeSet{Paths: []string{"object.a"}},
+				OpID:    "op-1",
+				Pattern: pattern,
 				Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 					return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x")}, nil
 				},
@@ -258,11 +257,10 @@ func TestARebuiltLogRefusesEveryWriteBeforeTheAppend(t *testing.T) {
 			before := h.appends.appends.Load()
 
 			_, err = h.pub.Publish(t.Context(), statelog.Request{
-				Subject:  probeSubject("a"),
-				Scope:    statelog.ScopeSet{Paths: []string{"object.a"}},
-				OpID:     "op-1",
-				MintedAt: time.Now(),
-				Pattern:  pattern,
+				Subject: probeSubject("a"),
+				Scope:   statelog.ScopeSet{Paths: []string{"object.a"}},
+				OpID:    "op-1",
+				Pattern: pattern,
 				Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 					return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x"), Version: 1}, nil
 				},
@@ -355,11 +353,10 @@ func TestFenceZeroAtTheAppendRefusesAsItselfInTheSameRound(t *testing.T) {
 					}
 
 					res, err := h.pub.Publish(t.Context(), statelog.Request{
-						Subject:  probeSubject("a"),
-						Scope:    statelog.ScopeSet{Paths: []string{"object.a"}},
-						OpID:     "op-1",
-						MintedAt: time.Now(),
-						Pattern:  pattern,
+						Subject: probeSubject("a"),
+						Scope:   statelog.ScopeSet{Paths: []string{"object.a"}},
+						OpID:    "op-1",
+						Pattern: pattern,
 						Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 							tc.trip(h)
 							return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x"), Version: 1}, nil
@@ -566,11 +563,10 @@ func TestACreateIsGuardedByTheRowAndByTheDeletionMarker(t *testing.T) {
 
 	create := func(h *harness) (statelog.Result, error) {
 		return h.pub.Publish(h.t.Context(), statelog.Request{
-			Subject:  probeSubject("a"),
-			Scope:    statelog.ScopeSet{Paths: []string{"object.a"}},
-			OpID:     "op-1",
-			MintedAt: time.Now(),
-			Pattern:  statelog.PatternCreate,
+			Subject: probeSubject("a"),
+			Scope:   statelog.ScopeSet{Paths: []string{"object.a"}},
+			OpID:    "op-1",
+			Pattern: statelog.PatternCreate,
 			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 				return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x")}, nil
 			},
@@ -738,9 +734,8 @@ func TestARecordMustDeclareWhatItMakesStale(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	_, err := h.pub.Publish(t.Context(), statelog.Request{
-		Subject:  probeSubject("a"),
-		OpID:     "op-1",
-		MintedAt: time.Now(),
+		Subject: probeSubject("a"),
+		OpID:    "op-1",
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x")}, nil
 		},
@@ -755,10 +750,9 @@ func TestADecisionWithNothingToSayPublishesNothing(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	res, err := h.pub.Publish(t.Context(), statelog.Request{
-		Subject:  probeSubject("a"),
-		Scope:    statelog.ScopeSet{Paths: []string{"object.a"}},
-		OpID:     "op-1",
-		MintedAt: time.Now(),
+		Subject: probeSubject("a"),
+		Scope:   statelog.ScopeSet{Paths: []string{"object.a"}},
+		OpID:    "op-1",
 		Decide: func(*sql.Tx, statelog.Stamp) (statelog.Decision, error) {
 			return statelog.Decision{Version: 7}, nil
 		},
@@ -826,11 +820,10 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 	// test is the write path's own, and a context deadline here would be
 	// the test supplying the bound it is meant to be checking.
 	_, err = h.pub.Publish(context.Background(), statelog.Request{
-		Subject:  probeSubject("a"),
-		Scope:    statelog.ScopeSet{Paths: []string{"p/a"}},
-		OpID:     "op-1",
-		MintedAt: time.Now(),
-		Pattern:  statelog.PatternArbitrated,
+		Subject: probeSubject("a"),
+		Scope:   statelog.ScopeSet{Paths: []string{"p/a"}},
+		OpID:    "op-1",
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return statelog.Decision{
 				Payload: probeRecord(stamp, "op-1", "mine"),

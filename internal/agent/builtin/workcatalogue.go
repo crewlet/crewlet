@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -177,7 +179,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		if refusal != "" {
 			return failed(refusal), nil
 		}
-		result, err := writer.WriteTypes(ctx, "types-"+uuid.NewString(), types)
+		result, err := writer.WriteTypes(ctx, statelog.NewOpID(time.Now(), "types"), types)
 		if err != nil {
 			return failed(writeFailure(tracker.WriteWorkCatalogueTool, err)), nil
 		}
@@ -192,7 +194,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		if refusal != "" {
 			return failed(refusal), nil
 		}
-		result, err := writer.WriteFields(ctx, "fields-"+uuid.NewString(), fields)
+		result, err := writer.WriteFields(ctx, statelog.NewOpID(time.Now(), "fields"), fields)
 		if err != nil {
 			return failed(writeFailure(tracker.WriteWorkCatalogueTool, err)), nil
 		}

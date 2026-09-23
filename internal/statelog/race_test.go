@@ -451,7 +451,7 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		}
 	})
 
-	t.Run("an operation minted before this node adopted answers unknown", func(t *testing.T) {
+	t.Run("an operation minted before an adoption during its own write answers unknown", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
 		first, err := h.write(probeSubject("a"), "op-0", "one")
@@ -459,19 +459,25 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 			t.Fatalf("the first write: %v", err)
 		}
 		h.anchorAt(probeSubject("a"), first.Position.Seq)
+		decided := h.rows.snapshots()
 
 		// The record lands, the acknowledgement is lost, this node
 		// applies past it — and its operation ledger is EMPTY, because
-		// it adopted a donated snapshot after this operation was
-		// minted and the ledger is scrubbed out of every one.
+		// it adopted a donated snapshot DURING this write, after the
+		// operation was minted and after its decision was checked, and
+		// the ledger is scrubbed out of every one.
 		h.applier.mu.Lock()
 		h.applier.auto = false
 		h.applier.mu.Unlock()
-		h.gates.adopted = time.Now().Add(time.Hour)
 		h.applier.advance(statelog.Position{Stream: probeStream, Generation: 1, Seq: 1_000})
 		h.appends.fail(errors.New("no response from stream"), false)
+		minted := time.Now()
+		h.appends.mu.Lock()
+		h.appends.beforeLastSeq = func() { h.adopt(minted.Add(time.Hour)) }
+		h.appends.mu.Unlock()
 
-		res, err := h.write(probeSubject("a"), "op-1", "two")
+		op := statelog.NewOpID(minted, "write-a")
+		res, err := h.write(probeSubject("a"), op, "two")
 		if err != nil {
 			t.Fatalf("write across an adoption: %v", err)
 		}
@@ -480,8 +486,48 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 				"as \"somebody else won\" would re-decide against a row that "+
 				"moved because of this very write", res.Outcome)
 		}
-		if res.OpID != "op-1" {
+		if got := h.rows.snapshots() - decided; got != 1 {
+			t.Fatalf("the write decided %d time(s), want once — the resolution "+
+				"of the landed record is what must answer, and a second decision "+
+				"is the re-decide the unknown exists to prevent", got)
+		}
+		if res.Position != (statelog.Position{}) {
+			t.Errorf("unknown named position %s — the newest record on the "+
+				"subject is not known to be this write's, so an unknown names "+
+				"none", res.Position)
+		}
+		if res.OpID != op {
 			t.Error("unknown must carry the op id to retry under")
+		}
+	})
+
+	t.Run("an acknowledged record whose ledger row an adoption scrubbed is applied", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		// The decision is checked before any adoption; the adoption is
+		// reported from the SECOND read of the record on — the
+		// resolution's — which is an adoption landing between this
+		// write's append and the answer to it.
+		h.gates.adopted = time.Now().Add(time.Hour)
+		h.gates.adoptFrom = 2
+		// This node's rows are past the record, and its own applier
+		// never wrote a row for it: the adopted artefact did the
+		// applying, which is what an adoption covering the record is.
+		h.applier.mu.Lock()
+		h.applier.auto = false
+		h.applier.mu.Unlock()
+		h.applier.advance(statelog.Position{Stream: probeStream, Generation: 1, Seq: 1_000})
+
+		res, err := h.write(probeSubject("a"), statelog.NewOpID(time.Now(), "write-a"), "one")
+		if err != nil {
+			t.Fatalf("an acknowledged write whose row the adoption scrubbed: %v — "+
+				"the broker named this operation's own record and no gate dropped "+
+				"it, so the missing row is the adoption's doing and not an "+
+				"applier that broke its contract", err)
+		}
+		if res.Outcome != statelog.OutcomeApplied || res.Position.Seq == 0 {
+			t.Fatalf("outcome = %q at %s, want applied at the acknowledged position",
+				res.Outcome, res.Position)
 		}
 	})
 }

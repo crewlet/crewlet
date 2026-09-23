@@ -429,11 +429,10 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 	scope := ScopeSet{Subject: true, Container: project}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readTask(ctx, tx, id)
 			switch {
@@ -502,11 +501,10 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return w.decide(stamp, subject, OpEviction, "", scope, opID, Eviction{
 				V: GateRecordVersion, NodeID: nodeID,

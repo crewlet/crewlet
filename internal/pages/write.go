@@ -128,11 +128,10 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 		excerpt(firstLine(in.Body, title)), nil)
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindTitle), ID: subject.ID},
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternCreate,
+		Subject: statelog.Subject{Kind: string(KindTitle), ID: subject.ID},
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternCreate,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return s.decide(stamp, actor, subject, OpCreate, scope, opID, CreatePayload{
 				V: DocumentVersion, PageID: page.ID, Container: container,
@@ -240,11 +239,10 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 	subject := PageSubject(pageID)
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
@@ -337,11 +335,10 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	}}
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindTitle), ID: subject.ID},
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternCreate,
+		Subject: statelog.Subject{Kind: string(KindTitle), ID: subject.ID},
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternCreate,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			current, _, err := readHeadTx(ctx, tx, pageID)
@@ -411,11 +408,10 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 	var read uint64
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
@@ -504,11 +500,10 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 	var read uint64
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
@@ -553,11 +548,10 @@ func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) 
 		Purpose: purpose, CreatedAt: at}
 
 	_, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindContainer), ID: key},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: statelog.Subject{Kind: string(KindContainer), ID: key},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			var held Container
 			var document []byte

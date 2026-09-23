@@ -30,6 +30,10 @@ type TurnRef struct {
 	// say which trigger it came from after the run outlives its process.
 	WorkKey string
 
+	// WorkSince is when that unit of work began, carried beside the key
+	// for the same reason — see [PendingRun.WorkSince].
+	WorkSince time.Time
+
 	AgentID     string
 	AgentHandle string
 	Role        string
@@ -137,6 +141,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	// finishes before the turn unwinds from being collected into nothing.
 	if err := store.BeginLaunch(ctx, PendingRun{
 		TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
+		WorkSince:   req.Turn.WorkSince,
 		AgentHandle: req.Turn.AgentHandle,
 		AgentID:     req.Turn.AgentID, Role: req.Turn.Role,
 		// WRITTEN WITH THE ROW, before the box exists, because every

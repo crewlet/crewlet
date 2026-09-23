@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	"github.com/google/uuid"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -224,7 +224,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// a tag declared into an archived project is the one order that reads
 	// as a mistake. Two writes, never one — two objects on two subjects.
 	if !tagEdit.Empty() {
-		result, err := writer.WriteTags(ctx, "tags-"+uuid.NewString(), key,
+		result, err := writer.WriteTags(ctx, statelog.NewOpID(time.Now(), "tags-"+key), key,
 			tagEdit, tracker.TagAuthority{Lead: lead, Operator: person})
 		if err != nil {
 			return failed(writeFailure(tracker.WriteProjectTool, err)), nil
@@ -239,7 +239,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["tags"] = tags
 	}
 	if !edit.Empty() {
-		result, err := writer.WriteProject(ctx, "policy-"+uuid.NewString(), key,
+		result, err := writer.WriteProject(ctx, statelog.NewOpID(time.Now(), "policy-"+key), key,
 			edit, tracker.ProjectAuthority{Lead: lead, Operator: person})
 		if err != nil {
 			return failed(writeFailure(tracker.WriteProjectTool, err)), nil

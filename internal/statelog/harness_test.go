@@ -383,6 +383,13 @@ type fakeGates struct {
 	reason  statelog.Reason
 	gated   bool
 	adopted time.Time
+
+	// adoptedReads counts AdoptedAt calls, and adoptFrom, when non-zero,
+	// is the read from which the adoption is REPORTED — which is how a
+	// case lands an adoption in the middle of one write, between the
+	// check its decision passed and the resolution of its append.
+	adoptedReads int
+	adoptFrom    int
 }
 
 func (g *fakeGates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position) (statelog.Reason, bool, error) {
@@ -394,7 +401,23 @@ func (g *fakeGates) GatedAt(context.Context, statelog.Subject, string, string, s
 func (g *fakeGates) AdoptedAt(context.Context) (time.Time, bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.adoptedReads++
+	if g.adoptFrom > 0 && g.adoptedReads < g.adoptFrom {
+		return time.Time{}, false, nil
+	}
 	return g.adopted, !g.adopted.IsZero(), nil
+}
+
+// adopt is what installing a donated snapshot does to this node's ledger: the
+// artefact arrives with the ledger SCRUBBED, so every row this node's applier
+// had written is gone, and the adoption is recorded at `at`.
+func (h *harness) adopt(at time.Time) {
+	h.applier.mu.Lock()
+	h.applier.ops = map[string]statelog.Position{}
+	h.applier.mu.Unlock()
+	h.gates.mu.Lock()
+	h.gates.adopted = at
+	h.gates.mu.Unlock()
 }
 
 // countingAppender wraps the real broker so a test can assert that a fenced
@@ -557,11 +580,10 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 func (h *harness) write(subject statelog.Subject, opID string, body string) (statelog.Result, error) {
 	h.t.Helper()
 	return h.pub.Publish(h.t.Context(), statelog.Request{
-		Subject:  subject,
-		Scope:    statelog.ScopeSet{Paths: []string{subject.String()}},
-		OpID:     opID,
-		MintedAt: time.Now(),
-		Pattern:  statelog.PatternArbitrated,
+		Subject: subject,
+		Scope:   statelog.ScopeSet{Paths: []string{subject.String()}},
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return statelog.Decision{Payload: probeRecord(stamp, opID, body), Version: 1}, nil
 		},

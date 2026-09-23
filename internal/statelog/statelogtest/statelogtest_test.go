@@ -62,8 +62,7 @@ func controlWrite(stampOf func(statelog.Stamp) statelog.Stamp) func(context.Cont
 		scope := statelog.ScopeSet{Paths: []string{"widget/w-1"}}
 		_, err := pub.Publish(ctx, statelog.Request{
 			Subject: subject, Scope: scope, OpID: opID,
-			MintedAt: time.Unix(1_700_000_000, 0).UTC(),
-			Pattern:  statelog.PatternArbitrated,
+			Pattern: statelog.PatternArbitrated,
 			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 				stamp = stampOf(stamp)
 				payload, err := json.Marshal(statelog.Envelope{

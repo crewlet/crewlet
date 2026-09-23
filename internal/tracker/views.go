@@ -99,11 +99,10 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 	at := w.Now()
 	view.UpdatedAt = at
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readView(ctx, tx, view.ID)
 			if err != nil {

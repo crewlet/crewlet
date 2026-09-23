@@ -249,6 +249,16 @@ type PendingRun struct {
 	// is the documented "nothing to collapse" case.
 	WorkKey string `json:"work_key,omitempty"`
 
+	// WorkSince is when that unit of work began, and it rides the row for
+	// the reason the key does: every operation id a turn derives from the
+	// key carries this instant as its mint time, so a resumed turn that
+	// could not reproduce it would derive DIFFERENT ids for the same
+	// writes, and the state log reads it to refuse deciding again an
+	// operation minted before its node adopted a donated snapshot.
+	// Zero on a row written before this field existed, which reads as
+	// older than every adoption — the conservative end.
+	WorkSince time.Time `json:"work_since,omitzero"`
+
 	AgentHandle string `json:"agent_handle"`
 	AgentID     string `json:"agent_id"`
 	Role        string `json:"role"`

@@ -333,7 +333,8 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 			// that run, and its writes stay idempotent against the
 			// trigger the run was dispatched for.
 			RunID: req.Run.TurnID, WorkKey: req.Run.UnitOfWork(),
-			Seat: seat, Org: company.Org,
+			WorkSince: req.Run.WorkSince,
+			Seat:      seat, Org: company.Org,
 			Depth: req.Run.DelegationDepth, Chain: req.Run.DelegationChain,
 		},
 		Answer:        req.Answer,
@@ -982,7 +983,7 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		// other fact about the seat here. The engine's current company is
 		// the next epoch once an apply lands mid-turn, and a renamed
 		// company derives a different id for the same seat.
-		TurnID: t.RunID, WorkKey: t.WorkKey,
+		TurnID: t.RunID, WorkKey: t.WorkKey, WorkSince: t.WorkSince,
 		AgentID: t.AgentID(), AgentHandle: t.Handle(), Role: role,
 		Depth: t.Depth, Chain: t.Chain,
 		TraceID: runTrace.TraceID, SpanID: runTrace.SpanID,

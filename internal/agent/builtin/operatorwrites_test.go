@@ -105,13 +105,16 @@ func TestAnOperatorsSecondWriteIsNotCollapsedAsARedelivery(t *testing.T) {
 	}
 	// AND THE ID STILL SAYS WHAT IT IS. Fresh is not the same as opaque: the
 	// verb and the object are what makes a stuck operation findable in the
-	// ledger, and a bare uuid would be a row nobody can trace back. So the two
-	// ids share everything up to the part that makes them unique.
-	shared := commonPrefix(trk.opIDs[0], trk.opIDs[1])
-	if !strings.HasPrefix(shared, "update-") || len(shared) <= len("update-") {
-		t.Errorf("the two operation ids are %q and %q, which share only %q — an "+
-			"id that does not name its verb and object is a ledger row nobody "+
-			"can trace back", trk.opIDs[0], trk.opIDs[1], shared)
+	// ledger, and a bare uuid would be a row nobody can trace back. So both
+	// ids carry the same NAME, and differ only in the part that makes them
+	// unique.
+	for _, id := range trk.opIDs {
+		if name := opName(id); !strings.HasPrefix(name, "update-") ||
+			name == "update-" || name != opName(trk.opIDs[0]) {
+			t.Errorf("the two operation ids are %q and %q — an id that does "+
+				"not name its verb and object is a ledger row nobody can trace "+
+				"back", trk.opIDs[0], trk.opIDs[1])
+		}
 	}
 }
 
@@ -214,13 +217,9 @@ func TestATurnWithNoWorkKeySeedsFromItsRun(t *testing.T) {
 	}
 }
 
-// commonPrefix is the leading text two strings share.
-func commonPrefix(a, b string) string {
-	n := min(len(a), len(b))
-	for i := range n {
-		if a[i] != b[i] {
-			return a[:i]
-		}
-	}
-	return a[:n]
+// opName is the part of an operation id that names what it is — everything
+// after the uuid that carries its mint instant (see statelog.OpMintedAt).
+func opName(id string) string {
+	_, name, _ := strings.Cut(id, ".")
+	return name
 }
