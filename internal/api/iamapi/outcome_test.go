@@ -1,7 +1,6 @@
 package iamapi_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -155,12 +154,6 @@ func TestARefusedWriteSaysWhenAndWhatToRetry(t *testing.T) {
 }
 
 // fakeBootstrap mints a code, or fails with err.
-type fakeBootstrap struct{ err error }
-
-func (b fakeBootstrap) MintCode(context.Context) (string, error) {
-	return "/var/lib/crewlet/bootstrap-code", b.err
-}
-
 // A BOOTSTRAP CODE THAT CANNOT BE MINTED SAYS WHETHER WAITING WILL HELP.
 //
 // Every failure answered a bare 503 — no Retry-After, and a status that told
@@ -185,7 +178,7 @@ func TestABootstrapMintFailureSaysWhetherWaitingHelps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t, func(o *iamapi.Options) {
-				o.Bootstrap = fakeBootstrap{err: tc.err}
+				o.Bootstrap = &fakeBootstrap{err: tc.err}
 			})
 			// AN ESTATE NOBODY CAN ADMINISTER, so the route reaches the mint.
 			for id, row := range r.directory.people {

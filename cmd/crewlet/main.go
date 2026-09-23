@@ -1584,9 +1584,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// its value. A node whose rows already hold somebody mints nothing,
 	// which is what stops an established fleet of a hundred nodes leaving
 	// a superuser-claim file on every machine.
-	if err := openBootstrap(ctx, boot, e, nodeID, authSurface); err != nil {
-		return nil, err
-	}
+	openBootstrap(ctx, authSurface, nodeID)
 	// AND THE DIRECTORY, which is nil on exactly the nodes the sign-in
 	// surface is nil on.
 	directory, err := directorySurface(boot, e, nodeID, authSurface)

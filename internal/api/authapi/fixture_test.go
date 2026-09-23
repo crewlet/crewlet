@@ -162,6 +162,10 @@ func (stubDirectory) OutstandingBootstrapCodes(context.Context, time.Time) (
 	return nil, nil
 }
 
+func (stubDirectory) BootstrapCode(context.Context, string) (iamdomain.BootstrapCode, error) {
+	return iamdomain.BootstrapCode{}, nil
+}
+
 type stubWriter struct{}
 
 // applied is a write that landed at a position and was applied here — what a

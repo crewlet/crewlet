@@ -32,8 +32,11 @@
 // The exceptions are named rather than assumed, and each discloses nothing a
 // stranger did not already have: a throttle refusal is keyed on the SOURCE, so
 // it tells somebody they are rate-limited, which they knew; a second-factor
-// prompt is reached only by somebody who already passed the first; and an
-// invitation's refusal is read by somebody holding the link.
+// prompt is reached only by somebody who already passed the first; an
+// invitation's refusal is read by somebody holding the link; and a STALE
+// founder code (`bootstrap_code_stale`) is answered only to somebody presenting
+// a code whose digest is on the identity log or in the serving node's own file
+// — which is to say, holding a real one.
 //
 // # A second factor is spent by the sign-in it completes
 //
@@ -81,6 +84,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -152,6 +156,12 @@ type Directory interface {
 	// aged out, which re-issuing one has to withdraw.
 	OutstandingBootstrapCodes(ctx context.Context, now time.Time) (
 		[]iamdomain.BootstrapCode, error)
+
+	// BootstrapCode resolves one code by its digest WHATEVER BECAME OF IT
+	// — the zero value for one the log holds no row for — which is what
+	// lets a founder holding a code that no longer works be told why, and
+	// what lets any node redeem a code another node wrote.
+	BootstrapCode(ctx context.Context, id string) (iamdomain.BootstrapCode, error)
 }
 
 // Writer is what this surface writes, defined here for Directory's reason.
@@ -425,6 +435,12 @@ type Service struct {
 	audit     Audit
 	custody   Custody
 	now       func() time.Time
+
+	// codeMu serialises every change to this node's founder-code FILE —
+	// the boot offer, a re-issue and the removal after a redemption — so
+	// two re-issues arriving at once cannot each withdraw, each write and
+	// each mint, leaving two live codes and a file holding only one.
+	codeMu sync.Mutex
 }
 
 // New builds the surface, or refuses a missing dependency by name.

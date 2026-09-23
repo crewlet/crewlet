@@ -3,11 +3,9 @@ package iamapi
 import (
 	"errors"
 	"net/http"
-	"slices"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -23,13 +21,23 @@ import (
 // where to read it, and reading it needs shell on the host, which is the
 // point.
 //
-// # Refused once somebody can administer this company
+// # It names the NODE as well as the path
+//
+// The file is written on whichever node served this request, and on a fleet
+// behind a load balancer that is not something the caller chose — so a path
+// with no host is a file nobody can find.
+//
+// # Refused wherever the redemption would be
 //
 // A live code is a way to become the first person, so it exists only while
-// there is no first person. Once anybody active holds a credential and
-// carries people:manage, this answers `409 bootstrap_closed` and an
-// administrator invites instead — which is the path that leaves a trail
-// naming who did it.
+// there is no first person. The seam asks the redemption's OWN gate — nobody
+// enrolled, `api.auth.bootstrap` open — and this answers `409
+// bootstrap_closed` when it is shut. It used to ask its own question here,
+// whether an ACTIVE, CREDENTIALLED ADMINISTRATOR existed, which is a different
+// one: a company whose only person was suspended was handed a code the
+// redemption refused for as long as it lived. The way back in there is an
+// administrator, or a Tier A token holding people:manage — the path that
+// leaves a trail naming who did it.
 func (s *Service) PostBootstrapCode(w http.ResponseWriter, r *http.Request) {
 	if s.bootstrap == nil {
 		// ABSENT RATHER THAN REFUSING, which is what a route that this
@@ -39,20 +47,16 @@ func (s *Service) PostBootstrapCode(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 		return
 	}
-	held, err := s.anyAdministrator(r)
-	if err != nil {
-		s.unavailable(w, r, "look for an administrator", err)
-		return
-	}
-	if held {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBootstrapClosed,
-			map[string]string{"detail": "this company already has somebody " +
-				"who can administer it; invite the next person instead, " +
-				"which leaves a trail naming who did it"})
-		return
-	}
-	path, err := s.bootstrap.MintCode(r.Context())
+	minted, err := s.bootstrap.MintCode(r.Context())
 	switch {
+	case errors.Is(err, iamdomain.ErrBootstrapClosed):
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBootstrapClosed,
+			map[string]string{"detail": "the first-person route is closed " +
+				"here — somebody is already enrolled, or api.auth.bootstrap " +
+				"is closed — so no code would ever be honoured. An " +
+				"administrator, or a Tier A token holding people:manage, " +
+				"invites or enrols the next person instead"})
+		return
 	case errors.Is(err, statelog.ErrUnavailable):
 		// THE ESTATE COULD NOT BE READ, OR A RECORD COULD NOT BE LANDED
 		// OR CONFIRMED: waiting clears it, so a 503 with the hint every
@@ -77,44 +81,15 @@ func (s *Service) PostBootstrapCode(w http.ResponseWriter, r *http.Request) {
 			httpjson.CodeInternalError, map[string]string{"detail": err.Error()})
 		return
 	}
-	log.WarnContext(r.Context(), "iam_bootstrap_code_minted", "path", path,
+	log.WarnContext(r.Context(), "iam_bootstrap_code_minted",
+		"path", minted.Path, "node", minted.Node,
 		"detail", "a one-time founder code is live on this host")
 	httpjson.Write(w, http.StatusCreated, map[string]any{
-		"path": path,
-		"detail": "the code is in that file, mode 0600, on this node's host. " +
-			"It is never returned over HTTP and never logged. Every code " +
-			"outstanding before this one was spent, so exactly one is live.",
+		"path": minted.Path,
+		"node": minted.Node,
+		"detail": "the code is in that file, mode 0600, on that node's host, " +
+			"and lasts 24 hours. It is never returned over HTTP and never " +
+			"logged. Every code outstanding before this one was withdrawn, " +
+			"so exactly one is live.",
 	})
-}
-
-// anyAdministrator reports whether somebody can already administer this
-// company.
-//
-// ACTIVE, CREDENTIALLED AND CARRYING people:manage — all three, because any
-// two of them describe a person who cannot actually do it: a suspended
-// administrator may not act, and one who has never enrolled a credential
-// cannot sign in to try.
-func (s *Service) anyAdministrator(r *http.Request) (bool, error) {
-	after := ""
-	for {
-		page, err := s.directory.People(r.Context(), iamdomain.PeopleQuery{
-			After: after, Limit: iamdomain.MaxPageSize,
-			Stage: iam.StageActive,
-		})
-		if err != nil {
-			return false, err
-		}
-		for _, row := range page.People {
-			if !slices.Contains(row.Grants, iam.GrantPeopleManage) {
-				continue
-			}
-			if s.hasCredential(r, row) {
-				return true, nil
-			}
-		}
-		if page.Next == "" {
-			return false, nil
-		}
-		after = page.Next
-	}
 }

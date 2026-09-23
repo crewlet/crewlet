@@ -84,9 +84,22 @@ func TestTheFirstPersonNamesTheCodeAsTheAuthority(t *testing.T) {
 	}{
 		{"the record accepts it", nil, http.StatusOK},
 		{"the exemption closed at the record",
-			fmt.Errorf("%w: this company already has somebody in it",
-				iamdomain.ErrRefused),
+			fmt.Errorf("%w: %w: this company already has somebody in it",
+				iamdomain.ErrRefused, iamdomain.ErrBootstrapClosed),
 			http.StatusConflict},
+		// THE CODE DIED BETWEEN THE ROUTE'S READ AND THE RECORD'S —
+		// aged out that second, or withdrawn by a re-issue — which is
+		// the stale answer, one command away, never the closed one.
+		{"the code died at the record",
+			fmt.Errorf("%w: %w: the one-time code is aged_out",
+				iamdomain.ErrRefused, iamdomain.ErrBootstrapCodeDead),
+			http.StatusGone},
+		// ANY OTHER REFUSAL IS THE NODE'S OWN WRITER being refused —
+		// its grants, or a ceiling this build cannot name — which no
+		// founder can clear and no wait fixes.
+		{"the node's writer was refused",
+			fmt.Errorf("%w: people:manage is required", iamdomain.ErrRefused),
+			http.StatusInternalServerError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

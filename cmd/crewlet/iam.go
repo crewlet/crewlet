@@ -830,10 +830,10 @@ func (p *iamPrinter) bootstrap(answer map[string]any, err error) error {
 	if p.raw {
 		return p.dump(answer)
 	}
-	fmt.Fprintf(p.w, "the one-time founder code is in %s on that node's "+
-		"host, mode 0600\n", str(answer["path"]))
-	fmt.Fprintln(p.w, "Every code outstanding before this one was withdrawn, "+
-		"so exactly one is live.")
+	fmt.Fprintf(p.w, "the one-time founder code is in %s on node %s's "+
+		"host, mode 0600\n", str(answer["path"]), str(answer["node"]))
+	fmt.Fprintln(p.w, "It lasts 24 hours. Every code outstanding before this "+
+		"one was withdrawn, so exactly one is live.")
 	return nil
 }
 

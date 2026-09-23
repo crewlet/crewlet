@@ -420,6 +420,18 @@ const (
 	// `api.auth.bootstrap` is closed.
 	CodeBootstrapClosed Code = "bootstrap_closed"
 
+	// CodeBootstrapCodeStale is a REAL one-time founder code that no longer
+	// works: it aged out, a re-issue withdrew it, or the node that wrote it
+	// never got its hash onto the log.
+	//
+	// ITS OWN CODE AND NEVER [CodeBootstrapClosed], because the remedies
+	// are opposite: that one is permanent and says ask somebody who has an
+	// account, this one is one command away. And specific without being an
+	// oracle, because it is reachable only by presenting a code whose
+	// digest is on the log or in the serving node's own file — a stranger
+	// guessing gets [CodeSignInRefused] like every other failed attempt.
+	CodeBootstrapCodeStale Code = "bootstrap_code_stale"
+
 	// CodeInviteSpent is an invitation that is redeemed, withdrawn or
 	// expired. SPECIFIC because the holder of the link needs to know to
 	// ask for another one, and because holding the link is already
@@ -618,6 +630,10 @@ var codes = map[Code]string{
 	CodeSessionRevoked: "This session has ended. Sign in again.",
 	CodeBootstrapClosed: "The first-operator setup is not available on this " +
 		"deployment. Ask somebody who already has an account to invite you.",
+	CodeBootstrapCodeStale: "That founder code no longer works: codes last 24 " +
+		"hours, and a newer one replaces an older. Run `crewlet iam " +
+		"bootstrap-code` for a fresh one, or restart the node that wrote the " +
+		"file, and use the code in the file it names.",
 	CodeSeatUnavailable: "The seat you are bound to is no longer in this " +
 		"company's org chart, so there is nothing for you to act as. An " +
 		"administrator can bind you to another one.",

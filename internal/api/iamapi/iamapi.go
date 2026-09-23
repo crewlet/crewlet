@@ -167,7 +167,18 @@ type Blinds interface {
 // can validate any node's, and a route that returned the value would put a
 // superuser claim in a response body, a proxy log and a shell history.
 type Bootstrap interface {
-	MintCode(ctx context.Context) (path string, err error)
+	MintCode(ctx context.Context) (BootstrapFile, error)
+}
+
+// BootstrapFile is where a freshly minted code was written: the path on the
+// host, and WHICH host — on a fleet the file lands on whichever node served
+// the request, and a path with no node is a file nobody can find.
+//
+// A mint on a route that is closed answers an error wrapping
+// [iamdomain.ErrBootstrapClosed], which this surface answers 409.
+type BootstrapFile struct {
+	Path string
+	Node string
 }
 
 // Audit is where this surface's identity facts go: a credential minted or

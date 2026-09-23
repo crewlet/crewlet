@@ -458,17 +458,32 @@ uses this. On `local` or `oidc` the first operator is created once, from a
 **one-time code this node writes beside its store**:
 
 ```
-2026-06-14 12:00 WARN engine  bootstrap_code_written path=/var/lib/crewlet/bootstrap-code
+2026-06-14 12:00:00.000 WARN  cli  iam_bootstrap_code_ready path=/var/lib/crewlet/bootstrap-code node=node-a
 ```
 
-Read that file on the host, open the dashboard, and set a login (dotted, like
-`jane.doe` — every person has one, and it is the name your changes are recorded
-under until you bind a seat), your address and a password.
-Nothing ever serves the code — the log line, `/health` and the welcome screen
-carry its **path**, so reading it means having access to the machine, which is
-the only credential a company genuinely has before it has any. The file is
-removed when it is used, and the route closes for good the moment anybody is
-enrolled.
+Read that file on the host and redeem it at `POST /auth/bootstrap` with a login
+(dotted, like `jane.doe` — every person has one, and it is the name your changes
+are recorded under until you bind a seat), your address and a password.
+Nothing ever serves the code — the log line carries its **path**, so reading it
+means having access to the machine, which is the only credential a company
+genuinely has before it has any. The file is removed when it is used, and the
+route closes for good the moment anybody is enrolled.
+
+**A code lasts 24 hours.** One that has run out — an install started on Friday
+and finished on Monday — is refused `410 bootstrap_code_stale`, never "this
+company has started", and a refused attempt claims nothing, so the route stays
+open. Two ways to a fresh one:
+
+- **Restart the node that wrote the file.** At boot a node checks its file
+  against the identity log: a code the log still honours is kept (you may be
+  about to type it), and one that aged out, was withdrawn or never reached the
+  log is replaced, and the new path logged.
+- **Run `crewlet iam bootstrap-code`** with `CREWLET_API_TOKEN` set to a Tier A
+  token holding `people:manage`. It withdraws every outstanding code and mints
+  one, so exactly one is live, and prints the path **and the node** it is on —
+  on a fleet the file lands on whichever node served the command, and any node
+  redeems it, because the code is checked on the log rather than against a
+  local file.
 
 Everybody after the first arrives by invitation, which confers exactly the
 grants and reach whoever issued it chose; the link's form proposes a login from

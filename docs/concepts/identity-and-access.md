@@ -377,31 +377,41 @@ be.
 
 So a node that finds an empty estate mints a **one-time code**, writes it beside
 its store at `0600`, and publishes its SHA-256 on the identity log. Nothing ever
-serves the code: the log line, the health body and the welcome screen carry its
-**path**. Reading it means having access to the host, which is the only
+serves the code: the log line carries its **path**, and so does the answer to a
+re-issue. Reading it means having access to the host, which is the only
 credential a company genuinely has before it has any.
 
 ```mermaid
 sequenceDiagram
-    participant Node
+    participant Node as Node that wrote the code
     participant Log as Identity log
+    participant Any as Any node
     participant Person
     Node->>Node: empty estate → mint a code
     Node->>Node: write 0600 beside the store
-    Node->>Log: publish SHA-256 (one subject, fleet-wide)
+    Node->>Log: publish SHA-256
     Person->>Node: read the file on the host
-    Person->>Node: POST /auth/bootstrap {code, login, password}
-    Node->>Log: enrol the person (whole ceiling)
-    Node->>Log: spend the code
-    Node->>Node: remove the file
-    Node-->>Person: session cookie
+    Person->>Any: POST /auth/bootstrap {code, login, email, password}
+    Any->>Log: is this digest live?
+    Any->>Log: enrol the person (whole ceiling)
+    Any->>Log: spend the code
+    Any->>Any: remove its own code file
+    Any-->>Person: session cookie
 ```
 
-Three things about that sequence are load-bearing:
+What about that sequence is load-bearing:
 
-- **It arbitrates on one subject for the whole domain.** Two live bootstrap
-  codes is two ways into an engine that has no other way in, so two nodes
-  minting at once contend at the broker and exactly one wins.
+- **The log is the check, so any node redeems any node's code.** A presented
+  code is hashed and looked up on the identity log, and what the log says is
+  the answer — live, redeemed, aged out, withdrawn, or nothing. A fleet behind a
+  load balancer puts the founder's request on whichever node it likes; the file
+  is read only to recognise a code the *serving* node wrote whose hash never
+  reached the log.
+- **Every code's life sits on one subject.** A mint, a withdrawal and a
+  redemption are records on the bootstrap's one subject, so an operator reads
+  them in order. Several codes can be live at once — every node that boots on
+  an empty estate offers its own, and a founder may be typing any of them — and
+  the re-issue below is what leaves exactly one.
 - **The code is spent on the log before the file is removed.** The record is
   what every *other* node reads to know the company has started; a file deleted
   first leaves a company that has an operator and a node that cannot prove it.
@@ -410,23 +420,50 @@ Three things about that sequence are load-bearing:
   nobody holds a credential — the alternative is a first operator who cannot
   grant themselves what they need in order to grant anybody anything. The
   enrolment **names the code** as its authority, and the record honours it
-  only while the code is live on the log and nobody else is enrolled; a code
-  file whose hash never reached the log is one no node accepts, and a second
-  caller racing the first is answered `409 bootstrap_closed`.
+  only while the code is live on the log and nobody else is enrolled; a second
+  caller arriving after the first is answered `409 bootstrap_closed`.
 
-Two more keep it honest. **The file is half the check and the log is the
-other:** a code is accepted only while its mint record is outstanding — not
-withdrawn by a re-issue, not spent, not past its 24 hours — so a stale file on
-a host proves nothing. And **the founder is derived from the code** (a uuid7 at
-the instant the log minted it), so a bootstrap refused halfway — a login outside
-the grammar, a record that did not land — is finished by the corrected retry
-rather than blocked by the address its own first attempt claimed.
+**A code lasts 24 hours**, and running out costs one command rather than a
+support ticket. A code that aged out, was withdrawn by a re-issue, or was
+written by a node whose mint never reached the log is answered `410
+bootstrap_code_stale`, naming the remedy — never `409 bootstrap_closed`, which
+is permanent and would send a founder away from a company still waiting for
+them, and never the uniform sign-in refusal, which would send them looking for a
+typo in a code that was right. It is specific without being an oracle: that
+answer is reachable only by presenting a code whose digest is on the log or in
+the serving node's own file, which a stranger guessing cannot do, and it is
+counted against the source like every failed attempt. The remedy is either of:
+
+- **A restart of the node that holds the file.** At boot a node checks its file
+  against the log. A code the log still honours is kept, because somebody may be
+  about to type it; anything else — aged out, withdrawn, never published, an
+  empty file — is replaced by a fresh one and the new path logged. Only the node
+  holding a file can see it, so each node replaces its own, and a boot never
+  withdraws a code another node wrote.
+- **`crewlet iam bootstrap-code`**, which withdraws every outstanding code and
+  mints one on whichever node serves the command — and names that **node** as
+  well as the path, because on a fleet that is not something the caller chose.
+  The withdrawals go first: a crash between them and the mint leaves no way in,
+  which running it again fixes, where the other order would leave two.
+
+**A refused attempt claims nothing.** An enrolment is a sequence — address,
+login, person — and the code is read before the first claim as well as at the
+person record, so a code the log no longer honours is refused before the
+founder's own address is reserved against the fresh code that replaces it. And
+**the founder is derived from the code** (a uuid7 at the instant the log minted
+it), so a bootstrap refused halfway for any other reason — a login outside the
+grammar, a record that did not land — is finished by the corrected retry rather
+than blocked by the address its own first attempt claimed.
 
 It **closes for good** the moment anybody is enrolled, whatever the
 configuration says, because what it creates is an operator carrying the whole
 ceiling. `api.auth.bootstrap: closed` shuts it from the start, which is right
 for a deployment restored from a backup where the answer is "ask somebody who
-already has an account".
+already has an account". Either way the route, its open flag on `GET
+/auth/config`, the boot offer and the re-issue ask **one** gate, so none of them
+can offer a code the others would refuse — and a node whose company has started
+removes any code file it still holds at its next boot, so an established fleet
+keeps no superuser claim on any host.
 
 ## Everybody after the first arrives by invitation
 
@@ -1516,7 +1553,8 @@ free, with no credential to revoke and no identity on the row. A row per
 attempt would hand the size of every node's event store — and of every backup
 and snapshot taken from it — to whoever is making the attempts. So a failed
 sign-in, a refused second factor, an identity-provider round trip that did not
-verify, a wrong bootstrap code, an invitation link that answers `410` (nobody
+verify, a wrong bootstrap code or a stale one (`410 bootstrap_code_stale`), an
+invitation link that answers `410` (nobody
 issued it, it was redeemed or aged out, or its address is already enrolled —
 the id in the link is the credential, so a source walking ids is guessing at
 one) and a bearer credential refused by a route that needs one each do two

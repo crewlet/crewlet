@@ -89,23 +89,21 @@ func (s *Service) Config(w http.ResponseWriter, r *http.Request) {
 	if s.provider != nil {
 		out.Provider = providerLabel(s.boot.API.Auth.OIDC.Issuer)
 	}
-	// THE ESTATE DECIDES, not the setting alone. `api.auth.bootstrap` says
-	// whether the route MAY run and the estate says whether it still can:
-	// a company with people in it closes it for good whatever the file
-	// says, because the route creates an operator carrying the whole
-	// ceiling.
-	if s.boot.API.Auth.Bootstrap != config.BootstrapAccessClosed {
-		held, err := s.directory.AnyPerson(r.Context())
-		if err != nil {
-			// THE UNKNOWN ARM IS REPORTED AS CLOSED, which is the
-			// fail-safe direction: a client told the route is open
-			// and refused is confusing, and a client told it is
-			// closed when the estate could not be read merely waits.
-			log.WarnContext(r.Context(), "api_auth_config_estate_unreadable",
-				"error", err)
-		} else {
-			out.Bootstrap = !held
-		}
+	// THE ROUTE'S OWN GATE, so this flag and the route can never
+	// disagree: `api.auth.bootstrap` says whether the route MAY run and
+	// the estate says whether it still can — a company with people in it
+	// closes it for good whatever the file says, because the route creates
+	// an operator carrying the whole ceiling.
+	closed, err := s.bootstrapClosed(r.Context())
+	if err != nil {
+		// THE UNKNOWN ARM IS REPORTED AS CLOSED, which is the fail-safe
+		// direction: a client told the route is open and refused is
+		// confusing, and a client told it is closed when the estate
+		// could not be read merely waits.
+		log.WarnContext(r.Context(), "api_auth_config_estate_unreadable",
+			"error", err)
+	} else {
+		out.Bootstrap = closed == ""
 	}
 	httpjson.Write(w, http.StatusOK, out)
 }

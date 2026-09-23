@@ -10,9 +10,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,10 +40,31 @@ import (
 // # The code is a FILE, not an answer
 //
 // It is written beside the store, 0600, by the node that mints it, and its
-// SHA-256 goes on the log. Nothing ever serves it: the log line, the health
-// body and the welcome screen carry its PATH, so reading it means having
-// access to the host — which is the only credential a company genuinely has
-// before it has any.
+// SHA-256 goes on the log. Nothing ever serves it: the log line and the
+// re-issue's answer carry its PATH, so reading it means having access to the
+// host — which is the only credential a company genuinely has before it has
+// any.
+//
+// # The LOG is the check, so any node redeems any node's code
+//
+// A presented code is hashed and looked up on the identity log, and what the
+// log says about it is the whole answer: live, redeemed, aged out, withdrawn,
+// or nothing. The file is not consulted to ACCEPT anything — a fleet behind a
+// load balancer puts the founder's request on whichever node it likes, and the
+// route used to compare against the serving node's own file, so every node but
+// the one that wrote the code refused it as a wrong one. The file is read only
+// to recognise a code this node wrote whose mint never reached the log, which
+// is a code its holder can replace rather than one they typed wrong.
+//
+// # It lives twenty-four hours, and one command replaces it
+//
+// A code that aged out, was withdrawn by a re-issue or never reached the log
+// answers `410 bootstrap_code_stale` naming the remedy — `crewlet iam
+// bootstrap-code`, or a restart of the node that wrote it — and never the
+// closed answer, which is permanent and would send a founder away from a
+// company still waiting for them. It is specific without being an oracle: the
+// arm is reachable only by presenting a code whose digest is on the log or in
+// this node's own file, which a stranger cannot do.
 //
 // # It closes for good
 //
@@ -58,7 +81,8 @@ const BootstrapCodeFile = "bootstrap-code"
 // THIRTY-TWO, which is the same floor every other credential this engine
 // mints clears, and deliberately not "enough for a one-time value": the code
 // creates a principal carrying the whole grant ceiling, and it sits in a file
-// for as long as nobody uses it.
+// for as long as nobody uses it. It is also what makes the code's digest a
+// safe thing to look up by: nobody finds a preimage of a row on the log.
 const bootstrapCodeBytes = 32
 
 // bootstrapLifetime is how long a minted code stays redeemable.
@@ -67,7 +91,10 @@ const bootstrapCodeBytes = 32
 // installs the engine and opens the dashboard, and the gap between those two
 // is a working day at the outside. Longer is a credential in a file nobody
 // remembers; shorter and an install started on a Friday afternoon is one
-// somebody has to restart.
+// somebody has to restart. What makes the number safe to be short is that
+// running out costs one command: a restart replaces a dead file on the node
+// that holds it ([Service.OfferBootstrapCode]), and `crewlet iam
+// bootstrap-code` mints a fresh one on whichever node serves it.
 const bootstrapLifetime = 24 * time.Hour
 
 // bootstrapRequest is what redeeming the code presents.
@@ -95,12 +122,13 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	if !s.admit(w, r, source, types.FailBootstrap) {
 		return
 	}
-	open, err := s.bootstrapOpen(r)
+	closed, err := s.bootstrapClosed(r.Context())
 	if err != nil {
+		log.WarnContext(r.Context(), "api_bootstrap_estate_unreadable", "error", err)
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
-	if !open {
+	if closed != "" {
 		// SPECIFIC, and safe to be: it says this company has started,
 		// which whoever can reach an unstarted one would find out by
 		// trying. What it must not do is look like a wrong code, which
@@ -121,44 +149,12 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	held, err := s.readBootstrapCode()
-	if err != nil {
-		log.ErrorContext(r.Context(), "api_bootstrap_code_unreadable",
-			"error", err, "path", s.bootstrapCodePath())
-		s.refuseSignIn(w, r, arrived, authevents.Failure{
-			Client: source, Method: types.FailBootstrap,
-		}, "no code file on this node")
-		return
-	}
-	// CONSTANT TIME, like every other credential comparison here: an early
-	// exit makes the time taken depend on how much of the code was right,
-	// which is a code you can guess one character at a time.
-	if subtle.ConstantTimeCompare([]byte(held), []byte(in.Code)) != 1 {
-		// THE CODE TRIED IS THE SUBJECT, keyed in memory and never
-		// kept: how many DIFFERENT codes one client tried in a minute is
-		// the difference between a typo and somebody guessing.
-		s.refuseSignIn(w, r, arrived, authevents.Failure{
-			Client: source, Method: types.FailBootstrap, Subject: in.Code,
-		}, "bootstrap code mismatch")
-		return
-	}
-	// THE FILE IS HALF OF IT, AND THE LOG IS THE OTHER. A code is live only
-	// while its mint record says so — not withdrawn by a re-issue, not
-	// aged out, not spent — and the file on its own said none of that: a
-	// code a day past its lifetime, or one `crewlet iam bootstrap-code`
-	// had superseded while its file survived on another node, still
-	// created the company's first operator. Refused exactly as a wrong code
-	// is, because to the caller it is one.
-	code, found, err := s.outstandingCode(r.Context(), bootstrapCodeID(held))
-	if err != nil {
-		log.WarnContext(r.Context(), "api_bootstrap_codes_unreadable", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
-		return
-	}
-	if !found {
-		s.refuseSignIn(w, r, arrived, authevents.Failure{
-			Client: source, Method: types.FailBootstrap,
-		}, "bootstrap code is not outstanding on the log")
+	// SURROUNDING WHITESPACE IS NOT PART OF A CODE — the alphabet is
+	// base64url — and the file's own read trims it, so a code pasted with
+	// the newline it was copied with is the code in the file.
+	presented := strings.TrimSpace(in.Code)
+	code, live := s.liveCode(w, r, arrived, source, presented)
+	if !live {
 		return
 	}
 	if err := credential.CheckStrength(in.Password); err != nil {
@@ -204,22 +200,11 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		// confer the ceiling on its own grants, and must not be able to.
 		Grants:        s.boot.API.Auth.MaxGrants,
 		Colleague:     iam.ColleagueWrite,
-		BootstrapCode: bootstrapCodeID(held),
+		BootstrapCode: code.ID,
 		OpID:          opID, Reason: "the first operator",
 	})
 	if err != nil {
-		if errors.Is(err, iamdomain.ErrRefused) {
-			// THE EXEMPTION CLOSED between the route's own check and
-			// the record: somebody else became the first person, or
-			// the code was spent or withdrawn. Nothing the caller
-			// retries will change that, so it is the closed answer
-			// rather than a 503.
-			log.InfoContext(r.Context(), "api_bootstrap_closed_at_the_record",
-				"error", err)
-			httpjson.Fail(w, http.StatusConflict, httpjson.CodeBootstrapClosed)
-			return
-		}
-		refuseEnrolment(w, r, "api_bootstrap_enrol_failed", err)
+		s.refuseFounder(w, r, arrived, source, presented, err)
 		return
 	}
 	if !landed(enrolled) {
@@ -235,7 +220,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	// to know the company has started, and a file deleted first leaves a
 	// company that has an operator and a node that cannot prove it.
 	spent, err := s.writer.SpendBootstrap(r.Context(), iamdomain.BootstrapSpend{
-		ID: bootstrapCodeID(held), Person: person, OpID: opID + ":spend",
+		ID: code.ID, Person: person, OpID: opID + ":spend",
 		Reason: "redeemed",
 	})
 	if err != nil || !landed(spent) {
@@ -246,14 +231,16 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 			"error", errText(err), "op_id", spent.OpID,
 			"outcome", string(spent.Outcome), "person", person)
 	}
-	// AND THE FILE GOES LAST. A failure here is logged and never reported:
-	// the operator exists, the route is closed by the estate whatever the
-	// file says, and telling somebody their first sign-in failed over a
-	// file they cannot see would be false.
-	if err := os.Remove(s.bootstrapCodePath()); err != nil {
-		log.WarnContext(r.Context(), "api_bootstrap_code_not_removed",
-			"error", err, "path", s.bootstrapCodePath())
-	}
+	// AND THIS NODE'S FILE GOES LAST, whichever code it holds: the company
+	// has started, so no code will ever be honoured again. A failure here is
+	// logged and never reported — the operator exists, the route is closed
+	// by the estate whatever the file says, and telling somebody their
+	// first sign-in failed over a file they cannot see would be false. A
+	// file on ANOTHER node goes at that node's next boot
+	// ([Service.OfferBootstrapCode]).
+	s.codeMu.Lock()
+	s.removeCodeFile(r.Context(), "the company's first person was created")
+	s.codeMu.Unlock()
 
 	log.InfoContext(r.Context(), "api_bootstrap_redeemed",
 		"person", person, "login", in.Login)
@@ -265,43 +252,150 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	}, signIn{method: types.SignInBootstrap})
 }
 
-// bootstrapOpen reports whether the first-person route may run at all.
+// liveCode is the live code a caller presented, answering false once it has
+// written the refusal.
+//
+// THE LOG DECIDES, by [iamdomain.BootstrapCode.State] — the predicate the
+// person record's own decide asks — so this route and the record cannot
+// disagree about a code. Each answer is a different remedy:
+//
+//   - LIVE is the way in.
+//   - REDEEMED is a company that has started on a node that has not applied
+//     its first person yet: the closed answer, which is permanent.
+//   - AGED OUT and WITHDRAWN are a real code that no longer works, and so is
+//     a code this node's OWN FILE holds whose mint never reached the log:
+//     `410 bootstrap_code_stale`, whose remedy is one command.
+//   - NOTHING — no row, and not this node's file — is a wrong code, and is
+//     refused exactly as every failed sign-in is.
+func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
+	arrived time.Time, source, presented string) (iamdomain.BootstrapCode, bool) {
+
+	code, err := s.directory.BootstrapCode(r.Context(), bootstrapCodeID(presented))
+	if err != nil {
+		log.WarnContext(r.Context(), "api_bootstrap_codes_unreadable", "error", err)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		return iamdomain.BootstrapCode{}, false
+	}
+	switch state := code.State(s.now()); state {
+	case iamdomain.CodeLive:
+		return code, true
+	case iamdomain.CodeRedeemed:
+		httpjson.Fail(w, http.StatusConflict, httpjson.CodeBootstrapClosed)
+	case iamdomain.CodeAgedOut, iamdomain.CodeWithdrawn:
+		s.refuseStaleCode(w, r, arrived, source, presented, string(state))
+	default:
+		// THE FILE IS READ ONLY HERE, and only to tell two absences
+		// apart: a code this node wrote whose mint never landed is one
+		// its holder replaces, and anything else is a code they typed
+		// wrong. CONSTANT TIME, like every credential comparison here:
+		// an early exit makes the time taken depend on how much of the
+		// code was right, which is a file read one character at a time.
+		if held, err := s.readBootstrapCode(); err == nil &&
+			subtle.ConstantTimeCompare([]byte(held), []byte(presented)) == 1 {
+			s.refuseStaleCode(w, r, arrived, source, presented, "unpublished")
+			return iamdomain.BootstrapCode{}, false
+		}
+		// THE CODE TRIED IS THE SUBJECT, keyed in memory and never
+		// kept: how many DIFFERENT codes one client tried in a minute is
+		// the difference between a typo and somebody guessing.
+		s.refuseSignIn(w, r, arrived, authevents.Failure{
+			Client: source, Method: types.FailBootstrap, Subject: presented,
+		}, "bootstrap code matches nothing on the log")
+	}
+	return iamdomain.BootstrapCode{}, false
+}
+
+// refuseStaleCode answers a REAL code that no longer works: aged out,
+// withdrawn by a re-issue, or written by this node and never published.
+//
+// # 410, its own code, and a remedy — never the closed answer
+//
+// A founder installing on a Friday and opening the dashboard on Monday holds a
+// code a day past its lifetime. Told `bootstrap_closed` they read "this company
+// has started" and give up on a company that is still waiting for them; told
+// `sign_in_refused` they go looking for a typo in a code that was right. What
+// is true is that the file is stale and one command replaces it, so that is
+// what the answer says.
+//
+// # A failed attempt like every other
+//
+// Counted against the SOURCE, reaching the failure tally and padded to the
+// deadline, as an invitation's 410 is — a refusal is a refusal whichever arm
+// produced it, and the specificity is safe because presenting a code whose
+// digest is on the log, or in this node's own file, is proof of holding one.
+func (s *Service) refuseStaleCode(w http.ResponseWriter, r *http.Request,
+	arrived time.Time, source, presented, state string) {
+
+	s.throttle.Fail(r.Context(), source)
+	s.audit.Failed(r.Context(), authevents.Failure{
+		Client: source, Method: types.FailBootstrap, Subject: presented,
+	})
+	log.WarnContext(r.Context(), "api_bootstrap_code_stale",
+		"state", state, "source", source,
+		"hint", "`crewlet iam bootstrap-code` mints a fresh one, and a "+
+			"restart replaces a dead file on the node that holds it")
+	s.throttle.Pad(r.Context(), arrived)
+	httpjson.Fail(w, http.StatusGone, httpjson.CodeBootstrapCodeStale)
+}
+
+// refuseFounder answers an enrolment the record refused.
+//
+// THE RECORD'S SENTINEL PICKS THE ANSWER, because the record read the code
+// and the directory in the snapshot the grants land from, which is later than
+// anything this route read: a code that died in between is the stale answer,
+// somebody else becoming the first person is the closed one, and any other
+// refusal of the node's own writer is a wiring fault no caller can clear.
+func (s *Service) refuseFounder(w http.ResponseWriter, r *http.Request,
+	arrived time.Time, source, presented string, err error) {
+
+	switch {
+	case errors.Is(err, iamdomain.ErrBootstrapCodeDead):
+		s.refuseStaleCode(w, r, arrived, source, presented, "dead at the record")
+	case errors.Is(err, iamdomain.ErrBootstrapClosed):
+		log.InfoContext(r.Context(), "api_bootstrap_closed_at_the_record",
+			"error", err)
+		httpjson.Fail(w, http.StatusConflict, httpjson.CodeBootstrapClosed)
+	case errors.Is(err, iamdomain.ErrRefused):
+		// THE NODE'S OWN WRITER REFUSED, which is its grants or a
+		// ceiling this build cannot name — a deployment fault, not the
+		// founder's, and not one waiting clears.
+		log.ErrorContext(r.Context(), "api_bootstrap_writer_refused",
+			"error", err)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+	default:
+		refuseEnrolment(w, r, "api_bootstrap_enrol_failed", err)
+	}
+}
+
+// bootstrapClosed says why the first-person route may not run, or "" while it
+// may.
 //
 // TWO CONDITIONS AND THE ESTATE WINS. `api.auth.bootstrap` says whether the
 // route may EVER run on this deployment, and the estate says whether it still
 // can — a company with people in it closes it for good whatever the file says,
 // because what the route creates is an operator carrying the whole ceiling.
-func (s *Service) bootstrapOpen(r *http.Request) (bool, error) {
+//
+// ONE GATE FOR EVERY PARTY THAT ASKS: the route, the posture read's open flag,
+// the boot path deciding whether to offer a code and the re-issue. The estate
+// half is [iamdomain.Reader.AnyPerson], which is the predicate the record and
+// the mint are refused on, so a reservation left by a refused attempt is
+// nobody here too.
+//
+// THE UNKNOWN ARM IS AN ERROR rather than folded into "closed": a caller told
+// to ask somebody who already has an account when nobody does is stuck for
+// good, where one told to try again merely waits.
+func (s *Service) bootstrapClosed(ctx context.Context) (string, error) {
 	if s.boot.API.Auth.Bootstrap == config.BootstrapAccessClosed {
-		return false, nil
+		return "api.auth.bootstrap is closed on this deployment", nil
 	}
-	held, err := s.directory.AnyPerson(r.Context())
+	held, err := s.directory.AnyPerson(ctx)
 	if err != nil {
-		// THE UNKNOWN ARM, and it is reported rather than folded into
-		// "closed": a caller told to ask somebody who already has an
-		// account when nobody does is stuck for good, where one told to
-		// try again merely waits.
-		log.WarnContext(r.Context(), "api_bootstrap_estate_unreadable", "error", err)
-		return false, err
+		return "", err
 	}
-	return !held, nil
-}
-
-// outstandingCode is the live code whose id is this, as the log has it: minted,
-// not withdrawn, not spent and not aged out, at this surface's clock.
-func (s *Service) outstandingCode(ctx context.Context, id string) (
-	iamdomain.BootstrapCode, bool, error) {
-
-	outstanding, err := s.directory.OutstandingBootstrapCodes(ctx, s.now())
-	if err != nil {
-		return iamdomain.BootstrapCode{}, false, err
+	if held {
+		return "somebody is already enrolled in this company", nil
 	}
-	for _, code := range outstanding {
-		if code.ID == id {
-			return code, true, nil
-		}
-	}
-	return iamdomain.BootstrapCode{}, false, nil
+	return "", nil
 }
 
 // bootstrapCodePath is where this node writes the one-time code.
@@ -327,63 +421,94 @@ func (s *Service) readBootstrapCode() (string, error) {
 	return code, nil
 }
 
-// WriteBootstrapCode mints a code, writes it 0600 beside the store and
-// publishes its hash.
+// OfferBootstrapCode makes sure this node's code file holds a code the log
+// honours, and answers its path — or "" where this node offers none.
 //
-// CALLED AT BOOT by the node that finds an empty estate, and answering the
-// PATH rather than the value: what a log line, a health body and a welcome
-// screen carry is where to look, so a code never travels anywhere it could be
-// read by somebody who cannot already read the host.
-func (s *Service) WriteBootstrapCode(ctx context.Context, nodeID string) (string, error) {
-	path := s.bootstrapCodePath()
-	if _, err := os.Stat(path); err == nil {
-		// ALREADY THERE, and it is not replaced: an operator may have
-		// the old one open in a terminal, and minting a second would
-		// silently invalidate a code somebody is about to type.
-		return path, nil
-	}
-	raw := make([]byte, bootstrapCodeBytes)
-	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("authapi: mint a bootstrap code: %w", err)
-	}
-	code := base64.RawURLEncoding.EncodeToString(raw)
-	// 0600 AND WRITTEN BEFORE THE RECORD, so a node that crashes between
-	// the two leaves a file nothing accepts rather than a record nothing
-	// can satisfy.
-	if err := os.WriteFile(path, []byte(code+"\n"), 0o600); err != nil {
-		return "", fmt.Errorf("authapi: write the bootstrap code to %s: %w", path, err)
-	}
-	minted, err := s.writer.MintBootstrap(ctx, iamdomain.BootstrapMint{
-		ID: bootstrapCodeID(code), Verifier: bootstrapCodeID(code),
-		MintedBy: nodeID, ExpiresAt: s.now().Add(bootstrapLifetime),
-		OpID: "bootstrap-mint:" + bootstrapCodeID(code), Reason: "a fresh estate",
-	})
+// CALLED AT BOOT, and answering the PATH rather than the value: what a log line
+// carries is where to look, so a code never travels anywhere it could be read
+// by somebody who cannot already read the host.
+//
+// # A live code is kept; anything else is replaced
+//
+// A code the log holds as LIVE is not replaced — an operator may have it open
+// in a terminal, and minting another would silently invalidate a code somebody
+// is about to type. Everything else is replaced by a fresh one: a code that
+// aged out, one a re-issue withdrew, one whose mint never reached the log, an
+// empty or unreadable file. The boot path used to keep ANY file, so a node
+// restarted a day after its first boot advertised a code the log had already
+// aged out, and the founder who read it was refused as having typed it wrong.
+//
+// # Only this node's file, and nobody else's code
+//
+// The node that holds a file is the only one that can see it, so each node
+// replaces its OWN at its own boot, and a code on another host is that host's
+// to replace. Nothing live is withdrawn here, whoever minted it: a fleet
+// booting on an empty estate offers one code per node, and a founder may be
+// typing any of them. `crewlet iam bootstrap-code` is the gesture that ends
+// every other code ([Service.ReissueBootstrapCode]).
+//
+// # A company that has started keeps no file
+//
+// Once anybody is enrolled — or `api.auth.bootstrap` is closed — no code will
+// ever be honoured, so a file left from before is removed rather than left on
+// the host as a superuser claim that merely happens not to work. This is what
+// clears the file on every node but the one that served the redemption.
+func (s *Service) OfferBootstrapCode(ctx context.Context, nodeID string) (string, error) {
+	s.codeMu.Lock()
+	defer s.codeMu.Unlock()
+
+	closed, err := s.bootstrapClosed(ctx)
 	if err != nil {
-		return "", fmt.Errorf("authapi: publish the bootstrap code's hash: %w", err)
+		return "", fmt.Errorf("authapi: read whether this company has "+
+			"started: %w", err)
 	}
-	if !landed(minted) {
-		// A CODE IS LIVE ONLY WHILE ITS MINT IS ON THE LOG, so a path to
-		// one nothing can confirm is a path to a code that may refuse
-		// its first use. The file stays, and a retry under the same op
-		// id — it is the code's own digest — lands this very mint.
-		return "", fmt.Errorf("authapi: the bootstrap code's hash (operation "+
-			"%s) has an unknown outcome; retry: %w", minted.OpID,
-			ErrUnresolved)
+	if closed != "" {
+		s.removeCodeFile(ctx, closed)
+		return "", nil
 	}
-	return path, nil
+	path := s.bootstrapCodePath()
+	held, err := s.readBootstrapCode()
+	switch {
+	case err == nil:
+		code, err := s.directory.BootstrapCode(ctx, bootstrapCodeID(held))
+		if err != nil {
+			return "", fmt.Errorf("authapi: read whether the code in %s is "+
+				"live: %w", path, err)
+		}
+		state := code.State(s.now())
+		if state == iamdomain.CodeLive {
+			return path, nil
+		}
+		log.WarnContext(ctx, "api_bootstrap_code_replaced", "path", path,
+			"state", string(state),
+			"detail", "the code in this file is not one the log honours, "+
+				"so a fresh one replaces it")
+	case errors.Is(err, fs.ErrNotExist):
+	default:
+		log.WarnContext(ctx, "api_bootstrap_code_replaced", "path", path,
+			"error", err)
+	}
+	return s.mintCodeFile(ctx, nodeID)
 }
 
 // ReissueBootstrapCode withdraws every outstanding code and mints one.
 //
 // # Exactly one is live after it runs, which the boot path deliberately is not
 //
-// [Service.WriteBootstrapCode] runs at BOOT and leaves an existing file alone,
-// because an operator may have the old code open in a terminal and replacing
-// it silently would invalidate what they are about to type. This is the
-// opposite gesture: somebody asked for a new one, so the old ones are the
-// problem rather than the thing to protect — a live code is a way to become
-// the first administrator with no credential at all, and an operator who
-// re-issued because they lost the file has no idea the original still works.
+// [Service.OfferBootstrapCode] keeps a live code, because an operator may have
+// it open in a terminal and replacing it silently would invalidate what they
+// are about to type. This is the opposite gesture: somebody asked for a new
+// one, so the old ones are the problem rather than the thing to protect — a
+// live code is a way to become the first administrator with no credential at
+// all, and an operator who re-issued because they lost the file has no idea
+// the original still works. The file lands on THIS node's host, and the
+// caller is told which node that is.
+//
+// REFUSED, wrapping [iamdomain.ErrBootstrapClosed], once the route is closed —
+// by the same gate the route asks, so a re-issue can never mint a code the
+// route would refuse. It used to ask whether an active, credentialled
+// administrator existed instead, and handed a company whose only person was
+// suspended a code the record then refused.
 //
 // THE WITHDRAWALS GO FIRST. A crash between them and the mint leaves a
 // company with NO way in, which an operator fixes by running this again; the
@@ -391,6 +516,17 @@ func (s *Service) WriteBootstrapCode(ctx context.Context, nodeID string) (string
 func (s *Service) ReissueBootstrapCode(ctx context.Context, nodeID string) (
 	string, error) {
 
+	s.codeMu.Lock()
+	defer s.codeMu.Unlock()
+
+	closed, err := s.bootstrapClosed(ctx)
+	if err != nil {
+		return "", fmt.Errorf("authapi: read whether this company has "+
+			"started: %w", err)
+	}
+	if closed != "" {
+		return "", fmt.Errorf("%w: %s", iamdomain.ErrBootstrapClosed, closed)
+	}
 	outstanding, err := s.directory.OutstandingBootstrapCodes(ctx, s.now())
 	if err != nil {
 		return "", fmt.Errorf("authapi: read the outstanding bootstrap "+
@@ -411,14 +547,112 @@ func (s *Service) ReissueBootstrapCode(ctx context.Context, nodeID string) (
 				code.ID, withdrawn.OpID, ErrUnresolved)
 		}
 	}
+	return s.mintCodeFile(ctx, nodeID)
+}
+
+// mintCodeFile writes a fresh code over this node's file and publishes its
+// hash. The caller holds codeMu.
+//
+// # The file is REPLACED, never edited
+//
+// Written to a temporary file in the same directory and renamed over the old
+// one, so a crash mid-write never leaves half a code, and the file is 0600
+// whatever the old one's mode was — a write into an existing file keeps that
+// file's permissions, which is how a code could land in a world-readable file
+// somebody had created by hand.
+//
+// # Written before the record, and removed if the record does not land
+//
+// A node that crashes between the two leaves a file nothing accepts rather
+// than a record nothing can satisfy, and the next boot replaces it. A mint the
+// log REFUSED — a company that started a moment ago — or that failed outright
+// takes its file with it, and one whose outcome is UNKNOWN keeps it without
+// offering it, so a file on the host is only ever a code the log honours or
+// one a restart replaces.
+func (s *Service) mintCodeFile(ctx context.Context, nodeID string) (string, error) {
 	path := s.bootstrapCodePath()
-	// THE FILE IS REPLACED, unlike the boot path's: whoever asked for this
-	// is holding the terminal, and leaving the old value in place would
-	// answer a path whose contents no longer work.
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("authapi: replace %s: %w", path, err)
+	raw := make([]byte, bootstrapCodeBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("authapi: mint a bootstrap code: %w", err)
 	}
-	return s.WriteBootstrapCode(ctx, nodeID)
+	code := base64.RawURLEncoding.EncodeToString(raw)
+	if err := replaceFile(path, []byte(code+"\n")); err != nil {
+		return "", fmt.Errorf("authapi: write the bootstrap code to %s: %w",
+			path, err)
+	}
+	id := bootstrapCodeID(code)
+	minted, err := s.writer.MintBootstrap(ctx, iamdomain.BootstrapMint{
+		ID: id, Verifier: id, MintedBy: nodeID,
+		ExpiresAt: s.now().Add(bootstrapLifetime),
+		OpID:      "bootstrap-mint:" + id, Reason: "a fresh estate",
+	})
+	if err != nil {
+		s.removeCodeFile(ctx, "its mint did not land")
+		return "", fmt.Errorf("authapi: publish the bootstrap code's hash: %w", err)
+	}
+	if !landed(minted) {
+		// THE FILE STAYS on a mint nobody can confirm, and the path is not
+		// offered. Removing it would be wrong in the case that matters: a
+		// mint that DID land is a live code, and a file gone from under it
+		// sends the next boot to mint a second one beside it. Kept, it is
+		// either that live code or one the next boot finds unhonoured and
+		// replaces — which is the whole of what a file here may be.
+		return "", fmt.Errorf("authapi: the bootstrap code's hash (operation "+
+			"%s) has an unknown outcome; retry: %w", minted.OpID,
+			ErrUnresolved)
+	}
+	return path, nil
+}
+
+// removeCodeFile removes this node's code file, if there is one. The caller
+// holds codeMu.
+//
+// LOGGED AND NEVER RETURNED: every caller has already decided the file must go,
+// and a file that could not be removed is a code the log will not honour —
+// the next boot tries again.
+func (s *Service) removeCodeFile(ctx context.Context, why string) {
+	path := s.bootstrapCodePath()
+	err := os.Remove(path)
+	switch {
+	case err == nil:
+		log.InfoContext(ctx, "api_bootstrap_code_removed", "path", path,
+			"reason", why)
+	case !errors.Is(err, fs.ErrNotExist):
+		log.WarnContext(ctx, "api_bootstrap_code_not_removed",
+			"error", err, "path", path, "reason", why)
+	}
+}
+
+// replaceFile writes data to path through a temporary file and a rename, so the
+// file is either the old one or the whole new one, and is 0600.
+func replaceFile(path string, data []byte) error {
+	// os.CreateTemp creates the file 0600, which is the mode the code
+	// needs — and a rename carries the temporary file's mode over, never
+	// the replaced one's.
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return nil
 }
 
 // bootstrapCodeID is the SHA-256 of a code, which is what the log carries.
