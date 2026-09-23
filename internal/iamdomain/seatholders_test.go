@@ -63,7 +63,7 @@ func TestSeatHoldersNamesWhoHoldsEachSeatAndAtWhatStage(t *testing.T) {
 	// removed from it while holding it — and routing it to the chart's map
 	// on that evidence is the one direction that can reach a leaver.
 	if _, err := rig.writer.Release(t.Context(), iamdomain.KindSeat, "ops-lead",
-		"op-unbind", "moved teams"); err != nil {
+		successor, "op-unbind", "moved teams"); err != nil {
 		t.Fatalf("unbind: %v", err)
 	}
 	rig.drain()
@@ -106,7 +106,7 @@ func TestTheApplierSignalsTheDirectoryOnlyWhenAStandingMoved(t *testing.T) {
 		}},
 		{"an unbind", true, func() error {
 			_, err := rig.writer.Release(t.Context(), iamdomain.KindSeat,
-				"sarah-chen", "op-unbind", "moved teams")
+				"sarah-chen", person, "op-unbind", "moved teams")
 			return err
 		}},
 		{"a bind", true, func() error {

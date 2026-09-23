@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
 // A WATCH IS DECIDED LIKE THE INBOX QUESTION ABOUT THE SAME SEAT.
@@ -152,7 +154,8 @@ func newWatchSocket(t *testing.T, chart authz.Chart, bound map[string]string,
 		})
 	}
 	b.API.Auth.Tokens = append(b.API.Auth.Tokens, extra...)
-	guard := auth.New(&b).BindSeats(func(login string) string { return bound[login] })
+	guard := auth.New(&b).BindSeats(auth.SeatBindings{
+		Directory: watchBindings(bound), Chart: watchSeats(bound)})
 	svc := buildService(t, stream.Options{Chart: chart})
 	srv := httptest.NewServer(stream.Handler(guard, svc, nil))
 	t.Cleanup(srv.Close)
@@ -187,4 +190,34 @@ func (f *watchFixture) assertOpen(t *testing.T, conn *websocket.Conn) {
 		t.Fatalf("after a refused watch the socket answered %v, want a pong: a "+
 			"refusal of one seat's frames closed the whole live channel", got)
 	}
+}
+
+// watchBindings binds each Tier A token's login to its seat, as an active
+// machine row decided at chart position 1.
+type watchBindings map[string]string
+
+func (b watchBindings) BoundSeat(_ context.Context, login string) (session.PersonRow, error) {
+	seat, ok := b[login]
+	if !ok {
+		return session.PersonRow{}, nil
+	}
+	return session.PersonRow{Found: true, Stage: iam.StageActive, Login: login,
+		Seat: seat, SeatAt: 1}, nil
+}
+
+// watchSeats holds every bound seat as a human seat, at a position covering
+// every binding.
+type watchSeats map[string]string
+
+func (c watchSeats) Seat(_ context.Context, ref string) (session.Seat, bool, error) {
+	for _, seat := range c {
+		if seat == ref {
+			return session.Seat{Handle: seat, Kind: "human"}, true, nil
+		}
+	}
+	return session.Seat{}, false, nil
+}
+
+func (watchSeats) Position(context.Context) (uint64, time.Duration, error) {
+	return 1, 0, nil
 }
