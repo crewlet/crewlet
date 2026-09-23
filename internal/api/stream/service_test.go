@@ -2,6 +2,7 @@ package stream_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -54,6 +55,12 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 		// about who may watch whom names the chart it means.
 		opts.Chart = authz.NoChart{}
 	}
+	if opts.Holders == nil {
+		// NO DIRECTORY, which every login reads as UNKNOWN, for the
+		// chart's reason: a case about whose record a login names states
+		// the directory it means.
+		opts.Holders = blindDirectory{}
+	}
 	s, err := stream.NewService(livestate.New(), opts)
 	if err != nil {
 		t.Fatalf("stream.NewService: %v", err)
@@ -76,11 +83,20 @@ func TestNewServiceRefusesEveryMissingFunctionByName(t *testing.T) {
 	}
 	for _, field := range []string{
 		"Health", "Posture", "Handles", "Roster", "Org", "Tools", "Schedules", "Chart",
+		"Holders",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
 		}
 	}
+}
+
+// blindDirectory is an identity directory that can say nothing — see
+// [buildService].
+type blindDirectory struct{}
+
+func (blindDirectory) HolderRecord(context.Context, string) (string, error) {
+	return "", errors.New("this fixture holds no identity directory")
 }
 
 func envelope(etype string, payload map[string]any) livestate.Envelope {

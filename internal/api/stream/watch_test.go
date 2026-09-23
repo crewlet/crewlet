@@ -3,8 +3,11 @@ package stream_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -157,6 +160,15 @@ func newWatchSocket(t *testing.T, chart authz.Chart, bound map[string]string,
 	extra ...config.APIToken) *watchFixture {
 
 	t.Helper()
+	return newWatchSocketOver(t, chart, nil, bound, extra...)
+}
+
+// newWatchSocketOver is [newWatchSocket] resolving a watched login through
+// holders — nil takes [buildService]'s directory, which can say nothing.
+func newWatchSocketOver(t *testing.T, chart authz.Chart, holders iam.Holders,
+	bound map[string]string, extra ...config.APIToken) *watchFixture {
+
+	t.Helper()
 	b := config.DefaultBootstrap()
 	b.API.Auth.MaxGrants = iam.AllGrants
 	for login := range bound {
@@ -169,7 +181,7 @@ func newWatchSocket(t *testing.T, chart authz.Chart, bound map[string]string,
 	b.API.Auth.Tokens = append(b.API.Auth.Tokens, extra...)
 	guard := auth.New(&b).BindSeats(auth.SeatBindings{
 		Directory: watchBindings(bound), Chart: watchSeats(bound)})
-	svc := buildService(t, stream.Options{Chart: chart})
+	svc := buildService(t, stream.Options{Chart: chart, Holders: holders})
 	srv := httptest.NewServer(stream.Handler(guard, svc, nil))
 	t.Cleanup(srv.Close)
 	return &watchFixture{svc: svc,
@@ -233,4 +245,125 @@ func (c watchSeats) Seat(_ context.Context, ref string) (session.Seat, bool, err
 
 func (watchSeats) Position(context.Context) (uint64, time.Duration, error) {
 	return 1, 0, nil
+}
+
+// watchDirectory is the identity directory a watched login resolves through:
+// each login in records is held and names that record, every other login is
+// held by nobody, and err makes every lookup unknown. It counts what it was
+// asked, so a case can show a caller who may not look never reached it.
+type watchDirectory struct {
+	records map[string]string
+	err     error
+	mu      sync.Mutex
+	asked   []string
+}
+
+func (d *watchDirectory) HolderRecord(_ context.Context, login string) (string, error) {
+	d.mu.Lock()
+	d.asked = append(d.asked, login)
+	d.mu.Unlock()
+	if d.err != nil {
+		return "", d.err
+	}
+	if record, held := d.records[login]; held {
+		return record, nil
+	}
+	return "", fmt.Errorf("%w: %s", iam.ErrNoHolder, login)
+}
+
+func (d *watchDirectory) lookups() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.asked)
+}
+
+// A WATCH OF SOMEBODY'S LOGIN IS INSTALLED ON THEIR RECORD, and decided on it.
+//
+// `inbox_changed` is pushed to the name a person's notices are KEPT under —
+// their seat, when the identity directory binds them to one — and the watch
+// was decided and routed on the name as sent: a lead watching their report by
+// login was refused as leading nobody called that, and an administrator's
+// watch of a bound person's login was installed on the login, where no frame
+// is ever pushed. It resolves through the one owner function the `work_inbox`
+// question resolves the same name through. And the directory is asked only
+// once the watch has been decided as far as it can be without the record, so
+// a caller who leads nobody is refused alike whatever the login is, even by a
+// node that cannot read the directory, and never reaches it.
+func TestAWatchOfSomebodysLoginIsInstalledOnTheirRecord(t *testing.T) {
+	t.Parallel()
+	chart := &leadChart{leads: map[[2]string]bool{{"platform-lead", "sarah-chen"}: true}}
+	bound := map[string]string{
+		"token:lead":     "platform-lead",
+		"token:stranger": "ops-lead",
+	}
+	admin := config.APIToken{ID: "admin", Token: "admin-token-long-enough-to-pass",
+		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantFleetOperate}}
+	records := map[string]string{"sarah.chen": "sarah-chen"}
+
+	t.Run("a lead's report, by login", func(t *testing.T) {
+		t.Parallel()
+		f := newWatchSocketOver(t, chart, &watchDirectory{records: records}, bound, admin)
+		conn := f.open(t, "lead-token-long-enough-to-pass")
+		write(t, conn, map[string]any{"kind": "watch", "seat": "sarah.chen"})
+		waitFor(t, func() bool { return f.svc.Hub().Watchers("sarah-chen") == 1 },
+			"a lead's watch of their report's login never reached the report's seat")
+		if got := f.svc.Hub().Watchers("sarah.chen"); got != 0 {
+			t.Errorf("the watch was installed on the login as sent (%d), where "+
+				"no frame is ever pushed", got)
+		}
+	})
+
+	t.Run("the admin grant, by login", func(t *testing.T) {
+		t.Parallel()
+		f := newWatchSocketOver(t, chart, &watchDirectory{records: records}, bound, admin)
+		conn := f.open(t, "admin-token-long-enough-to-pass")
+		write(t, conn, map[string]any{"kind": "watch", "seat": "sarah.chen"})
+		waitFor(t, func() bool { return f.svc.Hub().Watchers("sarah-chen") == 1 },
+			"an administrator's watch of a bound person's login never reached the seat")
+
+		// A LOGIN NOBODY HOLDS names no record, which only the admin
+		// grant is told — and waiting will not change it.
+		write(t, conn, map[string]any{"kind": "watch", "seat": "ghost.person"})
+		refusal := next(t, conn)
+		if refusal["kind"] != stream.KindError || refusal["what"] != "watch" ||
+			refusal["error"] != stream.CodeNotFound {
+			t.Fatalf("a watch of a login nobody holds was answered %v, want "+
+				"not_found", refusal)
+		}
+		f.assertOpen(t, conn)
+	})
+
+	t.Run("a caller who leads nobody", func(t *testing.T) {
+		t.Parallel()
+		var answers []string
+		for _, dir := range []*watchDirectory{
+			{records: records},
+			{err: errors.New("engine: sarah.chen is bound to sarah-chen and this " +
+				"node cannot say where that seat is now")},
+		} {
+			f := newWatchSocketOver(t, chart, dir, bound, admin)
+			conn := f.open(t, "stranger-token-long-enough-to-pass")
+			for _, login := range []string{"sarah.chen", "ghost.person"} {
+				write(t, conn, map[string]any{"kind": "watch", "seat": login})
+				refusal := next(t, conn)
+				if refusal["kind"] != stream.KindError ||
+					refusal["error"] != stream.CodeUnauthorized {
+					t.Fatalf("a stranger's watch of %s was answered %v, want the "+
+						"refusal a seat they do not lead gets", login, refusal)
+				}
+				answers = append(answers, fmt.Sprint(refusal["reason"], refusal["grants"]))
+			}
+			if asked := dir.lookups(); len(asked) != 0 {
+				t.Errorf("the directory was asked %v for a caller it could never "+
+					"admit", asked)
+			}
+			f.assertOpen(t, conn)
+		}
+		for _, answer := range answers[1:] {
+			if answer != answers[0] {
+				t.Errorf("two logins were refused differently (%s, %s), which is "+
+					"the directory speaking", answers[0], answer)
+			}
+		}
+	})
 }

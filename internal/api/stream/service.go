@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -99,6 +100,9 @@ type Service struct {
 	// chart decides a `watch` frame. See [Options.Chart].
 	chart authz.Chart
 
+	// holders resolves a `watch` frame's login. See [Options.Holders].
+	holders iam.Holders
+
 	// revalidateEvery is how often an open socket's credential is checked
 	// again. See [Options.RevalidateEvery].
 	revalidateEvery time.Duration
@@ -118,8 +122,8 @@ type HandleFunc func() map[string]string
 
 // Options configure a service.
 //
-// Health, Posture, Handles, Roster, Org, Tools, Schedules and Chart are
-// REQUIRED, and [NewService] refuses a missing one by name. Each is something
+// Health, Posture, Handles, Roster, Org, Tools, Schedules, Chart and Holders
+// are REQUIRED, and [NewService] refuses a missing one by name. Each is something
 // the engine beside the API always answers, so a missing one is a wiring
 // mistake, and serving around it would push a confident answer where there is
 // none: a health frame reading "ok", an empty catalogue, an organization with
@@ -185,6 +189,17 @@ type Options struct {
 	// without one would answer every lead's watch of a report as
 	// "undecidable" for the life of the process.
 	Chart authz.Chart
+
+	// Holders says whose record somebody else's LOGIN names — the identity
+	// directory's half of [iam.OwnerOf] — which is what a `watch` frame
+	// naming a login is resolved through before it is decided and
+	// installed. REQUIRED for [Options.Chart]'s reason: `inbox_changed` is
+	// pushed to the name a person's notices are kept under, their SEAT
+	// when the directory binds them to one, so a watch installed on the
+	// login as sent is one no frame ever reaches — and a service built
+	// without it would refuse every such watch as undecidable for the life
+	// of the process.
+	Holders iam.Holders
 }
 
 // NewService builds the fan-out over a projection, or refuses a missing
@@ -203,6 +218,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		{"Tools", opts.Tools == nil},
 		{"Schedules", opts.Schedules == nil},
 		{"Chart", opts.Chart == nil},
+		{"Holders", opts.Holders == nil},
 	} {
 		if field.absent {
 			missing = append(missing, "Options."+field.name)
@@ -225,6 +241,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		tools:     opts.Tools,
 		schedules: opts.Schedules,
 		chart:     opts.Chart,
+		holders:   opts.Holders,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
 

@@ -26,6 +26,13 @@
 // The one seat-routed kind, `inbox_changed`, says whose inbox moved, when and
 // why; an index anyone could write to would be a way to follow somebody else's
 // inbox that the question itself refuses.
+//
+// AND IT IS RESOLVED BEFORE IT IS DECIDED, through [iam.OwnerOf] and the same
+// identity directory that question reads: a frame is pushed to the name a
+// person's notices are kept under — their seat, when the directory binds them
+// to one — so a watch naming their login is installed on that seat, and the
+// directory is asked only once the watch has been decided as far as it can
+// be without the record.
 package stream
 
 import (

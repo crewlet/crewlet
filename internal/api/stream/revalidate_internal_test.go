@@ -232,6 +232,7 @@ func openRevalidatedOver(t *testing.T, opened iam.Principal,
 		Tools:           func() []map[string]any { return nil },
 		Schedules:       func() any { return []any{} },
 		Chart:           chart,
+		Holders:         blindHolders{},
 		RevalidateEvery: testInterval,
 	})
 	if err != nil {

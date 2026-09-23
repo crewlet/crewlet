@@ -79,7 +79,7 @@ func TestARecheckWithdrawsOnlyTheWatchItDecided(t *testing.T) {
 	client := NewClient(AudienceOf([]iam.Grant{iam.GrantStateRead}))
 	hub.Register(client)
 	chart := &heldChart{asked: make(chan struct{}), release: make(chan struct{})}
-	w := &watching{hub: hub, client: client, chart: chart}
+	w := &watching{hub: hub, client: client, chart: chart, holders: blindHolders{}}
 	hub.Watch(client, "sarah-chen")
 
 	ctx := iam.WithPrincipal(t.Context(), person("platform-lead"))
@@ -117,6 +117,14 @@ func TestARecheckWithdrawsOnlyTheWatchItDecided(t *testing.T) {
 	default:
 		t.Error("a withdrawn watch said nothing to the tab")
 	}
+}
+
+// blindHolders is an identity directory that can say nothing, for a case that
+// never names a login — every one in this package's own suite names a seat.
+type blindHolders struct{}
+
+func (blindHolders) HolderRecord(context.Context, string) (string, error) {
+	return "", errors.New("this fixture holds no identity directory")
 }
 
 // heldChart refuses every lead question, and holds the FIRST one until

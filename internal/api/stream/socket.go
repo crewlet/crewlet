@@ -169,8 +169,10 @@ type request struct {
 	What   string         `json:"what"`
 	Params map[string]any `json:"params"`
 
-	// Seat is which seat a `watch` frame asks to be a recipient for, and
-	// empty clears the subscription. See [Hub.Watch].
+	// Seat is whose record a `watch` frame asks to be a recipient for —
+	// a seat's handle, or a login, which is resolved to the record its
+	// holder's notices are kept under — and empty clears the
+	// subscription. See [watching] and [Hub.Watch].
 	Seat string `json:"seat"`
 }
 
@@ -330,7 +332,8 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	// be served live for the rest of the interval. See [Service.Join].
 	svc.Join(client)
 	defer svc.Hub().Unregister(client)
-	seats := &watching{hub: svc.Hub(), client: client, chart: svc.chart}
+	seats := &watching{hub: svc.Hub(), client: client, chart: svc.chart,
+		holders: svc.holders}
 
 	var writer sync.WaitGroup
 	writer.Go(func() {
@@ -518,10 +521,25 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 // WHY THE PREVIOUS WATCH IS DROPPED on a refused or undecidable one: a watch
 // is a screen saying where it now is ([Hub.Watch] keeps one seat per socket
 // for that reason), so the seat it asked to leave is not one it still wants.
+//
+// # The name is RESOLVED, by the one owner function
+//
+// `inbox_changed` is pushed to the name a person's notices are KEPT under —
+// their seat when the identity directory binds them to one — so a watch is
+// resolved through [iam.OwnerOf], exactly as the `work_inbox` question about
+// the same name is, and installed on what it resolved to. Decided and routed
+// on the name as sent, a lead watching their report by login was refused as
+// leading nobody called that, and an administrator's watch of a bound person's
+// login was installed on the login, where no frame is ever pushed. And the
+// directory is asked only once the watch has been decided as far as it can be
+// without the record ([watching.mayLook]): a caller who leads nobody is
+// refused before anything is looked up, so what the directory says about a
+// login is never theirs to learn.
 type watching struct {
-	hub    *Hub
-	client *Client
-	chart  authz.Chart
+	hub     *Hub
+	client  *Client
+	chart   authz.Chart
+	holders iam.Holders
 }
 
 // watchWhat is what a watch refusal's error frame names in `what`, which is
@@ -546,23 +564,102 @@ func (w *watching) watch(ctx context.Context, req request) (websocket.StatusCode
 		return CloseUnauthenticated,
 			"watching a seat needs a credential this node can resolve"
 	}
-	seat := strings.TrimSpace(req.Seat)
-	if seat == "" {
+	name := strings.TrimSpace(req.Seat)
+	if name == "" {
 		// CLEARING IS ALWAYS ALLOWED: it withdraws routing, and needs
 		// nobody's authority to stop receiving something.
 		w.hub.Watch(w.client, "")
 		return 0, ""
 	}
-	if code, refused, ok := w.decide(ctx, principal, seat); !ok {
+	seat, code, refused, ok := w.resolve(ctx, principal, name)
+	if !ok {
 		w.hub.Watch(w.client, "")
 		w.client.Reply(Envelope{Kind: KindError, ID: req.ID, What: watchWhat,
 			Error: code, Refused: refused})
 		return 0, ""
 	}
 	w.hub.Watch(w.client, seat)
-	log.DebugContext(ctx, "stream_watch", "login", principal.Login, "seat", seat)
+	log.DebugContext(ctx, "stream_watch", "login", principal.Login,
+		"asked", name, "seat", seat)
 	return 0, ""
 }
+
+// resolve is the record a `watch` frame's name addresses, decided: what the
+// watch is installed on, or the code and refusal it is answered with.
+//
+// [iam.OwnerOf] answers the name — the caller's own names are their own
+// record, somebody else's login is their holder's, and anything else is read
+// as the seat it names — and the watch is decided on what it resolved to. A
+// login nobody holds, or one whose holder's seat is gone, is decided on the
+// name as typed, which nobody leads, so only the admin grant learns it names
+// no record (`not_found`, which no retry changes); a directory this node
+// cannot read is `unavailable`, and its own words — which name the seat a
+// login is bound to — go to the log.
+func (w *watching) resolve(ctx context.Context, principal iam.Principal,
+	name string) (string, httpjson.Code, *Refused, bool) {
+
+	owner, _, err := iam.OwnerOf(ctx, principal, name, w.holders,
+		w.mayLook(principal))
+	var looked *iam.LookRefused
+	switch {
+	case errors.As(err, &looked):
+		var answer *watchAnswer
+		if errors.As(looked.Err, &answer) {
+			return "", answer.code, answer.refused, false
+		}
+		return "", CodeUnavailable, nil, false
+	case errors.Is(err, iam.ErrNoHolder), errors.Is(err, iam.ErrHolderUnseated):
+		if code, refused, ok := w.decide(ctx, principal, name); !ok {
+			return "", code, refused, false
+		}
+		return "", CodeNotFound, nil, false
+	case err != nil:
+		log.InfoContext(ctx, "stream_watch_unresolvable", "login", principal.Login,
+			"asked", name, "error", err.Error())
+		return "", CodeUnavailable, nil, false
+	}
+	if code, refused, ok := w.decide(ctx, principal, owner); !ok {
+		return "", code, refused, false
+	}
+	return owner, "", nil, true
+}
+
+// mayLook is the watch's decision BEFORE the identity directory is asked whose
+// record somebody else's login is — see [iam.MayLook] and
+// [authz.Object.Unresolved]: the same verb [watching.decide] asks, of a record
+// nobody has resolved yet. A caller who could be admitted only as the lead of
+// whoever holds the login lets the lookup happen, and the watch is decided
+// again on the record; every other answer is the frame the watch is answered
+// with.
+func (w *watching) mayLook(principal iam.Principal) iam.MayLook {
+	return func(ctx context.Context, login string) error {
+		d := authz.Decide(ctx, principal, authz.ActionPersonRead, authz.Object{
+			Kind: authz.KindPerson, Owner: login, Unresolved: true,
+		}, w.chart, time.Now())
+		switch {
+		case d.Allowed, errors.Is(d.Err, authz.ErrUnresolved):
+			return nil
+		case d.Unknown():
+			log.InfoContext(ctx, "stream_watch_undecidable", "login",
+				principal.Login, "asked", login, "error", d.Err)
+			return &watchAnswer{code: CodeUnavailable}
+		}
+		log.InfoContext(ctx, "stream_watch_refused", "login", principal.Login,
+			"asked", login, "reason", string(d.Reason))
+		return &watchAnswer{code: CodeUnauthorized,
+			refused: NewRefused(d.Reason, d.Grants)}
+	}
+}
+
+// watchAnswer is a watch's answer carried through [iam.OwnerOf] as the error
+// its gate refused with, so the frame it becomes is the one a decision on a
+// seat would have made.
+type watchAnswer struct {
+	code    httpjson.Code
+	refused *Refused
+}
+
+func (a *watchAnswer) Error() string { return "stream: watch refused: " + string(a.code) }
 
 // decide asks the table whether principal may watch seat, answering the error
 // code a refusal carries — and, for a refusal on authority, the reason and the

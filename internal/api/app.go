@@ -572,6 +572,11 @@ func New(opts Options) (*App, error) {
 		// WHO LEADS WHOM, which a `watch` frame is decided by — the SAME
 		// seam the `work_inbox` question about the same seat asks.
 		Chart: opts.Sources.Chart,
+		// AND WHOSE RECORD A LOGIN NAMES, which a `watch` frame naming
+		// one is resolved through — the SAME seam that question resolves
+		// the same name through, so a watch is installed on the record
+		// the frames are pushed to.
+		Holders: opts.Sources.Holders,
 
 		Now:            now,
 		HealthInterval: opts.HealthInterval,

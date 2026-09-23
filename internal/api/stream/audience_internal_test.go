@@ -94,6 +94,7 @@ func TestTheSnapshotCarriesOnlyWhatItsAudienceMayRead(t *testing.T) {
 		Tools:     func() []map[string]any { return nil },
 		Schedules: func() any { return []any{} },
 		Chart:     authz.NoChart{},
+		Holders:   blindHolders{},
 	})
 	if err != nil {
 		t.Fatal(err)
