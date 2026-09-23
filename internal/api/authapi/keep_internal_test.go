@@ -143,12 +143,12 @@ type openingWriter struct {
 }
 
 func (w *openingWriter) OpenSession(_ context.Context, in iamdomain.SessionStart) (
-	statelog.Position, error) {
+	iamdomain.SessionOpened, error) {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.opened = in.Lineage
-	return w.at, nil
+	return iamdomain.SessionOpened{Position: w.at}, nil
 }
 
 func (w *openingWriter) CloseSession(_ context.Context, lineage, _, reason, _ string) (

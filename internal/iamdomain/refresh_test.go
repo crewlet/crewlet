@@ -299,11 +299,11 @@ func (r *writeRig) openSessionAt(person string, expires time.Time) (string,
 	lineage := uuid.Must(uuid.NewV7()).String()
 	var at statelog.Position
 	if err := r.during(func() error {
-		var err error
-		at, err = r.writer.OpenSession(r.t.Context(), iamdomain.SessionStart{
+		opened, err := r.writer.OpenSession(r.t.Context(), iamdomain.SessionStart{
 			Lineage: lineage, Person: person, AbsoluteExpiresAt: expires,
 			OpID: "session:" + lineage,
 		})
+		at = opened.Position
 		return err
 	}); err != nil {
 		r.t.Fatalf("open a session: %v", err)
