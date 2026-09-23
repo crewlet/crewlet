@@ -206,12 +206,14 @@ func (c *fakeChart) Position(context.Context) (uint64, time.Duration, error) {
 type endings struct {
 	mu      sync.Mutex
 	persons []string
+	epochs  []uint64
 }
 
-func (e *endings) record(_ context.Context, person string) {
+func (e *endings) record(_ context.Context, person string, epoch uint64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.persons = append(e.persons, person)
+	e.epochs = append(e.epochs, epoch)
 }
 
 func (e *endings) all() []string {

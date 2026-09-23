@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/chartapi"
@@ -247,7 +245,16 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 }
 
 // sessionReuse ends every session of a person whose cookie was replayed past
-// the rotation overlap.
+// the rotation overlap — every one they opened at or below the replayed
+// bearer's epoch.
+//
+// CONDITIONAL AND DETERMINISTIC, because it is asked for by every ingress node
+// the replay reaches: [iamdomain.Writer.RevokePast] moves the epoch only while
+// it is still at the bearer's, and the op id is the person and that epoch, so
+// the second node's ask publishes nothing and the same node's retry is the
+// same operation. It used to mint a fresh op id and bump unconditionally, so
+// each node — and each lineage a node's bounded dedupe forgot — ended the
+// sessions the person had opened since the last bump.
 //
 // THE EPOCH AND NOT THE ONE SESSION, because a cookie that was replayed is a
 // cookie somebody else has, and the one thing nobody can establish from the
@@ -259,8 +266,8 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 // THE WRITE IS THE NODE'S OWN, not the person's: they did not ask for it, and
 // an authentication trail that recorded them as the author of their own
 // lockout would be wrong about the one row an investigation reads.
-func sessionReuse(e *engine.Engine) func(context.Context, string) {
-	return func(ctx context.Context, person string) {
+func sessionReuse(e *engine.Engine) func(context.Context, string, uint64) {
+	return func(ctx context.Context, person string, epoch uint64) {
 		writer := e.IAMWriter()
 		if writer == nil {
 			return
@@ -270,8 +277,8 @@ func sessionReuse(e *engine.Engine) func(context.Context, string) {
 		// revocation that inherits a dead context does nothing at all,
 		// which is this engine's rule for every cleanup.
 		ctx = context.WithoutCancel(ctx)
-		opID := "session-reuse:" + person + ":" + uuid.NewString()
-		revoked, err := writer.Revoke(ctx, person, opID,
+		opID := "session-reuse:" + person + ":" + strconv.FormatUint(epoch, 10)
+		revoked, err := writer.RevokePast(ctx, person, epoch, opID,
 			"a session cookie was replayed past the rotation overlap")
 		if err != nil || revoked.Outcome == statelog.OutcomeUnknown {
 			// AN UNKNOWN OUTCOME IS NOT A REVOCATION: nothing can say the

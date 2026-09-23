@@ -1044,6 +1044,12 @@ the two holders is the person. So the revocation epoch is bumped rather than
 the lineage ended: ending only the lineage would leave whoever captured it
 holding whatever they rotate to next.
 
+The bump is **conditional on the epoch the replayed cookie was minted at**: it
+moves the person's epoch only while it is still there. Every node the replay
+reaches asks for it, and a node asks again if it has forgotten the session
+since, so an unconditional bump would end — once per asking — the sessions the
+person opened after the first one. Past that epoch the ask publishes nothing.
+
 ---
 
 ## Every route is guarded, and the exemptions are the list
@@ -1318,7 +1324,7 @@ Identity has **two trails**, and they answer different questions.
 | `iam_session_started` | The sign-in surface, on a password, app-code, identity-provider, invitation, bootstrap-code or token sign-in | Once per session |
 | `iam_stepup_completed` | The sign-in surface, when a signed-in person confirms who they are | Once per step-up |
 | `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), the deactivation probe (`idp_revoked`), or the request guard noticing a deadline (`idle`, `absolute`) | Once per ending, from the fact that ended it: a deadline once per session per node, when the cookie is next presented, and only for a session no record had already ended — a revoked person's other browser presenting its cookie the next day is not announced again as `absolute` |
-| `iam_session_reuse_detected` | The request guard, for a cookie presented past its rotation overlap | Once per session per node — and the sessions the person held are ended once, however often the replay repeats |
+| `iam_session_reuse_detected` | The request guard, for a cookie presented past its rotation overlap | Once per session per node — and the sessions the person held are ended once, however often the replay repeats and however many nodes see it: the revocation moves the epoch only while it is still at the replayed cookie's |
 | `iam_login_failures` | The engine's own flush loop | One row per client per minute; see below |
 | `iam_recovery_code_used` | The sign-in surface | Once per code, with how many are left |
 | `iam_credential_minted`, `iam_credential_revoked` | The directory (a machine token) and the sign-in surface (an app code or a new set of recovery codes) | Once per gesture |

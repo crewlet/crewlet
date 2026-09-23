@@ -243,6 +243,12 @@ func (w *Writer) announce(ctx context.Context, result statelog.Result, err error
 	w.events.Emit(ctx, payload)
 }
 
+// errNothingToPublish is what a decide returns when its snapshot shows the
+// write has nothing left to do — a conditional revocation whose epoch has
+// already moved past the one it was asked about. [Writer.request] turns it
+// into the framework's empty decision, which answers `applied` with no record.
+var errNothingToPublish = errors.New("iamdomain: nothing to publish")
+
 // unresolved is a SEQUENCE's answer when one of its steps could not be
 // resolved: unknown, under the GESTURE's operation id.
 //
@@ -432,7 +438,12 @@ func (w *Writer) request(rec *MutationRecord, opID string,
 		Pattern: pattern,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
 			if decide != nil {
-				if err := decide(tx); err != nil {
+				if err := decide(tx); errors.Is(err, errNothingToPublish) {
+					// THE FRAMEWORK'S OWN "NOTHING TO WRITE": an empty
+					// decision answers applied, with no position,
+					// because no record exists.
+					return statelog.Decision{}, nil
+				} else if err != nil {
 					return statelog.Decision{}, err
 				}
 			}

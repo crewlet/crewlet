@@ -437,6 +437,15 @@ func TestAReplayedCookieRevokesOnceHoweverOftenItIsPresented(t *testing.T) {
 	if ended := rig.ended.all(); len(ended) != 1 {
 		t.Errorf("revoked %d times for three presentations, want once", len(ended))
 	}
+	// AT THE BEARER'S EPOCH, which is what makes the revocation itself
+	// land once however many nodes ask: it moves the epoch only while it is
+	// still at the one the replayed cookie was minted at.
+	rig.ended.mu.Lock()
+	epochs := append([]uint64(nil), rig.ended.epochs...)
+	rig.ended.mu.Unlock()
+	if len(epochs) != 1 || epochs[0] != 3 {
+		t.Errorf("revoked through epochs %v, want the replayed bearer's 3", epochs)
+	}
 	reuse := tr.published("iam_session_reuse_detected")
 	if len(reuse) != 1 {
 		t.Fatalf("%d reuse rows, want 1", len(reuse))

@@ -168,8 +168,9 @@ type Sessions struct {
 	audit Audit
 
 	// onReuse is called when a bearer's rotation index proves a cookie was
-	// replayed past the overlap. It bumps the person's revocation epoch,
-	// which ends every session they hold.
+	// replayed past the overlap, with the person and the EPOCH the bearer
+	// was minted at. It ends every session the person opened at or below
+	// that epoch.
 	//
 	// ONCE PER LINEAGE, on the same decision that records the replay: a
 	// replayed cookie is refused, and whoever holds it can present it
@@ -177,12 +178,19 @@ type Sessions struct {
 	// revocation, which is a write to the identity log paced by the holder
 	// of a cookie this node had already refused.
 	//
+	// AND CONDITIONAL ON THE EPOCH, which is what the correctness rests on
+	// rather than the dedupe: the once-per-lineage decision is one NODE's
+	// and it is bounded, so another ingress node seeing the same replay —
+	// or this one after the lineage was forgotten — asks again, and a
+	// revocation that moves the epoch only while it is still at the
+	// bearer's is one that lands once however often it is asked for.
+	//
 	// A SEAM RATHER THAN A WRITE FROM HERE, which is internal/iam/session's
 	// own rule arriving one layer out: validation runs on every ingress
 	// node on every request, and a validator that could append to the log
 	// is one an unauthenticated caller can make write. Nil logs and does
 	// not write, which is the honest posture for a node with no publisher.
-	onReuse func(ctx context.Context, person string)
+	onReuse func(ctx context.Context, person string, epoch uint64)
 
 	// now is the clock, injectable so a case can pin what a principal's
 	// freshness is measured against.
@@ -210,9 +218,10 @@ type SessionsDeps struct {
 	// External is `api.external_url`.
 	External string
 
-	// OnReuse ends every session of a person whose cookie was replayed.
-	// Optional; see [Sessions.onReuse].
-	OnReuse func(ctx context.Context, person string)
+	// OnReuse ends every session of a person whose cookie was replayed,
+	// up to the epoch the replayed bearer carries. Optional; see
+	// [Sessions.onReuse].
+	OnReuse func(ctx context.Context, person string, epoch uint64)
 
 	// Audit records what this arm sees. REQUIRED, and not only for the
 	// rows: the revocation a replay triggers is taken on the same
@@ -617,7 +626,7 @@ func (s *Sessions) reuse(r *http.Request, v session.Validation, remote string) {
 	if s.onReuse == nil {
 		return
 	}
-	s.onReuse(ctx, v.Bearer.Person)
+	s.onReuse(ctx, v.Bearer.Person, v.Bearer.Epoch)
 }
 
 // ended records what a refusing row means for the audit trail — which, for

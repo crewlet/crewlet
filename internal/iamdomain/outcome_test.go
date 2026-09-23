@@ -104,3 +104,79 @@ func TestAnEnrolmentStopsAtAStepNobodyCanConfirm(t *testing.T) {
 		t.Fatalf("the retry answered %+v, want applied", result)
 	}
 }
+
+// A REPLAY'S REVOCATION LANDS ONCE HOWEVER OFTEN IT IS ASKED FOR.
+//
+// Every ingress node a replayed cookie reaches asks for it, and so does a node
+// whose once-per-lineage dedupe forgot the lineage — and each unconditional
+// revocation moved the epoch again, ending the sessions the person had opened
+// since the last. RevokePast moves it only while it is still at the replayed
+// bearer's, decided in the snapshot it publishes from; past it, nothing is
+// published at all.
+//
+// Mutation: drop the condition and the second ask moves the epoch to 2 and
+// appends a record.
+func TestAReplaysRevocationLandsOnceHoweverOftenItIsAsked(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	person := enrolForSessions(t, rig)
+	epoch := func() string {
+		got := rig.column(`SELECT epoch FROM iam_revocation_epochs WHERE person_id = ?`, person)
+		if len(got) != 1 {
+			return "none"
+		}
+		return got[0]
+	}
+	ask := func(opID string) statelog.Result {
+		t.Helper()
+		var result statelog.Result
+		if err := rig.draining(func() error {
+			var err error
+			result, err = rig.writer.RevokePast(t.Context(), person, 0, opID,
+				"a replayed cookie")
+			return err
+		}); err != nil {
+			t.Fatalf("revoke past: %v", err)
+		}
+		rig.drain()
+		return result
+	}
+	first := ask("session-reuse:node-a")
+	if first.Outcome != statelog.OutcomeApplied || first.Position.Seq == 0 {
+		t.Fatalf("the first ask answered %+v, want a record applied", first)
+	}
+	if got := epoch(); got != "1" {
+		t.Fatalf("epoch %s after the first ask, want 1", got)
+	}
+	end, err := rig.log.End(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ANOTHER NODE, the same replayed bearer, its own op id.
+	second := ask("session-reuse:node-b")
+	if second.Outcome != statelog.OutcomeApplied || second.Position.Seq != 0 {
+		t.Errorf("the second ask answered %+v, want applied with nothing "+
+			"published", second)
+	}
+	if got := epoch(); got != "1" {
+		t.Errorf("epoch %s after the second ask, want it still 1 — the "+
+			"sessions opened since the first were ended again", got)
+	}
+	if after, _ := rig.log.End(t.Context()); after != end {
+		t.Errorf("the log moved from %d to %d on an ask with nothing to do",
+			end, after)
+	}
+
+	// THE CONTROL: an unconditional revocation still moves it.
+	if err := rig.draining(func() error {
+		_, err := rig.writer.Revoke(t.Context(), person, "op-signout", "signed out")
+		return err
+	}); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	rig.drain()
+	if got := epoch(); got != "2" {
+		t.Errorf("an unconditional revocation left the epoch at %s, want 2", got)
+	}
+}

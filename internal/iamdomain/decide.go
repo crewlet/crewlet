@@ -924,6 +924,35 @@ func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 	statelog.Result, error) {
 
+	return w.revoke(ctx, personID, nil, opID, reason)
+}
+
+// RevokePast ends every session a person opened at or below epoch — the
+// revocation reuse detection makes on their behalf when a cookie minted at
+// that epoch is replayed.
+//
+// # Conditional, and decided in the snapshot it is published from
+//
+// It bumps the epoch only while the current one is still at or below the
+// bearer's; past it, every session the replay could reach is already over and
+// NOTHING IS PUBLISHED — the answer is `applied` with no position, the
+// framework's own "nothing to write". That is what makes the revocation safe
+// to ask for more than once: every ingress node that sees one replayed cookie
+// asks, and so does one node whose once-per-lineage dedupe forgot the lineage,
+// and an unconditional [Writer.Revoke] would move the epoch once per asking —
+// each move ending the sessions the person opened since the last. A dedupe is
+// the place to save work, never the place correctness is kept.
+func (w *Writer) RevokePast(ctx context.Context, personID string, epoch uint64,
+	opID, reason string) (statelog.Result, error) {
+
+	return w.revoke(ctx, personID, &epoch, opID, reason)
+}
+
+// revoke is the body both revocations share: unconditional when past is nil,
+// and a no-op once the epoch has moved beyond *past.
+func (w *Writer) revoke(ctx context.Context, personID string, past *uint64,
+	opID, reason string) (statelog.Result, error) {
+
 	if personID == "" || opID == "" {
 		return statelog.Result{}, errors.New("iamdomain: a revocation needs " +
 			"a person and an operation id")
@@ -942,6 +971,9 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 		current, err := epochOf(ctx, tx, personID)
 		if err != nil {
 			return err
+		}
+		if past != nil && current > *past {
+			return errNothingToPublish
 		}
 		rec.Mutation, err = EncodeRevocation(Revocation{
 			V: DocumentVersion, Epoch: current + 1,
