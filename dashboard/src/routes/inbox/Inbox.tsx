@@ -256,8 +256,8 @@ export function Inbox() {
           three, which is why the page is not simply locked. */}
       {viewer.anonymous ? (
         <Callout variant="warning">
-          No API token is presented, so this browser is nobody. The engine's own conditions are
-          below; a person's notices need a credential bound to their seat.
+          Nobody is signed in and no API token is presented, so this browser is nobody. The engine's
+          own conditions are below; a person's notices need a credential bound to their seat.
         </Callout>
       ) : viewer.unbound ? (
         <Callout variant="warning">

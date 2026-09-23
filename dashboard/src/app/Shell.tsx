@@ -469,12 +469,15 @@ function ViewerChip() {
   if (viewer.loading) return null;
   if (viewer.anonymous) {
     return (
-      // NEUTRAL, AND OUTLINED. "anonymous" and an operator id are both
+      // NEUTRAL, AND OUTLINED. "anonymous" and a login are both
       // IDENTITY — who the frame thinks you are — and uilet's tone doc draws
       // the same line this dashboard does: a tone says what a thing IS, never
       // who it is. The boundary is what separates the chip from the page bar
       // behind it; a tint would read as a state nobody is in.
-      <Tag appearance="outline" title="No API token is presented; the guarded screens are locked">
+      <Tag
+        appearance="outline"
+        title="Nobody is signed in and no API token is presented; the guarded screens are locked"
+      >
         anonymous
       </Tag>
     );
