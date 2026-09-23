@@ -2,12 +2,10 @@ package builtin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -348,6 +346,11 @@ type Actor struct {
 	// [Actor.OperationSince].
 	WorkSince time.Time
 
+	// Calls is the run's call log, which a derived operation id reads its
+	// repeat count from — see [opIDFor] and [turnctx.CallLog]. Nil outside
+	// a turn, where every id is fresh anyway.
+	Calls *turnctx.CallLog
+
 	Chain []string
 }
 
@@ -476,11 +479,21 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 }
 
 // actor resolves who this call writes as — see [WorkDeps.Actor].
+//
+// THE RUN'S CALL LOG IS THE TURN'S ON EVERY PATH, whoever resolved the rest:
+// it is not attribution, and a resolver that forgot it would silently hand a
+// repeated call its first copy's operation id.
 func (d WorkDeps) actor(ctx context.Context, turn *turnctx.Turn) (Actor, error) {
+	resolve := actorFor
 	if d.Actor != nil {
-		return d.Actor(ctx, turn)
+		resolve = func(turn *turnctx.Turn) (Actor, error) { return d.Actor(ctx, turn) }
 	}
-	return actorFor(turn)
+	actor, err := resolve(turn)
+	if err != nil {
+		return Actor{}, err
+	}
+	actor.Calls = turn.CallLog()
+	return actor, nil
 }
 
 // partyOf is who a personal read about `handle` is about — see
@@ -1384,7 +1397,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// THE OPERATION, AND THE TASK'S ID FROM IT — see [createdTaskID]. The
 	// project is the operation's object rather than the id, because the id
 	// is what is being derived; by here it is settled, default included.
-	opID := opIDFor(actor, "create", task.Project, args)
+	opID := opIDFor(actor, t.Name(), "create", task.Project, args)
 	task.ID = createdTaskID(opID)
 	// A UNIT THE CALLER NAMED, checked against the chart and open to every
 	// seat — deliberately unlike the re-route above. `FiledUnit` is the
@@ -1483,7 +1496,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// and writing it before the create would name a task no node holds.
 	if len(blockers) > 0 {
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
-			opIDFor(actor, "depend", task.ID, args), tracker.DependencyChange{
+			opIDFor(actor, t.Name(), "depend", task.ID, args), tracker.DependencyChange{
 				Task: task.ID, Project: task.Project, WaitingOnAdd: blockers,
 			}, t.deps.Leads)
 		if err != nil {
@@ -1649,36 +1662,35 @@ func handles(all ...string) []string {
 // window the broker acknowledged it as the first record, the ledger answered
 // `applied` at the first position, and the change the model had just asked
 // for was dropped with a success. So the id also covers a digest of the
-// call's own arguments ([callDigest]): the same call repeated — a re-run, or
-// an executor that asks twice — is still one operation, and two different
-// calls are two.
-func opIDFor(actor Actor, verb, object string, args map[string]any) string {
+// call's own arguments ([turnctx.ArgsDigest]): the same call repeated — a
+// re-run, or an executor that asks twice — is still one operation, and two
+// different calls are two.
+//
+// # And how many different calls to the tool came before it
+//
+// What a call asks for says which write it is and not WHEN, so a run that
+// moved an item to `in_progress`, then to `done`, then back to `in_progress`
+// derived one id for the first and third calls, and the third was answered as
+// the first's retry — `applied`, with the item still `done`. So the id also
+// carries the call's repeat count in this run ([turnctx.CallLog.Ordinal]): the
+// third call follows a different one and is a new operation, while a call
+// repeated with nothing different in between keeps its count and its id. A
+// re-run that makes the same calls in the same order reproduces every count.
+//
+// A COUNT OF ZERO ADDS NOTHING to the identity, so a run's first call of each
+// kind — every call, before this existed — derives the id it always did.
+//
+// tool is the calling tool's own name, which is what the count is kept by.
+func opIDFor(actor Actor, tool, verb, object string, args map[string]any) string {
 	seed := actor.OperationSeed()
 	if seed == "" {
 		return statelog.NewOpID(time.Now(), verb+"-"+object)
 	}
-	return statelog.DeriveOpID(actor.OperationSince(), verb+"-"+object,
-		opIDNamespace, seed, verb, object, callDigest(args))
-}
-
-// callDigest is what one tool call asks for, as a digest of its arguments.
-//
-// CANONICAL, because a re-run must reproduce it: the arguments are JSON a
-// model wrote and a decoder read, and encoding/json writes a map's keys in
-// sorted order at every depth, so two decodes of the same call encode to the
-// same bytes whatever order the model emitted them in.
-//
-// A FRESH VALUE WHERE THE ARGUMENTS CANNOT BE ENCODED, which a decoded JSON
-// object never is — and the direction matters: a fresh digest makes a retry
-// write twice, which is visible and bounded, where a constant one would make
-// two different calls one operation and drop the second with a success.
-func callDigest(args map[string]any) string {
-	raw, err := json.Marshal(args)
-	if err != nil {
-		return uuid.NewString()
+	identity := []string{opIDNamespace, seed, verb, object, turnctx.ArgsDigest(args)}
+	if repeat := actor.Calls.Ordinal(tool, args); repeat > 0 {
+		identity = append(identity, "repeat:"+strconv.Itoa(repeat))
 	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
+	return statelog.DeriveOpID(actor.OperationSince(), verb+"-"+object, identity...)
 }
 
 // opIDNamespace keeps a derived operation id from colliding with one another
@@ -1971,7 +1983,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// fields.
 	if !patch.Empty() {
 		got, err := writer.UpdateTask(ctx,
-			opIDFor(actor, "update", before.Task.ID, args), before.Task.ID,
+			opIDFor(actor, t.Name(), "update", before.Task.ID, args), before.Task.ID,
 			before.Task.Project, ifMatch, patch, kind,
 			tracker.Wake{
 				Kind:   kind,
@@ -2000,7 +2012,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			return failed(unconfiguredText(UpdateWorkItemTool)), nil
 		}
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
-			opIDFor(actor, "depend", before.Task.ID, args), change, t.deps.Leads)
+			opIDFor(actor, t.Name(), "depend", before.Task.ID, args), change, t.deps.Leads)
 		if err != nil {
 			return failed(writeFailure(UpdateWorkItemTool, err)), nil
 		}
@@ -2315,7 +2327,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// re-run turn posts once rather than saying the same thing
 		// twice. The engine's redelivery guarantees make a re-run turn
 		// ordinary rather than exceptional.
-		ID:         commentID(actor, before.Task.ID, args),
+		ID:         commentID(actor, t.Name(), before.Task.ID, args),
 		Task:       before.Task.ID,
 		Author:     actor.Handle,
 		AuthorKind: actor.Kind,
@@ -2383,7 +2395,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		},
 	}
 	got, err := writer.UpdateTask(ctx,
-		opIDFor(actor, "comment", comment.ID, args), before.Task.ID, before.Task.Project,
+		opIDFor(actor, t.Name(), "comment", comment.ID, args), before.Task.ID, before.Task.Project,
 		// A COMMENT NEVER CONDITIONS ON A VERSION: it adds to the thread
 		// rather than replacing anybody's value, so there is nothing a
 		// concurrent edit could make it clobber.
@@ -2455,13 +2467,21 @@ func unansweredWarning(task tracker.Task, actor Actor, comment *tracker.Comment)
 // them a seat's second remark on a task in one turn was the first one's id,
 // so it upserted the first comment's row — or, inside the log's duplicate
 // window, never landed at all while the tool answered that it had.
-func commentID(actor Actor, taskID string, args map[string]any) string {
+//
+// AND ITS REPEAT COUNT, exactly as [opIDFor] carries it and for the same
+// call: the comment's id is the subject its create arbitrates on, so an id
+// that stayed put while the operation moved would be refused as a comment that
+// already exists.
+func commentID(actor Actor, tool, taskID string, args map[string]any) string {
 	seed := actor.OperationSeed()
 	if seed == "" {
 		seed = uuid.NewString()
 	}
-	return uuid.NewSHA1(commentNamespace, []byte(seed+"\x00"+taskID+"\x00"+
-		actor.Handle+"\x00"+callDigest(args))).String()
+	name := seed + "\x00" + taskID + "\x00" + actor.Handle + "\x00" + turnctx.ArgsDigest(args)
+	if repeat := actor.Calls.Ordinal(tool, args); repeat > 0 {
+		name += "\x00repeat:" + strconv.Itoa(repeat)
+	}
+	return uuid.NewSHA1(commentNamespace, []byte(name)).String()
 }
 
 // commentNamespace is the uuid namespace comment ids are derived under. Fixed

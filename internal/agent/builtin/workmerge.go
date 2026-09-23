@@ -132,7 +132,7 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	cancelled.Status = tracker.StatusCancelled
 	cancelled.StatusGroup = tracker.StatusCancelled.Group()
 	got, err := t.deps.Merges(actor).MergeDuplicates(ctx,
-		opIDFor(actor, "merge", before.Task.ID, args), before.Task.ID, survivor,
+		opIDFor(actor, t.Name(), "merge", before.Task.ID, args), before.Task.ID, survivor,
 		moveSubtasks(args), tracker.Wake{
 			Kind: tracker.ChangeStatus, Before: before.Task, After: cancelled,
 		}.Notify(t.deps.Leads))

@@ -618,6 +618,10 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		ReplyTo:   strings.TrimSpace(argString(args, "reply_to")),
 		TurnKey:   turnKey(turn),
 		TurnSince: turnSince(turn),
+		// HOW MANY DIFFERENT CALLS TO THIS TOOL CAME FIRST in this run —
+		// see [opIDFor] for what a remark made again after another one
+		// cost without it.
+		Repeat: turn.CallLog().Ordinal(t.Name(), args),
 	}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)

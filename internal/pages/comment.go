@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +59,13 @@ type NewComment struct {
 	// operation minted before its ledger's watermark whose row it no longer
 	// holds, and a call's own clock is always after it.
 	TurnSince time.Time
+
+	// Repeat is how many earlier calls in the turn's run asked the same
+	// tool for something else — see turnctx.CallLog. It is part of the
+	// derived id, so a remark made again after a different one is a second
+	// comment rather than the first one's retry, while a remark repeated
+	// with nothing between stays one. Zero adds nothing to the id.
+	Repeat int
 
 	Quiet bool
 }
@@ -304,10 +312,14 @@ func (s *Store) commentOpID(pageID string, in NewComment) string {
 		return s.newSeqID()
 	}
 	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Body)))
+	identity := []string{commentNamespace, pageID, strings.TrimSpace(in.TurnKey),
+		hex.EncodeToString(sum[:])}
+	if in.Repeat > 0 {
+		identity = append(identity, "repeat:"+strconv.Itoa(in.Repeat))
+	}
 	// UNNAMED, because this is the comment's own id as well and a reader
 	// addresses it: the page and the turn it came from are on the row.
-	return statelog.DeriveOpID(in.TurnSince, "", commentNamespace, pageID,
-		strings.TrimSpace(in.TurnKey), hex.EncodeToString(sum[:]))
+	return statelog.DeriveOpID(in.TurnSince, "", identity...)
 }
 
 // commentNamespace scopes the derived operation ids. FIXED for the life of the

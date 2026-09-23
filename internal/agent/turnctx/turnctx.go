@@ -58,7 +58,8 @@ import (
 //
 // IMMUTABLE after construction. Derive a new one rather than mutating it — a
 // tool that could rewrite the seat it runs as would make every authorization
-// decision downstream a suggestion.
+// decision downstream a suggestion. The one exception is [Turn.Calls], a log
+// that only grows and that nothing authorizes on.
 //
 // A goroutine that captures a Turn and outlives the turn is a bug, and the one
 // no linter can see. The rule that makes it checkable: a Turn is PASSED, never
@@ -159,6 +160,37 @@ type Turn struct {
 	// request somebody is still waiting for.
 	Task  string
 	Reply string
+
+	// Calls is what this run has called so far, which a derived operation
+	// id reads its repeat count from — see [CallLog].
+	//
+	// THE ONE PART OF A TURN THAT CHANGES, and only by growing: the tool
+	// surface appends each call it made, and nothing can rewrite or drop an
+	// entry, so no authorization decision reads it and nothing a model says
+	// reaches it but the calls it actually made.
+	Calls *CallLog
+}
+
+// CallLog is this run's call log, or nil outside a turn — see [Turn.Calls].
+func (t *Turn) CallLog() *CallLog {
+	if t == nil {
+		return nil
+	}
+	return t.Calls
+}
+
+// WithCalls is this turn with calls as its log — a delegated worker's view of
+// the run, on a fork of the run's own log ([CallLog.Fork]).
+//
+// A DERIVED TURN, never this one changed: a worker's calls must not reach the
+// parent's log until its wave is done.
+func (t *Turn) WithCalls(calls *CallLog) *Turn {
+	if t == nil {
+		return nil
+	}
+	derived := *t
+	derived.Calls = calls
+	return &derived
 }
 
 // Handle is the acting seat's handle, or "" when there is no seat.

@@ -171,6 +171,13 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			RunID:     t.runID,
 			WorkKey:   t.workKey,
 			WorkSince: t.workSince,
+			// EVERY RUN STARTS ITS OWN CALL LOG, which a derived operation
+			// id reads its repeat count from (see [turnctx.CallLog]). Empty
+			// for a new run, a re-run included: it makes its calls again,
+			// and each count comes out as it did. A RESUMED run passes
+			// through here too, and the runner seeds its log with what the
+			// run called before it parked.
+			Calls: turnctx.NewCallLog(),
 			// The seat and the ORG both come off the pinned epoch, so a
 			// colleague lookup mid-turn resolves against the roster this
 			// turn started under rather than one that changed underneath

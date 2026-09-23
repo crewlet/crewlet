@@ -2614,3 +2614,99 @@ func TestAWorkersProviderHandOffIsPublishedAgainstTheParentTurn(t *testing.T) {
 		t.Errorf("actor = %q, want CTO", actor)
 	}
 }
+
+// --- the run's call log ----------------------------------------------------
+
+// countingTool is a seat-scoped tool that reads, at the moment it runs, the
+// repeat count its own call would carry in a derived operation id.
+type countingTool struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func (c *countingTool) Name() string               { return "count_calls" }
+func (c *countingTool) Description() string        { return "counts the run's calls" }
+func (c *countingTool) Parameters() map[string]any { return nil }
+func (c *countingTool) Call(context.Context, map[string]any) (tools.Result, error) {
+	return tools.Result{Output: "no turn"}, nil
+}
+func (c *countingTool) CallForTurn(_ context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, _ := args["v"].(string)
+	c.counts[v] = turn.CallLog().Ordinal(c.Name(), args)
+	return tools.Result{Output: "counted"}, nil
+}
+
+// A WORKER COUNTS FROM WHAT THE RUN CALLED AND FROM ITS OWN CALLS, NEVER A
+// SIBLING'S — and the run counts every worker's calls once the wave is done.
+//
+// Workers write under the parent's unit of work, so a derived operation id's
+// repeat count has to see the run's calls or a worker's write made again after
+// a different one takes its first copy's id. But siblings run concurrently, so
+// a count that included them would depend on which finished first and a re-run
+// would not reproduce it. Here the second sibling runs strictly after the
+// first has made and recorded its call, which is exactly when a shared log
+// would have counted it.
+func TestAWorkerCountsTheRunsCallsButNotItsSiblings(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	counter := &countingTool{counts: map[string]int{}}
+	if err := w.registry.RegisterWith(counter, tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: mcp.Yes}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	w.snapshot = w.registry.Snapshot()
+
+	firstRecorded := make(chan struct{})
+	var once sync.Once
+	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+		answered := slices.ContainsFunc(req.Messages, func(m llm.Message) bool {
+			return m.Role == llm.RoleTool
+		})
+		switch {
+		case strings.Contains(userText(req), "first") && !answered:
+			return callTool(counter.Name(), map[string]any{"v": "first"}, 1, 1), nil
+		case strings.Contains(userText(req), "first"):
+			// ASKED AGAIN, so its call has returned and been recorded.
+			once.Do(func() { close(firstRecorded) })
+			return answer("done", 1, 1), nil
+		case !answered:
+			select {
+			case <-firstRecorded:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return callTool(counter.Name(), map[string]any{"v": "second"}, 1, 1), nil
+		}
+		return answer("done", 1, 1), nil
+	}}
+	cfg := baseConfig(t, w, p)
+	cfg.ParentRemaining = 0
+	calls := turnctx.NewCallLog()
+	calls.Record(counter.Name(), map[string]any{"v": "parent"})
+	cfg.Turn = &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: cfg.Seat.Role,
+		Org: cfg.Seat.Org, Calls: calls}
+
+	results := run(t, cfg, batch([]string{counter.Name()}, []subagent.Task{
+		{Prompt: "the first task"}, {Prompt: "the second task"},
+	}))
+	for _, res := range results {
+		if res.Failed() {
+			t.Fatalf("a worker failed: %+v", res)
+		}
+	}
+	counter.mu.Lock()
+	first, second := counter.counts["first"], counter.counts["second"]
+	counter.mu.Unlock()
+	if first != 1 || second != 1 {
+		t.Fatalf("the workers counted %d and %d different calls before theirs, "+
+			"want the run's 1 each — the second saw its sibling's call", first, second)
+	}
+	if got := calls.Ordinal(counter.Name(), map[string]any{"v": "parent"}); got != 2 {
+		t.Fatalf("after the wave the run counts %d different calls before a "+
+			"repeat of its own, want both workers' — the repeat would take its "+
+			"first copy's id with a worker's write in place", got)
+	}
+}

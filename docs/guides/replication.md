@@ -74,11 +74,21 @@ afterwards it arrives. Deciding it again would mean deciding against rows that
 already hold it — a retried purge would find its task gone and refuse, an
 update conditioned on a version would find that version moved by its own first
 copy and refuse as stale. A retried create comes back as the task the first
-copy filed, under the key it took — a turn re-run after a crash files one work
-item, not two, because the new item's id is derived from the operation. Only a
-create that took its key number and never filed its task is finished on a
-fresh number, which leaves a gap in the project's numbering (ENG-8 is skipped)
-rather than two items sharing a key.
+copy filed, under the key it took — the new item's id is derived from the
+operation, so a turn re-run after a crash that makes the **same** call files
+one work item, not two. Only a create that took its key number and never filed
+its task is finished on a fresh number, which leaves a gap in the project's
+numbering (ENG-8 is skipped) rather than two items sharing a key.
+
+That holds for a re-run's calls only where they are the same calls. A turn's
+operation ids are derived from its unit of work, the verb, the object, the
+call's arguments and how many different calls to the same tool the run made
+before it (see
+[the turn engine](../concepts/turn-engine.md#a-turns-two-identities)), and the
+model behind a re-run is sampled again: a title or a comment it words
+differently is a different operation, so that re-run files a second item or
+posts a second comment. The engine cannot tell a reworded call from a new
+one, and a crashed run leaves no record of its calls to compare against.
 
 The same holds for a write whose acknowledgement was lost and which the ledger
 then answers: unless the broker acknowledged this very attempt at the position

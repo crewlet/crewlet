@@ -221,7 +221,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Default:   argBool(args, "default"),
 		Icon:      strings.TrimSpace(argString(args, "icon")),
 	}
-	result, err := t.deps.ViewWriter(actor).WriteView(ctx, opIDFor(actor, "view", id, args), view)
+	result, err := t.deps.ViewWriter(actor).WriteView(ctx, opIDFor(actor, t.Name(), "view", id, args), view)
 	if err != nil {
 		return failed(writeFailure(tracker.SaveWorkViewTool, err)), nil
 	}

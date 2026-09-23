@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -611,5 +613,42 @@ func TestASaveThatAlsoRenamesWaitsForTheRenamesOwnPosition(t *testing.T) {
 		t.Errorf("the turn waited for %v — the rename is the second write, so "+
 			"a re-read in this turn has to be past ITS position, not the "+
 			"save's", kb.awaited)
+	}
+}
+
+// A PAGE REMARK MADE AGAIN AFTER A DIFFERENT ONE CARRIES ITS REPEAT COUNT, so
+// the store derives a second comment rather than the first one's retry; a
+// remark repeated with nothing between carries the same count and stays one.
+func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	turn := workTurn(t)
+	turn.Calls = turnctx.NewCallLog()
+	surface := tools.NewSurface("execute", reg.Snapshot(),
+		[]string{builtin.CommentOnPageTool}).ForTurn(turn)
+	for _, body := range []string{"blocked", "blocked", "unblocked", "blocked"} {
+		res, err := surface.Execute(t.Context(), llm.ToolCall{
+			Name: builtin.CommentOnPageTool, Arguments: map[string]any{"page": "p1", "body": body},
+		})
+		if err != nil || res.Failed {
+			t.Fatalf("comment %q = (%+v, %v)", body, res, err)
+		}
+	}
+	var repeats []int
+	for _, c := range kb.comments {
+		repeats = append(repeats, c.Repeat)
+	}
+	if len(repeats) != 4 {
+		t.Fatalf("four remarks reached the store as %d", len(repeats))
+	}
+	if repeats[1] != repeats[0] {
+		t.Errorf("a remark repeated with nothing between carried %d after %d — "+
+			"a retry would post it twice", repeats[1], repeats[0])
+	}
+	if repeats[3] == repeats[0] {
+		t.Errorf("the remark made again after \"unblocked\" carried the first "+
+			"one's count %d, so its id is the first one's and it is that one's "+
+			"retry (counts %v)", repeats[0], repeats)
 	}
 }

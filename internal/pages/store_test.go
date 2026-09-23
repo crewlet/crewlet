@@ -244,6 +244,45 @@ func TestATurnsCommentOnAPageIsPostedOnce(t *testing.T) {
 	}
 }
 
+// A REMARK A TURN MAKES AGAIN AFTER A DIFFERENT ONE IS A SECOND COMMENT, and
+// its own retry is still one.
+//
+// A turn's comment id is derived from the turn and the body, which names WHICH
+// remark it is and not WHEN: "blocked", "unblocked", "blocked" derived one id
+// for the first and the third, and the third was the first's retry — nothing
+// posted, while the thread read "unblocked" last. The tool hands the store the
+// call's repeat count in the run, and the id carries it.
+func TestARemarkMadeAgainAfterAnotherIsASecondComment(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	for _, in := range []pages.NewComment{
+		{Body: "blocked", TurnKey: "turn-7"},
+		{Body: "unblocked", TurnKey: "turn-7", Repeat: 1},
+		{Body: "blocked", TurnKey: "turn-7", Repeat: 1},
+		// ITS RETRY, which a re-run makes under the same count.
+		{Body: "blocked", TurnKey: "turn-7", Repeat: 1},
+	} {
+		if _, _, err := r.store.Comment(t.Context(), agent("eng"), page.Page.ID,
+			in); err != nil {
+			t.Fatalf("comment %+v: %v", in, err)
+		}
+		r.drain()
+	}
+	thread, err := r.store.Thread(t.Context(), page.Page.ID)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	var bodies []string
+	for _, c := range thread {
+		bodies = append(bodies, c.Body)
+	}
+	if !slices.Equal(bodies, []string{"blocked", "unblocked", "blocked"}) {
+		t.Fatalf("the thread reads %q, want the remark made again after "+
+			"\"unblocked\" posted once more and its retry collapsed", bodies)
+	}
+}
+
 // ONLY THE AUTHOR EDITS A COMMENT, operator included.
 func TestOnlyTheAuthorEditsAComment(t *testing.T) {
 	t.Parallel()

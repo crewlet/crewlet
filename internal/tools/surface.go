@@ -358,6 +358,13 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		return toolloop.ToolResult{}, err
 	}
 	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed})
+	// INTO THE RUN'S LOG TOO, failed or not: a call that reports a failure
+	// may still have written part of what it asked for (a gesture stopped
+	// at a step whose outcome is unknown), and a call the log never heard
+	// of is one a later count misses — which hands a repeat its first
+	// copy's id. Recording one that wrote nothing only raises a count, and
+	// a raised count is a fresh operation. See [turnctx.CallLog].
+	s.turn.CallLog().Record(call.Name, args)
 	if s.guard != nil && !res.Failed {
 		// SUCCESS ONLY. A load that named a key nobody has comes back
 		// failed, and treating it as an unlock would let a typo open
