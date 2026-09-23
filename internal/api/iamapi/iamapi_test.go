@@ -153,6 +153,13 @@ type fakeDirectory struct {
 	people map[string]iamdomain.PersonRow
 	creds  map[string][]iamdomain.CredentialRow
 	err    error
+
+	// claims is what the claim report reads, and claimsErr a report this
+	// node could not read. liveKeys are the removed people whose key the
+	// key duty has not yet destroyed.
+	claims    iamdomain.ClaimReport
+	claimsErr error
+	liveKeys  []string
 }
 
 func (d *fakeDirectory) People(_ context.Context, q iamdomain.PeopleQuery) (
@@ -213,6 +220,24 @@ func (d *fakeDirectory) History(context.Context, iamdomain.HistoryQuery) (
 
 func (d *fakeDirectory) PositionAt(context.Context, time.Time) (uint64, error) {
 	return 0, d.err
+}
+
+func (d *fakeDirectory) Claims(context.Context, time.Time) (iamdomain.ClaimReport, error) {
+	if d.claimsErr != nil {
+		return iamdomain.ClaimReport{}, d.claimsErr
+	}
+	return d.claims, d.err
+}
+
+func (d *fakeDirectory) KeysOutlivingRemovals(_ context.Context, keys iamdomain.KeyIndex) (
+	int, []string, error) {
+
+	if keys == nil {
+		// A REPORT THAT ASKS WITHOUT A STORE is the bug this fake names:
+		// the arm is meant to be skipped when there is nothing to ask.
+		return 0, nil, errors.New("asked with no key index")
+	}
+	return len(d.liveKeys), d.liveKeys, d.err
 }
 
 // fakeWriter records what the surface asked of it.
@@ -784,6 +809,119 @@ func TestTheReportNamesAGrantTheCeilingClamps(t *testing.T) {
 		t.Errorf("the report does not name the clamped grant: %v", got.body)
 	}
 }
+
+// A DUPLICATED CLAIM AND AN ORPHANED RESERVATION ARE NAMED, and an address is
+// named by its kind alone.
+//
+// These are the two states the identity estate cannot refuse at a write — a
+// restore can put one address on two people, and an enrolment can stop after
+// its claims — and the report is where an operator is told. The address itself
+// is sealed, so its duplicate must say "email" and who, and never carry the
+// keyed blind it was found by: that value means nothing to a person and is
+// the one thing about an address this estate keeps in a lookup form.
+func TestTheReportNamesADuplicateClaimAndAnOrphan(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	holders := []string{alice.String(), bob.String()}
+	ghost := "018f3a9c-0000-7000-8000-0000000000dd"
+	r.directory.claims = iamdomain.ClaimReport{
+		Duplicates: []iamdomain.DuplicateClaim{
+			{Kind: iamdomain.KindEmail, Token: "blind-of-an-address", People: holders},
+			{Kind: iamdomain.KindLogin, Token: "alice.admin", People: holders},
+		},
+		Orphans: []iamdomain.OrphanedClaim{{
+			Person: ghost, Login: "ghost.person",
+			Holds: []iamdomain.ObjectKind{iamdomain.KindLogin},
+		}},
+	}
+	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if got.status != http.StatusOK {
+		t.Fatalf("status %d (body %v)", got.status, got.body)
+	}
+	var claims, logins, orphans int
+	rows, _ := got.body["findings"].([]any)
+	for _, raw := range rows {
+		row, _ := raw.(map[string]any)
+		switch row["kind"] {
+		case string(iamapi.KindDuplicateClaim):
+			claims++
+			people, _ := row["people"].([]any)
+			if len(people) != 2 {
+				t.Errorf("a duplicate names %v, want both holders", row["people"])
+			}
+			if row["claim"] == string(iamdomain.KindLogin) {
+				logins++
+				if row["login"] != "alice.admin" {
+					t.Errorf("the duplicated login reads %v", row["login"])
+				}
+			}
+		case string(iamapi.KindOrphanedClaim):
+			orphans++
+			if row["person"] != ghost || row["login"] != "ghost.person" {
+				t.Errorf("the orphan reads %v", row)
+			}
+		}
+	}
+	if claims != 2 || logins != 1 || orphans != 1 {
+		t.Fatalf("the report named %d duplicates (%d logins) and %d orphans, "+
+			"want 2 (1) and 1: %v", claims, logins, orphans, got.body)
+	}
+	if encoded, _ := json.Marshal(got.body); strings.Contains(string(encoded),
+		"blind-of-an-address") {
+		t.Error("the report carried an address's blind, which means nothing to " +
+			"a person and is the lookup form of their address")
+	}
+}
+
+// AN UNREADABLE CLAIM REPORT IS AN OUTAGE, not a clean one.
+//
+// This report is the only place a duplicate identity is ever named, so one
+// that dropped the arm it could not read would say "nothing to report" about a
+// company holding two people on one address.
+func TestAnUnreadableClaimReportIsAnOutageNotACleanBill(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.directory.claimsErr = errors.New("the replicated estate is not open")
+	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if got.status != http.StatusServiceUnavailable {
+		t.Fatalf("status %d with the claims unreadable, want 503 (body %v)",
+			got.status, got.body)
+	}
+}
+
+// A REMOVED PERSON WHOSE KEY STILL LIVES IS NAMED — where the node can ask.
+//
+// Until the key duty lands a failed delete, a removed person's name is
+// readable from every backup taken before the removal, and "is that person
+// gone" has to be answerable as "not yet". A node with no secret store cannot
+// tell, and SKIPS the arm rather than asking with nothing — the fake refuses a
+// question asked without a store, so a report that asked anyway fails here.
+func TestTheReportNamesALiveKeyOfARemovedPersonWhereItCanAsk(t *testing.T) {
+	t.Parallel()
+	gone := "018f3a9c-0000-7000-8000-0000000000ee"
+
+	without := newRig(t)
+	without.directory.liveKeys = []string{gone}
+	got := without.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if got.status != http.StatusOK {
+		t.Fatalf("a node with no secret store answered %d: %v", got.status, got.body)
+	}
+	if hasFinding(got.body, string(iamapi.KindKeyOutlivedRemoval)) {
+		t.Error("a node that cannot list keys reported one")
+	}
+
+	with := newRig(t, func(o *iamapi.Options) { o.Keys = listedKeys{} })
+	with.directory.liveKeys = []string{gone}
+	got = with.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if !hasFinding(got.body, string(iamapi.KindKeyOutlivedRemoval)) {
+		t.Fatalf("a removed person's live key was not named: %v", got.body)
+	}
+}
+
+// listedKeys is a key index the fake directory is asked with.
+type listedKeys struct{}
+
+func (listedKeys) Names(context.Context, string) ([]string, error) { return nil, nil }
 
 func hasFinding(body map[string]any, kind string) bool {
 	return findingOf(body, kind) != nil

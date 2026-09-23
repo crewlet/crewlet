@@ -50,12 +50,32 @@ const (
 	// written — and worth saying, because the row and the behaviour
 	// differ and nothing else would say so.
 	KindClampedGrant FindingKind = "grant_clamped_by_ceiling"
+
+	// KindDuplicateClaim is an address, a login or a seat more than one
+	// person holds. The broker cannot produce one and a restore or a
+	// reanchor can; the estate has no unique index to refuse it with and
+	// must not have one, so the report is where it is named — and an
+	// operator, not the engine, decides who keeps it.
+	KindDuplicateClaim FindingKind = "claim_duplicated"
+
+	// KindOrphanedClaim is a reservation an enrolment left behind: claims
+	// taken for somebody whose content record never followed. Removing the
+	// reservation's id releases them.
+	KindOrphanedClaim FindingKind = "claim_orphaned"
+
+	// KindKeyOutlivedRemoval is somebody removed whose key still exists,
+	// because the removal's own delete of it failed. Until the key duty
+	// lands it their name and address are readable from every backup taken
+	// before the removal — which is the answer to "is that person gone"
+	// that an operator needs to be told is "not yet".
+	KindKeyOutlivedRemoval FindingKind = "removal_key_live"
 )
 
-// FindingKinds are the five, in the order the report renders them.
+// FindingKinds are the eight, in the order the report renders them.
 var FindingKinds = []FindingKind{
 	KindNoManageHolder, KindNoCredential, KindDanglingBinding,
-	KindShredded, KindClampedGrant,
+	KindShredded, KindClampedGrant, KindDuplicateClaim, KindOrphanedClaim,
+	KindKeyOutlivedRemoval,
 }
 
 // Finding is one row of the report.
@@ -65,8 +85,21 @@ type Finding struct {
 	Login  string      `json:"login,omitempty"`
 	Seat   string      `json:"seat,omitempty"`
 	Grant  iam.Grant   `json:"grant,omitempty"`
-	Detail string      `json:"detail"`
+
+	// Claim and People are a duplicate's: which kind of claim, and
+	// everybody holding it. An address is named by its KIND alone — the
+	// address is sealed and this report opens nothing.
+	Claim  string   `json:"claim,omitempty"`
+	People []string `json:"people,omitempty"`
+
+	Detail string `json:"detail"`
 }
+
+// Keys is the company's secret store as the report reads it: which person keys
+// exist. NIL-ABLE, and the absence is the THIRD VALUE for [Bindings]' reason —
+// a node with no secret store cannot tell a removed person's key from no key,
+// so the arm is skipped rather than answered.
+type Keys = iamdomain.KeyIndex
 
 // Bindings is what the report asks about one person's seat binding: whether it
 // dangles, and if so the sentence that says which seat, why and what to do.
@@ -141,6 +174,20 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 				"grant or revoke except through a Tier A token",
 		}}, findings...)
 	}
+	claims, err := s.claimFindings(r)
+	if err != nil {
+		s.unavailable(w, r, "read the claims", err)
+		return
+	}
+	findings = append(findings, claims...)
+	if s.keys != nil {
+		keys, err := s.keyFindings(r)
+		if err != nil {
+			s.unavailable(w, r, "read which removed people's keys live", err)
+			return
+		}
+		findings = append(findings, keys...)
+	}
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"findings":                  findings,
 		"position":                  position,
@@ -202,6 +249,65 @@ func (s *Service) findingsFor(r *http.Request, row iamdomain.PersonRow) (
 		}
 	}
 	return out, bindingChecked
+}
+
+// claimFindings is every duplicated claim and every orphaned reservation this
+// node's rows hold.
+//
+// AN UNREADABLE ANSWER IS AN OUTAGE, unlike [Service.hasCredential]'s: that arm
+// is one person's detail and defaults to the answer that raises no false alarm,
+// while this one is the only place a duplicate identity is ever named — and a
+// report that silently dropped it would read as a company that has none.
+func (s *Service) claimFindings(r *http.Request) ([]Finding, error) {
+	report, err := s.directory.Claims(r.Context(), s.now())
+	if err != nil {
+		return nil, err
+	}
+	var out []Finding
+	for _, dup := range report.Duplicates {
+		f := Finding{
+			Kind: KindDuplicateClaim, Claim: string(dup.Kind), People: dup.People,
+			Detail: "more than one person holds this " + string(dup.Kind) +
+				" claim, which a restore or a reanchor can produce and the " +
+				"engine never refuses at apply; decide who keeps it and release " +
+				"it from the others",
+		}
+		switch dup.Kind {
+		case iamdomain.KindLogin:
+			f.Login = dup.Token
+		case iamdomain.KindSeat:
+			f.Seat = dup.Token
+		}
+		out = append(out, f)
+	}
+	for _, orphan := range report.Orphans {
+		out = append(out, Finding{
+			Kind: KindOrphanedClaim, Person: orphan.Person, Login: orphan.Login,
+			Seat: orphan.Seat,
+			Detail: "an enrolment stopped after reserving these claims, so they " +
+				"are held by nobody who can use them; remove this id to " +
+				"release them",
+		})
+	}
+	return out, nil
+}
+
+// keyFindings is every removed person whose key outlived the removal.
+func (s *Service) keyFindings(r *http.Request) ([]Finding, error) {
+	_, pending, err := s.directory.KeysOutlivingRemovals(r.Context(), s.keys)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Finding, 0, len(pending))
+	for _, id := range pending {
+		out = append(out, Finding{
+			Kind: KindKeyOutlivedRemoval, Person: id,
+			Detail: "this person was removed and their key still exists, so " +
+				"their name and address are readable from every backup taken " +
+				"before the removal; the key duty retries until it is destroyed",
+		})
+	}
+	return out, nil
 }
 
 // hasCredential reports whether somebody can prove themselves at all.

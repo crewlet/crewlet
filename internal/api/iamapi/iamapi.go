@@ -53,9 +53,9 @@ var log = logging.Get("api.iam")
 
 // Directory is the read side this surface needs.
 //
-// CONSUMER-DEFINED and six methods wide: internal/iamdomain's reader answers
+// CONSUMER-DEFINED and eight methods wide: internal/iamdomain's reader answers
 // more than this — a sign-in's keyed lookups among them — and those are
-// exactly what must not be reachable from a route. Naming the six is what
+// exactly what must not be reachable from a route. Naming the eight is what
 // keeps the enumeration-safe half of that package out of an HTTP handler.
 type Directory interface {
 	People(ctx context.Context, q iamdomain.PeopleQuery) (iamdomain.PeoplePage, error)
@@ -64,6 +64,14 @@ type Directory interface {
 	Sessions(ctx context.Context, personID string) ([]iamdomain.SessionRecord, error)
 	History(ctx context.Context, q iamdomain.HistoryQuery) (iamdomain.HistoryPage, error)
 	PositionAt(ctx context.Context, at time.Time) (uint64, error)
+
+	// Claims and KeysOutlivingRemovals are the two identity duties' own
+	// readings, which the report shows on demand: a duplicate or an orphan
+	// the claim duty warns about, and a removed person whose key the key
+	// duty has not yet destroyed.
+	Claims(ctx context.Context, now time.Time) (iamdomain.ClaimReport, error)
+	KeysOutlivingRemovals(ctx context.Context, keys iamdomain.KeyIndex) (
+		int, []string, error)
 }
 
 // Writer is one party's authority to change the identity estate, as this
@@ -187,6 +195,11 @@ type Options struct {
 	// silent about the writes an investigation looks for first.
 	Audit Audit
 
+	// Keys lists the person keys the company's secret store holds, for
+	// the report's removed-but-still-readable arm. NIL-ABLE, and the
+	// absence is the third value — see [Keys].
+	Keys Keys
+
 	// Now is the clock, injectable so a case can pin an expiry.
 	Now func() time.Time
 }
@@ -201,6 +214,7 @@ type Service struct {
 	bindings  Bindings
 	ceiling   []iam.Grant
 	audit     Audit
+	keys      Keys
 	now       func() time.Time
 }
 
@@ -224,7 +238,8 @@ func New(opts Options) (*Service, error) {
 		directory: opts.Directory, authority: opts.Authority,
 		opener: opts.Opener, bootstrap: opts.Bootstrap,
 		external: opts.ExternalBase, bindings: opts.Bindings,
-		ceiling: slices.Clone(opts.Ceiling), audit: opts.Audit, now: opts.Now,
+		ceiling: slices.Clone(opts.Ceiling), audit: opts.Audit, keys: opts.Keys,
+		now: opts.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }

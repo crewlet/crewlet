@@ -362,6 +362,10 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 		// What an administrator did — a token minted or revoked, a
 		// session ended, a person removed — on the node's audit feed.
 		Audit: e.AuthEvents(),
+		// AND WHICH PERSON KEYS EXIST, so a removal whose key outlived it
+		// is named while the key duty is still retrying — nil on a node
+		// with no fleet store, which skips that arm.
+		Keys: e.PersonKeyIndex(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: the identity directory: %w", err)

@@ -74,26 +74,10 @@ func ShredRemoved(ctx context.Context, reader *Reader, keys KeyIndex,
 		return ShredReport{}, errors.New("iamdomain: the key duty needs the " +
 			"directory, the store's names and a shredder")
 	}
-	names, err := keys.Names(ctx, personKeyPrefix)
-	if err != nil {
-		return ShredReport{}, fmt.Errorf("iamdomain: list the person keys: %w", err)
-	}
-	report := ShredReport{Keys: len(names)}
-	if len(names) == 0 {
-		return report, nil
-	}
-	// SORTED HERE and not trusted to arrive so: the seam promises names,
-	// and the membership test below is a binary search.
-	names = slices.Clone(names)
-	slices.Sort(names)
-	removed, err := reader.RemovedPeople(ctx)
+	held, pending, err := reader.KeysOutlivingRemovals(ctx, keys)
+	report := ShredReport{Keys: held, Pending: pending}
 	if err != nil {
 		return report, err
-	}
-	for _, id := range removed {
-		if _, live := slices.BinarySearch(names, PersonDEKName(id)); live {
-			report.Pending = append(report.Pending, id)
-		}
 	}
 	var errs []error
 	for _, id := range report.Pending {
@@ -111,6 +95,36 @@ func ShredRemoved(ctx context.Context, reader *Reader, keys KeyIndex,
 		report.Destroyed = append(report.Destroyed, id)
 	}
 	return report, errors.Join(errs...)
+}
+
+// KeysOutlivingRemovals is every removed person whose key still exists — the
+// key duty's work, and what the directory report names while it is pending —
+// and how many person keys the store holds in all.
+func (r *Reader) KeysOutlivingRemovals(ctx context.Context, keys KeyIndex) (
+	int, []string, error) {
+
+	names, err := keys.Names(ctx, personKeyPrefix)
+	if err != nil {
+		return 0, nil, fmt.Errorf("iamdomain: list the person keys: %w", err)
+	}
+	if len(names) == 0 {
+		return 0, nil, nil
+	}
+	// SORTED HERE and not trusted to arrive so: the seam promises names,
+	// and the membership test below is a binary search.
+	names = slices.Clone(names)
+	slices.Sort(names)
+	removed, err := r.RemovedPeople(ctx)
+	if err != nil {
+		return len(names), nil, err
+	}
+	var pending []string
+	for _, id := range removed {
+		if _, live := slices.BinarySearch(names, PersonDEKName(id)); live {
+			pending = append(pending, id)
+		}
+	}
+	return len(names), pending, nil
 }
 
 // RemovedPeople is every person a removal tombstoned on this node, in id

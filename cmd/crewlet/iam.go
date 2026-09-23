@@ -627,18 +627,38 @@ func (p *iamPrinter) check(answer map[string]any, err error) error {
 	fmt.Fprintln(tw, "FINDING\tWHO\tDETAIL")
 	for _, raw := range rows {
 		row, _ := raw.(map[string]any)
-		who := str(row["login"])
-		if who == "" {
-			who = str(row["person"])
-		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\n",
-			str(row["kind"]), dash(who), str(row["detail"]))
+			str(row["kind"]), dash(findingWho(row)), str(row["detail"]))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
 	}
 	fmt.Fprintf(p.w, "\nas of %s\n", str(answer["position"]))
 	return nil
+}
+
+// findingWho is the WHO column for one finding.
+//
+// A DUPLICATE NAMES EVERYBODY HOLDING THE CLAIM, prefixed by which claim — and
+// by the claim's value where it is readable (a login, a seat); an address is
+// named by its kind alone, because the report carries no form of it. Every
+// other finding is about one person, by their login where they have one.
+func findingWho(row map[string]any) string {
+	if people, _ := row["people"].([]any); len(people) > 0 {
+		ids := make([]string, 0, len(people))
+		for _, p := range people {
+			ids = append(ids, str(p))
+		}
+		claim := str(row["claim"])
+		if value := str(row["login"]) + str(row["seat"]); value != "" {
+			claim += " " + value
+		}
+		return claim + ": " + strings.Join(ids, ", ")
+	}
+	if who := str(row["login"]); who != "" {
+		return who
+	}
+	return str(row["person"])
 }
 
 func (p *iamPrinter) audit(answer map[string]any, err error) error {
