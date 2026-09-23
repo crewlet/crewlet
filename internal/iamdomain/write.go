@@ -326,10 +326,10 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 		return MutationRecord{}, err
 	}
 	if len(reason) > MaxReason {
-		return MutationRecord{}, fmt.Errorf("iamdomain: the reason on this %s "+
-			"is %d bytes and the cap is %d — it is rendered into an "+
-			"authentication trail beside the op that caused it, so it says "+
-			"WHICH cause fired rather than narrating", op, len(reason), MaxReason)
+		return MutationRecord{}, fmt.Errorf("%w: the reason on this %s is %d "+
+			"bytes and the cap is %d — it is rendered into an authentication "+
+			"trail beside the op that caused it, so it says WHICH cause fired "+
+			"rather than narrating", ErrInvalid, op, len(reason), MaxReason)
 	}
 	version := RecordVersion
 	if op == OpRemove || op == OpEviction {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1153,5 +1154,60 @@ func TestAMachineEnrolsWithNoAddressAndAPersonMayNot(t *testing.T) {
 		t.Errorf("a machine with neither an address nor a login was refused "+
 			"with %v, want %v — it is a credential holder nobody can list "+
 			"or revoke", err, iamdomain.ErrNotFindable)
+	}
+}
+
+// AN ENROLMENT OUT OF BOUNDS IS REFUSED BEFORE IT CLAIMS ANYTHING.
+//
+// An enrolment is a sequence, and the person record is its LAST append — so a
+// bound first checked there is met after the address and the login are
+// already claimed. A reason one byte past the cap used to be refused exactly
+// there: the enrolment failed, its reservation held both names, and the
+// corrected retry was refused as "claimed" by the half its own first attempt
+// had left behind. The refusal is asserted on the SENTINEL, which a surface
+// answers 400, and on the ESTATE, which must be untouched.
+func TestAnEnrolmentOutOfBoundsClaimsNothing(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	for i, tc := range []struct {
+		name   string
+		mutate func(*iamdomain.Enrolment)
+	}{
+		{"a reason past the cap", func(e *iamdomain.Enrolment) {
+			e.Reason = strings.Repeat("x", iamdomain.MaxReason+1)
+		}},
+		{"a colleague level this build cannot name", func(e *iamdomain.Enrolment) {
+			e.Colleague = iam.Colleague("admin")
+		}},
+	} {
+		in := iamdomain.Enrolment{
+			PersonID: fmt.Sprintf("018f3a9c-0000-7000-8000-0000000004a%d", i),
+			Kind:     iam.KindPerson, Stage: iam.StageActive,
+			Name: "Sarah Chen", Email: "sarah.chen@example.com",
+			Login: "sarah.chen", OpID: fmt.Sprintf("op-bounds-%d", i),
+			Reason: "a hire",
+		}
+		tc.mutate(&in)
+		if err := rig.enrol(in); !errors.Is(err, iamdomain.ErrInvalid) {
+			t.Errorf("%s: refused with %v, want %v", tc.name, err,
+				iamdomain.ErrInvalid)
+		}
+	}
+	rig.drain()
+	if got := rig.column(`SELECT id FROM iam_people`); len(got) != 0 {
+		t.Errorf("a refused enrolment left rows %v holding its claims — the "+
+			"corrected retry is refused as claimed by its own first attempt", got)
+	}
+
+	// THE CONTROL: the same enrolment inside its bounds lands, and takes
+	// the address and the login the refused ones did not.
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: "018f3a9c-0000-7000-8000-0000000004b1",
+		Kind:     iam.KindPerson, Stage: iam.StageActive,
+		Name: "Sarah Chen", Email: "sarah.chen@example.com",
+		Login: "sarah.chen", OpID: "op-bounds-ok", Reason: "a hire",
+		Colleague: iam.ColleagueWrite,
+	}); err != nil {
+		t.Fatalf("the corrected enrolment was refused: %v", err)
 	}
 }

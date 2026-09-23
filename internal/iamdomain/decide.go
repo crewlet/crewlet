@@ -259,6 +259,17 @@ type Enrolment struct {
 	Reason string
 }
 
+// validate refuses an enrolment that could not land, BEFORE the first claim.
+//
+// EVERY BOUND THE SEQUENCE WILL MEET IS CHECKED HERE, and that is the point of
+// the method rather than a tidiness: an enrolment is a sequence of appends, and
+// a bound first met at the person record — the last of them — is met after the
+// address and the login are already claimed. The refusal then leaves a
+// reservation holding both, and the caller's corrected retry is refused as
+// "claimed" by the half its own first attempt left behind. [Writer.record]
+// still checks the reason on every record, which is the backstop for the
+// gestures that are one append; this is the check that runs while nothing has
+// been published.
 func (e Enrolment) validate() error {
 	switch {
 	case e.Invitation != "" && e.BootstrapCode != "":
@@ -286,7 +297,19 @@ func (e Enrolment) validate() error {
 		return fmt.Errorf("%w: %q is not a kind the directory enrols — want "+
 			"%s or %s", ErrNotEnrollable, e.Kind, iam.KindPerson, iam.KindMachine)
 	case !e.Stage.Valid():
-		return fmt.Errorf("iamdomain: %q is not an enrolment stage", e.Stage)
+		return fmt.Errorf("%w: %q is not an enrolment stage", ErrInvalid, e.Stage)
+	case len(e.Reason) > MaxReason:
+		return fmt.Errorf("%w: the reason on this enrolment is %d bytes and "+
+			"the cap is %d — it is rendered into an authentication trail "+
+			"beside the op that caused it, so it says WHICH cause fired "+
+			"rather than narrating", ErrInvalid, len(e.Reason), MaxReason)
+	case e.Colleague != "" && !e.Colleague.Valid():
+		// UNSET IS THE CLOSED END and a real setting — see
+		// [Person.Colleague] — so only a value this build cannot place on
+		// its ladder is refused. Stored, it would read as no reach on
+		// this build and as whatever a newer one means by it on the next.
+		return fmt.Errorf("%w: %q is not a colleague level — want one of %v",
+			ErrInvalid, e.Colleague, iam.Colleagues)
 	case e.Kind == iam.KindPerson && e.Email == "":
 		return fmt.Errorf("%w: enrolling a person needs an address — it is "+
 			"the interactive login key, and somebody with none can never "+
@@ -473,6 +496,16 @@ func loginFits(kind iam.Kind, login string) error {
 // 400 — it is a value somebody typed, and reporting it as a failure of the
 // engine would send them looking for an outage.
 var ErrInvalidLogin = errors.New("iamdomain: that login does not fit its holder's kind")
+
+// ErrInvalid reports a value outside a bound this domain holds a record to: a
+// reason past [MaxReason], a colleague level this build cannot name, a stage
+// that is not one.
+//
+// ITS OWN SENTINEL for [ErrInvalidLogin]'s reason: it is a value the caller
+// supplied and can correct, so a surface answers it 400 naming the field — and
+// before it existed these fell through to a 500, which tells somebody who
+// wrote a long sentence that the engine is broken.
+var ErrInvalid = errors.New("iamdomain: a value is outside the bounds this estate holds it to")
 
 // ErrNotEnrollable reports an enrolment of a kind the directory does not hold.
 var ErrNotEnrollable = errors.New("iamdomain: the directory enrols people and machines only")
@@ -813,10 +846,10 @@ func (w *Writer) SetStage(ctx context.Context, personID string, stage iam.Stage,
 		return statelog.Position{}, err
 	}
 	if !stage.Valid() {
-		return statelog.Position{}, fmt.Errorf("iamdomain: %q is not an "+
-			"enrolment stage — only `active` may act, which is an allowlist "+
-			"of one, so a stage this build cannot name would suspend somebody "+
-			"by accident", stage)
+		return statelog.Position{}, fmt.Errorf("%w: %q is not an enrolment "+
+			"stage — only `active` may act, which is an allowlist of one, so a "+
+			"stage this build cannot name would suspend somebody by accident",
+			ErrInvalid, stage)
 	}
 	mutation, err := EncodeStatus(StatusChange{V: DocumentVersion, Stage: stage})
 	if err != nil {
@@ -1779,6 +1812,13 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		return statelog.Position{}, errors.New("iamdomain: an invitation needs " +
 			"an expiry; one read as `never` is a superuser claim that stays " +
 			"live in somebody's mailbox for the life of the company")
+	case in.Colleague != "" && !in.Colleague.Valid():
+		// REFUSED AT THE INVITATION rather than at its redemption: what
+		// redeeming confers is decided here, once, and a level the
+		// enrolment would refuse is a link that can never be redeemed —
+		// found out by the person it was sent to.
+		return statelog.Position{}, fmt.Errorf("%w: %q is not a colleague "+
+			"level — want one of %v", ErrInvalid, in.Colleague, iam.Colleagues)
 	}
 	if w.blinds == nil || w.sealer == nil {
 		return statelog.Position{}, fmt.Errorf("iamdomain: this node cannot "+

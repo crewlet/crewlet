@@ -229,7 +229,10 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request,
 		// classified they fell through to the 500 below, which told an
 		// administrator who wrote `jane` the engine was broken.
 		errors.Is(err, iamdomain.ErrInvalidLogin),
-		errors.Is(err, iamdomain.ErrNotEnrollable):
+		errors.Is(err, iamdomain.ErrNotEnrollable),
+		// AND A VALUE OUTSIDE A BOUND — a reason past the cap, a colleague
+		// level this build cannot name — for the same reason.
+		errors.Is(err, iamdomain.ErrInvalid):
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": err.Error()})
 	case errors.Is(err, statelog.ErrConflict):

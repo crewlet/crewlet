@@ -899,7 +899,8 @@ func TestEveryRouteMountsWithAVerbTheTableKnows(t *testing.T) {
 // sending them looking for an outage instead of at the field.
 func TestARefusedLoginOrKindIsABadRequestAndNotAFault(t *testing.T) {
 	t.Parallel()
-	for _, refusal := range []error{iamdomain.ErrInvalidLogin, iamdomain.ErrNotEnrollable} {
+	for _, refusal := range []error{iamdomain.ErrInvalidLogin,
+		iamdomain.ErrNotEnrollable, iamdomain.ErrInvalid} {
 		r := newRig(t)
 		r.writer.err = fmt.Errorf("%w: the domain's own sentence", refusal)
 		got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{

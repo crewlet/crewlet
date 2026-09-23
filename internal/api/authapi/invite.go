@@ -196,7 +196,8 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event string, err e
 	switch {
 	case errors.Is(err, iamdomain.ErrInvalidLogin),
 		errors.Is(err, iamdomain.ErrNotFindable),
-		errors.Is(err, iamdomain.ErrNotEnrollable):
+		errors.Is(err, iamdomain.ErrNotEnrollable),
+		errors.Is(err, iamdomain.ErrInvalid):
 		log.InfoContext(r.Context(), event, "refused", "invalid", "error", err)
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": err.Error()})
