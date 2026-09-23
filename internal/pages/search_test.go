@@ -20,10 +20,17 @@ import (
 // [knowledge.Query.ExcludeAncestors] is part of the seam's contract, and its
 // default is what keeps an unreviewed page under the auto-draft parent out of
 // every seat's prompt. The turn-start prefetch and `search_knowledge` both set
-// it to the auto-draft parent, and a searcher that never read it returned the
-// drafts it exists to hide. The chain is read from the page rows, so a draft
-// two levels down is hidden as surely as one directly under the parent — and
-// a caller that passes an empty exclusion, deliberately, sees every one.
+// it to the auto-draft parent. The chain is read from the page rows, so a
+// draft two levels down is hidden as surely as one directly under the parent —
+// and a caller that passes an empty exclusion, deliberately, sees every one.
+//
+// THE TITLE PREFIX JUDGES ONLY A CHAIN THIS NODE COULD NOT READ WHOLE. Every
+// hit's chain is read here, so a draft moved out from under the parent is
+// returned wherever it landed — under another page or at the top of its
+// container — because moving is the gesture that means reviewed. What the
+// prefix hides is a draft whose chain runs into a parent this node no longer
+// holds: what was above that parent is unknown, and an unknown chain fails
+// closed.
 func TestANativeSearchHonoursTheAncestorExclusion(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -37,9 +44,8 @@ func TestANativeSearchHonoursTheAncestorExclusion(t *testing.T) {
 	deeper := r.write(author("jane"), pages.NewPage{
 		Title: "Key rotation in staging", Body: words, ParentID: under.Page.ID,
 	})
-	// THE BACKSTOP'S OWN CASE: a draft at the top of its container has an
-	// empty chain, which the seam cannot tell from one that did not come
-	// back, so its title is what hides it.
+	// A DRAFT AT THE TOP OF ITS CONTAINER, prefix kept. Its chain was read
+	// and is empty, which is a page under nothing — so it is returned.
 	prefixed := r.write(author("jane"), pages.NewPage{
 		Title: knowledge.AutoDraftTitlePrefix + "Rotating keys", Body: words,
 	})
@@ -48,8 +54,7 @@ func TestANativeSearchHonoursTheAncestorExclusion(t *testing.T) {
 	})
 	// AND THE GESTURE THAT MEANS REVIEWED: a draft moved out from under the
 	// parent to another page, keeping its prefix. Its chain comes back and
-	// carries no excluded title, so the prefix — the backstop for a chain
-	// that did not — is not consulted, and it is returned.
+	// carries no excluded title, so the prefix is not consulted.
 	runbooks := r.write(author("jane"), pages.NewPage{
 		Title: "Runbooks", Body: "an index of procedures",
 	})
@@ -62,39 +67,51 @@ func TestANativeSearchHonoursTheAncestorExclusion(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("move the draft under Runbooks: %v", err)
 	}
+	// THE BACKSTOP'S OWN CASE: two pages under a parent that is then
+	// purged, so each one's chain runs into a page this node no longer
+	// holds. The draft is hidden by its title; the ordinary page is not,
+	// because an unknown chain is no reason to hide a title that claims
+	// nothing.
+	holding := r.write(author("jane"), pages.NewPage{
+		Title: "Holding pen", Body: "pages waiting for a home",
+	})
+	orphaned := r.write(author("jane"), pages.NewPage{
+		Title: knowledge.AutoDraftTitlePrefix + "Signing keys", Body: words,
+		ParentID: holding.Page.ID,
+	})
+	stray := r.write(author("jane"), pages.NewPage{
+		Title: "Key ceremony notes", Body: words, ParentID: holding.Page.ID,
+	})
+	if _, err := r.store.Purge(t.Context(), author("jane"), holding.Page.ID,
+		"emptied"); err != nil {
+		t.Fatalf("purge the holding page: %v", err)
+	}
 	r.drain()
 
 	index := search.NewIndexerOver(r.db, []search.LexicalSource{search.PageSource{}})
-	for {
-		worked, err := index.Sweep(t.Context())
-		if err != nil {
-			t.Fatalf("index the pages: %v", err)
-		}
-		if !worked {
-			break
-		}
-	}
+	indexUntilQuiet(t, index)
 	searcher, err := pages.NewSearcher(pages.SearcherOptions{Index: index, DB: r.db})
 	if err != nil {
 		t.Fatalf("NewSearcher: %v", err)
 	}
 
 	hidden := searcher.Search(t.Context(), knowledge.Query{Text: words})
-	if got := hitIDs(hidden); !sameMembers(got, []string{reviewed.Page.ID, moved.Page.ID}) {
-		t.Errorf("the default search returned %v, want %q and the draft moved "+
-			"under Runbooks — the other three are under the excluded parent "+
-			"or at the top of the container carrying its prefix",
-			hitTitles(hidden), reviewed.Page.Title)
+	if got := hitIDs(hidden); !sameMembers(got, []string{reviewed.Page.ID,
+		prefixed.Page.ID, moved.Page.ID, stray.Page.ID}) {
+		t.Errorf("the default search returned %v, want %q, the two drafts moved "+
+			"out and the page whose parent was purged — the other three are "+
+			"under the excluded parent or carry its prefix on a chain this "+
+			"node could not read", hitTitles(hidden), reviewed.Page.Title)
 	}
 
 	shown := searcher.Search(t.Context(), knowledge.Query{
 		Text: words, ExcludeAncestors: []string{},
 	})
 	want := []string{under.Page.ID, deeper.Page.ID, prefixed.Page.ID,
-		reviewed.Page.ID, moved.Page.ID}
+		reviewed.Page.ID, moved.Page.ID, orphaned.Page.ID, stray.Page.ID}
 	if got := hitIDs(shown); !sameMembers(got, want) {
 		t.Errorf("a search that asked for no exclusion returned %v, want all "+
-			"five pages that match", hitTitles(shown))
+			"seven pages that match", hitTitles(shown))
 	}
 	for _, hit := range shown {
 		if hit.PageID == deeper.Page.ID && !slices.Equal(hit.Ancestors,
@@ -106,6 +123,13 @@ func TestANativeSearchHonoursTheAncestorExclusion(t *testing.T) {
 			[]string{runbooks.Page.Title}) {
 			t.Errorf("the moved draft's chain is %v, want Runbooks alone",
 				hit.Ancestors)
+		}
+		// WHOLE WHERE THE WALK REACHED THE TOP, and not where it ran
+		// into the purged parent.
+		wantWhole := hit.PageID != orphaned.Page.ID && hit.PageID != stray.Page.ID
+		if hit.AncestorsKnown != wantWhole {
+			t.Errorf("%q reports its chain known=%v, want %v", hit.Title,
+				hit.AncestorsKnown, wantWhole)
 		}
 	}
 
@@ -119,6 +143,67 @@ func TestANativeSearchHonoursTheAncestorExclusion(t *testing.T) {
 	if got := searcher.Search(t.Context(), knowledge.Query{Text: words}); len(got) != 0 {
 		t.Errorf("a search whose chains could not be read returned %v, want "+
 			"nothing", hitTitles(got))
+	}
+}
+
+// A HIT THE INDEX HAS NOT DROPPED YET IS NOT AN ANSWER.
+//
+// The index is behind this node's own rows by design: a page trashed or purged
+// a moment ago keeps its index row until the indexer's next orphan pass. The
+// parent-chain read that follows the ranking is the later of the two reads, so
+// it is what decides — a purged page is one nobody can open, and a trashed one
+// is not what a knowledge search answers with.
+func TestAHitTheIndexHasNotDroppedYetIsNotReturned(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const words = "rotate the signing key"
+	kept := r.write(author("jane"), pages.NewPage{Title: "Key rotation", Body: words})
+	trashed := r.write(author("jane"), pages.NewPage{Title: "Old key rotation", Body: words})
+	purged := r.write(author("jane"), pages.NewPage{Title: "Older key rotation", Body: words})
+
+	index := search.NewIndexerOver(r.db, []search.LexicalSource{search.PageSource{}})
+	indexUntilQuiet(t, index)
+	searcher, err := pages.NewSearcher(pages.SearcherOptions{Index: index, DB: r.db})
+	if err != nil {
+		t.Fatalf("NewSearcher: %v", err)
+	}
+	// THE CONTROL: all three are indexed and returned, so what goes missing
+	// below went missing at the read rather than never being there.
+	all := []string{kept.Page.ID, trashed.Page.ID, purged.Page.ID}
+	if got := hitIDs(searcher.Search(t.Context(), knowledge.Query{Text: words})); !sameMembers(got, all) {
+		t.Fatalf("before any removal the search returned %v, want all three", got)
+	}
+
+	if _, err := r.store.Trash(t.Context(), author("jane"), trashed.Page.ID); err != nil {
+		t.Fatalf("trash: %v", err)
+	}
+	if _, err := r.store.Purge(t.Context(), author("jane"), purged.Page.ID, "a duplicate"); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	r.drain()
+	// NO SWEEP: the index still holds both rows, which is the window.
+	got := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	if ids := hitIDs(got); !slices.Equal(ids, []string{kept.Page.ID}) {
+		t.Errorf("with the index not yet swept the search returned %v, want %q "+
+			"alone — a trashed page and a purged one are not answers",
+			hitTitles(got), kept.Page.Title)
+	}
+}
+
+// indexUntilQuiet sweeps until a whole lap finds nothing to do.
+func indexUntilQuiet(t *testing.T, index *search.Indexer) {
+	t.Helper()
+	for sweeps := 0; ; sweeps++ {
+		if sweeps == 1000 {
+			t.Fatal("the index never settled")
+		}
+		worked, err := index.Sweep(t.Context())
+		if err != nil {
+			t.Fatalf("index the pages: %v", err)
+		}
+		if !worked {
+			return
+		}
 	}
 }
 
@@ -202,7 +287,7 @@ func TestAKnowledgeSearchWaitsForThePagesFirstBuildAlone(t *testing.T) {
 			t.Fatalf("index the pages: %v", err)
 		}
 	}
-	if index.Ready() {
+	if index.ReadyFor() {
 		t.Fatal("the unfinished corpus reports its first build done, so this " +
 			"case cannot tell one corpus's gate from the whole index's")
 	}

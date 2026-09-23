@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
@@ -24,6 +25,71 @@ func (s *stubSearcher) CanSearch(*org.Role, *org.Organization) bool { return s.c
 func (s *stubSearcher) Search(_ context.Context, q knowledge.Query) []knowledge.Hit {
 	s.queries = append(s.queries, q)
 	return s.hits
+}
+
+// indexingSearcher is a backend that keeps an index of its own, and says
+// whether this node's is still on its first build.
+type indexingSearcher struct {
+	stubSearcher
+	building bool
+}
+
+func (s *indexingSearcher) Building(context.Context) bool { return s.building }
+
+// A NODE STILL INDEXING SAYS SO, in the turn-start block's own sentence.
+//
+// "No documents match" invites different keywords, which on an index still on
+// its first build find nothing either, and a seat that concludes nothing was
+// written down acts on it by writing a page that already exists. The turn-start
+// block already tells the two apart; a seat's own search has to as well, or the
+// seat that followed the block's advice and searched gets the other answer.
+func TestASearchOnABuildingIndexSaysSo(t *testing.T) {
+	t.Parallel()
+	ask := func(t *testing.T, backend KnowledgeSearcher) string {
+		t.Helper()
+		tool := &searchKnowledge{search: backend}
+		res, err := tool.CallForTurn(context.Background(), searchTurn(),
+			map[string]any{"query": "signing key rotation"})
+		if err != nil {
+			t.Fatalf("CallForTurn: %v", err)
+		}
+		// NOT A FAILED CALL: nothing is wrong, and a failure would send
+		// the model looking for a tool that works.
+		if res.Failed {
+			t.Fatalf("the search failed the call: %s", res.Output)
+		}
+		return res.Output
+	}
+
+	building := &indexingSearcher{stubSearcher: stubSearcher{can: true}, building: true}
+	if got := ask(t, building); got != prefetch.BuildingKnowledgeHint {
+		t.Errorf("an empty search on a building index answered %q, want the "+
+			"turn-start block's building hint", got)
+	}
+	if len(building.queries) != 1 {
+		t.Errorf("the backend saw %d searches, want the one that came back empty",
+			len(building.queries))
+	}
+
+	// A SEARCH THAT FOUND SOMETHING HAS FOUND IT, whether or not this
+	// node's own index is still catching up — a peer may have answered.
+	found := &indexingSearcher{building: true, stubSearcher: stubSearcher{
+		can: true, hits: []knowledge.Hit{{Title: "Key rotation"}},
+	}}
+	if got := ask(t, found); !strings.Contains(got, "Key rotation") {
+		t.Errorf("a building node discarded the hits it did find: %q", got)
+	}
+
+	// THE CONTROLS: a built index, and a backend that keeps none, answer
+	// an empty search as an empty search.
+	for name, backend := range map[string]KnowledgeSearcher{
+		"built":    &indexingSearcher{stubSearcher: stubSearcher{can: true}},
+		"no index": &stubSearcher{can: true},
+	} {
+		if got := ask(t, backend); !strings.Contains(got, "not everything is written down") {
+			t.Errorf("%s: an empty search answered %q, want the no-match answer", name, got)
+		}
+	}
 }
 
 func searchTurn() *turnctx.Turn {

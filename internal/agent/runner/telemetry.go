@@ -45,7 +45,8 @@ import (
 //     reaches a screen without waiting on the slowest tool.
 //   - agent_phase_completed — the durable record: the prompts, the response,
 //     the tools, the tokens, the decision. Whole, or — past what one event
-//     carries — cut, with its whole kept in parts under its own id
+//     carries — cut, with its whole kept in parts under its own id when
+//     every part lands, and its notes saying why when one does not
 //     (phasefit.go).
 //
 // TELEMETRY NEVER FAILS THE WORK. Every publish here is fire-and-log: the
@@ -547,8 +548,8 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration int,
 		verdict = "extend"
 	}
 	// THROUGH publishPhase, like every other phase record, so one the
-	// transport refuses as too large is published cut with its whole kept in
-	// parts rather than dropped.
+	// transport refuses as too large is published cut, with its whole in
+	// parts when they land, rather than dropped.
 	e.publishPhase(ctx, types.AgentPhaseCompleted{
 		Agent:    e.turn.AgentID,
 		RoleName: e.role,
@@ -679,16 +680,13 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		Decision:        string(res.Status),
 		ConversationKey: e.turn.ConversationKey,
 		Failed:          res.Failed(),
-		// A CHILD'S failure text, which is the one field on this event
-		// whose length is set by something the parent does not control.
-		// Bounded at events.MaxDiagnosticBytes, marked where it cuts,
-		// because no cut form of a record shortens its error: an
-		// unbounded one would leave even the record's least form too large
-		// to publish, and the phase with no record at all. The parent
-		// phase's own error is carried the same way. What the bound drops
-		// is on neither the record nor the parts of its whole, which are
-		// taken from the record after the bound.
-		Error:     events.ClipDiagnostic(res.Error),
+		// A CHILD'S failure text, WHOLE, however long whatever failed made
+		// it. A record too large for one event is fit by publishPhase, and
+		// the error is the last text that fit cuts (phaseRecordTiers), only
+		// once every other text is at its mark; the record's whole, this
+		// text included, goes out first as parts, which hold it when every
+		// one of them lands.
+		Error:     res.Error,
 		ErrorKind: string(res.Status),
 	}
 	e.publishPhase(ctx, ev)
@@ -763,13 +761,10 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
 	}
 	if rec.Err != nil {
-		// Bounded at events.MaxDiagnosticBytes, which is two orders of
-		// magnitude past a message written to be read — an exhausted
-		// provider chain naming what each attempt refused, a wrapped chain
-		// whose cause is at its end — for the reason the worker's error
-		// above is: no cut form of a record shortens its error, so an
-		// unbounded one would leave the phase with no record at all.
-		ev.Error = events.ClipDiagnostic(rec.Err.Error())
+		// WHOLE, as the worker's error above is and for the same reason:
+		// a record too large for one event is fit by publishPhase, which
+		// cuts the error last and publishes the whole record first as parts.
+		ev.Error = rec.Err.Error()
 		ev.ErrorKind = classifyError(rec.Err)
 	}
 	e.publishPhase(ctx, ev)
@@ -896,13 +891,15 @@ func partialRound(p *toolloop.Partial) map[string]any {
 // Only on the live event, which is republished five times a second for the
 // length of the phase. A tool result is routinely the largest thing on the
 // frame — a knowledge search, a file read — and it is already final: the
-// reader opens it on the completed record, which carries it whole, or — on a
-// record too large for one event — whose whole, kept in parts under the
-// record's id, does.
+// reader opens it on the completed record, which carries it whole. A record
+// too large for one event is published cut, and then the result is whole in
+// the record's parts, under the record's id, when every part landed; when
+// one did not, the record's notes say its whole was not kept, and the rest of
+// the result is kept nowhere.
 //
 // The arguments are NOT bounded. They are what a reader scans a running phase
-// for ("which file is it reading now?"), they are small, and cutting JSON in
-// the middle produces something no consumer can parse.
+// for ("which file is it reading now?"), and cutting JSON in the middle
+// produces something no consumer can parse.
 func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
 	out := toolExecutions(execs)
 	for _, row := range out {
@@ -928,13 +925,14 @@ func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
 //
 // The tail is what a reader is actually watching — text appears at the END —
 // and once the round commits its text is carried whole in the round narration
-// of every frame after it, and kept on the phase's completed record (whole, or
-// in the parts of a record too large for one event). At four thousand bytes,
-// each field this cuts adds
-// at most that much (plus the three-byte marker) to a frame, however long the
-// round runs. Bytes rather than characters because that cost is what the bound
-// is for, so a round written in a script whose characters take three bytes
-// each shows a third as many of them.
+// of every frame after it, and kept on the phase's completed record: whole
+// there, or, on a record too large for one event, whole in its parts when
+// every part landed — when one did not, the record's notes say its whole was
+// not kept. At four thousand bytes, each field this cuts adds at most that
+// much (plus the three-byte marker) to a frame, however long the round runs.
+// Bytes rather than characters because that cost is what the bound is for, so
+// a round written in a script whose characters take three bytes each shows a
+// third as many of them.
 const partialTail = 4000
 
 // tail is the last [partialTail] bytes of text, with a leading "…" when it

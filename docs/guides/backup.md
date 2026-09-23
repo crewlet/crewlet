@@ -6,7 +6,7 @@ survivable without one.
 
 The short version: **`crewlet backup` takes a verified copy of a running
 node**, without stopping it. It goes through the engine because it has to —
-the store file is locked to that process and the embedded broker binds no
+the store's files are locked to that process and the embedded broker binds no
 socket, so nothing outside the engine can read either estate. The cold
 runbook further down remains the belt to that braces.
 
@@ -39,7 +39,7 @@ A deployment's durable state lives in four estates:
 | Estate | Where | What it holds |
 |---|---|---|
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
-| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — today the work tracker and the knowledge embeddings — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — today the work tracker, the knowledge base's pages and the embeddings over both — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
 | **cli-agent homes** | Per-seat state directories on the engine host | Subscription CLI logins (portable via `crewlet llm export`) |
@@ -52,9 +52,9 @@ Classify before you size the job:
   *provided the whole fleet cold-starts together* (they re-form from nothing).
 - **Held twice:** the learning tables and the conversation ledger. Each row is
   also on the memory changelog, which is how a seat's memory follows it to a
-  new node — so a store file lost with the stream estate intact costs at most
-  the last sync cycle, and the seat re-hydrates the rest on its next
-  acquisition.
+  new node — so the node's own store file lost with the stream estate intact
+  costs at most the last sync cycle, and the seat re-hydrates the rest on its
+  next acquisition.
 - **Derived, and rebuildable *only within the replay window*:** everything in
   the replicated estate. A node that loses that file replays the domain logs
   from the beginning and arrives at exactly the same rows — but only if the
@@ -86,7 +86,7 @@ why the manifest is written last.
     └── …                                  one per stream and bucket found
 ```
 
-Three properties worth knowing:
+Worth knowing about it:
 
 - **Each store copy is taken with `VACUUM INTO` and then verified** — reopened,
   integrity-checked, its schema compared against the database it came from,
@@ -175,8 +175,9 @@ peers hold too.
 A node is **two** database files, and they answer differently.
 
 The **replicated estate** is a copy of state every node holds: the tracker's
-projects, tasks, comments and history, derived from an ordered log by an
-applier that runs identically everywhere. Any healthy node's copy of it is the
+projects, tasks, comments and history, the knowledge base's pages and the
+embeddings over both, derived from ordered logs by appliers that run
+identically everywhere. Any healthy node's copy of it is the
 company's, in the same sense the stream estate is.
 
 The **node estate** is that node's alone, and what only lives there is what
@@ -249,7 +250,7 @@ is the freshest backup imaginable.
 **The backup interval IS the recovery point for history below the trim
 floor.** Above that floor the log holds every record on R replicas and every
 node holds the applied rows, so losing a node loses nothing. Below it the log
-holds nothing, and each node's own database file is the only copy of that
+holds nothing, and each node's replicated estate is the only copy of that
 history — N of them, independent, none replicated. A schedule of six hours is
 therefore a six-hour RPO for that half of the company's past, and no replica
 count changes it. See [Retention](retention.md).
@@ -297,11 +298,17 @@ down anyway.
 
 1. **Drain and stop every node** — SIGTERM or Ctrl+C once, and let the drain
    converge; see [graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown).
-2. **Copy, per node:** the store file **together with its `-wal` sidecar** —
-   committed data lives in both, while the `-shm` and `.lock` sidecars are
-   transient — and `stream.store_dir` for every embedded member. Copying both
-   out of one instant is what keeps the node's local state and the fleet's
-   shared state telling one story.
+2. **Copy, per node:** both store files, **each together with its `-wal`
+   sidecar** — the node estate at `store.path` and the replicated estate at
+   `store.replicated_path` (by default `crewlet-replicated.db` beside
+   `store.path`). Committed data lives in a database file and its `-wal`
+   both, while the `-shm`, `-tshm` and `.lock` sidecars are transient. Leave
+   the replicated estate out and a restore has only the logs to rebuild it
+   from, which hold nothing below their trim floor: the tracker's and the
+   knowledge base's older history would come back only from a peer's copy,
+   and on a single node from nowhere. Copy `stream.store_dir` for every
+   embedded member too. Copying all of it out of one instant is what keeps
+   the node's local state and the fleet's shared state telling one story.
 3. **Copy Tier A:** `crewlet.yaml` and any NATS credential/TLS files it
    names — and record where the keyring material comes from. **Keep the
    keyring out of the data's backup domain**
@@ -328,7 +335,9 @@ and `store-replicated.db` at its `store.replicated_path` (by default
 each copy is self-contained, and a stale sidecar from the old database is the
 one thing that would corrupt it. **Both, from the same backup set**: they are
 one node's state, and a restore holding one of them has an audit log and a
-tracker from different moments.
+tracker from different moments. A copy from the cold runbook goes back the way
+it was taken instead: each database with the `-wal` copied beside it, since
+that is where some of its committed data is, and no other sidecar.
 The stream half is restored into a broker with `nats stream restore` per
 snapshot for an external cluster; for the embedded topology, restore into a
 fresh `stream.store_dir` on a node started for that purpose. Then:
@@ -357,12 +366,12 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   coordination store beside the activation pointer, so a node restored with a
   stale store picks up the live revision; `crewlet config export` from any
   running node round-trips the document, sealed or not.
-- **A store file lost with the stream estate intact is nearly free.** The
+- **The node estate lost with the stream estate intact is nearly free.** The
   learning tables and the conversation ledger re-hydrate from the memory
   changelog when the seat is next acquired, so what is actually lost is that
   node's audit log, its scheduled-run history and its config revision
-  history. Start the node with an empty store; it migrates fresh and its
-  seats arrive remembering.
+  history. Start the node with no file at `store.path` and no `-wal` beside
+  it; it migrates a fresh one and its seats arrive remembering.
 - **Total loss of the stream estate without a backup is survivable by
   re-provisioning** — secrets resolve store-first-env-second so a brand-new
   node starts from the environment, and every stream, bucket and mailbox is
@@ -373,16 +382,16 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
 
 ## What not to do
 
-- **Do not copy the store file while the engine runs.** A live WAL database
+- **Do not copy the store files while the engine runs.** A live WAL database
   copied mid-write is a torn copy; the engine's exclusive lock and the
   driver's one-process rule exist precisely because there is no safe second
   opener. `crewlet backup` is the supported way to copy a running node,
-  and it works by asking the engine to copy its own database.
+  and it works by asking the engine to copy its own databases.
 - **Do not treat a directory without a `manifest.json` as a backup.** It is
   an attempt that did not finish, and the manifest's absence is the only
   thing that says so.
 - **Do not point `sqlite3`, Litestream, or any other SQLite tooling at the
-  live file.** The file format is SQLite's, but the live coordination is not:
+  live files.** The file format is SQLite's, but the live coordination is not:
   the store's engine does not support mixed-tool multi-process access.
   Reading a *cold copy* with `sqlite3` is fine; writing one is not a
   supported path back.
@@ -393,10 +402,10 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
 ## Filesystem snapshots — the other online option
 
 An **atomic** volume or filesystem snapshot (LVM, ZFS, btrfs, EBS) that
-captures the store file, its `-wal`, and `stream.store_dir` at one instant is
-a crash image: restoring it recovers exactly as if the node had lost power at
-that moment — WAL replay on the store, unacked work redelivered from the
-mailboxes. A non-atomic copy of a live tree is **not** this, and gets no such
+captures both store files, each with its `-wal`, and `stream.store_dir` at one
+instant is a crash image: restoring it recovers exactly as if the node had lost
+power at that moment — WAL replay on the store, unacked work redelivered from
+the mailboxes. A non-atomic copy of a live tree is **not** this, and gets no such
 guarantee.
 
 Treat snapshots as defense in depth rather than the copy you must be able to

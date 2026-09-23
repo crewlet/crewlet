@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,6 +52,10 @@ type CoordStore struct {
 	runs  coord.SandboxRuns
 	calls coord.BridgeCalls
 	now   func() time.Time
+
+	// log is where the store's own lines go: the package's logger, unless a
+	// suite hands it one to read ([CoordStore.WithLogger]).
+	log *slog.Logger
 }
 
 // RunRecords is the slice of the fleet's coordination store a [CoordStore]
@@ -80,6 +86,21 @@ func (s *CoordStore) clock() time.Time {
 	return time.Now().UTC()
 }
 
+// WithLogger sends the store's lines to logger, for a suite that asserts about
+// what the node says about a call — without pointing the process-wide sink at
+// a buffer that every parallel test would then share.
+func (s *CoordStore) WithLogger(logger *slog.Logger) *CoordStore {
+	s.log = logger
+	return s
+}
+
+func (s *CoordStore) logger() *slog.Logger {
+	if s.log != nil {
+		return s.log
+	}
+	return log
+}
+
 // casRetries bounds one read-decide-write.
 //
 // Sixteen, matching the coordination store's own loops. Contention here is a
@@ -89,6 +110,26 @@ func (s *CoordStore) clock() time.Time {
 // instead of as a lost race: a caller told "somebody else got there" stops,
 // while a caller told "no answer" retries.
 const casRetries = 16
+
+// bridgeCallAddressRetries bounds how many numbers one call reserves for its
+// record before its append gives up.
+//
+// ITS OWN BOUND, because this is not a compare-and-swap. A number is passed
+// over only when a part or a record is already filed at it, and a launch's
+// numbering hands out an address somebody holds in one situation only: the
+// launch was purged while a call was still filing under it, so the numbering
+// started again at 1, through numbers such late calls hold. A purged launch is
+// one no run names and no reader asks for again — every purge follows the row's
+// moving off the launch, and a launch id is never reused — so a call that meets
+// a stray is itself late, and an exhausted bound fails a record nothing reads.
+// Each pass costs a reservation and whatever the call filed at that number
+// before meeting the stray, which stays behind for the sweep.
+//
+// SIXTEEN, and the exact number is not load-bearing: since nothing a reader
+// sees depends on it, the bound has only to end a loop that is not converging,
+// and sixteen strays in a row is sixteen of the box's own calls landing after
+// the purge, ahead of this one in the new numbering.
+const bridgeCallAddressRetries = 16
 
 // BeginLaunch opens a launch on this turn's row. See the contract on
 // [PendingStore].
@@ -402,7 +443,7 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, call B
 		return true
 	})
 	if viewErr != nil {
-		log.WarnContext(ctx, "sandbox_bridge_row_view_append_failed",
+		s.logger().WarnContext(ctx, "sandbox_bridge_row_view_append_failed",
 			"turn_id", turnID, "launch_id", run.LaunchID, "seq", seq, "tool", call.Name,
 			"error", viewErr.Error(),
 			"detail", "the call is recorded in its own record, which every reader in this "+
@@ -412,8 +453,9 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, call B
 }
 
 // record files one call under the run's current launch, and returns it as its
-// record holds it — whole, or fitted with a reference to its parts, or fitted
-// and saying its whole was not kept — with the Seq it was filed at.
+// record holds it — whole, or cut to its fitted or least form with a reference
+// to its parts, or cut and saying its whole was not kept — with the Seq it was
+// filed at.
 //
 // A CALL ITS RECORD CAN HOLD WHOLE is appended as it is: one write, no parts.
 // Only a call too large for the ceiling, or one a server below the ceiling
@@ -444,15 +486,21 @@ func (s *CoordStore) record(ctx context.Context, run PendingRun, call BridgeCall
 }
 
 // refusedWithinCeiling says that the server refused a record the contract's
-// ceiling admits, and what that costs.
+// ceiling admits, and what the node files in its place.
+//
+// LOGGED AS IT HAPPENS, whatever becomes of the call afterwards: the refusal is
+// a fact about a server's setting that an operator has to change either way,
+// and a line that waited for the call's fate would say nothing when the store
+// then failed outright. What the call's record ends up holding is told by the
+// lines [CoordStore.recordInParts] logs once it has landed.
 func (s *CoordStore) refusedWithinCeiling(ctx context.Context, run PendingRun, call BridgeCall, bytes int, err error) {
-	log.ErrorContext(ctx, "sandbox_bridge_call_refused_within_ceiling",
+	s.logger().ErrorContext(ctx, "sandbox_bridge_call_refused_within_ceiling",
 		"turn_id", run.TurnID, "launch_id", run.LaunchID, "tool", call.Name,
 		"record_bytes", bytes, "record_limit_bytes", MaxBridgeCallBytes, "error", err.Error(),
-		"detail", "the NATS server this node is connected to accepts less than the contract's "+
-			"ceiling: set max_payload to at least queue.MaxPayloadBytes on every server of the "+
-			"cluster; the call's record is kept in its least form, its name and outcome, and its "+
-			"whole in parts split small enough for that server when it takes them")
+		"detail", "the NATS server this node is connected to refused a record the contract's "+
+			"ceiling admits, so its max_payload is below queue.MaxPayloadBytes: set max_payload to "+
+			"at least queue.MaxPayloadBytes on every server of the cluster. The call's record is "+
+			"filed in its least form instead: its name and outcome, both texts replaced by their marks")
 }
 
 // recordInParts keeps a call's whole in part records filed under the call's
@@ -467,82 +515,120 @@ func (s *CoordStore) refusedWithinCeiling(ctx context.Context, run PendingRun, c
 //
 // AN ADDRESS ALREADY TAKEN — a part or the record at the reserved number — is
 // a stray a late write left after this launch was purged. The call takes
-// another number rather than share an address with it; the stray, and any
-// part this call filed before meeting it, go with the launch's purge.
+// another number rather than share an address with it, at most
+// [bridgeCallAddressRetries] times; the stray, and whatever this call filed at
+// the number before meeting it, are left for the sweep.
+//
+// WHAT THE RECORD HOLDS IS REPORTED ONCE IT HAS LANDED, and only then: a record
+// that failed to land holds nothing, and a pass that met a stray is followed by
+// one that may keep the whole after all.
 func (s *CoordStore) recordInParts(ctx context.Context, run PendingRun, call BridgeCall,
 	whole []byte, refused bool,
 ) (BridgeCall, uint64, error) {
-	for range casRetries {
+	for range bridgeCallAddressRetries {
 		seq, err := s.calls.ReserveBridgeCall(ctx, run.TurnID, run.LaunchID)
 		if err != nil {
 			return BridgeCall{}, 0, err
 		}
 		ref := wholeRef{bytes: len(whole)}
-		parts, err := s.fileParts(ctx, run.TurnID, run.LaunchID, seq, whole)
+		parts, partsErr := s.fileParts(ctx, run.TurnID, run.LaunchID, seq, whole)
 		switch {
-		case errors.Is(err, errAddressTaken):
+		case errors.Is(partsErr, errAddressTaken):
 			continue
-		case err != nil:
-			// NOT THE APPEND'S FAILURE: the call ran, and its record can
-			// still hold its fitted form. What is lost is the rest of it,
-			// so the record says so and carries no reference, and the loss
-			// is an error in the log rather than a quiet gap.
-			log.ErrorContext(ctx, "sandbox_bridge_call_whole_not_kept",
-				"turn_id", run.TurnID, "launch_id", run.LaunchID, "seq", seq, "tool", call.Name,
-				"whole_bytes", len(whole), "parts_written", parts, "error", err.Error(),
-				"detail", "the call's record holds the form it was cut to and says its whole was "+
-					"not kept; the coding agent in the box was handed the whole output, and no "+
-					"copy the engine can read back exists")
-		default:
+		case partsErr == nil:
 			ref.parts = parts
 		}
-		recorded, created, err := s.fileRecord(ctx, run, call, seq, ref, refused)
+		// A PARTS FAILURE IS NOT THE APPEND'S: the call ran, and its record
+		// can still hold the form it is cut to, saying the whole was not kept.
+		filed, err := s.fileRecord(ctx, run, call, seq, ref, refused)
 		if err != nil {
+			if partsErr != nil {
+				err = fmt.Errorf("%w (and its whole had not been kept in parts: %w)", err, partsErr)
+			}
 			return BridgeCall{}, 0, err
 		}
-		if created {
-			return recorded, seq, nil
+		if !filed.created {
+			continue
 		}
+		s.reportFiled(ctx, run, call, seq, ref, filed.cut, parts, partsErr)
+		return filed.call, seq, nil
 	}
 	return BridgeCall{}, 0, fmt.Errorf("every number the launch handed out for the call's "+
-		"record was already taken, %d times", casRetries)
+		"record was already taken, %d times", bridgeCallAddressRetries)
+}
+
+// reportFiled says what a call's record holds, now that it has landed at seq:
+// what its fitted form did not keep whole, and a whole that was not kept.
+func (s *CoordStore) reportFiled(ctx context.Context, run PendingRun, call BridgeCall, seq uint64,
+	ref wholeRef, cut bridgeCallCut, partsWritten int, partsErr error,
+) {
+	if cut != (bridgeCallCut{}) {
+		where := "its whole is in the parts filed under it, which a resume reads"
+		if !ref.kept() {
+			where = "its whole was not kept, and its marks say so"
+		}
+		s.logger().WarnContext(ctx, "sandbox_bridge_call_fitted",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID, "seq", seq, "tool", call.Name,
+			"output_bytes", cut.outputBytes, "args_bytes", cut.argsBytes,
+			"whole_bytes", ref.bytes, "whole_parts", ref.parts,
+			"record_limit_bytes", MaxBridgeCallBytes,
+			"detail", "the call's record could not hold it whole and holds what fits, marked where "+
+				"it was cut; "+where)
+	}
+	if partsErr != nil {
+		// THE LOSS IS AN ERROR IN THE LOG rather than a quiet gap: the
+		// record says so to every reader of the call, and this says so to
+		// the operator, with why.
+		s.logger().ErrorContext(ctx, "sandbox_bridge_call_whole_not_kept",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID, "seq", seq, "tool", call.Name,
+			"whole_bytes", ref.bytes, "parts_written", partsWritten, "error", partsErr.Error(),
+			"detail", "the call's record holds the form it was cut to, marked where it was cut, "+
+				"and names no parts: the coding agent in the box was handed the whole output, and "+
+				"no copy the engine can read back exists. The parts written before the failure are "+
+				"named by nothing, and go with the launch's purge")
+	}
+}
+
+// filedRecord is what [CoordStore.fileRecord] put at a reserved number.
+type filedRecord struct {
+	// call is the call as its record holds it.
+	call BridgeCall
+
+	// cut is what the fitted form did not keep whole, zero for a call it kept
+	// whole and for the least form, which the refusal that forced it reports.
+	cut bridgeCallCut
+
+	// created is false when the address already held a record, and nothing
+	// was filed.
+	created bool
 }
 
 // fileRecord files a call's record at a reserved number, reporting false when
 // that address is taken: the fitted form with ref, or the least form when the
 // server has refused a record within the ceiling — before this one, or now.
+//
+// IT LOGS NOTHING ABOUT THE RECORD, which holds nothing until it is created:
+// [CoordStore.recordInParts] reports it once it has landed.
 func (s *CoordStore) fileRecord(ctx context.Context, run PendingRun, call BridgeCall, seq uint64,
 	ref wholeRef, refused bool,
-) (BridgeCall, bool, error) {
+) (filedRecord, error) {
 	if !refused {
 		fitted, raw, cut, err := fitBridgeCall(call, ref)
 		if err != nil {
-			return BridgeCall{}, false, err
-		}
-		if cut != (bridgeCallCut{}) {
-			where := "its whole is kept in the parts filed under the record, which a resume reads"
-			if !ref.kept() {
-				where = "its whole was not kept, and the record says so"
-			}
-			log.WarnContext(ctx, "sandbox_bridge_call_fitted",
-				"turn_id", run.TurnID, "launch_id", run.LaunchID, "seq", seq, "tool", call.Name,
-				"output_bytes", cut.outputBytes, "args_bytes", cut.argsBytes,
-				"whole_bytes", ref.bytes, "whole_parts", ref.parts,
-				"record_limit_bytes", MaxBridgeCallBytes,
-				"detail", "the call's record could not hold it whole and keeps what fits, marked; "+where)
+			return filedRecord{}, err
 		}
 		created, err := s.calls.CreateBridgeCall(ctx, run.TurnID, run.LaunchID, seq, raw)
 		if !errors.Is(err, coord.ErrTooLarge) {
-			return fitted, created, err
+			return filedRecord{call: fitted, cut: cut, created: created}, err
 		}
 		s.refusedWithinCeiling(ctx, run, call, len(raw), err)
 	}
 	least, raw, err := leastBridgeCall(call, ref)
 	if err != nil {
-		return BridgeCall{}, false, err
+		return filedRecord{}, err
 	}
 	created, err := s.calls.CreateBridgeCall(ctx, run.TurnID, run.LaunchID, seq, raw)
-	return least, created, err
+	return filedRecord{call: least, created: created}, err
 }
 
 // errAddressTaken is a part or a record already filed at an address a call
@@ -552,12 +638,13 @@ var errAddressTaken = errors.New("sandbox: the call's reserved address already h
 // fileParts files a call's whole as parts under call seq, in order, and
 // reports how many it filed.
 //
-// A PART REFUSED AS TOO LARGE IS SPLIT IN TWO — it and every part after it,
-// since the server that refused it will refuse their size too — while each
-// half is at least [bridgeCallPartFloorBytes]. A part is a byte range of the
-// whole's encoding rather than a cut of any text in it: no reader ever decodes
-// a part alone, and the reassembled bytes are the whole exactly, so where a
-// part boundary falls is invisible to everything that reads the call.
+// A PART REFUSED AS TOO LARGE IS RETRIED SMALLER — at half its size, or at
+// [bridgeCallPartFloorBytes] when half would be smaller — and so is every part
+// after it, since the server that refused it will refuse their size too. Only
+// a refused part of the floor or smaller ends the split. A part is a byte range
+// of the whole's encoding rather than a cut of any text in it: no reader ever
+// decodes a part alone, and the reassembled bytes are the whole exactly, so
+// where a part boundary falls is invisible to everything that reads the call.
 func (s *CoordStore) fileParts(ctx context.Context, turnID, launchID string, seq uint64, whole []byte) (int, error) {
 	size, filed := bridgeCallPartBytes, 0
 	for rest := whole; len(rest) > 0; {
@@ -565,12 +652,11 @@ func (s *CoordStore) fileParts(ctx context.Context, turnID, launchID string, seq
 		created, err := s.calls.CreateBridgeCallPart(ctx, turnID, launchID, seq, filed+1, rest[:n])
 		switch {
 		case errors.Is(err, coord.ErrTooLarge):
-			half := (n + 1) / 2
-			if half < bridgeCallPartFloorBytes {
-				return filed, fmt.Errorf("a part of %d bytes was refused as too large, and no part "+
-					"is split below %d bytes: %w", n, bridgeCallPartFloorBytes, err)
+			if n <= bridgeCallPartFloorBytes {
+				return filed, fmt.Errorf("a part of %d bytes was refused as too large, and a refused "+
+					"part is not split below %d bytes: %w", n, bridgeCallPartFloorBytes, err)
 			}
-			size = half
+			size = max((n+1)/2, bridgeCallPartFloorBytes)
 			continue
 		case err != nil:
 			return filed, err
@@ -615,9 +701,12 @@ func (w wholeRef) outputNote() string {
 
 // wholeUnreadable is the note a call read back in its fitted form ends with
 // when its record names parts and they do not reassemble into it.
+//
+// WORDED AS WHAT HAPPENED, for the reason [ArgsInParts] is: it is carried into
+// the resumed phase's record, which outlives the parts.
 func wholeUnreadable(call BridgeCall, why string) string {
-	return fmt.Sprintf("\n[the whole of this call, %d bytes kept in %d parts, could not be read "+
-		"back: %s; this is the form its record was cut to]", call.WholeBytes, call.WholeParts, why)
+	return fmt.Sprintf("\n[the whole of this call, %d bytes filed in %d parts, could not be read "+
+		"back: %s; this call is shown as its record kept it]", call.WholeBytes, call.WholeParts, why)
 }
 
 // fitBridgeCall encodes a call as its record, fitted to [MaxBridgeCallBytes],
@@ -775,7 +864,7 @@ func (s *CoordStore) BridgeCalls(ctx context.Context, run PendingRun) (BridgeLog
 // missing (purged under a read, lost) or a whole that disagrees with its
 // record would otherwise be handed to the resume as the call itself, shorter
 // or other than what the run did, with nothing to say so. What is handed over
-// instead is the fitted form, which is honest about being cut, plus the note.
+// instead is the fitted form, which is honest about being cut ([unreadable]).
 // A part past the count the record names belongs to no reference and is not
 // read.
 func (s *CoordStore) whole(ctx context.Context, run PendingRun, fitted BridgeCall, parts []coord.BridgeCallPart) BridgeCall {
@@ -783,12 +872,35 @@ func (s *CoordStore) whole(ctx context.Context, run PendingRun, fitted BridgeCal
 	if why == "" {
 		return whole
 	}
-	log.ErrorContext(ctx, "sandbox_bridge_call_whole_unreadable",
+	s.logger().ErrorContext(ctx, "sandbox_bridge_call_whole_unreadable",
 		"turn_id", run.TurnID, "launch_id", run.LaunchID, "seq", fitted.Seq, "tool", fitted.Name,
 		"whole_bytes", fitted.WholeBytes, "whole_parts", fitted.WholeParts, "parts_found", len(parts),
 		"reason", why,
-		"detail", "the call is read back in the form its record was cut to, and its output says so")
-	fitted.Output += wholeUnreadable(fitted, why)
+		"detail", "the call is read back in the form its record was cut to: arguments the record set "+
+			"aside are marked as not read back, and its output ends in a note saying why")
+	return unreadable(fitted, why)
+}
+
+// unreadable is a call's fitted form as the whole-log read hands it over when
+// the parts it was filed in do not reassemble into it.
+//
+// NOTHING IN IT MAY POINT AT THE PARTS AS WHERE THE REST IS. The record's own
+// marker for arguments it set aside says they went into the parts, and those
+// are exactly what could not be read — while this form is what the resume
+// carries into the phase's record and the reviewer's evidence, and the run's
+// end purges the parts. So that marker gives way to [ArgsUnreadable], with the
+// same byte count, and the output ends in the note saying why. Arguments the
+// record kept whole are left exactly as they are.
+func unreadable(fitted BridgeCall, why string) BridgeCall {
+	if n, ok := argsInPartsBytes(fitted.Args); ok {
+		fitted.Args = ArgsUnreadable(n)
+	}
+	note := wholeUnreadable(fitted, why)
+	if fitted.Output == "" {
+		// A call that returned nothing has no text for the note to follow.
+		note = strings.TrimPrefix(note, "\n")
+	}
+	fitted.Output += note
 	return fitted
 }
 
@@ -992,7 +1104,7 @@ func (s *CoordStore) purgeCalls(ctx context.Context, turnID, launchID string) {
 	// WITHOUT CANCEL, like every teardown: the caller's context may be the
 	// very thing that is ending, and a purge that inherits it does nothing.
 	if err := s.calls.PurgeBridgeCalls(context.WithoutCancel(ctx), turnID, launchID); err != nil {
-		log.WarnContext(ctx, "sandbox_bridge_calls_purge_failed",
+		s.logger().WarnContext(ctx, "sandbox_bridge_calls_purge_failed",
 			"turn_id", turnID, "launch_id", launchID, "error", err.Error(),
 			"detail", "the maintenance sweep purges the calls of every launch no run names")
 	}

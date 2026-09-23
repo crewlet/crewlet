@@ -110,6 +110,9 @@ func configureMeter(
 	}
 
 	providerOpts := []sdkmetric.Option{sdkmetric.WithResource(res)}
+	for _, reader := range opts.metricReaders {
+		providerOpts = append(providerOpts, sdkmetric.WithReader(reader))
+	}
 	if metricsEnabled(opts) {
 		endpoint := metricsEndpoint(opts)
 		exp, err := newMetricExporter(ctx, opts, endpoint)
@@ -123,9 +126,10 @@ func configureMeter(
 
 	// THE HISTOGRAM BOUNDARIES ARE THE RECORDER'S, so a bucket on a
 	// collector's panel is the bucket the recorder counted into. The SDK's
-	// own default boundaries stop at 10 s, which is inside the range this
-	// engine measures — a 16-second apply would land in an overflow bucket
-	// and read as "at least 10 s" for ever.
+	// own default boundaries stop at 10 000 — 10 s for a duration in
+	// milliseconds, well inside the range the recorder's bins resolve — so
+	// anything slower would land in the overflow bucket and read only as
+	// "more than 10 s".
 	providerOpts = append(providerOpts, sdkmetric.WithView(sdkmetric.NewView(
 		sdkmetric.Instrument{Kind: sdkmetric.InstrumentKindHistogram},
 		sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
@@ -176,16 +180,20 @@ func shutdownMeter(ctx context.Context, mp *sdkmetric.MeterProvider) error {
 
 // registerInstruments wires every catalogue entry to the recorder.
 //
-// # Why every instrument is OBSERVABLE
+// # Why the counters and gauges are OBSERVABLE
 //
 // The recorder is the source of truth and the SDK is a reader of it. An
 // observable instrument is one the SDK asks for a value at export time, which
-// is exactly that relationship — and it means a measurement costs an atomic
-// add on the hot path rather than a call into the SDK.
+// is exactly that relationship — and it means recording a counter or a gauge
+// never calls into the SDK at all: the recorder's own write is the whole of
+// it.
 //
 // It also means there is ONE callback for the whole catalogue rather than one
-// per instrument: the recorder's read is a single pass, so asking it once and
-// distributing is both cheaper and impossible to leave half-registered.
+// per instrument: the recorder's read is one pass over every series, so asking
+// it once and distributing makes that pass once per export rather than once
+// per instrument, and no observable instrument can be left without a callback.
+//
+// Histograms are the exception, for the reason at their case below.
 func registerInstruments(mp otelmetric.MeterProvider, rec *metrics.Recorder) error {
 	meter := mp.Meter("github.com/crewlet/crewlet")
 

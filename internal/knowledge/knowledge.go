@@ -2,7 +2,8 @@
 // knowledge" prefetch and the search_knowledge builtin both read the team
 // knowledge base through.
 //
-// Exactly ONE backend per company, chosen by which integration is
+// Exactly ONE backend per company, chosen by `knowledge.backend` — which,
+// left empty, derives from whether an `integrations.confluence` block is
 // configured. Two would mean an agent's answer to "what do we already know
 // about this" depends on which searcher happened to be asked, and neither
 // would be wrong.
@@ -70,19 +71,21 @@ type DraftPage struct {
 // AutoDraftTitlePrefix is stamped on every auto-drafted page's title.
 //
 // The FAIL-CLOSED BACKSTOP, not the primary mechanism: the ancestor
-// exclusion is, and this covers the backends whose parent lookup can fail —
-// an outage then hides drafts rather than leaking them. A lead who moves a
-// draft out of the parent without renaming it still publishes it, because
-// renaming is optional and moving is the gesture that means "reviewed".
+// exclusion is, and this covers a hit whose chain the backend could not read
+// whole ([Hit.AncestorsKnown] false) — an outage then hides drafts rather than
+// leaking them. A lead who moves a draft out of the parent without renaming it
+// still publishes it, wherever it lands, because renaming is optional and
+// moving is the gesture that means "reviewed": [Excludes] never consults the
+// prefix for a hit whose whole chain was read.
 const AutoDraftTitlePrefix = "[Auto-draft] "
 
-// DefaultLimit is how many hits the prefetch asks for.
+// DefaultLimit is how many hits a query that names no limit gets
+// ([Query.Hits]).
 //
-// Eight, against a block that is re-sent on every round of the executor:
-// the cost is the hit count times the round cap, and past a handful the
-// marginal hit is a page the agent will not read anyway. A knowledge base
-// that cannot put something useful in eight results will not put it in
-// twenty either — it will bury it.
+// Eight: past a handful the marginal hit is a page nobody will read, and a
+// knowledge base that cannot put something useful in eight results will not
+// put it in twenty either — it will bury it. The seat-facing callers each name
+// their own, smaller limit.
 const DefaultLimit = 8
 
 // SnippetLimit bounds a hit's snippet, in bytes.
@@ -101,18 +104,32 @@ type Hit struct {
 	// round to discover, where an absent one costs nothing.
 	URL string
 
-	// Container is the backend container the page lives in — a Confluence
-	// space key today — named neutrally because the seam's whole job is
-	// that a caller never learns which backend answered.
+	// Container is the backend container the page lives in — a native
+	// container's key or a Confluence space key — named neutrally because
+	// the seam's whole job is that a caller never learns which backend
+	// answered.
 	Container string
 
 	PageID  string
 	Snippet string
 
-	// Ancestors are the page's parent chain, outermost first. Empty on a
-	// backend with no such chain, which is why the auto-draft title
-	// prefix exists as a backstop.
+	// Ancestors are the page's parent chain, outermost first — empty for a
+	// page at the top of its container, and also wherever the backend could
+	// not read the chain, which is why [Hit.AncestorsKnown] travels beside
+	// it.
 	Ancestors []string
+
+	// AncestorsKnown says Ancestors is the page's WHOLE chain as the backend
+	// read it, so an empty one means the page sits at the top of its
+	// container rather than that the chain is missing.
+	//
+	// ITS OWN FIELD because the chain alone cannot say it: an empty list is
+	// what a top-level page has AND what a lookup that did not come back
+	// leaves, and those two call for opposite answers from [Excludes] — the
+	// first page is not under the draft parent, the second might be. The
+	// zero value is "not known", so a backend that sets nothing gets the
+	// fail-closed reading rather than the permissive one.
+	AncestorsKnown bool
 }
 
 // Query is one search, in the only terms a caller may use.
@@ -233,23 +250,29 @@ func Permitted(scope []string, selfAuth bool) (allowed bool, unscoped bool) {
 
 // Excludes reports whether a hit sits under any excluded ancestor.
 //
+// THE ONE RULE, which every backend calls rather than restating, so a page is
+// kept or dropped the same way whichever backend a company runs.
+//
 // Case-insensitive on the title, because a backend hands back whatever
 // somebody typed and an exclusion that missed on capitalisation would leak
 // exactly the drafts it exists to hide.
 //
 // The TITLE PREFIX is the fail-closed backstop, and it applies ONLY when the
-// hit has no ancestor chain to judge by — a lookup that failed, or a backend
-// that has no such chain at all. An outage must hide drafts rather than leak
-// them.
+// backend could not read the hit's whole chain ([Hit.AncestorsKnown] false):
+// a lookup that did not come back, a chain that ran into a parent the backend
+// no longer holds, or an answer that cannot tell an empty chain from an absent
+// one. An outage must hide drafts rather than leak them.
 //
-// It deliberately does NOT apply to a hit whose chain came back and does not
-// match: that page has been MOVED out of the draft parent, and moving is the
-// gesture that means reviewed. Renaming is optional, so a prefix check that
-// outranked a known-good chain would leave every published draft invisible
-// until somebody noticed the title.
+// It deliberately does NOT apply to a hit whose whole chain was read and
+// carries no excluded title — an empty chain included, which is a page at the
+// top of its container. That page is not under the draft parent; if it was
+// once, it has been MOVED out, and moving is the gesture that means reviewed.
+// Renaming is optional, so a prefix check that outranked a known chain would
+// leave every published draft invisible until somebody noticed the title.
 //
-// Both halves are gated on the auto-draft parent actually being excluded: a
-// caller who asked to see drafts means it.
+// The prefix applies only while the caller excludes [AutoDraftedParent]: a
+// caller who asked to see drafts means it, and one excluding some other page
+// asked a different question.
 func Excludes(h Hit, ancestors []string) bool {
 	if len(ancestors) == 0 {
 		return false
@@ -265,7 +288,7 @@ func Excludes(h Hit, ancestors []string) bool {
 			}
 		}
 	}
-	return draftsHidden && len(h.Ancestors) == 0 &&
+	return draftsHidden && !h.AncestorsKnown &&
 		strings.HasPrefix(h.Title, AutoDraftTitlePrefix)
 }
 
@@ -277,7 +300,7 @@ func Excludes(h Hit, ancestors []string) bool {
 // through the seat's own tools. A pointer that says it is a pointer is not the
 // same thing as content that was quietly halved.
 //
-// Three properties the two hand-rolled copies of this used to get wrong:
+// Three properties:
 //
 //   - ALWAYS MARKED. Every cut ends in an ellipsis, including the no-space
 //     fallback. An unmarked cut is indistinguishable from a page that really
@@ -286,9 +309,9 @@ func Excludes(h Hit, ancestors []string) bool {
 //     straddles the boundary and yields invalid UTF-8, which reaches a model as
 //     a replacement character — a bug that appears the first time a page is not
 //     ASCII.
-//   - LENGTH ONLY. A copy of this in the Confluence parser also cut at the
-//     first newline or ". " before applying any limit, so it decapitated a page
-//     to its opening sentence even when asked for an unlimited snippet.
+//   - LENGTH ONLY. Nothing cuts at the first newline or sentence before the
+//     limit applies, which would decapitate a page to its opening sentence even
+//     when asked for an unlimited snippet.
 //
 // A limit of zero or less is unbounded.
 func Snippet(text string, limit int) string {
@@ -296,7 +319,10 @@ func Snippet(text string, limit int) string {
 	if text == "" || limit <= 0 || len(text) <= limit {
 		return text
 	}
-	head := text[:limit]
+	// THE BUDGET, backed up to a rune boundary, so every cut below is on
+	// one: the two searches land on an ASCII byte, which is never inside a
+	// multi-byte rune, and the fallback is the budget itself.
+	head := textcut.Bytes(text, limit)
 	// A sentence boundary inside the second half of the budget reads as a
 	// summary rather than a cut, so it is preferred — and still marked,
 	// because the page continues past it either way.
@@ -306,7 +332,6 @@ func Snippet(text string, limit int) string {
 	if i := strings.LastIndex(head, " "); i > 0 {
 		return head[:i] + "…"
 	}
-	// No space at all — a URL, a CJK run. Back up to a rune boundary
-	// rather than splitting one.
-	return textcut.Bytes(text, limit) + "…"
+	// No space at all — a URL, a CJK run.
+	return head + "…"
 }

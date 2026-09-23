@@ -266,7 +266,8 @@ the resume reads it back whole, so the resumed phase is rebuilt from the
 tool's whole output and the whole arguments it was called with. Where the
 parts could not be written, or do not reassemble into the call, the resume
 gets the record's fitted form instead, marked where it was cut and saying
-that its whole is not there — never a shortened text posing as the whole.
+that its whole was not kept, or could not be read back — never a shortened
+text posing as the whole.
 See
 [Code Sandbox § The tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
 for the bounded copy the run's row still keeps for older builds, and for

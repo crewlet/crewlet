@@ -169,8 +169,12 @@ type Status string
 // WHAT THE TRASH TAKES A PAGE OUT OF is search, `list_pages`, the children a
 // detail read carries, its container's count and the tool-skill registry —
 // and not the rest: a trashed page is still read by its id or its address,
-// and still listed wherever a listing names no status. Nothing expires it.
-// [Store.Restore] publishes it again, and only [Store.Purge] removes it.
+// and still listed wherever a listing names no status. Nothing expires it,
+// and only [Store.Purge] removes it.
+//
+// [Store.Restore] sets a page PUBLISHED whatever its status was before the
+// trash: the trash does not record that status, so a draft that was trashed
+// comes back published — for the first time.
 const (
 	StatusPublished Status = "published"
 	StatusDraft     Status = "draft"

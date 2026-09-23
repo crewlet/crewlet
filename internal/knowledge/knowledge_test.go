@@ -91,31 +91,51 @@ func TestExcludesDropsHitsUnderAnExcludedParent(t *testing.T) {
 	}
 }
 
-// The FAIL-CLOSED BACKSTOP: a backend whose ancestor lookup came back empty
-// must hide drafts rather than leak them.
-func TestTheTitlePrefixCatchesADraftWithNoAncestorChain(t *testing.T) {
-	orphan := knowledge.Hit{Title: knowledge.AutoDraftTitlePrefix + "Deploy runbook"}
-	if !knowledge.Excludes(orphan, []string{knowledge.AutoDraftedParent}) {
-		t.Fatal("a draft with no ancestor chain was not excluded")
-	}
-	// But only while drafts are actually being hidden — a caller who asked
-	// to see them means it, and a different exclusion is a different ask.
-	if knowledge.Excludes(orphan, []string{"Archive"}) {
-		t.Fatal("an unrelated exclusion hid a draft the caller asked for")
-	}
-	if knowledge.Excludes(orphan, nil) {
-		t.Fatal("no exclusion at all still hid a draft")
-	}
-	// And a lead who moved a draft out WITHOUT renaming it has published
-	// it: moving is the gesture that means reviewed, renaming is optional.
-	// The prefix must not outrank a chain that came back clean, or every
-	// published draft stays invisible until somebody notices the title.
-	moved := knowledge.Hit{
-		Title:     knowledge.AutoDraftTitlePrefix + "Deploy runbook",
-		Ancestors: []string{"Engineering"},
-	}
-	if knowledge.Excludes(moved, []string{knowledge.AutoDraftedParent}) {
-		t.Fatal("a draft moved out of the parent is still hidden by its title")
+// THE TITLE PREFIX JUDGES ONLY A CHAIN THE BACKEND COULD NOT READ.
+//
+// Fail closed where the chain is not known — a lookup that did not come back,
+// a chain that ran into a parent the backend no longer holds — because an
+// outage must hide drafts rather than leak them. And never where it IS known,
+// an empty one included: a lead who moved a draft out WITHOUT renaming it has
+// published it, whether it landed under another page or at the top of its
+// container, because moving is the gesture that means reviewed and renaming
+// is optional. A prefix that outranked a known chain would leave every
+// published draft invisible until somebody noticed the title.
+func TestTheTitlePrefixJudgesOnlyAChainTheBackendCouldNotRead(t *testing.T) {
+	const title = knowledge.AutoDraftTitlePrefix + "Deploy runbook"
+	drafts := []string{knowledge.AutoDraftedParent}
+	for _, tc := range []struct {
+		name     string
+		hit      knowledge.Hit
+		excluded []string
+		want     bool
+	}{
+		{"no chain came back", knowledge.Hit{Title: title}, drafts, true},
+		{"a chain cut short by a parent the backend no longer holds",
+			knowledge.Hit{Title: title, Ancestors: []string{"Engineering"}}, drafts, true},
+		{"moved to the top of its container: the known chain is empty",
+			knowledge.Hit{Title: title, AncestorsKnown: true}, drafts, false},
+		{"moved under another page",
+			knowledge.Hit{Title: title, Ancestors: []string{"Engineering"}, AncestorsKnown: true},
+			drafts, false},
+		// THE CHAIN STILL DECIDES FIRST: a known chain that names the
+		// draft parent is excluded whatever the title says.
+		{"a known chain under the draft parent",
+			knowledge.Hit{Title: "Deploy runbook", Ancestors: []string{knowledge.AutoDraftedParent},
+				AncestorsKnown: true}, drafts, true},
+		// ONLY WHILE DRAFTS ARE BEING HIDDEN: a caller who asked to see
+		// them means it, and a different exclusion is a different ask.
+		{"an unrelated exclusion", knowledge.Hit{Title: title}, []string{"Archive"}, false},
+		{"no exclusion at all", knowledge.Hit{Title: title}, nil, false},
+		// AND ONLY ON THE PREFIX: an unknown chain on an ordinary title is
+		// not a reason to hide a page, or every outage empties the answer.
+		{"an ordinary title with no chain", knowledge.Hit{Title: "Deploy runbook"}, drafts, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := knowledge.Excludes(tc.hit, tc.excluded); got != tc.want {
+				t.Errorf("Excludes(%+v, %v) = %v, want %v", tc.hit, tc.excluded, got, tc.want)
+			}
+		})
 	}
 }
 

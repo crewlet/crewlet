@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,8 +10,10 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // A FLEET STORE REFUSES A SERVER THAT CANNOT CARRY ITS RECORDS.
@@ -73,21 +76,95 @@ func TestAPartsKeyIsNeverDecodedAsACallAndGoesWithItsLaunch(t *testing.T) {
 	}
 }
 
-// THE CLIENT'S SIZE REFUSAL IS PERMANENT, NOT A BLIP.
+// THE CLIENT'S SIZE REFUSAL IS PERMANENT, NOT A BLIP — AND IT NAMES THE LIMIT
+// THAT REFUSED IT.
 //
 // The open-time check reads what the server announced when this node
 // connected, and a client re-reads that announcement on every reconnect — so a
 // cluster member configured below the ceiling is met at write time. The same
 // bytes are refused the same way every time, and an error that read as
-// "unavailable" would be retried for ever.
+// "unavailable" would be retried for ever. The limit the client enforced is
+// that server's own, so the refusal names it, and the setting to change: one
+// naming only the contract's ceiling would send a reader looking for an
+// oversized value when a value within it was refused.
 func TestTheClientsSizeRefusalIsPermanent(t *testing.T) {
 	t.Parallel()
-	refused := createRefusal(fmt.Errorf("publish: %w", nats.ErrMaxPayload))
+	refused := createRefusal(fmt.Errorf("publish: %w", nats.ErrMaxPayload), "a part of a bridged call",
+		2<<20, 1<<20)
 	if !errors.Is(refused, coord.ErrTooLarge) || errors.Is(refused, coord.ErrUnavailable) {
 		t.Errorf("a payload refusal = %v, want coord.ErrTooLarge and not coord.ErrUnavailable", refused)
 	}
-	down := createRefusal(nats.ErrConnectionClosed)
+	for _, want := range []string{
+		"a part of a bridged call of 2097152 bytes",
+		"announces 1048576 bytes, below the 8388608",
+		"set max_payload to at least 8388608 on every server of the cluster",
+	} {
+		if !strings.Contains(refused.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, refused)
+		}
+	}
+
+	// A LIMIT AT OR ABOVE THE CONTRACT'S IS NOT THE ONE THAT REFUSED: no value
+	// within the ceiling reaches it, so the announcement was replaced after
+	// the refusal, and the error must not present it as the cause.
+	replaced := createRefusal(nats.ErrMaxPayload, "a bridged call", 2<<20, queue.MaxPayloadBytes)
+	if !errors.Is(replaced, coord.ErrTooLarge) || strings.Contains(replaced.Error(), "below the") ||
+		!strings.Contains(replaced.Error(), "since replaced") {
+		t.Errorf("a refusal read against a limit the contract fits = %v, want it named as an "+
+			"announcement replaced since", replaced)
+	}
+
+	down := createRefusal(nats.ErrConnectionClosed, "a bridged call", 10, 1<<20)
 	if !errors.Is(down, coord.ErrUnavailable) || errors.Is(down, coord.ErrTooLarge) {
 		t.Errorf("a closed connection = %v, want coord.ErrUnavailable", down)
+	}
+}
+
+// A SERVER BELOW THE CEILING, MET AT WRITE TIME, IS NAMED BY ITS OWN LIMIT.
+//
+// What a refusal names is read off the connection the store writes through,
+// not assumed: a cluster member left at nats-server's own 1 MiB default refuses
+// a value the contract's ceiling admits, and every write of the log has to say
+// which limit refused it. The store is built on such a server by hand, because
+// OpenFleet refuses to open on one — which is why production meets it only
+// after a reconnect.
+func TestAValueARealServerRefusesNamesThatServersLimit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	nc := embeddedNATSAt(t, 1<<20)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	calls, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: fmt.Sprintf("c%d_calls", bucketSeq.Add(1)),
+	})
+	if err != nil {
+		t.Fatalf("create the bucket: %v", err)
+	}
+	f := &FleetStore{js: js, calls: calls}
+	value := bytes.Repeat([]byte("p"), 2<<20)
+	for name, write := range map[string]func() error{
+		"an append": func() error {
+			_, err := f.AppendBridgeCall(ctx, "turn-1", "launch-1", value)
+			return err
+		},
+		"a record at a reserved number": func() error {
+			_, err := f.CreateBridgeCall(ctx, "turn-1", "launch-1", 7, value)
+			return err
+		},
+		"a part": func() error {
+			_, err := f.CreateBridgeCallPart(ctx, "turn-1", "launch-1", 7, 1, value)
+			return err
+		},
+	} {
+		err := write()
+		if !errors.Is(err, coord.ErrTooLarge) || errors.Is(err, coord.ErrUnavailable) {
+			t.Errorf("%s the server refused = %v, want coord.ErrTooLarge", name, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "announces 1048576 bytes") {
+			t.Errorf("%s: the refusal does not name the server's own limit: %v", name, err)
+		}
 	}
 }

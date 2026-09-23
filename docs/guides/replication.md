@@ -150,14 +150,21 @@ retention status` prints both, per node and per domain.
 ### The bulk-apply degradation, priced
 
 One applier per domain, one goroutine, one totally ordered log. The measured
-drain is at least 2 000 rows/s and the steady-state load of the reference
-company is 0.244 rows/s — 0.012 %. What binds is not the average; it is the
-burst.
+drain is at least 2 000 rows/s. What binds is not a company's average load
+against it; it is the burst.
 
-That floor is deliberately conservative, and it is the number every figure
-below is derived from. An applier writes a record's child rows — tags,
-watchers, relations, dependency mirrors, the inverted index's postings — as
-**multi-row inserts chunked to the engine's probed bind-parameter limit**,
+**Rows here are database rows, not records.** Every figure in this section
+counts the rows an apply writes. The `crewlet.statelog.drain.records_per_second`
+gauge in [Metrics](../reference/metrics.md) counts the log's **records**
+instead — the unit a node's backlog is counted in, and so the rate its lag in
+seconds and its retry hints are derived from — and a record writes as many
+rows as its apply needs, so the gauge and these figures are different numbers
+that cannot be compared.
+
+The 2 000 rows/s floor is deliberately conservative, and it is the number
+every figure below is derived from. An applier writes a record's child rows —
+tags, watchers, relations, dependency mirrors, the inverted index's postings —
+as **multi-row inserts chunked to the engine's probed bind-parameter limit**,
 rather than one statement per row. On the pinned driver that limit is 2 000
 parameters, so a seven-column row batches 285 to a statement and a
 three-column row 666: an 8 000-row apply is 22 statements rather than 8 000.
@@ -175,9 +182,10 @@ fleet-wide without tripping any alarm:
 - a barriered read answers `behind` with a computed `retry_after_seconds` of
   about 16.
 
-Both are the system working. `crewlet retention status` publishes the longest
-apply transaction and the longest batch actually observed, so this is a
-measured property of your fleet rather than a surprise.
+Both are the system working. The `crewlet.statelog.apply.tx.duration` and
+`crewlet.statelog.apply.batch.rows` histograms in
+[Metrics](../reference/metrics.md) record every apply transaction and the rows
+it wrote, so this is a measured property of your fleet rather than a surprise.
 
 **The occupancy is per domain, not per node.** Every domain's applier writes
 the same replicated database, and a node hands that database's write lock to

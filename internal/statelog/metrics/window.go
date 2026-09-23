@@ -57,9 +57,10 @@ type Window struct {
 // are computed the same way and can be compared.
 //
 // total is a float64 for the reason the recorder's series total is: the window
-// sums the same increments the cumulative series does, and a windowed total
-// that rounded where the cumulative one did not would put two different
-// numbers for one counter on the operator record and the collector's panel.
+// sums the same increments the cumulative series does, an
+// [Instrument.Fractional] counter's fractions among them, and a whole-number
+// total here would read 0 for a day of sub-second contributions that the
+// cumulative series beside it summed.
 type bucketValue struct {
 	total  float64
 	max    float64

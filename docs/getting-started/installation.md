@@ -4,8 +4,8 @@
 
 **A glibc userland, on linux.** Crewlet is one binary with no runtime to
 install: it embeds its event stream (a NATS JetStream server) and its database
-is a local file it creates. There is no broker to operate and nothing to point
-a DSN at.
+is two local files it creates. There is no broker to operate and nothing to
+point a DSN at.
 
 It is not, however, a *static* binary on linux, and it is worth knowing why
 before you pick a base image. The store's database engine is a native library
@@ -89,9 +89,12 @@ working company:
   points the same config slot at an external NATS server — the client code is
   identical, so it is a connection choice rather than a second backend. See
   [Fleet](../guides/fleet.md).
-- the **store** is one local file this process owns *exclusively*. Not a
-  shared database, and no DSN: two engines pointed at one file corrupt it.
-  Coordination between nodes goes through a separate KV slot, never the file.
+- the **store** is two local files this process owns *exclusively*: this
+  node's own records at `store.path`, and beside it the replicated estate a
+  state log's applier writes. Not a shared database, and no DSN: a second
+  engine pointed at either file is refused, naming the process that holds it.
+  Coordination between nodes goes through a separate KV slot, never these
+  files.
 
 ### The compose file is for the integrations
 

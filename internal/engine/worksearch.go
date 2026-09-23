@@ -16,6 +16,13 @@ import (
 // is the same scan the knowledge search makes, with `task` where that one puts
 // `page`, and the two rankings cannot drift because there is only one.
 
+// itemCorpus is the corpus a work search reads, and the one its building gate
+// asks about. ONE CONSTANT FOR BOTH, so the gate cannot wait on a corpus the
+// search never reads — the index finishes each corpus's first lap on its own,
+// and a gate asking about the whole index would answer a work search "still
+// building" for as long as the PAGES were.
+const itemCorpus = string(search.SourceTask)
+
 // itemRanker is [tracker.Ranker] over this node's index and fan-out.
 type itemRanker struct {
 	fan   *search.FanOut
@@ -31,7 +38,7 @@ func (r itemRanker) RankItems(ctx context.Context, text string,
 	}
 	answer, err := r.fan.Search(ctx, search.FanQuery{
 		Text:    text,
-		Sources: []string{string(search.SourceTask)},
+		Sources: []string{itemCorpus},
 		Limit:   limit,
 	})
 	if err != nil {
@@ -60,9 +67,11 @@ func (r itemRanker) RankItems(ctx context.Context, text string,
 	return out, nil
 }
 
-// Building implements [tracker.Ranker].
+// Building implements [tracker.Ranker]: whether this node's index has yet to
+// finish its first lap over the work items — see [itemCorpus] for why not the
+// whole index.
 func (r itemRanker) Building(_ context.Context) bool {
-	return r.index != nil && !r.index.Ready()
+	return r.index != nil && !r.index.ReadyFor(itemCorpus)
 }
 
 // WorkSearch is this node's ranked item search, or nil when it has no index —
@@ -84,9 +93,8 @@ func (e *Engine) WorkSearch() *tracker.Searcher {
 // `deps.Search != nil` gate reads correctly: handed the other one it registers
 // a search tool that can only fail.
 //
-// ONE FUNCTION FOR BOTH CALLERS. It was two — an unexported one here and a
-// one-line exported wrapper around it — which is two places for the typed-nil
-// rule above to be stated and one of them to stop matching.
+// ONE FUNCTION FOR BOTH CALLERS, so the typed-nil rule above is stated in one
+// place rather than in two that can stop matching.
 func WorkSearcher(e *Engine) builtin.WorkSearcher {
 	if s := e.WorkSearch(); s != nil {
 		return s
@@ -97,13 +105,11 @@ func WorkSearcher(e *Engine) builtin.WorkSearcher {
 // indexedCorpora is which corpora a node with these two backends indexes, and
 // it is what the startup actually builds the index over.
 //
-// A FUNCTION rather than three lines inside the startup, because the defect it
-// replaces could not be reached from a test without standing a whole company
-// up: the index was built inside the block gated on the WIKI's backend, so a
-// company with `tracker.backend: native` and Confluence for its knowledge
-// indexed none of its own work items and served no ranked item search — while
-// the embedding duty, armed on EITHER backend, went on paying for a vector on
-// every one of them.
+// A FUNCTION rather than three lines inside the startup, so which corpora a
+// node indexes can be tested without standing a whole company up. It follows
+// EITHER native backend rather than the wiki's alone: a company with
+// `tracker.backend: native` and Confluence for its knowledge still indexes its
+// own work items and serves a ranked item search.
 //
 // IT FOLLOWS THE BACKENDS rather than covering both unconditionally: a company
 // on Jira has no `tracker_tasks` worth walking, and a walk over a table its

@@ -818,7 +818,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// through this. A nil syncer is the honest shape for a node with no
 	// broker or no store: there is nowhere to carry memory to, and
 	// prepareSeat then skips the step rather than pretending it happened.
-	if e.memory, err = memsync.New(backends.Store, backends.Conn(),
+	//
+	// THE QUEUE'S OWN CONNECTION, on every topology. The memory changelog
+	// is a stream on the same broker as everything else, and a seat moves
+	// between nodes on a dialled cluster exactly as it does between
+	// embedded members — so a connection that exists only when the broker
+	// is embedded would leave every seat of an external-NATS fleet to
+	// arrive on its next node with an empty memory, and report nothing.
+	if e.memory, err = memsync.New(backends.Store, backends.brokerConn(),
 		func(handle string) string {
 			c := e.Company()
 			if c == nil {

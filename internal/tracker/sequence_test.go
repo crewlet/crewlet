@@ -429,9 +429,9 @@ func TestOneBulkEditAppliesAtATimeOnOneNode(t *testing.T) {
 		t.Fatalf("a second bulk while the first applied answered %v, want it "+
 			"refused as in flight", second)
 	}
-	// TWO SUBJECTS, at the one-row-a-second floor a writer with no measured
-	// drain projects from: the admitted bulk's two seconds, and nothing for
-	// the one refused.
+	// TWO SUBJECTS, at the one-record-a-second floor a writer with no
+	// measured drain projects from: the admitted bulk's two seconds, and
+	// nothing for the one refused.
 	if got := bulkOccupancy(r); got != 2 {
 		t.Errorf("the occupancy counter reads %v seconds, want the admitted "+
 			"bulk's 2", got)
@@ -440,6 +440,55 @@ func TestOneBulkEditAppliesAtATimeOnOneNode(t *testing.T) {
 	if _, err := r.writer.UpdateTasks(t.Context(), "op-bulk-3", []string{"t-3"},
 		"ENG", tracker.TaskPatch{Title: ptr("third")}, tracker.ChangeFields, nil); err != nil {
 		t.Fatalf("a bulk after the first had applied answered %v", err)
+	}
+}
+
+// A BULK EDIT'S OCCUPANCY IS PROJECTED FROM THE APPLIER'S MEASURED DRAIN, and
+// the fraction of a second it comes to is kept.
+//
+// The projection is the bulk's records — one per task — over the drain in
+// records a second, and it is what the fleet's read-degradation budget sums.
+// Two tasks at four records a second is half a second: a bulk smaller than one
+// second's drain, whose projection a whole-number path would lose entirely.
+// [TestOneBulkEditAppliesAtATimeOnOneNode] pins the floor an unmeasured drain
+// projects from; this pins the measured path, end to end from the call to the
+// recorder.
+//
+// Mutation: make [tracker.Writer]'s drainRows ignore the measured rate and the
+// occupancy reads the floor's 2 s; hand the projection to the recorder as a
+// whole number and it reads 0.
+func TestABulkEditProjectsItsOccupancyFromTheMeasuredDrain(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t-1", "t-2"} {
+		filedTask(t, r, id)
+	}
+	writer, err := tracker.NewWriter(tracker.WriterDeps{
+		Publisher: r.publisher, DB: r.db, NodeID: "node-a", Claims: r.claims,
+		Metrics: r.metrics,
+		// FOUR RECORDS A SECOND, as the applier would report having
+		// measured it.
+		Drain: func() float64 { return 4 },
+		Actor: "ana", ActorKind: tracker.AuthorHuman,
+		Now: func() time.Time { return r.at },
+	})
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	done := tracker.StatusDone
+	result, err := writer.UpdateTasks(t.Context(), "op-bulk", []string{"t-1", "t-2"},
+		"ENG", tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil)
+	if err != nil {
+		t.Fatalf("UpdateTasks: %v", err)
+	}
+	if len(result.Applied) != 2 {
+		t.Fatalf("the bulk applied %v, want both tasks — a bulk that did not "+
+			"run is not the path this case is about", result.Applied)
+	}
+	if got := bulkOccupancy(r); got != 0.5 {
+		t.Errorf("the occupancy counter reads %v seconds, want 0.5: two records "+
+			"over a measured four a second", got)
 	}
 }
 

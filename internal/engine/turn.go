@@ -597,8 +597,13 @@ func panicBreach(role, agentID, turnID string, trace events.TraceContext,
 		Agent:    agentID,
 		RoleName: role,
 		Kind:     types.GuardUnhandledException,
-		Detail:   events.ClipDiagnostic(panicked.Error()),
-		TurnID:   turnID,
+		// THE EVENT CARRIES THE HEAD, AND THIS NODE'S LOG THE WHOLE: each
+		// frame that builds this logs the panic's value whole at ERROR
+		// before it does — dispatch_panicked in the dispatcher,
+		// sandbox_resume_panicked on the resume — and this detail is that
+		// value behind "panic: " ([turn.PanicError.Error]).
+		Detail: events.ClipDiagnostic(panicked.Error()),
+		TurnID: turnID,
 	}, trace)
 	// SOURCED AS THE SEAT, as every turn-level event is (see
 	// [Engine.publishEvent]): a consumer with no other attribution renders
@@ -628,18 +633,17 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 			AgentHandle: handle,
 			TriggerID:   ev.ID.String(),
 			TriggerType: ev.Type,
-			// THROUGH [events.ClipDiagnostic], like the other eight
-			// diagnostic sites in the tree, rather than through a bare
-			// 200 that was the only one of its kind.
+			// THROUGH [events.ClipDiagnostic], so the event keeps the
+			// cause's head, up to the bound, and says where the rest is.
 			//
-			// A wrapped Go error reads OUTERMOST FIRST, so 200 bytes
-			// bought the dispatch wrappers and cut the innermost cause —
-			// on this path of all paths, since this event is the record
-			// of a trigger that will NEVER be redelivered and therefore
-			// the only durable statement of why the work was dropped.
-			// `abandon` logs the same error WHOLE a few lines up, where
-			// it scrolls away, which had the two bounds exactly the
-			// wrong way round.
+			// This event is the record of a trigger that will NEVER be
+			// redelivered, and therefore the only durable statement of
+			// why the work was dropped: a wrapped Go error reads
+			// OUTERMOST FIRST, so a tighter bound would keep the dispatch
+			// wrappers and drop the innermost cause. The event carries
+			// the head and this node's log the whole: [Dispatcher.abandon],
+			// this function's one caller, logs the same error whole at
+			// ERROR as turn_abandoned before calling it.
 			Reason: reason + ", so it was not redelivered: " +
 				events.ClipDiagnostic(cause.Error()),
 		}, triggerTrace([]*events.Event{ev}))

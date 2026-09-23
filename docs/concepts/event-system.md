@@ -352,6 +352,22 @@ an `Actor()` (role, then source, then agent id, then `system`). An event type
 this build does not know decodes into the envelope with `Data` nil and its
 fields kept verbatim in `Extra`, and re-publishes losslessly.
 
+**A failure text on an event carries its head; the node's log carries the
+whole.** An event past the transport's 8 MiB ceiling is refused rather than
+shortened, so the failure texts whose length is set by whatever failed — a
+turn's `error`, a guard breach's `detail`, `llm_unavailable`'s `last_error`,
+a revision apply's `error`, the reason on a trigger that will not be worked
+— are cut at 64 KiB, keeping their start and ending in a marker that says
+the whole is in the log of the node that published the event. That node logs
+it whole at WARN or ERROR: a turn's failure texts as `turn_failure_cut`,
+naming the run, whenever one was cut; an apply's as `reconcile_tick_failed`
+(or `initial_reconcile_failed` at boot); a panic caught outside a turn's own
+frames as `dispatch_panicked` or `sandbox_resume_panicked`; an abandoned
+trigger's as `turn_abandoned`. A phase
+record's `error` is not bounded this way: it is the last text the record's own
+fit cuts when the record is too large for one event, and the record's whole,
+error included, is kept in parts that `GET /phases/{id}` reassembles.
+
 Changes are additive-only — new fields get defaults, existing fields are never removed, and an event type this build does not know round-trips through it losslessly rather than being dropped: a rolling upgrade puts unknown types on the wire in both directions. Every backend retains each subscription's undelivered backlog until it is consumed, so a restart resumes cleanly; durable, replayable event history is the [event store](../guides/deployment.md#the-event-store), not the queue. The queue keeps no ledger of everything ever published, and that is the mailbox semantic rather than a gap: on the work-queue streams an acked message is gone at once, and what a subscription retains is what nobody has acked yet. The one stream that keeps history is `CREWLET_EVENTS`, and it keeps it by **age** (`stream.event_retention_hours`, 30 days by default) rather than until someone reads it.
 
 ---

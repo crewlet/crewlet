@@ -1,12 +1,16 @@
 package engine
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE COMPANY'S COALESCING KNOBS REACH THE VALUE EVERY SEAT READS.
@@ -115,5 +119,58 @@ func TestSearchKnowledgeIsGatedOnConfigAndResolvedPerCall(t *testing.T) {
 	}
 	if hits := got.Search(t.Context(), knowledge.Query{Text: "x"}); hits != nil {
 		t.Errorf("an unstarted knowledge base returned %v", hits)
+	}
+}
+
+// THE TOOL HEARS THAT THIS NODE'S INDEX IS STILL BUILDING.
+//
+// search_knowledge tells "not indexed yet" from "nothing matched" by asking its
+// searcher whether it is building — and what it is handed is this adapter, not
+// the native searcher. An adapter that forwarded only the seam's two methods
+// would hide the question, so a seat's own search on a node on its first build
+// would answer "no team documents match … not everything is written down": the
+// answer the gate exists to prevent, and one a seat acts on by writing a page
+// that already exists.
+func TestSearchKnowledgeHearsTheIndexIsStillBuilding(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	index := search.NewIndexerOver(db, []search.LexicalSource{search.PageSource{}})
+	searcher, err := pages.NewSearcher(pages.SearcherOptions{Index: index, DB: db})
+	if err != nil {
+		t.Fatalf("NewSearcher: %v", err)
+	}
+	e := &Engine{native: &native{searcher: searcher}}
+
+	// THE SHAPE THE TOOL ASKS: an optional method on what it was handed.
+	adapter, ok := knowledgeSearch(e, &Company{Config: &config.Company{}}).(interface {
+		Building(ctx context.Context) bool
+	})
+	if !ok {
+		t.Fatal("the adapter a seat's search_knowledge holds cannot say whether " +
+			"the index is building")
+	}
+	if !adapter.Building(t.Context()) {
+		t.Error("a node whose index has built nothing is not reported as building")
+	}
+	for sweeps := 0; !index.ReadyFor(string(search.SourcePage)); sweeps++ {
+		if sweeps == 100 {
+			t.Fatal("the page corpus never finished its first lap")
+		}
+		if _, err := index.Sweep(t.Context()); err != nil {
+			t.Fatalf("index the pages: %v", err)
+		}
+	}
+	if adapter.Building(t.Context()) {
+		t.Error("a node whose pages are built is still reported as building")
+	}
+
+	// AND A NODE WITH NO SEARCHER, or one that keeps no index, is never
+	// building: there is nothing to wait for.
+	if (liveKnowledge{engine: &Engine{}}).Building(t.Context()) {
+		t.Error("a node with no knowledge searcher reported itself building")
 	}
 }

@@ -90,16 +90,17 @@ func totalOf(reading []Snapshot, name string) float64 {
 }
 
 // A SUB-SECOND CONTRIBUTION TO A FRACTIONAL COUNTER IS KEPT, in the cumulative
-// series an exporter reads AND in the window the operator record reads.
+// series an exporter reads AND in the rolling window [Recorder.ReadWindow]
+// serves.
 //
 // The fractional counter sums the applier seconds a bulk edit projects, and a
 // bulk smaller than one second's drain projects a fraction of a second. As a
 // whole number each of those adds zero, and a day of them sums to zero — the
 // one answer that looks like a healthy fleet.
 //
-// Mutation: put `uint64(v)` back into the counter case of [Recorder.record]
-// and both readings are zero; truncate in [Window.Add] alone and the windowed
-// one is.
+// Mutation: truncate the increment to a whole number at the top of
+// [Recorder.record] and both readings are zero; truncate it in [Window.Add]
+// alone and the windowed one is.
 func TestAFractionalCounterKeepsEverySubSecondContribution(t *testing.T) {
 	t.Parallel()
 	r, err := New()
@@ -118,18 +119,19 @@ func TestAFractionalCounterKeepsEverySubSecondContribution(t *testing.T) {
 			"second has to be kept, not rounded away", got, want)
 	}
 	if got := totalOf(r.ReadWindow(), TrackerBulkApplySeconds); got != want {
-		t.Errorf("windowed total = %v, want %v: the operator record reads this "+
-			"one, and it has to agree with the series the collector reads",
-			got, want)
+		t.Errorf("windowed total = %v, want %v: the window sums the same "+
+			"increments as the cumulative series, so inside one window the "+
+			"two have to agree", got, want)
 	}
 }
 
 // A FRACTION REACHES ONLY A COUNTER THAT CAN HOLD ONE.
 //
 // A counter that is not Fractional is exported as an integer, so a fraction the
-// recorder kept in it would be on the operator record and dropped on the
-// collector's panel. A whole increment is exact in either arithmetic, which is
-// why a fractional counter still takes one from [Recorder.Add].
+// recorder kept in it would stay in the recorder's own readings and be
+// truncated out of the export. A whole increment is exact in either
+// arithmetic, which is why a fractional counter still takes one from
+// [Recorder.Add].
 //
 // Mutation: drop the Fractional check in [Recorder.AddValue] and the integer
 // counter holds half a read.
@@ -143,8 +145,8 @@ func TestAFractionReachesOnlyAFractionalCounter(t *testing.T) {
 	r.AddValue(StatelogReadServed, 0.5, served)
 	if got := totalOf(r.Read(), StatelogReadServed); got != 0 {
 		t.Errorf("a counter exported as an integer holds %v after a fraction "+
-			"was offered to it, want nothing: the collector would read a "+
-			"different number from the operator record", got)
+			"was offered to it, want nothing: the export would truncate what "+
+			"the recorder holds", got)
 	}
 	// THE CONTROL: the same counter takes the whole increments it counts.
 	r.Add(StatelogReadServed, 2, served)
@@ -331,46 +333,34 @@ func TestAYoungWindowIsLabelledPartial(t *testing.T) {
 	}
 }
 
-// EVERY INSTRUMENT HAS ITS OWN NAME, and nothing else asserted it.
+// NO TWO INSTRUMENTS DIFFER ONLY IN A SEPARATOR.
 //
-// Two entries for one measurement is not a tidiness problem: the catalogue is
-// what the reference page and the recorder are both derived from, so a
-// duplicate ships as two rows an operator has to choose between and two series
-// that each carry half the events. It happened — `apply.tx.aborts` and
-// `apply.tx_aborts` were one measurement under two spellings, differing only
-// in a separator — and nothing here noticed.
-func TestNoTwoInstrumentsShareAName(t *testing.T) {
+// [Validate] refuses a name declared twice, and it cannot see this: `a.b.c`
+// and `a.b_c` are two names to it and to every collector, and one name to a
+// reader. Two entries for one measurement is not a tidiness problem: the
+// catalogue is what the reference page and the recorder are both derived from,
+// so such a pair ships as two rows an operator has to choose between and two
+// series that each carry half the events.
+func TestNoTwoInstrumentsDifferOnlyInASeparator(t *testing.T) {
 	t.Parallel()
-	seen := map[string]string{}
-	for _, inst := range Catalogue() {
-		if _, dup := seen[inst.Name]; dup {
-			t.Errorf("%q appears twice — one measurement under two entries is "+
-				"two series each carrying half the events", inst.Name)
-		}
-		seen[inst.Name] = inst.Shows
-	}
-
-	// AND NO TWO NAMES DIFFER ONLY IN A SEPARATOR, which is how the
-	// duplicate above got in: `a.b.c` and `a.b_c` are one name to a reader
-	// and two to every collector.
 	flat := map[string]string{}
-	for name := range seen {
-		key := strings.ReplaceAll(name, "_", ".")
+	for _, inst := range Catalogue() {
+		key := strings.ReplaceAll(inst.Name, "_", ".")
 		if first, dup := flat[key]; dup {
 			t.Errorf("%q and %q differ only in a separator — one of them is a "+
-				"second spelling of the other", first, name)
+				"second spelling of the other", first, inst.Name)
 		}
-		flat[key] = name
+		flat[key] = inst.Name
 	}
 }
 
 // AN ALARM MUST BE ABLE TO GO OUT, and against a cumulative counter it cannot.
 //
-// This is the defect the window was written for and then never wired to.
-// `search_degraded` fires on a fraction being above zero; computed from
-// [Recorder.Read]'s monotone totals, one degraded search after boot lights it
-// for the life of the process, because the numerator can only grow. Computed
-// from [Recorder.ReadWindow] it clears once the hour holding it rolls out.
+// This is what the window is for. `search_degraded` fires on a fraction being
+// above zero; computed from [Recorder.Read]'s monotone totals, one degraded
+// search after boot lights it for the life of the process, because the
+// numerator can only grow. Computed from [Recorder.ReadWindow] it clears once
+// the hour holding it rolls out.
 //
 // `crewlet retention status` derives its exit code from these alarms, so an
 // alarm that cannot clear is a cron that fires for ever.

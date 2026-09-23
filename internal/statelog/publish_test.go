@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -448,6 +451,88 @@ func TestAWriteThatKeepsLosingIsRefusedRatherThanRetriedForEver(t *testing.T) {
 	if got := h.rows.snapshots(); got != 16 {
 		t.Fatalf("took %d snapshots, want 16 — each round must decide again "+
 			"from a fresh one, or the retry is the same decision repeated", got)
+	}
+}
+
+// A RECORD THE TRANSPORT REFUSES FOR ITS SIZE IS REFUSED ON ITS FIRST APPEND,
+// naming the limit.
+//
+// Through the real appender on a real broker, from both sides that refuse one:
+// the client, against the max_payload its server announced, and the broker,
+// against a max_msg_size somebody set on the stream. Either way nothing was
+// stored and the same record is refused the same way every time, so another
+// round only repeats the refusal. Read as no answer, the client's refusal would
+// be decided again round after round, to a conflict that names neither the
+// size nor the setting.
+func TestARecordTooLargeForTheTransportIsRefusedOnceNamingTheLimit(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// limit narrows the broker the harness runs, where the case needs
+		// a limit the default one does not have.
+		limit func(t *testing.T, h *harness)
+		body  int
+		// says is the setting the refusal must name.
+		says string
+	}{
+		{name: "the client refuses it against its server's max_payload",
+			body: queue.MaxPayloadBytes + 1, says: "max_payload"},
+		{name: "the broker refuses it against the stream's max_msg_size",
+			limit: func(t *testing.T, h *harness) { streamMaxMsgSize(t, h, 1<<10) },
+			body:  2 << 10, says: "max_msg_size"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			if tc.limit != nil {
+				tc.limit(t, h)
+			}
+			_, err := h.write(probeSubject("a"), "op-1", strings.Repeat("x", tc.body))
+			var refusal *statelog.Unavailable
+			if !errors.As(err, &refusal) {
+				t.Fatalf("a record too large for the transport returned %v, want "+
+					"an Unavailable", err)
+			}
+			if refusal.Reason != statelog.ReasonTooLarge {
+				t.Fatalf("reason = %q, want %q: %v", refusal.Reason,
+					statelog.ReasonTooLarge, err)
+			}
+			if !strings.Contains(refusal.Detail, tc.says) {
+				t.Errorf("the refusal does not name %s, the setting that refused "+
+					"the record: %v", tc.says, err)
+			}
+			if refusal.OpID != "op-1" {
+				t.Errorf("the refusal carries op id %q, want the write's own", refusal.OpID)
+			}
+			if got := h.appends.appends.Load(); got != 1 {
+				t.Errorf("the publisher appended %d times, want 1 — a size "+
+					"refusal is the same on every attempt, so the first one is "+
+					"the answer", got)
+			}
+		})
+	}
+}
+
+// streamMaxMsgSize sets a max_msg_size on the harness's log, which the engine
+// never does, so the broker refuses a larger record itself.
+func streamMaxMsgSize(t *testing.T, h *harness, limit int32) {
+	t.Helper()
+	broker, err := jetstream.New(h.q.Conn())
+	if err != nil {
+		t.Fatalf("reach the JetStream API: %v", err)
+	}
+	s, err := broker.Stream(t.Context(), probeStream)
+	if err != nil {
+		t.Fatalf("read the log: %v", err)
+	}
+	info, err := s.Info(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's configuration: %v", err)
+	}
+	cfg := info.Config
+	cfg.MaxMsgSize = limit
+	if _, err := broker.UpdateStream(t.Context(), cfg); err != nil {
+		t.Fatalf("set the log's max_msg_size: %v", err)
 	}
 }
 

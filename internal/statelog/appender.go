@@ -5,6 +5,8 @@ import (
 	"errors"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // Appender is the broker, as narrowly as the framework needs it: one
@@ -24,6 +26,11 @@ type Appender interface {
 	// a real expectation with a specific meaning ("this subject holds
 	// nothing") and a sentinel would make the one branch that matters
 	// most indistinguishable from the branch that skips arbitration.
+	//
+	// A record the CLIENT refuses for its size answers [queue.ErrTooLarge]:
+	// that refusal is made before the broker sees the record, so it carries
+	// no API error for [classify] to read, and without the sentinel it is
+	// indistinguishable from no answer at all.
 	Append(ctx context.Context, subject, msgID string, expect *uint64, body []byte) (seq uint64, duplicate bool, err error)
 
 	// LastSeq answers the last sequence on a subject, reporting false
@@ -41,8 +48,9 @@ type Appender interface {
 	LastSeq(ctx context.Context, subject string) (seq uint64, found bool, err error)
 }
 
-// fault is what a publish attempt actually was, which is three facts and not
-// two.
+// fault is what a publish attempt actually was: a record stored, a record
+// refused, or no answer at all — and refusals differ in their remedy, so each
+// remedy is a value of its own.
 type fault int
 
 const (
@@ -56,12 +64,20 @@ const (
 	// faultFull is the stream refusing to store the record at all.
 	faultFull
 
+	// faultTooLarge is the record refused for its SIZE, and nothing
+	// stored: by the NATS client against the max_payload its server
+	// announced, or by the broker against the stream's max_msg_size. It is
+	// as definitive as faultFull — the same record is refused the same way
+	// every time — and apart from it because the remedy is a different
+	// setting.
+	faultTooLarge
+
 	// faultUnknown is no answer: the append may or may not have landed,
 	// and nothing here can tell which.
 	faultUnknown
 )
 
-// classify decides which of the three a publish error was.
+// classify decides what a publish error was.
 //
 // # Why BOTH rejection codes, and why this is one function
 //
@@ -82,9 +98,23 @@ const (
 // would be a parser against a message that is free to be reworded, for a
 // number the discriminator answers authoritatively — so the rejection is
 // treated as "stale, cause unknown" and LastSeq is asked.
+//
+// # And why a size refusal is checked before anything else
+//
+// The CLIENT refuses a record larger than the max_payload its server announced
+// before sending a byte, so that refusal carries no APIError at all — and an
+// error with none is the third value below, an append that may or may not have
+// landed. Read that way, the write path reads the subject back, finds nothing
+// of this write's, and decides again, round after round, to a conflict that
+// names neither the size nor the setting. The appender answers it as
+// [queue.ErrTooLarge], naming the max_payload that refused it, and those words
+// are the detail.
 func classify(err error) (fault, string) {
 	if err == nil {
 		return faultNone, ""
+	}
+	if errors.Is(err, queue.ErrTooLarge) {
+		return faultTooLarge, err.Error()
 	}
 	var apiErr *jetstream.APIError
 	if errors.As(err, &apiErr) {
@@ -92,6 +122,14 @@ func classify(err error) (fault, string) {
 		case jetstream.JSErrCodeStreamWrongLastSequence,
 			jetstream.JSErrCodeStreamWrongLastSequenceConstant:
 			return faultRejected, apiErr.Description
+		case codeMessageExceedsMaximum:
+			// THE BROKER'S SIZE REFUSAL, of a record larger than the
+			// stream's max_msg_size — a setting the engine never makes,
+			// so somebody made it on the stream. The server's words name
+			// no setting, so the detail does.
+			return faultTooLarge, apiErr.Description + " — the stream's " +
+				"max_msg_size is smaller than this record and its headers; " +
+				"raise it on the stream, or remove it"
 		case codeStreamStoreFailed:
 			// THE ONE PLACE THE DESCRIPTION TRAVELS RATHER THAN BEING
 			// PARSED. This code covers both "maximum bytes exceeded"
@@ -119,3 +157,8 @@ func classify(err error) (fault, string) {
 // code. It is not exported by the client, so it is written down here with
 // what it covers rather than left as a literal at the switch.
 const codeStreamStoreFailed jetstream.ErrorCode = 10077
+
+// codeMessageExceedsMaximum is the server's "message size exceeds maximum
+// allowed", which it answers for a record larger than the stream's own
+// max_msg_size. Not exported by the client either.
+const codeMessageExceedsMaximum jetstream.ErrorCode = 10054

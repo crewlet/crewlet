@@ -2,6 +2,7 @@ package jetstream
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -270,12 +271,14 @@ func TestAKeyListingCostsAConsumerAndSaysSoAtDebug(t *testing.T) {
 	rec := &recordedLines{}
 	srv.embedded.ns.SetLoggerV2(rec, true, false, false)
 
-	nc, err := srv.Conn()
+	// THE QUEUE'S OWN CONNECTION, which is the one the coordination store
+	// lists its keys over in production (internal/engine's openNATS).
+	q, err := srv.Client(ctx)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer nc.Close()
-	js, err := jetstream.New(nc)
+	defer func() { _ = q.Stop(context.WithoutCancel(ctx)) }()
+	js, err := jetstream.New(q.Conn())
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}

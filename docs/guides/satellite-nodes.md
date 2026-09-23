@@ -14,8 +14,9 @@ runs agents, holds no company-wide duty, and terminates no inbound
 traffic.
 
 > A satellite is a normal `crewlet run` with roles subtracted, not a
-> lighter agent-only binary. It still needs to reach the database and
-> the broker. If that is not possible from where you want the agent,
+> lighter agent-only binary. It still needs to reach the broker, which
+> carries both the event stream and the coordination slot. If that is not
+> possible from where you want the agent,
 > this is not the mechanism you want — see
 > [what a satellite still needs](#what-a-satellite-still-needs).
 
@@ -29,9 +30,14 @@ not a request handler you can route, it is a place where things run:
 | Moves to the satellite | Stays on the core |
 |---|---|
 | The agent instance, its state and its turns | The HTTP API, the dashboard, every integration's webhooks |
-| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | The scheduler tick, the retention sweep, the sandbox waiter, skill clustering and curation |
+| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | The scheduler tick, the retention sweep's fleet-wide jobs, the sandbox waiter, skill clustering and curation |
 | Its LLM calls, its knowledge searches, its tool calls | Every other seat's agents and MCP servers |
 | Its sandbox launches, if the role is sandboxed | The company config, the leases and the ledgers — all shared, in the coordination slot |
+
+Some housekeeping runs on every node and so on the satellite too: the
+retention sweep of the tables each node keeps its own copy of — its event
+log and its agents' memory among them — because only the node holding a
+table can sweep it.
 
 The MCP row is the one that makes this feature what it is. A seat's
 stdio MCP servers are children of the process holding its lease, so
@@ -75,8 +81,9 @@ Three steps: say what the node is, say where the role belongs, start it.
 ### 1. Give the satellite a Tier A config
 
 Only the Tier A file lives on the satellite. The company itself (roles,
-prompts, providers, integrations) comes from the database, so there is
-no company YAML to copy or keep in sync.
+prompts, providers, integrations) comes from the fleet — the coordination
+store holds the active revision, and the node adopts it into its own store —
+so there is no company YAML to copy or keep in sync.
 
 ```yaml
 # crewlet.yaml, on the satellite host
@@ -89,7 +96,9 @@ node:
                                   #   company's worth — see below
 
 store:
-  path: "/var/lib/crewlet/sat-eu-1.db"   # this node's own file, not shared
+  path: "/var/lib/crewlet/sat-eu-1.db"   # this node's own records; its
+                                         #   replicated estate goes beside it.
+                                         #   Neither file is shared
 
 stream:
   type: nats
@@ -141,15 +150,15 @@ process, and it strands the seat when that particular process is gone.
 Both commands run **on the satellite**, against the Tier A file above:
 
 ```bash
-crewlet migrate                 # this host's own store file
+crewlet migrate                 # this host's own store files
 crewlet run                     # roles come from the file
 ```
 
 `crewlet migrate` is **per node, not per fleet**. There is no shared database
-to migrate from elsewhere: it applies the pending schema migrations to the one
-local store file its Tier A config names (`/var/lib/crewlet/sat-eu-1.db`
-above), and every node owns its file exclusively. A new satellite is migrated
-on the satellite.
+to migrate from elsewhere: it applies the pending schema migrations to the two
+local store files its Tier A config names (`/var/lib/crewlet/sat-eu-1.db`
+above, and the replicated estate beside it), and every node owns its files
+exclusively. A new satellite is migrated on the satellite.
 
 Or, if you would rather not put roles in the file:
 
@@ -194,7 +203,7 @@ the dependency surface before choosing a host for it:
 - **Outbound reach to the coordination slot and to the stream.** Seat
   leases, the activation pointer, the ledgers and the seat's inbox all
   live there. A network so restricted that neither is reachable cannot
-  host a satellite. Its own store file is local, so that one costs
+  host a satellite. Its own store files are local, so they cost
   nothing.
 - **Whatever its LLM provider needs.** Usually outbound HTTPS to the
   provider. A network with no egress at all can still work if the role

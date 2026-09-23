@@ -74,6 +74,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
@@ -226,6 +227,16 @@ type Options struct {
 	// prevent. Nil builds one, so a caller that only wants traces is not
 	// made to know about metrics.
 	Recorder *metrics.Recorder
+
+	// metricReaders are attached to the MeterProvider [Configure] builds,
+	// beside the exporter's periodic reader when there is one.
+	//
+	// UNEXPORTED, so nothing outside this package can set it: it is how
+	// this package's tests collect from the provider Configure actually
+	// builds and installs, view and registrations included, rather than
+	// from one a test assembled by hand — which passes with either of
+	// those missing.
+	metricReaders []sdkmetric.Reader
 }
 
 func (o Options) env(name string) string {

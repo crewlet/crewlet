@@ -65,7 +65,9 @@ const EmptyKnowledgeHint = "(no team documents surfaced at turn start — " +
 	"gathered more context about what the task actually needs)"
 
 // BuildingKnowledgeHint is what the block says while this node's own index is
-// still catching up.
+// still catching up — and what the `search_knowledge` tool answers when a
+// search on such a node comes back empty. ONE SENTENCE FOR BOTH, because a seat
+// reads both, and two wordings of one state read as two states.
 //
 // A DIFFERENT SENTENCE from [EmptyKnowledgeHint], and the difference is what
 // it tells the seat to do. "Nothing surfaced" invites a focused re-search,

@@ -24,10 +24,10 @@ Crewlet uses a [two-tier config](../concepts/configuration.md):
 ## 0. There is no infrastructure to start
 
 Crewlet is one binary. Its event stream is a NATS JetStream server it
-embeds, and its database is a local file it creates — so a company runs with
-no broker to operate and nothing to point a DSN at. Both slots take an
-external address when a deployment outgrows that; see
-[Deployment](../guides/deployment.md).
+embeds, and its database is two local files it creates — so a company runs
+with no broker to operate and nothing to point a DSN at. When a deployment
+outgrows one node the stream takes an external address; the store stays each
+node's own files. See [Deployment](../guides/deployment.md).
 
 The compose file in a repo checkout is for the *integration* loops
 (Mattermost, GitLab) further down this page, not for the engine.
@@ -61,8 +61,9 @@ stream:
 store:
   path: "./acme-data/acme.db"   # this node's own database, owned
                           #   EXCLUSIVELY by this process. Not a shared
-                          #   database and no DSN: two engines pointed at one
-                          #   path corrupt it. A second file is created beside
+                          #   database and no DSN: a second engine pointed at
+                          #   the same path is refused, naming the process
+                          #   that holds it. A second file is created beside
                           #   it for the replicated estate — a snapshot is a
                           #   copy of one of the two, which is why they are
                           #   not one file. See concepts/architecture.md

@@ -505,6 +505,10 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 	// The RAW bytes as the stored payload, not a re-serialization of the
 	// parsed body: this row is what the dashboard shows when somebody opens
 	// the delivery, and it should show what the provider actually sent.
+	//
+	// BUILT HERE rather than by store.RecordFor, which builds the row of an
+	// EVENT: a delivery is not one, and its payload, its label and its tags
+	// are all its own. RecordFor's doc states the difference once.
 	if err := r.events.Append(ctx, store.EventRecord{
 		ID: id, Type: d.label, Source: d.source, Time: at,
 		Category: events.WebhookCategory, Summary: d.summary, Actor: d.source,

@@ -41,10 +41,11 @@ func page(t testing.TB, db *store.DB, id, container, title, body string, version
 
 // indexAll drives the indexer to a fixed point.
 //
-// UNTIL IT FINDS NOTHING TWICE, not until [search.Indexer.Ready]. Ready is the
-// first-build gate — it counts pages the index has no row for at all — and is
-// deliberately blind to a row that is merely stale, so waiting on it would
-// return the instant an edit's page was represented by its PREVIOUS text.
+// UNTIL IT FINDS NOTHING TWICE, not until [search.Indexer.ReadyFor]. That is
+// the first-build gate — it closes once per process, on each corpus's first
+// lap — and is deliberately blind to a row that is merely stale, so waiting on
+// it would return the instant an edit's page was represented by its PREVIOUS
+// text.
 //
 // Twice, because the reconciliation walk wraps: one empty sweep can be the end
 // of a pass rather than the end of the work.
@@ -159,9 +160,9 @@ func TestAnEditRemovesTheTermsItRemoved(t *testing.T) {
 }
 
 // A DRAFT AND A TRASHED PAGE ARE NOT SEARCHABLE. A draft is somebody's
-// unfinished thought and a trashed page is deleted as far as any reader is
-// concerned; surfacing either puts content in front of an agent that no
-// person considers current.
+// unfinished thought and a trashed page is one somebody put in the trash —
+// still read by its id or its address, but out of search; surfacing either
+// puts content in front of an agent that no person considers current.
 func TestOnlyPublishedPagesAreIndexed(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -223,7 +224,7 @@ func TestReadyDistinguishesABuildingIndexFromAnEmptyCompany(t *testing.T) {
 	// A BUILD THAT HAS NOT RUN IS NOT READY, even over an empty company:
 	// this node has established nothing, and answering "nothing matched"
 	// from a walk that never ran is the claim the gate exists to prevent.
-	if x.Ready() {
+	if x.ReadyFor() {
 		t.Fatal("an indexer whose walk has never run reported ready")
 	}
 	page(t, db, "p.new", "ENG", "New", "something to index", 1)
@@ -231,7 +232,7 @@ func TestReadyDistinguishesABuildingIndexFromAnEmptyCompany(t *testing.T) {
 		t.Errorf("pending = %d, want 1", n)
 	}
 	indexAll(t, x)
-	if !x.Ready() {
+	if !x.ReadyFor() {
 		t.Error("the index never reported ready")
 	}
 
@@ -243,7 +244,7 @@ func TestReadyDistinguishesABuildingIndexFromAnEmptyCompany(t *testing.T) {
 	if n, _ := x.Pending(t.Context()); n != 1 {
 		t.Fatalf("pending = %d after a later save, want 1", n)
 	}
-	if !x.Ready() {
+	if !x.ReadyFor() {
 		t.Error("one page saved after the first build turned every empty " +
 			"search on this node into \"still building, try again\" — which on " +
 			"a company with people in it never clears")
@@ -378,7 +379,7 @@ func TestTheIndexerCatchesUpOnItsOwn(t *testing.T) {
 	defer cancel()
 	go x.Run(ctx)
 
-	waitFor(t, x.Ready, "the indexer never caught up on its own")
+	waitFor(t, func() bool { return x.ReadyFor() }, "the indexer never caught up on its own")
 	hits, err := x.Search(t.Context(), search.LexicalQuery{Text: "vocabulary", Limit: 5})
 	if err != nil {
 		t.Fatalf("search: %v", err)
@@ -693,10 +694,10 @@ func TestAWorkItemIsFoundByItsOwnWords(t *testing.T) {
 	}
 }
 
-// THE GATE WAITS FOR EVERY CORPUS. A node whose pages have been walked and
-// whose items have not is one that would report itself ready and answer an
-// item search empty — which is the "nothing written down" lie the gate exists
-// to prevent, moved one corpus over.
+// THE WHOLE-INDEX GATE WAITS FOR EVERY CORPUS. Asked with no names, a node
+// whose pages have been walked and whose items have not would otherwise report
+// itself ready and answer an item search empty — which is the "nothing written
+// down" lie the gate exists to prevent, moved one corpus over.
 func TestTheReadinessGateCountsEveryCorpus(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -706,7 +707,7 @@ func TestTheReadinessGateCountsEveryCorpus(t *testing.T) {
 	x := search.NewIndexerOver(db, []search.LexicalSource{pages, unreachableSource{}})
 
 	page(t, db, "p.1", "ENG", "Something", "a body worth indexing", 1)
-	if x.Ready() {
+	if x.ReadyFor() {
 		t.Fatal("the index reports itself ready with a corpus it has never " +
 			"walked, so a seat is told that corpus holds nothing")
 	}
@@ -725,7 +726,7 @@ func TestTheReadinessGateCountsEveryCorpus(t *testing.T) {
 	if pages.scans == 0 {
 		t.Fatal("the page corpus was never scanned")
 	}
-	if x.Ready() {
+	if x.ReadyFor() {
 		t.Error("one corpus finishing its lap made the whole index ready, so " +
 			"a seat searching the other is told it holds nothing")
 	}
@@ -1022,8 +1023,8 @@ func TestReadyForNarrowsToTheSourcesAQueryNames(t *testing.T) {
 	if !x.ReadyFor(string(search.SourcePage)) {
 		t.Error("the page corpus wrapped and still reports itself building")
 	}
-	if !x.Ready() {
-		t.Error("every source wrapped and Ready() disagrees with ReadyFor()")
+	if !x.ReadyFor() {
+		t.Error("every source wrapped and the whole index still reports itself building")
 	}
 }
 

@@ -99,16 +99,30 @@ func (b *Backends) Complete() error {
 		strings.Join(missing, ", "))
 }
 
-// Conn is the broker connection the queue opened — the one the coordination
-// store rides — when the broker is EMBEDDED in this node's process, and nil
-// when this node dialled an external one.
+// EmbeddedConn is the broker connection the queue opened, when the broker is
+// EMBEDDED in this node's process, and nil when this node dialled an external
+// one.
 //
-// The backup snapshots the streams over it, and on the default topology it has
-// no other way in: the embedded broker binds no socket. Nil is its answer for a
-// dialled broker because of what the backup reads nil as — the stream estate
-// belongs to a cluster somebody else runs, and is backed up there (see
-// internal/backup's Options.Conn). The connection exists on that topology all
-// the same; this accessor declines to name it.
+// It is the BACKUP's accessor, and the name says so because nil is an answer
+// only the backup wants. The backup snapshots the streams over this
+// connection, and on the default topology it has no other way in: the
+// embedded broker binds no socket. On a dialled broker the stream estate
+// belongs to a cluster somebody else runs and is backed up there (see
+// internal/backup's Options.Conn), so this answers nil although the
+// connection exists. A subsystem that rides the broker on every topology
+// takes [Backends.brokerConn] instead: handed nil on a dialled broker, it
+// would stand down on every node of an external-NATS deployment.
+//
+// The caller takes no ownership — see [Backends.brokerConn].
+func (b *Backends) EmbeddedConn() *nats.Conn {
+	if b.stopServer == nil {
+		return nil
+	}
+	return b.brokerConn()
+}
+
+// brokerConn is the broker connection the queue opened — the one the
+// coordination store rides — on every topology, embedded or dialled.
 //
 // ASKED OF THE QUEUE rather than remembered from the open, because Queue is an
 // exported slot a caller may fill with a wrapper around the one OpenBackends
@@ -118,10 +132,7 @@ func (b *Backends) Complete() error {
 // The caller takes no ownership. The queue closes this connection in Stop,
 // which [Backends.Close] calls, and a caller that closed it first would take
 // the queue, every consumer and the coordination store down with it.
-func (b *Backends) Conn() *nats.Conn {
-	if b.stopServer == nil {
-		return nil
-	}
+func (b *Backends) brokerConn() *nats.Conn {
 	broker, ok := b.Queue.(interface{ Conn() *nats.Conn })
 	if !ok {
 		return nil
@@ -233,12 +244,10 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 		return nil, err
 	}
 
-	// LAST, because it is the only step whose failure has something to
-	// clean up behind it. Opening the file first and then failing to reach
-	// a broker would leave the node's own database open with nobody
-	// holding it — and the store is exclusive to one process, so the next
-	// attempt in the same process would contend with the corpse of this
-	// one.
+	// LAST, and a failure here takes the stream and coordination down
+	// again, so a failed open leaves nothing running: an embedded broker
+	// left behind would be a server nobody holds a handle to, for the life
+	// of the process.
 	db, err := openStore(ctx, b, c)
 	if err != nil {
 		out.Close(ctx)
@@ -261,7 +270,9 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	return out, nil
 }
 
-// openStore opens this node's local database.
+// openStore opens this node's two local databases — the node estate at
+// store.path and the replicated estate at store.replicated_path, or beside it
+// when that is empty.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
 	opts := store.Options{
 		MaxOpenConns:   b.Store.MaxOpenConns,

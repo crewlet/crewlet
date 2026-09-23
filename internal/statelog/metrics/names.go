@@ -34,7 +34,7 @@ const (
 	StatelogDeferredCount            = "crewlet.statelog.deferred.count"
 	StatelogDeferredOldestAgeSeconds = "crewlet.statelog.deferred.oldest_age_seconds"
 	StatelogDrainCommitsPerSecond    = "crewlet.statelog.drain.commits_per_second"
-	StatelogDrainRowsPerSecond       = "crewlet.statelog.drain.rows_per_second"
+	StatelogDrainRecordsPerSecond    = "crewlet.statelog.drain.records_per_second"
 	StatelogLingerYields             = "crewlet.statelog.linger.yields"
 	StatelogLogBytes                 = "crewlet.statelog.log.bytes"
 	StatelogLogHeadroomFraction      = "crewlet.statelog.log.headroom_fraction"

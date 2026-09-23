@@ -7,9 +7,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // DomainLog is one state-log domain's append surface: a conditional publish
@@ -147,6 +149,10 @@ func (q *Queue) openProvisioned(ctx context.Context, stream string) (jetstream.S
 // repeated id inside the duplicate window is served out of the window with no
 // quorum round trip, so an acknowledgement carrying one would prove nothing
 // about the log's end.
+//
+// A record the client refuses for its size is [queue.ErrTooLarge] — see
+// [DomainLog.sizeRefusal]. Every other error is the client's own, unwrapped,
+// because the state log classifies the broker's answer by its type.
 func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *uint64, body []byte) (uint64, bool, error) {
 	opts := make([]jetstream.PublishOpt, 0, 2)
 	if msgID != "" {
@@ -157,9 +163,54 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 	}
 	ack, err := l.js.Publish(ctx, subject, body, opts...)
 	if err != nil {
+		if errors.Is(err, nats.ErrMaxPayload) {
+			return 0, false, l.sizeRefusal(subject, len(body), len(opts) > 0, err)
+		}
 		return 0, false, err
 	}
 	return ack.Sequence, ack.Duplicate, nil
+}
+
+// sizeRefusal is the client's own too-large refusal of an append, translated
+// into the contract's sentinel and naming the max_payload that refused it.
+//
+// [queue.ErrTooLarge] BECAUSE IT IS PERMANENT. The client measures a message
+// against the max_payload the server it is connected to announced and refuses
+// it before anything is sent, so the same record is refused the same way on
+// every attempt. Returned as the client's own error it reads to the state
+// log's write path as no answer at all — an append that may or may not have
+// landed — which that path resolves by reading the subject back and deciding
+// again, round after round, until it reports a conflict that names neither the
+// size nor the setting.
+//
+// THE RECORD AND ITS HEADERS are what the client measured: an append carrying
+// an operation id or an expectation carries it as a header, so a record a few
+// bytes under the limit is refused too, and the message says so rather than
+// claiming the record alone is over it. headers says whether this one carried
+// any.
+//
+// The limit is read after the refusal, off the live connection. A reconnect in
+// between names the server the connection is on now, so the message says what
+// that server announces rather than that the record exceeds it. Where it
+// announces less than the queue contract's ceiling, the setting to raise is
+// named, as [Queue.tooLarge] names it for an event.
+func (l *DomainLog) sizeRefusal(subject string, size int, headers bool, cause error) error {
+	accepts := l.js.Conn().MaxPayload()
+	measured := fmt.Sprintf("the record's %d bytes", size)
+	if headers {
+		measured += " and its headers"
+	}
+	remedy := ""
+	if accepts < queue.MaxPayloadBytes {
+		remedy = fmt.Sprintf(", below the %d bytes the queue contract carries "+
+			"(queue.MaxPayloadBytes): set max_payload to at least %d on every "+
+			"server of the cluster", queue.MaxPayloadBytes, queue.MaxPayloadBytes)
+	}
+	return fmt.Errorf("jetstream: append to %q on %s: the NATS client refused %s "+
+		"without sending them, because they are more than the max_payload of the "+
+		"server the connection was on; the server it is on now announces a "+
+		"%d-byte max_payload%s: %w: %w",
+		subject, l.name, measured, accepts, remedy, queue.ErrTooLarge, cause)
 }
 
 // LastSeq answers the last sequence on a subject, reporting false with a nil

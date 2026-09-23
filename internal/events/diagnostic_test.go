@@ -25,21 +25,26 @@ func TestADiagnosticIsBoundedOnlySoTheEventCanBePublished(t *testing.T) {
 			"input, not for messages written to be read", len(real))
 	}
 
-	huge := strings.Repeat("x", events.MaxDiagnosticBytes*3)
+	// A head and a tail that tell themselves apart, so which end was kept is
+	// something the assertions below can see.
+	huge := "engine: turn for ceo: " + strings.Repeat("x", events.MaxDiagnosticBytes*3) + " :the tail"
 	got := events.ClipDiagnostic(huge)
 	if len(got) > events.MaxDiagnosticBytes+200 {
 		t.Errorf("a clipped diagnostic is %d bytes, past its own bound", len(got))
 	}
-	// MARKED. An unmarked cut is indistinguishable from an error that
-	// really did end there.
-	if !strings.Contains(got, "truncated") {
-		t.Errorf("the cut is silent: %q", got[len(got)-80:])
+	// MARKED, AND SAYING WHERE THE REST IS. An unmarked cut is
+	// indistinguishable from an error that really did end there, and a mark
+	// that names no place leaves a reader holding a head with no whole.
+	if !strings.Contains(got, "cut at 64 KiB") {
+		t.Errorf("the cut is silent, or names another bound: %q", got[len(got)-120:])
+	}
+	if !strings.Contains(got, "the whole is in the log of the node that published it") {
+		t.Errorf("the cut does not say where the whole is: %q", got[len(got)-120:])
 	}
 	// THE HEAD. A wrapped Go error reads outermost-first, so the head names
-	// the operation that failed; and where this bound actually bites — a
-	// decode failure quoting a document — the head is the message.
-	if !strings.HasPrefix(got, "xxx") {
-		t.Errorf("the tail was kept instead of the head: %q", got[:40])
+	// the operation that failed.
+	if !strings.HasPrefix(got, "engine: turn for ceo: ") || strings.Contains(got, ":the tail") {
+		t.Errorf("the tail was kept instead of the head: %q … %q", got[:40], got[len(got)-160:])
 	}
 	// Two orders of magnitude below the queue's ceiling, so this field can
 	// never be what pushes an event over it.

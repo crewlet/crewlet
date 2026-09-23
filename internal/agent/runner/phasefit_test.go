@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -30,6 +31,13 @@ import (
 // refuses what the real broker refuses, at the same ceiling — and returns the
 // phase records and the record parts that were accepted.
 func publishedPhases(t *testing.T, rec phaseRecord) ([]*types.AgentPhaseCompleted, []*types.AgentPhaseRecordPart) {
+	t.Helper()
+	return publishedBy(t, func(ctx context.Context, e emitter) { e.completed(ctx, rec) })
+}
+
+// publishedBy is publishedPhases for any way an emitter publishes a phase
+// record: drive publishes through an emitter over the in-memory queue.
+func publishedBy(t *testing.T, drive func(ctx context.Context, e emitter)) ([]*types.AgentPhaseCompleted, []*types.AgentPhaseRecordPart) {
 	t.Helper()
 	q := memory.New()
 	if err := q.Start(t.Context()); err != nil {
@@ -52,7 +60,7 @@ func publishedPhases(t *testing.T, rec phaseRecord) ([]*types.AgentPhaseComplete
 	var emu sync.Mutex
 	e := emitter{pub: q, turn: Turn{RunID: "tn-1", AgentID: "agent-1"}, role: "Lead",
 		tally: &Spend{}, mu: &emu}
-	e.completed(t.Context(), rec)
+	drive(t.Context(), e)
 	return records, parts
 }
 
@@ -217,6 +225,135 @@ func TestOneTextPastTheCeilingIsFitWithTheNoteSayingSo(t *testing.T) {
 	}
 }
 
+// A PHASE'S ERROR PAST ONE EVENT RIDES WHOLE IN THE PARTS, AND THE RECORD
+// CARRIES ITS HEAD.
+//
+// An error is as long as whatever failed made it. Cut to a fixed bound before
+// the record existed, the whole the parts kept would be the cut text and the
+// rest of the error would be kept nowhere. Built whole, it is the last text the
+// fit reaches — every other text on the record goes to its mark first — and
+// the parts hold it exactly as the phase returned it. For the turn's own phase
+// and for a delegated worker alike, which build their records separately.
+func TestAPhaseErrorPastOneEventRidesWholeInTheParts(t *testing.T) {
+	t.Parallel()
+	// Past the ceiling on its own, in a three-byte script, so a cut through a
+	// character would show.
+	failure := "provider: " + strings.Repeat("失敗した ", queue.MaxPayloadBytes/13+100_000)
+	calls := []toolloop.Execution{
+		{Round: 1, Name: "read_page", Args: map[string]any{"id": 1}, Output: "the page body"},
+		{Round: 1, Name: "slack_post", Args: map[string]any{"channel": "C1"}, Output: "posted"},
+	}
+	for _, tc := range []struct {
+		name  string
+		drive func(ctx context.Context, e emitter)
+	}{
+		{"the turn's own phase", func(ctx context.Context, e emitter) {
+			e.completed(ctx, phaseRecord{Phase: phase.Execute, Iteration: 1, Failed: true,
+				Err:    errors.New(failure),
+				Result: toolloop.Result{RoundsUsed: 1, Text: "partial answer", Executions: calls}})
+		}},
+		{"a delegated worker", func(ctx context.Context, e emitter) {
+			e.subagentCompleted(ctx, subagent.Result{ID: "t1", Status: subagent.StatusFailed,
+				Error: failure, Text: "partial answer", Rounds: 1, Executions: calls})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			records, parts := publishedBy(t, tc.drive)
+			if len(records) != 1 {
+				t.Fatalf("%d phase records were published, want the one, cut", len(records))
+			}
+			rec := records[0]
+			if !rec.Failed {
+				t.Error("the record of a failed phase does not say it failed")
+			}
+			if !strings.HasSuffix(rec.Error, "…") || !utf8.ValidString(rec.Error) ||
+				!strings.HasPrefix(failure, strings.TrimSuffix(rec.Error, "…")) || len(rec.Error) >= len(failure) {
+				t.Fatalf("the record's error is not a marked head of the failure: %d of %d bytes, ending …%q",
+					len(rec.Error), len(failure), rec.Error[max(0, len(rec.Error)-12):])
+			}
+			// THE ERROR WAS REACHED LAST: every other text went to its mark
+			// before it was touched.
+			if rec.Response != "…" {
+				t.Errorf("the response is %q; want its mark, since the error was cut", rec.Response)
+			}
+			for i, row := range rec.ToolExecutions {
+				if row["result"] != "…" {
+					t.Errorf("call %d's result is %q; want its mark, since the error was cut", i, row["result"])
+				}
+			}
+			raw, err := json.Marshal(events.New(*rec, events.TraceContext{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(raw) > queue.MaxPayloadBytes {
+				t.Errorf("the cut record is %d bytes, past the %d-byte ceiling", len(raw), queue.MaxPayloadBytes)
+			}
+			// THE WHOLE: the error exactly as the phase returned it.
+			if len(parts) < 2 || rec.WholeParts != len(parts) {
+				t.Fatalf("%d parts published and the record names %d", len(parts), rec.WholeParts)
+			}
+			var back events.Event
+			if err := json.Unmarshal(reassemble(t, parts), &back); err != nil {
+				t.Fatalf("the reassembled whole is not an event: %v", err)
+			}
+			full, ok := back.Data.(*types.AgentPhaseCompleted)
+			if !ok {
+				t.Fatalf("the whole is a %T", back.Data)
+			}
+			if full.Error != failure {
+				t.Errorf("the whole's error is %d bytes; want the phase's own %d, whole", len(full.Error), len(failure))
+			}
+		})
+	}
+}
+
+// THE ERROR IS THE LAST TEXT THE FIT CUTS.
+//
+// It is what says why a failed phase failed, so while cutting the other texts
+// can make the room — a tool result, or the prose, each as long as the error —
+// the error goes out whole beside them. Sharing a tier with either, a common
+// level would have cut it with them.
+func TestTheErrorIsTheLastTextTheFitCuts(t *testing.T) {
+	t.Parallel()
+	failure := strings.Repeat("the provider refused: ", (5<<20)/22)
+	long := strings.Repeat("x", 5<<20)
+	for _, tc := range []struct {
+		name string
+		res  toolloop.Result
+		// other reads the long text back off the published record.
+		other func(*types.AgentPhaseCompleted) string
+	}{
+		{"beside a long tool result",
+			toolloop.Result{RoundsUsed: 1, Executions: []toolloop.Execution{
+				{Round: 1, Name: "read_file", Args: map[string]any{"path": "dump.log"}, Output: long}}},
+			func(rec *types.AgentPhaseCompleted) string {
+				s, _ := rec.ToolExecutions[0]["result"].(string)
+				return s
+			}},
+		{"beside a long response",
+			toolloop.Result{RoundsUsed: 1, Text: long},
+			func(rec *types.AgentPhaseCompleted) string { return rec.Response }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			records, _ := publishedPhases(t, phaseRecord{Phase: phase.Execute, Iteration: 1,
+				Failed: true, Err: errors.New(failure), Result: tc.res})
+			if len(records) != 1 {
+				t.Fatalf("%d phase records were published, want the one, cut", len(records))
+			}
+			if got := records[0].Error; got != failure {
+				t.Errorf("the error went out as %d of its %d bytes while the other long text could "+
+					"make the room", len(got), len(failure))
+			}
+			if other := tc.other(records[0]); !strings.HasSuffix(other, "…") || len(other) >= len(long) {
+				t.Errorf("the other long text went out as %d of its %d bytes; want it cut to make the room",
+					len(other), len(long))
+			}
+		})
+	}
+}
+
 // A RECORD THAT FITS IS PUBLISHED EXACTLY AS IT WAS: nothing is cut and no
 // part is published unless the transport refuses the whole.
 func TestAPhaseRecordThatFitsIsNotTouched(t *testing.T) {
@@ -297,6 +434,9 @@ type sent struct {
 	bytes int
 	err   error
 	ev    *events.Event
+	// data is how much of the whole a part attempt carried, refused or not;
+	// zero on anything but a part.
+	data int
 }
 
 func (p *transport) Publish(_ context.Context, _ string, ev *events.Event) error {
@@ -317,13 +457,59 @@ func (p *transport) Publish(_ context.Context, _ string, ev *events.Event) error
 			return err
 		}
 	}
+	data := 0
+	if part, ok := ev.Data.(*types.AgentPhaseRecordPart); ok {
+		data = len(part.Data)
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.first == nil {
 		p.first = raw
 	}
-	p.attempts = append(p.attempts, sent{typ: ev.Type, bytes: len(raw), err: refused, ev: back})
+	p.attempts = append(p.attempts, sent{typ: ev.Type, bytes: len(raw), err: refused, ev: back, data: data})
 	return refused
+}
+
+// recordAttempts is every attempt at the phase record, the whole first.
+func (p *transport) recordAttempts() []sent {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []sent
+	for _, a := range p.attempts {
+		if a.typ == (types.AgentPhaseCompleted{}).EventType() {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// partAttempts is every attempt at a part, refused or not.
+func (p *transport) partAttempts() []sent {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []sent
+	for _, a := range p.attempts {
+		if a.typ == (types.AgentPhaseRecordPart{}).EventType() {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// encodedPart is what a part carrying n bytes of data weighs as the publisher
+// encodes it, with the envelope a part of this package's emitter has.
+func encodedPart(t *testing.T, n int) int {
+	t.Helper()
+	record := uuid.New()
+	part := events.New(types.AgentPhaseRecordPart{
+		RecordID: record.String(), Index: 1, Offset: n, WholeBytes: 4 * n, Data: make([]byte, n),
+	}, events.TraceContext{})
+	part.ID = types.PhaseRecordPartID(record, 1)
+	raw, err := json.Marshal(part)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(raw)
 }
 
 // accepted is what the transport took: the phase records and the parts.
@@ -487,6 +673,138 @@ func TestARefusedPartOfOddLengthGoesOutAsTwoParts(t *testing.T) {
 	}
 	if !bytes.Equal(reassemble(t, parts), whole) {
 		t.Error("the two halves do not reassemble to the whole")
+	}
+}
+
+// A REFUSED PART LARGER THAN THE FLOOR IS ASKED FOR AT THE FLOOR BEFORE THE
+// WHOLE IS GIVEN UP.
+//
+// Halving alone steps over the floor: a part of between one floor and two
+// halves to less than one. A server that takes a part AT the floor and refuses
+// the part twice its size would then never be asked for one, and the record
+// would go out with no whole behind it — so a half below the floor is raised
+// to it.
+func TestARefusedPartIsTriedAtTheFloorBeforeTheWholeIsGivenUp(t *testing.T) {
+	t.Parallel()
+	// THE SERVER, between the floor and twice it: it takes a part of exactly
+	// the floor, with room for the digits one part's envelope has over
+	// another's, and nothing larger.
+	pub := &transport{refuse: tooLargeAbove(encodedPart(t, phasePartFloor) + 512)}
+	// A WHOLE BETWEEN ONE FLOOR AND TWO, so its first part is refused and
+	// halves to below the floor.
+	rec := phaseEvent(toolloop.Result{RoundsUsed: 1, Executions: []toolloop.Execution{
+		{Round: 1, Name: "read_file", Args: map[string]any{"path": "a.log"}, Output: strings.Repeat("x", 100_000)},
+	}})
+	account := emitterOver(pub).publishPhase(t.Context(), rec)
+
+	records, parts := pub.accepted()
+	whole := len(pub.first)
+	if whole <= phasePartFloor || whole >= 2*phasePartFloor {
+		t.Fatalf("the whole is %d bytes; the case needs one between the floor (%d) and twice it",
+			whole, phasePartFloor)
+	}
+	if len(records) != 1 {
+		t.Fatalf("%d records published (account %+v); want the record, cut", len(records), account)
+	}
+	if records[0].WholeParts == 0 || records[0].WholeParts != len(parts) || account.Parts != len(parts) {
+		t.Fatalf("the record names %d parts, the account %d, and %d landed: a server that takes a "+
+			"part at the floor lost the whole (notes: %q)", records[0].WholeParts, account.Parts,
+			len(parts), records[0].Notes)
+	}
+	if !bytes.Equal(reassemble(t, parts), pub.first) {
+		t.Error("the parts do not reassemble to the whole the transport refused")
+	}
+	if len(parts[0].Data) != phasePartFloor {
+		t.Errorf("the first part that landed carries %d bytes; want exactly the floor, %d",
+			len(parts[0].Data), phasePartFloor)
+	}
+}
+
+// ONLY A PART REFUSED AT THE FLOOR GIVES THE WHOLE UP, AND NOTHING SMALLER IS
+// EVER ASKED FOR.
+//
+// A server that refuses a part of the floor is not one a smaller part can
+// serve at a reasonable cost, so the parts end there: the record goes out
+// with no whole behind it and says so — after a part at the floor was asked
+// for, and never one below it.
+func TestAPartRefusedAtTheFloorGivesTheWholeUp(t *testing.T) {
+	t.Parallel()
+	pub := &transport{refuse: tooLargeAbove(encodedPart(t, phasePartFloor) - 512)}
+	account := emitterOver(pub).publishPhase(t.Context(), phaseEvent(heavyResult(300, 42_000)))
+
+	records, parts := pub.accepted()
+	if len(records) != 1 || len(parts) != 0 {
+		t.Fatalf("%d records and %d parts published; want the record alone", len(records), len(parts))
+	}
+	if records[0].WholeParts != 0 || account.Parts != 0 {
+		t.Errorf("the record names %d parts (account %d) of a whole that was not kept",
+			records[0].WholeParts, account.Parts)
+	}
+	if !strings.Contains(records[0].Notes, "was not kept") {
+		t.Errorf("notes = %q, want them to say the whole was not kept", records[0].Notes)
+	}
+	smallest := 0
+	for _, a := range pub.partAttempts() {
+		if smallest == 0 || a.data < smallest {
+			smallest = a.data
+		}
+	}
+	if smallest != phasePartFloor {
+		t.Errorf("the smallest part asked for carried %d bytes; want exactly the floor, %d — "+
+			"asked for no smaller, and not given up before it", smallest, phasePartFloor)
+	}
+}
+
+// THE RECORD'S WALK STARTS BELOW THE SMALLEST PART THE SERVER REFUSED.
+//
+// The parts go first, and a part refused as too large is a message the server
+// has already said it refuses at that size. The record is measured the same
+// way, so asking for it at that size again is a refusal already answered: the
+// walk starts at half the smallest part refused, and every form it tries is
+// smaller than that part.
+func TestTheRecordsWalkStartsBelowTheSmallestPartRefused(t *testing.T) {
+	t.Parallel()
+	pub := &transport{refuse: tooLargeAbove(3 << 20)}
+	account := emitterOver(pub).publishPhase(t.Context(), phaseEvent(heavyResult(300, 42_000)))
+
+	records, _ := pub.accepted()
+	if len(records) != 1 || account.Form == "" {
+		t.Fatalf("%d records published (account %+v); want the record, cut", len(records), account)
+	}
+	smallest := 0
+	for _, a := range pub.partAttempts() {
+		if a.err != nil && (smallest == 0 || a.bytes < smallest) {
+			smallest = a.bytes
+		}
+	}
+	if smallest == 0 {
+		t.Fatal("the server refused no part; the case needs one it did")
+	}
+	attempts := pub.recordAttempts()
+	if len(attempts) < 2 {
+		t.Fatalf("%d attempts at the record; want the whole and at least one form", len(attempts))
+	}
+	if first := attempts[1]; first.bytes > smallest/2 {
+		t.Errorf("the first form tried weighs %d bytes; want at most half the %d-byte part the "+
+			"server refused", first.bytes, smallest)
+	}
+	for i, a := range attempts[1:] {
+		if a.bytes >= smallest {
+			t.Errorf("form %d weighs %d bytes, at least the %d-byte part the server had already refused",
+				i+1, a.bytes, smallest)
+		}
+	}
+	// And the form the parts pointed at is one the server takes: it landed a
+	// part at least that large.
+	largest := 0
+	for _, a := range pub.partAttempts() {
+		if a.err == nil {
+			largest = max(largest, a.bytes)
+		}
+	}
+	if first := attempts[1]; first.bytes <= largest && first.err != nil {
+		t.Errorf("the first form, %d bytes, was refused though the server took a %d-byte part",
+			first.bytes, largest)
 	}
 }
 

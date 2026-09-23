@@ -675,8 +675,9 @@ type KnowledgeBackend string
 
 // The knowledge backends.
 const (
-	// KnowledgeNative is the engine's own: pages held as fleet documents
-	// and projected into every node.
+	// KnowledgeNative is the engine's own: every change to a page is one
+	// record on the knowledge base's ordered log, applied into every node's
+	// replicated estate.
 	KnowledgeNative KnowledgeBackend = "native"
 
 	// KnowledgeConfluence is Confluence, read live at query time.
@@ -806,8 +807,9 @@ type TrackerBackend string
 
 // The trackers.
 const (
-	// TrackerNative is the engine's own: work items held as fleet
-	// documents and projected into every node.
+	// TrackerNative is the engine's own: every change to a work item is
+	// one record on the tracker's ordered log, applied into every node's
+	// replicated estate.
 	TrackerNative TrackerBackend = "native"
 
 	// TrackerJira is Jira, whose state the engine reads through a seat's

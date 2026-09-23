@@ -1520,8 +1520,8 @@ func assertRecordFits(t *testing.T, call sandbox.BridgeCall) {
 
 // ARGUMENTS ARE JSON, and a cut through JSON is text nothing can parse — so
 // when they alone overfill the record, the record holds a marker in their
-// place, in the field every reader of it shows, saying they are kept whole in
-// the call's parts; and the resume reads them whole from there.
+// place, in the field every reader of it shows, saying they were filed whole
+// in the call's parts; and the resume reads them whole from there.
 //
 // AND THE OUTPUT KEEPS THE ROOM THEY GAVE BACK. The arguments are decided
 // before the output is cut, so a small output beside them — "posted", after a

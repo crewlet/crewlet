@@ -9,13 +9,14 @@ import (
 	"time"
 )
 
-// bins are the histogram's boundaries, in milliseconds.
+// bins are the histogram's boundaries, in the instrument's own unit —
+// milliseconds for a duration.
 //
-// TWENTY-ONE POWER-OF-TWO BUCKETS from 64 µs to 64 s, which resolves a
-// percentile to within a factor of two at every scale this engine measures —
-// from a 40 µs index probe to a 16 s bulk apply. Fixed rather than
-// configurable: a boundary set that differs between nodes cannot be merged,
-// and merging across a fleet is most of what these are for.
+// TWENTY-ONE POWERS OF TWO from 1/16 to 65 536, which for a duration is
+// 62.5 µs to about 65.5 s, so a percentile read from them is within a factor of
+// two anywhere in that range. Fixed rather than configurable: a boundary set
+// that differs between nodes cannot be merged, and merging across a fleet is
+// most of what these are for.
 //
 // The alternative — exact quantiles — needs either unbounded memory or a
 // sketch with its own error bounds, for an answer nobody acts on more
@@ -36,15 +37,16 @@ func Bins() []float64 { return append([]float64(nil), bins...) }
 //
 // It holds counters, gauges and fixed-bin histograms keyed by instrument name
 // and attribute set, and it is safe for concurrent use by every goroutine in
-// the process — which is the point: one atomic add is what makes a number on
-// the operator record and a number on a collector's panel the same number.
+// the process — which is the point: every write updates both views under one
+// lock, the cumulative series an exporter reads and the rolling window the
+// alarms read.
 //
 // # Why it is not the OTel API directly
 //
 // Two readers, not one. The OTel instruments are one; the rolling 24-hour
-// window the operator record renders is the other, and the OTel SDK offers no
-// way to read back what was recorded. A second counting path for the second
-// reader is the drift this design exists to prevent.
+// window the operator record's alarms read is the other, and the OTel SDK
+// offers no way to read back what was recorded. A second counting path for the
+// second reader is the drift this design exists to prevent.
 type Recorder struct {
 	mu     sync.Mutex
 	series map[string]*series
@@ -57,15 +59,17 @@ type Recorder struct {
 	// a counter and a gauge have a current value the exporter can ask for
 	// at export time, and a distribution does not — the observations have
 	// to reach it as they happen. So the recorder keeps its own copy (for
-	// the operator record, which reads back) and forwards to the sink (for
-	// the collector, which cannot).
+	// the alarms, which read back) and forwards to the sink (for the
+	// collector, which cannot).
 	//
-	// Nil until an exporter binds one, which is the ordinary state of a
-	// deployment with no collector: the recorder's own copy still answers.
+	// A histogram with no sink bound — a recorder nothing installed a
+	// provider over, as in a test — records into the recorder's own copy
+	// alone, which still answers every read.
 	sinks map[string]func(float64, map[string]string)
 
-	// window is the ROLLING 24-hour view the operator record reads, fed
-	// from the same one write path as the cumulative series beside it.
+	// window is the ROLLING 24-hour view the operator record's alarms
+	// read, fed from the same one write path as the cumulative series
+	// beside it.
 	//
 	// TWO VIEWS OF ONE MEASUREMENT, and both are needed. `series` is
 	// cumulative since this process started, which is what an exporter
@@ -73,8 +77,9 @@ type Recorder struct {
 	// on a fraction being above zero, so against a monotone counter one
 	// degraded search after boot lights it for the life of the process and
 	// it can never go out — and `search_slow` and `barrier_slow` take a
-	// maximum, so one slow observation ever is permanent. That is the
-	// defect this window was written for and then never wired to.
+	// p95, which over a cumulative distribution only ever dilutes a bad
+	// hour and never forgets it: the alarm clears once enough good
+	// observations have piled on top, not once the problem has.
 	window *Window
 }
 
@@ -194,14 +199,15 @@ func (r *Recorder) Add(name string, n uint64, attrs Attrs) {
 // need not be whole.
 //
 // A COUNTER NEED NOT COUNT EVENTS. Some of what is summed here is a duration
-// or a projection — seconds of applier occupancy a bulk edit imposes, which is
-// a fraction of a second for every bulk smaller than one second's drain — and
-// rounded to a whole number each of those adds nothing, so a day of them sums
-// to zero, which is the one answer that looks like a healthy fleet.
+// or a projection — the seconds of applier occupancy a bulk edit is projected
+// to impose, which is a fraction of a second for every bulk smaller than one
+// second's drain — and truncated to a whole number each of those adds nothing,
+// so a day of them sums to zero, which is the one answer that looks like a
+// healthy fleet.
 //
 // REFUSED ON A COUNTER THAT IS NOT FRACTIONAL, because that counter is
-// exported as an integer: a fraction added to it would be in the operator
-// record and dropped on the collector's panel, two numbers for one
+// exported as an integer: a fraction added to it would stay in the recorder's
+// own readings and be truncated out of the export, two numbers for one
 // measurement. byName is read here without the lock because only [New] writes
 // it, before the recorder is returned.
 //
@@ -308,7 +314,9 @@ type Snapshot struct {
 	Unit  string
 	Attrs map[string]string
 
-	// Total is a counter's sum; Value is a gauge's current reading.
+	// Total is a counter's sum; Value is a gauge's reading — its current
+	// one from [Recorder.Read], the highest it reached from
+	// [Recorder.ReadWindow].
 	//
 	// Total is a float64 for every counter, for the reason at the series'
 	// own total: a counter that counts events reads back as a whole number,
@@ -352,10 +360,12 @@ func (s Snapshot) Quantile(q float64) float64 {
 // ReadWindow returns every series as the ROLLING WINDOW holds it, in the same
 // shape and order as [Recorder.Read].
 //
-// The two differ in exactly one way and it is the whole point: `Total`,
-// `Count`, `Sum` and the bins here cover the last [Buckets] hours, where
-// Read's cover every hour since this process started. An alarm reads this one;
-// an exporter, which diffs successive scrapes itself, reads the other.
+// The two differ in the period they cover, and that is the whole point:
+// `Total`, `Count`, `Sum` and the bins here cover the window — see [Buckets] —
+// where Read's cover every hour since this process started. A gauge's `Value`
+// differs with it, as the highest reading in the window rather than the
+// current one. An alarm reads this one; an exporter, which diffs successive
+// scrapes itself, reads the other.
 func (r *Recorder) ReadWindow() []Snapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()

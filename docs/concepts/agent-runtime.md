@@ -293,13 +293,17 @@ flowchart TD
    store the next steps close. Requests still running get a five-second grace
    and are then cut, the live feed stops, and every dashboard socket is
    closed (`api_stopped`).
-8. **Stop the duties**: the sandbox waiter first (its keepalive is what stops
-   a running box being reaped while turns are still finishing), then the
-   notification transports, the maintenance duties, the integration reconcile
+8. **Stop the duties** and the node's other loops: the sandbox waiter first
+   (its keepalive is what stops a running box being reaped while turns are
+   still finishing), then the rest — among them the notification transports,
+   the maintenance sweep, the state log's trim, the integration reconcile
    loop, memory sync, the learning passes, the cron scheduler and the
-   credential cooldown refresh.
-9. **Close the backends**: the shared MCP servers are reaped, then the stream
-   connection and the store file are closed (`engine_stopped`).
+   credential cooldown refresh. The duties this node held are given back once
+   every duty loop has stopped, so no tick of this node runs after a peer can
+   take one.
+9. **Close the backends**: the state log's apply loops end, the shared MCP
+   servers are reaped, then the stream connection and the store's two files
+   are closed (`engine_stopped`).
 
 **Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 

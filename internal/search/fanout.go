@@ -149,11 +149,12 @@ type FanQuery struct {
 	// the protocol rather than a policy: each returns its top-[FuseN] per
 	// method, so the fusion sees at most FuseN of each however many the
 	// caller asks for, and a Limit past that is answered short with
-	// nothing on the answer saying so. Every caller in this tree sits
-	// under it — the tracker's own ceiling is fifty and the knowledge
-	// seam's largest ask is twenty-four — and that agreement is held by a
-	// test in internal/engine, where the two are wired together, rather
-	// than by two constants in two packages happening to match.
+	// nothing on the answer saying so. internal/engine's
+	// TestNoSearchCallerAsksForMoreThanAFanOutCanAnswer holds the tracker's
+	// ceiling and the knowledge seam's default ask under it, where the
+	// searchers and their callers are wired together, rather than two
+	// constants in two packages happening to match. A caller that names a
+	// limit of its own is held under it by that value alone.
 	Limit int
 }
 
@@ -207,9 +208,14 @@ type FanOut struct {
 	// Local is this node's own scan. Required.
 	Local Scanner
 
-	// Peers reaches the rest of the fleet. NIL IS A LEGAL DEPLOYMENT and
-	// the common one — a single node, an embedded engine, every test — and
-	// it means the local scan takes every bucket.
+	// Peers reaches the rest of the fleet. Nil never scatters, and the
+	// local scan takes every bucket.
+	//
+	// NIL IS NOT WHAT KEEPS A SINGLE NODE SOLO. A running engine always
+	// wires the broker here, because every engine has a queue; what keeps
+	// its search on one node is the rest of [FanOut.plan] — a roster that
+	// names this node alone or cannot be read, or a corpus under
+	// [FanOutFloor]. A nil here is a caller that wired no fleet at all.
 	Peers Peers
 
 	// Roster answers which nodes are live, this one included. Nil, or an

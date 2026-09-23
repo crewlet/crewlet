@@ -280,3 +280,18 @@ func (k liveKnowledge) Search(ctx context.Context, q knowledge.Query) []knowledg
 	}
 	return s.Search(ctx, q)
 }
+
+// Building forwards the current searcher's own answer, and is false for one
+// that keeps no index or for none at all.
+//
+// FORWARDED, NOT LEFT OUT, because an adapter that carried only the seam's
+// methods would hide the one fact the tool needs to tell "not indexed yet"
+// from "nothing matched" — and the seat on a freshly joined node would be told
+// the company has written nothing down. Resolved per call like the rest: the
+// searcher it asks is the one the node is running now.
+func (k liveKnowledge) Building(ctx context.Context) bool {
+	builder, ok := k.engine.Knowledge().(interface {
+		Building(ctx context.Context) bool
+	})
+	return ok && builder.Building(ctx)
+}

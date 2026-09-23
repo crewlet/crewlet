@@ -179,7 +179,7 @@ back what it wrote.
 | `worker:retention` | The state log's trim: reads each domain's terms from the live fleet, purges from the ordered log what they all permit, and publishes what it concluded, so a node not holding the duty can still say why a log is not shrinking. |
 | `worker:embeddings` | Embeds the company's pages and work items once for the fleet, publishing each vector on the vector domain's log for every node's applier to write, so the provider is billed once. |
 
-**Six more services run on every node, whatever the roles say.**
+**These services run on every node, whatever the roles say.**
 
 | Always on | What it does |
 |---|---|
@@ -187,8 +187,16 @@ back what it wrote.
 | Config reconciler | Polls the activation pointer, applies an epoch, reports status — all in the KV. |
 | Node presence | The `node:ID` lease in the KV, plus the posture heartbeat. |
 | Reflection worker | Consumes `turn_completed`, one delivery at a time, and writes to the store. |
-| Observability edge | Two routes off one published event: a publish listener writes the store row, a projector pushes it live onto `/ws/stream`. |
+| Observability edge | A publish listener writes the store row for every event this node publishes. A node that serves the API also projects the whole company's events live onto its `/ws/stream`. |
 | Node-local sweeps | The maintenance worker's retention jobs over the tables each node keeps its own copy of, on the same tick as the `worker:maintenance` fleet jobs and whether or not this node holds that lease. |
+
+They are not the only loops every node runs. Each also runs the state log's
+apply loop for each domain, with the position heartbeat, snapshotter and donor
+beside it; the change feeds that turn a committed record into a wake; memory
+sync, which carries its seats' memory onto the changelog; skill sync; the
+credential cooldown refresh; and the live token meters. The duties in the table
+before this one are the other way round: a node without the `workers` role
+never claims one.
 
 `seats` is the exception — the one group whose boxes hand work to each other.
 This is what a wake becomes after the stream delivers it:

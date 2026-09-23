@@ -1500,7 +1500,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Store: e.Backends().Store,
 		// Nil on a node that dialled an external NATS cluster, whose
 		// streams are backed up at the cluster. See internal/backup.
-		Conn: e.Backends().Conn(),
+		Conn: e.Backends().EmbeddedConn(),
 		// The trim-hold register. A backup is not a counted node, so
 		// without this the fleet's own trim can delete exactly the records
 		// the artefact's store-to-stream gap needs to be replayable, and

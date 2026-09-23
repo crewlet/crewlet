@@ -73,10 +73,22 @@ var tagKeys = map[string]string{
 // RecordFor builds the stored form of an event, reporting false when the event
 // is not one this store keeps (see [Category] and [events.Unlisted]).
 //
-// THE ONE BUILDER OF A ROW, and internal/observe's writer — the engine's only
-// production writer — builds through it: which dimensions become tags, which
-// spend becomes columns and what an unlisted type's row carries are rules
-// about this store's columns, so they are stated beside them, once.
+// THE ONE BUILDER OF AN EVENT'S ROW, and internal/observe's writer, which
+// writes the events this node publishes, builds through it: which dimensions
+// become tags, which spend becomes columns and what an unlisted type's row
+// carries are rules about this store's columns, so they are stated beside
+// them, once.
+//
+// The log's one other production writer is the webhook receiver
+// (internal/api/webhooks), and the row it writes is not an event: it records
+// an inbound DELIVERY, whose payload is the bytes the provider sent rather
+// than an envelope this engine encoded, whose type is the delivery's label
+// rather than a registered event type — so [Category] has no answer for it,
+// and it is filed under the webhook category whatever its label — and whose
+// tags are the delivery's own (who it was for, and the provider's delivery
+// id). None of that passes through an [events.Event], so it has nothing for
+// this builder to build from; [EventLog.Append] derives the rest of its row
+// the way it does for any record built by hand.
 //
 // Pure apart from the clock: it touches no database, so the mapping is
 // testable on its own.
@@ -155,7 +167,7 @@ const spendEventType = "agent_phase_completed"
 //
 // Nil for every other event, which is what leaves the promoted columns at
 // their defaults — see schema/0015 for why they are columns.
-// It reads the SHALLOW form: nine scalars are wanted, and decoding into
+// It reads the SHALLOW form: only a few scalars are wanted, and decoding into
 // map[string]any would deep-decode the engine's largest payload — a phase
 // completion carries the phase's whole prompt and tool log.
 // map[string]json.RawMessage leaves everything it is not asked for as bytes.

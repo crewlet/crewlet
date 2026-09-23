@@ -1562,9 +1562,9 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 	resource := bulkClaim(trackerStream)
 	// TWICE THE PROJECTED APPLY TIME, so the lease outlives the work it
 	// admits without outliving it by so much that a crashed holder blocks
-	// the company. The projection is rows over the applier's own measured
-	// drain, which is the same divisor every retry hint in this design is
-	// computed from.
+	// the company. The projection is the bulk's records — one per task —
+	// over the applier's own measured drain in records a second, the same
+	// rate a refused read's retry hint divides its backlog by.
 	projected := float64(rows) / w.drainRows()
 	ttl := 2 * time.Duration(projected*float64(time.Second))
 	if ttl < ClaimHeartbeat {
@@ -1621,14 +1621,15 @@ func (w *Writer) bulkInFlight(ctx context.Context, resource string) error {
 		statelog.ErrUnavailable)
 }
 
-// drainRows is the applier's measured rows a second, and the divisor of every
-// projection computed from it.
+// drainRows is the applier's measured drain in RECORDS a second, and the
+// divisor of every projection computed from it.
 //
 // A FLOOR RATHER THAN A DEFAULT, because dividing by a drain that has not been
 // measured yet — zero — is an infinite lease, which is worse than any wrong
-// number. One row a second is deliberately pessimistic: it makes the first
+// number. One record a second is deliberately pessimistic: it makes the first
 // projection too long rather than too short, and a lease held too long delays a
 // caller where one held too briefly admits the concurrency it exists to stop.
+// A measured rate at or below it is floored too.
 func (w *Writer) drainRows() float64 {
 	if w.Drain == nil {
 		return 1
