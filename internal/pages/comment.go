@@ -85,7 +85,7 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, _, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -106,7 +106,7 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(in.Quiet, ChangeComment, head,
 				excerpt(body), mentions)
-			return s.decide(actor, subject, OpPatch, scope, opID, patch, notify, at)
+			return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
 		},
 	})
 	if err != nil {
@@ -150,7 +150,7 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -180,7 +180,7 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(false, ChangeCommentEdited, head,
 				excerpt(body), nil)
-			return s.decide(actor, subject, OpPatch, scope, opID, PagePatch{
+			return s.decide(stamp, actor, subject, OpPatch, scope, opID, PagePatch{
 				V: DocumentVersion, Comment: &CommentPatch{
 					ID: commentID, Body: &body, Author: held.Author,
 					AuthorKind: held.AuthorKind, ReplyTo: held.ReplyTo,
@@ -214,14 +214,14 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, _, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(true, ChangeCommentEdited, head, "", nil)
-			return s.decide(actor, subject, OpPatch, scope, opID, PagePatch{
+			return s.decide(stamp, actor, subject, OpPatch, scope, opID, PagePatch{
 				V:       DocumentVersion,
 				Comment: &CommentPatch{ID: commentID, Removed: true},
 			}, notify, at)

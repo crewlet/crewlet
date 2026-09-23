@@ -85,6 +85,17 @@ type Candidate struct {
 	// Kinds are the subject kinds the suite may publish. The first is
 	// used wherever one is needed.
 	Kinds []string
+
+	// Rows builds the domain's own read seam over an estate — the one its
+	// production publisher decides through.
+	Rows func(db *store.DB) (statelog.Rows, error)
+
+	// Write performs at least one write through the domain's OWN
+	// production write path — the writer every caller reaches, not a
+	// fixture — over the publisher the suite hands it, which decides from
+	// db. It is how [Stamped] reaches the one builder that can forget the
+	// framework's stamp.
+	Write func(ctx context.Context, pub *statelog.Publisher, db *store.DB) error
 }
 
 // Factory builds a fresh candidate for one case.
@@ -97,6 +108,7 @@ func Run(t *testing.T, new Factory) {
 	t.Run("tables", func(t *testing.T) { runTables(t, new) })
 	t.Run("envelope", func(t *testing.T) { runEnvelope(t, new) })
 	t.Run("apply", func(t *testing.T) { runApply(t, new) })
+	t.Run("stamp", func(t *testing.T) { runStamp(t, new) })
 }
 
 // openEstate brings up a replicated estate with the framework's tables and the

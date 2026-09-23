@@ -600,11 +600,15 @@ func (e *Embedder) append(ctx context.Context, subject Subject, rec VectorRecord
 	// travel on the message and be absent from every copy of the record any
 	// node ever reads back.
 	rec.OpID = opIDFor(rec)
-	payload, err := rec.Encode()
+	// THE REQUEST IS FORMED FROM THE RECORD'S OWN ENVELOPE, as the one every
+	// applier reads — encoded once here, before the stamp exists, only so
+	// the subject, the scope and the op id are the record's rather than a
+	// second spelling of them. The stamp does not move any of the three.
+	unstamped, err := rec.Encode()
 	if err != nil {
 		return fmt.Errorf("search: encode the vector record for %s: %w", subject, err)
 	}
-	env, err := Domain{}.Envelope(payload)
+	env, err := Domain{}.Envelope(unstamped)
 	if err != nil {
 		return fmt.Errorf("search: the record this duty just wrote for %s does "+
 			"not decode: %w", subject, err)
@@ -616,8 +620,21 @@ func (e *Embedder) append(ctx context.Context, subject Subject, rec VectorRecord
 		OpID:     opID,
 		MintedAt: e.deps.Now().UTC(),
 		Pattern:  statelog.PatternAdditive,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return statelog.Decision{Payload: payload, Envelope: env}, nil
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			// THE FRAMEWORK'S STAMP, on this record as on every other
+			// domain's. This domain's gates are open, so nothing here
+			// reads the writer today — but it is the envelope's
+			// declared field, the publisher refuses a record without
+			// it, and a gate added later must not find a corpus of
+			// records that name nobody.
+			stamped := rec
+			stamped.Gen, stamped.Writer = stamp.Gen, stamp.Writer
+			payload, encodeErr := stamped.Encode()
+			if encodeErr != nil {
+				return statelog.Decision{}, fmt.Errorf("search: encode the "+
+					"vector record for %s: %w", subject, encodeErr)
+			}
+			return statelog.Decision{Payload: payload}, nil
 		},
 	})
 	if err != nil {

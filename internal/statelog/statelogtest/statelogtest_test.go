@@ -37,8 +37,44 @@ func TestTheCompactedControlPasses(t *testing.T) {
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		c := control()
 		c.Domain = compactedControl{c.Domain.(controlDomain)}
+		c.Rows = rowsOver(c.Domain)
 		return c
 	})
+}
+
+// rowsOver is the framework's own read seam over one control domain, which is
+// what a real domain's constructor returns too.
+func rowsOver(d statelog.Domain) func(*store.DB) (statelog.Rows, error) {
+	return func(db *store.DB) (statelog.Rows, error) {
+		return statelog.NewRows(db, d, nil)
+	}
+}
+
+// controlWrite is the control domain's write path: one widget, through the
+// publisher, stamped with what stampOf makes of the stamp it is handed — the
+// identity for a domain that does its job, anything else for one that lies.
+func controlWrite(stampOf func(statelog.Stamp) statelog.Stamp) func(context.Context,
+	*statelog.Publisher, *store.DB) error {
+
+	return func(ctx context.Context, pub *statelog.Publisher, _ *store.DB) error {
+		const opID = "control-write"
+		subject := statelog.Subject{Kind: "widget", ID: "w-1"}
+		scope := statelog.ScopeSet{Paths: []string{"widget/w-1"}}
+		_, err := pub.Publish(ctx, statelog.Request{
+			Subject: subject, Scope: scope, OpID: opID,
+			MintedAt: time.Unix(1_700_000_000, 0).UTC(),
+			Pattern:  statelog.PatternArbitrated,
+			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				stamp = stampOf(stamp)
+				payload, err := json.Marshal(statelog.Envelope{
+					V: 1, Kind: "widget", Subject: subject, OpID: opID,
+					Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
+				})
+				return statelog.Decision{Payload: payload}, err
+			},
+		})
+		return err
+	}
 }
 
 func control() statelogtest.Candidate {
@@ -46,6 +82,8 @@ func control() statelogtest.Candidate {
 		Domain:  controlDomain{},
 		Applier: controlApplier{},
 		Kinds:   []string{"widget"},
+		Rows:    rowsOver(controlDomain{}),
+		Write:   controlWrite(func(s statelog.Stamp) statelog.Stamp { return s }),
 		Migrate: func(ctx context.Context, db *store.DB) error {
 			return db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(ctx, controlDDL)
@@ -263,6 +301,50 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("the suite objected, but to something else: %v", errs)
+		}
+	})
+
+	// AND A WRITE PATH THAT DROPS THE STAMP IT IS HANDED — the defect every
+	// domain in this tree shipped with. Each arm is a way to get it wrong:
+	// the stamp ignored outright, a writer that is some other node's, a
+	// generation that is not the snapshot's. Its verdict comes back from a
+	// write, so it needs a store.
+	for name, lie := range map[string]func(statelog.Stamp) statelog.Stamp{
+		"a write path that stamps nothing": func(statelog.Stamp) statelog.Stamp {
+			return statelog.Stamp{}
+		},
+		"a write path that names another node": func(s statelog.Stamp) statelog.Stamp {
+			s.Writer = "somebody-else"
+			return s
+		},
+		"a write path that stamps another generation": func(s statelog.Stamp) statelog.Stamp {
+			s.Gen = 1
+			return s
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := statelogtest.Stamped(t, func(*testing.T) statelogtest.Candidate {
+				c := control()
+				c.Write = controlWrite(lie)
+				return c
+			})
+			if err == nil {
+				t.Fatalf("the suite passed %s — every applier's eviction gate "+
+					"reads that stamp", name)
+			}
+		})
+	}
+	// AND ONE THAT SUPPLIES NO WRITE PATH AT ALL, which certifies nothing.
+	t.Run("a candidate with no write path", func(t *testing.T) {
+		t.Parallel()
+		err := statelogtest.Stamped(t, func(*testing.T) statelogtest.Candidate {
+			c := control()
+			c.Write = nil
+			return c
+		})
+		if err == nil {
+			t.Fatal("the suite passed a candidate whose write path it never ran")
 		}
 	})
 

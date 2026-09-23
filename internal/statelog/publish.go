@@ -293,7 +293,47 @@ type Request struct {
 	// Decide runs inside the snapshot's transaction and returns the
 	// record to publish. It may run more than once — each round takes a
 	// fresh snapshot — and must decide only from rows it reads there.
-	Decide func(*sql.Tx) (Decision, error)
+	//
+	// It is handed the round's [Stamp], and the record it returns MUST
+	// carry both halves in its envelope: the publisher refuses one that
+	// does not, before anything is appended.
+	Decide func(tx *sql.Tx, stamp Stamp) (Decision, error)
+}
+
+// Stamp is what every record a publisher appends carries about WHERE IT CAME
+// FROM, handed to the domain's decision rather than left for the domain to
+// find.
+//
+// # Why the framework hands it over, and then checks it
+//
+// Both halves are read by somebody who cannot ask the writer. The eviction gate
+// compares a record's Writer against the node an eviction names, on every
+// applier in the fleet and on a node that may not be able to decode the payload
+// at all; the generation is what makes a record from before a reanchor
+// comparable and safely stale rather than plausible. Each domain's envelope had
+// a field for both and NO write path in the tree filled either — the publisher
+// held its node id and stamped nothing — so every record reached every applier
+// with an empty writer, the eviction gate's "is this writer evicted" never
+// matched a row, and clause (iii) of the floor theorem, the one that holds when
+// the other two are defeated, dropped nothing. Nothing looked wrong, because a
+// gate that fires never and a gate with nothing to fire on read the same.
+//
+// So the values are the framework's and not the domain's to find: a domain's
+// decision receives them, and [Publisher] decodes the envelope of what came
+// back — through [Domain.Envelope], the same reader every applier uses — and
+// refuses a record whose envelope does not carry them. A domain that forgets is
+// a write that fails on its first attempt, naming the field, rather than a
+// fleet whose evictions quietly do nothing.
+type Stamp struct {
+	// Writer is this node's id — the publisher's own, which is what the
+	// eviction gate compares against.
+	Writer string
+
+	// Gen is the generation of the snapshot the decision was taken from:
+	// [Snap.Checkpoint]'s, read in the decision's own transaction, so a
+	// record is stamped with the generation of the rows it was decided
+	// from rather than with a value read beside them.
+	Gen uint32
 }
 
 // ErrExists reports a first-writer-wins create for an object that is already
@@ -334,8 +374,9 @@ type Publisher struct {
 	metrics  *metrics.Recorder
 	logger   *slog.Logger
 
-	// nodeID is this node's own identity, stamped on every record so the
-	// eviction gate has something to compare against.
+	// nodeID is this node's own identity, handed to every decision as
+	// [Stamp.Writer] and checked on every record before it is appended, so
+	// the eviction gate has something to compare against.
 	nodeID string
 
 	// generation is the estate's current generation, read fresh on every
@@ -492,7 +533,7 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 
 	gen := p.generation()
 	for round := 1; round <= casRounds; round++ {
-		snap, err := p.rows.Snapshot(ctx, req.Subject, req.Scope, req.Decide)
+		snap, err := p.snapshot(ctx, req)
 		if err != nil {
 			return Result{Rounds: round}, err
 		}
@@ -510,6 +551,12 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 				Version: snap.Decision.Version,
 				Rounds:  round,
 			}, nil
+		}
+		// BEFORE ANY BROKER CALL: a record that does not say who wrote it
+		// is one no eviction gate can drop, and nothing after the append
+		// could take it back.
+		if err = p.stamped(req, snap); err != nil {
+			return Result{Rounds: round}, err
 		}
 
 		expect, behind, err := p.expectation(ctx, req, snap, gen)
@@ -561,6 +608,63 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 	}
 	return Result{Rounds: casRounds}, fmt.Errorf("%w: %s kept changing under this write",
 		ErrConflict, req.Subject)
+}
+
+// snapshot takes one round's snapshot, handing the domain's decision the
+// [Stamp] it must carry: this node's id, and the generation of the checkpoint
+// the same transaction read.
+func (p *Publisher) snapshot(ctx context.Context, req Request) (Snap, error) {
+	return p.rows.Snapshot(ctx, req.Subject, req.Scope,
+		func(tx *sql.Tx, checkpoint Position) (Decision, error) {
+			return req.Decide(tx, p.stampAt(checkpoint))
+		})
+}
+
+// stampAt is the stamp a decision taken at checkpoint is handed. One function
+// for both the handing and the check in [Publisher.stamped], so the two can
+// never name different values.
+func (p *Publisher) stampAt(checkpoint Position) Stamp {
+	return Stamp{Writer: p.nodeID, Gen: checkpoint.Generation}
+}
+
+// stamped refuses a decision whose record does not carry the stamp it was
+// decided under — see [Stamp] for what an unstamped record cost.
+//
+// THE PAYLOAD'S OWN ENVELOPE, decoded by the domain's own reader: that is the
+// only envelope any applier ever sees, so it is the only one worth checking.
+// And it is the REQUEST's op id the record must carry too, because the two
+// travel separately — the request's is the message id and the one Resolve asks
+// the ledger for, the record's is the one the applier writes there — and a
+// record that named another would be answered, by the ledger that exists to
+// answer it, as an operation that never landed.
+func (p *Publisher) stamped(req Request, snap Snap) error {
+	want := p.stampAt(snap.Checkpoint)
+	env, err := p.domain.Envelope(snap.Decision.Payload)
+	if err != nil {
+		return fmt.Errorf("statelog: the %s record decided for %s does not "+
+			"decode through its own domain's envelope reader: %w — every "+
+			"applier reads it that way first", p.domain.Name(), req.Subject, err)
+	}
+	switch {
+	case env.Writer != want.Writer:
+		return fmt.Errorf("statelog: the %s record decided for %s names writer "+
+			"%q, and this publisher is %q — the eviction gate compares a record's "+
+			"writer against every eviction on the log, so a record carrying "+
+			"another node's id, or none, is one no eviction of this node can "+
+			"drop; the domain's decision must put [Stamp.Writer] in its envelope",
+			p.domain.Name(), req.Subject, env.Writer, want.Writer)
+	case env.Gen != want.Gen:
+		return fmt.Errorf("statelog: the %s record decided for %s is stamped "+
+			"generation %d, and the snapshot it was decided from is at %d — the "+
+			"domain's decision must put [Stamp.Gen] in its envelope",
+			p.domain.Name(), req.Subject, env.Gen, want.Gen)
+	case env.OpID != req.OpID:
+		return fmt.Errorf("statelog: the %s record decided for %s carries "+
+			"operation %q and the write is %q — the ledger an ambiguous publish "+
+			"is resolved by is keyed on the record's, so this write could never "+
+			"be answered for", p.domain.Name(), req.Subject, env.OpID, req.OpID)
+	}
+	return nil
 }
 
 // disposition is what one append attempt leaves the round loop to do, and

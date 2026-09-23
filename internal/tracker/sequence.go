@@ -312,7 +312,7 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternCreate,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			// THE GUARD ROW IS READ INSIDE THE SNAPSHOT, because a task
 			// below the trim floor has no record left on the log to
 			// prove it existed and its own row is what still says so.
@@ -326,7 +326,7 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 			if present > 0 {
 				return statelog.Decision{}, statelog.ErrExists
 			}
-			return w.decide(subject, OpCreate, ChangeCreated, scope, opID,
+			return w.decide(stamp, subject, OpCreate, ChangeCreated, scope, opID,
 				task, notify, at)
 		},
 	})
@@ -372,7 +372,7 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			if guard != nil {
 				if err := guard(tx); err != nil {
 					return statelog.Decision{}, err
@@ -386,7 +386,7 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 			next := Counter{
 				V: DocumentVersion, Project: project, Last: counter.Last + k,
 			}
-			decision, err := w.decide(subject, OpPatch, "", scope, opID,
+			decision, err := w.decide(stamp, subject, OpPatch, "", scope, opID,
 				next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -990,14 +990,14 @@ func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternCreate,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			if owner, claimed, err := readAlias(ctx, tx, key); err != nil {
 				return statelog.Decision{}, err
 			} else if claimed && owner != taskID {
 				return statelog.Decision{}, fmt.Errorf("tracker: key %s belongs "+
 					"to task %s, so it cannot be aliased to %s", key, owner, taskID)
 			}
-			return w.decide(subject, OpCreate, "", scope, opID, KeyAlias{
+			return w.decide(stamp, subject, OpCreate, "", scope, opID, KeyAlias{
 				Key: key, TaskID: taskID,
 			}, nil, at)
 		},

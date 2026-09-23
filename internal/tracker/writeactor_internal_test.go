@@ -3,6 +3,8 @@ package tracker
 import (
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE WRITER IS WHAT PUTS THE BOUND SEAT ON THE RECORD.
@@ -38,7 +40,8 @@ func TestTheWriterStampsTheBoundSeatOntoItsRecord(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			w := base.As("founder", AuthorOperator, c.provenance)
-			decision, err := w.decide(TaskSubject("t-1"), OpPatch, ChangeFields,
+			decision, err := w.decide(statelog.Stamp{Writer: "node-a", Gen: 1},
+				TaskSubject("t-1"), OpPatch, ChangeFields,
 				ScopeSet{Subject: true, Container: "ENG"}, "op-1",
 				struct{}{}, nil, at)
 			if err != nil {

@@ -110,8 +110,8 @@ func (w *Writer) PublishGeneration(ctx context.Context, gen uint32,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpGeneration, "", scope, opID, Generation{
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(stamp, subject, OpGeneration, "", scope, opID, Generation{
 				V:                  GateRecordVersion,
 				Gen:                gen,
 				NewStreamCreatedAt: in.StreamCreatedAt.UTC(),

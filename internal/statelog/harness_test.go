@@ -225,7 +225,7 @@ type fakeRows struct {
 }
 
 func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statelog.ScopeSet,
-	decide func(*sql.Tx) (statelog.Decision, error)) (statelog.Snap, error) {
+	decide func(*sql.Tx, statelog.Position) (statelog.Decision, error)) (statelog.Snap, error) {
 	r.mu.Lock()
 	snap, err := r.snap, r.decideErr
 	staged, override := r.override[subj.String()]
@@ -250,8 +250,10 @@ func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statel
 		return statelog.Snap{}, err
 	}
 	// The fake holds no transaction, which is honest: what is under test
-	// is the framework's branching on what the snapshot SAYS.
-	d, derr := decide(nil)
+	// is the framework's branching on what the snapshot SAYS. The
+	// checkpoint it hands the decision is the one it reports, which is the
+	// real snapshot's contract: one read, stamped and returned.
+	d, derr := decide(nil, snap.Checkpoint)
 	if derr != nil {
 		return statelog.Snap{}, derr
 	}
@@ -534,10 +536,34 @@ func (h *harness) write(subject statelog.Subject, opID string, body string) (sta
 		OpID:     opID,
 		MintedAt: time.Now(),
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return statelog.Decision{Payload: []byte(body), Version: 1}, nil
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return statelog.Decision{Payload: probeRecord(stamp, opID, body), Version: 1}, nil
 		},
 	})
+}
+
+// probeRecord is one probe-domain record carrying the stamp its decision was
+// handed and the op id it is published under — the two things the publisher
+// refuses a record without — plus an opaque body.
+//
+// THROUGH [probeDomain.Envelope]'s OWN SHAPE, because that reader is what the
+// publisher decodes the record with: a helper that wrote any other shape would
+// be testing a record no domain publishes.
+func probeRecord(stamp statelog.Stamp, opID, body string) []byte {
+	payload, err := json.Marshal(struct {
+		statelog.Envelope
+		Body string
+	}{
+		Envelope: statelog.Envelope{
+			V: 1, Kind: "object", OpID: opID,
+			Gen: stamp.Gen, Writer: stamp.Writer,
+		},
+		Body: body,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("encode a probe record: %v", err))
+	}
+	return payload
 }
 
 // anchorAt stages a durable row whose anchor is seq in the current

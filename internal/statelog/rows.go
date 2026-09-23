@@ -42,8 +42,14 @@ type Rows interface {
 	// model. A read transaction held across a round trip is a reader
 	// holding a snapshot open while the world moves, which is what the
 	// store's own short-transaction rule exists to stop.
+	//
+	// decide is handed the CHECKPOINT the transaction reads, before it
+	// decides anything: it is the one value the record's generation can be
+	// taken from, and it is [Snap.Checkpoint] — the same read, not a
+	// second one — so the generation a record is stamped with is the
+	// generation of the rows it was decided from. See [Stamp].
 	Snapshot(ctx context.Context, subj Subject, s ScopeSet,
-		decide func(*sql.Tx) (Decision, error)) (Snap, error)
+		decide func(tx *sql.Tx, checkpoint Position) (Decision, error)) (Snap, error)
 
 	// Op answers where an operation was applied on this node.
 	//
@@ -64,11 +70,17 @@ type Decision struct {
 	// there is nothing to publish, which is a legitimate outcome and not
 	// an error: an update that changes no field is a no-op the caller
 	// should be told succeeded.
+	//
+	// ITS ENVELOPE IS THE ONLY ONE THERE IS. The publisher decodes it with
+	// [Domain.Envelope] before anything is appended and refuses a record
+	// that does not carry the [Stamp] it was decided under — so there is
+	// no second envelope beside the payload for a domain to fill in
+	// differently. There was one, and nothing but a fallback generation
+	// ever read it: every domain left its writer and generation empty
+	// there and in the payload alike, and the eviction gate compared an
+	// empty writer against every eviction in the fleet for the life of
+	// the deployment.
 	Payload []byte
-
-	// Envelope is the record's own envelope, which the framework reads
-	// for the subject, the scope and the op id it publishes under.
-	Envelope Envelope
 
 	// Version is the object's version as the decision read it, which the
 	// caller's own if_match compared against and which travels back in

@@ -196,8 +196,8 @@ func TestEvictedNodeRefusesBeforeTheAppend(t *testing.T) {
 				OpID:     "op-1",
 				MintedAt: time.Now(),
 				Pattern:  pattern,
-				Decide: func(*sql.Tx) (statelog.Decision, error) {
-					return statelog.Decision{Payload: []byte("x")}, nil
+				Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+					return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x")}, nil
 				},
 			})
 			var refusal *statelog.Unavailable
@@ -263,8 +263,8 @@ func TestARebuiltLogRefusesEveryWriteBeforeTheAppend(t *testing.T) {
 				OpID:     "op-1",
 				MintedAt: time.Now(),
 				Pattern:  pattern,
-				Decide: func(*sql.Tx) (statelog.Decision, error) {
-					return statelog.Decision{Payload: []byte("x"), Version: 1}, nil
+				Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+					return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x"), Version: 1}, nil
 				},
 			})
 			requireWrongStream(t, err)
@@ -360,9 +360,9 @@ func TestFenceZeroAtTheAppendRefusesAsItselfInTheSameRound(t *testing.T) {
 						OpID:     "op-1",
 						MintedAt: time.Now(),
 						Pattern:  pattern,
-						Decide: func(*sql.Tx) (statelog.Decision, error) {
+						Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 							tc.trip(h)
-							return statelog.Decision{Payload: []byte("x"), Version: 1}, nil
+							return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x"), Version: 1}, nil
 						},
 					})
 					tc.require(t, err)
@@ -571,8 +571,8 @@ func TestACreateIsGuardedByTheRowAndByTheDeletionMarker(t *testing.T) {
 			OpID:     "op-1",
 			MintedAt: time.Now(),
 			Pattern:  statelog.PatternCreate,
-			Decide: func(*sql.Tx) (statelog.Decision, error) {
-				return statelog.Decision{Payload: []byte("x")}, nil
+			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x")}, nil
 			},
 		})
 	}
@@ -741,8 +741,8 @@ func TestARecordMustDeclareWhatItMakesStale(t *testing.T) {
 		Subject:  probeSubject("a"),
 		OpID:     "op-1",
 		MintedAt: time.Now(),
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return statelog.Decision{Payload: []byte("x")}, nil
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return statelog.Decision{Payload: probeRecord(stamp, "op-1", "x")}, nil
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "scope") {
@@ -759,7 +759,7 @@ func TestADecisionWithNothingToSayPublishesNothing(t *testing.T) {
 		Scope:    statelog.ScopeSet{Paths: []string{"object.a"}},
 		OpID:     "op-1",
 		MintedAt: time.Now(),
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
+		Decide: func(*sql.Tx, statelog.Stamp) (statelog.Decision, error) {
 			return statelog.Decision{Version: 7}, nil
 		},
 	})
@@ -831,10 +831,9 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 		OpID:     "op-1",
 		MintedAt: time.Now(),
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return statelog.Decision{
-				Payload:  []byte("mine"),
-				Envelope: statelog.Envelope{Kind: "object", OpID: "op-1"},
+				Payload: probeRecord(stamp, "op-1", "mine"),
 			}, nil
 		},
 	})

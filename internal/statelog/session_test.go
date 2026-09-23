@@ -108,9 +108,9 @@ func sessionWrite(subject statelog.Subject, opID string, session statelog.Positi
 		MintedAt: time.Now(),
 		Pattern:  statelog.PatternArbitrated,
 		Session:  session,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			decided()
-			return statelog.Decision{Payload: []byte("body"), Version: 1}, nil
+			return statelog.Decision{Payload: probeRecord(stamp, opID, "body"), Version: 1}, nil
 		},
 	}
 }

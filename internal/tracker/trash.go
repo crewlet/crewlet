@@ -149,7 +149,7 @@ func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 
 // tombstone publishes one task's removal.
 func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
-	stamp Tombstone, notify *Notify) (WriteResult, error) {
+	removal Tombstone, notify *Notify) (WriteResult, error) {
 
 	subject := TaskSubject(id)
 	scope := ScopeSet{Subject: true, Container: project}
@@ -160,7 +160,7 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readTask(ctx, tx, id)
 			switch {
 			case err != nil:
@@ -175,8 +175,8 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 				// task is in the state the caller asked for.
 				return statelog.Decision{}, nil
 			}
-			decision, err := w.decide(subject, OpTombstone, ChangeRemoved, scope,
-				opID, TaskPatch{Removed: &stamp}, notify, at)
+			decision, err := w.decide(stamp, subject, OpTombstone, ChangeRemoved, scope,
+				opID, TaskPatch{Removed: &removal}, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -202,7 +202,7 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readTask(ctx, tx, id)
 			switch {
 			case err != nil:
@@ -215,7 +215,7 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 				// own rule: a re-run must be able to finish.
 				return statelog.Decision{}, nil
 			}
-			decision, err := w.decide(subject, OpRestore, ChangeRestored, scope,
+			decision, err := w.decide(stamp, subject, OpRestore, ChangeRestored, scope,
 				opID, TaskPatch{Removed: &Tombstone{}}, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err

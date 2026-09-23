@@ -95,7 +95,7 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 		OpID:     chartOpID(epoch, p.Key),
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readProject(ctx, tx, p.Key)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -132,7 +132,7 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 			if !held {
 				op, kind = OpCreate, ChangeProjectCreated
 			}
-			decision, err := w.decide(subject, op, kind, scope,
+			decision, err := w.decide(stamp, subject, op, kind, scope,
 				chartOpID(epoch, p.Key), next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err

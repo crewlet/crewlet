@@ -65,7 +65,10 @@ are deliberate:
 
 - **The eviction gate.** A record written by a node the fleet evicted before
   the record's own position is dropped everywhere. A node that applied it
-  before learning it was evicted will drop it on replay.
+  before learning it was evicted will drop it on replay. Every record names
+  the node that published it and the generation it was decided in; the write
+  path is handed both and refuses to append a record that does not carry
+  them, because a record naming nobody is one this gate can never drop.
 - **The deletion gate.** A record about a task a purge destroyed applies
   nowhere, for ever. This is what stops a redelivery months later resurrecting
   rows an operator deliberately removed.

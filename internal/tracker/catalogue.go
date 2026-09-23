@@ -109,7 +109,7 @@ func (w *Writer) WriteTypes(ctx context.Context, opID string, types []TaskType) 
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			post := TypeCatalogue{
 				V: DocumentVersion, Types: clean, UpdatedAt: at,
 			}
@@ -117,7 +117,7 @@ func (w *Writer) WriteTypes(ctx context.Context, opID string, types []TaskType) 
 			// wake per catalogue edit would page the whole company for a
 			// renamed dropdown, and the feed still has to be able to say
 			// a dropdown was renamed.
-			return w.decide(subject, OpPatch, ChangeCatalogue, scope, opID,
+			return w.decide(stamp, subject, OpPatch, ChangeCatalogue, scope, opID,
 				post, nil, at)
 		},
 	})
@@ -140,7 +140,7 @@ func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readFieldCatalogue(ctx, tx)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -164,7 +164,7 @@ func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef
 			// wake per catalogue edit would page the whole company for a
 			// renamed dropdown, and the feed still has to be able to say
 			// a dropdown was renamed.
-			return w.decide(subject, OpPatch, ChangeCatalogue, scope, opID,
+			return w.decide(stamp, subject, OpPatch, ChangeCatalogue, scope, opID,
 				post, nil, at)
 		},
 	})

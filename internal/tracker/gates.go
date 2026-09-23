@@ -434,7 +434,7 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readTask(ctx, tx, id)
 			switch {
 			case err != nil:
@@ -443,7 +443,7 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is "+
 					"not on this node: %w", id, statelog.ErrUnavailable)
 			}
-			decision, err := w.decide(subject, OpPurge, ChangePurged, scope, opID, struct {
+			decision, err := w.decide(stamp, subject, OpPurge, ChangePurged, scope, opID, struct {
 				V      int    `json:"v"`
 				Reason string `json:"reason,omitempty"`
 			}{V: GateRecordVersion, Reason: reason}, purgeWake(current, reason, w.Actor, w.Leads), at)
@@ -528,8 +528,8 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpEviction, "", scope, opID, Eviction{
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(stamp, subject, OpEviction, "", scope, opID, Eviction{
 				V: GateRecordVersion, NodeID: nodeID,
 				EvictedBy: w.Actor, EvictedAt: at, Readmitted: readmit,
 			}, nil, at)

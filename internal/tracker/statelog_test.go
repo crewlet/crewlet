@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"testing"
@@ -40,8 +41,25 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			// kind nothing writes is a row nothing ever reads — so a
 			// partial list here would report the FIXTURE as the fault.
 			Kinds: suiteKinds(),
+			Rows:  tracker.NewRows,
+			Write: suiteWrite,
 		}
 	})
+}
+
+// suiteWrite is one write through the tracker's own [tracker.Writer] — the
+// builder every write path in the domain shares, which is where the
+// framework's stamp is kept or lost.
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) error {
+	w, err := tracker.NewWriter(tracker.WriterDeps{
+		Publisher: pub, DB: db, NodeID: statelogtest.SuiteWriter,
+		Actor: "suite", ActorKind: tracker.AuthorSystem,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = w.EvictNode(ctx, "suite-evict", "node-away")
+	return err
 }
 
 // encodeSuiteRecord builds one valid record at an arbitrary version.

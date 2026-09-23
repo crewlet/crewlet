@@ -133,8 +133,8 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternCreate,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return s.decide(actor, subject, OpCreate, scope, opID, CreatePayload{
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return s.decide(stamp, actor, subject, OpCreate, scope, opID, CreatePayload{
 				V: DocumentVersion, PageID: page.ID, Container: container,
 				Title: title, ParentID: page.ParentID, Body: page.Body,
 				Status: page.Status, Labels: page.Labels,
@@ -245,7 +245,7 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -279,7 +279,7 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(save.Quiet, kind, head,
 				excerptOfSave(save, head), nil)
-			return s.decide(actor, subject, OpPatch, scope, opID, patch, notify, at)
+			return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
 		},
 	})
 	if err != nil {
@@ -342,7 +342,7 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternCreate,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			current, _, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
@@ -352,7 +352,7 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 			out.Title = title
 			out.UpdatedAt = at
 			notify := s.notifyOf(quiet, ChangeRenamed, out, "", nil)
-			return s.decide(actor, subject, OpRename, scope, opID, RenamePayload{
+			return s.decide(stamp, actor, subject, OpRename, scope, opID, RenamePayload{
 				V: DocumentVersion, PageID: pageID,
 				Container: current.Container, Title: title,
 				FormerContainer: current.Container, FormerTitle: current.Title,
@@ -416,7 +416,7 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -455,7 +455,7 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 			out.UpdatedAt = at
 			scope := ScopeSet{Subject: true, Container: current.Container}
 			notify := s.notifyOf(quiet, ChangeRenamed, out, "", nil)
-			return s.decide(actor, subject, OpRetitle, scope, opID, RetitlePayload{
+			return s.decide(stamp, actor, subject, OpRetitle, scope, opID, RetitlePayload{
 				V: DocumentVersion, PageID: pageID,
 				Title: title, FormerTitle: current.Title,
 			}, notify, at)
@@ -509,7 +509,7 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -517,7 +517,7 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 			out, read = head, revision
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(false, kind, head, "", nil)
-			return s.decide(actor, subject, op, scope, opID, StatusPayload{
+			return s.decide(stamp, actor, subject, op, scope, opID, StatusPayload{
 				V: DocumentVersion, Reason: reason,
 			}, notify, at)
 		},
@@ -558,7 +558,7 @@ func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) 
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			var held Container
 			var document []byte
 			err := tx.QueryRowContext(ctx,
@@ -584,7 +584,7 @@ func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) 
 				}
 				out.CreatedAt = held.CreatedAt
 			}
-			return s.decide(Actor{Handle: "system", Kind: AuthorOperator},
+			return s.decide(stamp, Actor{Handle: "system", Kind: AuthorOperator},
 				subject, OpPatch, ScopeSet{Subject: true}, opID,
 				ContainerPayload{
 					V: DocumentVersion, Key: key, Name: name, Purpose: purpose,

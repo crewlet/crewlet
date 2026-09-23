@@ -159,8 +159,15 @@ func refusal(err error, subject string) error {
 }
 
 // decide builds one record inside the snapshot's own transaction.
-func (s *Store) decide(actor Actor, subject Subject, op OpKind, scope ScopeSet,
-	opID string, payload any, notify *Notify, at time.Time) (statelog.Decision, error) {
+//
+// THE STAMP IS THE FRAMEWORK'S, and it goes on the envelope here because this
+// is the one builder every write path shares. It was never set: the writer and
+// the generation were fields every record carried empty, so the eviction gate
+// — which reads the writer on every applier before any kind rule — had nobody
+// to drop, and a node the fleet had evicted went on writing pages everybody
+// applied. The publisher now refuses a record that does not carry it.
+func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op OpKind,
+	scope ScopeSet, opID string, payload any, notify *Notify, at time.Time) (statelog.Decision, error) {
 
 	if err := scope.Validate(); err != nil {
 		return statelog.Decision{}, err
@@ -173,7 +180,7 @@ func (s *Store) decide(actor Actor, subject Subject, op OpKind, scope ScopeSet,
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
 			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
-			CreatedAt: at, Scope: scope,
+			CreatedAt: at, Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Mutation:   body,
 		Actor:      actor.Name(),
@@ -187,14 +194,7 @@ func (s *Store) decide(actor Actor, subject Subject, op OpKind, scope ScopeSet,
 	if err != nil {
 		return statelog.Decision{}, err
 	}
-	return statelog.Decision{
-		Payload: encoded,
-		Envelope: statelog.Envelope{
-			V: record.V, Kind: string(subject.Kind),
-			Subject: statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
-			Op:      string(op), OpID: opID, Scope: scope.Resolve(subject),
-		},
-	}, nil
+	return statelog.Decision{Payload: encoded}, nil
 }
 
 // Validate refuses a scope a writer cannot mean.

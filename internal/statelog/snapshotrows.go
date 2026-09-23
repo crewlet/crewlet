@@ -64,32 +64,33 @@ func NewRows(db *store.DB, d Domain, guards Guards) (*SnapshotRows, error) {
 // broker matches the expectation, accepts the append, and both callers are
 // told they won.
 func (r *SnapshotRows) Snapshot(ctx context.Context, subj Subject, scope ScopeSet,
-	decide func(*sql.Tx) (Decision, error)) (Snap, error) {
+	decide func(tx *sql.Tx, checkpoint Position) (Decision, error)) (Snap, error) {
 
 	var snap Snap
 	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		decision, err := decide(tx)
-		if err != nil {
-			return err
-		}
-		snap.Decision = decision
-
 		// THE CHECKPOINT THESE ROWS ARE AT, from the same transaction:
 		// it commits with the rows, so this is exactly the prefix the
-		// decision saw. The expectation-zero fence compares it rather
+		// decision sees. The expectation-zero fence compares it rather
 		// than the applier's live position, for the reason
-		// [Snap.Checkpoint] gives.
+		// [Snap.Checkpoint] gives — and it is read BEFORE the decision
+		// because the decision is stamped with its generation.
 		checkpoint, _, _, err := r.tables.readCursor(ctx, tx)
 		if err != nil {
 			return err
 		}
 		snap.Checkpoint = checkpoint
 
-		// The generation the anchor is read AT is the decision's own,
-		// because that is the generation the write will publish in: an
-		// anchor from a previous one is comparable and safely stale
-		// rather than an expectation.
-		anchor, err := r.tables.anchor(ctx, tx, r.tables.subjectOf(subj), decision.Envelope.Gen)
+		decision, err := decide(tx, checkpoint)
+		if err != nil {
+			return err
+		}
+		snap.Decision = decision
+
+		// The generation an absent anchor is reported AT is the
+		// checkpoint's, which is the generation the decision was stamped
+		// with: an anchor from a previous one is comparable and safely
+		// stale rather than an expectation.
+		anchor, err := r.tables.anchor(ctx, tx, r.tables.subjectOf(subj), checkpoint.Generation)
 		if err != nil {
 			return err
 		}

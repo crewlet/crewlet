@@ -104,7 +104,7 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readView(ctx, tx, view.ID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -167,7 +167,7 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 					post.Rank = current.Rank
 				}
 			}
-			return w.decide(subject, OpPatch, ChangeViewSaved, scope, opID,
+			return w.decide(stamp, subject, OpPatch, ChangeViewSaved, scope, opID,
 				post, nil, at)
 		},
 	})

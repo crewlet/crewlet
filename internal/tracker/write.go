@@ -507,7 +507,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			current, held, err := readTask(ctx, tx, id)
 			if err != nil {
@@ -602,7 +602,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			if err := scope.covers(current.Dependents); err != nil {
 				return statelog.Decision{}, err
 			}
-			decision, err := w.decide(subject, OpPatch, kind, scope, opID,
+			decision, err := w.decide(stamp, subject, OpPatch, kind, scope, opID,
 				charged, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -787,7 +787,7 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			for _, placement := range placements {
 				if !placement.Rank.Valid() {
 					return statelog.Decision{}, fmt.Errorf("tracker: %q is not "+
@@ -798,7 +798,7 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 			// history: it changes where a card sits and nothing about
 			// what the work is, so waking anybody for it would make a
 			// board's own drag a source of inbox traffic.
-			return w.decide(subject, OpPatch, "", scope, opID, RankOrder{
+			return w.decide(stamp, subject, OpPatch, "", scope, opID, RankOrder{
 				V: DocumentVersion, Project: project, Placements: placements,
 			}, nil, at)
 		},
@@ -835,8 +835,8 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpPatch, kind, scope, opID, document, notify, at)
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(stamp, subject, OpPatch, kind, scope, opID, document, notify, at)
 		},
 	})
 }
@@ -863,8 +863,8 @@ func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternAdditive,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpTurn, "", scope, opID, payload, nil, at)
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(stamp, subject, OpTurn, "", scope, opID, payload, nil, at)
 		},
 	})
 }
@@ -927,8 +927,14 @@ func checkChangeKind(subject Subject, op OpKind, kind ChangeKind, notify *Notify
 // in one place: a path that filled seven of them would publish a record the
 // deferral index could not file, and the failure would only show up on a
 // rolling upgrade.
-func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
-	scope ScopeSet, opID string, payload any, notify *Notify,
+//
+// IT FILLED SIX. The generation and the writer were declared, documented and
+// read — the writer by the eviction gate on every applier — and never set, so
+// every record this domain ever published named nobody and the gate had no
+// node to drop. Both now arrive as the framework's [statelog.Stamp], which the
+// publisher checks on the encoded record before it appends anything.
+func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
+	kind ChangeKind, scope ScopeSet, opID string, payload any, notify *Notify,
 	at time.Time) (statelog.Decision, error) {
 
 	if err := checkChangeKind(subject, op, kind, notify); err != nil {
@@ -954,7 +960,7 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
 			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
-			CreatedAt: at, Scope: scope,
+			CreatedAt: at, Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Kind:       kind,
 		Mutation:   body,
@@ -982,27 +988,7 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 			"rather than trimmed, because a trimmed one cannot rebuild its row",
 			op, subject, len(encoded), MaxCommitBytes)
 	}
-	return statelog.Decision{
-		Payload:  encoded,
-		Envelope: envelopeOf(record, scope, subject),
-	}, nil
-}
-
-// envelopeOf is the framework's own view of a record.
-//
-// IT RESOLVES THE SAME SCOPE THE RECORD CARRIES, through the same one-argument
-// call every other side uses. The publisher probes the deferral index with the
-// request's scope and the applier files a deferral under the envelope's, so a
-// second spelling here is a record filed where its own writer never looks.
-func envelopeOf(record MutationRecord, scope ScopeSet, subject Subject) statelog.Envelope {
-	return statelog.Envelope{
-		V:       record.V,
-		Kind:    string(subject.Kind),
-		Subject: wire(subject),
-		Op:      string(record.Op),
-		OpID:    record.OpID,
-		Scope:   scope.Resolve(subject),
-	}
+	return statelog.Decision{Payload: encoded}, nil
 }
 
 // wire is the framework's subject for one of this domain's.

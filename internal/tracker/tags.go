@@ -126,7 +126,7 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readTagSet(ctx, tx, project)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -156,7 +156,7 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 				// a legitimate outcome.
 				return statelog.Decision{}, nil
 			}
-			decision, err := w.decide(subject, OpPatch, ChangeTags, scope, opID,
+			decision, err := w.decide(stamp, subject, OpPatch, ChangeTags, scope, opID,
 				next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err

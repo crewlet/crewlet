@@ -1,6 +1,7 @@
 package pages_test
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -37,8 +38,22 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			// did not.
 			Encode: encodeSuiteRecord,
 			Kinds:  suiteKinds(),
+			Rows:   pages.NewRows,
+			Write:  suiteWrite,
 		}
 	})
+}
+
+// suiteWrite is one write through the knowledge base's own [pages.Store] —
+// the builder every write path in the domain shares, which is where the
+// framework's stamp is kept or lost.
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) error {
+	s, err := pages.NewStore(pages.Options{Publisher: pub, DB: db})
+	if err != nil {
+		return err
+	}
+	_, _, err = s.EnsureContainer(ctx, suiteContainer, "The suite's space", "")
+	return err
 }
 
 // suiteKinds is every kind, derived from the enum rather than typed again.
