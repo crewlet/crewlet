@@ -796,9 +796,10 @@ snapshot where it does not (`crewlet retention snapshots` says whether any peer
 can donate). Readmit it once its `SEQ` in `crewlet retention status` has
 reached one less than the higher of that domain's `TRIM FLOOR` and `FIRST` — the
 refusal's own `floor`, `first_seq` and `generation` are the numbers it
-compared, and right after a reanchor the `TRIM FLOOR` column can still show the
-old generation's floor. The position is a heartbeat old, so a node that has only
-just caught up can be refused once more; run the command again.
+compared, and right after a reanchor the domain shows no `TRIM FLOOR` until the
+trim's first tick on the adopted stream, so the bound is `FIRST` alone. The
+position is a heartbeat old, so a node that has only just caught up can be
+refused once more; run the command again.
 
 The refusal is the truth about the node rather than the thing keeping your data
 safe. Readmitting a node below the floor used to succeed, and it put back the

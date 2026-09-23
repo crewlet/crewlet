@@ -2224,7 +2224,12 @@ licenses, and it never moves down within a generation — so a blocked domain
 keeps the floor its last advance reached. `trim_to` is what the last tick
 itself concluded: zero while blocked, and below the floor whenever the lowest
 counted node is. The first is what a node must hold to replay; the second says
-whether the trim is moving. See [Retention](../guides/retention.md#the-trim-floor).
+whether the trim is moving. Both, with `terms`, `blocked_by` and
+`blocked_since`, come from the row the trim published at the domain's OWN
+`generation` only: just after a reanchor that row is about the stream the
+domain left, and the domain answers with no floor, no terms and not blocked
+until the trim's first tick on the adopted one. See
+[Retention](../guides/retention.md#the-trim-floor).
 
 A term's `state` is one of four, and `seq` is an answer in exactly one of them:
 `ok` carries the sequence the term permits, `unknown` is a term that could not

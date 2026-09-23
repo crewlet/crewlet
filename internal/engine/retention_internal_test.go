@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -1000,5 +1001,76 @@ func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 	}
 	if got := statelog.Evaluate(taken); len(got) != 0 {
 		t.Errorf("a node inside its backup policy raised %v", got)
+	}
+}
+
+// THE REPORT SHOWS A DOMAIN'S TRIM FLOOR ONLY FROM A ROW AT THAT DOMAIN'S OWN
+// GENERATION.
+//
+// The published row is a tick's conclusion about one number space. Just after
+// a reanchor it is the OLD stream's, and the report printed its floor, its
+// terms and its blocking term beside the adopted stream's first and last
+// sequences — a floor of 918 100 000 over a log that begins at 1, and a blocked
+// trim the fleet never concluded about the stream it now runs. Every other
+// reader of the row — the write fence, readiness, the trim itself — reads a
+// row at another generation as no floor at all, and the report now does too.
+func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
+	t.Parallel()
+	e, js := aRunningNode(t)
+	s := e.native.log
+	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a"}
+	trackerName, pagesName := tracker.Domain{}.Name(), pages.Domain{}.Name()
+
+	// A FLOOR AT EACH DOMAIN'S CURRENT GENERATION, blocked, so every field
+	// the row carries is one the report could show.
+	for _, name := range []string{trackerName, pagesName} {
+		gen := s.Domain(name).runner.Committed().Generation
+		if err := e.backends.Fleet.PutFloor(t.Context(), coord.TrimFloor{
+			Domain: name, Generation: gen, Floor: 918_100_000,
+			BlockedBy: string(statelog.TermBackupFloor),
+			Terms: []coord.TrimTerm{{
+				Name: string(statelog.TermBackupFloor), Known: false,
+			}},
+		}); err != nil {
+			t.Fatalf("publish %s's floor: %v", name, err)
+		}
+	}
+
+	// THE PAGES LOG IS REBUILT AND RE-ANCHORED, which moves the pages domain
+	// to the next generation and leaves its published row behind it.
+	rebuildLog(t, js, s.Domain(pagesName).domain.Stream())
+	s.publishPositions(t.Context())
+	stream := s.Domain(pagesName).domain.Stream().Name
+	live, _, err := e.ReanchorStatus(t.Context(), stream)
+	if err != nil {
+		t.Fatalf("ReanchorStatus: %v", err)
+	}
+	if _, err := e.Reanchor(t.Context(), ReanchorRequest{
+		Stream: stream, Confirm: statelog.ConfirmationOf(live), By: "ops-1",
+	}); err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+
+	report := r.Report(t.Context())
+	rows := map[string]statelog.DomainReport{}
+	for _, d := range report.Domains {
+		rows[d.Domain] = d
+	}
+	if got := rows[trackerName]; got.TrimFloor != 918_100_000 || got.BlockedBy == "" {
+		t.Fatalf("the tracker's row is %+v, want its own generation's floor and "+
+			"blocking term — the rule hides only another generation's", got)
+	}
+	got := rows[pagesName]
+	if got.Generation != 1 {
+		t.Fatalf("the pages row is at generation %d, want 1 after the reanchor", got.Generation)
+	}
+	if got.TrimFloor != 0 || got.TrimTo != 0 || got.BlockedBy != "" ||
+		len(got.Terms) != 0 || !got.BlockedSince.IsZero() {
+		t.Fatalf("the pages row is %+v — a floor, terms or a blocking term from "+
+			"generation 0 printed beside the adopted stream's sequences", got)
+	}
+	if slices.Contains(report.Blocked(), pagesName) {
+		t.Fatal("the report calls the pages trim blocked on a conclusion about " +
+			"the stream the reanchor left")
 	}
 }

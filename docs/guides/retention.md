@@ -178,6 +178,13 @@ zero while the trim is blocked, and below the floor whenever the lowest counted
 node is. The dashboard's retention screen shows it beside the floor when the
 two differ.
 
+**A floor belongs to one generation of its log.** Right after a
+[reanchor](#re-anchoring-a-recreated-stream) the published floor, its terms and
+its blocking term describe the stream that was left, so the status shows that
+domain with no floor, no terms and not blocked until the trim's first tick on
+the adopted stream — exactly as the write fence and readiness read it. The
+other domains' rows are unaffected.
+
 The floor is load-bearing for **writes**, not only for recovery. A write to an
 object whose last record has been deleted from the log cannot compare against
 that record any more, so it is retried as "this object's history on the log is
@@ -407,10 +414,10 @@ once it has applied every record up to the one just before that bound: in
 `crewlet retention status`, its `SEQ` for each of those domains has reached one
 less than the higher of the domain's `TRIM FLOOR` and `FIRST`. The refusal's
 own `floor`, `first_seq` and `generation` are the numbers it compared — right
-after a [re-anchor](#re-anchoring-a-recreated-stream) the `TRIM FLOOR` column
-can still show the old generation's floor, which the refusal no longer reads —
-and running the readmission again is always safe, since a refusal writes
-nothing. A readmission that reaches one log and not the other is finished the
+after a [re-anchor](#re-anchoring-a-recreated-stream) the domain shows no
+`TRIM FLOOR` until the trim's first tick on the adopted stream, and the bound
+is `FIRST` alone — and running the readmission again is always safe, since a
+refusal writes nothing. A readmission that reaches one log and not the other is finished the
 way an eviction is, with `-op-id`.
 
 The refusal is not what keeps the fleet's data safe, and being refused is not

@@ -85,11 +85,26 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			d.Bytes, d.MaxBytes = stats.Bytes, stats.MaxBytes
 			d.StreamReadable = true
 		}
-		if floor, published := floors[name]; published {
+		if floor, published := floors[name]; published && floor.Generation == d.Generation {
 			// THE FLOOR AND THE CONCLUSION ARE TWO FIELDS OF THE ROW,
 			// and the report carries both: filled from one, the two
 			// figures were always equal and a blocked domain reported
 			// a floor of zero over a log a purge had already emptied.
+			//
+			// ONLY A ROW AT THIS DOMAIN'S OWN GENERATION, which is the
+			// rule every reader of the floor follows ([floorFor], the
+			// trim's own [nextFloor]): a row from another generation
+			// is a conclusion about another number space. Just after a
+			// reanchor the published row is the OLD stream's, so its
+			// floor, its terms and its blocking term were printed
+			// beside the adopted stream's first and last sequences as
+			// though they bounded them — where the trim has concluded
+			// nothing yet about the adopted one, which is what the
+			// empty row says until its first tick at this generation.
+			// A row ABOVE this node's generation is the fleet's on a
+			// stream this node has not adopted; its numbers compare
+			// with nothing this node holds, and a node on the new
+			// generation reports them.
 			d.TrimFloor = floor.Floor
 			d.BlockedSince = floor.BlockedSince
 			d.Decision = decisionOf(floor)
