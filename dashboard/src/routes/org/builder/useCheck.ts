@@ -8,7 +8,7 @@
  *
  * WHAT MOVES THE CHECK. `reducer.checkTrigger` compares consecutive states:
  * a new base resets the check (it runs at once and lifts a halt), a moved
- * draft notifies it (it runs after the debounce). A change of operator token
+ * draft notifies it (it runs after the debounce). A change of stored token
  * moves neither the base nor the draft, and every answer may differ under the
  * new token, so the Builder asks for a reset with [requestReset] before it
  * dispatches `tokenChanged`, and the reset rides the state change that

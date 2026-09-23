@@ -13,7 +13,7 @@ export { Store, MAX_EVENTS } from "./store.ts";
 export type { StoreState, Slice } from "./store.ts";
 export { LiveSocket, QueryRefusedError, queryErrorCode, UNAVAILABLE_RETRY_MS } from "./socket.ts";
 export { api } from "./api.ts";
-export { rest, RestError, REQUEST_TIMEOUT_MS, isAbort } from "./rest.ts";
+export { rest, RestError, REQUEST_TIMEOUT_MS, isAbort, refusedGrants } from "./rest.ts";
 export type { RequestOptions, RestResponse, QueryValue } from "./rest.ts";
 export {
   apiToken,

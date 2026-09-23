@@ -49,6 +49,16 @@ describe("what it surfaces", () => {
     expect(attentionQueue(input({ authRejected: true }))[0]?.id).toBe("auth");
   });
 
+  // A REFUSED CREDENTIAL IS REPAIRED BY SIGNING IN AS OFTEN AS BY A TOKEN. The
+  // item said to "set a token matching one of the api.auth.tokens entries",
+  // which a person whose session had ended could not act on at all.
+  test("a refused credential names both repairs and no operator token", () => {
+    const auth = attentionQueue(input({ authRejected: true }))[0];
+    expect(auth?.detail).toContain("Sign in again");
+    expect(auth?.detail).toContain("crewlet iam token");
+    expect(`${auth?.title} ${auth?.detail}`).not.toMatch(/operator token/);
+  });
+
   // THE ENGINE'S OWN WORD. This case asserted `awaiting_input`, which
   // `sandbox.PendingRun` cannot write — its statuses are `launching`,
   // `running`, `awaiting_clarification`, `resumed`, `done`, `failed` and

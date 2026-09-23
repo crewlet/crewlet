@@ -390,7 +390,8 @@ function seatFacts({
  * engine failed to answer, an em dash says the field is empty, and "needs an
  * operator token" says the reader is missing a credential they may be holding.
  * That last one is what this used to print, on five of the eight tabs and in
- * every peek.
+ * every peek — and for EVERY failed read, a node catching up included, until
+ * a refusal became its own outcome carrying the grant the engine named.
  */
 function modelFact(reading: SeatReading): string {
   switch (reading.state) {
@@ -402,7 +403,14 @@ function modelFact(reading: SeatReading): string {
     case "absent":
       return "not in the active revision";
     case "refused":
-      return "needs an operator token";
+      // THE GRANT THE ENGINE NAMED — `config:read`, for the company
+      // document — and never "an operator token", which sent a signed-in
+      // reader to find a credential they have no use for.
+      return reading.grants.length > 0
+        ? `needs ${reading.grants.join(" or ")}`
+        : "needs a credential the engine accepts";
+    case "failed":
+      return "could not be read just now";
     case "unread":
       return "";
   }
@@ -415,8 +423,9 @@ function modelFact(reading: SeatReading): string {
  * ONE SENTENCE PER OUTCOME, shared by the tile's note and the meter's callout so
  * the two can never disagree about one seat. Both printed "needs an operator
  * token" for every outcome that was not a value — a claim about the READER,
- * wrong for a document still in flight and wrong for a revision whose roles do
- * not name this seat.
+ * wrong for a document still in flight, wrong for a revision whose roles do
+ * not name this seat, and wrong for a reader signed in without `config:read`,
+ * who lacks a grant rather than a token.
  */
 function capNote(reading: SeatReading): string {
   switch (reading.state) {
@@ -425,7 +434,11 @@ function capNote(reading: SeatReading): string {
     case "absent":
       return "the active revision has no single seat by this name";
     case "refused":
-      return "it needs an operator token";
+      return reading.grants.length > 0
+        ? `it needs ${reading.grants.join(" or ")}`
+        : "it needs a credential the engine accepts";
+    case "failed":
+      return "the engine could not answer just now";
     case "unread":
       return "it has not been read yet";
   }
@@ -614,10 +627,10 @@ export function SeatScreen({ handle }: { handle: string }) {
     { enabled: tab === "work", pollMs: 30_000 },
   );
   // THE SEVEN CLAIMS, and only where the reader may have them. `work_my_work`
-  // is scoped by the engine to the seat the caller's own credential is bound
-  // to — the same rule `work_person` above follows — so asking for somebody
-  // else's without an operator token puts a refusal where the honest answer
-  // is that this is their queue. The guard is the one already derived for the
+  // is answered by the engine to its owner, whoever leads them and
+  // `fleet:operate` — the same rule `work_person` above follows — so asking
+  // for somebody else's on neither puts a refusal where the honest answer is
+  // that this is their queue. The guard is the one already derived for the
   // person record rather than a second copy of the rule.
   const mine = useQuery(
     "work_my_work",
@@ -646,8 +659,8 @@ export function SeatScreen({ handle }: { handle: string }) {
   // THE GUARDED HALF. A seat's email, model chain, token budget, contact
   // identities, tool credentials, integrations and schedules are NOT on the
   // anonymous org projection — `internal/api/orgprojection.go` spells out what
-  // is, field by field, and everything else stays behind the operator token —
-  // so this screen reads them from the company document.
+  // is, field by field, and everything else stays behind `config:read` — so
+  // this screen reads them from the company document.
   // ...AND ON EVERY TAB, because the HEADER reads the model chain out of this
   // same answer and renders above the strip on all eight of them. `enabled` is
   // the guard for a question whose PARAMETER is not chosen yet; gating it on
@@ -676,7 +689,10 @@ export function SeatScreen({ handle }: { handle: string }) {
   // WHAT THIS READER CAN SAY ABOUT THE GUARDED HALF, as a named outcome rather
   // than a nullable role: [seatReading] carries the four this screen has to tell
   // apart, and `configured` is the one of them that holds a document.
-  const reading = useMemo(() => seatReading(settings, config.error), [settings, config.error]);
+  const reading = useMemo(
+    () => seatReading(settings, config.error, config.refusal),
+    [settings, config.error, config.refusal],
+  );
   const configured = reading.state === "read" ? reading.role : null;
   const credentials = useMemo(
     () => (settings && seat ? mcpEnvOf(settings, seat.kind) : {}),
@@ -941,9 +957,21 @@ export function SeatScreen({ handle }: { handle: string }) {
             <Card.Header icon={<CheckGlyph size="sm" />}>
               <Card.Title>Their day</Card.Title>
             </Card.Header>
+            {/* THE RULE, NOT A CREDENTIAL. This said reading it "needs an
+                operator credential", which was never the rule: the engine
+                answers a person's record to them, to whoever leads them and to
+                fleet:operate. This page asks on the first and the last alone,
+                because the lead relation is the chart's to decide — so a lead
+                is pointed at My work, which asks the engine and shows what it
+                answers. */}
             <p className="t-body">
-              Their inbox, their queue and their pinned views are theirs. Reading another person's
-              record needs an operator credential.
+              Their inbox, their queue and their pinned views are theirs. The engine shows them to
+              them, to whoever leads them and to <code className="inline">fleet:operate</code>; if
+              you lead them,{" "}
+              <a className="t-link prose-link" href={href(["me"], { handle })}>
+                open their day in My work
+              </a>
+              .
             </p>
           </Card>
         )}
@@ -1461,8 +1489,12 @@ export function SeatScreen({ handle }: { handle: string }) {
             ) : (
               <p className="t-caption">
                 Their own queue — what they mean to do first, the questions put to them and their
-                checklist items on other seats&apos; tasks — is theirs to read. An operator
-                credential, or their own, shows it here.
+                checklist items on other seats&apos; tasks — is theirs to read. It shows here to
+                them and to <code className="inline">fleet:operate</code>; if you lead them,{" "}
+                <a className="t-link prose-link" href={href(["me"], { handle })}>
+                  open their day in My work
+                </a>
+                .
               </p>
             )}
           </div>

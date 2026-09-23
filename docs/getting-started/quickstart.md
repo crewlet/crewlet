@@ -528,7 +528,9 @@ Or create the company from the dashboard: open **Company** and its
 **Builder** lens (`#/company?lens=builder`). With no configuration active it opens
 on a form that starts the company from a template, has the engine check it,
 and creates it with `PUT /config`. The builder reads and writes `/config`, so
-it asks for an operator token: paste `$CREWLET_API_TOKEN_FOUNDER`. The
+it asks for a credential: press **Set token** and paste
+`$CREWLET_API_TOKEN_FOUNDER`, whose entry carries the `config:read` and
+`config:write` it needs. The
 dashboard writes no model provider, so one step stays outside it. Until it is
 done the company runs and no agent seat takes a turn; whatever is sent to a
 seat waits on its inbox. Add `providers.llm` afterwards with

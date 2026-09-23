@@ -165,7 +165,7 @@ export type BuilderAction =
   | { readonly type: "redo" }
   | { readonly type: "discard" }
   | { readonly type: "checked"; readonly settled: SettledCheck }
-  /** The operator token changed: the tab may have changed hands. */
+  /** The stored token changed: the tab may have changed hands. */
   | { readonly type: "tokenChanged" }
   /**
    * A save landed as `revisionId`, and `derived` is the derivation its answer
@@ -236,7 +236,7 @@ export function isBaseKeyed(state: BuilderState): boolean {
  * `null` when neither did. Keying the base from a check's answer changes
  * neither the base document nor its revision, so it asks for nothing.
  *
- * A change of operator token moves no generation and no base, and resets the
+ * A change of stored token moves no generation and no base, and resets the
  * check all the same (every answer may differ): its owner calls the runner's
  * `reset` directly when the token changes.
  */

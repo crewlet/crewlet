@@ -5,14 +5,14 @@
  * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. A
  * stored token proves nothing (an engine with `api.auth.disabled` needs none,
  * and a rotated one is refused), so `GET /config` is read on mount and again
- * whenever the operator token changes, and its answer decides:
+ * whenever the stored token changes, and its answer decides:
  *
  * | `GET /config` answers                            | The lens shows |
  * |---|---|
  * | 200                                              | edit mode |
  * | 404 `no_active_revision`, no company in the org  | create mode |
  * | 404 `no_active_revision`, a company in the org   | this node has not caught up (never create mode) |
- * | 401 or 403                                       | a request for a token, worded by whether one is stored |
+ * | 401 or 403                                       | the grants the refusal named, or else a request for a credential |
  * | a plain 404, or a body that is not JSON          | this process does not serve the configuration |
  * | nothing (status 0)                               | the engine could not be reached |
  *
@@ -51,7 +51,8 @@ import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/a
 import { useFillScreen } from "~/app/fill.tsx";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
-import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
+import { needsSentence } from "~/lib/refusal.ts";
+import { apiToken, onTokenChanged, refusedGrants, requestToken } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import type { Tone } from "@crewlethq/ui";
 import {
@@ -257,7 +258,12 @@ export type Posture =
     }
   | { readonly kind: "create" }
   | { readonly kind: "behind" }
-  | { readonly kind: "guarded"; readonly tokenStored: boolean }
+  | {
+      readonly kind: "guarded";
+      readonly tokenStored: boolean;
+      /** The grants the refusal named; empty for a 401. See [guardedWords]. */
+      readonly grants: readonly string[];
+    }
   | { readonly kind: "unserved" }
   | { readonly kind: "unreachable"; readonly detail: string }
   | { readonly kind: "failed"; readonly detail: string };
@@ -287,7 +293,9 @@ export function postureOf(answer: HttpAnswer, org: OrgKnowledge, tokenStored: bo
     }
     return { kind: "edit", document: answer.body, revision };
   }
-  if (answer.status === 401 || answer.status === 403) return { kind: "guarded", tokenStored };
+  if (answer.status === 401 || answer.status === 403) {
+    return { kind: "guarded", tokenStored, grants: refusedGrants(answer.body) };
+  }
   if (code === "unreadable_body") return { kind: "unserved" };
   if (answer.status === 404) {
     if (code !== "no_active_revision") return { kind: "unserved" };
@@ -318,12 +326,50 @@ interface StatusLook {
 }
 
 /**
- * How the toolbar reads a check status. A refusal of the token is worded by
- * whether one is stored: "refused" names a credential the browser does not
- * hold when the operator has cleared it, which sends them looking for a
- * wrong token rather than a missing one.
+ * What a refusal on authority says the reader lacks, in the three places the
+ * lens says it: the toolbar's status, the paused-editing reason and the
+ * banner. ONE FUNCTION so the three cannot disagree.
+ *
+ * THE GRANTS COME FIRST, FROM THE ANSWER. All three said "needs an operator
+ * token", which was the whole of authority while a Tier A token was the only
+ * credential: a person signed in without `config:write` was sent to find a
+ * token they have no use for. With no grants named (a 401), the wording
+ * turns on whether a token is stored: "refused" names a credential the
+ * browser does not hold once it has been cleared, which sends the reader
+ * looking for a wrong token rather than a missing one.
  */
-function statusLook(status: CheckStatus, problems: number, tokenStored: boolean): StatusLook {
+export function guardedWords(
+  tokenStored: boolean,
+  grants: readonly string[],
+): { label: string; reason: string; sentence: string } {
+  if (grants.length > 0) {
+    const list = grants.join(" or ");
+    return {
+      label: `Needs ${list}`,
+      reason: `the credential presented does not carry ${list}`,
+      sentence: needsSentence("Editing the organization", grants),
+    };
+  }
+  if (tokenStored) {
+    return {
+      label: "The engine refused the token",
+      reason: "the engine refused this browser's token",
+      sentence: "The engine refused this browser's token.",
+    };
+  }
+  return {
+    label: "Needs a credential",
+    reason: "no credential was presented",
+    sentence: needsSentence("Editing the organization", []),
+  };
+}
+
+/** How the toolbar reads a check status. */
+function statusLook(
+  status: CheckStatus,
+  problems: number,
+  guarded: ReturnType<typeof guardedWords>,
+): StatusLook {
   switch (status) {
     case "checking":
       return { label: "Checking", tone: "neutral", icon: RefreshGlyph };
@@ -336,11 +382,7 @@ function statusLook(status: CheckStatus, problems: number, tokenStored: boolean)
     case "conflict":
       return { label: "The configuration changed", tone: "warning", icon: WarningGlyph };
     case "guarded":
-      return {
-        label: tokenStored ? "The engine refused the token" : "Needs an operator token",
-        tone: "danger",
-        icon: KeyGlyph,
-      };
+      return { label: guarded.label, tone: "danger", icon: KeyGlyph };
   }
 }
 
@@ -727,12 +769,19 @@ function Lens({
 
   // Read at render: a token change always dispatches, so this is current.
   const tokenStored = apiToken() !== "";
+  // WHAT WAS REFUSED, from whichever answer refused it: the read of the
+  // configuration, or the check of the draft against it.
+  const refusedFor: readonly string[] =
+    posture.kind === "guarded"
+      ? posture.grants
+      : answered?.status === "guarded"
+        ? answered.grants
+        : [];
+  const guarded = guardedWords(tokenStored, refusedFor);
   const readOnlyReason = useMemo((): string | null => {
     if (save.unsettled || keeping.unsettled) return "the outcome of the last save is not known yet";
     if (keeping.offer) return "a kept draft is waiting for Keep or Discard";
-    if (posture.kind === "guarded" || status === "guarded") {
-      return tokenStored ? "the engine refused this browser's token" : "no operator token is set";
-    }
+    if (posture.kind === "guarded" || status === "guarded") return guarded.reason;
     if (status === "conflict") return "the configuration changed since this draft was started";
     if (loaded && !isBaseKeyed(state)) return "the engine has not described this company yet";
     return null;
@@ -744,7 +793,7 @@ function Lens({
     status,
     loaded,
     state,
-    tokenStored,
+    guarded.reason,
   ]);
   const readOnly = !loaded || readOnlyReason !== null;
 
@@ -1177,7 +1226,7 @@ function Lens({
   }
 
   const problemCount = problemsCurrent ? state.check.problems.problemCount : 0;
-  const look = statusLook(status, problemCount, tokenStored);
+  const look = statusLook(status, problemCount, guarded);
   const canUndo = !readOnly && state.log.ops.length > 0;
   const canRedo = !readOnly && state.log.undone.length > 0;
   // THE CREATE FORM HAS NO TOOLBAR: there is no draft to undo, check or save
@@ -1451,9 +1500,9 @@ function Lens({
               </Button>
             }
           >
-            {tokenStored
+            {refusedFor.length === 0 && tokenStored
               ? "The engine refused this browser's token. Your draft is kept on this page; set a token the engine accepts to keep editing."
-              : "Editing the organization needs an operator token. Your draft is kept on this page."}
+              : `${guarded.sentence} Your draft is kept on this page.`}
           </Callout>
         )}
         {posture.kind === "unreachable" && (
@@ -1997,11 +2046,7 @@ function PostureScreen({
       return (
         <EmptyState
           icon={<KeyGlyph />}
-          title={
-            posture.tokenStored
-              ? "The engine refused this browser's token."
-              : "Editing the organization needs an operator token."
-          }
+          title={guardedWords(posture.tokenStored, posture.grants).sentence}
           description="The configuration is guarded, reads included."
           action={
             <Button variant="primary" onClick={onSetToken}>

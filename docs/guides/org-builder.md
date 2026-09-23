@@ -20,8 +20,9 @@ under [Editing a node](#editing-a-node), field by field.
 ## Opening the builder
 
 The configuration is guarded, reads included, so the builder needs what any
-other configuration client needs: an operator token the engine accepts. There
-is no posture in which it does not — `api.auth.disabled` is retired, and
+other configuration client needs: a credential carrying `config:read` to open
+it and `config:write` to save — a person signed in with those grants, or a
+token that carries them. There is no posture in which it does not — `api.auth.disabled` is retired, and
 `crewlet run -dev-principal` is a flag on a node reached over loopback rather
 than a configuration a browser can meet. What the lens shows is
 decided from what the engine answers, never from whether the browser holds a
@@ -32,7 +33,8 @@ token:
 | the active revision | the organization, ready to edit |
 | `404 no_active_revision`, and the organization the node pushes names no company | creating the company |
 | `404 no_active_revision`, while the organization names a company | "This node has not caught up with the fleet's configuration yet." Try again once the node has applied the fleet's revision, or use another node |
-| `401` or `403` | a request for a token, with **Set token** |
+| `403` naming grants | "Editing the organization needs *grant*, which the credential you presented does not carry." — the grants the refusal named, any one of which would do |
+| `401` | "The engine refused this browser's token." when one is stored, and otherwise a request for a credential — sign in, or **Set token** |
 | a plain `404`, or an answer that is not JSON | "This process does not serve the configuration." The process has no configuration store; open the dashboard on a node running the engine |
 | nothing | the engine could not be reached, with **Retry** |
 
@@ -45,10 +47,10 @@ and the builder treats it as a node it could not reach: the draft is kept,
 and the check retries until a peer or the restarted node answers. Nothing is
 written by a refused save, so there is nothing to settle afterwards.
 
-Changing the operator token while a draft is open keeps the draft. The
+Changing the stored token while a draft is open keeps the draft. The
 builder reads the configuration again and checks the draft under the new
-token; if the engine refuses it, editing pauses until a token it accepts is
-set.
+token; if the engine refuses it, editing pauses until a credential it accepts —
+and whose grants reach the configuration — is presented.
 
 ## Creating the company
 
@@ -217,8 +219,9 @@ current draft:
 | Could not reach the engine to check | the dry run got no answer; the builder retries with an increasing wait |
 | Read-only here | this process cannot write the configuration |
 | The configuration changed | another revision was activated after this draft was started |
-| The engine refused the token | set a token the engine accepts to continue |
-| Needs an operator token | the engine asks for a token and none is set; set one to continue |
+| Needs *grant* | the credential presented was accepted and does not carry the grant the refusal named; sign in as somebody who holds it, or set a token that carries it |
+| The engine refused the token | the stored token was not accepted; set one the engine accepts to continue |
+| Needs a credential | nothing the engine accepted was presented; sign in, or set a token |
 
 A change is checked about a third of a second after it is made, so a burst of
 changes (a held key, several undos) is checked once.

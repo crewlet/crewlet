@@ -63,7 +63,7 @@ export interface RailRow {
   owns: string[];
   /** Shown under the label in the command palette. */
   hint: string;
-  /** Everything under this row needs an operator credential. */
+  /** Everything under this row is refused to a reader nobody signed in as. */
   guarded?: boolean;
   /** The access key in the `g`-prefixed jump chord. */
   chord: string;

@@ -968,7 +968,28 @@ var RestError = class extends Error {
 	get unauthorized() {
 		return this.status === 401 || this.status === 403;
 	}
+	/** The grants a refusal on authority named — see [refusedGrants]. */
+	get grants() {
+		return refusedGrants(this.body);
+	}
 };
+/**
+* The grants a refusal on AUTHORITY named: any ONE of which would have
+* admitted the caller. Empty when the answer named none — a 401 (nobody was
+* recognised), or a rule that asks a relation no grant replaces.
+*
+* READ FROM THE ANSWER, because the engine's envelope carries them under
+* `grants` precisely so no screen has to name a grant itself: a sentence
+* typed into a screen is a second statement of the rule, and the one that
+* goes stale the day the rule's grant moves. Takes the raw body rather than
+* only a [RestError] because the org builder reads `GET /config` through its
+* own answer type.
+*/
+function refusedGrants(body) {
+	if (typeof body !== "object" || body === null) return [];
+	const grants = body.grants;
+	return Array.isArray(grants) ? grants.filter((g) => typeof g === "string") : [];
+}
 /**
 * A refusal that never reached the engine: DNS, a dropped connection, a proxy
 * answering HTML. Status 0, so a caller testing `status === 409` cannot
@@ -1149,4 +1170,4 @@ var rest = {
 	})
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RestError, Store, UNAVAILABLE_RETRY_MS, api, apiToken, clearToken, isAbort, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };
+export { LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RestError, Store, UNAVAILABLE_RETRY_MS, api, apiToken, clearToken, isAbort, onTokenChanged, onTokenRequested, queryErrorCode, refusedGrants, requestToken, rest, storeToken };

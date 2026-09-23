@@ -36,6 +36,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { documentUnits, indexOrg, type OrgIndex } from "~/lib/seats.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { needsSentence } from "~/lib/refusal.ts";
 import { useMemo } from "react";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -376,6 +377,7 @@ function containerFacts({
   capped,
   unread,
   units,
+  unitsWithheld,
   now,
 }: {
   container: PageContainer;
@@ -391,6 +393,8 @@ function containerFacts({
    * does not know who files here, and an empty list would say nobody does.
    */
   units: { name: string }[] | null;
+  /** Why [units] is null, as the sentence the fact shows in its place. */
+  unitsWithheld: string;
   now: number;
 }): Fact[] {
   const lead = units?.[0];
@@ -428,7 +432,7 @@ function containerFacts({
       // The panel below answers the other half — who actually has.
       label: "Filed by",
       value: !units ? (
-        <EmptyValue label="Needs an operator token to read" />
+        <EmptyValue label={unitsWithheld} />
       ) : units.length > 0 ? (
         units.map((u) => u.name).join(", ")
       ) : (
@@ -511,6 +515,16 @@ export function ContainerPeek({ id }: { id: string }) {
       .filter((u) => (u.space ?? "").toUpperCase() === id.toUpperCase())
       .map((u) => ({ name: u.name }));
   }, [doc.data, doc.error, id]);
+  // WHY THERE IS NO ANSWER, said three ways because they are three facts. It
+  // printed "Needs an operator token to read" for all of them: to a reader
+  // signed in without `config:read` (who lacks a grant, not a token), to a
+  // node still catching up, and to a read that simply had not come back.
+  const unitsWithheld =
+    doc.error === "unauthorized"
+      ? needsSentence("Reading who files here", doc.refusal?.grants ?? [])
+      : doc.error
+        ? "The company document could not be read just now"
+        : "The company document has not answered yet";
 
   return (
     <>
@@ -542,6 +556,7 @@ export function ContainerPeek({ id }: { id: string }) {
                   capped,
                   unread: !list.data,
                   units,
+                  unitsWithheld,
                   now,
                 })}
               />

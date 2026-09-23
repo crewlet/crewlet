@@ -313,7 +313,7 @@ function useServerSharing(server: string): {
  *
  * THE COMPANY DOCUMENT ANSWERS THIS AND THE PROJECTION CANNOT. `mcp_env` is
  * guarded — it holds tool credentials — so the anonymous org projection
- * carries none of it, and a reader without an operator token simply does not
+ * carries none of it, and a reader without `config:read` simply does not
  * know which seats a per-seat server is launched for. Null says exactly that,
  * for the same reason an unread `shared` is null: an empty list here reads as
  * "nobody holds this tool", which is a claim about somebody's company.

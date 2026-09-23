@@ -263,7 +263,7 @@ what they did, what it cost, the machine.
 | **Knowledge** | `#/knowledge` | — |
 | **Activity** | `#/activity` | seats working now, neutral |
 | **Cost** | `#/cost` | — |
-| **Admin** | `#/admin` | a lock when no operator credential is presented |
+| **Admin** | `#/admin` | a lock while nobody is signed in ("needs you signed in") |
 
 **Admin's row is never hidden.** A section that vanishes without a credential is
 indistinguishable from one that does not exist, so an operator on a fresh
@@ -2584,7 +2584,7 @@ rendered idle from the first phase to the last.
   and a body that breaks part way through is status 0 (an answer never fully
   heard, so a write's outcome is unknown) rather than an empty success. A
   screen that reads a REST answer uses `lib/useRest.ts`, which aborts a
-  superseded read, re-reads when the operator token changes and, where asked,
+  superseded read, re-reads when the stored token changes and, where asked,
   when the tab comes back.
   A refusal replaces what is on screen; a request that never reached the
   engine keeps the last answer with the error beside it; and an answer belongs

@@ -138,9 +138,12 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       severity: "critical",
       subject: "engine",
       icon: "key",
-      title: "The engine refused this browser's token",
+      // THE CREDENTIAL, NOT "THE TOKEN". The refusal is of whatever this
+      // browser presented — a stored token or a session cookie — and the
+      // repair named only one of the two, and only the Tier A half of it.
+      title: "The engine refused this browser's credential",
       detail:
-        "Reads and writes are both blocked. Set a token matching one of the api.auth.tokens entries.",
+        "Reads and writes are both blocked. Sign in again, or set a token the engine accepts: one of its api.auth.tokens values, or a machine token minted by crewlet iam token.",
     });
   } else if (!connected) {
     out.push({

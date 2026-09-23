@@ -22,8 +22,8 @@
  * STATES. `checking` while an answer for the current generation is due;
  * `clean` and `problems` for a validated draft; `conflict` when the engine
  * holds a newer revision than the draft's base (a 409, a 412, or a dry run
- * reporting a different base); `guarded` when it refused the token (401 or
- * 403); `unreachable` when the request was never answered or the engine
+ * reporting a different base); `guarded` when it refused the credential (401
+ * or 403); `unreachable` when the request was never answered or the engine
  * failed (status 0, or a 5xx). A draining node's `503 draining` is one of
  * those, deliberately: the drain ends, so the retry reaches a peer behind a
  * load balancer, or this node once it has restarted.
@@ -121,7 +121,15 @@ export type CheckOutcome =
       readonly reason: ConflictReason;
       readonly currentRevisionId: string | null;
     }
-  | { readonly status: "guarded" }
+  | {
+      readonly status: "guarded";
+      /**
+       * The grants the refusal named, any ONE of which would admit this
+       * reader — empty for a 401, where nothing the engine accepted was
+       * presented. Read from the answer, never written here.
+       */
+      readonly grants: readonly string[];
+    }
   | { readonly status: "unreachable"; readonly detail: string };
 
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
@@ -162,7 +170,13 @@ export function classifyCheck(
       derived: derivedOf(result.derived),
     };
   }
-  if (answer.status === 401 || answer.status === 403) return { status: "guarded" };
+  if (answer.status === 401 || answer.status === 403) {
+    // The envelope's `grants`, parsed here rather than through
+    // `refusedGrants` because this directory takes nothing from
+    // `~/protocol` at runtime (see boundary.test.ts).
+    const grants = list<unknown>(body.grants).filter((g): g is string => typeof g === "string");
+    return { status: "guarded", grants };
+  }
   if (answer.status === 409 || answer.status === 412) {
     const reason: ConflictReason =
       code === "no_active_revision"
@@ -410,7 +424,11 @@ export function saveRules(status: CheckStatus, hasChanges: boolean): SaveRules {
         review: false,
         save: false,
         waiting: false,
-        reason: "Saving needs an operator token the engine accepts.",
+        // THE BANNER SAYS WHICH GRANT, from the refusal itself; this is the
+        // disabled button's reason, and it used to name "an operator
+        // token", which a signed-in reader holding the wrong grants has no
+        // use for.
+        reason: "The engine refused this browser's credential to write the configuration.",
       };
     case "problems":
       return { review: true, save: false, waiting: false, reason: "Fix the problems above first." };

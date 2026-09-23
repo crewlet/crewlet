@@ -131,7 +131,7 @@ describe("the faint rung is decoration", () => {
     },
     {
       selector: ".rail-lock",
-      why: 'A KeyGlyph with `title="needs an operator credential"`. An icon, and the title is the text.',
+      why: 'A KeyGlyph with `title="needs you signed in"`. An icon, and the title is the text.',
     },
     {
       selector: ".rail-collapse",

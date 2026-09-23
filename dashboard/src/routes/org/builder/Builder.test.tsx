@@ -98,7 +98,9 @@ describe("the posture table", () => {
     engine.script = () => json({ error: "unauthorized" }, 401);
     mountBuilder({ engine });
     expect(
-      await screen.findByText("Editing the organization needs an operator token."),
+      await screen.findByText(
+        "Editing the organization needs a credential the engine accepts. Sign in, or set a token.",
+      ),
     ).toBeDefined();
     expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
   });
@@ -111,7 +113,9 @@ describe("the posture table", () => {
       r.headers.Authorization === "Bearer good" ? null : json({ error: "unauthorized" }, 401);
     mountBuilder({ engine });
     expect(
-      await screen.findByText("Editing the organization needs an operator token."),
+      await screen.findByText(
+        "Editing the organization needs a credential the engine accepts. Sign in, or set a token.",
+      ),
     ).toBeDefined();
     act(() => {
       storeToken("good");
@@ -119,6 +123,24 @@ describe("the posture table", () => {
     expect(await screen.findByText("No problems")).toBeDefined();
     expect(screen.getByText("editable")).toBeDefined();
     expect(engine.checks().at(-1)!.headers.Authorization).toBe("Bearer good");
+  });
+
+  // A REFUSAL ON AUTHORITY NAMES THE GRANT IT NAMED. A reader whose credential
+  // the engine ACCEPTED and whose grants do not reach the configuration lacks
+  // a grant, not a token: "needs an operator token" sent a person signed in
+  // without `config:read` to look for a token they have no use for, and the
+  // toolbar and the paused-editing reason said the same thing.
+  test("a refusal that names a grant says which, wherever the lens says it", async () => {
+    const engine = new Engine(company());
+    engine.script = () =>
+      json({ error: "unauthorized", reason: "no_grant", grants: ["config:read"] }, 403);
+    mountBuilder({ engine });
+    expect(
+      await screen.findByText(
+        "Editing the organization needs config:read, which the credential you presented does not carry.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/operator token/)).toBeNull();
   });
 
   test("a refusal of a stored token says the token was refused", async () => {
@@ -678,16 +700,18 @@ describe("a token change mid-edit", () => {
     });
     expect(
       await screen.findByText(
-        "Editing the organization needs an operator token. Your draft is kept on this page.",
+        "Editing the organization needs a credential the engine accepts. Sign in, or set a token. Your draft is kept on this page.",
       ),
     ).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
     // The status names what is missing: no token was refused, none is set.
-    expect(await screen.findByText("Needs an operator token")).toBeDefined();
+    expect(await screen.findByText("Needs a credential")).toBeDefined();
     expect(screen.queryByText("The engine refused the token")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() =>
-      expect(liveRegion().textContent).toBe("Editing is paused because no operator token is set."),
+      expect(liveRegion().textContent).toBe(
+        "Editing is paused because no credential was presented.",
+      ),
     );
     // The seats are still drawn from the draft, not replaced by a refusal.
     expect(within(screen.getByRole("list", { name: "Seats" })).getByText("CEO")).toBeDefined();

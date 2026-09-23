@@ -75,7 +75,7 @@ export function degradationOf({
     return {
       variant: "danger",
       icon: <KeyGlyph size="md" />,
-      message: "The engine refused this browser's API token.",
+      message: "The engine refused this browser's credential.",
       action: { label: "Set token", onClick: onSetToken },
     };
   }

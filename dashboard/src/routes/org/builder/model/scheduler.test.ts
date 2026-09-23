@@ -133,8 +133,20 @@ describe("classifyCheck", () => {
 
   test("refusals map to the states that halt, and failures to unreachable", () => {
     const cases: [HttpAnswer, unknown][] = [
-      [{ status: 401, body: { error: "unauthorized" } }, { status: "guarded" }],
-      [{ status: 403, body: {} }, { status: "guarded" }],
+      [
+        { status: 401, body: { error: "unauthorized" } },
+        { status: "guarded", grants: [] },
+      ],
+      [
+        { status: 403, body: {} },
+        { status: "guarded", grants: [] },
+      ],
+      // THE GRANTS THE REFUSAL NAMED travel with it, so the lens can say
+      // what the reader lacks rather than "an operator token".
+      [
+        { status: 403, body: { error: "unauthorized", grants: ["config:write", 7] } },
+        { status: "guarded", grants: ["config:write"] },
+      ],
       [
         { status: 503, body: { error: "draining", detail: "restarting" } },
         { status: "unreachable", detail: "restarting" },

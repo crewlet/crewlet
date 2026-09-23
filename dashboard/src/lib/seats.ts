@@ -52,6 +52,8 @@ import type {
   OrgUnit,
   PhaseLLM,
   ProviderKeys,
+  QueryErrorCode,
+  QueryRefusal,
   SandboxEntry,
   ScheduleSpec,
 } from "~/protocol/index.ts";
@@ -612,14 +614,21 @@ export type SeatSettings =
 /**
  * WHAT THIS READER CAN SAY ABOUT A SEAT'S GUARDED HALF.
  *
- * FOUR OUTCOMES, NOT A NULLABLE ROLE. The company document is behind an
- * operator token, so "this seat is not in the active revision", "you may not
- * read it", "the read has not come back yet" and "here it is" are four
- * different facts — and a `ConfigRole | null` collapses the first three into
- * one. Every screen that did that printed the same sentence for all of them,
- * and the sentence it picked was the reader's: the seat header's MODEL fact
- * read "needs an operator token" on five of eight tabs, because those tabs
- * simply did not ask.
+ * FIVE OUTCOMES, NOT A NULLABLE ROLE. The company document is behind a grant
+ * (`config:read`), so "this seat is not in the active revision", "you may not
+ * read it", "the engine could not answer", "the read has not come back yet"
+ * and "here it is" are five different facts — and a `ConfigRole | null`
+ * collapses the first four into one. Every screen that did that printed the
+ * same sentence for all of them, and the sentence it picked was the reader's:
+ * the seat header's MODEL fact read "needs an operator token" on five of
+ * eight tabs, because those tabs simply did not ask.
+ *
+ * ONLY `unauthorized` IS A REFUSAL. Every error used to read as one, so a
+ * node still catching up after a restart told every reader of every seat that
+ * THEY were missing a credential — a claim about the reader, made by an
+ * answer about the node. And a refusal carries the grants the engine named,
+ * because what a signed-in reader lacks is a grant, never "an operator
+ * token".
  *
  * THE ERROR IS CHECKED FIRST, and that order is the whole of it. `useQuery`
  * keeps its last good answer through a failed ask — which suits a poll and is
@@ -632,16 +641,24 @@ export type SeatReading =
   | { state: "read"; role: ConfigRole; unit: ConfigUnit | null }
   /** The revision answered and names no single seat by this name. */
   | { state: "absent" }
-  /** The engine refused the read: this reader is missing a credential. */
-  | { state: "refused" }
+  /**
+   * The engine refused the read on authority. `grants` are the ones it named,
+   * any ONE of which would admit this reader — empty for a 401, where nothing
+   * the engine accepted was presented.
+   */
+  | { state: "refused"; grants: readonly string[] }
+  /** The engine could not answer: a node catching up, a socket gone, a fault. */
+  | { state: "failed" }
   /** Nothing has been asked, or nothing has come back. Never a claim. */
   | { state: "unread" };
 
 export function seatReading(
   settings: SeatSettings | null | undefined,
-  error?: unknown,
+  error?: QueryErrorCode | null,
+  refusal?: QueryRefusal | null,
 ): SeatReading {
-  if (error) return { state: "refused" };
+  if (error === "unauthorized") return { state: "refused", grants: refusal?.grants ?? [] };
+  if (error) return { state: "failed" };
   if (!settings) return { state: "unread" };
   if (settings.state === "found") {
     return { state: "read", role: settings.role, unit: settings.unit };

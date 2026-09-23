@@ -67,6 +67,29 @@ export class RestError extends Error {
   get unauthorized(): boolean {
     return this.status === 401 || this.status === 403;
   }
+
+  /** The grants a refusal on authority named — see [refusedGrants]. */
+  get grants(): string[] {
+    return refusedGrants(this.body);
+  }
+}
+
+/**
+ * The grants a refusal on AUTHORITY named: any ONE of which would have
+ * admitted the caller. Empty when the answer named none — a 401 (nobody was
+ * recognised), or a rule that asks a relation no grant replaces.
+ *
+ * READ FROM THE ANSWER, because the engine's envelope carries them under
+ * `grants` precisely so no screen has to name a grant itself: a sentence
+ * typed into a screen is a second statement of the rule, and the one that
+ * goes stale the day the rule's grant moves. Takes the raw body rather than
+ * only a [RestError] because the org builder reads `GET /config` through its
+ * own answer type.
+ */
+export function refusedGrants(body: unknown): string[] {
+  if (typeof body !== "object" || body === null) return [];
+  const grants = (body as Record<string, unknown>).grants;
+  return Array.isArray(grants) ? grants.filter((g): g is string => typeof g === "string") : [];
 }
 
 /**

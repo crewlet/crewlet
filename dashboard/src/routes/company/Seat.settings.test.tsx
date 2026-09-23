@@ -27,7 +27,7 @@ import { SeatPeek, SeatScreen } from "./Seat.tsx";
 import { Router } from "~/app/router.tsx";
 import { fmtCount } from "~/lib/format.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, QueryRefusedError, Store } from "~/protocol/index.ts";
 import type { CompanyDocument, OrgProjection } from "~/protocol/index.ts";
 
 class InertWebSocket {
@@ -433,6 +433,35 @@ test("the model fact is the same on every tab", async () => {
     expect(headerFacts(), name).toContain("fast → backup → big");
     expect(headerFacts(), name).not.toContain("needs an operator token");
   }
+});
+
+// A REFUSED DOCUMENT NAMES THE GRANT IT NAMED, AND A NODE CATCHING UP IS NOT A
+// REFUSAL.
+//
+// Every failed read of the company document printed "needs an operator
+// token": to a person signed in without `config:read`, who lacks a grant
+// rather than a token, and to every reader of every seat while a node was
+// still catching up after a restart — a claim about the READER made by an
+// answer about the NODE.
+test("the model fact names a refusal's grant, and an unavailable read claims nothing about the reader", async () => {
+  mount("#/company/people/ceo", (what) =>
+    what === "config"
+      ? Promise.reject(
+          new QueryRefusedError("unauthorized", { reason: "no_grant", grants: ["config:read"] }),
+        )
+      : answering(what),
+  );
+  await settle();
+  expect(headerFacts()).toContain("needs config:read");
+  expect(headerFacts()).not.toContain("operator token");
+  cleanup();
+
+  mount("#/company/people/ceo", (what) =>
+    what === "config" ? Promise.reject(new Error("unavailable")) : answering(what),
+  );
+  await settle();
+  expect(headerFacts()).toContain("could not be read just now");
+  expect(headerFacts()).not.toContain("needs");
 });
 
 // THE RAIL ASKS NOBODY, SO IT CLAIMS NOTHING.

@@ -61,6 +61,7 @@ import {
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
+import { needsSentence } from "~/lib/refusal.ts";
 import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
@@ -887,7 +888,7 @@ export function disconnectOrder(
   //
   // The button is rendered from the ROWS (`!absent && onDisconnect`), and
   // `sections` comes from `GET /setup/integrations`, which is a separate
-  // request that can 401 for want of an operator token or fail transiently.
+  // request that can be refused for want of a grant or fail transiently.
   // With the key set taken from `sections` alone, that window rendered a
   // Disconnect button whose dialog computed an EMPTY list, issued no DELETE
   // at all, and then ran onDone() and closed exactly as it does after a real
@@ -1731,6 +1732,8 @@ export function useSetup(): {
   byKey: Map<string, SetupToolState>;
   base: SetupListing["external_url"] | null;
   guarded: boolean;
+  /** The grants the refusal named, when [guarded] — see [needsSentence]. */
+  needs: string[];
   /**
    * True until this read has answered ONCE, however it answered.
    *
@@ -1755,6 +1758,7 @@ export function useSetup(): {
 } {
   const [listing, setListing] = useState<SetupListing | null>(null);
   const [guarded, setGuarded] = useState(false);
+  const [needs, setNeeds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   // `quiet` re-reads without the skeleton, for a refresh nobody asked for.
@@ -1793,12 +1797,14 @@ export function useSetup(): {
         if (generation.current !== mine) return;
         setListing(answer);
         setGuarded(false);
+        setNeeds([]);
       } catch (err) {
         if (generation.current !== mine) return;
         // A refusal is not an empty answer. The screen keeps every read it
         // already has and simply offers no writes.
         setListing(null);
         setGuarded(err instanceof RestError && err.unauthorized);
+        setNeeds(err instanceof RestError ? err.grants : []);
       } finally {
         // ANSWERED, not answered WELL. A refusal is a state the screen can
         // render honestly, with the banner and no buttons; waiting is not.
@@ -1828,6 +1834,7 @@ export function useSetup(): {
     byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
     base: listing?.external_url ?? null,
     guarded,
+    needs,
     loading,
     reload,
   };
@@ -2077,13 +2084,14 @@ const PASS_IDLE_POLL_MS = 60_000;
  *
  * REST, LIKE [useSetup], AND FOR THE SAME REASONS: no query in the socket's
  * registry answers anything about a pass, and `/setup` is guarded in full —
- * so a reader with no operator token is REFUSED here rather than shown an
+ * so a reader without its grant is REFUSED here rather than shown an
  * empty history, and `guarded` is what tells those two apart.
  */
 function useSetupRuns(kinds: string[]): {
   runs: SetupRun[];
   scope: string;
   guarded: boolean;
+  needs: string[];
   loading: boolean;
 } {
   // THE KEY IS THE DEPENDENCY, not the array. A caller derives its kinds from
@@ -2093,6 +2101,7 @@ function useSetupRuns(kinds: string[]): {
   const [runs, setRuns] = useState<SetupRun[]>([]);
   const [scope, setScope] = useState("");
   const [guarded, setGuarded] = useState(false);
+  const [needs, setNeeds] = useState<string[]>([]);
   const [loading, setLoading] = useState(key !== "");
   // THE READ THAT ANSWERS LAST IS NOT THE READ THAT WAS ASKED LAST — the same
   // generation counter [useSetup] keeps, and for the same reason: a poll tick
@@ -2134,10 +2143,12 @@ function useSetupRuns(kinds: string[]): {
           );
           setScope(answers.find((answer) => answer.scope)?.scope ?? "");
           setGuarded(false);
+          setNeeds([]);
         } catch (err) {
           if (generation.current !== mine) return;
           setRuns([]);
           setGuarded(err instanceof RestError && err.unauthorized);
+          setNeeds(err instanceof RestError ? err.grants : []);
         } finally {
           // ANSWERED, not answered WELL — [useSetup] says the rest.
           if (generation.current === mine) setLoading(false);
@@ -2174,7 +2185,7 @@ function useSetupRuns(kinds: string[]): {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [reload]);
 
-  return { runs, scope, guarded, loading };
+  return { runs, scope, guarded, needs, loading };
 }
 
 /**
@@ -2195,10 +2206,17 @@ function useSetupRuns(kinds: string[]): {
 function useSetupRun(
   kind: string,
   id: string,
-): { run: SetupRun | null; missing: boolean; guarded: boolean; loading: boolean } {
+): {
+  run: SetupRun | null;
+  missing: boolean;
+  guarded: boolean;
+  needs: string[];
+  loading: boolean;
+} {
   const [run, setRun] = useState<SetupRun | null>(null);
   const [missing, setMissing] = useState(false);
   const [guarded, setGuarded] = useState(false);
+  const [needs, setNeeds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const generation = useRef(0);
   useEffect(
@@ -2228,11 +2246,13 @@ function useSetupRun(
           setRun(answer);
           setMissing(false);
           setGuarded(false);
+          setNeeds([]);
         } catch (err) {
           if (generation.current !== mine) return;
           setRun(null);
           setMissing(err instanceof RestError && err.status === 404);
           setGuarded(err instanceof RestError && err.unauthorized);
+          setNeeds(err instanceof RestError ? err.grants : []);
         } finally {
           if (generation.current === mine) setLoading(false);
         }
@@ -2251,7 +2271,7 @@ function useSetupRun(
     return () => clearInterval(timer);
   }, [running, read]);
 
-  return { run, missing, guarded, loading };
+  return { run, missing, guarded, needs, loading };
 }
 
 /**
@@ -2374,7 +2394,7 @@ function concludedLine(run: SetupRun): string {
  */
 function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
   const now = useNow();
-  const { runs, scope, guarded, loading } = useSetupRuns(kinds);
+  const { runs, scope, guarded, needs, loading } = useSetupRuns(kinds);
   // WHICH PASS IS OPEN, as the surface AND the id rather than the id alone:
   // the detail route is keyed on both, and a tool has several kinds — an id on
   // its own could not say which surface's pass it was once the listing that
@@ -2386,16 +2406,15 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
   );
 
   if (guarded) {
-    // NOT AN EMPTY HISTORY. `/setup` is guarded in full, reads included, so
-    // this reader is being refused rather than told nothing has run — and the
-    // banner at the top of the screen is where the token is supplied.
+    // NOT AN EMPTY HISTORY. `/setup` takes a grant for every route, reads
+    // included, so this reader is being refused rather than told nothing has
+    // run — and the sentence names the grant the refusal did, never "an
+    // operator token", which sent a signed-in reader to find a credential
+    // they have no use for.
     return (
       <Card>
         <Card.Header icon={<RefreshGlyph size="sm" />}>Provisioning passes</Card.Header>
-        <span className="t-caption">
-          Reading what a pass found needs an operator token, so this is what the engine will not say
-          without one.
-        </span>
+        <span className="t-caption">{needsSentence("Reading what a pass found", needs)}</span>
       </Card>
     );
   }
@@ -2556,7 +2575,7 @@ function PassDetail({
   name: string;
   now: number;
 }) {
-  const { run, missing, guarded, loading } = useSetupRun(kind, id);
+  const { run, missing, guarded, needs, loading } = useSetupRun(kind, id);
 
   if (loading && !run) return <Skeleton variant="text" rows={4} label="Loading" />;
   if (missing) {
@@ -2577,7 +2596,7 @@ function PassDetail({
     return (
       <div className="int-row-note">
         <span className="int-row-note-text">
-          <span className="int-row-note-when">Reading one pass needs an operator token.</span>
+          <span className="int-row-note-when">{needsSentence("Reading one pass", needs)}</span>
         </span>
       </div>
     );
@@ -3058,9 +3077,13 @@ export function Integrations({ kind }: { kind?: string }) {
       )}
       {setup.guarded && (
         <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
+          {/* THE READ THAT WAS REFUSED, named as such: the listing is what
+              says what each integration still needs, and its refusal names
+              the grant IT takes. Connecting takes more, which the connect
+              route names when it is asked. */}
           <span>
-            Setting an integration up needs an operator token. This screen is showing what it can
-            read without one.
+            {needsSentence("Reading the integrations' setup state", setup.needs)} This screen shows
+            what it can read without it, and offers no way to connect.
           </span>
           <span className="spacer" />
           {/* The same door QueryState opens, for the same reason: with

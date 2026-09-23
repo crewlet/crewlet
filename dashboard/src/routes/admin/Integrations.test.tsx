@@ -1621,6 +1621,35 @@ test("the roster is read again when the tab comes back", async () => {
   await waitFor(() => expect(calls.length).toBe(2));
 });
 
+// A REFUSED LISTING CARRIES THE GRANT IT NAMED.
+//
+// The screen said setting an integration up "needs an operator token", which a
+// person signed in without `config:read` has no use for: what they lack is a
+// grant, and the refusal names it. The hook hands it to the banner.
+function NeedsProbe() {
+  const setup = useSetup();
+  return (
+    <span data-testid="needs">
+      {setup.loading ? "loading" : `${setup.guarded}:${setup.needs.join(",")}`}
+    </span>
+  );
+}
+
+test("a refused listing names the grant the refusal named", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ error: "unauthorized", reason: "no_grant", grants: ["config:read"] }),
+          { status: 403 },
+        ),
+    ),
+  );
+  render(<NeedsProbe />);
+  await waitFor(() => expect(screen.getByTestId("needs").textContent).toBe("true:config:read"));
+});
+
 // A TOOL NOTHING CONVERGES IS NOT PERPETUALLY CONNECTING.
 //
 // "The loop has not reported yet" is a window for a surface with a pass and a

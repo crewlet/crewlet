@@ -33,6 +33,7 @@
 
 import { useCallback, useRef, useState, type MutableRefObject } from "react";
 import type { Derived } from "~/protocol/index.ts";
+import { needsSentence } from "~/lib/refusal.ts";
 import { toDocument, type IndexedDocument } from "./model/document.ts";
 import type { KeySource } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
@@ -124,7 +125,7 @@ function refusalMessage(outcome: CheckOutcome): string {
     case "problems":
       return "The engine refused the save. The problems it found are marked on the chart; fix them, then save again.";
     case "guarded":
-      return "The engine refused this browser's token. Set a token it accepts, then save again.";
+      return `${needsSentence("Saving the configuration", outcome.grants)} Your draft is kept.`;
     default:
       return "The engine refused the save.";
   }

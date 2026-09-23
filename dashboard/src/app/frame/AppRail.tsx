@@ -109,9 +109,12 @@ export function AppRail({
                     {badge.text}
                   </span>
                 )}
-                {/* THE LOCK IS ON THE ROW, not instead of it. */}
+                {/* THE LOCK IS ON THE ROW, not instead of it. It is drawn
+                    while NOBODY is signed in, so it says that: "needs an
+                    operator credential" named a token a person signing in
+                    has no use for. */}
                 {row.guarded && locked && (
-                  <span className="rail-lock" title="needs an operator credential">
+                  <span className="rail-lock" title="needs you signed in">
                     <KeyGlyph size="xs" />
                   </span>
                 )}
