@@ -62,7 +62,7 @@ func ownRecordTools(t *testing.T, person *personSpy, views *viewStore) map[strin
 			Reader: trk, Writer: trk.as,
 			PersonWriter: func(builtin.Actor) builtin.PersonWriter { return person },
 			ViewWriter:   func(builtin.Actor) builtin.ViewWriter { return views },
-			Seats:        func() []colleague.Seat { return builtin.Corpus(company) },
+			Seats:        func() []colleague.Seat { return builtin.Corpus(company, nil) },
 			Actor:        builtin.PrincipalActor,
 		},
 		Authorize: builtin.Decide(handleChart{}),
@@ -207,7 +207,7 @@ func TestSomebodyElsesRecordIsWrittenExactlyAsDecided(t *testing.T) {
 	t.Parallel()
 	company := ownRecordCompany()
 	deps := builtin.WorkDeps{
-		Seats: func() []colleague.Seat { return builtin.Corpus(company) },
+		Seats: func() []colleague.Seat { return builtin.Corpus(company, nil) },
 		Actor: builtin.PrincipalActor,
 	}
 	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
