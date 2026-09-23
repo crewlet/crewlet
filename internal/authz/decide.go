@@ -11,9 +11,9 @@ import (
 // Class is one authority rule, shared by every action that obeys it.
 //
 // THE RULES ARE THE CLOSED SET, NOT THE VERBS. There are dozens of verbs and
-// nine ways to decide one, so a table keyed on the verb would state nine rules
-// dozens of times and drift on whichever copy somebody edited. A verb picks
-// its class in [classOf] and the class is written once, here.
+// thirteen ways to decide one, so a table keyed on the verb would state
+// thirteen rules dozens of times and drift on whichever copy somebody edited.
+// A verb picks its class in [rules] and the class is written once, here.
 type Class string
 
 const (
@@ -84,9 +84,11 @@ const (
 	// admin path alone.
 	ClassSavedView Class = "saved_view"
 
-	// ClassContainer — a project's own policy: its fields, its default
-	// assignee, its routing unit, a tag rename. Whoever leads the project,
-	// or the admin path.
+	// ClassContainer — a container's own policy. For a PROJECT: its
+	// fields, its default assignee, a task's routing unit, a tag rename, the
+	// project's archive. For a PAGE CONTAINER: its own settings and a page's
+	// rename. Whoever leads that container, or the admin path — and the
+	// object's KIND picks which of the two relations is asked.
 	ClassContainer Class = "container"
 
 	// ClassChartObject — one object in the org chart's own public half: a
@@ -94,8 +96,9 @@ const (
 	// Whoever leads that object, or the admin path.
 	//
 	// ITS OWN CLASS RATHER THAN [ClassContainer], because the chart holds
-	// THREE lead relations and they are three questions: who leads a seat,
-	// who leads a unit, and who leads the unit that owns a PROJECT. A
+	// FOUR lead relations and they are four questions: who leads a seat,
+	// who leads a unit, who leads the unit that owns a PROJECT, and who
+	// leads the unit that owns a PAGE CONTAINER. A
 	// project is a tracker key a unit may declare, so asking the project
 	// relation with a unit key matches only a company whose unit files its
 	// work under a project of the same name — and answers false everywhere
@@ -478,7 +481,7 @@ func actorOf(p iam.Principal) string {
 
 // writeGrantFor is which capability covers writing this kind of thing.
 //
-// THE OBJECT DECIDES, not the verb, because the split the closed ten makes is
+// THE OBJECT DECIDES, not the verb, because the split the closed eleven makes is
 // by SURFACE: a company routinely wants an automation that files bugs and may
 // not edit the handbook. A kind with no write grant answers the zero, which
 // [granted] refuses — the same shape as a gate somebody forgot to fill in.
@@ -494,7 +497,7 @@ func writeGrantFor(k ObjectKind) iam.Grant {
 		// anyway is the difference between a kind that is unreachable
 		// here and one that falls through to the empty gate below by
 		// accident. Chart writes reach their authority through
-		// ClassContainer and ClassOperator instead.
+		// ClassChartObject and ClassOperator instead.
 		return iam.GrantConfigWrite
 	}
 	return ""

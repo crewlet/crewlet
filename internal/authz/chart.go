@@ -4,14 +4,14 @@ import "context"
 
 // Chart is the company hierarchy, as much of it as the rules ask about.
 //
-// CONSUMER-DEFINED AND THREE METHODS. It is declared here because this is the
+// CONSUMER-DEFINED AND FOUR METHODS. It is declared here because this is the
 // package that calls it, and it is small because a seam is what a caller
 // needs rather than what a provider has: internal/org can answer a dozen
-// questions about a chart and these are the three any authority rule turns
-// on. UnitMember arrives with the chat surface, where it gets its first call
+// questions about a chart and these are the four any authority rule turns
+// on — who leads a person, a project, a unit and a page container. UnitMember arrives with the chat surface, where it gets its first call
 // site — a seam method nothing calls is a declaration connected to nothing.
 //
-// # Both are THREE-VALUED, and that is the whole reason it exists
+// # Every one is THREE-VALUED, and that is the whole reason it exists
 //
 // The seam this replaces was `func(ctx, actor, project string) bool`, and its
 // implementation opened with `if c == nil || c.Org == nil { return false }`.

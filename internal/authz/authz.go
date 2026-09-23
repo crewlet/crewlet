@@ -1,7 +1,7 @@
 // Package authz decides whether a principal may do a thing to an object.
 //
 // ONE FUNCTION AND ONE TABLE. [Decide] is the whole surface, and every
-// authority rule this engine has is a row in [classOf] beside the verb it
+// authority rule this engine has is a row in [rules] beside the verb it
 // governs. What that buys is the thing five hand-written gates could not: a
 // seat's own tool, the operator MCP and an HTTP route asking about one verb
 // get one answer, because there is one answer to get.
@@ -36,7 +36,7 @@
 // Everything [Decide] needs arrives as an argument: the principal, the verb,
 // the object. The one thing it cannot hold is the org chart — that is a fact
 // about the company, it is edited live, and a copy here would be a second
-// opinion about the hierarchy. So the chart is a two-method seam the consumer
+// opinion about the hierarchy. So the chart is a four-method seam the consumer
 // implements, and every other input is a value a test can write down. A rule
 // exercised only through a running engine is a rule nobody re-reads.
 package authz
@@ -230,7 +230,7 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 // adminGrant is the capability that overrides every relation-based class.
 //
 // [iam.GrantFleetOperate] rather than a grant of its own, because that is what
-// the closed ten has for "whoever runs this deployment" and a second admin
+// the closed eleven has for "whoever runs this deployment" and a second admin
 // grant beside it would be a second answer to one question. Its own name here
 // so the eleven rules below say ADMIN where they mean it, and one edit moves
 // every one of them the day the vocabulary grows a people-management grant.

@@ -26,7 +26,7 @@ type Policy struct {
 	Action Action
 
 	// Object builds the object from the matched request. Nil means the
-	// action needs no object beyond its own kind — every [ClassOpen] and
+	// action needs no object beyond its own kind — every [ClassRead] and
 	// [ClassOperator] route — and a class that reads a field of an
 	// absent object refuses with [ReasonUnnamed] rather than guessing.
 	Object func(*http.Request) Object
