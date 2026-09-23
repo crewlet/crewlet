@@ -24,8 +24,7 @@ import (
 func TestEntityKindsMatchTheClient(t *testing.T) {
 	engine := configapi.EntityKinds()
 
-	body, err := clientsource.Declaration("../"+clientsource.Tree,
-		`(?s)const ENTITY_KINDS = \[(.*?)\] as const`)
+	body, err := clientsource.Literal("../"+clientsource.Tree, "ENTITY_KINDS")
 	if err != nil {
 		t.Fatal(err)
 	}

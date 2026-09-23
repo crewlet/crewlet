@@ -5,18 +5,13 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
-)
 
-// dashboardProtocol is the dashboard's own declaration of the wire, as SOURCE:
-// the dashboard's source is committed, so it is in every checkout, and the
-// built bundle would be a step behind any change a branch makes to it.
-const dashboardProtocol = "../../../dashboard/src/protocol/types.ts"
+	"github.com/crewlet/crewlet/internal/clientsource"
+)
 
 // clientOnlyCodes are the query error codes the dashboard's socket produces
 // itself, which no engine frame carries: a sent query that went unanswered,
@@ -100,33 +95,23 @@ func engineCodes(t *testing.T) []string {
 }
 
 // dashboardCodes is the members of the dashboard's QueryErrorCode union.
+//
+// FOUND BY ITS NAME AND READ BY ITS SYNTAX, through [clientsource.Union]. This
+// read `protocol/types.ts` by path and cut the union at the first `;` once its
+// doc comments had been blanked by a regular expression — so a move of the
+// file failed the gate for a drift that had not happened, and a comment
+// quoting a code, or holding a semicolon, was one regex away from becoming a
+// member or ending the union early. `internal/api/stream` is one level deeper
+// than the directory [clientsource.Tree] is written against, so it joins the
+// extra step itself.
 func dashboardCodes(t *testing.T) []string {
 	t.Helper()
-	source, err := os.ReadFile(filepath.FromSlash(dashboardProtocol))
+	codes, err := clientsource.Union("../"+clientsource.Tree, "QueryErrorCode")
 	if err != nil {
 		// FAILS rather than skips: the dashboard source is committed, so a
-		// missing file is a moved file, and a skip would certify nothing.
-		t.Fatalf("read the dashboard's protocol types: %v", err)
-	}
-	text := string(source)
-	const head = "export type QueryErrorCode ="
-	start := strings.Index(text, head)
-	if start < 0 {
-		t.Fatalf("%s declares no QueryErrorCode union", dashboardProtocol)
-	}
-	// The members' doc comments are prose: they quote words ("there is
-	// nothing") and may carry a semicolon of their own. They go BEFORE the
-	// union's terminating semicolon is looked for, or a comment could end the
-	// union early or add a quoted word as a member.
-	body := regexp.MustCompile(`(?s)/\*.*?\*/|//[^\n]*`).ReplaceAllString(text[start+len(head):], "")
-	end := strings.Index(body, ";")
-	if end < 0 {
-		t.Fatalf("the QueryErrorCode union in %s never ends", dashboardProtocol)
-	}
-	body = body[:end]
-	var codes []string
-	for _, m := range regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(body, -1) {
-		codes = append(codes, m[1])
+		// missing declaration is a renamed one, and a skip would certify
+		// nothing.
+		t.Fatal(err)
 	}
 	if len(codes) == 0 {
 		t.Fatal("the QueryErrorCode union has no members, so this test could not fail")

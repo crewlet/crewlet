@@ -27,8 +27,7 @@ import (
 func TestAttributionFieldsAreTheEngines(t *testing.T) {
 	engine := deltaFields(t)
 
-	body, err := clientsource.Declaration(clientsource.Tree,
-		`(?s)export const CHANGE_FIELDS = \[(.*?)\] as const`)
+	body, err := clientsource.Literal(clientsource.Tree, "CHANGE_FIELDS")
 	if err != nil {
 		t.Fatal(err)
 	}

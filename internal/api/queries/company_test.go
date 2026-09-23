@@ -5,9 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -1011,8 +1009,10 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 // rewrite while reporting a pass. [rooms_test.go] records the identical bug
 // being found and fixed in this same package; this file was missed, and
 // nothing noticed, because nothing counted skips. So: the source, never the
-// build output, and a missing file is FATAL — a broken checkout is not a
-// reason to certify nothing.
+// build output, and a missing declaration is FATAL — a broken checkout is not
+// a reason to certify nothing. And no path at all: the interfaces are found by
+// NAME through [clientsource.Interface], so a move of `protocol/types.ts` is
+// invisible here instead of a third time this gate reads a file that is gone.
 //
 // It reads the TYPE rather than the room's access sites, and that is the
 // second lesson. The old sweep matched `row.<field>` and `data.<field>`
@@ -1025,15 +1025,6 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 // here.
 func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	t.Parallel()
-	// dashboardTree is rooms_test.go's, for the reason its comment gives:
-	// the source tree, not the build output.
-	typesPath := filepath.Join(dashboardTree, "protocol", "types.ts")
-	source, err := os.ReadFile(typesPath)
-	if err != nil {
-		t.Fatalf("read %s: %v — this gate cannot run without the client's "+
-			"declaration, and skipping would certify nothing while reporting "+
-			"a pass", typesPath, err)
-	}
 
 	// EVERY third-party app, because the per-integration detail fields (url,
 	// seats) only appear on the rows that have them: a fixture missing one
@@ -1071,7 +1062,7 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	}
 
 	// Every field the client declares on a row, and on the answer around it.
-	for field, required := range declaredFields(t, string(source), "IntegrationRow") {
+	for field, required := range declaredFields(t, "IntegrationRow") {
 		if required {
 			for _, r := range rows {
 				entry, _ := r.(map[string]any)
@@ -1093,7 +1084,7 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 			t.Logf("IntegrationRow declares %s (optional) and no row carries it", field)
 		}
 	}
-	for field, required := range declaredFields(t, string(source), "IntegrationsAnswer") {
+	for field, required := range declaredFields(t, "IntegrationsAnswer") {
 		if _, ok := body[field]; !ok && required {
 			t.Errorf("IntegrationsAnswer declares %s as REQUIRED and the "+
 				"answer never sends it", field)
@@ -1101,39 +1092,32 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	}
 }
 
-// declaredFields returns the fields of one TypeScript interface, mapped to
+// declaredFields returns the members of one TypeScript interface, mapped to
 // whether the client declares them REQUIRED (no `?`).
 //
-// Deliberately a small parser over the declaration rather than a sweep of
-// access sites: an interface states the contract once, where a `row.x` /
-// `r.x` / destructured-`x` sweep states it as many times as the room has
-// spellings and silently covers only the spellings it guessed.
-func declaredFields(t *testing.T, source, iface string) map[string]bool {
+// The interface rather than a sweep of access sites: an interface states the
+// contract once, where a `row.x` / `r.x` / destructured-`x` sweep states it as
+// many times as the room has spellings and silently covers only the spellings
+// it guessed. READ BY ITS SYNTAX: the reader this replaced took a field to be
+// a line at exactly two spaces of indent inside a `}` at column zero, so a
+// member whose type wrapped, or an interface a formatter laid out differently,
+// read as fewer fields than it has. An index signature (`[key: string]:
+// unknown`) names no field anybody reads by name, and is not one.
+func declaredFields(t *testing.T, iface string) map[string]bool {
 	t.Helper()
-
-	start := regexp.MustCompile(`(?m)^export interface ` + iface + ` \{$`).FindStringIndex(source)
-	if start == nil {
-		t.Fatalf("no `export interface %s` in the client's protocol types — "+
-			"it was renamed or removed, and this gate is asserting about nothing", iface)
+	// `internal/api/queries` is one level deeper than the directory
+	// [clientsource.Tree] is written against.
+	members, err := clientsource.Interface("../"+clientsource.Tree, iface)
+	if err != nil {
+		t.Fatalf("%v — this gate cannot run without the client's declaration, "+
+			"and skipping would certify nothing while reporting a pass", err)
 	}
-	end := regexp.MustCompile(`(?m)^\}$`).FindStringIndex(source[start[1]:])
-	if end == nil {
-		t.Fatalf("interface %s is not closed at column 0", iface)
-	}
-	body := source[start[1] : start[1]+end[0]]
-
-	// A field line, at one level of indentation: `name?: type;`. The leading
-	// `^  ` anchors to the interface's own fields, so a nested object literal
-	// contributes nothing; the `[a-z_]` class excludes the `[key: string]:
-	// unknown` index signature, which is not a field anybody reads by name.
-	field := regexp.MustCompile(`(?m)^  ([a-z][a-z0-9_]*)(\??):`)
 	out := map[string]bool{}
-	for _, m := range field.FindAllStringSubmatch(body, -1) {
-		out[m[1]] = m[2] == ""
+	for _, m := range members {
+		out[m.Name] = !m.Optional
 	}
 	if len(out) == 0 {
-		t.Fatalf("interface %s declared no fields this could read; the shape "+
-			"of the declaration changed and this gate stopped asserting", iface)
+		t.Fatalf("interface %s declares no fields, so this gate asserts about nothing", iface)
 	}
 	return out
 }

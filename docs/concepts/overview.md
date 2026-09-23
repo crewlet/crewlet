@@ -267,8 +267,8 @@ internal/
 │                         #   resolver is config.Resolver)
 ├── skipgate/ solo/       # The suite's own gates: a skip is not a pass, and
 │                         #   which packages need the runner to themselves
-├── clientsource/         # Holds a constant the dashboard declares against the
-│                         #   engine's own
+├── clientsource/         # Holds a declaration the dashboard makes against the
+│                         #   engine's own, found by name and read by syntax
 ├── e2e/                  # The end-to-end company, and the dashboard replay
 └── version/ logging/ redact/ envref/ envfile/ workkey/ backoff/  # small shared
                           #   grammars

@@ -2,8 +2,6 @@ package types
 
 import (
 	"encoding/json"
-	"fmt"
-	"regexp"
 	"slices"
 	"testing"
 
@@ -84,9 +82,9 @@ var turnBands = []string{"WENT_WRONG", "GIVEN", "DID", "LEFT_BEHIND", "TURN_STOP
 //
 // Its own declaration, because its shape is its own: the bands are
 // `new Set([...])` and this is `Record<string, string>` keyed on the type with
-// the destination as the value, so one regex cannot read both. Keeping them
-// apart is also what lets the entry below be about the map rather than about
-// a band nobody would find it in.
+// the destination as the value, so the bands are read as their strings and
+// this as its KEYS. Keeping them apart is also what lets the entry below be
+// about the map rather than about a band nobody would find it in.
 const absorbedBand = "ABSORBED"
 
 // notPersisted are absorbed types that never reach the event store at all, so
@@ -156,8 +154,7 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 		// `internal/events/types` is one level deeper than the package
 		// directory [clientsource.Tree] is written against, so it joins
 		// the extra step itself — the same as internal/api/configapi.
-		body, err := clientsource.Declaration("../"+clientsource.Tree,
-			fmt.Sprintf(`(?s)const %s = new Set\(\[(.*?)\]\)`, band))
+		body, err := clientsource.Literal("../"+clientsource.Tree, band)
 		if err != nil {
 			t.Errorf("%s: %v", band, err)
 			continue
@@ -203,16 +200,19 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 	// declaration has a different shape, checked identically because it makes
 	// the identical promise: the screen draws these rows, so a type here that
 	// the turn query cannot return is an inventory line that never appears.
-	absorbed, err := clientsource.Declaration("../"+clientsource.Tree,
-		fmt.Sprintf(`(?s)const %s: Record<string, string> = \{(.*?)\n\}`, absorbedBand))
-	if err != nil {
-		t.Errorf("%s: %v", absorbedBand, err)
-	} else {
+	absorbed, err := clientsource.Literal("../"+clientsource.Tree, absorbedBand)
+	var names []string
+	if err == nil {
 		// KEYS, NOT EVERY QUOTED STRING. The map's values are prose — "the
 		// phase card it opens" — so [clientsource.Strings] would read a
 		// destination as an event type and report the whole map as
-		// unregistered.
-		names := absorbedKeys(absorbed)
+		// unregistered. Quoted keys are keys: one holding a dot cannot be
+		// written bare, so the first such type absorbed arrives quoted.
+		names, err = clientsource.Keys(absorbed)
+	}
+	if err != nil {
+		t.Errorf("%s: %v", absorbedBand, err)
+	} else {
 		if len(names) == 0 {
 			t.Errorf("the Turn screen's %s map names no event type, so this "+
 				"gate certifies nothing for it", absorbedBand)
@@ -349,30 +349,6 @@ func turnScopedTypes(t *testing.T) (stamped, persisted, known map[string]bool) {
 	}
 	return stamped, persisted, known
 }
-
-// absorbedKeys reads the TYPE names out of an object-literal body — the token
-// before each `:` — and ignores the prose values.
-func absorbedKeys(body string) []string {
-	var out []string
-	for _, m := range absorbedKey.FindAllStringSubmatch(body, -1) {
-		out = append(out, m[1])
-	}
-	return out
-}
-
-// A key at the start of a line, which is what prettier guarantees for this
-// map and what keeps a colon inside a comment or a value from reading as one.
-//
-// THE QUOTES ARE OPTIONAL BECAUSE TYPESCRIPT MAKES THEM SO, and reading only
-// the bare form is how this gate would stop covering exactly the entries most
-// likely to need it. An object key holding a dot cannot be written bare —
-// `turn.guard_breach`, `phase.tool_skill_blocked` and `prompt.size` are all
-// band members today — so the first one absorbed arrives quoted, matches
-// nothing here, and is checked by nobody. The `len(names) == 0` guard does not
-// notice, because the four unquoted keys beside it still match: the map would
-// report five entries and certify four of them, which is the silent skip this
-// whole file exists to make impossible.
-var absorbedKey = regexp.MustCompile(`(?m)^\s*"?([a-z][a-z0-9_.]*)"?:`)
 
 func sortedKeys(set map[string]bool) []string {
 	out := make([]string, 0, len(set))

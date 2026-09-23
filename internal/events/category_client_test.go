@@ -23,12 +23,17 @@ import (
 //
 // A chip for a real category with nothing in it is still useful — it says the
 // category exists and is quiet — so what is asserted is that every chip names
-// a category the engine has, and the ones it does not offer are reported.
+// a category the engine has, every category has a chip, and no chip is drawn
+// twice.
+//
+// ONE GATE. This list was held by two tests once, each reading it its own way
+// and each agreeing with the other; a second question about the chips belongs
+// here, which is what `internal/clientsource`'s contract records.
 func TestCategoryChipsAreTheEngines(t *testing.T) {
+	t.Parallel()
 	engine := events.CategoryNames()
 
-	body, err := clientsource.Declaration(clientsource.Tree,
-		`(?s)const CATEGORIES = \[(.*?)\] as const`)
+	body, err := clientsource.Literal(clientsource.Tree, "CATEGORIES")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,5 +60,8 @@ func TestCategoryChipsAreTheEngines(t *testing.T) {
 		t.Errorf("the engine assigns %v, which the event log offers no chip for — "+
 			"those rows can be read but not filtered to at all, which is the state "+
 			"the chip list was introduced to end", missing)
+	}
+	if len(slices.Compact(slices.Clone(client))) != len(client) {
+		t.Errorf("the event log offers %v, drawing a chip twice", client)
 	}
 }

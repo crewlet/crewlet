@@ -9,14 +9,15 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// The three lists the dashboard has to keep its own copy of, held against the
+// The lists the dashboard has to keep its own copy of, held against the
 // engine's.
 //
-// All three are closed sets the engine owns and the dashboard cannot import:
+// Every one is a closed set the engine owns and the dashboard cannot import:
 // it is a separate build in a separate language, so `WorkViewShape`, the
-// grid's sort keys and the change kinds are copies. Every copy in this tree has drifted at least once —
-// see `internal/clientsource`'s own doc — and these two drift silently in
-// opposite directions, which is why each is checked in both.
+// grid's and the directory's sort keys, the change kinds and the grouping axes
+// are copies. Every copy in this tree has drifted at least once — see
+// `internal/clientsource`'s own doc — and each drifts silently, so each gate
+// below says which direction it holds and why.
 
 // EVERY SHAPE THE ENGINE MINTS HAS A RENDERER, AND EVERY RENDERER HAS A SHAPE.
 //
@@ -34,12 +35,10 @@ func TestEveryViewShapeTheEngineMintsHasARenderer(t *testing.T) {
 	t.Parallel()
 	engine := tracker.ViewTypeNames()
 
-	body, err := clientsource.Declaration(clientsource.Tree,
-		`export type WorkViewShape = ([^;]*);`)
+	client, err := clientsource.Union(clientsource.Tree, "WorkViewShape")
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := clientsource.Strings(body)
 	if len(client) == 0 {
 		t.Fatal("the dashboard names no view shapes at all, so this gate certifies nothing")
 	}
@@ -86,8 +85,7 @@ func TestEveryViewShapeTheEngineMintsHasARenderer(t *testing.T) {
 func TestEveryGridSortKeyIsOneTheGrammarTakes(t *testing.T) {
 	t.Parallel()
 
-	body, err := clientsource.Declaration(clientsource.Tree,
-		`(?s)const COLUMN_SORT_KEYS = \[(.*?)\] as const`)
+	body, err := clientsource.Literal(clientsource.Tree, "COLUMN_SORT_KEYS")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,8 +126,7 @@ func TestEveryGridSortKeyIsOneTheGrammarTakes(t *testing.T) {
 func TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes(t *testing.T) {
 	t.Parallel()
 
-	body, err := clientsource.Declaration(clientsource.Tree,
-		`(?s)const PROJECT_SORT_KEYS = \[(.*?)\] as const`)
+	body, err := clientsource.Literal(clientsource.Tree, "PROJECT_SORT_KEYS")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,8 +171,7 @@ func TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes(t *testing
 // reach. Both are silent, which is why this is a test.
 func TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase(t *testing.T) {
 	t.Parallel()
-	body, err := clientsource.Declaration(clientsource.Tree,
-		`(?s)export const CHANGES: \{[^}]*\}\[\] = \[(.*?)\n\];`)
+	body, err := clientsource.Literal(clientsource.Tree, "CHANGES")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,8 +219,7 @@ func TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase(t *testing.T) {
 func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 	t.Parallel()
 
-	body, err := clientsource.Declaration(clientsource.Tree,
-		`(?s)export const GROUP_AXES[^=]*= \[(.*?)\];`)
+	body, err := clientsource.Literal(clientsource.Tree, "GROUP_AXES")
 	if err != nil {
 		t.Fatal(err)
 	}
