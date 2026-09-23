@@ -328,11 +328,11 @@ func seatHeld(e *engine.Engine) chartapi.Held {
 	if reader == nil {
 		return nil
 	}
-	return func(handle string) bool {
+	return func(seat string) bool {
 		// THE BACKGROUND CONTEXT, because this is asked while rendering a
 		// report on a tick with no request to inherit: a per-seat read
 		// bound to a cancelled request would make a page half-answer.
-		return reader.SeatHeld(context.Background(), handle)
+		return reader.SeatHeld(context.Background(), seat)
 	}
 }
 

@@ -77,7 +77,8 @@ import (
 // not hold as a human seat.
 type BindingResidue struct {
 	// Person is the directory id, Login the name the dashboard prints and
-	// Seat the handle their row names.
+	// Seat the seat their row names, by its IDENTITY — the handle it was
+	// created under (ADR-0020).
 	Person, Login, Seat string
 
 	// Settled is the first residue — removed, tombstoned or not a human

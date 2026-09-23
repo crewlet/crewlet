@@ -958,8 +958,8 @@ func (r *Reader) SessionStanding(ctx context.Context, lineage string,
 	return owner, owner != "" && state == SessionLive, nil
 }
 
-// SeatHeld reports whether a seat handle is one somebody in this estate is
-// bound to.
+// SeatHeld reports whether a seat — named by its IDENTITY, the handle it was
+// created under (ADR-0020) — is one somebody in this estate is bound to.
 //
 // # A BOOL HERE, deliberately, and the third value is the reader's absence
 //
@@ -975,8 +975,8 @@ func (r *Reader) SessionStanding(ctx context.Context, lineage string,
 // seat in the company as unheld: its copy of this estate is legitimately
 // empty because it never applies the domain, so it supplies no reader rather
 // than a reader that answers false for everybody.
-func (r *Reader) SeatHeld(ctx context.Context, handle string) bool {
-	if handle == "" {
+func (r *Reader) SeatHeld(ctx context.Context, seat string) bool {
+	if seat == "" {
 		return false
 	}
 	var held bool
@@ -985,16 +985,17 @@ func (r *Reader) SeatHeld(ctx context.Context, handle string) bool {
 			SELECT EXISTS(
 				SELECT 1 FROM iam_people
 				 WHERE seat_id = ? AND stage = ?)`,
-			handle, string(iam.StageActive)).Scan(&held)
+			seat, string(iam.StageActive)).Scan(&held)
 	}); err != nil {
-		log.Warn("iam_seat_held_unreadable", "handle", handle, "error", err)
+		log.Warn("iam_seat_held_unreadable", "seat", seat, "error", err)
 		return false
 	}
 	return held
 }
 
-// HolderOf names the person bound to a seat, read INSIDE a transaction the
-// caller supplies.
+// HolderOf names the person bound to a seat — by its IDENTITY, the handle it
+// was created under, which is what a binding names (ADR-0020) — read INSIDE a
+// transaction the caller supplies.
 //
 // # The transaction is the caller's, and that is the point
 //
@@ -1019,15 +1020,15 @@ func (r *Reader) SeatHeld(ctx context.Context, handle string) bool {
 // read it cannot perform, this answers a WRITE: a removal decided on an
 // unreadable directory is one that silently orphans whoever holds the seat.
 // So the error travels, and the chart refuses.
-func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, handle string) (string, error) {
-	if handle == "" {
+func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, seat string) (string, error) {
+	if seat == "" {
 		return "", nil
 	}
 	var login string
 	err := tx.QueryRowContext(ctx, `
 		SELECT login FROM iam_people
 		 WHERE seat_id = ? AND stage = ?
-		 LIMIT 1`, handle, string(iam.StageActive)).Scan(&login)
+		 LIMIT 1`, seat, string(iam.StageActive)).Scan(&login)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// NOBODY, and it is a finding rather than a failure: a seat the
@@ -1035,7 +1036,7 @@ func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, handle string) (strin
 		// of every agent seat in the company.
 		return "", nil
 	case err != nil:
-		return "", fmt.Errorf("iamdomain: read who holds seat %q: %w", handle, err)
+		return "", fmt.Errorf("iamdomain: read who holds seat %q: %w", seat, err)
 	}
 	// THE LOGIN IS ALWAYS THERE. The query reads active people only — a
 	// reservation, the half-enrolled row a claim leaves, has no stage and
@@ -1051,8 +1052,13 @@ func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, handle string) (strin
 // registry it governs; this package says who holds the seat and at what stage,
 // and nothing about what that means for a Slack mention.
 type SeatHolder struct {
-	// Seat is the handle the binding names, which is the address every
-	// other subsystem uses for a seat — see the `seat_id` column.
+	// Seat is the seat's IDENTITY — the handle it was created under, which
+	// no rename moves and the chart never issues twice (ADR-0020) — and
+	// never the handle it answers to now. A reader turns it into a seat by
+	// the chart's identity lookup ([chart.Reader.SeatByIdentity], or
+	// [org.Role.Origin] over a built tree), never by comparing it to a
+	// handle: after a rename the two differ, and after the old handle is
+	// reused they name different seats.
 	Seat string
 
 	// Person is who holds it, or who last held it before a removal.
@@ -1081,7 +1087,11 @@ type SeatHolder struct {
 	// unbound hands the seat back to the chart like any other unbind, rather
 	// than back to the leaver's tombstone — which, read from the seat's
 	// current rows alone, withheld it again indefinitely whatever its
-	// contact map had since been pointed at.
+	// contact map had since been pointed at. The tombstone, the successor's
+	// bind and the stamp all name the seat by its IDENTITY, so a bind under
+	// a handle the seat was renamed to after the removal still ends it: keyed
+	// on the handle typed at the time, the leaver's tombstone named an address
+	// nobody could bind again and withheld the new holder for ever.
 	Removed bool
 }
 

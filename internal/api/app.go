@@ -203,7 +203,7 @@ type Options struct {
 	// without it every authority rule asking "do you lead this" falls
 	// through to the admin grant. The binding used to be a field on a
 	// seat's contact block naming the token id; it is a directory row now,
-	// arbitrated on `iam.seat.<handle>` so two holders cannot claim one
+	// arbitrated on `iam.seat.<identity>` so two holders cannot claim one
 	// seat.
 	//
 	// THE ZERO VALUE BINDS NOTHING, which is what an API stood up in a

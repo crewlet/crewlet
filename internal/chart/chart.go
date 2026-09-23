@@ -75,9 +75,10 @@
 //     twice: it resolves to its object however many renames ago it was
 //     retired, no rename and no creation may take it, and a removal tombstones
 //     it beside the address the object held. Everything durable a seat owns is
-//     keyed on the id derived from it (ADR-0019), so a second object created
-//     under it would share the first one's mailbox, lease and diary. See
-//     [identityHolder].
+//     keyed on the id derived from it (ADR-0019) and every binding the
+//     identity directory holds names a seat by it (ADR-0020), so a second
+//     object created under it would share the first one's mailbox, diary and
+//     people. See [identityHolder].
 //   - NOT THAT THE CHART IS THE ORGANISATION. [internal/org] builds the
 //     runtime tree a turn reads — normalised, with lead inheritance and
 //     manages-expansion applied. This package holds what was AUTHORED. Every

@@ -47,8 +47,9 @@ import (
 // wrong, which is the failure mode the state log's alarm table exists to
 // prevent and this borrows wholesale.
 
-// Held reports whether a seat handle is one somebody in the identity directory
-// is bound to.
+// Held reports whether a seat — named by its IDENTITY, the handle it was
+// created under ([org.Role.Origin], ADR-0020) — is one somebody in the
+// identity directory is bound to.
 //
 // # Consumer-defined, and THREE-VALUED by its absence rather than its return
 //
@@ -63,7 +64,7 @@ import (
 // A bool inside the function would be the wrong shape for the same reason a
 // bool is the wrong shape everywhere in this tree, and here the absence IS the
 // third value: a report that cannot ask does not guess.
-type Held func(handle string) bool
+type Held func(seat string) bool
 
 // Severity orders a finding by what it costs.
 type Severity string
@@ -303,7 +304,10 @@ func seatFindings(role *org.Role, settings *config.Company, held Held) []Finding
 				"assigning it in the tracker rather than mentioning them",
 		})
 	}
-	if role.IsHuman() && held != nil && !held(handle) {
+	// ASKED BY THE SEAT'S IDENTITY — the handle it was created under — which
+	// is what a binding names (ADR-0020): asked by the handle it answers to
+	// now, a renamed seat whose holder is bound read as unheld.
+	if role.IsHuman() && held != nil && !held(role.Origin()) {
 		out = append(out, Finding{
 			Kind: KindSeatUnheld, Severity: SeverityWarning,
 			Object: handle,

@@ -69,12 +69,12 @@ type iamDirectory struct{ reader *iamdomain.Reader }
 
 // SeatHolders is the directory's bindings in notify's vocabulary.
 //
-// THE HANDLE EACH BINDING NAMES, passed through as the row stores it: the
-// handle the seat had when the person was bound. It is internal/notify that
-// resolves it against the organization a registry is built from — through the
-// seat's former handles, as the request path does — because that is where the
-// organization is, and a copy resolved here against some other company would be
-// a second answer about whose seat a binding is.
+// THE SEAT IDENTITY EACH BINDING NAMES, passed through as the row stores it:
+// the handle the seat was CREATED under (ADR-0020). It is internal/notify that
+// finds the seat by it in the organization a registry is built from — as the
+// request path does — because that is where the organization is, and a copy
+// resolved here against some other company would be a second answer about
+// whose seat a binding is.
 func (d iamDirectory) SeatHolders(ctx context.Context) ([]notify.Holder, error) {
 	holders, err := d.reader.SeatHolders(ctx)
 	if err != nil {

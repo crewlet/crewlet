@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -688,6 +689,10 @@ var ErrNotFindable = errors.New("iamdomain: nothing could find this identity")
 // CREATE-ONLY AT AN EXPECTATION OF ZERO, which IS the uniqueness check: there
 // is no unique index in this estate and there cannot be one, so two writers
 // claiming one token contend at the broker and exactly one wins.
+//
+// A SEAT IS NAMED BY ANY ADDRESS IT ANSWERS TO — its handle, one it used to
+// answer to, the one it was created under — and CLAIMED BY ITS IDENTITY, the
+// last of those (ADR-0020): see [Writer.seatIdentity].
 func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 	opID string) (statelog.Result, error) {
 
@@ -733,6 +738,19 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 	if kind == KindLink && payload.Issuer == "" {
 		return statelog.Result{}, fmt.Errorf("%w: a provider link needs the "+
 			"issuer its subject belongs to", ErrInvalid)
+	}
+	// A SEAT IS CLAIMED BY ITS IDENTITY, whatever address it was named by,
+	// and the subject has to be known before the snapshot is — so the
+	// address is resolved here and confirmed again inside the decide, which
+	// refuses if a rename moved it in between rather than claiming a seat
+	// nobody named.
+	named := token
+	if kind == KindSeat {
+		identity, err := w.seatIdentity(ctx, token)
+		if err != nil {
+			return statelog.Result{}, err
+		}
+		token = identity
 	}
 	subject, err := claimSubject(kind, token)
 	if err != nil {
@@ -785,6 +803,20 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 				return err
 			}
 		}
+		if kind == KindSeat {
+			// THE CHART READ GUARANTEES NOTHING, and this is the one
+			// place in the domain that crosses a log. A seat lives on
+			// the chart's stream; nothing orders the two, so this bind
+			// and that seat's removal can both be valid and both win.
+			// The residue — a person bound to a seat the chart no
+			// longer has — is a legal named state the session layer
+			// answers with a 403 NAMING THE SEAT. What it catches is a
+			// typo, and a name that moved between the resolution that
+			// chose this subject and this snapshot.
+			if err := confirmSeat(ctx, tx, named, token); err != nil {
+				return err
+			}
+		}
 		holder, held, err := holderOf(ctx, tx, kind, token)
 		if err != nil {
 			return err
@@ -795,17 +827,6 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 		claim := Claim{V: DocumentVersion, Person: personID,
 			Sealed: payload.Sealed, Issuer: payload.Issuer}
 		if kind == KindSeat {
-			// THE CHART READ GUARANTEES NOTHING, and this is the one
-			// place in the domain that crosses a log. A seat lives on
-			// the chart's stream; nothing orders the two, so this bind
-			// and that seat's removal can both be valid and both win.
-			// The residue — a person bound to a seat the chart no
-			// longer has — is a legal named state the session layer
-			// answers with a 403 NAMING THE SEAT. This catches a typo,
-			// and that is all it is for.
-			if err := seatExists(ctx, tx, token); err != nil {
-				return err
-			}
 			// AND THE POSITION THAT READ WAS TAKEN AT GOES ON THE
 			// RECORD, which is the half that IS load-bearing. It is
 			// read in the SAME TRANSACTION as the seat row above, so
@@ -1051,7 +1072,25 @@ func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 		return statelog.Result{}, fmt.Errorf("%w: moving a %s claim needs "+
 			"the %s to move to — a move to nothing is a release, and a login "+
 			"is never released", ErrInvalid, kind, kind)
-	case to == from:
+	case kind == KindSeat:
+		// A SEAT IS COMPARED BY ITS IDENTITY, never by the address it was
+		// named with: `from` is the identity the person's row holds, and
+		// `to` whatever an administrator typed — the seat's new handle
+		// included, which names the seat they already hold.
+		identity, err := w.seatIdentity(ctx, to)
+		if err != nil {
+			return statelog.Result{}, err
+		}
+		if identity == from {
+			// NOTHING TO MOVE, and it is the answer rather than a
+			// refusal: the edit asked for the seat they hold, by a name
+			// it answers to. Applied with no record, as the framework
+			// answers a decision that has nothing to write.
+			return statelog.Result{Outcome: statelog.OutcomeApplied,
+				OpID: opID}, nil
+		}
+	}
+	if to == from {
 		return statelog.Result{}, fmt.Errorf("%w: %s already holds the %s "+
 			"%q, so there is nothing to move", ErrInvalid, personID, kind, to)
 	}
@@ -1611,7 +1650,57 @@ func enrolledKindOf(ctx context.Context, tx *sql.Tx, personID string) (iam.Kind,
 	return iam.Kind(kind), nil
 }
 
-// seatExists is the ADVISORY chart read, and its doc is the whole of what it
+// seatIdentity is the IDENTITY of the seat an address names — the handle the
+// seat was created under — read from this node's chart before the claim's
+// subject is formed.
+//
+// # Why the claim is on the identity and not on the address
+//
+// A binding that named the handle typed at the time followed an ADDRESS, and
+// an address is what a rename moves (ADR-0020): after one, the same seat could
+// be claimed a second time under its new handle, since the two subjects never
+// contend, and a removal's tombstone stopped naming the seat anybody could bind
+// again. The identity is the one name the chart never moves and never issues
+// twice, so one seat is one subject for as long as the company exists.
+//
+// # Why it is read BEFORE the snapshot
+//
+// The subject a record arbitrates on is fixed before the framework takes the
+// snapshot its decide runs in — the expectation is that subject's anchor — so
+// the address has to become an identity first. [confirmSeat] then resolves it
+// again inside the decide and refuses if the two disagree, so what is published
+// is always what that snapshot saw: a rename landing in between is a conflict
+// to retry, never a claim on a seat nobody named.
+func (w *Writer) seatIdentity(ctx context.Context, address string) (string, error) {
+	var identity string
+	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		seat, err := seatNamed(ctx, tx, address)
+		if err != nil {
+			return err
+		}
+		identity = seat.Origin()
+		return nil
+	})
+	return identity, err
+}
+
+// confirmSeat resolves an address again INSIDE a decide's snapshot and refuses
+// when it no longer names the seat the claim's subject was formed for.
+func confirmSeat(ctx context.Context, tx *sql.Tx, address, identity string) error {
+	seat, err := seatNamed(ctx, tx, address)
+	if err != nil {
+		return err
+	}
+	if seat.Origin() != identity {
+		return fmt.Errorf("%w: iamdomain: seat %q named the seat created under "+
+			"%q when this bind began and names the one created under %q now — "+
+			"the chart moved in between, so re-read the seat and bind again",
+			statelog.ErrConflict, address, identity, seat.Origin())
+	}
+	return nil
+}
+
+// seatNamed is the ADVISORY chart read, and its doc is the whole of what it
 // promises.
 //
 // IT GUARANTEES NOTHING. The chart is a different domain on a different
@@ -1622,26 +1711,36 @@ func enrolledKindOf(ctx context.Context, tx *sql.Tx, personID string) (iam.Kind,
 // WHAT IT BUYS is that binding somebody to a seat handle nobody has ever
 // created — a typo, the overwhelmingly common failure — is refused at the
 // moment somebody can still fix it, rather than becoming a person who cannot
-// act and a 403 nobody can explain.
-func seatExists(ctx context.Context, tx *sql.Tx, seatID string) error {
-	var present int
-	err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM chart_seats WHERE handle = ?`, seatID).Scan(&present)
+// act and a 403 nobody can explain. And it is where an ADDRESS becomes the seat
+// it names, through the chart's own resolution ([chart.ResolveSeatIn]) —
+// handle, retired handle, the handle it was created under — so a bind names
+// the same seat the chart API and the org tree do.
+//
+// # An unreadable chart REFUSES now, and why it used to pass
+//
+// When the claim was on the address it was given, a node that could not read
+// the chart was in the state every node is in with respect to the other log,
+// and refusing would have blocked every binding for a check that was never
+// load-bearing. The identity IS load-bearing: it is the subject the claim
+// arbitrates on, and a node that cannot read the chart cannot say which seat
+// an address names. So it is the unknown arm — [statelog.ErrUnavailable], a
+// 503 a retry clears — and never a guess.
+func seatNamed(ctx context.Context, tx *sql.Tx, address string) (chart.Seat, error) {
+	seat, found, err := chart.ResolveSeatIn(ctx, tx, address)
 	switch {
 	case err != nil:
-		// UNREADABLE IS NOT ABSENT, and here it is not a refusal either:
-		// this read guarantees nothing, so a node that cannot perform it
-		// is in the state every node is in with respect to the other
-		// log anyway. Refusing would make a chart-table outage block
-		// every seat binding for a check that was never load-bearing.
-		return nil
-	case present == 0:
-		return fmt.Errorf("iamdomain: the chart on this node has no seat %q. "+
-			"This check is ADVISORY — the chart is a different log and nothing "+
-			"orders the two — so it is here to catch a typo; if the seat was "+
-			"created moments ago, retry", seatID)
+		return chart.Seat{}, fmt.Errorf("%w: iamdomain: read this node's chart "+
+			"to resolve seat %q: %w", statelog.ErrUnavailable, address, err)
+	case !found:
+		// ErrInvalid, because it is a value the caller typed: before this
+		// was classified it fell through to a 500, telling an
+		// administrator who mistyped a handle that the engine was broken.
+		return chart.Seat{}, fmt.Errorf("%w: the chart on this node has no seat "+
+			"%q. This check is ADVISORY — the chart is a different log and "+
+			"nothing orders the two — so it is here to catch a typo; if the "+
+			"seat was created moments ago, retry", ErrInvalid, address)
 	}
-	return nil
+	return seat, nil
 }
 
 // MintBootstrap issues the company's one way in before it has anybody.

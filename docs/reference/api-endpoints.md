@@ -797,6 +797,16 @@ so a login its holder's grammar refuses, a seat the chart does not hold, or
 either one somebody else holds is refused with the person exactly as they were.
 `seat: ""` unbinds.
 
+A `seat` may be named by **any handle it answers to** — its current one, one it
+used to have, the one it was created under — and the binding records the seat's
+**identity**: the handle it was *created* under, which no rename moves. So the
+`seat` a person reads back is that identity, a renamed seat still resolves from
+it, and naming the seat a person already holds by its new handle is a no-op
+(`200`, no record) rather than a move. A seat that has been renamed can never be
+bound to a second person under its new name: both names are one seat. A seat
+the chart does not hold is `400` (a value that was typed), and one this node's
+chart could not be read to resolve is `503` with a `Retry-After`.
+
 #### `oidc_subject` links somebody to their identity provider account
 
 `PATCH /iam/people/{id}` with `{"oidc_subject": "<sub>"}` pins the person to

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -37,6 +38,48 @@ func TestASeatViewWithNoChartRefusesRatherThanAnsweringSeatless(t *testing.T) {
 	}
 	if binding.Handle() != "" {
 		t.Errorf("handle %q from a node that cannot answer", binding.Handle())
+	}
+}
+
+// A BINDING'S SEAT IS FOUND BY THE HANDLE IT WAS CREATED UNDER, on a running
+// node, through a rename and through a removal.
+//
+// A binding names its seat by that identity (ADR-0020), and this is the one
+// place the request path and the dangling-binding rule turn it back into a
+// seat. Looked up as an ADDRESS, the seat's new handle would answer for the
+// identity too — which is how a person bound before a rename came to sign in
+// as whichever seat took the old handle next — and a seat renamed and then
+// removed would read as merely absent rather than conclusively gone.
+func TestTheSeatViewFindsABindingsSeatByItsIdentity(t *testing.T) {
+	t.Parallel()
+	e := bootDirectoryNode(t, nil)
+	view, writer := SeatViewOf(e), e.ChartWriter()
+	if _, err := writer.WriteRekey(t.Context(), "test:rename",
+		chart.ObjectRef{Kind: chart.KindSeat, ID: "dana"}, founderSeat); err != nil {
+		t.Fatalf("rename the founder's seat: %v", err)
+	}
+
+	seat, found, err := view.Seat(t.Context(), founderSeat)
+	if err != nil || !found || seat.Handle != "dana" || seat.Kind != session.SeatKindHuman {
+		t.Errorf("the identity reads %+v (found %v, %v), want the renamed human "+
+			"seat", seat, found, err)
+	}
+	if seat, found, err := view.Seat(t.Context(), "dana"); err != nil || found {
+		t.Errorf("the seat's current handle answered as an identity: %+v, %v, %v",
+			seat, found, err)
+	}
+
+	if _, err := writer.WriteRemoval(t.Context(), "test:remove", chart.Batch{
+		Reason: "left", Operations: []chart.Operation{{Kind: chart.OpRemoveObject,
+			Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "dana"}}},
+	}); err != nil {
+		t.Fatalf("remove the seat: %v", err)
+	}
+	seat, found, err = view.Seat(t.Context(), founderSeat)
+	if err != nil || !found || !seat.Tombstoned {
+		t.Errorf("the removed seat's identity reads %+v (found %v, %v), want a "+
+			"tombstone — conclusive, so a leaver is refused without waiting "+
+			"out a grace", seat, found, err)
 	}
 }
 

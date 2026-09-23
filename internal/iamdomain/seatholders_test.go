@@ -1,6 +1,8 @@
 package iamdomain_test
 
 import (
+	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -8,6 +10,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE DIRECTORY SAYS WHO HOLDS EACH SEAT, AT WHAT STAGE — and who held one
@@ -248,5 +252,197 @@ func TestSeatBindingsIsEveryBindingAndNothingElse(t *testing.T) {
 	}
 	if got[sarah].Stage != iam.StageActive || got[priya].Stage != iam.StageSuspended {
 		t.Errorf("stages read back as %q and %q", got[sarah].Stage, got[priya].Stage)
+	}
+}
+
+// A SEAT IS BOUND BY THE HANDLE IT WAS CREATED UNDER (ADR-0020).
+//
+// Whatever address an administrator types — the handle a seat answers to now,
+// one it used to, the one it was created under — the binding names the seat's
+// IDENTITY, so one seat is one claim subject for as long as the company exists.
+// Keyed on the address typed at the time, a renamed seat was claimable a second
+// time under its new handle: the two subjects never contend, and two people
+// acted as one seat.
+func TestASeatIsBoundByTheHandleItWasCreatedUnder(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	sarah := bindNew(t, rig, "sarah.chen", "sarah-chen")
+	rig.renameSeat("sarah-chen", "sarah")
+
+	// A SECOND PERSON, NAMING THE SEAT BY ITS NEW HANDLE AND BY ITS OLD:
+	// both are the same seat, and it is Sarah's.
+	tom := uuid.New().String()
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: tom, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Tom", Email: "tom@example.com", Login: "tom.reyes",
+		OpID: "op-enrol-tom", Reason: "a hire",
+	}); err != nil {
+		t.Fatalf("enrol tom: %v", err)
+	}
+	rig.drain()
+	for _, address := range []string{"sarah", "sarah-chen"} {
+		_, err := rig.writer.Claim(t.Context(), iamdomain.KindSeat, address,
+			tom, "op-bind-tom-"+address)
+		var claimed *iamdomain.ErrClaimed
+		if !errors.As(err, &claimed) || claimed.Holder != sarah {
+			t.Errorf("binding a second person to %q answered %v, want it "+
+				"refused as Sarah's seat", address, err)
+		}
+		rig.drain()
+	}
+	if got := rig.column(`SELECT id FROM iam_people WHERE seat_id != ''`); len(got) != 1 {
+		t.Errorf("%d people are bound after the renamed seat was claimed "+
+			"again: %v", len(got), got)
+	}
+	if got := rig.column(`SELECT seat_id FROM iam_people WHERE id = ?`,
+		sarah); len(got) != 1 || got[0] != "sarah-chen" {
+		t.Errorf("sarah's binding reads %v, want the identity sarah-chen", got)
+	}
+
+	// AND A MOVE TO THE SEAT SHE HOLDS, BY ITS NEW NAME, IS NOTHING TO DO:
+	// applied with no record, rather than a claim and a release that would
+	// leave her bound to nothing.
+	moved, err := rig.writer.Rebind(t.Context(), sarah, "sarah-chen", "sarah",
+		"op-rebind-same", "tidying up")
+	if err != nil || moved.Outcome != statelog.OutcomeApplied {
+		t.Errorf("a move onto the seat she holds answered %+v, %v", moved, err)
+	}
+	rig.drain()
+	if got := rig.column(`SELECT seat_id FROM iam_people WHERE id = ?`,
+		sarah); len(got) != 1 || got[0] != "sarah-chen" {
+		t.Errorf("after a move onto her own seat sarah's binding reads %v", got)
+	}
+
+	// THE CONTROL: a seat nobody holds, named by its new handle, is bound
+	// under the handle it was created under.
+	rig.seatOnly("design-lead")
+	rig.renameSeat("design-lead", "design-head")
+	if _, err := rig.writer.Claim(t.Context(), iamdomain.KindSeat,
+		"design-head", tom, "op-bind-tom-design"); err != nil {
+		t.Fatalf("bind tom to the renamed design seat: %v", err)
+	}
+	rig.drain()
+	if got := rig.column(`SELECT seat_id FROM iam_people WHERE id = ?`,
+		tom); len(got) != 1 || got[0] != "design-lead" {
+		t.Errorf("tom's binding reads %v, want the identity design-lead", got)
+	}
+}
+
+// A REMOVAL'S SAY ENDS AT THE NEXT BIND, WHATEVER THE SEAT IS CALLED BY THEN.
+//
+// Omar holds the ops seat and is removed, which leaves a tombstone naming it;
+// the chart then renames the seat, and Lena is bound to it under the new handle
+// — the only one the chart will accept for a live seat. Keyed on the handle
+// typed at each bind, the stamp matched only tombstones naming the NEW handle,
+// so Omar's went on withholding the seat's contact identities for ever while
+// Lena held it.
+func TestARemovalsSayEndsAtTheNextBindUnderAnyHandle(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+	omar := bindNew(t, rig, "omar.haddad", "ops-lead")
+	if _, err := rig.writer.Remove(t.Context(), omar, "op-remove",
+		"left the company"); err != nil {
+		t.Fatalf("remove omar: %v", err)
+	}
+	rig.drain()
+	assertHolders(t, holdersBySeat(t, reader), map[string]iamdomain.SeatHolder{
+		"ops-lead": {Seat: "ops-lead", Person: omar, Removed: true},
+	})
+
+	rig.renameSeat("ops-lead", "ops-head")
+	lena := uuid.New().String()
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: lena, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Lena", Email: "lena@example.com", Login: "lena.fischer",
+		OpID: "op-enrol-lena", Reason: "a hire",
+	}); err != nil {
+		t.Fatalf("enrol lena: %v", err)
+	}
+	rig.drain()
+	if _, err := rig.writer.Claim(t.Context(), iamdomain.KindSeat, "ops-head",
+		lena, "op-bind-lena"); err != nil {
+		t.Fatalf("bind lena: %v", err)
+	}
+	rig.drain()
+	assertHolders(t, holdersBySeat(t, reader), map[string]iamdomain.SeatHolder{
+		"ops-lead": {Seat: "ops-lead", Person: lena, Stage: iam.StageActive},
+	})
+
+	// AND IT STAYS ENDED when she is unbound: the seat goes back to the
+	// chart, not to Omar's tombstone.
+	if _, err := rig.writer.Release(t.Context(), iamdomain.KindSeat, "ops-lead",
+		lena, "op-unbind-lena", "moved teams"); err != nil {
+		t.Fatalf("unbind lena: %v", err)
+	}
+	rig.drain()
+	assertHolders(t, holdersBySeat(t, reader), map[string]iamdomain.SeatHolder{})
+}
+
+// A RENAME BETWEEN THE RESOLUTION AND THE SNAPSHOT IS A CONFLICT, NEVER A CLAIM.
+//
+// The subject a bind arbitrates on has to be known before the framework takes
+// the snapshot its decide runs in, so the address is turned into an identity
+// first and confirmed again inside the decide. Here the resolution reads a
+// chart in which `sarah` is still the seat created as `sarah`, and the snapshot
+// one in which `sarah` is the seat created as `sarah-chen`: published anyway,
+// the bind would claim an identity no seat has.
+func TestARenameBetweenTheResolutionAndTheDecideIsAConflict(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	sarah := bindNew(t, rig, "sarah.chen", "sarah-chen")
+	if _, err := rig.writer.Release(t.Context(), iamdomain.KindSeat,
+		"sarah-chen", sarah, "op-unbind", "moving"); err != nil {
+		t.Fatalf("unbind: %v", err)
+	}
+	rig.drain()
+	rig.renameSeat("sarah-chen", "sarah")
+
+	// THE STALE READ: a second store whose chart still has `sarah` as a
+	// seat that was never renamed, standing in for the instant before the
+	// rename landed.
+	stale, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "stale.db"),
+		store.Options{PinnedWriters: 1})
+	if err != nil {
+		t.Fatalf("open the stale store: %v", err)
+	}
+	t.Cleanup(func() { _ = stale.Close() })
+	staleRig := &writeRig{t: t, db: stale}
+	staleRig.seatOnly("sarah")
+	writer, err := iamdomain.NewWriter(iamdomain.WriterDeps{
+		Publisher: rig.publisher, DB: stale, Actor: "ana.admin",
+		ActorKind: iam.KindPerson, Grants: iam.AllGrants,
+		Now: func() time.Time { return brokerAt },
+	})
+	if err != nil {
+		t.Fatalf("build the writer: %v", err)
+	}
+	_, err = writer.Claim(t.Context(), iamdomain.KindSeat, "sarah", sarah,
+		"op-bind-raced")
+	if !errors.Is(err, statelog.ErrConflict) {
+		t.Errorf("a bind whose seat was renamed under it answered %v, want %v",
+			err, statelog.ErrConflict)
+	}
+	rig.drain()
+	if got := rig.column(`SELECT seat_id FROM iam_people WHERE id = ?`,
+		sarah); len(got) != 1 || got[0] != "" {
+		t.Errorf("sarah's binding reads %v after a refused bind, want none", got)
+	}
+}
+
+// A SEAT NOBODY CREATED IS A VALUE THE CALLER TYPED, NOT A FAULT.
+//
+// The refusal is what an administrator reads when they mistype a handle, and
+// it used to be an unclassified error every surface turned into a 500 — "the
+// engine is broken" for a typo.
+func TestBindingASeatTheChartDoesNotHoldIsRefusedAsInvalid(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	person := bindNew(t, rig, "sarah.chen", "sarah-chen")
+	_, err := rig.writer.Rebind(t.Context(), person, "sarah-chen",
+		"no-such-seat", "op-typo", "a typo")
+	if !errors.Is(err, iamdomain.ErrInvalid) {
+		t.Errorf("a bind to a seat the chart does not hold answered %v, want %v",
+			err, iamdomain.ErrInvalid)
 	}
 }

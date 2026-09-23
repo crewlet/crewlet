@@ -3,6 +3,7 @@ package iamdomain_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -950,14 +952,76 @@ func (r *writeRig) seatChartAt(seq uint64) {
 // bind's advisory existence check passes.
 func (r *writeRig) seatOnly(handle string) {
 	r.t.Helper()
+	r.seatRow(chart.Seat{V: chart.DocumentVersion, Handle: handle,
+		Kind: chart.SeatHuman})
+}
+
+// seatRow writes one seat's chart row whole, in the shape the chart's own
+// applier writes it: the handle and the retired handles as columns, and the
+// document every resolution decodes the seat's identity out of.
+func (r *writeRig) seatRow(seat chart.Seat) {
+	r.t.Helper()
+	document, err := chart.EncodeSeat(seat)
+	if err != nil {
+		r.t.Fatalf("encode seat %s: %v", seat.Handle, err)
+	}
+	former := seat.FormerHandles
+	if former == nil {
+		former = []string{}
+	}
+	formerJSON, err := json.Marshal(former)
+	if err != nil {
+		r.t.Fatalf("encode the retired handles of %s: %v", seat.Handle, err)
+	}
 	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(r.t.Context(), `
-			INSERT INTO chart_seats (handle, kind, created_at, updated_at, version, document)
-			VALUES (?, 'human', 0, 0, 1, x'')
-			ON CONFLICT (handle) DO NOTHING`, handle)
+			INSERT INTO chart_seats
+				(handle, former_keys_json, kind, created_at, updated_at, version, document)
+			VALUES (?, ?, ?, 0, 0, 1, ?)
+			ON CONFLICT (handle) DO UPDATE SET
+				former_keys_json = excluded.former_keys_json,
+				kind = excluded.kind, document = excluded.document`,
+			seat.Handle, string(formerJSON), string(seat.Kind), document)
 		return err
 	}); err != nil {
-		r.t.Fatalf("seed a seat: %v", err)
+		r.t.Fatalf("seed seat %s: %v", seat.Handle, err)
+	}
+}
+
+// renameSeat moves a seat's row onto a new handle the way the chart's rekey
+// does: the handle it was created under frozen as its origin by the first
+// rename, and the handle it leaves retired at the front of its aliases.
+func (r *writeRig) renameSeat(from, to string) {
+	r.t.Helper()
+	var document []byte
+	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(r.t.Context(),
+			`SELECT document FROM chart_seats WHERE handle = ?`, from).Scan(&document)
+	}); err != nil {
+		r.t.Fatalf("read seat %s: %v", from, err)
+	}
+	seat, err := chart.DecodeSeat(document)
+	if err != nil {
+		r.t.Fatalf("decode seat %s: %v", from, err)
+	}
+	if seat.OriginHandle == "" {
+		seat.OriginHandle = from
+	}
+	seat.Handle = to
+	seat.FormerHandles = append([]string{from}, seat.FormerHandles...)
+	r.dropSeat(from)
+	r.seatRow(seat)
+}
+
+// dropSeat deletes a seat's chart row, as a removal does.
+func (r *writeRig) dropSeat(handle string) {
+	r.t.Helper()
+	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(r.t.Context(),
+			`DELETE FROM chart_seats WHERE handle = ?`, handle)
+		return err
+	}); err != nil {
+		r.t.Fatalf("drop seat %s: %v", handle, err)
 	}
 }
 

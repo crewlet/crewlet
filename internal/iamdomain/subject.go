@@ -56,6 +56,25 @@
 // token, and the person it concerns is inside a payload the deferring node
 // cannot read. The scope is the only thing that can connect the two, which is
 // why it is on the envelope and readable at every version.
+//
+// # A seat is bound by its IDENTITY, never by an address (ADR-0020)
+//
+// A seat binding — the claim subject `iam.seat.<id>`, the row's `seat_id`, the
+// seat a removal's tombstone records, the successor's stamp on that tombstone,
+// and every reading of them ([Reader.SeatHolders], [Reader.SeatBindings], the
+// fleet's scatter answer, the notify registry's standing, the request path's
+// seat table, the dangling-binding rule) — names the seat by the handle it was
+// CREATED under: `chart.Seat.Origin`, the same anchor ADR-0019 derives the
+// agent id from, which no rename moves and the chart never issues twice.
+//
+// An administrator names a seat by any address it answers to; the bind
+// resolves that address through the chart's own resolution and claims the
+// identity it names ([Writer.seatIdentity]). Every reader turns the identity
+// back into a seat through the chart's IDENTITY lookup and never by comparing
+// it to a handle. Keyed on the handle typed at the time, a rename made one seat
+// claimable twice (two subjects that never contend), a removal's tombstone
+// under the old handle withheld the seat's next holder for ever, and a new seat
+// that took the freed handle inherited somebody else's suspension.
 package iamdomain
 
 import (
@@ -381,7 +400,8 @@ func LoginSubject(login string) Subject {
 	return Subject{Kind: KindLogin, ID: strings.ToLower(strings.TrimSpace(login))}
 }
 
-// SeatSubject names a claim on one seat, by its derived id.
+// SeatSubject names a claim on one seat, by its IDENTITY — the handle it was
+// created under — so one seat is one subject however often it is renamed.
 func SeatSubject(seatID string) Subject {
 	return Subject{Kind: KindSeat, ID: seatID}
 }

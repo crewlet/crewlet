@@ -350,8 +350,8 @@ func (b Batch) Validate(ctx context.Context, tx *sql.Tx, holders Holders) (
 		}
 		switch op.Kind {
 		case OpRemoveObject:
-			if refused := checkHeld(ctx, tx, i, op, holders); refused != nil {
-				return nil, nil, refused
+			if err := checkHeld(ctx, tx, i, op, holders); err != nil {
+				return nil, nil, err
 			}
 			gone = append(gone, ObjectRef{
 				Kind: op.Object.Kind, ID: NormalizeKey(op.Object.ID)})
@@ -425,12 +425,21 @@ func (b Batch) Validate(ctx context.Context, tx *sql.Tx, holders Holders) (
 type Holders interface {
 	// HolderOf names the person bound to a seat, empty for a seat nobody
 	// holds, and an ERROR for rows this node could not read.
-	HolderOf(ctx context.Context, tx *sql.Tx, handle string) (string, error)
+	//
+	// THE SEAT IS NAMED BY ITS IDENTITY — the handle it was created under,
+	// [Seat.Origin] — because that is what a binding names (ADR-0020). Asked
+	// by the handle the seat answers to now, a renamed seat read as held by
+	// nobody, and its holder's removal went through without a word.
+	HolderOf(ctx context.Context, tx *sql.Tx, seat string) (string, error)
 }
 
 // checkHeld refuses a seat removal the directory contradicts.
+//
+// AN ERROR RATHER THAN A REFUSAL when the chart's own row cannot be read, which
+// is the one failure here that is neither a rule nor the directory's: the
+// identity the directory is asked about is on that row.
 func checkHeld(ctx context.Context, tx *sql.Tx, index int, op Operation,
-	holders Holders) *RefusalError {
+	holders Holders) error {
 
 	if op.Object.Kind != KindSeat {
 		return nil
@@ -446,7 +455,18 @@ func checkHeld(ctx context.Context, tx *sql.Tx, index int, op Operation,
 				"serves people", handle),
 		}
 	}
-	holder, err := holders.HolderOf(ctx, tx, handle)
+	// THE IDENTITY, off the row. A seat created earlier in this same batch
+	// has no row yet, and its identity is the handle it is being created
+	// under.
+	identity := handle
+	seat, found, err := readSeat(ctx, tx, handle)
+	if err != nil {
+		return fmt.Errorf("chart: read seat %q to ask who holds it: %w", handle, err)
+	}
+	if found {
+		identity = seat.Origin()
+	}
+	holder, err := holders.HolderOf(ctx, tx, identity)
 	if err != nil {
 		return &RefusalError{
 			Index: index, Rule: RuleDirectoryUnreadable,

@@ -538,9 +538,22 @@ neither can refuse a write the other is making.
 
 What that means in practice:
 
-- **The bind arbitrates.** `iam.seat.<handle>` is a claim, create-only at an
-  expectation of zero, so two people cannot be bound to one seat: they contend
-  at the broker and exactly one wins.
+- **A binding names the seat by the handle it was created under.** An
+  administrator names a seat by any handle it answers to — its current one, a
+  retired one, the original — and the bind resolves that name through the
+  chart and records the seat's **identity**: the handle it was *created* under,
+  which no rename moves and the chart never issues to another seat. Every
+  reader turns it back into a seat the same way — the request path, the
+  dangling-binding check, contact routing, a satellite's view of the directory
+  — so a binding follows its seat through every rename, and never follows an
+  old handle to a seat somebody created later. Keyed on the handle typed at the
+  time, a renamed seat could be claimed again under its new name, and a
+  removed person's claim on the old name went on withholding the seat from
+  whoever held it next. See
+  [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-a-seat-binding-names-the-seat-it-was-created-as.md).
+- **The bind arbitrates.** `iam.seat.<identity>` is a claim, create-only at an
+  expectation of zero, so two people cannot be bound to one seat, under any of
+  its names: they contend at the broker and exactly one wins.
 - **The seat's removal does not.** The chart's removal decide reads the
   directory inside its own snapshot and refuses a seat somebody holds, naming
   them — but a bind landing on the other log at the same instant passes its own

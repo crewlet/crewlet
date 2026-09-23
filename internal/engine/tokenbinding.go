@@ -21,7 +21,7 @@ import (
 // DOCUMENT says who a credential is — a seat's contact block is how to reach a
 // person, and a credential is something they hold. The identity estate says it
 // instead: a MACHINE enrolled under the token's own login (`token:<id>`) and
-// bound to a seat, arbitrated on `iam.seat.<handle>` so two holders cannot
+// bound to a seat, arbitrated on `iam.seat.<identity>` so two holders cannot
 // claim one seat.
 //
 // # This is half, and the other half is the SAME as a session's

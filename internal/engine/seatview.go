@@ -60,26 +60,31 @@ func SeatViewOf(e *Engine) SeatView {
 var errNoChartDomain = errors.New("engine: this node runs no org chart, so it " +
 	"cannot say which seat anybody holds")
 
-// Seat resolves a reference to the seat it names now.
+// Seat resolves a binding's seat — by its IDENTITY, the handle it was created
+// under — to the seat as it is known now.
 //
-// A REFERENCE RATHER THAN A HANDLE LOOKUP, which [chart.Reader.SeatRow]
-// already is: it resolves a former handle through the chart's own rename
-// trail, so a person bound to a seat that was renamed keeps resolving rather
-// than being told their seat is gone. The ROW and nothing else: this runs on
-// every signed-in request and on every binding the dangling-binding alarm
-// classifies, and neither reads the seats it manages or its history.
+// AN IDENTITY LOOKUP AND NOT AN ADDRESS ONE ([chart.Reader.SeatByIdentity]),
+// because a binding names the seat by its identity (ADR-0020). Resolved as an
+// address — the live handle first, a retired one after — a person bound before
+// a rename signed in as whichever seat later took the old handle, and a
+// suspended one's standing landed on that stranger. The ROW and nothing else:
+// this runs on every signed-in request and on every binding the
+// dangling-binding alarm classifies, and neither reads the seats it manages or
+// its history.
 //
 // AN ABSENT SEAT IS PROBED FOR A TOMBSTONE, because a tombstone is CONCLUSIVE
 // where an absence is not. [session.ResolveSeat] can answer 403 from one
 // without first establishing that this node has caught up with the binding,
 // and that is the difference between refusing a leaver immediately and making
-// them wait out a grace that will never change the answer.
-func (v SeatView) Seat(ctx context.Context, ref string) (session.Seat, bool, error) {
+// them wait out a grace that will never change the answer. The chart writes
+// one on a removed seat's identity as well as on the handle it last held, so
+// the probe by identity finds a seat renamed before it was removed.
+func (v SeatView) Seat(ctx context.Context, identity string) (session.Seat, bool, error) {
 	if v.reader == nil {
 		return session.Seat{}, false, errNoChartDomain
 	}
 	fresh := statelog.Freshness{Level: statelog.ReadStale}
-	seat, err := v.reader.SeatRow(ctx, ref, fresh)
+	seat, err := v.reader.SeatByIdentity(ctx, identity, fresh)
 	switch {
 	case err == nil:
 		return session.Seat{
@@ -92,13 +97,14 @@ func (v SeatView) Seat(ctx context.Context, ref string) (session.Seat, bool, err
 		// and an absent row are 503 and 403, and the sentinel above is
 		// the only thing that tells them apart.
 		return session.Seat{}, false, fmt.Errorf(
-			"engine: read the seat %q: %w", ref, err)
+			"engine: read the seat created under %q: %w", identity, err)
 	}
 	removal, found, _, err := v.reader.Removed(ctx,
-		chart.ObjectRef{Kind: chart.KindSeat, ID: ref}, fresh)
+		chart.ObjectRef{Kind: chart.KindSeat, ID: identity}, fresh)
 	if err != nil {
 		return session.Seat{}, false, fmt.Errorf(
-			"engine: read the removal of the seat %q: %w", ref, err)
+			"engine: read the removal of the seat created under %q: %w",
+			identity, err)
 	}
 	if !found {
 		// ABSENT AND NOT TOMBSTONED. Reported as not found with no

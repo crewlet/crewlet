@@ -100,8 +100,9 @@ type holdersReply struct {
 }
 
 // holderWire is one binding on the wire — the FACT, never the verdict, and
-// never the person: which handle the binding names and at what stage. Who
-// holds it stays on the nodes that hold the directory.
+// never the person: which seat the binding names, by the seat's IDENTITY (the
+// handle it was created under, ADR-0020), and at what stage. Who holds it stays
+// on the nodes that hold the directory.
 type holderWire struct {
 	Seat    string `json:"seat"`
 	Stage   string `json:"stage,omitempty"`

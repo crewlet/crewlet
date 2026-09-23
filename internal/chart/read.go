@@ -291,33 +291,40 @@ func (r *Reader) Seat(ctx context.Context, handle string, fresh statelog.Freshne
 	return out, nil
 }
 
-// SeatRow answers one seat by its handle, or by a handle it used to answer to —
-// the row alone, without the seats it manages and the history [Reader.Seat]
-// reads beside it.
+// SeatByIdentity answers the seat whose IDENTITY is this — the handle it was
+// created under ([Seat.Origin]) — and never a seat that merely answers to it.
 //
-// THE READ THAT RUNS PER REQUEST. Every signed-in request resolves the seat
-// its person is bound to, and the dangling-binding alarm classifies every
-// binding in the company the same way; neither renders a `manages:` list or up
-// to [HistoryLimit] history rows, and [Reader.Seat] read both on every call. It
-// resolves the address exactly as [Reader.Seat] does — the current handle
-// first, a retired one after — so the two can never name different seats.
-func (r *Reader) SeatRow(ctx context.Context, handle string, fresh statelog.Freshness) (
-	Seat, error) {
+// # Why an identity and not an address
+//
+// It is the read the IDENTITY DIRECTORY resolves through: every signed-in
+// request resolves the seat its person is bound to, and the dangling-binding
+// alarm classifies every binding in the company the same way. A binding names
+// its seat by the identity rather than by the handle typed when it was made —
+// ADR-0020 — because a handle is an address a rename moves, and a binding that
+// followed an address came to name a stranger's seat, or two people's one. The
+// identity is what no rename moves and no creation re-issues: see
+// [identityHolder], and the tombstone a removal leaves on it.
+//
+// THE ROW ALONE, without the seats it manages and the history [Reader.Seat]
+// reads beside it: neither per-request caller renders a `manages:` list or up
+// to [HistoryLimit] history rows.
+func (r *Reader) SeatByIdentity(ctx context.Context, identity string,
+	fresh statelog.Freshness) (Seat, error) {
 
 	if fresh.Level == "" {
 		return Seat{}, errors.New("chart: this read names no level")
 	}
-	handle = NormalizeKey(handle)
+	identity = NormalizeKey(identity)
 	var out Seat
-	_, err := r.log.Read(ctx, fresh.Query(ReadScope("", handle), false),
+	_, err := r.log.Read(ctx, fresh.Query(ReadScope("", identity), false),
 		func(tx *sql.Tx) error {
-			seat, found, err := resolveSeat(ctx, tx, handle)
+			seat, found, err := seatByIdentity(ctx, tx, identity)
 			if err != nil {
 				return err
 			}
 			if !found {
-				return fmt.Errorf("chart: no seat answers to %q: %w",
-					handle, ErrNotFound)
+				return fmt.Errorf("chart: no seat was created under %q: %w",
+					identity, ErrNotFound)
 			}
 			out = seat
 			return nil
@@ -326,6 +333,30 @@ func (r *Reader) SeatRow(ctx context.Context, handle string, fresh statelog.Fres
 		return Seat{}, err
 	}
 	return out, nil
+}
+
+// ResolveSeatIn answers the seat an ADDRESS names — a handle, one it used to
+// answer to, or the one it was created under — inside a transaction the CALLER
+// holds.
+//
+// # Exported for one reader, and the transaction is the point
+//
+// The identity domain binds a person to a seat an administrator TYPED, and the
+// binding names the seat's identity (ADR-0020): so the bind's decide has to
+// turn the typed address into that identity inside the very snapshot it
+// decides in. A read of its own would see another instant — the "take ONE
+// snapshot" rule's failure — and a second implementation of the resolution
+// order would be where the two came to name different seats. It is advisory
+// there, as every cross-domain read is: the chart is another log.
+func ResolveSeatIn(ctx context.Context, tx *sql.Tx, address string) (Seat, bool, error) {
+	return resolveSeat(ctx, tx, NormalizeKey(address))
+}
+
+// SeatByIdentityIn is [Reader.SeatByIdentity] inside a transaction the caller
+// holds — the chart's own removal decide asking the directory about the seat it
+// is removing, and the identity domain deciding a write about a binding.
+func SeatByIdentityIn(ctx context.Context, tx *sql.Tx, identity string) (Seat, bool, error) {
+	return seatByIdentity(ctx, tx, NormalizeKey(identity))
 }
 
 // ErrNotFound reports an address nothing in the chart answers to.
@@ -347,7 +378,8 @@ var ErrNotFound = errors.New("chart: no such object")
 //
 // AND THE ORIGIN NEVER STOPS. The key an object was created under is its
 // IDENTITY ([Unit.OriginKey], [Seat.OriginHandle]) — everything durable a seat
-// owns is keyed on it (ADR-0019) — while the alias list is capped at
+// owns is keyed on it (ADR-0019), and so is every binding the identity
+// directory holds (ADR-0020) — while the alias list is capped at
 // [MaxFormerKeys]. An object renamed once too often used to stop answering to
 // the address it was created under, which is the one address nothing else may
 // ever take; resolving it for ever is what lets [addressHolder] refuse a
@@ -399,8 +431,9 @@ func addressHolder(ctx context.Context, tx *sql.Tx, kind ObjectKind,
 // and the difference is what a creation's own identity is. A new object's
 // identity is the address it is created under, so creating onto another
 // object's identity makes two objects with one: one mailbox, one lease, one
-// diary and one schedule ledger between two seats (ADR-0019). A retired alias
-// carries none of that — a creation onto one only
+// diary and one schedule ledger between two seats (ADR-0019), and every person
+// the identity directory bound to the first seat bound to the second as well
+// (ADR-0020). A retired alias carries none of that — a creation onto one only
 // re-points the references somebody wrote with it, which is the claimant-wins
 // rule [resolveUnit] states.
 //
@@ -432,6 +465,27 @@ func resolveSeat(ctx context.Context, tx *sql.Tx, handle string) (Seat, bool, er
 	seat, match, err := byRetiredAddress(ctx, tx, "chart_seats", handle,
 		DecodeSeat, Seat.Origin)
 	return seat, match != retiredNone, err
+}
+
+// seatByIdentity is the seat whose identity is this address, and no other.
+//
+// THE DIRECT ROW FIRST, and it is the ordinary answer: a seat that was never
+// renamed answers to the handle it was created under, and so does one renamed
+// back. It is CHECKED rather than trusted, because a live handle is not
+// necessarily anybody's identity — a seat could be renamed onto another's
+// retired identity before [addressHolder] counted one — and a lookup that
+// trusted it would hand a binding to whichever seat now wears the name.
+func seatByIdentity(ctx context.Context, tx *sql.Tx, identity string) (Seat, bool, error) {
+	seat, found, err := readSeat(ctx, tx, identity)
+	if err != nil {
+		return Seat{}, false, err
+	}
+	if found && seat.Origin() == identity {
+		return seat, true, nil
+	}
+	seat, match, err := byRetiredAddress(ctx, tx, "chart_seats", identity,
+		DecodeSeat, Seat.Origin)
+	return seat, match == retiredOrigin, err
 }
 
 // retiredMatch is how a renamed object answers to an address it no longer

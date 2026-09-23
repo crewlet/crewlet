@@ -202,12 +202,11 @@ func TestReadingTheDirectoryIsThreeValued(t *testing.T) {
 
 // A SUSPENSION FINDS A SEAT THE CHART HAS RENAMED SINCE THE BIND.
 //
-// A binding names the handle the seat had when the person was bound, and
-// nothing rewrites it on a rename: the chart keeps the old handle as a FORMER
-// one, and the request path resolves the binding through it. The control is
-// the reading applied to the raw handle — what the registry did before — which
-// names a handle no seat answers to, so the suspended founder's Slack account
-// went on resolving to their renamed seat.
+// A binding names its seat by the handle the seat was CREATED under (ADR-0020),
+// which a rename never moves. The control is the reading applied to that name
+// as a live handle — what the registry did before the binding was an identity —
+// which names a handle no seat answers to, so the suspended founder's Slack
+// account went on resolving to their renamed seat.
 func TestASuspensionAfterARenameStillWithholdsTheSeat(t *testing.T) {
 	t.Parallel()
 	o := renamedCompany()
@@ -215,7 +214,7 @@ func TestASuspensionAfterARenameStillWithholdsTheSeat(t *testing.T) {
 		{Seat: "dana-founder", Stage: iam.StageSuspended},
 	})
 
-	// THE CONTROL: no seat answers to the bound handle as its own.
+	// THE CONTROL: no seat answers to the bound identity as its own handle.
 	for role := range o.AllRoles() {
 		if role.Handle() == "dana-founder" {
 			t.Fatal("the fixture's seat still answers to its old handle, so " +
@@ -240,18 +239,26 @@ func TestASuspensionAfterARenameStillWithholdsTheSeat(t *testing.T) {
 	}
 }
 
-// A FORMER HANDLE ANOTHER SEAT HAS TAKEN RESOLVES TO THAT SEAT — which is the
-// chart's own stated residue, and the seat the request path gives the same
-// person, so contact routing and sign-in never disagree about whose seat a
-// binding is.
+// A BINDING FOLLOWS ITS SEAT, AND NEVER THE ADDRESS IT WAS MADE WITH.
 //
-// Live handles are resolved FIRST, as [org.Organization.Role] resolves them:
-// the seat now called `dana-founder` is withheld for the suspension, and the
-// renamed seat that used to be called that routes. The other order would let a
-// retired handle outrank a live one.
-func TestAFormerHandleAnotherSeatTookResolvesToThatSeat(t *testing.T) {
+// The founder's seat was created as `founder`, renamed to `dana-founder` and
+// then to `dana`, and a new seat for somebody else has since taken the retired
+// alias `dana-founder` — which the chart allows, because an alias is not an
+// identity. The founder is suspended. Their binding names `founder`, so it is
+// THEIR seat that is withheld, under its current handle, and the stranger's
+// seat routes: resolved as an address the other way round, the stranger was
+// silenced for somebody else's suspension while the suspended person's own
+// Slack messages went on being attributed to their seat.
+func TestABindingFollowsItsSeatAndNeverTheAddressItWasMadeWith(t *testing.T) {
 	t.Parallel()
-	o := renamedCompany()
+	o := company()
+	for _, role := range o.Roles {
+		if role.Name == "Dana Founder" {
+			role.DeclaredHandle = "dana"
+			role.OriginHandle = "founder"
+			role.FormerHandles = []string{"dana-founder", "founder"}
+		}
+	}
 	o.Roles = append(o.Roles, &org.Role{
 		Name: "Dana Founder Two", Kind: org.KindHuman, DeclaredHandle: "dana-founder",
 		Contact: &org.HumanContact{SlackUserID: "U0SECOND"},
@@ -260,14 +267,44 @@ func TestAFormerHandleAnotherSeatTookResolvesToThatSeat(t *testing.T) {
 
 	r := notify.NewRegistry(o)
 	r.ReconcileHumanContacts(o, env(nil), notify.StandingOf([]notify.Holder{
-		{Seat: "dana-founder", Stage: iam.StageSuspended},
+		{Seat: "founder", Stage: iam.StageSuspended},
+		{Seat: "dana-founder", Stage: iam.StageActive},
 	}))
-	if _, ok := r.ByExternalID("slack", "U0SECOND"); ok {
-		t.Error("the seat that now answers to the bound handle still routes")
+	if p, ok := r.ByExternalID("slack", "U0FOUNDER"); ok {
+		t.Errorf("the suspended founder's account still resolves to %q", p.Handle)
 	}
-	if p, ok := r.ByExternalID("slack", "U0FOUNDER"); !ok || p.Handle != "dana" {
-		t.Errorf("the renamed seat was withheld for a handle another seat holds "+
-			"live (%+v, %v)", p, ok)
+	if why, ok := r.Withholding("dana"); !ok || why != notify.WithheldSuspended {
+		t.Errorf("the founder's renamed seat reports %q/%v, want suspended", why, ok)
+	}
+	if p, ok := r.ByExternalID("slack", "U0SECOND"); !ok || p.Handle != "dana-founder" {
+		t.Errorf("the seat that took the retired alias was withheld for "+
+			"somebody else's suspension (%+v, %v)", p, ok)
+	}
+}
+
+// TWO SEATS CLAIMING ONE IDENTITY ARE BOTH WITHHELD.
+//
+// The chart never issues an identity twice, so this is an organization built by
+// hand or a restore's residue. Picking one of the two could route a suspended
+// person's accounts through the seat not picked; withholding both makes one
+// person briefly unreachable, which is the direction to be wrong in.
+func TestTwoSeatsClaimingOneIdentityAreBothWithheld(t *testing.T) {
+	t.Parallel()
+	o := renamedCompany()
+	o.Roles = append(o.Roles, &org.Role{
+		Name: "Dana Founder Two", Kind: org.KindHuman, DeclaredHandle: "dana-founder",
+		Contact: &org.HumanContact{SlackUserID: "U0SECOND"},
+	})
+	o.Normalize()
+
+	seats := notify.StandingOf([]notify.Holder{
+		{Seat: "dana-founder", Stage: iam.StageSuspended},
+	}).Seats(o)
+	for _, handle := range []string{"dana", "dana-founder"} {
+		if why := seats[handle]; why != notify.WithheldSuspended {
+			t.Errorf("%s reads %q, want suspended — both seats carry the "+
+				"suspended binding's identity", handle, why)
+		}
 	}
 }
 
@@ -299,12 +336,14 @@ func TestAnUnreadDirectoryWithholdsEveryHumanSeat(t *testing.T) {
 }
 
 // renamedCompany is the fixture company after the founder's seat was renamed
-// from `dana-founder` to `dana`.
+// from `dana-founder` to `dana` — the shape the chart gives a renamed seat: the
+// handle it was created under frozen as its origin, and retired as an alias.
 func renamedCompany() *org.Organization {
 	o := company()
 	for _, role := range o.Roles {
 		if role.Name == "Dana Founder" {
 			role.DeclaredHandle = "dana"
+			role.OriginHandle = "dana-founder"
 			role.FormerHandles = []string{"dana-founder"}
 		}
 	}

@@ -613,6 +613,28 @@ func TestTheFullSeatTable(t *testing.T) {
 	}
 }
 
+// A REFUSAL NAMES A RENAMED SEAT BY THE NAME IT ANSWERS TO NOW, beside the
+// identity the binding holds.
+//
+// A binding names its seat by the handle it was created under (ADR-0020), so a
+// refusal built from the binding alone named a seat by an address nobody had
+// used since its rename — and sent the person, and whoever fixes it, looking
+// for a seat the chart no longer calls that.
+func TestARefusalNamesARenamedSeatByItsCurrentHandle(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	rig.chart.seats["platform-lead"] = session.Seat{Handle: "platform-head", Kind: "agent"}
+	got := session.ResolveSeat(t.Context(), rig.chart, rig.dir.identity.Person)
+	if got.Row != session.SeatRowGone {
+		t.Fatalf("landed on %q, want %q", got.Row, session.SeatRowGone)
+	}
+	for _, name := range []string{"platform-head", "platform-lead"} {
+		if !strings.Contains(got.Detail, name) {
+			t.Errorf("the refusal %q does not name %q", got.Detail, name)
+		}
+	}
+}
+
 // A SEAT THAT COULD NOT BE RESOLVED NEVER FALLS THROUGH TO AN EMPTY HANDLE.
 //
 // The one arm that is allowed to answer with no handle is the seatless one.

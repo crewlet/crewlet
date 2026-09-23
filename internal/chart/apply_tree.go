@@ -403,11 +403,11 @@ func (a *Applier) applyRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 		rows += int(n)
 
 		// AND THE ADDRESS IT WAS CREATED UNDER, when a rename moved it
-		// off that one. The origin is the object's identity (ADR-0019)
-		// and the one address nothing else may ever take — a creation
-		// onto it would inherit the removed seat's mailbox, its lease and
-		// its diary — and a tombstone is what every creation path already
-		// refuses. Read
+		// off that one. The origin is the object's identity (ADR-0019,
+		// ADR-0020) and the one address nothing else may ever take — a
+		// creation onto it would inherit the removed seat's mailbox, its
+		// diary and every person the directory still binds to it — and a
+		// tombstone is what every creation path already refuses. Read
 		// BEFORE the delete, which is the last moment the row can say it.
 		identity, err := a.tombstoneIdentity(ctx, tx, at, object.Kind, id, p.Reason)
 		if err != nil {

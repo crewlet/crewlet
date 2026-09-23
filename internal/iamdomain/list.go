@@ -65,8 +65,9 @@ type PersonRow struct {
 	NameSealed  []byte
 	EmailSealed []byte
 
-	// Seat is the chart handle this person is bound to, and SeatAt the
-	// chart position the bind was decided at.
+	// Seat is the IDENTITY of the seat this person is bound to — the handle
+	// it was created under, which no rename moves (ADR-0020) — and SeatAt
+	// the chart position the bind was decided at.
 	Seat   string
 	SeatAt uint64
 
@@ -856,8 +857,8 @@ type SeatBinding struct {
 	// Person is the directory id, Login the name the dashboard prints.
 	Person, Login string
 
-	// Seat is the handle the binding names — the handle the seat had when
-	// the person was bound — and SeatAt the chart position the bind's
+	// Seat is the seat's IDENTITY — the handle it was created under, which
+	// no rename moves (ADR-0020) — and SeatAt the chart position the bind's
 	// decide read it at.
 	Seat   string
 	SeatAt uint64

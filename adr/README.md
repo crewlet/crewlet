@@ -119,3 +119,4 @@ six false statements by the time anybody checked.
 | [0017](0017-a-turn-id-names-one-run.md) | A turn id names one RUN; the work key names the unit of work | `TestARedeliveredTriggerRunsUnderItsOwnIdentity` |
 | [0018](0018-every-state-log-record-is-signed.md) | Every state-log record is signed, and the framework verifies before a domain decodes | `TestATamperedRecordIsRefusedPermanently` |
 | [0019](0019-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md) | A seat's identity is derived from the handle it was CREATED under, so a rename moves only its address | `TestARenameKeepsTheIDTheLeaseTheMailboxAndTheDiary` |
+| [0020](0020-a-seat-binding-names-the-seat-it-was-created-as.md) | A seat binding names the seat by the handle it was CREATED under, never by the address typed at the time | `TestASeatIsBoundByTheHandleItWasCreatedUnder` |

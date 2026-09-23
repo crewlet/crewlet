@@ -272,37 +272,43 @@ func TestAClaimThatLostTheRaceIsDroppedRatherThanStallingTheDomain(t *testing.T)
 	}
 }
 
-// THE ROW READ AND THE DETAIL READ NAME ONE SEAT, through a rename.
+// A SEAT IS FOUND BY THE HANDLE IT WAS CREATED UNDER, and by nothing else.
 //
-// [chart.Reader.SeatRow] is the per-request read — the seat a signed-in person
-// is bound to, and every binding the dangling-binding alarm classifies — and it
-// exists only so those paths stop reading a manages list and a history nobody
-// renders. It must resolve an address exactly as [chart.Reader.Seat] does, or a
-// person's sign-in and the page describing their seat would disagree about which
-// seat a retired handle names.
-func TestTheSeatRowResolvesAnAddressAsTheSeatReadDoes(t *testing.T) {
+// [chart.Reader.SeatByIdentity] is the read a binding resolves through — the
+// seat a signed-in person is bound to, and every binding the dangling-binding
+// alarm classifies — and a binding names the seat's IDENTITY (ADR-0020). So it
+// must find the renamed seat by the handle it was created under, and must NOT
+// answer for the seat's current handle: that is an address, and a lookup that
+// treated one as an identity is how a binding came to name a stranger.
+func TestASeatIsFoundByTheHandleItWasCreatedUnder(t *testing.T) {
 	t.Parallel()
 	r := newWriteRig(t)
 	r.batch("op-hire", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""))
 	r.applySeatRekey("op-rename", "sarah-okonkwo", "sarah-chen")
 	reader := r.reader()
 
-	for _, address := range []string{"sarah-okonkwo", "sarah-chen"} {
-		row, err := reader.SeatRow(t.Context(), address, session())
-		if err != nil {
-			t.Fatalf("SeatRow(%q): %v", address, err)
-		}
-		detail, err := reader.Seat(t.Context(), address, session())
-		if err != nil {
-			t.Fatalf("Seat(%q): %v", address, err)
-		}
-		if row.Handle != "sarah-okonkwo" || row.Handle != detail.Seat.Handle {
-			t.Errorf("%q names %q by its row and %q by its detail, want the "+
-				"renamed seat both ways", address, row.Handle, detail.Seat.Handle)
-		}
+	got, err := reader.SeatByIdentity(t.Context(), "sarah-chen", session())
+	if err != nil {
+		t.Fatalf("SeatByIdentity(sarah-chen): %v", err)
 	}
-	if _, err := reader.SeatRow(t.Context(), "nobody", session()); !errors.Is(err, chart.ErrNotFound) {
-		t.Errorf("an address nothing answers to read as %v, want ErrNotFound", err)
+	if got.Handle != "sarah-okonkwo" {
+		t.Errorf("the identity names %q, want the renamed seat", got.Handle)
+	}
+	// THE CONTROL: the same seat by its ADDRESS reads through the detail
+	// read, so the refusal below is about identities and not about a seat
+	// the rig failed to make.
+	if detail, err := reader.Seat(t.Context(), "sarah-okonkwo", session()); err != nil ||
+		detail.Seat.Handle != "sarah-okonkwo" {
+		t.Fatalf("the renamed seat does not read by its handle: %+v, %v", detail, err)
+	}
+	if _, err := reader.SeatByIdentity(t.Context(), "sarah-okonkwo",
+		session()); !errors.Is(err, chart.ErrNotFound) {
+		t.Errorf("the seat's CURRENT handle answered as an identity (%v), so a "+
+			"binding made against it would follow the address to whoever "+
+			"holds it next", err)
+	}
+	if _, err := reader.SeatByIdentity(t.Context(), "nobody", session()); !errors.Is(err, chart.ErrNotFound) {
+		t.Errorf("an identity nothing was created under read as %v, want ErrNotFound", err)
 	}
 }
 
@@ -359,7 +365,8 @@ func TestTheIdentityOutlivesTheAliasCap(t *testing.T) {
 //
 // A new seat's identity is the handle it is created under, so a seat created on
 // a renamed seat's origin is a second seat with the first one's identity: one
-// mailbox, one lease and one diary between two agents (ADR-0019). All three
+// mailbox, one lease and one diary between two agents (ADR-0019), and every
+// person bound to the first seat bound to the second (ADR-0020). All three
 // creation paths refuse or skip it — a batch at its decide, a lone content
 // write at its decide, and an import, which decides nothing, at its apply.
 //
@@ -406,7 +413,8 @@ func TestACreationNeverTakesAnotherSeatsIdentity(t *testing.T) {
 //
 // The removal tombstones the handle the seat held; it now tombstones the one it
 // was created under as well, because a creation onto that one would hand a
-// stranger the removed seat's mailbox and diary. And a RENAME onto a removed address is refused: the tombstone that
+// stranger the removed seat's diary and every person the directory still binds
+// to it. And a RENAME onto a removed address is refused: the tombstone that
 // drops the removed seat's old records would drop every later record on the
 // renamed seat's own subject too, leaving a seat nobody could edit.
 func TestARemovedSeatsIdentityIsNeverIssuedAgain(t *testing.T) {
@@ -444,4 +452,27 @@ func TestARemovedSeatsIdentityIsNeverIssuedAgain(t *testing.T) {
 	}
 	// THE CONTROL: the survivor can still be renamed somewhere free.
 	r.applySeatRekey("op-free", "lena-ops", "lena")
+}
+
+// A REMOVAL ASKS THE DIRECTORY ABOUT THE SEAT BY ITS IDENTITY.
+//
+// A binding names the seat it was made to by the handle the seat was created
+// under (ADR-0020), so a removal that asked about the handle the seat answers
+// to now read a renamed seat as held by nobody — and removed it out from under
+// the person holding it, which is the one mistake the check exists to catch.
+func TestARemovalAsksTheDirectoryByTheSeatsIdentity(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-hire", op(chart.OpCreateSeat, chart.KindSeat, "omar", ""))
+	r.applySeatRekey("op-rename", "ops-head", "omar")
+
+	_, err := r.writer.WithHolders(heldBy{handle: "omar", login: "omar.haddad"}).
+		WriteRemoval(t.Context(), "op-remove", chart.Batch{
+			Operations: []chart.Operation{
+				op(chart.OpRemoveObject, chart.KindSeat, "ops-head", ""),
+			}})
+	if ref := refusal(t, err); ref.Rule != chart.RuleSeatHeld ||
+		!strings.Contains(ref.Detail, "omar.haddad") {
+		t.Errorf("a renamed seat somebody holds was removed: %+v", ref)
+	}
 }

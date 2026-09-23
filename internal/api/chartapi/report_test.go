@@ -293,6 +293,28 @@ func TestAnUnheldSeatIsTheDirectorysAnswerAndNotTheContactBlocks(t *testing.T) {
 	}
 }
 
+// A RENAMED SEAT IS ASKED ABOUT BY ITS IDENTITY.
+//
+// A binding names the seat by the handle it was created under (ADR-0020), so
+// the directory holds `cto` for a seat now called `chief-tech`. Asked by the
+// current handle, the person holding it was invisible and the seat reported
+// unheld — an operator sent to invite somebody who is already signed in.
+func TestARenamedSeatIsAskedAboutByItsIdentity(t *testing.T) {
+	t.Parallel()
+	view, settings := running()
+	cto := view.Role("cto")
+	cto.Kind = org.KindHuman
+	cto.Contact = &org.HumanContact{MattermostUserID: "cto"}
+	cto.DeclaredHandle, cto.OriginHandle = "chief-tech", "cto"
+	cto.FormerHandles = []string{"cto"}
+
+	got := chartapi.Evaluate(view, settings, func(seat string) bool { return seat == "cto" })
+	if got.Counts[chartapi.KindSeatUnheld] != 0 {
+		t.Errorf("a renamed seat whose identity is held was reported unheld: %v",
+			got.Counts)
+	}
+}
+
 // AND A NODE THAT CANNOT TELL DOES NOT GUESS.
 //
 // This is the whole reason the seam is a nil-able function rather than a bool

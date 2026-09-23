@@ -132,6 +132,15 @@ CREATE TABLE iam_people (
     -- survives one, through chart_seats.former_keys_json — and the residue is
     -- the chart's own stated residue, that a former handle goes on resolving
     -- until something else claims it.
+    --
+    -- SUPERSEDED BY ADR-0020, and the paragraphs above describe what this
+    -- column held when this file was written, not what it holds. It is the
+    -- seat's IDENTITY — the handle the seat was CREATED under, which chart
+    -- rows carry as `origin_handle` and which no rename moves and the chart
+    -- never issues twice — because a binding that followed an address came to
+    -- name a stranger's seat, or one seat twice. (A COMMENT ONLY. Nothing
+    -- about the shape this file creates has changed, and nothing may: an
+    -- applied migration is history.)
     seat_id            TEXT    NOT NULL DEFAULT '',
     -- The CHART POSITION the bind's decide read that seat row at.
     --

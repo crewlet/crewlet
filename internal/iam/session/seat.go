@@ -39,18 +39,23 @@ import (
 // is there and how far this node has got, and a seam that asked for more would
 // be one the session path could stall on.
 type Chart interface {
-	// Seat resolves a seat reference — a handle, or one the seat used to
-	// answer to — to the handle it is known by now.
+	// Seat resolves a binding's seat — named by its IDENTITY, the handle it
+	// was created under — to the seat as it is known now.
 	//
-	// A REFERENCE RATHER THAN A LOOKUP, because a rename moves a handle
-	// and every written-down reference to a seat survives one through the
-	// chart's own former-key resolution. An implementation that queried
-	// the handle column directly would report every renamed seat as gone,
-	// which is a 403 for everybody bound to one.
+	// AN IDENTITY RATHER THAN AN ADDRESS, because a binding names one
+	// (ADR-0020): a rename moves a handle and the chart may later give a
+	// retired one to another seat, so an implementation that resolved the
+	// binding as an ADDRESS — the handle column, or the rename trail —
+	// reported a renamed seat as gone, or signed its holder in as whichever
+	// seat wore the name next. An identity names one seat for ever.
+	//
+	// A SEAT THAT WAS REMOVED answers `found` with Tombstoned set, from the
+	// tombstone the chart writes on its identity; one that never existed,
+	// or that this node has not applied, answers not found and no error.
 	//
 	// AN ERROR IS THE UNKNOWN ARM, never "no such seat": a view that is
 	// not built and a seat that does not exist are 503 and 403.
-	Seat(ctx context.Context, ref string) (Seat, bool, error)
+	Seat(ctx context.Context, identity string) (Seat, bool, error)
 
 	// Position is how far this node's chart applier has committed,
 	// packed, and Lag how far behind it is.
@@ -70,7 +75,7 @@ type Chart interface {
 // Seat is what the chart says about one seat, as narrowly as this needs it.
 type Seat struct {
 	// Handle is the seat as it is addressed NOW, which is what an author
-	// column records — not the reference that resolved to it.
+	// column records — not the identity the binding named it by.
 	Handle string
 
 	// Kind is agent or human. A person may only be bound to a human seat:
@@ -83,7 +88,7 @@ type Seat struct {
 	// carries so a gate does not re-walk the chart per request.
 	Unit string
 
-	// Tombstoned reports a reference the chart holds a REMOVAL record for.
+	// Tombstoned reports an identity the chart holds a REMOVAL record for.
 	//
 	// THE CHART DELETES THE ROW AND WRITES A TOMBSTONE, so an
 	// implementation answers this by reading that tombstone and reports
@@ -245,6 +250,12 @@ func ResolveSeat(ctx context.Context, chart Chart, person PersonRow) Binding {
 	// arm because the question the position then settles is the same one:
 	// has this node seen what the binding was decided against?
 	detail := fmt.Sprintf("seat %q", person.Seat)
+	if found && seat.Handle != "" && seat.Handle != person.Seat {
+		// THE NAME AN ADMINISTRATOR KNOWS IT BY, beside the identity the
+		// binding holds: a refusal naming only the handle a seat was
+		// created under sends somebody looking for a seat renamed long ago.
+		detail = fmt.Sprintf("seat %q (created as %q)", seat.Handle, person.Seat)
+	}
 	switch {
 	case !found:
 		detail += " is not in this node's chart view"
