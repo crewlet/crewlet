@@ -2516,6 +2516,18 @@ func writeFailure(name string, err error) string {
 		return fmt.Sprintf("%s was refused: %v. Nothing is wrong with your "+
 			"edit — somebody changed the item after you read it. Call "+
 			"get_work_item again and decide from what it says now.", name, err)
+	case errors.Is(err, tracker.ErrStepUnresolved):
+		// NEITHER DONE NOR NOT MADE. A gesture that walks — a move, a
+		// merge, a promotion, a dependency — stopped at a step whose
+		// outcome is unknown, so the default below ("the change was NOT
+		// made") would be false about the steps that landed, and "done"
+		// false about the rest. The same call again carries the same
+		// operation id, and that is what finishes it.
+		return fmt.Sprintf("%s stopped part of the way through: %v. Some of "+
+			"it may already have landed. Call %s again with exactly the same "+
+			"arguments — the retry answers what landed and finishes the rest. "+
+			"Do not report it as done until a call answers without this "+
+			"error.", name, err, name)
 	case errors.Is(err, tracker.ErrReassignmentBudget):
 		// THE REFUSAL THAT MUST NOT INVITE ANOTHER ATTEMPT: this item is
 		// circulating between agents, and a message that reads like a

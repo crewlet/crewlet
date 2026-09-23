@@ -745,6 +745,18 @@ func TestAFailedWriteSaysSo(t *testing.T) {
 	if !strings.Contains(got.Output, "Do not reassign it again") {
 		t.Errorf("the budget refusal invites another attempt: %q", got.Output)
 	}
+
+	// AND A WALK THAT STOPPED AT AN UNKNOWN STEP IS NEITHER: some of it may
+	// have landed, so "NOT made" would be false, and the same call again is
+	// what finishes it.
+	trk.writeErr = fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved)
+	got = callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "status": "done",
+	})
+	if !got.Failed || strings.Contains(got.Output, "NOT made") ||
+		!strings.Contains(got.Output, "exactly the same arguments") {
+		t.Errorf("a walk that stopped at an unresolved step gave %q", got.Output)
+	}
 }
 
 // A REFERENCE IS RESOLVED TO AN ID BEFORE IT IS STORED. A model types the key

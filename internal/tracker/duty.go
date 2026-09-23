@@ -413,9 +413,12 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 		d.deps.Logger.WarnContext(ctx, "tracker_merge_marker_without_target",
 			"task", id, "detail", "the marker is cleared and the task left "+
 				"open; the merge it names never linked anything")
-		if _, err = d.deps.Writer.UpdateTask(ctx, opID, walk.task,
+		var cleared WriteResult
+		cleared, err = d.deps.Writer.UpdateTask(ctx, opID, walk.task,
 			walk.project, NoIfMatch, TaskPatch{Merging: &done},
-			ChangeFields, nil); err != nil {
+			ChangeFields, nil)
+		if err = resolved(fmt.Sprintf("the merge marker's removal from "+
+			"task %s", id), cleared, err); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -433,10 +436,15 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 	// mid-merge, which this job would then pick up again on every tick for
 	// ever.
 	cancelled := StatusCancelled
-	if _, err = d.deps.Writer.UpdateTask(ctx, stepID(opID, "close"),
+	closed, err := d.deps.Writer.UpdateTask(ctx, stepID(opID, "close"),
 		walk.task, walk.project, NoIfMatch,
 		TaskPatch{Status: &cancelled, Merging: &done},
-		ChangeStatus, nil); err != nil {
+		ChangeStatus, nil)
+	// AN UNKNOWN CLOSE IS NOT A COMPLETED MERGE: counting it would report
+	// a repair this tick cannot vouch for, and the next tick — which finds
+	// the marker still up if it did not land — is the one that decides.
+	if err = resolved(fmt.Sprintf("task %s's close as a duplicate of %s",
+		id, walk.into), closed, err); err != nil {
 		return false, err
 	}
 	d.deps.Logger.InfoContext(ctx, "tracker_merge_completed",

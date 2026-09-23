@@ -122,8 +122,13 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 		result, err := w.UpdateTask(ctx, stepID(opID, "waiting"), change.Task,
 			change.Project, NoIfMatch, TaskPatch{Relate: intent},
 			ChangeRelations, found.wakeFor(found.self, nil, leads))
-		if err != nil {
-			return out, err
+		// AN UNKNOWN AUTHORED EDGE STOPS THE CALL BEFORE ITS MIRRORS. A
+		// mirror written over an edge that may not exist is the residue
+		// the order above exists to rule out: a blocker listing a
+		// dependent whose own edge is missing, which no scan can find.
+		if err = resolved(fmt.Sprintf("task %s's own dependency edges",
+			change.Task), result, err); err != nil {
+			return DependencyResult{WriteResult: result}, err
 		}
 		out.WriteResult = result
 	}
@@ -149,11 +154,13 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 		if adding {
 			notify = found.wakeFor(other, nil, leads)
 		}
-		if _, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("b%d", i)),
+		authored, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("b%d", i)),
 			id, other.Project, NoIfMatch, TaskPatch{Relate: intent},
-			ChangeRelations, notify); err != nil {
+			ChangeRelations, notify)
+		if err = resolved(fmt.Sprintf("task %s's edge to %s", id,
+			change.Task), authored, err); err != nil {
 			return out, fmt.Errorf("tracker: %d of this call's edges were "+
-				"written before task %s refused its own: %w", i, id, err)
+				"written before task %s's own stopped the call: %w", i, id, err)
 		}
 	}
 
@@ -280,7 +287,11 @@ func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChang
 		result, err := writer.UpdateTask(ctx, stepID(opID, fmt.Sprintf("m%d", i)),
 			id, subject.Project, NoIfMatch, TaskPatch{Depend: intent},
 			ChangeRelations, notify)
-		if err != nil {
+		// AN UNKNOWN MIRROR IS REPORTED ONE-SIDED, not mirrored: it may not
+		// be on the log, and one that is not is exactly the edge the duty
+		// repairs. Reported mirrored, a caller would be told a blocker
+		// knows about a dependent it may never hear of.
+		if resolved("a mirror", result, err) != nil {
 			oneSided = append(oneSided, id)
 			continue
 		}

@@ -136,6 +136,39 @@ func mergeClaim(task string) string  { return classMerge.Resource(task) }
 // scrubbed it.
 func stepID(opID, step string) string { return statelog.StepOpID(opID, step) }
 
+// ErrStepUnresolved reports a walking sequence that stopped at a step whose
+// outcome is UNKNOWN.
+//
+// NEITHER "DONE" NOR "NOT MADE": the steps before it landed, the step itself
+// may or may not be on the log, and nothing after it was written. A caller
+// told this re-runs the gesture under the SAME operation id, and every step
+// answers for itself — see each sequence's "Re-running it".
+var ErrStepUnresolved = errors.New("tracker: a step's outcome is unresolved")
+
+// resolved reads one step of a walking sequence the way the walk must: a step
+// that failed stops it, and so does one whose outcome is UNKNOWN.
+//
+// AN UNKNOWN STEP IS NOT ONE THAT LANDED. [Writer.UpdateTask] answers unknown
+// with a nil error — the record may be on the log and may not — and every walk
+// checked only the error, so it carried on over a step it could not vouch for:
+// descendants moved under a root whose own move might not have landed, a mark
+// taken down over a child still keyed in the old project, a duplicate closed
+// with a subtask still under it, and a caller told the whole gesture
+// succeeded. Stopping leaves the walk's own mark up, which is what hands the
+// remainder to the re-run or the duty rather than to nobody.
+func resolved(step string, result WriteResult, err error) error {
+	switch {
+	case err != nil:
+		return err
+	case result.Outcome == statelog.OutcomeUnknown:
+		return fmt.Errorf("tracker: whether %s landed is unknown (operation "+
+			"%s), so the walk stopped there; re-run it under the same "+
+			"operation id, which answers what landed and carries on from it: %w",
+			step, result.OpID, ErrStepUnresolved)
+	}
+	return nil
+}
+
 // WriteResult is what a tracker write returns.
 //
 // It carries the framework's own three-valued outcome UNCHANGED — a write is
@@ -848,7 +881,11 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 		// key IT took; this run's number is the gap.
 		created, err = w.landedTask(ctx, created.Result, subtask.ID)
 	}
-	if err != nil {
+	// A SUBTASK WHOSE CREATE IS UNKNOWN IS NOT ONE TO POINT AT: marking the
+	// item over it is the struck-through line pointing at nothing that this
+	// order exists to prevent.
+	if err = resolved(fmt.Sprintf("subtask %s's create", subtask.ID),
+		created, err); err != nil {
 		return created, err
 	}
 	if parentProject == "" {
@@ -864,9 +901,10 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 		parentProject, NoIfMatch,
 		TaskPatch{Promote: &PromoteIntent{Item: itemID, Subtask: subtask.ID}},
 		ChangeChecklist, nil)
-	if err != nil {
+	if err = resolved(fmt.Sprintf("the mark on %s's item", parentID),
+		marked, err); err != nil {
 		return created, fmt.Errorf("tracker: subtask %s is filed and its item "+
-			"in %s is not yet marked; retry the promotion under the same "+
+			"in %s may not be marked yet; retry the promotion under the same "+
 			"operation id, which completes it: %w", created.Key, parentID, err)
 	}
 	created.Result = marked.Result
@@ -1220,9 +1258,11 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			return WriteResult{}, err
 		}
 		if merged, changed := mergeTags(set, newTags); changed {
-			if _, err := w.WriteDocument(ctx, stepID(opID, "tags"),
-				TagsSubject(target), "", merged, ChangeTags, nil); err != nil {
-				return WriteResult{}, fmt.Errorf("tracker: declare the moving "+
+			declared, err := w.WriteDocument(ctx, stepID(opID, "tags"),
+				TagsSubject(target), "", merged, ChangeTags, nil)
+			if err = resolved("the moving subtree's tags in "+target,
+				declared, err); err != nil {
+				return declared, fmt.Errorf("tracker: declare the moving "+
 					"subtree's tags in %s: %w", target, err)
 			}
 		}
@@ -1230,9 +1270,9 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 
 	// THE ALIAS BEFORE THE RE-KEY, so a key somebody pastes into chat
 	// keeps resolving from the moment it stops being current.
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if _, err := w.claimAlias(ctx, stepID(opID, "alias"), root.Key, taskID, at); err != nil {
-		return WriteResult{}, err
+	aliased, err := w.claimAlias(ctx, stepID(opID, "alias"), root.Key, taskID, at)
+	if err = resolved("key "+root.Key+"'s alias", aliased, err); err != nil {
+		return aliased, err
 	}
 
 	base, _, err := w.mintKey(ctx, stepID(opID, "counter"), target, 1+len(subtree), nil)
@@ -1255,7 +1295,11 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	former := append(append([]string{}, root.FormerKeys...), root.Key)
 	result, err := w.moveOne(ctx, stepID(opID, "root"), root, target, former,
 		&KeyMint{N: base}, len(subtree) > 0)
-	if err != nil {
+	// A ROOT WHOSE MOVE IS UNKNOWN HAS NO SUBTREE TO FOLLOW IT: moving the
+	// descendants under a root that may still be in its old project splits
+	// the subtree the other way round.
+	if err = resolved(fmt.Sprintf("task %s's move into %s", taskID, target),
+		result, err); err != nil {
 		return result, err
 	}
 	if len(subtree) > 0 {
@@ -1315,7 +1359,9 @@ func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 		// THE LEDGER CANNOT SAY, so neither can this call — and moving
 		// the rest on a root that another operation may have moved would
 		// finish somebody else's walk under this one's name.
-		return WriteResult{Result: answered}, nil
+		return WriteResult{Result: answered}, resolved(fmt.Sprintf(
+			"task %s's move into %s", root.ID, target),
+			WriteResult{Result: answered}, nil)
 	}
 	if err := w.followRoot(ctx, opID, root, subtree); err != nil {
 		return WriteResult{Result: answered}, err
@@ -1437,9 +1483,10 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 // watching the root heard about the move from its first append.
 func (w *Writer) endMove(ctx context.Context, opID, rootID, project string) error {
 	down := false
-	_, err := w.UpdateTask(ctx, stepID(opID, "moved"), rootID, project,
+	result, err := w.UpdateTask(ctx, stepID(opID, "moved"), rootID, project,
 		NoIfMatch, TaskPatch{Moving: &down}, ChangeMoved, nil)
-	return err
+	return resolved(fmt.Sprintf("the mid-move mark's removal from task %s",
+		rootID), result, err)
 }
 
 // moveDescendants moves each of a subtree's descendants, in order, on the
@@ -1448,10 +1495,16 @@ func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
 	descendants []Task, base uint64) error {
 
 	for i, descendant := range descendants {
-		if _, err := w.moveOne(ctx, stepID(opID, "task-"+descendant.ID),
+		moved, err := w.moveOne(ctx, stepID(opID, "task-"+descendant.ID),
 			descendant, target,
 			append(append([]string{}, descendant.FormerKeys...), descendant.Key),
-			&KeyMint{N: base + uint64(i)}, false); err != nil {
+			&KeyMint{N: base + uint64(i)}, false)
+		// AN UNKNOWN DESCENDANT STOPS THE WALK like a refused one, and
+		// the root's mark stays up over it: lowering the mark past a
+		// task that may still be in the old project is the split subtree
+		// nothing would look for again.
+		if err = resolved(fmt.Sprintf("task %s's move into %s",
+			descendant.ID, target), moved, err); err != nil {
 			return fmt.Errorf("tracker: %d of %d descendants moved; re-run the "+
 				"move under the same operation id, which moves the rest: %w",
 				i, len(descendants), err)
@@ -1640,13 +1693,14 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			Kind: RelationDuplicates, Other: into,
 		}}}, Merging: &merging, MergeReparent: &reparent},
 		ChangeRelations, nil)
-	if err != nil {
-		return WriteResult{}, err
+	if err = resolved(fmt.Sprintf("task %s's merge marker", duplicate),
+		marked, err); err != nil {
+		return marked, err
 	}
 
 	if reparent {
-		if _, err := w.reparentOnto(ctx, opID, duplicate, into); err != nil {
-			return WriteResult{}, err
+		if _, err = w.reparentOnto(ctx, opID, duplicate, into); err != nil {
+			return marked, err
 		}
 	}
 
@@ -1656,9 +1710,11 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 	// re-parented children in between are on subjects of their own — so
 	// the mark's position is what this last append has to see, whatever
 	// the loop above published. See [Writer.After].
-	return w.After(marked.Position).UpdateTask(ctx, stepID(opID, "close"),
+	closed, err := w.After(marked.Position).UpdateTask(ctx, stepID(opID, "close"),
 		duplicate, task.Project, NoIfMatch,
 		TaskPatch{Status: &cancelled, Merging: &done}, ChangeStatus, notify)
+	return closed, resolved(fmt.Sprintf("task %s's close as a duplicate of %s",
+		duplicate, into), closed, err)
 }
 
 // reparentOnto moves whatever is left of a duplicate's subtasks onto the
@@ -1693,9 +1749,14 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 		}
 		for _, child := range batch {
 			after = child.ID
-			if _, err := w.UpdateTask(ctx, stepID(opID, "c/"+child.ID),
+			result, err := w.UpdateTask(ctx, stepID(opID, "c/"+child.ID),
 				child.ID, child.Project, NoIfMatch, TaskPatch{Parent: &into},
-				ChangeReparented, nil); err != nil {
+				ChangeReparented, nil)
+			// AN UNKNOWN CHILD STOPS THE WALK, so the close — which
+			// takes the merge marker down — never runs over a subtask
+			// that may still be under the duplicate.
+			if err = resolved(fmt.Sprintf("subtask %s's move onto %s",
+				child.ID, into), result, err); err != nil {
 				return moved, fmt.Errorf("tracker: %d subtask(s) re-parented "+
 					"onto %s and %s still has more; the tracker duty completes "+
 					"the rest idempotently: %w", moved, into, duplicate, err)

@@ -299,6 +299,49 @@ type lossyLog struct {
 	// sequence.
 	landedOn string
 	landed   func()
+
+	// dropOn and dropStage lose ONE append's acknowledgement on one
+	// subject and then the probe that resolves it — so a walk's single
+	// step, and nothing either side of it, has an unknown outcome. A read
+	// of the subject BEFORE the append (a create's own expectation) is
+	// answered as usual.
+	dropOn    string
+	dropStage int
+}
+
+// The stages of a targeted drop.
+const (
+	dropIdle = iota
+	dropNextAppend
+	dropNextProbe
+)
+
+// dropFor loses the acknowledgement of the next append that LANDS on a
+// subject ending in suffix, and the probe the publisher then resolves the
+// lost acknowledgement with.
+func (l *lossyLog) dropFor(suffix string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.dropOn, l.dropStage = suffix, dropNextAppend
+}
+
+// loseFor reports whether this answer about subject is the one a targeted drop
+// loses: an append's acknowledgement at the first stage, a probe at the second.
+func (l *lossyLog) loseFor(subject string, probe bool) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !strings.HasSuffix(subject, l.dropOn) || l.dropOn == "" {
+		return false
+	}
+	switch {
+	case !probe && l.dropStage == dropNextAppend:
+		l.dropStage = dropNextProbe
+		return true
+	case probe && l.dropStage == dropNextProbe:
+		l.dropStage, l.dropOn = dropIdle, ""
+		return true
+	}
+	return false
 }
 
 // afterAppendTo runs fn once, after the next append to a subject ending in
@@ -368,14 +411,14 @@ func (l *lossyLog) Append(ctx context.Context, subject, msgID string, expect *ui
 			fn()
 		}
 	}
-	if err == nil && l.lose() {
+	if err == nil && (l.lose() || l.loseFor(subject, false)) {
 		return 0, false, errAnswerLost
 	}
 	return seq, dup, err
 }
 
 func (l *lossyLog) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
-	if l.lose() {
+	if l.lose() || l.loseFor(subject, true) {
 		return 0, false, errAnswerLost
 	}
 	return l.Appender.LastSeq(ctx, subject)

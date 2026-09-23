@@ -49,6 +49,17 @@ different with each.
   log and it may not. This is the only outcome a retry is correct for, and the
   retry carries the same operation id so the ledger collapses a duplicate.
 
+A gesture made of **several** records in order — a cross-project move, a merge
+of duplicates, a checklist item's promotion, a dependency with its mirror —
+treats a step answered `unknown` as the end of the walk, not as a step that
+landed. Nothing after it is written: no descendant follows a root whose own
+move is unknown, a mid-move or mid-merge mark is not taken down, and a
+dependency's mirror is not written over an authored edge nobody can vouch for
+(a mirror whose own outcome is unknown is reported one-sided, the state the
+tracker duty repairs). The gesture fails naming the operation id, and running it
+again under that id answers each step that landed from the ledger and finishes
+the rest.
+
 ### What a retry is judged by: the instant its operation was minted
 
 Every node keeps an **operation ledger** — which operations its own applier
