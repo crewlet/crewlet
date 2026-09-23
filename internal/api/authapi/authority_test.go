@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -52,12 +53,12 @@ func TestARedemptionNamesItsInvitationAsTheAuthority(t *testing.T) {
 	}).Routes(mux)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/auth/invite/inv-1", strings.NewReader(
+		"/auth/invite/"+invitationID, strings.NewReader(
 			`{"login":"dana.sre","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	if got.Invitation != "inv-1" || got.BootstrapCode != "" {
+	if got.Invitation != invitationID || got.BootstrapCode != "" {
 		t.Errorf("the redemption's enrolment names invitation %q and code %q, "+
 			"want the invitation it redeems and no code", got.Invitation,
 			got.BootstrapCode)
@@ -95,7 +96,15 @@ func TestTheFirstPersonNamesTheCodeAsTheAuthority(t *testing.T) {
 			}
 			var got iamdomain.Enrolment
 			mux := http.NewServeMux()
+			// THE CODE IS OUTSTANDING ON THE LOG as well as in the file:
+			// a code only the file holds (withdrawn, spent or expired)
+			// creates nobody, which is a different case.
+			sum := sha256.Sum256([]byte(code))
 			buildWith(t, b, nil, func(o *authapi.Options) {
+				o.Directory = codeDirectory{codes: []iamdomain.BootstrapCode{{
+					ID: hex.EncodeToString(sum[:]), MintedAt: clock,
+					ExpiresAt: clock.Add(time.Hour),
+				}}}
 				o.Writer = enrolmentRecorder{got: &got, err: tc.err}
 			}).Routes(mux)
 			rec := httptest.NewRecorder()
@@ -107,7 +116,6 @@ func TestTheFirstPersonNamesTheCodeAsTheAuthority(t *testing.T) {
 				t.Fatalf("status %d, want %d: %s", rec.Code, tc.status,
 					rec.Body.String())
 			}
-			sum := sha256.Sum256([]byte(code))
 			if got.BootstrapCode != hex.EncodeToString(sum[:]) ||
 				got.Invitation != "" {
 				t.Errorf("the first person's enrolment names code %q and "+
