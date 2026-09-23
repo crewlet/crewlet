@@ -266,6 +266,18 @@ func (s Sources) clock() time.Time {
 	return s.Now()
 }
 
+// zone is the company's ONE clock (ADR-0018) as the current epoch sets it, or
+// UTC before one is running: what every day this surface cuts — a `due=`
+// filter, a due band, an overdue mark, a person's day — begins at.
+//
+// Read per call, like [Sources.Company] itself, because an apply can move it.
+func (s Sources) zone() *time.Location {
+	if s.Company == nil {
+		return time.UTC
+	}
+	return s.Company().Location()
+}
+
 // ErrUnavailable is a question this node understood and cannot answer YET: its
 // copy of the company's records is still catching up, or the coordination store
 // it reads could not be reached.

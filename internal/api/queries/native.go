@@ -109,12 +109,12 @@ type WorkReader interface {
 		tracker.ProjectListing, error)
 	Project(ctx context.Context, q tracker.ProjectDetailQuery) (
 		tracker.ProjectDetail, error)
-	Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time) (
-		tracker.WorkloadAnswer, error)
+	Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time,
+		loc *time.Location) (tracker.WorkloadAnswer, error)
 	Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
 		tracker.ActivityAnswer, error)
-	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time) (
-		tracker.MyWork, error)
+	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time,
+		loc *time.Location) (tracker.MyWork, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
 	Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (tracker.InboxAnswer, error)
 	Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time) (
@@ -134,7 +134,7 @@ type PageReader interface {
 // ---- work -------------------------------------------------------------- //
 
 func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
-	now := time.Now().UTC()
+	now := s.clock()
 	// THROUGH THE EXPANSION, so a `view=` or a `preset=` is the set of
 	// defaults it stands for rather than a key nothing reads. The viewer
 	// is a parameter here for the reason it is on the view strip: this
@@ -168,7 +168,12 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		Handle:     party.Handle,
 		OperatorID: party.OperatorID,
 		Project:    s.projectOf(viewer),
-	}, now, time.UTC)
+		// THE COMPANY'S OWN CLOCK (ADR-0018), which every relative date
+		// in the grammar and the due bands and overdue marks on every row
+		// are cut on. This was UTC, so for the hours between the
+		// company's midnight and UTC's a board's "today" was a different
+		// day from the one a seat's own `list_work_items` resolved.
+	}, now, s.zone())
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
@@ -683,7 +688,7 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 		Units: s.chartUnits(),
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	}, s.clock(), s.zone())
 	if err != nil {
 		return nil, err
 	}
@@ -836,7 +841,7 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 		// see [freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	}, s.clock(), s.zone())
 	if err != nil {
 		return nil, err
 	}

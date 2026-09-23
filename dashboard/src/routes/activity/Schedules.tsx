@@ -109,7 +109,7 @@ function scheduleFacts(row: ScheduleRow, now: number): Fact[] {
         </>
       ),
     },
-    { label: "Timezone", value: row.timezone || "UTC" },
+    { label: "Timezone", value: row.timezone },
     {
       label: "Next",
       // THE ENGINE'S ANSWER, and the REASON where it has none. A schedule
@@ -282,13 +282,14 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
   // the engine resolves the row's timezone and evaluates the expression there,
   // so a list worked out in UTC was wrong by the zone's STANDING offset on
   // every row of every company that does not run in UTC, not merely across a
-  // daylight-saving change. An empty `timezone` is the engine's own default
-  // rather than an unreadable one; a zone this runtime cannot read yields no
-  // fires at all, which is the same refusal an unparseable expression gets and
-  // is what `problem` on the row names.
+  // daylight-saving change. The engine names the zone on EVERY row: a schedule
+  // that names none of its own fires on the company's clock (ADR-0018) and
+  // arrives carrying it, so there is nothing here to default — and a default
+  // of UTC was exactly the wrong clock for such a row. A zone this runtime
+  // cannot read yields no fires at all, which is the same refusal an
+  // unparseable expression gets and is what `problem` on the row names.
   const upcoming = useMemo(
-    () =>
-      row.cron ? nextFires(row.cron, new Date(minute * 60_000), row.timezone || "UTC", count) : [],
+    () => (row.cron ? nextFires(row.cron, new Date(minute * 60_000), row.timezone, count) : []),
     [row.cron, row.timezone, minute, count],
   );
   // ONE FIRE IS NOT A SERIES. The next fire is already a fact in the header,
@@ -298,7 +299,7 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
     <Card>
       <Card.Header
         icon={<CalendarTodayGlyph size="sm" />}
-        subtitle={`the next ${upcoming.length} fires this expression works out to, evaluated in ${row.timezone || "UTC"}`}
+        subtitle={`the next ${upcoming.length} fires this expression works out to, evaluated in ${row.timezone}`}
       >
         <Card.Title>And after that</Card.Title>
       </Card.Header>

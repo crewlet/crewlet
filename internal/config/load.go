@@ -522,6 +522,25 @@ var retiredCompanyFields = map[string]string{
 		"working week any more, so there is no setting to move it to. " +
 		"Delete the line",
 
+	// The two clocks the company's one clock replaced (ADR-0018). Both
+	// shipped in the example companies, so both are refused by name — and
+	// the refusal says the move CHANGES WHAT FIRES WHEN for one of them:
+	// a company that wrote `default_timezone: UTC` beside a Berlin tracker
+	// fired its zone-less schedules on UTC, and one clock at the top puts
+	// them on Berlin's.
+	"TrackerNativeConfig.timezone": "`tracker.native.timezone` is now the " +
+		"company's top-level `timezone`, one level up beside `name:`: it is " +
+		"the clock every calendar edge the engine cuts is on — the tracker's " +
+		"dates, a person's day and a schedule that names no zone — rather " +
+		"than the tracker's alone. Move the value there",
+	"Scheduling.default_timezone": "`scheduling.default_timezone` is retired: " +
+		"a schedule that names no `timezone` of its own fires on the company's " +
+		"top-level `timezone`, the one clock the tracker's dates and a " +
+		"person's day are cut on too. Delete the line, and write `timezone:` " +
+		"at the top of the document if the company is not on UTC — a company " +
+		"that also set `tracker.native.timezone` to another zone now fires " +
+		"its zone-less schedules on THAT zone, so give a schedule its own " +
+		"`timezone:` where it must keep the old one",
 	"Knowledge.confluence_spaces": "`knowledge.confluence_spaces` is now " +
 		"`knowledge.scope`, and it scopes whichever knowledge base the " +
 		"company runs rather than Confluence specifically. The values are " +

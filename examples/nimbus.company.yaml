@@ -21,6 +21,17 @@ policies:
   - "Each engineering role owns specific projects (see the `Repo Ownership` page in the LEAD space); do not push to projects you do not own without an explicit handoff from their owner"
   - "The Phase-2 AI framework is developed in a dedicated project owned by AI Systems Engineering; the control plane (nimbuscore, nimbusk0s) stays focused on cluster-level primitives that the framework depends on"
 
+# The company's ONE clock, as an IANA zone (default UTC).  Every calendar
+# edge the engine cuts is cut on it: where "today" and "this week" begin
+# for a ``due=`` filter, a due band, an overdue mark and each person's own
+# day; what a relative date ("next Friday") or an all-day due date resolves
+# to; and the wall clock a schedule that names no ``timezone`` of its own
+# fires on — so the 09:00 schedules below fire at 09:00 in Berlin.  A clock for
+# AUTHORED instants and calendar edges only: no duration is measured
+# against it, because a duration measured on a wall clock changes length
+# twice a year.  See docs/getting-started/configuration.md.
+timezone: "Europe/Berlin"
+
 # Company-wide token budget — a single hard cap on total LLM tokens across
 # EVERY agent (CEO, CTO, PM, DevRel, the three engineers, their sub-agents,
 # and the learning/aux passes).  The engine's BudgetManager charges this
@@ -347,7 +358,6 @@ learning:
 scheduling:
   enabled: true
   tick_seconds: 10
-  default_timezone: "UTC"                  # schedules without their own ``timezone`` use this
   jitter_seconds: 30                       # spread schedules that share a popular cron minute (e.g. 9am)
 
 
@@ -497,17 +507,12 @@ integrations:
 tracker:
   backend: native
 
-  # The engine's own tracker's policy.  Nothing here gates a write: the
-  # timezone is what a relative date ("next Friday") and an all-day due
-  # date resolve against.  It is a clock for AUTHORED instants and
-  # calendar edges only — no duration is measured against it, because a
-  # duration measured on a wall clock changes length twice a year.
-  native:
-    timezone: "Europe/Berlin"
-    # ``inbox_retention_days`` left at its default of a year.  It is the
-    # one horizon here that deletes anything, and what it deletes is a
-    # DERIVED inbox row rather than the history it points at — that
-    # answers for ever.
+  # The engine's own tracker's policy is one setting, and it is left at
+  # its default here: ``native: {inbox_retention_days: 365}`` — a year.
+  # It is the one horizon that deletes anything, and what it deletes is a
+  # DERIVED inbox row rather than the history it points at, which answers
+  # for ever.  The clock the tracker's dates mean is the company's own
+  # ``timezone`` at the top of this file.
 
 knowledge:
   backend: native
@@ -671,7 +676,7 @@ units:
             # Fires a TaskAssigned to the CEO's own inbox on the cron.
             schedules:
               - name: morning-tracker-review
-                cron: "0 9 * * 1-5"            # 09:00 Mon–Fri, in scheduling.default_timezone
+                cron: "0 9 * * 1-5"            # 09:00 Mon–Fri, on the company's clock (``timezone``)
                 task: >
                   Review overnight activity across the LEAD, PROD and ENG projects:
                   stalled epics, new escalations from the CTO or PM, scope creep, and

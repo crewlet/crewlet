@@ -16,6 +16,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -254,8 +255,9 @@ func TestNewAppliesDefaults(t *testing.T) {
 	if h.s.tick != DefaultTick {
 		t.Errorf("tick = %v, want %v", h.s.tick, DefaultTick)
 	}
-	if h.s.defaultTZ != DefaultTimezone {
-		t.Errorf("timezone = %q, want %q", h.s.defaultTZ, DefaultTimezone)
+	// No clock is the default company's, which is UTC.
+	if zone := h.s.companyZone(); zone != time.UTC {
+		t.Errorf("a scheduler built with no clock fires on %v, want UTC", zone)
 	}
 	if h.s.catchupMin != DefaultCatchupMin || h.s.catchupMax != DefaultCatchupMax {
 		t.Errorf("catchup = [%v, %v], want [%v, %v]",
@@ -606,14 +608,92 @@ func TestAScheduleFiresOnItsOwnZoneNotUTC(t *testing.T) {
 	}
 }
 
-func TestTheDefaultTimezoneAppliesToAScheduleThatNamesNone(t *testing.T) {
+// A SCHEDULE THAT NAMES NO ZONE FIRES ON THE COMPANY'S CLOCK (ADR-0018), the
+// one every other calendar edge is cut on — and not on UTC, which is where it
+// would fire if the clock were not consulted at all.
+func TestAScheduleThatNamesNoZoneFiresOnTheCompanysClock(t *testing.T) {
 	t.Parallel()
-	h := build(t, roleOrg(org.Schedule{Name: "ams", Cron: "30 9 * * *", Task: "x"}),
-		func(o *Options) { o.DefaultTimezone = "Europe/Amsterdam" })
+	amsterdam := mustZone(t, "Europe/Amsterdam")
+	sch := org.Schedule{Name: "ams", Cron: "30 9 * * *", Task: "x"}
+
+	// 09:30 Amsterdam (CEST) is 07:30 UTC in June.
+	h := build(t, roleOrg(sch), func(o *Options) {
+		o.Zone = func() *time.Location { return amsterdam }
+	})
 	h.seed(tickAt(7, 29, 30))
 	if got := h.tick(tickAt(7, 30, 30)); got != 1 {
-		t.Fatalf("Tick = %d, want 1 — the system default zone applies", got)
+		t.Fatalf("Tick at 07:30Z = %d, want 1 — the company's clock applies", got)
 	}
+	h2 := build(t, roleOrg(sch), func(o *Options) {
+		o.Zone = func() *time.Location { return amsterdam }
+	})
+	h2.seed(tickAt(9, 29, 30))
+	if got := h2.tick(tickAt(9, 30, 30)); got != 0 {
+		t.Fatalf("Tick at 09:30Z = %d, want 0 — that is 09:30 UTC, not the company's 09:30", got)
+	}
+}
+
+// AND A SCHEDULE'S OWN ZONE OUTRANKS THE COMPANY'S: it is that one piece of
+// work's wall clock — the Tokyo team's standup — never a second company clock.
+func TestAScheduleNamingItsOwnZoneKeepsIt(t *testing.T) {
+	t.Parallel()
+	sch := org.Schedule{Name: "ams", Cron: "30 9 * * *", Task: "x", Timezone: "Europe/Amsterdam"}
+	h := build(t, roleOrg(sch), func(o *Options) {
+		o.Zone = func() *time.Location { return mustZone(t, "Asia/Tokyo") }
+	})
+	h.seed(tickAt(7, 29, 30))
+	if got := h.tick(tickAt(7, 30, 30)); got != 1 {
+		t.Fatalf("Tick at 07:30Z = %d, want 1 — the schedule's own Amsterdam 09:30", got)
+	}
+}
+
+// THE CLOCK IS READ AT EVERY TICK, not captured when the loop was armed.
+//
+// The loop outlives the apply that armed it, exactly as it outlives the org
+// it reads per tick. A zone captured at construction kept firing a company's
+// zone-less schedules on the clock it had when the loop started until
+// something happened to re-arm it — so a founder who corrected `timezone`
+// had standups arriving at the old hour, on a screen showing the new one.
+func TestAMovedCompanyClockMovesTheNextTick(t *testing.T) {
+	t.Parallel()
+	var clock atomic.Pointer[time.Location]
+	clock.Store(time.UTC)
+	h := build(t, roleOrg(org.Schedule{Name: "ams", Cron: "30 9 * * *", Task: "x"}),
+		func(o *Options) { o.Zone = clock.Load })
+
+	// On UTC, 07:30Z is not the 09:30 standup.
+	h.seed(tickAt(7, 29, 30))
+	if got := h.tick(tickAt(7, 30, 30)); got != 0 {
+		t.Fatalf("Tick at 07:30Z on UTC = %d, want 0", got)
+	}
+	// The apply moves the company to Amsterdam; the same loop, one day
+	// later, fires at Amsterdam's 09:30.
+	clock.Store(mustZone(t, "Europe/Amsterdam"))
+	h.seed(tickAt(7, 29, 30).AddDate(0, 0, 1))
+	if got := h.tick(tickAt(7, 30, 30).AddDate(0, 0, 1)); got != 1 {
+		t.Fatalf("Tick at 07:30Z after the clock moved to Amsterdam = %d, want 1", got)
+	}
+}
+
+// A SCHEDULE NAMING A HOST'S OWN CLOCK DOES NOT FIRE, even one assembled in
+// code past validation: `Local` is whatever zone the node holding the duty is
+// set to, so the standup would move every time the duty did.
+func TestAScheduleOnAHostsOwnClockDoesNotFire(t *testing.T) {
+	t.Parallel()
+	h := build(t, roleOrg(org.Schedule{Name: "local", Cron: "* * * * *", Task: "x", Timezone: "Local"}))
+	h.seed(tickAt(7, 29, 30))
+	if got := h.tick(tickAt(7, 30, 30)); got != 0 {
+		t.Fatalf("Tick = %d, want 0 — a host's own clock is not a calendar", got)
+	}
+}
+
+func mustZone(t *testing.T, name string) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		t.Fatalf("load %s: %v", name, err)
+	}
+	return loc
 }
 
 // --- catchup --------------------------------------------------------------

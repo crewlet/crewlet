@@ -60,11 +60,16 @@ test("the fires are worked out in the schedule's zone, not in UTC", () => {
   expect(screen.getByText(/evaluated in Asia\/Tokyo/)).toBeTruthy();
 });
 
-// AND A ZONE-LESS ROW IS THE ENGINE'S OWN DEFAULT, not an unreadable zone:
-// `nextFires` refuses to default one itself, so the default is stated here and
-// stated in the subtitle, rather than yielding no fires at all.
-test("a row naming no zone is worked out in UTC and says so", () => {
-  render(<NextFires row={row({ timezone: "" })} now={NOW} count={3} />);
-  expect(screen.getAllByText(/09:00:00/).length).toBe(3);
-  expect(screen.getByText(/evaluated in UTC/)).toBeTruthy();
+// AND A SCHEDULE THAT NAMES NO ZONE ARRIVES ON THE COMPANY'S CLOCK (ADR-0018):
+// the engine resolves it, so the row names the company's zone and the fires are
+// worked out there. The screen defaults nothing — a zone-less row read as UTC
+// was nine hours out for a company in Tokyo — so a row that somehow named no
+// zone draws no fires rather than a list on a clock the engine does not fire
+// on.
+test("a row is worked out in the zone the engine names, and never in a default", () => {
+  render(<NextFires row={row({ timezone: "Asia/Tokyo" })} now={NOW} count={3} />);
+  expect(screen.getAllByText(/00:00:00/).length).toBe(3);
+  cleanup();
+  const { container } = render(<NextFires row={row({ timezone: "" })} now={NOW} count={3} />);
+  expect(container.textContent).toBe("");
 });

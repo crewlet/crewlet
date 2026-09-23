@@ -53,6 +53,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -61,10 +62,6 @@ var log = logging.Get("schedule.scheduler")
 
 // Defaults, and the argument for each.
 const (
-	// DefaultTimezone is the zone a schedule that names none is evaluated
-	// in, and what a Scheduler built without one uses.
-	DefaultTimezone = "UTC"
-
 	// DefaultTick is the poll interval.
 	//
 	// Cron fires at minute granularity, so any interval under a minute
@@ -139,8 +136,14 @@ type Options struct {
 	// ends up firing every schedule once per node.
 	Ledger Claimer
 
-	// DefaultTimezone applies to any schedule that names none.
-	DefaultTimezone string
+	// Zone is the company's clock (ADR-0018), which a schedule that names
+	// no zone of its own is evaluated in. Nil is UTC.
+	//
+	// A function rather than a value for the reason [Options.Org] is one:
+	// an apply can move the company's clock, and a zone captured when the
+	// loop was armed kept firing the standups on the old one until the
+	// loop happened to be re-armed.
+	Zone func() *time.Location
 
 	// Tick is the poll interval; zero takes [DefaultTick] and anything at
 	// or above [MaxTick] is refused.
@@ -189,12 +192,12 @@ type Options struct {
 
 // Scheduler dispatches role- and unit-scoped recurring work.
 type Scheduler struct {
-	pub       Publisher
-	org       func() *org.Organization
-	ledger    Claimer
-	defaultTZ string
-	tick      time.Duration
-	jitter    time.Duration
+	pub    Publisher
+	org    func() *org.Organization
+	ledger Claimer
+	zone   func() *time.Location
+	tick   time.Duration
+	jitter time.Duration
 
 	catchupMin time.Duration
 	catchupMax time.Duration
@@ -248,7 +251,7 @@ func New(opts Options) (*Scheduler, error) {
 		pub:        opts.Publisher,
 		org:        opts.Org,
 		ledger:     opts.Ledger,
-		defaultTZ:  cmpOr(opts.DefaultTimezone, DefaultTimezone),
+		zone:       opts.Zone,
 		tick:       durOr(opts.Tick, DefaultTick),
 		jitter:     max(opts.Jitter, 0),
 		catchupMin: durOr(opts.CatchupMin, DefaultCatchupMin),
@@ -278,7 +281,7 @@ func New(opts Options) (*Scheduler, error) {
 func (s *Scheduler) Run(ctx context.Context) {
 	log.InfoContext(ctx, "scheduler_started",
 		"tick_seconds", s.tick.Seconds(),
-		"default_timezone", s.defaultTZ,
+		"company_timezone", s.companyZone().String(),
 		"jitter_seconds", s.jitter.Seconds(),
 		"fleet_singleton", s.duty != nil)
 	ticker := time.NewTicker(s.tick)
@@ -342,10 +345,15 @@ func (s *Scheduler) Tick(ctx context.Context, at time.Time) int {
 	first := s.lastTick.IsZero()
 	windowStart := s.lastTick
 	company := s.org()
+	// THE CLOCK IS READ ONCE PER TICK, beside the org: every schedule one
+	// tick evaluates is evaluated against the same company, so an apply
+	// landing mid-tick cannot put half of them on one clock and half on
+	// the next.
+	clock := s.companyZone()
 
 	fired := 0
 	for _, entry := range Entries(company) {
-		fired += s.evaluate(ctx, company, entry, at, windowStart, first)
+		fired += s.evaluate(ctx, company, clock, entry, at, windowStart, first)
 	}
 
 	s.lastTick = at
@@ -356,16 +364,16 @@ func (s *Scheduler) Tick(ctx context.Context, at time.Time) int {
 // published. Every failure inside it is logged and swallowed: a tick evaluates
 // every schedule, and one that gave up on the first bad cron would let a typo
 // stop a company's whole ritual calendar.
-func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, e Entry, at, windowStart time.Time, first bool) int {
+func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, clock *time.Location,
+	e Entry, at, windowStart time.Time, first bool) int {
 	sch := e.Schedule
 	if !sch.IsEnabled() {
 		return 0
 	}
-	zone := cmpOr(sch.Timezone, s.defaultTZ)
-	loc, err := time.LoadLocation(zone)
+	loc, err := ZoneOf(sch, clock)
 	if err != nil {
 		log.ErrorContext(ctx, "schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
-			"scope_id", e.ScopeID, "timezone", zone, "error", err)
+			"scope_id", e.ScopeID, "timezone", sch.Timezone, "error", err)
 		return 0
 	}
 	cron, err := Parse(sch.Cron)
@@ -640,12 +648,33 @@ func newTrace(ctx context.Context) events.TraceContext {
 	return tracing.TraceOf(spanCtx)
 }
 
-// cmpOr returns v unless it is the zero string.
-func cmpOr(v, def string) string {
-	if v == "" {
-		return def
+// companyZone is the company's clock as this tick reads it, or UTC.
+func (s *Scheduler) companyZone() *time.Location {
+	if s.zone == nil {
+		return time.UTC
 	}
-	return v
+	if loc := s.zone(); loc != nil {
+		return loc
+	}
+	return time.UTC
+}
+
+// ZoneOf is the clock one schedule fires on: its own `timezone` when it
+// names one, and the company's otherwise (ADR-0018). A nil company clock is
+// UTC.
+//
+// ONE implementation for the tick and for [Describe], so the zone the
+// dashboard says a schedule runs in is the zone it fires in — and read
+// through [period.LoadZone], the reader config validation admits a name
+// through, so a name the validator refused can never be one this fires on.
+func ZoneOf(sch org.Schedule, company *time.Location) (*time.Location, error) {
+	if sch.Timezone == "" {
+		if company == nil {
+			return time.UTC, nil
+		}
+		return company, nil
+	}
+	return period.LoadZone(sch.Timezone)
 }
 
 // durOr returns d unless it is zero or negative.

@@ -141,8 +141,13 @@ type MyWorkQuery struct {
 }
 
 // MyWork answers everything one person is expected to look at.
-func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time) (
-	MyWork, error) {
+//
+// `now` and `loc` are the instant and the company's clock the day is cut on,
+// the pair [ParseQuery] takes for a `due=` filter: every row's `overdue` mark
+// here is derived from where the company's day began, so it agrees with the
+// mark the same task carries on a board.
+func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time,
+	loc *time.Location) (MyWork, error) {
 
 	if q.Level == "" {
 		return MyWork{}, fmt.Errorf("tracker: this my_work read names no " +
@@ -169,7 +174,7 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time) (
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		return readMyWork(ctx, tx, q.Who, now, &out)
+		return readMyWork(ctx, tx, q.Who, now, loc, &out)
 	})
 	if err != nil {
 		return MyWork{}, err
@@ -184,13 +189,17 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time) (
 }
 
 func readMyWork(ctx context.Context, tx *sql.Tx, who Party, now time.Time,
-	out *MyWork) error {
+	loc *time.Location, out *MyWork) error {
 
 	// THE DAY BOUNDARY the `overdue` column on every row is computed
-	// against. UTC, because a compound answer has no caller-supplied zone
-	// and the alternative — a boundary read from the process's own clock
-	// — would put one node's rows a day out from another's.
-	anchor, err := ResolveDate("today", now, time.UTC)
+	// against: the company's own midnight, on the clock the surface
+	// passed. It was UTC once, on the reasoning that this answer had no
+	// caller-supplied zone — and that put every row a day out from the
+	// board for the hours between the company's midnight and UTC's, with a
+	// task due today marked overdue on one screen and not on the other.
+	// Never the process's own clock, which would put one node's rows a
+	// day out from another's.
+	anchor, err := ResolveDate("today", now, loc)
 	if err != nil {
 		return err
 	}

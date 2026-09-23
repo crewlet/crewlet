@@ -62,6 +62,17 @@ policies:
   - "Reply in the thread you were asked in; open a new thread when you start a new topic, so one conversation stays one conversation"
   - "The Phase-2 AI framework is the AI Systems Engineer's; the control plane (nimbuscore, nimbusk0s) is the SWE's; the console and website are the Frontend SWE's — coordinate across those lines in the channel rather than assuming"
 
+# The company's ONE clock, as an IANA zone (default UTC).  Every calendar
+# edge the engine cuts is cut on it: where "today" and "this week" begin
+# for a ``due=`` filter, a due band, an overdue mark and each person's own
+# day; what a relative date ("next Friday") or an all-day due date resolves
+# to; and the wall clock a schedule that names no ``timezone`` of its own
+# fires on — so the 09:00 schedules below fire at 09:00 in Berlin.  A clock for
+# AUTHORED instants and calendar edges only: no duration is measured
+# against it, because a duration measured on a wall clock changes length
+# twice a year.  See docs/getting-started/configuration.md.
+timezone: "Europe/Berlin"
+
 # Company-wide token budget — a single hard cap on total LLM tokens across
 # EVERY agent (CEO, CTO, PM, DevRel, the three engineers, their workers,
 # and the learning/aux passes).  The engine charges this org budget on
@@ -569,7 +580,6 @@ learning:
 scheduling:
   enabled: true
   tick_seconds: 10
-  default_timezone: "UTC"                  # schedules without their own ``timezone`` use this
   jitter_seconds: 30                       # spread schedules that share a popular cron minute.
                                            #   It earns its keep here: the three engineers'
                                            #   standup fires on one minute and there are only
@@ -641,8 +651,6 @@ integrations:
 # because a reader should see the choice rather than infer it.
 tracker:
   backend: native
-  native:
-    timezone: "Europe/Berlin"
 
 knowledge:
   backend: native
@@ -782,7 +790,7 @@ units:
             # tracker activity; here the channels are the record.
             schedules:
               - name: morning-pulse
-                cron: "0 9 * * 1-5"            # 09:00 Mon–Fri, in scheduling.default_timezone
+                cron: "0 9 * * 1-5"            # 09:00 Mon–Fri, on the company's clock (``timezone``)
                 task: >
                   Read what the team posted since yesterday morning across the channels you
                   are in. Say — in one short post to town-square — what is moving, what is

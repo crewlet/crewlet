@@ -57,7 +57,7 @@ flowchart TD
 schedules:
   - name: morning-smoke        # unique within the role/unit; part of the idempotency key
     cron: "0 9 * * 1-5"        # standard 5-field cron (see below)
-    timezone: Europe/Amsterdam # IANA tz; falls back to scheduling.default_timezone
+    timezone: Europe/Amsterdam # IANA tz; falls back to the company's `timezone`
     task: "Run the smoke-test pipeline and triage failures"
     target: each               # unit schedules only — each | lead
     enabled: true              # set false to keep it in config without firing
@@ -71,7 +71,7 @@ schedules:
 | `name` | — (required) | Identifier, unique within the role/unit. Renaming lets a same-minute fire re-run once. |
 | `cron` | — (required) | 5-field cron expression, evaluated in `timezone`. |
 | `task` | — (required) | The task prompt handed to the runner agent. |
-| `timezone` | `scheduling.default_timezone` | IANA timezone the cron is evaluated in. |
+| `timezone` | the company's [`timezone`](#which-clock-a-schedule-fires-on) | IANA timezone the cron is evaluated in. |
 | `target` | `each` | **Unit schedules only.** Who runs it (see [Delivery](#delivery-who-runs-it)). Ignored for role schedules. [Human seats](humans-in-the-org.md) never run schedules: `each` fans out to direct agent roles only, an enabled `lead` schedule under a (possibly inherited) human lead is a config error, and human seats cannot define role schedules. |
 | `enabled` | `true` | `false` keeps the schedule in config but never fires it. |
 | `timeout_seconds` | `180` | Hard wall-clock cap on the scheduled turn. |
@@ -79,13 +79,36 @@ schedules:
 
 Config load (and so `crewlet validate`) checks each schedule's shape: a
 non-empty `name` and `task`, a `cron` with exactly five fields, a
-`timezone` that loads, a non-negative `timeout_seconds`, a `target` of
+`timezone` that loads and is not `Local` or `localtime`, a non-negative `timeout_seconds`, a `target` of
 `each` or `lead`, and names unique within the owning role or unit. The
 cron **grammar** itself is parsed on every tick rather than at load, so an
 expression with five fields and an invalid value (`61 * * * *`) passes
 validation, and the schedule is skipped on every tick with
 `schedule_parse_failed` naming it. Watch for that line after adding a
 schedule.
+
+### Which clock a schedule fires on
+
+A schedule that names no `timezone` fires on the **company's clock** — the
+top-level [`timezone`](../getting-started/configuration.md#the-companys-clock)
+of the company document, UTC when absent — which is the same clock every
+"today", due band and overdue mark in the tracker is cut on. So a
+`0 9 * * 1-5` standup on a Berlin company fires at 09:00 in Berlin, on the day
+the board calls today. There is no scheduler-wide default zone: one would be a
+second company clock, and a standup that fired at 09:00 on one clock while the
+board cut its days on another disagreed with it about which day that 09:00 was
+on.
+
+A schedule's own `timezone` is that one piece of work's wall clock — the
+Tokyo team's 09:30 standup on a Berlin company — and nothing else is cut on
+it. `Local` and `localtime` are refused for both: each is whatever zone the
+host reading it is set to, and the scheduler is a [singleton
+duty](seat-ownership.md#singleton-duties) that moves between hosts, so the
+standup would move with it.
+
+The company's clock is read at **every tick**, like the org is, so an apply
+that changes `timezone` moves the next tick's fires without re-arming the
+loop.
 
 ### Cron syntax
 
@@ -272,11 +295,13 @@ System-level knobs live under a top-level `scheduling:` block:
 scheduling:
   enabled: true              # master switch
   tick_seconds: 10           # scheduler poll interval
-  default_timezone: UTC      # used by any Schedule without its own timezone
   jitter_seconds: 0          # max per-schedule deterministic spread (see below)
   catchup_min_seconds: 120   # lower clamp on the catchup window
   catchup_max_seconds: 7200  # upper clamp on the catchup window
 ```
+
+There is no zone here: a schedule that names none fires on the company's
+clock (see [Which clock a schedule fires on](#which-clock-a-schedule-fires-on)).
 
 The scheduler **auto-enables** when `enabled` is not `false` and the org
 actually declares at least one schedule (see [When the loop runs](#when-the-loop-runs)):

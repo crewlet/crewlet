@@ -133,6 +133,35 @@ func TestSchedulesProjectsWhatIsConfigured(t *testing.T) {
 	}
 }
 
+// A SCHEDULE THAT NAMES NO ZONE IS DESCRIBED ON THE COMPANY'S CLOCK, the one it
+// fires on (ADR-0018) — the zone beside it and the next run worked out in it
+// both. A row that said UTC while the tick fired on Tokyo would be a screen
+// promising a standup nine hours from when it arrives.
+func TestAZonelessScheduleIsDescribedOnTheCompanysClock(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(companyDoc + "timezone: Asia/Tokyo\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+	}, "schedules", nil))
+	rows, _ := body["schedules"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("%d schedules, want one: %v", len(rows), body)
+	}
+	row, _ := rows[0].(map[string]any)
+	if row["timezone"] != "Asia/Tokyo" {
+		t.Errorf("the schedule is described in %v, want the company's clock Asia/Tokyo",
+			row["timezone"])
+	}
+	// Sunday 23 August 16:00 UTC; the next weekday 09:00 in Tokyo (UTC+9)
+	// is Monday the 24th at 00:00 UTC — not 09:00 UTC.
+	if want := "2026-08-24T00:00:00Z"; row["next_run"] != want {
+		t.Errorf("next run = %v, want %s — 09:00 on the company's clock", row["next_run"], want)
+	}
+}
+
 // fakeRuns is a dispatch ledger with fixed contents.
 type fakeRuns struct {
 	runs []schedule.Run

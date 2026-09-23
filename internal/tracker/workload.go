@@ -92,8 +92,11 @@ type WorkloadAnswer struct {
 }
 
 // Workload answers who is carrying how much, against what they can take.
-func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time) (
-	WorkloadAnswer, error) {
+//
+// `now` and `loc` are the instant and the company's clock the overdue count is
+// cut on — see [Reader.MyWork], which cuts the same day.
+func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time,
+	loc *time.Location) (WorkloadAnswer, error) {
 
 	if q.Level == "" {
 		return WorkloadAnswer{}, fmt.Errorf("tracker: this workload read " +
@@ -114,7 +117,7 @@ func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time) (
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		return readWorkload(ctx, tx, q, now, &out)
+		return readWorkload(ctx, tx, q, now, loc, &out)
 	})
 	if err != nil {
 		return WorkloadAnswer{}, err
@@ -129,13 +132,13 @@ func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time) (
 }
 
 func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
-	now time.Time, out *WorkloadAnswer) error {
+	now time.Time, loc *time.Location, out *WorkloadAnswer) error {
 
 	// THE DAY BOUNDARY the overdue count is against, resolved exactly as
-	// [readMyWork] resolves it and for the same reason: a compound answer
-	// has no caller-supplied zone, and a boundary read from the process's
-	// own clock would put one node's counts a day out from another's.
-	anchor, err := ResolveDate("today", now, time.UTC)
+	// [readMyWork] resolves it and for the same reason: the company's own
+	// midnight, so a person's overdue count here is the number of tasks a
+	// board marks overdue for them.
+	anchor, err := ResolveDate("today", now, loc)
 	if err != nil {
 		return err
 	}

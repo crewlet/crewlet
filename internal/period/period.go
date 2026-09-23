@@ -5,8 +5,10 @@
 // the moment it begins to the moment the next one does — together with the
 // LABEL that names it: `2026-09-23` for a day, `2026-W39` for a week,
 // `2026-09` for a month. [At] finds the window a moment falls in, [Window.Next]
-// and [Window.Shift] walk from one to another, [Parse] reads a label back, and
-// [Days] lists the days a range touches.
+// and [Window.Shift] walk from one to another, [Parse] reads a label back,
+// [Days] lists the days a range touches, and [LoadZone] reads the name of the
+// clock all of them are cut on — refusing the two names that mean whichever
+// host happens to read them.
 //
 // # Labels, not instants
 //

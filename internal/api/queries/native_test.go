@@ -43,6 +43,11 @@ type stubWork struct {
 	workloadQuery tracker.WorkloadQuery
 	workload      tracker.WorkloadAnswer
 
+	// The instant and the clock each day-cutting read was handed, so a
+	// test can hold a surface to the company's own midnight.
+	expandNow, workloadNow, myWorkNow    time.Time
+	expandZone, workloadZone, myWorkZone *time.Location
+
 	expandViewer  tracker.Viewer
 	activityQuery tracker.ActivityQuery
 	activity      tracker.ActivityAnswer
@@ -72,9 +77,10 @@ func (s *stubWork) Project(_ context.Context, q tracker.ProjectDetailQuery) (
 }
 
 func (s *stubWork) Workload(_ context.Context, q tracker.WorkloadQuery,
-	_ time.Time) (tracker.WorkloadAnswer, error) {
+	now time.Time, loc *time.Location) (tracker.WorkloadAnswer, error) {
 
 	s.workloadQuery = q
+	s.workloadNow, s.workloadZone = now, loc
 	return s.workload, s.err
 }
 
@@ -86,9 +92,10 @@ func (s *stubWork) Activity(_ context.Context, q tracker.ActivityQuery,
 }
 
 func (s *stubWork) MyWork(_ context.Context, q tracker.MyWorkQuery,
-	_ time.Time) (tracker.MyWork, error) {
+	now time.Time, loc *time.Location) (tracker.MyWork, error) {
 
 	s.myWorkQuery = q
+	s.myWorkNow, s.myWorkZone = now, loc
 	return s.myWork, s.err
 }
 
@@ -104,6 +111,7 @@ func (s *stubWork) ExpandedQuery(_ context.Context, params map[string]any,
 	// parsed query does not carry: it is a property of the surface rather
 	// than a filter, so a handler that dropped it would still return rows.
 	s.expandViewer = viewer
+	s.expandNow, s.expandZone = now, loc
 	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
 }
 

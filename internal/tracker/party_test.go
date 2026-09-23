@@ -12,6 +12,7 @@ package tracker_test
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -26,7 +27,7 @@ func (r *roundTrip) myWorkAs(who tracker.Party) tracker.MyWork {
 	r.t.Helper()
 	out, err := r.reader.MyWork(r.t.Context(), tracker.MyWorkQuery{
 		Who: who, Level: statelog.ReadStale,
-	}, wednesday)
+	}, wednesday, time.UTC)
 	if err != nil {
 		r.t.Fatalf("MyWork(%s): %v", who, err)
 	}
@@ -744,7 +745,7 @@ func TestAnUnnamedPartyIsRefused(t *testing.T) {
 
 	if _, err := r.reader.MyWork(t.Context(), tracker.MyWorkQuery{
 		Who: alias, Level: statelog.ReadStale,
-	}, wednesday); err == nil {
+	}, wednesday, time.UTC); err == nil {
 		t.Error("my_work with an alias and no seat answered")
 	}
 	if _, err := r.reader.Inbox(t.Context(), tracker.InboxQuery{

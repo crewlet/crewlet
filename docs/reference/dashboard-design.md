@@ -1497,9 +1497,13 @@ Two rules keep it honest:
 
 - **The engine is the authority.** `next_run` on a row is the engine's own
   computation and is what the screen shows as *Next*; this is a reading aid
-  beside it, never a second source for the same fact. A schedule that names a
-  timezone says so under the list, because the engine evaluates it in that
-  zone and this reads it in UTC.
+  beside it, never a second source for the same fact. The instants are worked
+  out in the zone the engine names on the row — the schedule's own, or the
+  [company's clock](../getting-started/configuration.md#the-companys-clock)
+  where it names none — and never in a default of the screen's: a row read as
+  UTC was wrong by the zone's standing offset. A row whose zone is not UTC
+  says so under the list, because each instant is then shown in the reader's
+  own zone.
 - **An unreadable expression says so.** The engine runs the schedule; a
   reading aid that invented a sentence would put words on screen the engine
   does not act on. The expression renders as itself with nothing claimed.

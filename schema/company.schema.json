@@ -1737,10 +1737,6 @@
           "minimum": 0,
           "type": "integer"
         },
-        "default_timezone": {
-          "description": "IANA zone for schedules that name none.",
-          "type": "string"
-        },
         "enabled": {
           "description": "Master switch for the scheduler (default on).",
           "type": [
@@ -2004,10 +2000,6 @@
           "maximum": 3650,
           "minimum": 0,
           "type": "integer"
-        },
-        "timezone": {
-          "description": "IANA timezone for authored dates (default UTC).",
-          "type": "string"
         }
       },
       "type": "object"
@@ -2269,6 +2261,10 @@
       },
       "description": "name -\u003e value facts substituted into tool-skill text. Keys must be identifiers.",
       "type": "object"
+    },
+    "timezone": {
+      "description": "The company's one clock, an IANA zone (default UTC): where its days and weeks begin, what a relative or all-day date resolves to, and what a schedule naming no zone fires on.",
+      "type": "string"
     },
     "token_budget": {
       "description": "Org-wide token ceiling across all seats; 0 = unlimited.",

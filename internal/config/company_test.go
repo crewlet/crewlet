@@ -181,16 +181,26 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"learning.episode_lifecycle.exemplar_count", ErrConflict,
 		},
 
+		// the company's clock
+		{
+			"an unknown timezone",
+			"name: Acme\ntimezone: Mars/Olympus\n",
+			"timezone", ErrUnknownValue,
+		},
+		{
+			// A HOST'S OWN CLOCK: it loads, and it is whatever zone the
+			// node reading it is set to, so two nodes would cut two
+			// different days from one company.
+			"the host's own clock",
+			"name: Acme\ntimezone: Local\n",
+			"timezone", ErrUnknownValue,
+		},
+
 		// scheduling
 		{
 			"a tick that can miss a cron minute",
 			"name: Acme\nscheduling:\n  tick_seconds: 300\n",
 			"scheduling.tick_seconds", ErrOutOfRange,
-		},
-		{
-			"an unknown timezone",
-			"name: Acme\nscheduling:\n  default_timezone: Mars/Olympus\n",
-			"scheduling.default_timezone", ErrUnknownValue,
 		},
 		{
 			"catchup max below min",

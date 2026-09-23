@@ -303,6 +303,7 @@ func parityCases() []parityCase {
 name: Acme
 mission: ship
 policies: [write things down]
+timezone: Europe/Berlin
 token_budget: 1000000
 skill_variables:
   wiki_base_url: "${WIKI_URL}"
@@ -333,7 +334,7 @@ turn_engine:
 learning:
   enabled: true
   skill_synthesis: {scheduler_enabled: true}
-scheduling: {enabled: true, tick_seconds: 10, default_timezone: UTC}
+scheduling: {enabled: true, tick_seconds: 10}
 integrations:
   mattermost:
     enabled: true

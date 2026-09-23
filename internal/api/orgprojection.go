@@ -40,18 +40,36 @@ import (
 // inherits one). The effective hierarchy the engine derives is a different
 // fact with a different shape, and mixing the two into one field would leave a
 // reader unable to tell a declared lead from an inherited one.
+//
+// The company's clock is the one exception, and it is not a mixture: an
+// unwritten `timezone` IS UTC, with no inheritance and nothing a reader could
+// want to tell apart, so [OrgProjection.Timezone] carries the clock the engine
+// resolved rather than leaving a client to default an empty string — which a
+// browser does to ITS OWN zone.
 
 // OrgProjection is the anonymous view of a company.
 //
 // Every field is omitted when empty, so a node with no active company answers
 // `{}`, which is the shape the dashboard already reads as "nothing loaded".
 type OrgProjection struct {
-	Name     string    `json:"name,omitempty"`
-	Mission  string    `json:"mission,omitempty"`
-	Vision   string    `json:"vision,omitempty"`
-	Policies []string  `json:"policies,omitempty"`
-	Roles    []OrgSeat `json:"roles,omitempty"`
-	Units    []OrgUnit `json:"units,omitempty"`
+	Name     string   `json:"name,omitempty"`
+	Mission  string   `json:"mission,omitempty"`
+	Vision   string   `json:"vision,omitempty"`
+	Policies []string `json:"policies,omitempty"`
+
+	// Timezone is the company's ONE clock (ADR-0018) as the engine resolves
+	// it: the IANA name the document writes, or `UTC` where it writes none.
+	//
+	// PUBLIC, because every date an anonymous reader is shown is cut on it
+	// — "today", "this week", a due band, an overdue mark — and a screen
+	// that cut them on the browser's own zone would put a task under a
+	// different day from the one the engine's own answer beside it names.
+	// It says where a company keeps its hours, which its every timestamp
+	// already does; it names no account, no credential and nothing to dial.
+	Timezone string `json:"timezone,omitempty"`
+
+	Roles []OrgSeat `json:"roles,omitempty"`
+	Units []OrgUnit `json:"units,omitempty"`
 
 	// Derived is the hierarchy the engine derives from the document above:
 	// each seat's handle, its effective unit, its primary manager and
@@ -126,6 +144,7 @@ func orgProjection(company func() *config.Company) OrgProjection {
 		Mission:  c.Mission,
 		Vision:   c.Vision,
 		Policies: slices.Clone(c.Policies),
+		Timezone: c.Location().String(),
 		Roles:    orgSeats(c.Roles),
 		Units:    orgUnits(c.Units),
 		Derived:  &derived,
