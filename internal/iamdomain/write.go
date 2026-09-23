@@ -368,16 +368,13 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 			"trail beside the op that caused it, so it says WHICH cause fired "+
 			"rather than narrating", ErrInvalid, op, len(reason), MaxReason)
 	}
-	version := RecordVersion
-	if op == OpRemove || op == OpEviction {
-		// PINNED FOR EVER. A gate-installing record a node could not
-		// read would be deferred, and a deferred removal here is
-		// somebody off-boarded still signing in.
-		version = GateRecordVersion
-	}
 	return MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V:         version,
+			// THE LOWEST VERSION THAT CARRIES THE OP'S MEANING — a
+			// gate pinned for ever, a sweep at the version whose
+			// predicate it states, everything else at the base. See
+			// [RecordVersion] for why never the ceiling.
+			V:         writeVersion(op),
 			Subject:   subject,
 			Op:        op,
 			CreatedAt: w.Now().UTC(),

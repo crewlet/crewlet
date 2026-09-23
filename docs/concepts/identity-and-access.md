@@ -1594,8 +1594,11 @@ divided into 64 partitions by a hash of the person's id, so one horizon's worth
 of deletions is 64 bounded transactions rather than one unbounded one. The
 publisher is the `iam_sweep` duty, hourly, and it publishes only for a bucket
 holding something at least a day past its horizon, which bounds it at 64
-records a day. The same record collects sessions, invitations and bootstrap
-codes a week after they stopped being presentable. See
+records a day. The same record collects sessions, invitations, bootstrap
+codes and credentials a week after they stopped being presentable — whether
+they lapsed, were redeemed or were revoked — and a credential leaves the
+person's own row as well as the credentials listing, so the next change to
+their credentials cannot bring it back. See
 [Retention](../guides/retention.md#the-identity-duties).
 
 ### Removing somebody destroys a key, not a row

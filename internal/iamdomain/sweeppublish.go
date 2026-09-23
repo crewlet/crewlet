@@ -51,10 +51,15 @@ import (
 
 // SessionRowGrace is how long a row nobody can present is kept past the moment
 // it stopped being presentable: a session past its absolute deadline or ended,
-// an invitation or a bootstrap code past its expiry.
+// an invitation or a bootstrap code past its expiry or redeemed, a credential
+// past its expiry or revoked.
 //
-// A WEEK, which is the invitation horizon and the default absolute session
-// lifetime. The row is kept for the sessions screen and an investigation to say
+// A WEEK — the design's 168 hours — which is the invitation horizon and the
+// default absolute session lifetime. For a credential it is also what keeps a
+// token a pipeline is still presenting from being collected out from under a
+// clock skew or a paused duty, while an expired verifier is not kept for ever;
+// and the listing can say what was revoked and why for that week, after which
+// the change trail, kept for its own horizon, is the account of it. The row is kept for the sessions screen and an investigation to say
 // what ended and why ("ended by reuse detection" is the sentence somebody is
 // looking for); past a week the session's own trail row — kept for the session
 // horizon, ninety days by default — is the durable account of it, and the row
@@ -112,8 +117,8 @@ type SweepPlan struct {
 	Changes  uint64
 	Sessions uint64
 
-	// Expired is the instant before which a session, an invitation or a
-	// bootstrap code that is over is collected: now less
+	// Expired is the instant before which a session, an invitation, a
+	// bootstrap code or a credential that is over is collected: now less
 	// [SessionRowGrace], read once, here.
 	Expired time.Time
 
@@ -228,7 +233,7 @@ func trailBound(ctx context.Context, tx *sql.Tx, class HistoryClass,
 //
 // EVERY PREDICATE IS THE APPLY'S OWN, at the slack's bound rather than the
 // horizon's, and each is a seek on the index its delete uses — so this costs
-// six probes a bucket and never reads a row it will not report.
+// ten probes a bucket and never reads a row it will not report.
 func bucketDue(ctx context.Context, tx *sql.Tx, b Bucket, changes, sessions uint64,
 	over int64) (bool, error) {
 
@@ -265,6 +270,26 @@ func bucketDue(ctx context.Context, tx *sql.Tx, b Bucket, changes, sessions uint
 			SELECT 1 FROM iam_bootstrap_codes
 			WHERE bucket = ? AND redeemed_at = 0
 			  AND expires_at > 0 AND expires_at < ? LIMIT 1`,
+			[]any{bucket, over}},
+		// AND WHAT A VERSION-2 RECORD ALSO COLLECTS — see
+		// [SweepRecordVersion]. Asked here because the publisher only
+		// writes version 2, so a bucket holding nothing but a spent
+		// invitation or a revoked token is a bucket with something due.
+		{"redeemed invitations", over <= 0, `
+			SELECT 1 FROM iam_invites
+			WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ? LIMIT 1`,
+			[]any{bucket, over}},
+		{"redeemed bootstrap codes", over <= 0, `
+			SELECT 1 FROM iam_bootstrap_codes
+			WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ? LIMIT 1`,
+			[]any{bucket, over}},
+		{"revoked credentials", over <= 0, `
+			SELECT 1 FROM iam_credentials
+			WHERE bucket = ? AND revoked_at > 0 AND revoked_at < ? LIMIT 1`,
+			[]any{bucket, over}},
+		{"expired credentials", over <= 0, `
+			SELECT 1 FROM iam_credentials
+			WHERE bucket = ? AND expires_at > 0 AND expires_at < ? LIMIT 1`,
 			[]any{bucket, over}},
 	}
 	for _, probe := range probes {

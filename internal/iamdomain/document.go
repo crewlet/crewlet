@@ -525,7 +525,9 @@ type Sweep struct {
 	Sessions uint64 `json:"sessions,omitempty"`
 
 	// Expired is the instant sessions, invitations and bootstrap codes
-	// are collected against once they are over — already net of
+	// are collected against once they are over — and, on a record at
+	// [SweepRecordVersion], redeemed invitations and bootstrap codes and
+	// revoked or expired credentials too — already net of
 	// [SessionRowGrace], so the applier compares and never subtracts.
 	//
 	// THE PUBLISHER READ IT, ONCE, and that is the whole of the clock

@@ -722,17 +722,34 @@ their clocks were. The record names *positions* the publisher resolved once —
 "every change below this one, every session record below that one" — and one
 instant, also read once, against which the same record collects the rows that
 are **over** rather than old: sessions that ended or passed their absolute
-deadline, and invitations and bootstrap codes that expired unredeemed, each
-kept for a week afterwards so the sessions screen can still say what ended and
-why (the trail row is the durable account after that). It runs
+deadline; invitations and bootstrap codes that expired unredeemed **or were
+redeemed**; and credentials — passwords, provider links, machine tokens — that
+were **revoked or passed their own expiry**. Each is kept for a week (168
+hours) after it stopped being presentable, so the sessions and credentials
+screens can still say what ended and why; after that the trail row, kept for
+the change or session horizon, is the durable account of it. It runs
 **per bucket**: the estate is divided into 64 partitions by a hash of the
 person's id, so one horizon's worth of deletions is 64 bounded transactions of
 at most 4 000 rows each rather than one unbounded one. Two nodes whose clocks
 disagree delete exactly the same rows, because neither reads its own clock.
 
-A redeemed invitation and a revoked credential are **not** collected: the first
-is part of the record of how somebody joined, and the second lives inside the
-person's own row, which is rewritten whole on every change to it.
+A credential is collected from **two** places at once. The person's own row
+carries their credentials whole, and the rows the credentials screen reads are
+derived from it — so a sweep that deleted only those rows would be undone by the
+next change to that person's credentials, which republishes the whole set. The
+sweep rewrites the person's row without the collected credentials in the same
+transaction. How somebody joined outlives the redeemed invitation too: the
+redemption is on the change trail, kept for its own horizon.
+
+**A sweep record carries a version, and an older node waits for it.** Collecting
+what was spent is the second version of the sweep record. A sweep deletes by a
+rule every node evaluates for itself, so a node running a build that did not
+know the new clauses would delete less than its peers from the same record —
+and the copies would stay different after the upgrade, because a record is
+never applied twice. So an older node **defers** a version-2 sweep, holds back
+later identity records for the same bucket behind it, and applies all of them
+once it is upgraded. During a rolling upgrade that is a bucket's worth of
+people whose changes reach that node late, and never a node that disagrees.
 
 The identity domain's **operation ledger** keeps the single 30-day horizon
 every other domain's does, which is not a contradiction with the two above: a

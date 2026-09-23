@@ -78,7 +78,7 @@ const (
 // interval only decides how soon after that a bucket is swept and how fast a
 // backlog converges: an hour past the slack, and four thousand rows a bucket an
 // hour, which drains a weekend's lapse at the largest company this estate is
-// sized for inside a tick or two. A plan with nothing due is 384 indexed probes
+// sized for inside a tick or two. A plan with nothing due is 640 indexed probes
 // and no records.
 const IdentitySweepInterval = time.Hour
 

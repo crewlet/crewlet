@@ -3,6 +3,7 @@ package iamdomain
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -157,5 +158,194 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 			}
 		}
 	}
+	if expired <= 0 || at.record.V < SweepRecordVersion {
+		// A VERSION-1 SWEEP collects what version 1 said and nothing
+		// more — replay meets records written before version 2 existed,
+		// and applying them with a clause they never stated would delete
+		// rows the nodes that applied them live never deleted.
+		return int(written), nil
+	}
+
+	// VERSION 2: WHAT WAS SPENT, and not only what lapsed. A redeemed
+	// invitation and a redeemed bootstrap code are as unpresentable as
+	// expired ones, and version 1 kept them for ever — every address
+	// anybody was ever invited at, sealed, in every node's estate.
+	for _, collect := range []struct {
+		what, sql string
+	}{
+		{"redeemed invitations", `
+			DELETE FROM iam_invites WHERE rowid IN (
+				SELECT rowid FROM iam_invites
+				WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ?
+				LIMIT ?)`},
+		{"redeemed bootstrap codes", `
+			DELETE FROM iam_bootstrap_codes WHERE rowid IN (
+				SELECT rowid FROM iam_bootstrap_codes
+				WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ?
+				LIMIT ?)`},
+	} {
+		if err := spend(collect.what, collect.sql, bucket, expired); err != nil {
+			return int(written), err
+		}
+	}
+	if budget > 0 {
+		n, err := collectCredentials(ctx, tx, at, bucket, expired, budget)
+		written += n
+		if err != nil {
+			return int(written), err
+		}
+	}
 	return int(written), nil
+}
+
+// collectCredentials removes one bucket's credentials that stopped being usable
+// before `expired` — revoked, or past their own expiry — spending at most
+// budget rows.
+//
+// # From the document as well as from the rows
+//
+// A person's credentials are carried WHOLE on their document, and the rows are
+// derived from it: every content record rewrites them, and the read-modify-write
+// that changes somebody's second factor forms the new set from the document. A
+// sweep that deleted only rows would be undone by the next such write, which
+// republishes the document's copy. So each owner's document is rewritten
+// without the collected credentials, in the same transaction, and stamped with
+// this record's position in `scoped_through` rather than `version` — a sweep
+// arbitrates on its bucket's subject, not the person's, and the person
+// subject's own expectation must stay the last record on it.
+//
+// # One ordered pick, spent person by person
+//
+// The pick is ordered by (person, credential), so every node takes the same
+// subset under the budget, and it is spent a whole person at a time — the
+// person's document and every row collected for them — because a person half
+// collected would hold rows its document no longer lists. A person with more
+// due than the whole budget is collected in part, first to last, or they could
+// never be collected at all.
+//
+// A DOCUMENT THIS BUILD CANNOT READ IS LEFT ALONE, credentials and all: failing
+// the apply would stop this domain's log on every node at once, and the rows it
+// derived are the ones every node of this build keeps identically.
+func collectCredentials(ctx context.Context, tx *sql.Tx, at applyContext,
+	bucket, expired, budget int64) (int64, error) {
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, person_id FROM iam_credentials
+		 WHERE bucket = ? AND revoked_at > 0 AND revoked_at < ?
+		UNION
+		SELECT id, person_id FROM iam_credentials
+		 WHERE bucket = ? AND expires_at > 0 AND expires_at < ?
+		ORDER BY 2, 1
+		LIMIT ?`, bucket, expired, bucket, expired, budget)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: sweep credentials in bucket %d: %w",
+			bucket, err)
+	}
+	type owned struct {
+		person string
+		ids    []string
+	}
+	var due []owned
+	for rows.Next() {
+		var id, person string
+		if err := rows.Scan(&id, &person); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("iamdomain: sweep credentials in bucket %d: %w",
+				bucket, err)
+		}
+		if n := len(due); n > 0 && due[n-1].person == person {
+			due[n-1].ids = append(due[n-1].ids, id)
+			continue
+		}
+		due = append(due, owned{person: person, ids: []string{id}})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iamdomain: sweep credentials in bucket %d: %w",
+			bucket, err)
+	}
+
+	var written int64
+	for i, owner := range due {
+		// A WHOLE PERSON OR NONE: their rows and their document, which
+		// is one row more than the credentials. The first person is the
+		// exception, so a person with more due than the budget is not
+		// stuck for ever.
+		cost := int64(len(owner.ids)) + 1
+		if remaining := budget - written; cost > remaining {
+			if i > 0 || remaining < 2 {
+				break
+			}
+			owner.ids = owner.ids[:remaining-1]
+		}
+		n, err := collectOwned(ctx, tx, at, owner.person, owner.ids)
+		written += n
+		if err != nil {
+			return written, err
+		}
+	}
+	return written, nil
+}
+
+// collectOwned removes one person's collected credentials from their document
+// and their rows.
+func collectOwned(ctx context.Context, tx *sql.Tx, at applyContext,
+	person string, ids []string) (int64, error) {
+
+	var document []byte
+	err := tx.QueryRowContext(ctx,
+		`SELECT document FROM iam_people WHERE id = ?`, person).Scan(&document)
+	var written int64
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// ROWS NOBODY OWNS: a removal deletes a person's credentials with
+		// them, so there is no document to keep in step — the rows are
+		// simply collected.
+	case err != nil:
+		return 0, fmt.Errorf("iamdomain: read person %s to sweep their "+
+			"credentials: %w", person, err)
+	default:
+		held, err := DecodePerson(document)
+		if err != nil {
+			applyLog.WarnContext(ctx, "iam_sweep_person_unreadable",
+				"person", person, "error", err.Error(),
+				"detail", "this person's swept credentials are kept, rows and "+
+					"document alike, until a build that reads the document sweeps them")
+			return 0, nil
+		}
+		gone := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			gone[id] = true
+		}
+		kept := make([]Credential, 0, len(held.Credentials))
+		for _, credential := range held.Credentials {
+			if !gone[credential.ID] {
+				kept = append(kept, credential)
+			}
+		}
+		held.Credentials = kept
+		rewritten, err := EncodePerson(held)
+		if err != nil {
+			return 0, fmt.Errorf("iamdomain: re-encode person %s without their "+
+				"swept credentials: %w", person, err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE iam_people
+			   SET document = ?, scoped_through = MAX(scoped_through, ?)
+			 WHERE id = ?`, rewritten, at.packed, person); err != nil {
+			return 0, fmt.Errorf("iamdomain: rewrite person %s without their "+
+				"swept credentials: %w", person, err)
+		}
+		written++
+	}
+	for _, id := range ids {
+		result, err := tx.ExecContext(ctx,
+			`DELETE FROM iam_credentials WHERE id = ? AND person_id = ?`, id, person)
+		if err != nil {
+			return written, fmt.Errorf("iamdomain: sweep credential %s: %w", id, err)
+		}
+		n, _ := result.RowsAffected()
+		written += n
+	}
+	return written, nil
 }

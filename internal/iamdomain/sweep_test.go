@@ -5,8 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strconv"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -315,13 +319,21 @@ func (r *sweepRigT) trail() []string {
 	return r.column(`SELECT id FROM iam_history ORDER BY id`)
 }
 
-// sweepRecord wraps one sweep payload as the framework delivers it.
+// sweepRecord wraps one sweep payload as the framework delivers it, at the
+// version the publisher writes.
 func sweepRecord(t *testing.T, sweep iamdomain.Sweep) statelog.Record {
+	t.Helper()
+	return sweepRecordAt(t, iamdomain.SweepRecordVersion, sweep)
+}
+
+// sweepRecordAt is [sweepRecord] at a record version of the case's choosing —
+// the version a sweep already on the log may have been written at.
+func sweepRecordAt(t *testing.T, version int, sweep iamdomain.Sweep) statelog.Record {
 	t.Helper()
 	subject := iamdomain.SweepSubject(sweep.Bucket)
 	payload, err := iamdomain.Encode(iamdomain.MutationRecord{
 		RecordEnvelope: iamdomain.RecordEnvelope{
-			V: iamdomain.RecordVersion, OpID: "sweep-" + subject.ID,
+			V: version, OpID: "sweep-" + subject.ID,
 			Subject: subject, Op: iamdomain.OpSweep, Writer: "node-a",
 			Scope: iamdomain.BucketScope(sweep.Bucket % iamdomain.Buckets),
 		},
@@ -333,7 +345,7 @@ func sweepRecord(t *testing.T, sweep iamdomain.Sweep) statelog.Record {
 	}
 	return statelog.Record{
 		Envelope: statelog.Envelope{
-			V: iamdomain.RecordVersion, Kind: string(iamdomain.KindSweep),
+			V: version, Kind: string(iamdomain.KindSweep),
 			Subject: statelog.Subject{
 				Kind: string(iamdomain.KindSweep), ID: subject.ID,
 			},
@@ -372,3 +384,287 @@ func equalRows(a, b []string) bool {
 }
 
 var _ = context.Background
+
+// A VERSION-2 SWEEP COLLECTS WHAT WAS SPENT, from the rows AND the document.
+//
+// Version 1 kept every redeemed invitation — with the sealed address it was
+// for — every redeemed bootstrap code, and every revoked or expired credential,
+// verifier and all, for the life of the company. Version 2 collects each a week
+// past the moment it stopped being presentable, which the record's own instant
+// says; anything that stopped more recently, and anything still presentable,
+// stays.
+//
+// A CREDENTIAL IS COLLECTED FROM THE PERSON'S DOCUMENT TOO, and the last step
+// is why: credentials travel whole on the document and the rows are derived
+// from it, so the next change to somebody's credentials — which forms the new
+// set from the document — would republish a credential a sweep had deleted only
+// from the rows.
+//
+// And the CONTROL is the same record at version 1, which is how every sweep
+// already on the log was written: replayed, it must collect exactly what
+// version 1 said, or a node rebuilding from the log holds different rows from a
+// node that applied it live.
+func TestAVersionTwoSweepCollectsWhatWasSpent(t *testing.T) {
+	t.Parallel()
+	// THE PUBLISHER'S OWN CLOCK IS brokerAt, so its collection instant is a
+	// week before it; "long ago" is past that by more than the slack, which
+	// is what makes the bucket due at all.
+	cutoff := brokerAt.Add(-iamdomain.SessionRowGrace)
+	long, recent := cutoff.Add(-2*iamdomain.SweepSlack), cutoff.Add(time.Hour)
+	credentials := []iamdomain.Credential{
+		{V: iamdomain.DocumentVersion, ID: "revoked-long-ago",
+			Method: iamdomain.MethodToken, Verifier: "h1", RevokedAt: long},
+		{V: iamdomain.DocumentVersion, ID: "expired-long-ago",
+			Method: iamdomain.MethodToken, Verifier: "h2", ExpiresAt: long},
+		{V: iamdomain.DocumentVersion, ID: "revoked-recently",
+			Method: iamdomain.MethodToken, Verifier: "h3", RevokedAt: recent},
+		{V: iamdomain.DocumentVersion, ID: "live-token",
+			Method: iamdomain.MethodToken, Verifier: "h4",
+			ExpiresAt: brokerAt.Add(30 * 24 * time.Hour)},
+		{V: iamdomain.DocumentVersion, ID: "password",
+			Method: iamdomain.MethodPassword, Verifier: "argon"},
+	}
+	spent := func(t *testing.T) (*sweepRigT, string) {
+		t.Helper()
+		rig := &sweepRigT{writeRig: newWriteRig(t)}
+		person := uuid.Must(uuid.NewV7()).String()
+		if err := rig.enrol(iamdomain.Enrolment{
+			PersonID: person, Kind: iam.KindMachine, Stage: iam.StageActive,
+			Name: "Release pipeline", Login: "release:pipeline",
+			OpID: "enrol-pipeline", Reason: "a pipeline",
+		}); err != nil {
+			t.Fatalf("enrol: %v", err)
+		}
+		if err := rig.during(func() error {
+			_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
+				PersonID: person, OpID: "tokens",
+				Apply: func([]iamdomain.Credential) []iamdomain.Credential {
+					return credentials
+				},
+			})
+			return err
+		}); err != nil {
+			t.Fatalf("SetCredentials: %v", err)
+		}
+		bucket := int64(iamdomain.BucketOf(person))
+		if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+			for id, redeemed := range map[string]time.Time{
+				"spent-long-ago": long, "spent-recently": recent,
+			} {
+				if _, err := tx.ExecContext(t.Context(), `
+					INSERT INTO iam_invites
+						(id, email_blind, redeemed_at, bucket, created_at,
+						 version, document)
+					VALUES (?, ?, ?, ?, 1, 1, x'')`, "invite-"+id, "blind-"+id,
+					redeemed.UnixMilli(), bucket); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(t.Context(), `
+					INSERT INTO iam_bootstrap_codes
+						(id, verifier, redeemed_at, bucket, created_at,
+						 version, document)
+					VALUES (?, x'00', ?, ?, 1, 1, x'')`, "code-"+id,
+					redeemed.UnixMilli(), bucket); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("plant the spent rows: %v", err)
+		}
+		return rig, person
+	}
+	sweep := func(person string) iamdomain.Sweep {
+		return iamdomain.Sweep{V: iamdomain.DocumentVersion,
+			Bucket: iamdomain.BucketOf(person), Expired: cutoff}
+	}
+	held := func(rig *sweepRigT, person string) (rows, document []string) {
+		rows = rig.column(`SELECT id FROM iam_credentials WHERE person_id = ?
+			ORDER BY id`, person)
+		raw := rig.column(`SELECT document FROM iam_people WHERE id = ?`, person)
+		if len(raw) != 1 {
+			rig.t.Fatalf("person %s has %d rows", person, len(raw))
+		}
+		doc, err := iamdomain.DecodePerson([]byte(raw[0]))
+		if err != nil {
+			rig.t.Fatalf("decode the person: %v", err)
+		}
+		for _, c := range doc.Credentials {
+			document = append(document, c.ID)
+		}
+		slices.Sort(document)
+		return rows, document
+	}
+	everything := []string{"expired-long-ago", "live-token", "password",
+		"revoked-long-ago", "revoked-recently"}
+	kept := []string{"live-token", "password", "revoked-recently"}
+
+	t.Run("version 1 collects none of it", func(t *testing.T) {
+		t.Parallel()
+		rig, person := spent(t)
+		rig.apply(sweepRecordAt(t, iamdomain.BaseRecordVersion, sweep(person)),
+			brokerAt)
+		rows, document := held(rig, person)
+		if !slices.Equal(rows, everything) || !slices.Equal(document, everything) {
+			t.Errorf("a version-1 sweep left rows %v and document %v, want every "+
+				"credential in both — replay would diverge from live", rows, document)
+		}
+		if got := rig.column(`SELECT id FROM iam_invites ORDER BY id`); len(got) != 2 {
+			t.Errorf("a version-1 sweep collected a redeemed invitation: %v", got)
+		}
+	})
+
+	t.Run("version 2 collects what was spent a week ago", func(t *testing.T) {
+		t.Parallel()
+		rig, person := spent(t)
+		// THROUGH THE PUBLISHER, so the record is the one a node writes and
+		// sits at a real position on the log the next write follows.
+		var report iamdomain.SweepReport
+		if err := rig.during(func() error {
+			var err error
+			report, err = rig.sweeper(brokerAt).Sweep(t.Context(), defaultHorizons)
+			return err
+		}); err != nil {
+			t.Fatalf("Sweep: %v", err)
+		}
+		rig.drain()
+		if !slices.Equal(report.Published, []iamdomain.Bucket{iamdomain.BucketOf(person)}) {
+			t.Fatalf("the tick published %v, want the one bucket holding what was "+
+				"spent", report.Published)
+		}
+		at, err := rig.log.End(t.Context())
+		if err != nil {
+			t.Fatalf("read the log's end: %v", err)
+		}
+		rows, document := held(rig, person)
+		if !slices.Equal(rows, kept) {
+			t.Errorf("the credential rows are %v, want %v", rows, kept)
+		}
+		if !slices.Equal(document, kept) {
+			t.Errorf("the person's document lists %v, want %v — the next change "+
+				"to their credentials would republish what the sweep deleted",
+				document, kept)
+		}
+		for table, want := range map[string][]string{
+			"iam_invites":         {"invite-spent-recently"},
+			"iam_bootstrap_codes": {"code-spent-recently"},
+		} {
+			if got := rig.column(`SELECT id FROM ` + table + ` ORDER BY id`); !slices.Equal(got, want) {
+				t.Errorf("%s holds %v, want %v", table, got, want)
+			}
+		}
+		// SCOPED, NOT VERSIONED: the person subject's own expectation is
+		// its last record, which a sweep on the bucket's subject is not.
+		stamped := rig.column(`SELECT scoped_through FROM iam_people WHERE id = ?`,
+			person)
+		if len(stamped) != 1 || stamped[0] != strconv.FormatUint(at, 10) {
+			t.Errorf("the person's scoped_through is %v, want the sweep's position %d",
+				stamped, at)
+		}
+
+		// AND THE NEXT CHANGE TO THEIR CREDENTIALS resurrects nothing.
+		if err := rig.during(func() error {
+			_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
+				PersonID: person, OpID: "one-more",
+				Apply: func(current []iamdomain.Credential) []iamdomain.Credential {
+					return append(current, iamdomain.Credential{
+						V: iamdomain.DocumentVersion, ID: "new-token",
+						Method: iamdomain.MethodToken, Verifier: "h5",
+					})
+				},
+			})
+			return err
+		}); err != nil {
+			t.Fatalf("SetCredentials after the sweep: %v", err)
+		}
+		rows, _ = held(rig, person)
+		want := append(slices.Clone(kept), "new-token")
+		slices.Sort(want)
+		if !slices.Equal(rows, want) {
+			t.Errorf("after the next credential change the rows are %v, want "+
+				"%v — a swept credential came back", rows, want)
+		}
+	})
+}
+
+// THE PUBLISHER WRITES A SWEEP AT THE VERSION THAT STATES ITS PREDICATE, and
+// finds a bucket due for what only that version collects.
+//
+// Written at the base version, a sweep's new clauses would be evaluated by the
+// nodes that know them and skipped by the ones that do not — the same record
+// deleting different rows on different nodes. And a bucket whose only due row
+// is a credential revoked a week and a day ago is due: were the publisher's
+// probes version 1's, it would never publish the record that collects it.
+func TestTheSweepPublisherWritesTheVersionThatStatesItsPredicate(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	person := uuid.Must(uuid.NewV7()).String()
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: person, Kind: iam.KindMachine, Stage: iam.StageActive,
+		Name: "Release pipeline", Login: "release:pipeline",
+		OpID: "enrol-pipeline", Reason: "a pipeline",
+	}); err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	wall := time.Now().UTC()
+	if err := rig.during(func() error {
+		_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
+			PersonID: person, OpID: "revoke",
+			Apply: func([]iamdomain.Credential) []iamdomain.Credential {
+				return []iamdomain.Credential{{V: iamdomain.DocumentVersion,
+					ID: "revoked", Method: iamdomain.MethodToken, Verifier: "h",
+					RevokedAt: wall}}
+			},
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("SetCredentials: %v", err)
+	}
+	later := rig.sweeper(wall.Add(iamdomain.SessionRowGrace + iamdomain.SweepSlack +
+		time.Hour))
+	var report iamdomain.SweepReport
+	if err := rig.during(func() error {
+		var err error
+		report, err = later.Sweep(t.Context(), defaultHorizons)
+		return err
+	}); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	want := iamdomain.BucketOf(person)
+	if !slices.Equal(report.Published, []iamdomain.Bucket{want}) {
+		t.Fatalf("a week and a day past a revocation the tick published %v, "+
+			"want the revoked token's bucket %s", report.Published, want)
+	}
+	rig.drain()
+	if env := rig.lastEnvelope(); env.Op != iamdomain.OpSweep ||
+		env.V != iamdomain.SweepRecordVersion {
+		t.Errorf("the sweep was written as op %s at version %d, want a sweep at "+
+			"%d", env.Op, env.V, iamdomain.SweepRecordVersion)
+	}
+	if got := rig.column(`SELECT id FROM iam_credentials WHERE person_id = ?`,
+		person); len(got) != 0 {
+		t.Errorf("the revoked token outlived the sweep that was due for it: %v", got)
+	}
+}
+
+// lastEnvelope is the newest record on the rig's log, as every build reads it.
+func (r *writeRig) lastEnvelope() iamdomain.RecordEnvelope {
+	r.t.Helper()
+	last, err := r.log.End(r.t.Context())
+	if err != nil {
+		r.t.Fatalf("read the log's end: %v", err)
+	}
+	_, payload, _, ok, err := r.log.At(r.t.Context(), last)
+	if err != nil || !ok {
+		r.t.Fatalf("read record %d: %v (present %v)", last, err, ok)
+	}
+	body, verdict := r.verifier.Open(payload)
+	if verdict != statelog.Verified {
+		r.t.Fatalf("record %d did not verify: %s", last, verdict)
+	}
+	env, err := iamdomain.DecodeEnvelope(body)
+	if err != nil {
+		r.t.Fatalf("decode the envelope: %v", err)
+	}
+	return env
+}

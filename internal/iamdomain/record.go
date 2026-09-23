@@ -16,7 +16,46 @@ import (
 // A record above it is RETAINED rather than skipped — see the deferral contract
 // in [statelog] — which is what makes a rolling upgrade a period of reduced
 // coverage rather than an outage.
-const RecordVersion = 1
+//
+// IT IS THE CEILING THIS BUILD READS, NOT WHAT IT WRITES. Every record is
+// written at the lowest version that carries its meaning ([writeVersion]),
+// because a record a peer cannot read is deferred on that peer: written at the
+// ceiling for no reason, every record of a rolling upgrade would be deferred on
+// every older node. Two is [SweepRecordVersion] and nothing else.
+const RecordVersion = 2
+
+// BaseRecordVersion is what every record carries whose meaning has not changed
+// since this domain landed, which is every op but a sweep.
+const BaseRecordVersion = 1
+
+// SweepRecordVersion is what a sweep record carries.
+//
+// VERSION 2 COLLECTS MORE: beside what version 1 does, the credentials, the
+// redeemed invitations and the redeemed bootstrap codes that stopped being
+// presentable before the record's collection instant ([Writer.Sweep]).
+//
+// A VERSION AND NOT A FIELD, because a sweep deletes by a predicate every node
+// evaluates for itself. A clause an older build does not know would be carried
+// past as an unknown field and evaluated nowhere on that node, so the same
+// record would delete rows on some nodes and not on others — the estate's
+// byte-identical copies disagreeing for as long as the rollout lasts and after
+// it, since a record is never applied twice. At version 2 an older node
+// DEFERS the record and applies it once it is upgraded, under the semantics it
+// was written with; and a version-1 sweep already on the log is still applied
+// as version 1, because replay is the one reader that meets both.
+const SweepRecordVersion = 2
+
+// writeVersion is the version a record of op is written at: the lowest that
+// carries its meaning.
+func writeVersion(op OpKind) int {
+	switch op {
+	case OpRemove, OpEviction, OpInvalidate:
+		return GateRecordVersion
+	case OpSweep:
+		return SweepRecordVersion
+	}
+	return BaseRecordVersion
+}
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER.
@@ -498,7 +537,10 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	}
 	return Encode(MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V:       RecordVersion,
+			// THE BASE VERSION, never the ceiling: a barrier an older
+			// peer deferred is a linearizable read on that peer that
+			// waits for ever.
+			V:       BaseRecordVersion,
 			Subject: BarrierSubject(),
 			Op:      OpBarrier,
 			// THE BARRIER'S SCOPE IS RESOLVED FROM ITS KIND rather than
