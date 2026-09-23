@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 )
@@ -262,6 +263,38 @@ type Envelope struct {
 	// debug. Omitted on every other kind, so no existing frame changes
 	// shape.
 	Seat string `json:"seat,omitempty"`
+
+	// *Refused is a refusal on AUTHORITY's machine-readable half, on an
+	// `unauthorized` error frame and nowhere else: the rule's reason, and
+	// the grants any one of which would have admitted the caller —
+	// FLATTENED into the frame beside `error`, under the keys the REST
+	// envelope answers the same refusal with ([authz.DetailReason],
+	// [authz.DetailGrants]). The socket used to drop both, so a question a
+	// REST caller was refused with `{error, reason, grants}` came back over
+	// the socket as a bare code, and the dashboard — whose only data
+	// channel this is — could not tell a missing grant from a missing
+	// relation. Nil on every other frame, which omits both keys.
+	*Refused
+}
+
+// Refused is the reason and the grants an `unauthorized` frame carries.
+//
+// GRANTS IS NEVER OMITTED from a refusal that has one, because an EMPTY list is
+// an answer — no capability would admit this caller, and what is missing is a
+// relation the chart does not hold — where an absent key would read as a
+// frame that did not say.
+type Refused struct {
+	Reason string   `json:"reason"`
+	Grants []string `json:"grants"`
+}
+
+// NewRefused is the refusal a decision made, as the frame carries it.
+func NewRefused(reason authz.Reason, grants []iam.Grant) *Refused {
+	names := make([]string, 0, len(grants))
+	for _, g := range grants {
+		names = append(names, string(g))
+	}
+	return &Refused{Reason: string(reason), Grants: names}
 }
 
 // Push builds a broadcast envelope stamped now.

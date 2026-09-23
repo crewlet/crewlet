@@ -375,7 +375,7 @@ export function Inbox() {
               {inbox.loading && !inbox.data && (
                 <Skeleton variant="text" rows={5} label="Loading the inbox" />
               )}
-              <QueryState error={inbox.error} loading={inbox.loading}>
+              <QueryState error={inbox.error} refusal={inbox.refusal} loading={inbox.loading}>
                 {notices.map((notice) => (
                   <NoticeRow
                     key={notice.record_id}

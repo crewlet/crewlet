@@ -93,7 +93,7 @@ export function Budgets() {
             in the fleet's coordination store; this node could not reach it.
           </Callout>
         ) : (
-          <QueryState error={budgets.error} loading={budgets.loading}>
+          <QueryState error={budgets.error} refusal={budgets.refusal} loading={budgets.loading}>
             <DataGrid
               rows={seats}
               rowKey={(s) => s.agent_id || s.role}

@@ -298,7 +298,7 @@ function ChannelBody({
 export function ChannelPeek({ id }: { id: string }) {
   const now = useNow();
   const seatName = useSeatName();
-  const { data, loading, error } = useQuery("a2a_channels", WHOLE_RECORD, {
+  const { data, loading, error, refusal } = useQuery("a2a_channels", WHOLE_RECORD, {
     enabled: id !== "",
     pollMs: POLL_MS,
   });
@@ -307,7 +307,7 @@ export function ChannelPeek({ id }: { id: string }) {
   return (
     <>
       {loading && !data && <Skeleton variant="text" rows={5} label="Loading the channel" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {data?.available === false && (
           <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
             No channel record is reachable from this node, so this channel cannot be read here.
@@ -427,6 +427,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
       ) : (
         <QueryState
           error={channels.error}
+          refusal={channels.refusal}
           loading={channels.loading}
           empty={
             rows.length > 0

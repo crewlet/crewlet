@@ -324,7 +324,7 @@ export function Work({ project = "" }: { project?: string }) {
   // dashboard socket, so there is no push behind this and a poll is correct.
   // Twenty seconds: a board is read, not watched, and a tracker's own pace is
   // a person typing a comment.
-  const { data, loading, error } = useQuery("work_items", params, { pollMs: 20_000 });
+  const { data, loading, error, refusal } = useQuery("work_items", params, { pollMs: 20_000 });
   // AND WHAT HAPPENED, which is a different question from what is there: the
   // feed is ordered by the LOG rather than by anything this board sorts on,
   // so a change that moved nothing on screen is still visible.
@@ -713,6 +713,7 @@ export function Work({ project = "" }: { project?: string }) {
 
             <QueryState
               error={error}
+              refusal={refusal}
               loading={loading}
               empty={
                 // A TRASH WITH NOTHING IN IT IS NOT A FILTER THAT MATCHED
@@ -839,6 +840,7 @@ export function Work({ project = "" }: { project?: string }) {
             listed. */}
         <QueryState
           error={projects.error}
+          refusal={projects.refusal}
           loading={projects.loading}
           empty={
             (projects.data?.projects ?? []).length === 0
@@ -934,7 +936,7 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
       {state.loading && !state.data && (
         <Skeleton variant="text" rows={6} label="Loading the project" />
       )}
-      <QueryState error={state.error} loading={state.loading}>
+      <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {detail && (
           <>
             <ObjectHeader
@@ -973,7 +975,11 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
                       read that can say how the open work is distributed, so a
                       refusal rendered as no rows would read as a project whose
                       every task is in one status. */}
-                  <QueryState error={census.error} loading={census.loading}>
+                  <QueryState
+                    error={census.error}
+                    refusal={census.refusal}
+                    loading={census.loading}
+                  >
                     {census.data && (
                       <div className="col">
                         {statusCounts(census.data.groups ?? []).map((line) => (
@@ -1012,7 +1018,7 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
                 >
                   <Card.Title>Recent activity</Card.Title>
                 </Card.Header>
-                <QueryState error={feed.error} loading={feed.loading}>
+                <QueryState error={feed.error} refusal={feed.refusal} loading={feed.loading}>
                   {feed.data &&
                     (records.length > 0 ? (
                       <div className="col gap-2">

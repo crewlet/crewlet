@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -126,11 +127,31 @@ const (
 // query_failed.
 var (
 	ErrUnknownQuery = errors.New("stream: unknown query")
-	ErrUnauthorized = errors.New("stream: query requires an operator")
+	ErrUnauthorized = errors.New("stream: this caller may not ask that")
 	ErrNotFound     = errors.New("stream: no such record")
 	ErrBadParams    = errors.New("stream: query refused")
 	ErrUnavailable  = errors.New("stream: not available on this node yet")
 )
+
+// RefusedError is [ErrUnauthorized] carrying WHY: the rule's reason and the
+// grants that would have admitted the caller, which the error frame answers
+// with beside the code.
+//
+// An error rather than a field on the answer, because the query surface
+// reports a refusal the way it reports every failure — as the error — and the
+// frame is built from the error in exactly one place ([runQuery]).
+type RefusedError struct {
+	// What is what was refused, for the log.
+	What string
+	Refused
+}
+
+func (e *RefusedError) Error() string {
+	return fmt.Sprintf("%v: %s refused (%s)", ErrUnauthorized, e.What, e.Reason)
+}
+
+// Unwrap is what keeps every errors.Is(err, ErrUnauthorized) arm answering it.
+func (e *RefusedError) Unwrap() error { return ErrUnauthorized }
 
 // Query answers one client question.
 //
@@ -532,10 +553,10 @@ func (w *watching) watch(ctx context.Context, req request) (websocket.StatusCode
 		w.hub.Watch(w.client, "")
 		return 0, ""
 	}
-	if code, ok := w.decide(ctx, principal, seat); !ok {
+	if code, refused, ok := w.decide(ctx, principal, seat); !ok {
 		w.hub.Watch(w.client, "")
 		w.client.Reply(Envelope{Kind: KindError, ID: req.ID, What: watchWhat,
-			Error: code})
+			Error: code, Refused: refused})
 		return 0, ""
 	}
 	w.hub.Watch(w.client, seat)
@@ -544,9 +565,10 @@ func (w *watching) watch(ctx context.Context, req request) (websocket.StatusCode
 }
 
 // decide asks the table whether principal may watch seat, answering the error
-// code a refusal carries.
+// code a refusal carries — and, for a refusal on authority, the reason and the
+// grants a query's refusal carries too.
 func (w *watching) decide(ctx context.Context, principal iam.Principal,
-	seat string) (httpjson.Code, bool) {
+	seat string) (httpjson.Code, *Refused, bool) {
 
 	d := authz.Decide(ctx, principal, authz.ActionPersonRead,
 		authz.Object{Kind: authz.KindPerson, Owner: seat}, w.chart)
@@ -554,13 +576,13 @@ func (w *watching) decide(ctx context.Context, principal iam.Principal,
 	case d.Unknown():
 		log.InfoContext(ctx, "stream_watch_undecidable", "login", principal.Login,
 			"seat", seat, "error", d.Err)
-		return CodeUnavailable, false
+		return CodeUnavailable, nil, false
 	case !d.Allowed:
 		log.InfoContext(ctx, "stream_watch_refused", "login", principal.Login,
 			"seat", seat, "reason", string(d.Reason))
-		return CodeUnauthorized, false
+		return CodeUnauthorized, NewRefused(d.Reason, d.Grants), false
 	}
-	return "", true
+	return "", nil, true
 }
 
 // recheck re-decides the seat this socket watches, as whoever the latest
@@ -582,12 +604,13 @@ func (w *watching) recheck(ctx context.Context) {
 	if how != iam.Resolved {
 		return
 	}
-	code, ok := w.decide(ctx, principal, seat)
+	code, refused, ok := w.decide(ctx, principal, seat)
 	if ok || code == CodeUnavailable {
 		return
 	}
 	w.hub.Watch(w.client, "")
-	w.client.Reply(Envelope{Kind: KindError, What: watchWhat, Error: code})
+	w.client.Reply(Envelope{Kind: KindError, What: watchWhat, Error: code,
+		Refused: refused})
 }
 
 // runQuery answers one question onto the client's own queue.
@@ -599,7 +622,12 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 	case errors.Is(err, ErrUnknownQuery):
 		client.Reply(queryError(req, CodeUnknownQuery))
 	case errors.Is(err, ErrUnauthorized):
-		client.Reply(queryError(req, CodeUnauthorized))
+		env := queryError(req, CodeUnauthorized)
+		var refused *RefusedError
+		if errors.As(err, &refused) {
+			env.Refused = &refused.Refused
+		}
+		client.Reply(env)
 	case errors.Is(err, ErrNotFound):
 		client.Reply(queryError(req, CodeNotFound))
 	case errors.Is(err, ErrBadParams):

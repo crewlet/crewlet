@@ -11,7 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { LiveSocket, UNAVAILABLE_RETRY_MS } from "./socket.ts";
+import { LiveSocket, QueryRefusedError, UNAVAILABLE_RETRY_MS } from "./socket.ts";
 import { Store } from "./store.ts";
 
 /** A WebSocket the test drives and whose outgoing frames it reads. */
@@ -160,5 +160,40 @@ describe("a query frame", () => {
     const query = frames.find((frame) => frame.kind === "query");
     expect(query).toBeDefined();
     expect(Object.keys(query!).sort()).toEqual(["id", "kind", "params", "what"]);
+  });
+
+  // A REFUSAL ON AUTHORITY SAYS WHY over the socket as it does over REST: the
+  // engine's error frame carries the rule and the grants that would have
+  // admitted the reader, and the rejection a screen catches carries them too.
+  // The code stays the rejection's message, which is what every reader that
+  // only branches on the code already tests.
+  test("a refusal carries its reason and its grants to the screen", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    socket.start();
+    dial(0).open();
+    const asked = socket.query("events");
+    const frames = dial(0).sent.map((raw) => JSON.parse(raw) as { kind: string; id?: number });
+    const id = frames.find((frame) => frame.kind === "query")?.id;
+    socket.onMessage(
+      JSON.stringify({
+        kind: "error",
+        id,
+        what: "events",
+        error: "unauthorized",
+        reason: "no_grant",
+        grants: ["audit:read"],
+      }),
+    );
+    const refused = await asked.then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(refused).toBeInstanceOf(QueryRefusedError);
+    expect((refused as QueryRefusedError).message).toBe("unauthorized");
+    expect((refused as QueryRefusedError).refusal).toEqual({
+      reason: "no_grant",
+      grants: ["audit:read"],
+    });
   });
 });

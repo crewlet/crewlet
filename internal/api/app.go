@@ -1011,6 +1011,17 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any) (a
 		// authenticates at its handshake, so the unauthenticated arm is
 		// unreachable and a second code would be a wire change with
 		// nothing to read it.
+		//
+		// AND A REFUSAL ON AUTHORITY SAYS WHY, as it does over REST: the
+		// rule's reason and the grants that would have admitted the
+		// caller travel on the frame. It was reduced to the question's
+		// name here, so the one channel the dashboard reads was the one
+		// on which "you may not" could not say what would change that.
+		var refusal *queries.Refusal
+		if errors.As(err, &refusal) {
+			return nil, &stream.RefusedError{What: what,
+				Refused: *stream.NewRefused(refusal.Reason, refusal.Grants)}
+		}
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
 	case errors.Is(err, queries.ErrNotFound):
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)

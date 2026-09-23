@@ -320,7 +320,7 @@ function BridgeSummary({ run }: { run: SandboxRun }) {
 export function RunPeek({ turnId }: { turnId: string }) {
   const now = useNow();
   const live = useSandboxes();
-  const { data, loading, error } = useQuery("sandbox_runs", undefined, {
+  const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
     enabled: turnId !== "",
     pollMs: POLL_MS,
   });
@@ -333,7 +333,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
   return (
     <>
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading the run" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {/* NOT AN EMPTY RAIL. A turn id that matches no run is a hand-edited
             URL or a run swept past the retention horizon, and naming which
             turn resolved to nothing is more use than a header over no run. */}
@@ -418,7 +418,9 @@ export function Runs({ runId }: { runId?: string }) {
   const setSelected = (id: string) => nav.to(id ? ["activity", "runs", id] : ["activity", "runs"]);
   // Durable runs have no push behind them, so this is the one place a poll is
   // correct — and it is slow, because a run's lifetime is minutes.
-  const { data, loading, error } = useQuery("sandbox_runs", undefined, { pollMs: POLL_MS });
+  const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
+    pollMs: POLL_MS,
+  });
 
   const rows = useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]);
 
@@ -521,6 +523,7 @@ export function Runs({ runId }: { runId?: string }) {
       {loading && !rows.length && <Skeleton variant="text" rows={4} label="Loading runs" />}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           rows.length

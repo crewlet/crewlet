@@ -335,6 +335,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
       )}
       <QueryState
         error={list.error}
+        refusal={list.refusal}
         loading={list.loading}
         empty={
           rows.length

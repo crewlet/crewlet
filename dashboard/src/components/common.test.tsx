@@ -20,7 +20,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { Tag, type TagVariant } from "@crewlethq/ui";
 
-import { SeatCard } from "./common.tsx";
+import { QueryState, SeatCard } from "./common.tsx";
 import { drawnClasses, isDrawnAs } from "~/testing.tsx";
 import type { Seat } from "~/lib/seats.ts";
 import type { AgentRow, LiveCall } from "~/protocol/index.ts";
@@ -119,4 +119,33 @@ test("a seat the engine reported no handle for still links to its page", () => {
   expect(container.querySelector("a.seat-card")!.getAttribute("href")).toBe(
     "#/company/people/Ada%20Lovelace",
   );
+});
+
+// A REFUSAL ON AUTHORITY SAYS WHAT WOULD CHANGE IT. The banner read "the
+// credential you presented does not carry the grant this answer needs" and
+// named no grant, because the socket delivered the code alone; the engine's
+// frame now carries the rule and the grants, and the banner draws them — a
+// grant to ask for, or the honest answer that no grant would help.
+test("a refusal on authority names the grants that would admit the reader", () => {
+  render(
+    <QueryState
+      error="unauthorized"
+      refusal={{ reason: "no_grant", grants: ["audit:read"] }}
+      loading={false}
+    />,
+  );
+  expect(screen.getByText("audit:read")).toBeTruthy();
+  expect(screen.getByText("no_grant")).toBeTruthy();
+});
+
+test("a refusal no grant would change says so rather than naming one", () => {
+  render(
+    <QueryState
+      error="unauthorized"
+      refusal={{ reason: "not_lead", grants: [] }}
+      loading={false}
+    />,
+  );
+  expect(screen.getByText(/no grant would change that/)).toBeTruthy();
+  expect(screen.getByText("not_lead")).toBeTruthy();
 });

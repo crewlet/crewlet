@@ -20,7 +20,26 @@
 import { api } from "./api.ts";
 import { apiToken } from "./authToken.ts";
 import type { Store } from "./store.ts";
-import type { Frame, QueryErrorCode, QueryMap, QueryName } from "./types.ts";
+import type { Frame, QueryErrorCode, QueryMap, QueryName, QueryRefusal } from "./types.ts";
+
+/**
+ * A rejected question, carrying — when the engine refused it on AUTHORITY —
+ * the reason and the grants its error frame named.
+ *
+ * `message` IS STILL THE CODE, which every existing reader tests with
+ * {@link queryErrorCode}; the refusal rides beside it rather than replacing it,
+ * so a screen that only branches on the code is unchanged and one that can say
+ * what would admit the reader has it to say.
+ */
+export class QueryRefusedError extends Error {
+  constructor(
+    code: string,
+    readonly refusal: QueryRefusal | null,
+  ) {
+    super(code);
+    this.name = "QueryRefusedError";
+  }
+}
 
 const PATH = "/ws/stream";
 
@@ -109,6 +128,18 @@ const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
   timeout: true,
   closed: true,
 };
+
+/**
+ * The refusal an error frame carries, or null — for a frame that is not a
+ * refusal on authority, or a node too old to say why.
+ */
+function refusalOf(msg: Frame): QueryRefusal | null {
+  if (msg.error !== "unauthorized" || typeof msg.reason !== "string") return null;
+  return {
+    reason: msg.reason,
+    grants: Array.isArray(msg.grants) ? msg.grants.filter((g) => typeof g === "string") : [],
+  };
+}
 
 /**
  * The query error code `value` is, or null for anything else: no failure at
@@ -563,20 +594,29 @@ export class LiveSocket {
         }
         // An error frame always carries a code. One that does not is still
         // a failure nobody explained, which is what `query_failed` means.
-        this.settle(msg.id, msg.error || "query_failed", null);
+        //
+        // AND A REFUSAL ON AUTHORITY SAYS WHY — the rule and the grants that
+        // would have admitted the reader — which the engine sends beside the
+        // code under the REST envelope's own keys.
+        this.settle(msg.id, msg.error || "query_failed", null, refusalOf(msg));
         break;
       case "pong":
         break;
     }
   }
 
-  private settle(id: number | undefined, error: string | null, data: unknown): void {
+  private settle(
+    id: number | undefined,
+    error: string | null,
+    data: unknown,
+    refusal: QueryRefusal | null = null,
+  ): void {
     if (id === undefined) return;
     const entry = this.inflight.get(id);
     if (!entry) return;
     this.inflight.delete(id);
     clearTimeout(entry.timer);
-    if (error) entry.reject(new Error(error));
+    if (error) entry.reject(new QueryRefusedError(error, refusal));
     else entry.resolve(data);
   }
 

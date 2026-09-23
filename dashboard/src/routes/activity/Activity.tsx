@@ -332,6 +332,7 @@ export function Activity() {
         </Card.Header>
         <QueryState
           error={series.error}
+          refusal={series.refusal}
           loading={series.loading}
           empty={
             series.data && series.data.total === 0

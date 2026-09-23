@@ -50,6 +50,7 @@ test("the shell watches the viewer's seat and asks for their inbox again when it
           login: "ana.lee",
           grants: ["state:read"],
           handle: "ana",
+          owner: "ana",
           name: "Ana Lee",
           kind: "human",
         });

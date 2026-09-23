@@ -343,7 +343,7 @@ export function WorkItem({ id }: { id: string }) {
         <Skeleton variant="text" rows={8} label="Loading the item" />
       )}
 
-      <QueryState error={state.error} loading={state.loading}>
+      <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {state.data && item && (
           <>
             <ObjectHeader
@@ -435,7 +435,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
       {state.loading && !state.data && (
         <Skeleton variant="text" rows={6} label="Loading the item" />
       )}
-      <QueryState error={state.error} loading={state.loading}>
+      <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {state.data &&
           (item ? (
             <>
@@ -941,7 +941,7 @@ function Woke({
         ))}
       </div>
 
-      <QueryState error={routing.error} loading={routing.loading}>
+      <QueryState error={routing.error} refusal={routing.refusal} loading={routing.loading}>
         {routing.data && <Routing answer={routing.data} chrome={chrome} />}
       </QueryState>
     </div>

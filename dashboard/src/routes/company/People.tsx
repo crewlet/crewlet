@@ -62,6 +62,7 @@ function Workload({ seats }: { seats: Seat[] }) {
   return (
     <QueryState
       error={answer.error}
+      refusal={answer.refusal}
       loading={answer.loading}
       empty={
         rows.length

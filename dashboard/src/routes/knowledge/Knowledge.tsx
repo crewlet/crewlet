@@ -59,7 +59,11 @@ export function Knowledge() {
   // Searching is a real request against a real wiki, so it runs on submit
   // rather than on every keystroke: a per-character search would put one
   // request per letter through the company's own credentials.
-  const { data, loading, error } = useQuery("knowledge", { q }, { enabled: q.trim().length > 0 });
+  const { data, loading, error, refusal } = useQuery(
+    "knowledge",
+    { q },
+    { enabled: q.trim().length > 0 },
+  );
 
   const { open: openPeek } = usePeekControls();
   // WHAT `[` AND `]` WALK: the hits this search returned, in the engine's own
@@ -201,6 +205,7 @@ export function Knowledge() {
       {q && (
         <QueryState
           error={error}
+          refusal={refusal}
           loading={loading}
           empty={
             data?.hits?.length
@@ -512,7 +517,11 @@ export function ContainerPeek({ id }: { id: string }) {
       {containers.loading && !containers.data && (
         <Skeleton variant="text" rows={6} label="Loading the container" />
       )}
-      <QueryState error={containers.error} loading={containers.loading}>
+      <QueryState
+        error={containers.error}
+        refusal={containers.refusal}
+        loading={containers.loading}
+      >
         {containers.data &&
           (found ? (
             <>

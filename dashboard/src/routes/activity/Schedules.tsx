@@ -368,7 +368,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   );
   // Schedules are pushed on a config apply, and the RUNS are not pushed at
   // all — so this polls, slowly, because a cron's next fire moves in minutes.
-  const { data, loading, error } = useQuery("schedules", undefined, { pollMs: 30_000 });
+  const { data, loading, error, refusal } = useQuery("schedules", undefined, { pollMs: 30_000 });
 
   const schedules = data?.schedules ?? [];
   const runs = data?.recent_runs ?? [];
@@ -495,6 +495,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
       )}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           schedules.length

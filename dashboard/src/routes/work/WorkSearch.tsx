@@ -159,6 +159,7 @@ export function WorkSearch() {
       ) : (
         <QueryState
           error={hits.error}
+          refusal={hits.refusal}
           loading={hits.loading}
           empty={
             rows.length

@@ -157,6 +157,7 @@ function SpendOverTime({ range }: { range: TimeRange }) {
       </Card.Header>
       <QueryState
         error={series.error}
+        refusal={series.refusal}
         loading={series.loading}
         empty={
           data && data.totals.calls === 0
@@ -374,7 +375,9 @@ export function Spend() {
           window that could not be read drew a chart's error banner over stat
           tiles, bar lists and two tables that were all still rendering, with
           nothing saying where their numbers came from. */}
-      {!live && asked.error && <QueryState error={asked.error} loading={false} />}
+      {!live && asked.error && (
+        <QueryState error={asked.error} refusal={asked.refusal} loading={false} />
+      )}
 
       {/* The flush Panel is gone: StatGroup draws that surface itself. */}
       <StatGroup columns={4}>

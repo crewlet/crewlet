@@ -369,7 +369,7 @@ export function RevisionPeek({ id }: { id: string }) {
   return (
     <>
       {audit.loading && !audit.data && <Skeleton variant="text" rows={6} label="Loading" />}
-      <QueryState error={audit.error} loading={audit.loading}>
+      <QueryState error={audit.error} refusal={audit.refusal} loading={audit.loading}>
         {/* NOT AN EMPTY RAIL. A `peek=revision:` arrives from a pasted URL as
             often as from a row, and naming the id that resolved to nothing —
             and the window it was looked for in — is more use than a header
@@ -557,7 +557,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
       {revisionPath !== undefined && (
         <>
           {audit.loading && !audit.data && <Skeleton variant="text" rows={4} label="Loading" />}
-          <QueryState error={audit.error} loading={audit.loading}>
+          <QueryState error={audit.error} refusal={audit.refusal} loading={audit.loading}>
             {audit.data && !addressed && (
               <EmptyState
                 icon={<ScheduleGlyph size="xl" />}
@@ -603,7 +603,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
       {lens === "active" && (
         <>
           {active.loading && <Skeleton variant="text" rows={6} label="Loading" />}
-          <QueryState error={active.error} loading={active.loading}>
+          <QueryState error={active.error} refusal={active.refusal} loading={active.loading}>
             {active.data ? (
               <Card>
                 <Card.Header
@@ -659,6 +659,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
           {ids.loading && !ids.data && <Skeleton variant="text" rows={4} label="Loading" />}
           <QueryState
             error={ids.error}
+            refusal={ids.refusal}
             loading={ids.loading}
             empty={
               noRevision
@@ -714,7 +715,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                 ) : one.loading && !one.data ? (
                   <Skeleton variant="text" rows={6} label="Loading" />
                 ) : (
-                  <QueryState error={one.error} loading={one.loading}>
+                  <QueryState error={one.error} refusal={one.refusal} loading={one.loading}>
                     {one.data ? (
                       <CodeBlock
                         plain
@@ -749,6 +750,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
           {audit.loading && <Skeleton variant="text" rows={5} label="Loading" />}
           <QueryState
             error={audit.error}
+            refusal={audit.refusal}
             loading={audit.loading}
             empty={
               rows.length
@@ -847,6 +849,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
               ) : (
                 <QueryState
                   error={diff.error}
+                  refusal={diff.refusal}
                   loading={diff.loading}
                   empty={
                     diff.data?.changes?.length

@@ -61,7 +61,7 @@ interface Position {
 }
 
 export function DomainScreen({ name }: { name: string }) {
-  const { data, loading, error } = useQuery("retention", undefined, {
+  const { data, loading, error, refusal } = useQuery("retention", undefined, {
     enabled: name !== "",
     pollMs: POLL_MS,
   });
@@ -158,7 +158,7 @@ export function DomainScreen({ name }: { name: string }) {
       </PageActions>
 
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading the domain" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {data &&
           (domain ? (
             <>

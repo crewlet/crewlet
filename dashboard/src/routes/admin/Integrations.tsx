@@ -1885,6 +1885,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
       </Card.Header>
       <QueryState
         error={deliveries.error}
+        refusal={deliveries.refusal}
         loading={deliveries.loading}
         empty={
           deliveries.data && rows.length === 0
@@ -2715,7 +2716,7 @@ function LastDelivery({ surface, name, now }: { surface: string; name: string; n
  */
 export function IntegrationPeek({ kind }: { kind: string }) {
   const now = useNow();
-  const { data, loading, error } = useQuery("integrations", undefined, {
+  const { data, loading, error, refusal } = useQuery("integrations", undefined, {
     enabled: kind !== "",
     // The same slow cadence the screen uses at rest: traffic counters move
     // slowly, and a peek is read for seconds rather than watched.
@@ -2784,7 +2785,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
       />
       <div className="col gap-3">
         {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
-        <QueryState error={error} loading={loading}>
+        <QueryState error={error} refusal={refusal} loading={loading}>
           {data && present.length === 0 && (
             <EmptyState
               size="compact"

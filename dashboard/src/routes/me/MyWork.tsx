@@ -267,7 +267,7 @@ export function MyWork() {
         ))}
 
       {whose && (
-        <QueryState error={state.error} loading={state.loading}>
+        <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
           {mine && (
             <>
               {/* COVERAGE IS A BANNER, never swallowed: rows may be missing,
@@ -343,6 +343,7 @@ export function MyWork() {
                 </Card.Header>
                 <QueryState
                   error={inbox.error}
+                  refusal={inbox.refusal}
                   loading={inbox.loading}
                   empty={
                     notices.length

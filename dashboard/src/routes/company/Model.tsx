@@ -93,7 +93,7 @@ export function ModelActivity() {
   // attached is the query that makes an activity screen slow — and a phase
   // record without its payload has no prompts, no response, no tool calls and
   // no decision, which is everything this screen is for.
-  const { data, loading, error } = useQuery("phases", {
+  const { data, loading, error, refusal } = useQuery("phases", {
     limit: PAGE,
     ...(role ? { role } : {}),
   });
@@ -474,7 +474,7 @@ export function ModelActivity() {
       {loading && !merged.length && (
         <Skeleton variant="text" rows={5} rowHeight={44} label="Loading model activity" />
       )}
-      {error && <QueryState error={error} loading={loading} />}
+      {error && <QueryState error={error} refusal={refusal} loading={loading} />}
 
       {!loading && !filtered.length && !error && (
         <EmptyState

@@ -18,10 +18,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
 import {
   queryErrorCode,
+  QueryRefusedError,
   UNAVAILABLE_RETRY_MS,
   type QueryErrorCode,
   type QueryMap,
   type QueryName,
+  type QueryRefusal,
 } from "~/protocol/index.ts";
 
 export interface QueryResult<T> {
@@ -35,6 +37,13 @@ export interface QueryResult<T> {
    *  comparing it against a code the engine does not send fails the
    *  typecheck. */
   error: QueryErrorCode | null;
+  /**
+   * Why an `unauthorized` answer was refused — the rule, and the grants any
+   * one of which would have admitted the reader — or null. Pass it to
+   * `QueryState` beside `error`, which is what lets the refusal banner say what
+   * would change the answer rather than only that there was one.
+   */
+  refusal: QueryRefusal | null;
   /**
    * Ask again now.
    *
@@ -123,7 +132,8 @@ export function useQuery<K extends QueryName>(
     data: QueryMap[K] | null;
     loading: boolean;
     error: QueryErrorCode | null;
-  }>({ data: null, loading: enabled, error: null });
+    refusal: QueryRefusal | null;
+  }>({ data: null, loading: enabled, error: null, refusal: null });
 
   // The params object is a fresh literal on every render, so it cannot be a
   // dependency. Its serialisation can.
@@ -142,7 +152,7 @@ export function useQuery<K extends QueryName>(
 
   useEffect(() => {
     if (!enabled) {
-      setState({ data: null, loading: false, error: null });
+      setState({ data: null, loading: false, error: null, refusal: null });
       return;
     }
     const mine = ++generation.current;
@@ -153,7 +163,7 @@ export function useQuery<K extends QueryName>(
       try {
         const data = await socket.query(what, JSON.parse(key) as Record<string, unknown>);
         if (generation.current !== mine) return;
-        setState({ data, loading: false, error: null });
+        setState({ data, loading: false, error: null, refusal: null });
       } catch (err) {
         if (generation.current !== mine) return;
         // A socket rejection always carries a code; anything else that
@@ -167,6 +177,7 @@ export function useQuery<K extends QueryName>(
           data: prev.data,
           loading: false,
           error: code,
+          refusal: err instanceof QueryRefusedError ? err.refusal : null,
         }));
       } finally {
         // THE SOONER OF THE TWO. A poll keeps its own cadence; an

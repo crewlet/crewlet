@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -76,6 +77,12 @@ func TestALeadReadsAReportsInboxThroughTheApp(t *testing.T) {
 // relation from a missing grant — and the sentence that was meant to name the
 // remedy existed only in a log line, naming a grant in words nothing held
 // against the rule.
+//
+// AND OVER THE SOCKET, which is the dashboard's only data channel: the error
+// frame carries the same two facts under the same keys. It carried the code
+// alone — the app reduced the refusal to the question's name on its way to
+// the socket — so the one transport the screens read was the one that could
+// not say what would change the answer. A refused WATCH says it too.
 func TestARefusedPersonalQuestionNamesItsReasonAndItsGrants(t *testing.T) {
 	t.Parallel()
 	const token = "a-colleague-holding-state-read-and-nothing-else"
@@ -125,6 +132,61 @@ func TestARefusedPersonalQuestionNamesItsReasonAndItsGrants(t *testing.T) {
 		if !reflect.DeepEqual(body[authz.DetailGrants], c.grants) {
 			t.Errorf("GET %s: grants = %v, want %v", c.path,
 				body[authz.DetailGrants], c.grants)
+		}
+	}
+
+	// THE SAME QUESTIONS OVER THE SOCKET.
+	srv := httptest.NewServer(a)
+	t.Cleanup(srv.Close)
+	sock := dialInbox(t, srv.URL, token)
+	for i, c := range []struct {
+		frame  map[string]any
+		reason string
+		grants []any
+	}{
+		{map[string]any{"kind": "query", "id": 1, "what": "work_inbox",
+			"params": map[string]any{"handle": "bo"}},
+			string(authz.ReasonNotSelf), []any{string(iam.GrantFleetOperate)}},
+		{map[string]any{"kind": "query", "id": 2, "what": "events"},
+			string(authz.ReasonNoGrant), []any{string(iam.GrantAuditRead)}},
+		// A WATCH of somebody else's inbox is decided by the same rule
+		// and refused with the same two facts.
+		{map[string]any{"kind": "watch", "seat": "bo"},
+			string(authz.ReasonNotSelf), []any{string(iam.GrantFleetOperate)}},
+	} {
+		sock.send(t, c.frame)
+		body := nextError(t, sock)
+		if body["error"] != "unauthorized" {
+			t.Errorf("socket frame %d answered %v, want unauthorized", i, body)
+			continue
+		}
+		if body[authz.DetailReason] != c.reason {
+			t.Errorf("socket frame %d: reason = %v, want %q", i,
+				body[authz.DetailReason], c.reason)
+		}
+		if !reflect.DeepEqual(body[authz.DetailGrants], c.grants) {
+			t.Errorf("socket frame %d: grants = %v, want %v", i,
+				body[authz.DetailGrants], c.grants)
+		}
+	}
+}
+
+// nextError reads past every push to the next error frame, whole.
+func nextError(t *testing.T, s *inboxSocket) map[string]any {
+	t.Helper()
+	for {
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		_, raw, err := s.conn.Read(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		var frame map[string]any
+		if err := json.Unmarshal(raw, &frame); err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		if frame["kind"] == "error" {
+			return frame
 		}
 	}
 }

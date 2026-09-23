@@ -121,7 +121,7 @@ import {
   type Story,
 } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
-import type { EventRecord, TurnRow } from "~/protocol/index.ts";
+import type { EventRecord, QueryRefusal, TurnRow } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -262,6 +262,8 @@ export interface TurnView {
   turnId: string;
   loading: boolean;
   error: string | null;
+  /** Why an `unauthorized` answer was refused, for the refusal banner. */
+  refusal: QueryRefusal | null;
   /** Oldest first: a turn is read forwards. */
   events: EventRecord[];
   /** The store stopped at its per-turn cap, so what is missing is the MIDDLE. */
@@ -327,7 +329,7 @@ export function useTurnView(turnId: string): TurnView {
   // GUARDED ON THE ID. A rail is opened from a pasted `peek=turn:` as often as
   // from a row, and an empty one would ask the engine for a turn with no id
   // and be refused on the way in.
-  const { data, loading, error } = useQuery(
+  const { data, loading, error, refusal } = useQuery(
     "turn",
     { turn_id: turnId },
     { enabled: turnId !== "" },
@@ -465,6 +467,7 @@ export function useTurnView(turnId: string): TurnView {
     turnId,
     loading,
     error,
+    refusal,
     events,
     cut,
     attempt,
@@ -1279,7 +1282,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // weights, every trace the turn touched, and the JSON somebody attaches to
   // a bug report.
   const view = useTurnView(turnId);
-  const { loading, error, events, cut, attempt, phases, own, nested, rec, role } = view;
+  const { loading, error, refusal, events, cut, attempt, phases, own, nested, rec, role } = view;
   const { running, durationMs, story } = view;
 
   const prefetch = useMemo(
@@ -1483,6 +1486,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
       {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         // GATED ON WHAT THE PAGE HOLDS, not on the query's answer alone.
         // `QueryState` renders this INSTEAD of its children, so a turn whose
@@ -1806,7 +1810,7 @@ export function TurnPeek({ turnId }: { turnId: string }) {
   const nothing = view.events.length === 0 && view.phases.length === 0;
   if (nothing) {
     if (view.loading) return <Skeleton variant="text" rows={6} label="Loading the turn" />;
-    if (view.error) return <QueryState error={view.error} loading={false} />;
+    if (view.error) return <QueryState error={view.error} refusal={view.refusal} loading={false} />;
     return (
       <EmptyState
         size="compact"
@@ -1834,7 +1838,7 @@ export function TurnPeek({ turnId }: { turnId: string }) {
             something — a query answer, or a phase off the stream — so passing
             the in-flight flag here would blank a running turn's rail every
             time the query it does not need re-ran on a reconnect. */}
-        <QueryState error={view.error} loading={false}>
+        <QueryState error={view.error} refusal={view.refusal} loading={false}>
           {/* THE SAME WARNING THE PAGE CARRIES, because every count in the
               header above is made from these rows: a cut turn holds its
               opening and its ending and not its middle, and a rail that said

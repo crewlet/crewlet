@@ -3044,6 +3044,27 @@ export interface Frame {
   /** The seat an `inbox_changed` frame is about. Only a socket WATCHING that
    *  seat is sent one, so a frame here is already this tab's own. */
   seat?: string;
+  /** On an `unauthorized` error frame: the rule that refused — see
+   *  {@link QueryRefusal}. Absent on every other frame. */
+  reason?: string;
+  /** On an `unauthorized` error frame: the grants any one of which would have
+   *  admitted the caller. An EMPTY list is an answer — no grant would. */
+  grants?: string[];
+}
+
+/**
+ * Why the engine refused a question on AUTHORITY — the machine-readable half of
+ * an `unauthorized` answer, which the socket's error frame carries under the
+ * same keys the REST envelope does.
+ *
+ * `grants` are the capabilities any ONE of which would have admitted the
+ * caller; an empty list means no capability would, and what is missing is a
+ * relation the org chart does not hold (leading the person, owning the record).
+ * `reason` is the deciding rule's own word (`not_self`, `no_grant`, …).
+ */
+export interface QueryRefusal {
+  reason: string;
+  grants: string[];
 }
 
 /**

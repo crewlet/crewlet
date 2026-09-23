@@ -247,7 +247,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
   if (kind === "skills") params.skills = true;
   if (kind === "prose") params.skills = false;
 
-  const { data, loading, error } = useQuery("pages", params, { pollMs: 20_000 });
+  const { data, loading, error, refusal } = useQuery("pages", params, { pollMs: 20_000 });
 
   const rows = useMemo(
     () => [...(data?.pages ?? [])].sort((a, b) => tsKey(b.updated_at) - tsKey(a.updated_at)),
@@ -348,6 +348,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
 
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         // ONE EMPTY STATE. There used to be two, and on a company with no
         // pages at all they rendered TOGETHER: `QueryState` fired on
@@ -508,7 +509,7 @@ export function PageView({ container, title }: { container: string; title: strin
   const index = useMemo(() => indexOrg(org), [org]);
   const now = useNow();
   const id = `${container}/${title}`;
-  const { data, loading, error } = useQuery(
+  const { data, loading, error, refusal } = useQuery(
     "page",
     { id },
     { enabled: id !== "/", pollMs: 20_000 },
@@ -572,7 +573,7 @@ export function PageView({ container, title }: { container: string; title: strin
 
       {loading && <Skeleton variant="text" rows={8} label="Loading the page" />}
 
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {page && (
           <>
             {/* THE OBJECT'S OWN HEADER. The title used to be the page bar's
@@ -740,7 +741,11 @@ export function PagePeek({ id }: { id: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const now = useNow();
-  const { data, loading, error } = useQuery("page", { id }, { enabled: id !== "", pollMs: 20_000 });
+  const { data, loading, error, refusal } = useQuery(
+    "page",
+    { id },
+    { enabled: id !== "", pollMs: 20_000 },
+  );
   const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
   const page = data?.page;
   const excerpt = useMemo(() => firstLines(page?.body ?? "", PEEK_LINES), [page?.body]);
@@ -768,7 +773,7 @@ export function PagePeek({ id }: { id: string }) {
   return (
     <>
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading the page" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {page && (
           <>
             <ObjectHeader
@@ -1009,7 +1014,7 @@ function PageHistory({
 
       {version > 0 && (
         <div style={{ marginTop: "var(--space-3)" }}>
-          <QueryState error={body.error} loading={body.loading}>
+          <QueryState error={body.error} refusal={body.refusal} loading={body.loading}>
             {body.data ? (
               <>
                 <div className="row wrap gap-2">
@@ -1035,7 +1040,7 @@ function PageHistory({
                   )}
                 </div>
                 {lens === "diff" && previous > 0 ? (
-                  <QueryState error={prior.error} loading={prior.loading}>
+                  <QueryState error={prior.error} refusal={prior.refusal} loading={prior.loading}>
                     {prior.data &&
                       (stat.identical ? (
                         // IDENTICAL IS ITS OWN ANSWER. A save that changed
@@ -1121,6 +1126,7 @@ function PageChanges({
       </Card.Header>
       <QueryState
         error={feed.error}
+        refusal={feed.refusal}
         loading={feed.loading}
         empty={
           changes.length

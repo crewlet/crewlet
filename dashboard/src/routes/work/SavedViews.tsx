@@ -128,7 +128,8 @@ export function SavedViews({ id }: { id?: string }) {
     // this screen has, so a refusal rendered as "no saved view with that id"
     // tells a reader their view was deleted when the truth is that nothing
     // was read at all — and they act on it, by saving a second copy.
-    if (views.error) return <QueryState error={views.error} loading={false} />;
+    if (views.error)
+      return <QueryState error={views.error} refusal={views.refusal} loading={false} />;
     if (!one) {
       return (
         // DASHBOARD IS THE NEAREST GLYPH THERE IS. Our `columns` mark is
@@ -193,6 +194,7 @@ export function SavedViews({ id }: { id?: string }) {
 
       <QueryState
         error={views.error}
+        refusal={views.refusal}
         loading={views.loading}
         empty={
           saved.length

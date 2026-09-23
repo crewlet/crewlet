@@ -1412,6 +1412,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             )}
             <QueryState
               error={items.error}
+              refusal={items.refusal}
               loading={items.loading}
               empty={
                 items.data && !(items.data.items ?? []).length
@@ -1565,7 +1566,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                 />
               </Card>
             )}
-            {turnList.error && <QueryState error={turnList.error} loading={turnList.loading} />}
+            {turnList.error && (
+              <QueryState
+                error={turnList.error}
+                refusal={turnList.refusal}
+                loading={turnList.loading}
+              />
+            )}
             {history.loading && !turns.length && (
               <Skeleton variant="text" rows={4} rowHeight={44} label="Loading this seat's turns" />
             )}
@@ -1576,7 +1583,13 @@ export function SeatScreen({ handle }: { handle: string }) {
               store answered, and hidden for good on a node that keeps no event
               log at all. Only the settled half of this screen comes from that
               query; the running half is pushed. */}
-            {history.error && <QueryState error={history.error} loading={history.loading} />}
+            {history.error && (
+              <QueryState
+                error={history.error}
+                refusal={history.refusal}
+                loading={history.loading}
+              />
+            )}
             {!history.loading && !history.error && !turns.length && (
               <EmptyState
                 size="compact"
@@ -1655,7 +1668,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               stops it replying twice in one conversation — it is the engine&rsquo;s only account of
               what a seat said on a surface it does not own, and until now nothing read it.
             </PageNote>
-            <QueryState error={threads.error} loading={threads.loading}>
+            <QueryState error={threads.error} refusal={threads.refusal} loading={threads.loading}>
               <div className="split">
                 <Card padding="none">
                   <Card.Header
@@ -1757,7 +1770,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {memory.loading && (
               <Skeleton variant="text" rows={5} label="Loading this seat's memory" />
             )}
-            <QueryState error={memory.error} loading={memory.loading}>
+            <QueryState error={memory.error} refusal={memory.refusal} loading={memory.loading}>
               <div className="col gap-4">
                 <Card padding="none">
                   <Card.Header
@@ -2063,7 +2076,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {spend.loading && (
               <Skeleton variant="text" rows={4} label="Loading this seat's spend" />
             )}
-            <QueryState error={spend.error} loading={spend.loading}>
+            <QueryState error={spend.error} refusal={spend.refusal} loading={spend.loading}>
               <div className="grid grid-auto-lg">
                 <Card>
                   <Card.Header icon={<LayersGlyph size="sm" />}>

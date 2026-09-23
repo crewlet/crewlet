@@ -40,7 +40,13 @@ import {
   toneOf,
   type Seat,
 } from "~/lib/seats.ts";
-import type { AgentRow, FeedRow, QueryErrorCode, SandboxEntry } from "~/protocol/index.ts";
+import type {
+  AgentRow,
+  FeedRow,
+  QueryErrorCode,
+  QueryRefusal,
+  SandboxEntry,
+} from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
 
 /**
@@ -408,6 +414,52 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
 };
 
 /**
+ * A refusal on authority that says WHY: the grants any one of which would have
+ * admitted the reader, or — an empty list — that none would, because what is
+ * missing is a relation the org chart does not hold.
+ *
+ * FROM THE ANSWER, NEVER WRITTEN HERE. The engine's error frame carries the
+ * deciding rule's own reason and grants under the keys its REST envelope uses;
+ * a sentence naming a grant typed into this file is a second statement of the
+ * rule, and it is the one that goes stale the day the rule's grant moves.
+ */
+function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
+  return (
+    <Callout
+      variant="warning"
+      icon={<KeyGlyph size="md" />}
+      action={
+        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={requestToken}>
+          Set token
+        </Button>
+      }
+    >
+      {refusal.grants.length > 0 ? (
+        <>
+          You may not read this: the answer needs{" "}
+          {refusal.grants.map((grant, i) => (
+            <span key={grant}>
+              {i > 0 ? " or " : ""}
+              <code className="inline">{grant}</code>
+            </span>
+          ))}
+          , and the credential you presented carries none of them. Sign in as somebody who holds
+          one, or set a token that carries it.
+        </>
+      ) : (
+        <>
+          You may not read this, and no grant would change that: the rule that decided asks a
+          relation the org chart does not hold — leading this person, or the record being your own.
+        </>
+      )}{" "}
+      <span className="t-caption">
+        Refused as <code className="inline">{refusal.reason}</code>.
+      </span>
+    </Callout>
+  );
+}
+
+/**
  * What an empty or failed answer means, said precisely.
  *
  * `unauthorized` and a company with no seats are the same empty list and
@@ -417,11 +469,18 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
  */
 export function QueryState({
   error,
+  refusal,
   loading,
   empty,
   children,
 }: {
   error: string | null;
+  /**
+   * Why an `unauthorized` answer was refused — `useQuery`'s own `refusal`.
+   * The banner then says which grant would have admitted the reader, or that
+   * none would, rather than only that the answer was refused.
+   */
+  refusal?: QueryRefusal | null;
   loading: boolean;
   /**
    * `hint` IS REQUIRED, which is uilet's `EmptyState` rule and the reason this
@@ -435,8 +494,9 @@ export function QueryState({
   empty?: { title: ReactNode; hint: ReactNode };
   children?: ReactNode;
 }) {
-  const refusal = error ? REFUSALS[error as QueryErrorCode] : undefined;
-  if (refusal) return <>{refusal}</>;
+  if (error === "unauthorized" && refusal) return <RefusedOnAuthority refusal={refusal} />;
+  const banner = error ? REFUSALS[error as QueryErrorCode] : undefined;
+  if (banner) return <>{banner}</>;
   // A CODE THIS BUILD DOES NOT KNOW. A newer node may send one — the wire
   // evolves additively — and naming it is more use than calling it a refusal.
   if (error) {
