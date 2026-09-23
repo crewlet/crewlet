@@ -122,7 +122,7 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 	}
 
 	subject := TitleSubject(container, title)
-	opID := s.newSeqID()
+	opID := s.operation(actor, "create", container+"/"+NormalizeTitle(title))
 	scope := ScopeSet{Terms: []ScopeTerm{
 		{Kind: TermTitle, Container: container, ID: TitleToken(title)},
 		{Kind: TermObject, Container: container, ID: page.ID},
@@ -237,7 +237,7 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 	}
 
 	at := s.now()
-	opID := s.newSeqID()
+	opID := s.operation(actor, "save", pageID)
 	var out Page
 	var read uint64
 	subject := PageSubject(pageID)
@@ -327,7 +327,7 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	title = strings.Join(strings.Fields(title), " ")
 
 	at := s.now()
-	opID := s.newSeqID()
+	opID := s.operation(actor, "rename", pageID)
 	var out Page
 
 	head, err := s.head(ctx, pageID)
@@ -510,7 +510,7 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 		return Written{}, err
 	}
 	at := s.now()
-	opID := s.newSeqID()
+	opID := s.operation(actor, string(op), pageID)
 	subject := PageSubject(pageID)
 	var out Page
 	var read uint64

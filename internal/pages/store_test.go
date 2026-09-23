@@ -935,3 +935,62 @@ func TestTheReservedRuleFiresOnSaveRenameAndComment(t *testing.T) {
 		t.Fatalf("an agent could not write an ordinary container: %v", err)
 	}
 }
+
+// A GESTURE RETRIED UNDER THE CALLER'S OWN KEY IS ONE OPERATION.
+//
+// An HTTP write whose answer was `unknown` can only be retried safely under
+// the SAME operation id, because the ledger is what recognises a second
+// arrival. Every write here minted a fresh id per call, so a retried comment
+// posted twice — and there was no way for a caller with no turn to say "this
+// is the same gesture". [pages.Actor.OpKey] is that way.
+//
+// The control is the same retry with no key, which is two operations: the
+// comment posted twice is exactly what the key exists to prevent.
+func TestAGestureRetriedUnderOneKeyIsOneOperation(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+
+	keyed := author("ana")
+	keyed.OpKey = "request-7"
+	var changes []string
+	for range 2 {
+		_, written, err := r.store.Comment(t.Context(), keyed, page.Page.ID,
+			pages.NewComment{Body: "step 3 is stale"})
+		if err != nil {
+			t.Fatalf("comment: %v", err)
+		}
+		changes = append(changes, written.ChangeID)
+		r.drain()
+		trashed, err := r.store.Trash(t.Context(), keyed, page.Page.ID)
+		if err != nil {
+			t.Fatalf("trash: %v", err)
+		}
+		changes = append(changes, trashed.ChangeID)
+		r.drain()
+	}
+	if changes[0] != changes[2] || changes[1] != changes[3] {
+		t.Errorf("a retry under one key was a new operation: %v", changes)
+	}
+	thread, err := r.store.Thread(t.Context(), page.Page.ID)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if len(thread) != 1 {
+		t.Fatalf("a retried comment posted %d times", len(thread))
+	}
+
+	// THE CONTROL: no key, and the retry is a second comment.
+	unkeyed := author("bo")
+	for range 2 {
+		if _, _, err := r.store.Comment(t.Context(), unkeyed, page.Page.ID,
+			pages.NewComment{Body: "and step 4"}); err != nil {
+			t.Fatalf("comment: %v", err)
+		}
+		r.drain()
+	}
+	if thread, _ = r.store.Thread(t.Context(), page.Page.ID); len(thread) != 3 {
+		t.Fatalf("the control holds %d comments, want 3 — so this test cannot "+
+			"tell a keyed retry from an unkeyed one", len(thread))
+	}
+}

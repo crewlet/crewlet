@@ -290,7 +290,43 @@ type Actor struct {
 	OperatorID string
 	TurnID     string
 	Chain      []string
+
+	// OpKey is the caller's own operation key: the value a RETRY of this
+	// same gesture reproduces, which every write here derives its operation
+	// id from when it is set.
+	//
+	// ON THE ACTOR because it travels with the call and not with the store,
+	// for the same reason the actor does — and because it is what the
+	// tracker's actor already carries (`builtin.Actor.WorkKey`), so the two
+	// domains take a retry key the same way. EMPTY MINTS A FRESH ID PER
+	// CALL, which is right for every caller that will never retry the same
+	// gesture — and wrong for the one that must: an HTTP write whose answer
+	// was `unknown` can only be retried safely under the SAME id, because
+	// the operation ledger is what recognises a second arrival, and a fresh
+	// one would append the trash, the rename or the comment twice.
+	OpKey string
 }
+
+// operation is the id one write is published under: derived from the actor's
+// [Actor.OpKey] when there is one, and freshly minted when there is not.
+//
+// THE VERB AND THE OBJECT ARE PART OF THE DERIVATION, so one key covers every
+// record one gesture writes — a save and the rename that follows it are two
+// records, and one id for both would have the ledger collapse the second as a
+// redelivery of the first.
+func (s *Store) operation(actor Actor, verb, object string) string {
+	key := strings.TrimSpace(actor.OpKey)
+	if key == "" {
+		return s.newSeqID()
+	}
+	return uuid.NewSHA1(operationNamespace,
+		[]byte(key+"\x00"+verb+"\x00"+object)).String()
+}
+
+// operationNamespace scopes the derived operation ids. FIXED for the life of
+// the format: a new one would make a retry that straddles an upgrade append
+// its gesture a second time.
+var operationNamespace = uuid.MustParse("4e2a9c61-7d35-5b0f-9a8e-2c6d1f0b3a57")
 
 // Name is how this actor is recorded and rendered.
 //

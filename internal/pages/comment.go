@@ -70,7 +70,7 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 	mentions := cleanList(in.Mentions)
 
 	at := s.now()
-	opID := s.commentOpID(pageID, in)
+	opID := s.commentOpID(actor, pageID, in)
 	subject := PageSubject(pageID)
 	comment := Comment{
 		V: DocumentVersion, ID: opID, PageID: pageID,
@@ -139,7 +139,7 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 	}
 
 	at := s.now()
-	opID := s.newSeqID()
+	opID := s.operation(actor, "comment.edit", commentID)
 	subject := PageSubject(pageID)
 	var out Comment
 	// THE REVISION AN UNCHANGED EDIT ANSWERS WITH, taken in the decision's
@@ -237,7 +237,7 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 		return Written{}, err
 	}
 	at := s.now()
-	opID := s.newSeqID()
+	opID := s.operation(actor, "comment.remove", commentID)
 	subject := PageSubject(pageID)
 
 	result, err := s.publish(ctx, statelog.Request{
@@ -340,12 +340,21 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 // the ledger collapses rather than a second comment. The comment's own id is
 // the same value: one comment is one operation here, and two identifiers for
 // one thing is two places for a retry to disagree with itself.
-func (s *Store) commentOpID(pageID string, in NewComment) string {
-	if strings.TrimSpace(in.TurnKey) == "" {
+//
+// AND FROM THE CALLER'S OWN [Actor.OpKey] when there is no turn, for the same
+// reason every other write here takes it: a request retried after an
+// `unknown` must post once, and a comment is the gesture a person is most
+// likely to press twice.
+func (s *Store) commentOpID(actor Actor, pageID string, in NewComment) string {
+	key := strings.TrimSpace(in.TurnKey)
+	if key == "" {
+		key = strings.TrimSpace(actor.OpKey)
+	}
+	if key == "" {
 		return s.newSeqID()
 	}
 	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Body)))
-	name := pageID + "\x00" + strings.TrimSpace(in.TurnKey) + "\x00" +
+	name := pageID + "\x00" + key + "\x00" +
 		hex.EncodeToString(sum[:])
 	return uuid.NewSHA1(commentNamespace, []byte(name)).String()
 }
