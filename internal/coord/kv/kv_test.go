@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // embeddedNATS starts a nats-server inside the test process with no listener,
@@ -419,6 +420,7 @@ func TestFleetContract(t *testing.T) {
 			FireRetention:   10 * time.Minute,
 			FollowRetention: 10 * time.Minute,
 			CooldownMax:     time.Hour,
+			BudgetRetention: time.Hour,
 			StatusFreshness: 10 * time.Minute,
 		})
 		if err != nil {
@@ -445,7 +447,8 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute,
 		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
-		BucketPrefix: prefix,
+		BudgetRetention: time.Minute,
+		BucketPrefix:    prefix,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)
@@ -755,63 +758,85 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 func TestAnAdmittedChargeLeavesANewerRefusalStanding(t *testing.T) {
 	store := openFleet(t, embeddedNATS(t))
 	ctx := t.Context()
-	stamp := func() time.Time {
+	w := testWindows()
+	day := []period.Period{period.Day}
+	stamp := func() coord.Tally {
 		t.Helper()
-		rows, err := store.Usage(ctx)
+		tally, err := store.tally(ctx, coord.OrgScope, w)
 		if err != nil {
-			t.Fatalf("Usage: %v", err)
+			t.Fatalf("tally: %v", err)
 		}
-		for _, row := range rows {
-			if row.Scope == coord.OrgScope {
-				return row.RefusedAt
-			}
-		}
-		t.Fatal("the org scope is not listed")
-		return time.Time{}
+		return tally
 	}
 
-	if err := store.stampRefusal(ctx, coord.OrgScope); err != nil {
+	if err := store.stampRefusal(ctx, coord.OrgScope, day, coord.Tally{}.Roll(w), w); err != nil {
 		t.Fatalf("stampRefusal: %v", err)
 	}
 	seen := stamp()
 	// A distinct instant, so the two stamps cannot compare equal by
 	// landing in the same clock tick.
 	time.Sleep(2 * time.Millisecond)
-	if err := store.stampRefusal(ctx, coord.OrgScope); err != nil {
+	if err := store.stampRefusal(ctx, coord.OrgScope, day, seen, w); err != nil {
 		t.Fatalf("stampRefusal: %v", err)
 	}
 	newer := stamp()
-	if !newer.After(seen) {
-		t.Fatalf("setup: the second stamp %v is not after the first %v", newer, seen)
+	if !newer.Slots[0].RefusedAt.After(seen.Slots[0].RefusedAt) {
+		t.Fatalf("setup: the second stamp %v is not after the first %v",
+			newer.Slots[0].RefusedAt, seen.Slots[0].RefusedAt)
 	}
 
 	store.clearRefusal(ctx, coord.OrgScope, seen)
-	if got := stamp(); !got.Equal(newer) {
+	if got := stamp().Slots[0].RefusedAt; !got.Equal(newer.Slots[0].RefusedAt) {
 		t.Fatalf("refusal stamp = %v, want the newer %v: a stale clear erased a "+
-			"refusal that is still true", got, newer)
+			"refusal that is still true", got, newer.Slots[0].RefusedAt)
 	}
 
 	store.clearRefusal(ctx, coord.OrgScope, newer)
-	if got := stamp(); !got.IsZero() {
+	if got := stamp().Slots[0].RefusedAt; !got.IsZero() {
 		t.Fatalf("refusal stamp = %v, want it cleared by a caller that saw it", got)
 	}
 }
 
-// openFleet opens a fleet store on its own buckets, for a test that needs to
-// reach inside one rather than run the contract suite over it.
-func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
+// testWindows is the windows these cases charge in: a fixed day in the past,
+// so no case straddles a boundary by starting near midnight.
+func testWindows() coord.Windows {
+	return coord.WindowsAt(time.Date(2026, time.March, 14, 15, 9, 26, 0, time.UTC), time.UTC)
+}
+
+// orgSpent is the org's day, week and month spend at testWindows.
+func orgSpent(t *testing.T, store *FleetStore) [3]int {
 	t.Helper()
-	store, err := OpenFleet(context.Background(), nc, FleetConfig{
-		RateWindow: time.Minute, ClaimTTL: time.Minute,
-		LedgerRetention: time.Minute, FireRetention: time.Minute,
-		FollowRetention: time.Minute,
-		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
-		BucketPrefix: fmt.Sprintf("f%d", bucketSeq.Add(1)),
-	})
+	u, err := store.Used(t.Context(), coord.OrgScope, testWindows())
 	if err != nil {
-		t.Fatalf("OpenFleet: %v", err)
+		t.Fatalf("Used: %v", err)
 	}
-	return store
+	return [3]int{u.Windows[0].Used, u.Windows[1].Used, u.Windows[2].Used}
+}
+
+// AN UNREACHABLE COUNTER IS AN ERROR, NEVER A REFUSAL.
+//
+// "The company is out of tokens" is a budget event an operator acts on and
+// "the counter could not be read" is an outage, and a caller that cannot tell
+// them apart either stops a healthy company over a blip or spends past a cap
+// it could not read. A dead context is the one unreachable store a test can
+// make on demand; the answer it gets must carry the error and no refusal.
+func TestAnUnreachableCounterIsAnErrorNeverARefusal(t *testing.T) {
+	store := openFleet(t, embeddedNATS(t))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	got, err := store.Charge(ctx, coord.ChargeRequest{
+		Seat: coord.AgentScope("x"), Tokens: 10, Windows: testWindows(),
+		OrgCaps: coord.Caps{period.Day: 100},
+	})
+	if err == nil {
+		t.Fatalf("Charge on a dead context = %+v with no error", got)
+	}
+	if got.OK || got.RefusedScope != "" {
+		t.Fatalf("Charge on a dead context = %+v: an outage reported as a decision", got)
+	}
+	if _, err := store.Used(ctx, coord.OrgScope, testWindows()); err == nil {
+		t.Fatal("Used on a dead context answered a figure rather than an error")
+	}
 }
 
 // A CHARGE WHOSE CALLER HANGS UP STILL UNWINDS THE COMPANY'S HALF.
@@ -820,7 +845,7 @@ func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 // taking the org's tokens back off. The failure being undone is often the
 // caller's own cancellation, and an unwind that inherited that dead context
 // failed with it: the company was billed for a round that never ran, and kept
-// refusing early until an operator reset the counter.
+// refusing early until its windows turned over.
 func TestACancelledChargeStillUnwindsTheOrg(t *testing.T) {
 	store := openFleet(t, embeddedNATS(t))
 	ctx, cancel := context.WithCancel(t.Context())
@@ -829,16 +854,15 @@ func TestACancelledChargeStillUnwindsTheOrg(t *testing.T) {
 		KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel,
 	}
 
-	if got, err := store.Charge(ctx, "agent:x", 10, 100, 100); err == nil {
+	if got, err := store.Charge(ctx, coord.ChargeRequest{
+		Seat: "agent:x", Tokens: 10, Windows: testWindows(),
+		OrgCaps: coord.Caps{period.Day: 100}, SeatCaps: coord.Caps{period.Day: 100},
+	}); err == nil {
 		t.Fatalf("Charge = %+v, want the seat's write to fail on the cancelled context", got)
 	}
-	used, err := store.Used(t.Context(), coord.OrgScope)
-	if err != nil {
-		t.Fatalf("Used: %v", err)
-	}
-	if used != 0 {
-		t.Errorf("org used = %d after a charge that failed, want 0: the unwind "+
-			"ran on the cancelled context and left the company billed", used)
+	if used := orgSpent(t, store); used != [3]int{} {
+		t.Errorf("org day/week/month = %v after a charge that failed, want nothing: "+
+			"the unwind ran on the cancelled context and left the company billed", used)
 	}
 }
 
@@ -858,17 +882,49 @@ func TestAPostChargeThatCannotFinishRecordsNeitherScope(t *testing.T) {
 		KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel,
 	}
 
-	if got, err := store.PostCharge(ctx, seat, 10); err == nil {
+	if got, err := store.PostCharge(ctx, seat, 10, testWindows()); err == nil {
 		t.Fatalf("PostCharge = %+v, want the seat's write to fail on the cancelled context", got)
 	}
-	used, err := store.Used(t.Context(), coord.OrgScope)
+	if used := orgSpent(t, store); used != [3]int{} {
+		t.Errorf("org day/week/month = %v after a post-charge that failed, want "+
+			"nothing: the unwind ran on the cancelled context and left the company "+
+			"billed for a run its seat never recorded", used)
+	}
+}
+
+// AN UNWIND TAKES A CHARGE BACK FROM THE WINDOW IT WAS COUNTED IN.
+//
+// The seat's write can fail after midnight has passed and a peer has rolled
+// the org's day. What the refused round spent belongs to the day that is over;
+// taking it off the new day would hand that day credit, and a floor at zero
+// would hide it only until the day's first real charge.
+func TestAnUnwindLeavesAWindowThatHasRolledOnAlone(t *testing.T) {
+	store := openFleet(t, embeddedNATS(t))
+	ctx := t.Context()
+	today := testWindows()
+	tomorrow := coord.WindowsAt(today[0].End, time.UTC)
+
+	charged, fits, err := store.bump(ctx, coord.OrgScope, 40, today, nil)
+	if err != nil || !fits {
+		t.Fatalf("bump = (%v, %v)", fits, err)
+	}
+	// A peer's charge crosses midnight before the unwind lands.
+	if _, _, err := store.bump(ctx, coord.OrgScope, 25, tomorrow, nil); err != nil {
+		t.Fatalf("bump tomorrow: %v", err)
+	}
+	store.unwindOrg(ctx, 40, charged)
+
+	u, err := store.Used(ctx, coord.OrgScope, tomorrow)
 	if err != nil {
 		t.Fatalf("Used: %v", err)
 	}
-	if used != 0 {
-		t.Errorf("org used = %d after a post-charge that failed, want 0: the "+
-			"unwind ran on the cancelled context and left the company billed "+
-			"for a run its seat never recorded", used)
+	if got := u.Windows[0].Used; got != 25 {
+		t.Errorf("tomorrow's day = %d, want the 25 charged in it: the unwind took "+
+			"yesterday's round off a window it was never counted in", got)
+	}
+	// The week and the month did not roll, so the round comes off them.
+	if got := u.Windows[2].Used; got != 25 {
+		t.Errorf("the month = %d, want 25: the unwound round is still counted", got)
 	}
 }
 
@@ -882,11 +938,12 @@ func TestAPostChargeThatCannotFinishRecordsNeitherScope(t *testing.T) {
 func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
 	store := openFleet(t, embeddedNATS(t))
 	seat := coord.AgentScope("x")
-	if err := store.stampRefusal(t.Context(), coord.OrgScope); err != nil {
-		t.Fatalf("stampRefusal(org): %v", err)
-	}
-	if err := store.stampRefusal(t.Context(), seat); err != nil {
-		t.Fatalf("stampRefusal(seat): %v", err)
+	w := testWindows()
+	day := []period.Period{period.Day}
+	for _, scope := range []string{coord.OrgScope, seat} {
+		if err := store.stampRefusal(t.Context(), scope, day, coord.Tally{}.Roll(w), w); err != nil {
+			t.Fatalf("stampRefusal(%s): %v", scope, err)
+		}
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -897,19 +954,148 @@ func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
 		KeyValue: store.budgets, key: encodeKey(seat), hangUp: cancel,
 	}
 
-	if got, err := store.Charge(ctx, seat, 10, 100, 100); err != nil || !got.OK {
+	if got, err := store.Charge(ctx, coord.ChargeRequest{
+		Seat: seat, Tokens: 10, Windows: w,
+		OrgCaps: coord.Caps{period.Day: 100}, SeatCaps: coord.Caps{period.Day: 100},
+	}); err != nil || !got.OK {
 		t.Fatalf("Charge = (%+v, %v), want it admitted", got, err)
 	}
-	rows, err := store.Usage(t.Context())
+	rows, err := store.Usage(t.Context(), w)
 	if err != nil {
 		t.Fatalf("Usage: %v", err)
 	}
 	for _, row := range rows {
-		if !row.RefusedAt.IsZero() {
+		if !row.Windows[0].RefusedAt.IsZero() {
 			t.Errorf("%s still reads as refusing after an admitted charge: the "+
 				"clear ran on the caller's cancelled context", row.Scope)
 		}
 	}
+}
+
+// THE LIFETIME COUNTERS ARE RETIRED, ONCE, AND THEN NOTHING IS.
+//
+// A build before the windowed counters kept one figure per scope in
+// `<prefix>_budgets`, a bucket with no age. Nothing in this build reads it, so
+// left alone it holds a dead company's spend for the life of the deployment;
+// deleting it is the maintenance duty's decision, and this is the delete. The
+// windowed counters beside it must survive, and a second retirement must be a
+// quiet no-op rather than an error the duty logs every tick for ever.
+func TestTheLifetimeCountersAreRetiredAndTheWindowsKept(t *testing.T) {
+	nc := embeddedNATS(t)
+	store := openFleet(t, nc)
+	ctx := t.Context()
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	legacy := store.bucketPrefix + lifetimeBudgetSuffix
+	old, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: legacy})
+	if err != nil {
+		t.Fatalf("plant the lifetime bucket: %v", err)
+	}
+	if _, err := old.Put(ctx, encodeKey(coord.OrgScope), []byte(`{"used":900}`)); err != nil {
+		t.Fatalf("plant a lifetime counter: %v", err)
+	}
+	if _, err := store.PostCharge(ctx, coord.AgentScope("x"), 10, testWindows()); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+
+	retired, err := store.RetireLifetimeCounters(ctx)
+	if err != nil || !retired {
+		t.Fatalf("RetireLifetimeCounters = (%v, %v), want (true, nil)", retired, err)
+	}
+	if _, err := js.KeyValue(ctx, legacy); !errors.Is(err, jetstream.ErrBucketNotFound) {
+		t.Fatalf("the lifetime bucket is still there after its retirement: %v", err)
+	}
+	if got := orgSpent(t, store); got != [3]int{10, 10, 10} {
+		t.Fatalf("the windowed counters read %v after the retirement, want the 10 "+
+			"charged: the retirement deleted the wrong bucket", got)
+	}
+	retired, err = store.RetireLifetimeCounters(ctx)
+	if err != nil || retired {
+		t.Fatalf("a second RetireLifetimeCounters = (%v, %v), want (false, nil)", retired, err)
+	}
+}
+
+// THE WINDOWED COUNTERS AGE, AND THE AGE IS THE CONFIGURED ONE.
+//
+// The lifetime bucket had no age, so every seat that ever ran kept a record
+// for the life of the deployment. The windowed one reaps a record nobody has
+// charged for longer than the longest window — here a bucket built with a
+// short retention, so the case can watch it happen.
+func TestAnUnchargedCounterAgesOut(t *testing.T) {
+	nc := embeddedNATS(t)
+	store := openFleetWithTTL(t, nc, 500*time.Millisecond)
+	ctx := t.Context()
+	if _, err := store.PostCharge(ctx, coord.AgentScope("x"), 10, testWindows()); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rows, err := store.Usage(ctx, testWindows())
+		if err != nil {
+			t.Fatalf("Usage: %v", err)
+		}
+		if len(rows) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the counters are still listed %v after their bucket's age: %+v",
+				10*time.Second, rows)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// THE COUNTER RECORD'S WIRE IS SHARED BY EVERY BUILD ON THE BUCKET, and its
+// failure is the open one. A record whose slot key a reader does not know
+// decodes as a slot with no label, which every charge rolls — so a renamed key
+// would hand each scope its whole allowance back on the first charge a peer of
+// the other spelling made. Pinned as bytes, both ways: what this build writes,
+// and that what a peer wrote reads back as the same counter.
+func TestTheCounterRecordNamesEachSlotByItsLabel(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, time.March, 14, 12, 0, 0, 0, time.UTC)
+	refused := at.Add(time.Minute)
+	tally := coord.Tally{}.Roll(coord.WindowsAt(at, time.UTC)).Add(60, at)
+	tally = tally.Stamp([]period.Period{period.Week}, tally, refused)
+
+	const wire = `{"slots":{"day":{"label":"2026-03-14","used":60},` +
+		`"month":{"label":"2026-03","used":60},` +
+		`"week":{"label":"2026-W11","used":60,"refused_at":"2026-03-14T12:01:00Z"}},` +
+		`"at":"2026-03-14T12:00:00Z"}`
+	raw, err := encodeTally(tally)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if string(raw) != wire {
+		t.Fatalf("the counter record is\n  %s\nwant\n  %s", raw, wire)
+	}
+	back, err := decodeTally([]byte(wire))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if back.Slots != tally.Slots || !back.At.Equal(tally.At) {
+		t.Fatalf("a peer's record read back as %+v, want %+v", back, tally)
+	}
+}
+
+// openFleet opens a fleet store on its own buckets, for a test that needs to
+// reach inside one rather than run the contract suite over it.
+func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
+	t.Helper()
+	store, err := OpenFleet(context.Background(), nc, FleetConfig{
+		RateWindow: time.Minute, ClaimTTL: time.Minute,
+		LedgerRetention: time.Minute, FireRetention: time.Minute,
+		FollowRetention: time.Minute,
+		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
+		BudgetRetention: time.Minute,
+		BucketPrefix:    fmt.Sprintf("f%d", bucketSeq.Add(1)),
+	})
+	if err != nil {
+		t.Fatalf("OpenFleet: %v", err)
+	}
+	return store
 }
 
 // hangUpAfterWriting is the budgets bucket with one fault injected: the moment

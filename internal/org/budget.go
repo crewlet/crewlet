@@ -28,26 +28,8 @@ import (
 //
 // The windows are the company calendar's ([period]), cut on the company's one
 // clock: a day ceiling is what one local day may spend, a week ceiling one ISO
-// week from Monday, a month ceiling one calendar month.
+// week from Monday, a month ceiling one calendar month. The fleet's counters
+// keep a slot per window and admit a charge only while every capped window has
+// room for it, each window's allowance coming back when it turns over; a charge
+// carries this map to them as coord.Caps (ADR-0019).
 type TokenCeilings map[period.Period]int
-
-// Tightest is the smallest ceiling the scope declares, and false when it
-// declares none.
-//
-// It is the one number a counter that knows nothing of windows can be held
-// to without admitting a charge the windows would refuse. Such a counter —
-// one scope's spend since it was last reset — never reads less than what any
-// single window of that span has spent, so a charge that fits under the
-// smallest ceiling on it fits every window's ceiling too. The converse does
-// not hold, which is the price of the counter knowing no calendar: it refuses
-// charges a window would still admit once the day, week or month it began in
-// has turned over.
-func (c TokenCeilings) Tightest() (int, bool) {
-	limit, capped := 0, false
-	for _, ceiling := range c {
-		if !capped || ceiling < limit {
-			limit, capped = ceiling, true
-		}
-	}
-	return limit, capped
-}

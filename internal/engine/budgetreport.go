@@ -50,6 +50,13 @@ const BudgetReportInterval = 15 * time.Second
 type budgetReporter struct {
 	engine *Engine
 
+	// current latches once the fleet's protocol floor has reached
+	// [coord.WindowedCountersProtocol]: from then on every node charges the
+	// counters this build reads, and a floor that has reached it only falls
+	// again by a downgrade, which needs the whole fleet stopped. See
+	// [budgetReporter.countersCurrent].
+	current atomic.Bool
+
 	// seq is monotonic within this process, and it is the reorder guard
 	// the payload's own doc asks for: broker ordering holds within one
 	// topic and a broadcast subscription reads across all of them, so an
@@ -105,31 +112,13 @@ func (r *budgetReporter) run(ctx context.Context) {
 	}
 }
 
-// publish reads every counter and puts one snapshot on the stream.
-//
-// A FAILED READ PUBLISHES NOTHING, rather than a frame of zeroes: the
-// consumer REPLACES what it holds on every report, so a zeroed one would
-// render a company that is spending as a company that has spent nothing —
-// which is the one reading an operator acts on by doing nothing.
+// publish puts this tick's frame on the stream, when there is one.
 func (r *budgetReporter) publish(ctx context.Context) {
+	report, ok := r.frame(ctx, time.Now())
+	if !ok {
+		return
+	}
 	e := r.engine
-	company := e.Company()
-	if company == nil || company.Org == nil {
-		return
-	}
-	usage, err := e.backends.Fleet.Usage(ctx)
-	if err != nil {
-		if ctx.Err() == nil {
-			log.DebugContext(ctx, "budget_report_skipped", "error", err.Error(),
-				"detail", "the shared counter could not be read, so the live "+
-					"meters keep the last frame they had")
-		}
-		return
-	}
-	report, metered := budgetSnapshot(company, usage)
-	if !metered {
-		return
-	}
 	// THE INCARNATION, not the node id: see [types.BudgetReported.MeterID].
 	report.MeterID = e.node.Owner()
 	report.Seq = int(r.seq.Add(1))
@@ -144,25 +133,119 @@ func (r *budgetReporter) publish(ctx context.Context) {
 	}
 }
 
-// budgetSnapshot is the frame one read of the shared counter makes, and false
+// frame is the snapshot this node would publish at now, and false for every
+// reason it publishes nothing.
+//
+// THE WHOLE DECISION, split from the publish so it is testable without a
+// broker or a node: whether this node's reading of the counters is the fleet's
+// at all ([budgetReporter.countersCurrent]), whether the counters could be
+// read, and whether anything is capped. Everything [budgetReporter.publish]
+// adds — the incarnation, the sequence, the envelope — is stamped on a frame
+// this already decided to send.
+//
+// A FAILED READ PUBLISHES NOTHING, rather than a frame of zeroes: the
+// consumer REPLACES what it holds on every report, so a zeroed one would
+// render a company that is spending as a company that has spent nothing —
+// which is the one reading an operator acts on by doing nothing.
+func (r *budgetReporter) frame(ctx context.Context, now time.Time) (types.BudgetReported, bool) {
+	e := r.engine
+	company := e.Company()
+	if company == nil || company.Org == nil {
+		return types.BudgetReported{}, false
+	}
+	if !r.countersCurrent(ctx) {
+		return types.BudgetReported{}, false
+	}
+	windows := coord.WindowsAt(now, company.Config.Location())
+	usage, err := e.backends.Fleet.Usage(ctx, windows)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.DebugContext(ctx, "budget_report_skipped", "error", err.Error(),
+				"detail", "the shared counter could not be read, so the live "+
+					"meters keep the last frame they had")
+		}
+		return types.BudgetReported{}, false
+	}
+	return budgetSnapshot(company, windows, usage)
+}
+
+// countersCurrent reports whether this node's reading of the counters is the
+// fleet's: whether every live lease is at [coord.WindowedCountersProtocol] or
+// later.
+//
+// DURING THE ROLLING UPGRADE THAT WINDOWED THE COUNTERS, it is not. The older
+// nodes run every seat and charge the lifetime counter; this build reads the
+// windowed ones, which nothing charges until the older nodes have left, since
+// a newer node claims no seat beside them. Its frames would read the company
+// as having spent nothing, and every dashboard folds each node's frame over
+// the last — so the header would flicker between the two readings for as long
+// as the rollout took. It publishes nothing until then, and the older nodes'
+// frames are the meter.
+//
+// A floor that cannot be read, or that sees no live lease at all, is not yet:
+// a frame skipped costs one interval of a meter that keeps its last reading.
+func (r *budgetReporter) countersCurrent(ctx context.Context) bool {
+	if r.current.Load() {
+		return true
+	}
+	leases := r.engine.backends.Coord
+	if leases == nil {
+		// No lease store is one process with nobody to disagree with.
+		r.current.Store(true)
+		return true
+	}
+	floor, live, err := leases.FleetProtocolFloor(ctx)
+	if err != nil || !live || floor < coord.WindowedCountersProtocol {
+		return false
+	}
+	r.current.Store(true)
+	return true
+}
+
+// budgetSnapshot is the frame one read of the shared counters makes, and false
 // when nothing in the company is capped.
 //
 // Split from the publish so what a frame SAYS is testable without a broker, a
 // node and a fleet: the reading of the counter is the whole of what can be
 // wrong with it, and it was the half nothing exercised.
-func budgetSnapshot(company *Company, usage []coord.Usage) (types.BudgetReported, bool) {
-	report := types.BudgetReported{OrgMaxTokens: companyBudget(company.Org)}
+//
+// ONE FIGURE PER SCOPE, because that is what the frame carries: each scope's
+// [coord.Usage.Binding] window — a refusing window first, else the capped one
+// with the least room left — with that window's ceiling and its refusal, so a
+// meter never pairs one window's spend with another's cap. A scope nothing
+// has charged reads [coord.Unspent].
+func budgetSnapshot(company *Company, windows coord.Windows, usage []coord.Usage) (types.BudgetReported, bool) {
+	byScope := make(map[string]coord.Usage, len(usage))
+	for _, row := range usage {
+		byScope[row.Scope] = row
+	}
+	read := func(scope string) coord.Usage {
+		if row, found := byScope[scope]; found {
+			return row
+		}
+		return coord.Unspent(scope, windows)
+	}
+
+	var report types.BudgetReported
+	orgCaps := coord.Caps(company.Org.TokenBudget)
+	orgSlot, orgLimit, _ := read(coord.OrgScope).Binding(orgCaps)
+	report.OrgUsedTokens, report.OrgMaxTokens = orgSlot.Used, orgLimit
+	report.OrgRefusedAt = refusedAt(orgSlot)
+
 	// ONLY METERED SEATS, which is what the payload promises: absence
 	// means "no cap and no meter", and a seat listed at a cap of zero
 	// would be drawn as an empty bar rather than as no bar at all.
-	byScope := make(map[string]*types.BudgetMeter, len(usage))
-	var scopes []string
+	type seatMeter struct {
+		scope string
+		meter types.BudgetMeter
+	}
+	var seats []seatMeter
 	for seat := range company.Org.AllRoles() {
 		if !seat.IsAgent() {
 			continue
 		}
-		limit := seatBudget(company.Org, seat)
-		if limit <= 0 {
+		caps := coord.Caps(seat.TokenBudget)
+		if len(caps) == 0 {
 			continue
 		}
 		agentID, ok := company.Org.AgentIDFor(seat)
@@ -170,29 +253,19 @@ func budgetSnapshot(company *Company, usage []coord.Usage) (types.BudgetReported
 			continue
 		}
 		scope := coord.AgentScope(agentID.String())
-		byScope[scope] = &types.BudgetMeter{
-			AgentID: agentID.String(), Role: seat.Name, MaxTokens: limit,
-		}
-		scopes = append(scopes, scope)
-	}
-	for _, row := range usage {
-		if row.Scope == coord.OrgScope {
-			report.OrgUsedTokens = row.Used
-			report.OrgRefusedAt = refusedAt(row)
-			continue
-		}
-		if meter, metered := byScope[row.Scope]; metered {
-			meter.UsedTokens = row.Used
-			meter.RefusedAt = refusedAt(row)
-		}
+		slot, limit, _ := read(scope).Binding(caps)
+		seats = append(seats, seatMeter{scope: scope, meter: types.BudgetMeter{
+			AgentID: agentID.String(), Role: seat.Name,
+			UsedTokens: slot.Used, MaxTokens: limit, RefusedAt: refusedAt(slot),
+		}})
 	}
 	// SORTED BY SCOPE, so two frames of an unchanged company are
 	// byte-identical and a consumer diffing them sees nothing move.
-	slices.Sort(scopes)
-	for _, scope := range scopes {
-		report.Agents = append(report.Agents, *byScope[scope])
+	slices.SortFunc(seats, func(a, b seatMeter) int { return strings.Compare(a.scope, b.scope) })
+	for _, seat := range seats {
+		report.Agents = append(report.Agents, seat.meter)
 	}
-	if report.OrgMaxTokens <= 0 && len(report.Agents) == 0 {
+	if len(orgCaps) == 0 && len(report.Agents) == 0 {
 		// NOTHING IS CAPPED, so there is no meter to render and a frame
 		// would be a header bar over an unlimited budget.
 		return types.BudgetReported{}, false
@@ -200,15 +273,15 @@ func budgetSnapshot(company *Company, usage []coord.Usage) (types.BudgetReported
 	return report, true
 }
 
-// refusedAt renders a scope's refusal stamp the way the payload carries it:
-// RFC 3339 in UTC, and empty for a scope that is not refusing.
+// refusedAt renders a window's refusal stamp the way the payload carries it:
+// RFC 3339 in UTC, and empty for a window that is not refusing.
 //
 // EMPTY, never the zero instant spelled out. The dashboard tests the field for
 // presence, so "0001-01-01T00:00:00Z" would put every capped seat in its
 // attention queue as refusing charges since the first century.
-func refusedAt(row coord.Usage) string {
-	if row.RefusedAt.IsZero() {
+func refusedAt(slot coord.WindowUsage) string {
+	if slot.RefusedAt.IsZero() {
 		return ""
 	}
-	return row.RefusedAt.UTC().Format(time.RFC3339Nano)
+	return slot.RefusedAt.UTC().Format(time.RFC3339Nano)
 }

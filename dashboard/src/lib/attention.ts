@@ -208,7 +208,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "token",
       title: "The company token budget is refusing charges",
-      detail: `Turns are being declined at the budget gate. Last refusal ${org.refused_at}. Raise token_budget or reset the counter.`,
+      detail: `Turns are being declined at the budget gate. Last refusal ${org.refused_at}. Raise token_budget, or wait for its window to turn over.`,
       path: ["cost"],
       at: org.refused_at,
     });
@@ -229,7 +229,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "token",
       title: "The company token budget is nearly spent",
-      detail: `${Math.round((org.used / org.max) * 100)}% of the company's token budget is spent. Raise token_budget or reset the counter.`,
+      detail: `${Math.round((org.used / org.max) * 100)}% of the company's token budget for this window is spent. Raise token_budget, or wait for the window to turn over.`,
       path: ["cost"],
     });
   }

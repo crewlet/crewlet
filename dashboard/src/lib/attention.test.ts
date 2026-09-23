@@ -253,6 +253,22 @@ describe("what it surfaces", () => {
     expect(attentionQueue(input({ budget: { org: { used: 10, max: 100 } } }))).toEqual([]);
   });
 
+  // THE ADVICE IS ONE AN OPERATOR CAN TAKE. The counters are windowed and
+  // there is no reset: room comes from raising the ceiling or from the window
+  // turning over, so an item that sent somebody looking for a reset would
+  // send them to a command that no longer exists.
+  test("a budget item advises raising the ceiling or waiting, never a reset", () => {
+    for (const org of [
+      { used: 99, max: 100, refused_at: "2026-01-01T11:59:00Z" },
+      { used: 95, max: 100 },
+    ]) {
+      const [item] = attentionQueue(input({ budget: { org } }));
+      expect(item?.detail).toContain("token_budget");
+      expect(item?.detail).toContain("turn over");
+      expect(item?.detail).not.toMatch(/reset/i);
+    }
+  });
+
   // WHAT THE QUIET BAND DRAWS IS TWO-SIDED, and only one side is a type error.
   //
   // TypeScript refuses a condition that names no subject. Nothing but this

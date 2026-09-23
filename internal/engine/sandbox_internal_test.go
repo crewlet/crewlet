@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -564,10 +565,7 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Queue: discardQueue{}, Pending: store, Manager: manager, Resume: resume,
-		Account: sandboxAccountant{
-			budgets: fleet,
-			caps:    func(string) (int, int) { return orgCap, seatCap },
-		},
+		Account: accountant(fleet, dayCap(orgCap), dayCap(seatCap)),
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -615,11 +613,15 @@ func (r *chargeRig) deliver(t *testing.T) error {
 
 func (r *chargeRig) used(t *testing.T, scope string) int {
 	t.Helper()
-	got, err := r.fleet.Used(t.Context(), scope)
-	if err != nil {
-		t.Fatalf("Used(%s): %v", scope, err)
+	return dayUsed(t.Context(), t, r.fleet, scope)
+}
+
+// dayCap is a day ceiling of n, or no ceiling at all for 0 — the rig's shorthand.
+func dayCap(n int) coord.Caps {
+	if n == 0 {
+		return nil
 	}
-	return got
+	return coord.Caps{period.Day: n}
 }
 
 // A CODING RUN IS CHARGED TO THE FLEET ONCE, however often its completion

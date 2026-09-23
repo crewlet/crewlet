@@ -36,6 +36,15 @@
 // delete that cannot be undone is not idempotent in the way a range delete is,
 // so it does not lean on the duty at all. Every write is a compare-and-set,
 // and the retirement claims the seat's own lease while it deletes.
+//
+// # And one that runs once
+//
+// The lifetime token counters an earlier build kept are a coordination bucket
+// that nothing reads any more, and [RetiredBudgetJobs] deletes it — but only
+// once no live lease is held below the protocol that windowed the counters,
+// because an older node still charges it on every round and would fail every
+// charge closed without it. After that tick there is nothing to retire and the
+// job costs one lease listing per sweep.
 package maintenance
 
 import (

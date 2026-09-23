@@ -131,7 +131,7 @@ type Sources struct {
 	// budget screen reads spend and nothing else, and a source that could
 	// reach the activation pointer would eventually be given a reason to.
 	Budget interface {
-		Usage(ctx context.Context) ([]coord.Usage, error)
+		Usage(ctx context.Context, windows coord.Windows) ([]coord.Usage, error)
 	}
 
 	// Sandbox is the durable record of detached coding runs, the fleet's

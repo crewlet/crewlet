@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
@@ -587,14 +588,29 @@ func TestATraceOfExactlyTheCapIsNotReportedCut(t *testing.T) {
 	}
 }
 
+// budgetsAt is the instant the budgets cases read and charge at.
+var budgetsAt = time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+
+// chargeAt charges a seat in the windows of budgetsAt, on UTC.
+func chargeAt(t *testing.T, f *coordmemory.Fleet, seat string, tokens int, org, seatCaps coord.Caps) coord.Spend {
+	t.Helper()
+	got, err := f.Charge(t.Context(), coord.ChargeRequest{
+		Seat: seat, Tokens: tokens, Windows: coord.WindowsAt(budgetsAt, time.UTC),
+		OrgCaps: org, SeatCaps: seatCaps,
+	})
+	if err != nil {
+		t.Fatalf("charge: %v", err)
+	}
+	return got
+}
+
 func TestBudgetsPairTheCapWithTheDurableCounter(t *testing.T) {
 	t.Parallel()
 	// THE CAP AND THE COUNTER GO TOGETHER, and neither is useful alone: a
 	// ceiling with no usage says nothing about how close a company is, and
 	// usage with no ceiling says nothing about whether it will be refused.
-	// The cap is the TIGHTEST window a scope caps, because that is the one
-	// the counter is held to: a month's ceiling beside it would draw
-	// headroom the gate does not grant.
+	// The pair is ONE WINDOW's — the capped window with the least room
+	// left — so a ceiling is never drawn beside another window's spend.
 	cfg := parsed(t, `
 name: Acme
 providers:
@@ -617,14 +633,14 @@ token_budget: {week: 10000, month: 40000}
 	ceo := organization.AgentSeatByHandle("ceo")
 	id, _ := organization.AgentIDFor(ceo)
 	budgets := coordmemory.NewFleet()
-	if _, err := budgets.Charge(t.Context(), coord.AgentScope(id.String()), 120, 10000, 500); err != nil {
-		t.Fatalf("charge: %v", err)
-	}
+	chargeAt(t, budgets, coord.AgentScope(id.String()), 120,
+		coord.Caps(organization.TokenBudget), coord.Caps(ceo.TokenBudget))
 
 	r := registryOver(t, queries.Sources{
 		State:   livestate.New(),
 		Company: func() *config.Company { return cfg },
 		Budget:  budgets,
+		Now:     func() time.Time { return budgetsAt },
 	})
 	got := ask(t, r, "budgets", nil)
 
@@ -632,6 +648,7 @@ token_budget: {week: 10000, month: 40000}
 		t.Error("durable = false with a readable counter, so every figure " +
 			"below it reads as unmeasured")
 	}
+	// The company's week has 9 880 left and its month 39 880: the week.
 	orgRow, _ := got["org"].(map[string]any)
 	if orgRow["max_tokens"] != 10000 || orgRow["durable_used"] != 120 {
 		t.Errorf("org = %+v", orgRow)
@@ -646,9 +663,63 @@ token_budget: {week: 10000, month: 40000}
 		t.Fatalf("seats = %d, want the one AGENT seat — a human spends "+
 			"nothing and a permanent zero row is noise", len(seats))
 	}
+	// The CEO's day has 380 left and its month 11 880: the day.
 	seat, _ := seats[0].(map[string]any)
 	if seat["role"] != "CEO" || seat["max_tokens"] != 500 || seat["durable_used"] != 120 {
 		t.Errorf("seat = %+v", seat)
+	}
+}
+
+func TestBudgetsReadTheWindowTheCompanysClockIsIn(t *testing.T) {
+	t.Parallel()
+	// The answer cuts its day where the gate does: on the company's clock.
+	// Charged at 23:30 in Los Angeles — 06:30 the next day in UTC — the
+	// spend is the Los Angeles day's until LOS ANGELES midnight, and gone
+	// the moment after it. An answer cut on UTC would show it as the next
+	// day's spend all evening and roll it seven hours early.
+	cfg := parsed(t, `
+name: Acme
+timezone: America/Los_Angeles
+providers:
+  llm:
+    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: p
+token_budget: {day: 1000}
+`)
+	la, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	id, _ := organization.AgentIDFor(organization.AgentSeatByHandle("ceo"))
+	evening := time.Date(2026, time.September, 22, 23, 30, 0, 0, la)
+	budgets := coordmemory.NewFleet()
+	if _, err := budgets.Charge(t.Context(), coord.ChargeRequest{
+		Seat: coord.AgentScope(id.String()), Tokens: 300,
+		Windows: coord.WindowsAt(evening, la), OrgCaps: coord.Caps{period.Day: 1000},
+	}); err != nil {
+		t.Fatalf("charge: %v", err)
+	}
+	orgUsed := func(at time.Time) any {
+		t.Helper()
+		r := registryOver(t, queries.Sources{
+			State: livestate.New(), Company: func() *config.Company { return cfg },
+			Budget: budgets, Now: func() time.Time { return at },
+		})
+		row, _ := ask(t, r, "budgets", nil)["org"].(map[string]any)
+		return row["durable_used"]
+	}
+	if got := orgUsed(evening.Add(15 * time.Minute)); got != 300 {
+		t.Errorf("at 23:45 in Los Angeles the day holds %v, want the 300 charged at 23:30", got)
+	}
+	if got := orgUsed(evening.Add(45 * time.Minute)); got != 0 {
+		t.Errorf("at 00:15 in Los Angeles the day holds %v, want a fresh day", got)
 	}
 }
 
@@ -709,18 +780,17 @@ token_budget: {day: 10000}
 	id, _ := organization.AgentIDFor(organization.AgentSeatByHandle("ceo"))
 	scope := coord.AgentScope(id.String())
 	budgets := coordmemory.NewFleet()
-	if _, err := budgets.Charge(t.Context(), scope, 90, 10000, 100); err != nil {
-		t.Fatalf("charge: %v", err)
-	}
-	refusal, err := budgets.Charge(t.Context(), scope, 20, 10000, 100)
-	if err != nil || refusal.RefusedScope != "agent" {
-		t.Fatalf("setup: refusal = (%+v, %v), want the seat to refuse", refusal, err)
+	orgCaps, seatCaps := coord.Caps{period.Day: 10000}, coord.Caps{period.Day: 100}
+	chargeAt(t, budgets, scope, 90, orgCaps, seatCaps)
+	if refusal := chargeAt(t, budgets, scope, 20, orgCaps, seatCaps); refusal.RefusedScope != "agent" {
+		t.Fatalf("setup: refusal = %+v, want the seat to refuse", refusal)
 	}
 
 	r := registryOver(t, queries.Sources{
 		State:   livestate.New(),
 		Company: func() *config.Company { return cfg },
 		Budget:  budgets,
+		Now:     func() time.Time { return budgetsAt },
 	})
 	got := ask(t, r, "budgets", nil)
 

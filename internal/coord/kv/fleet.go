@@ -14,8 +14,10 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // A BUCKET IS A STREAM, and provisioning a replicated one has the two hazards
@@ -372,15 +374,18 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           enough that a deliberate re-send later is not swallowed
 //	ledger     turn-completion retention, days: it has to outlast the
 //	           redelivery horizon and the scheduler's catchup floor
-//	cooldowns  the longest credential cooldown, an hour
+//	cooldowns  the longest credential cooldown, a day
 //	status     peer freshness, a minute: a node that STOPS reporting must
 //	           vanish from the fleet view, which the bucket does for free
 //	config     none at all: the activation pointer is the fencing sequence,
 //	           and a pointer that expired would restart the epoch
-//	budgets    none at all either, for the opposite reason: a token cap is
-//	           a ceiling for the life of a deployment, and a counter that
-//	           rolled over would re-arm a company somebody had stopped
-//	channels   none at all, for a third reason: a bucket age cannot tell an
+//	budgets    the longest calendar window and a day, thirty-two days: a
+//	           scope's counter holds a slot per window and a charge rewrites
+//	           it, so a record older than the longest window counts nothing
+//	           any window still current can be refused against. The age is
+//	           NOT the reset — a window's allowance comes back by the roll
+//	           inside the charge that crosses its boundary (ADR-0019)
+//	channels   none at all, for a second reason: a bucket age cannot tell an
 //	           OPEN channel from a closed one, so it would reap the
 //	           authorization record of an ask still waiting for its answer
 //	follows    a chat thread's last-activity horizon, ninety days: every
@@ -399,8 +404,8 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           and a bucket that expired one would de-authenticate a
 //	           company on a timer nobody set
 //	integrations
-//	           none at all, for the budget counter's reason: an
-//	           integration's reconcile status is standing state, and one
+//	           none at all: an integration's reconcile status is
+//	           standing state rather than a recent event, and one
 //	           that expired would make a converged surface read as one
 //	           nobody has looked at, sending the loop to re-provision
 //	           against a third-party app it had already agreed with
@@ -435,7 +440,7 @@ const (
 	cooldownSuffix     = "_cooldowns"
 	statusSuffix       = "_status"
 	configSuffix       = "_config"
-	budgetSuffix       = "_budgets"
+	budgetSuffix       = "_token_windows"
 	channelSuffix      = "_channels"
 	followsSuffix      = "_follows"
 	firesSuffix        = "_fires"
@@ -451,6 +456,13 @@ const (
 	payloadKey      = "revision_payload"
 	fleetCASRetries = 16
 )
+
+// lifetimeBudgetSuffix is the bucket the token counters lived in before they
+// were windowed: one lifetime figure per scope, with no age. This build never
+// opens it; the maintenance duty deletes it once no older node is live (see
+// [FleetStore.RetireLifetimeCounters]), and it is not in the table above
+// because nothing here reads it.
+const lifetimeBudgetSuffix = "_budgets"
 
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
 // a BUCKET's retention; see the file doc for why each is its own bucket.
@@ -485,6 +497,12 @@ type FleetConfig struct {
 	// bucket's age: a cooldown is stored as its own end instant, so the
 	// bucket only has to outlive the longest one anybody sets.
 	CooldownMax time.Duration
+
+	// BudgetRetention is how long a token counter outlives its last write.
+	// It must outlast the longest calendar window a counter has a slot for,
+	// or a scope charged early in a month and not again would be forgotten
+	// while the month still counted it — see [coord.BudgetRetention].
+	BudgetRetention time.Duration
 
 	// StatusFreshness is how long a node's apply status counts as current.
 	StatusFreshness time.Duration
@@ -524,6 +542,7 @@ func (c *FleetConfig) normalize() error {
 		{"LedgerRetention", c.LedgerRetention}, {"FireRetention", c.FireRetention},
 		{"FollowRetention", c.FollowRetention},
 		{"CooldownMax", c.CooldownMax},
+		{"BudgetRetention", c.BudgetRetention},
 		{"StatusFreshness", c.StatusFreshness},
 	}
 	for _, field := range required {
@@ -666,7 +685,8 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		{&store.config, configSuffix,
 			"Crewlet activation pointer; NO TTL — its revision IS the epoch", 0},
 		{&store.budgets, budgetSuffix,
-			"Crewlet token counters; NO TTL — a cap is a ceiling for the deployment's life", 0},
+			"Crewlet token counters, a slot per calendar window; the bucket TTL outlasts the longest window",
+			cfg.BudgetRetention},
 		{&store.channels, channelSuffix,
 			"Crewlet agent-to-agent channels; NO TTL — an open ask must outlive any clock", 0},
 		{&store.follows, followsSuffix,
@@ -696,6 +716,7 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 	log.DebugContext(ctx, "coord_kv_fleet_open", "prefix", cfg.BucketPrefix,
 		"rate_window", cfg.RateWindow, "claim_ttl", cfg.ClaimTTL,
 		"ledger_retention", cfg.LedgerRetention, "cooldown_max", cfg.CooldownMax,
+		"budget_retention", cfg.BudgetRetention,
 		"status_freshness", cfg.StatusFreshness)
 	return store, nil
 }
@@ -963,224 +984,249 @@ func (f *FleetStore) Since(ctx context.Context, now time.Time) (map[string]time.
 
 // ---- the token counters ------------------------------------------------ //
 
-// budgetRecord is one scope's spend.
+// tallyRecord is one scope's counter as the bucket stores it: a slot per
+// period, keyed by the period's own spelling, and when the counter last moved.
 //
-// RefusedAt is omitted when zero, so a record no refusal has touched encodes
-// exactly as it did before the field existed, and a build that predates it
-// reads a stamped record by ignoring the key.
-//
-// Such a build also DROPS the key when it writes the record, because it
-// re-encodes only the fields it knows: during a rolling upgrade, a charge an
-// older node makes clears the stamp whether or not the scope had room. That is
-// the harmless direction, and the only one available without a second key: the
-// stamp is what a dashboard shows, never what the gate decides with, and the
-// next refusal by an upgraded node writes it again.
-type budgetRecord struct {
+// KEYED BY PERIOD rather than positional, so a record reads as what it is in
+// `nats kv get` and a period this build does not know is a key it skips
+// rather than a slot it misplaces. Evolution is additive, with the caveat
+// every record here carries: a build that predates a field DROPS it when it
+// rewrites the record, because it re-encodes only what it knows. A refusal
+// stamp an older node drops is the harmless direction — the stamp is what a
+// dashboard shows, never what the gate decides with, and the next refusal by a
+// newer node writes it again.
+type tallyRecord struct {
+	Slots map[period.Period]slotRecord `json:"slots"`
+	At    time.Time                    `json:"at,omitzero"`
+}
+
+type slotRecord struct {
+	Label     string    `json:"label"`
 	Used      int       `json:"used"`
-	At        time.Time `json:"at"`
 	RefusedAt time.Time `json:"refused_at,omitzero"`
 }
 
-// Charge checks and increments the org's counter and the seat's.
+func encodeTally(t coord.Tally) ([]byte, error) {
+	record := tallyRecord{Slots: make(map[period.Period]slotRecord, len(t.Slots)), At: t.At}
+	for i, p := range period.Periods {
+		if s := t.Slots[i]; s.Label != "" {
+			record.Slots[p] = slotRecord{Label: s.Label, Used: s.Used, RefusedAt: s.RefusedAt}
+		}
+	}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return nil, fmt.Errorf("coord/kv: encode the token counter: %w", err)
+	}
+	return raw, nil
+}
+
+func decodeTally(raw []byte) (coord.Tally, error) {
+	var record tallyRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return coord.Tally{}, err
+	}
+	t := coord.Tally{At: record.At}
+	for i, p := range period.Periods {
+		if s, ok := record.Slots[p]; ok {
+			t.Slots[i] = coord.Slot{Label: s.Label, Used: s.Used, RefusedAt: s.RefusedAt}
+		}
+	}
+	return t, nil
+}
+
+// Charge checks and increments the org's counter and the seat's, in every
+// window.
 //
 // Two keys and no transaction, so the all-or-nothing property is BUILT: the
 // org is charged first and compensated if the seat then refuses. See
-// [coord.Budgets.Charge] for why that order and not the reverse.
-func (f *FleetStore) Charge(ctx context.Context, agentScope string, tokens, orgLimit, agentLimit int) (coord.Spend, error) {
-	if tokens <= 0 {
+// [coord.Budgets.Charge] for why that order and not the reverse. Each scope's
+// windows are ONE record, so each scope is still one compare-and-swap, and the
+// roll onto a new window happens inside it.
+func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord.Spend, error) {
+	if req.Tokens <= 0 {
 		// Not an error and not a charge. A phase whose provider reported
 		// nothing still ran, and refusing it would stop a company over a
 		// backend that omits usage.
 		return coord.Spend{OK: true}, nil
 	}
-	if agentScope == "" {
-		return coord.Spend{}, errors.New("coord/kv: a charge needs a seat scope")
+	if err := req.Validate(); err != nil {
+		return coord.Spend{}, fmt.Errorf("coord/kv: %w", err)
 	}
 
-	// A charge larger than a whole cap can never fit, so it is screened
-	// before anything is written, and a seat whose own cap is smaller than
-	// the charge never costs the org a bump and an unwind.
-	if orgLimit > 0 && tokens > orgLimit {
-		used, err := f.Used(ctx, coord.OrgScope)
+	// A charge larger than a whole ceiling can never fit, so it is screened
+	// before anything is written, and a seat whose own ceiling is smaller
+	// than the charge never costs the org a bump and an unwind.
+	if req.OrgCaps.Exceeds(req.Tokens) {
+		org, err := f.tally(ctx, coord.OrgScope, req.Windows)
 		if err != nil {
 			return coord.Spend{}, err
 		}
-		return f.refuse(ctx, coord.OrgScope, "org", used, orgLimit), nil
+		return f.refuse(ctx, coord.OrgScope, "org", org, req.Tokens, req.OrgCaps, req.Windows), nil
 	}
-	if agentLimit > 0 && tokens > agentLimit {
+	if req.SeatCaps.Exceeds(req.Tokens) {
 		// ORG FIRST even here, which is why the screen reads the org's
-		// counter before naming the seat. Testing each cap alone reported
-		// the seat for a charge the company had no room for either, and
-		// the contract's ordering rule exists for exactly that case: an
-		// operator who raised this seat's ceiling would still be refused.
-		if orgLimit > 0 {
-			orgUsed, err := f.Used(ctx, coord.OrgScope)
+		// counter before naming the seat. Testing each ceiling alone
+		// reported the seat for a charge the company had no room for
+		// either, and the contract's ordering rule exists for exactly that
+		// case: an operator who raised this seat's ceiling would still be
+		// refused.
+		if len(req.OrgCaps) > 0 {
+			org, err := f.tally(ctx, coord.OrgScope, req.Windows)
 			if err != nil {
 				return coord.Spend{}, err
 			}
-			if orgUsed+tokens > orgLimit {
-				return f.refuse(ctx, coord.OrgScope, "org", orgUsed, orgLimit), nil
+			if len(org.Refusing(req.Tokens, req.OrgCaps)) > 0 {
+				return f.refuse(ctx, coord.OrgScope, "org", org, req.Tokens, req.OrgCaps, req.Windows), nil
 			}
 		}
-		used, err := f.Used(ctx, agentScope)
+		seat, err := f.tally(ctx, req.Seat, req.Windows)
 		if err != nil {
 			return coord.Spend{}, err
 		}
-		return f.refuse(ctx, agentScope, "agent", used, agentLimit), nil
+		return f.refuse(ctx, req.Seat, "agent", seat, req.Tokens, req.SeatCaps, req.Windows), nil
 	}
 
-	org, fits, err := f.bump(ctx, coord.OrgScope, tokens, orgLimit)
+	org, fits, err := f.bump(ctx, coord.OrgScope, req.Tokens, req.Windows, req.OrgCaps)
 	if err != nil {
 		return coord.Spend{}, err
 	}
 	if !fits {
-		return f.refuse(ctx, coord.OrgScope, "org", org.Used, orgLimit), nil
+		return f.refuse(ctx, coord.OrgScope, "org", org, req.Tokens, req.OrgCaps, req.Windows), nil
 	}
 
-	agent, fits, err := f.bump(ctx, agentScope, tokens, agentLimit)
+	seat, fits, err := f.bump(ctx, req.Seat, req.Tokens, req.Windows, req.SeatCaps)
 	switch {
 	case err != nil, !fits:
 		// COMPENSATE, which is what a single SQL transaction used to do
 		// for free: charging the company for a turn that never ran lets
 		// it exhaust its budget on work it did not do.
-		f.unwindOrg(ctx, tokens)
+		f.unwindOrg(ctx, req.Tokens, org)
 		if err != nil {
 			return coord.Spend{}, err
 		}
-		return f.refuse(ctx, agentScope, "agent", agent.Used, agentLimit), nil
+		return f.refuse(ctx, req.Seat, "agent", seat, req.Tokens, req.SeatCaps, req.Windows), nil
 	}
-	// ADMITTED, so each scope that carried a refusal has just had room for
-	// a charge. The counter writes above deliberately kept the stamp: the
-	// org is written before the seat is tested, and clearing it there would
-	// let a charge that was refused overall erase the company's refusal.
+	// ADMITTED, so each scope that carried a refusal has just had room in
+	// every window. The counter writes above deliberately kept the stamps:
+	// the org is written before the seat is tested, and clearing them there
+	// would let a charge that was refused overall erase the company's
+	// refusal.
 	for _, scope := range []struct {
 		key  string
-		seen time.Time
-	}{{coord.OrgScope, org.RefusedAt}, {agentScope, agent.RefusedAt}} {
-		if !scope.seen.IsZero() {
+		seen coord.Tally
+	}{{coord.OrgScope, org}, {req.Seat, seat}} {
+		if scope.seen.Refused() {
 			f.clearRefusal(ctx, scope.key, scope.seen)
 		}
 	}
-	return coord.Spend{OK: true, OrgUsed: org.Used, AgentUsed: agent.Used}, nil
+	return coord.Spend{
+		OK:    true,
+		Org:   org.ClearAll().Usage(coord.OrgScope, req.Windows),
+		Agent: seat.ClearAll().Usage(req.Seat, req.Windows),
+	}, nil
 }
 
 // PostCharge adds spend that already happened to the org's counter and the
 // seat's, refusing nothing. See [coord.Budgets.PostCharge].
 //
 // The same two writes as an admitted [FleetStore.Charge], org first, with no
-// cap to test and no refusal stamp cleared: [FleetStore.bump] carries a stamp
-// through, and nothing here decided the scope had room.
-func (f *FleetStore) PostCharge(ctx context.Context, agentScope string, tokens int) (coord.Spend, error) {
+// ceiling to test and no refusal stamp cleared: [FleetStore.bump] carries a
+// stamp through, and nothing here decided the scope had room.
+func (f *FleetStore) PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error) {
 	if tokens <= 0 {
 		return coord.Spend{OK: true}, nil
 	}
-	if agentScope == "" {
+	if seat == "" {
 		return coord.Spend{}, errors.New("coord/kv: a charge needs a seat scope")
 	}
-	org, _, err := f.bump(ctx, coord.OrgScope, tokens, 0)
+	if err := windows.Validate(); err != nil {
+		return coord.Spend{}, fmt.Errorf("coord/kv: %w", err)
+	}
+	org, _, err := f.bump(ctx, coord.OrgScope, tokens, windows, nil)
 	if err != nil {
 		return coord.Spend{}, err
 	}
-	agent, _, err := f.bump(ctx, agentScope, tokens, 0)
+	agent, _, err := f.bump(ctx, seat, tokens, windows, nil)
 	if err != nil {
-		f.unwindOrg(ctx, tokens)
+		f.unwindOrg(ctx, tokens, org)
 		return coord.Spend{}, err
 	}
-	return coord.Spend{OK: true, OrgUsed: org.Used, AgentUsed: agent.Used}, nil
+	return coord.Spend{
+		OK: true, Org: org.Usage(coord.OrgScope, windows), Agent: agent.Usage(seat, windows),
+	}, nil
 }
 
-// unwindOrg takes back the org's half of a charge whose seat half did not land.
+// unwindOrg takes back the org's half of a charge whose seat half did not
+// land, from the windows that charge was counted in.
 //
 // On a context that OUTLIVES the caller's. The failure being undone is often
 // the caller's own cancellation (a turn stopped mid-charge, a node draining),
 // and an unwind that inherited that dead context failed with it: the company
-// was billed for a round that never ran, and refused early until an operator
-// reset the counter. It cannot hang in the caller's place: the client bounds
-// every request made on a context with no deadline by its own API timeout.
+// was billed for a round that never ran, and refused early until the window
+// turned over. It cannot hang in the caller's place: the client bounds every
+// request made on a context with no deadline by its own API timeout.
 //
 // Logged rather than returned: the caller's answer is already decided, and a
-// compensation that failed leaves the org over-stated, which trips the cap
+// compensation that failed leaves the org over-stated, which trips a cap
 // EARLY. That is the safe direction, and it is worth a line saying so rather
 // than a drift nobody can later explain.
-func (f *FleetStore) unwindOrg(ctx context.Context, tokens int) {
-	if _, _, undo := f.bump(context.WithoutCancel(ctx), coord.OrgScope, -tokens, 0); undo != nil {
+func (f *FleetStore) unwindOrg(ctx context.Context, tokens int, charged coord.Tally) {
+	_, undo := f.casTally(context.WithoutCancel(ctx), coord.OrgScope, "unwind the token counter",
+		func(stored coord.Tally, found bool) (coord.Tally, bool) {
+			// Gone means aged out, and there is nothing left to take a
+			// charge back from.
+			return stored.Undo(tokens, charged, time.Now().UTC()), found
+		})
+	if undo != nil {
 		log.ErrorContext(ctx, "coord_kv_budget_compensation_failed", "scope", coord.OrgScope,
 			"tokens", tokens, "error", undo,
-			"detail", "the org counter is over-stated by this charge and will refuse "+
-				"early; clear it with `crewlet budgets reset`")
+			"detail", "the org counter is over-stated by this charge in the windows it "+
+				"was counted in, and will refuse early until they turn over")
 	}
 }
 
-// refuse stamps a refusal on the scope that made it and answers with it.
+// refuse stamps a refusal on the windows of the scope that made it and
+// answers with it.
 //
-// A stamp that cannot be written is LOGGED and the refusal still stands. The
-// decision was taken from a counter this call read, so it is true whether or
-// not the stamp lands; turning it into an error would report an outage for a
-// company that is simply out of budget, and those send an operator to
-// different places. What the failure costs is one dashboard not saying
-// "refusing charges" until the next refusal writes.
-func (f *FleetStore) refuse(ctx context.Context, scope, name string, used, limit int) coord.Spend {
-	if err := f.stampRefusal(ctx, scope); err != nil {
+// rolled is the scope's counter rolled to the charge's windows, which is what
+// the refusal was found on. A stamp that cannot be written is LOGGED and the
+// refusal still stands. The decision was taken from a counter this call read,
+// so it is true whether or not the stamp lands; turning it into an error
+// would report an outage for a company that is simply out of budget, and
+// those send an operator to different places. What the failure costs is one
+// dashboard not saying "refusing charges" until the next refusal writes.
+func (f *FleetStore) refuse(ctx context.Context, scope, name string, rolled coord.Tally, tokens int,
+	caps coord.Caps, windows coord.Windows) coord.Spend {
+
+	refusing := rolled.Refusing(tokens, caps)
+	if err := f.stampRefusal(ctx, scope, refusing, rolled, windows); err != nil {
 		log.WarnContext(ctx, "coord_kv_budget_refusal_not_recorded", "scope", scope, "error", err,
 			"detail", "the charge was still refused; the live meter will not show "+
 				"this refusal until the scope refuses another charge")
 	}
-	return coord.Spend{RefusedScope: name, RefusedUsed: used, RefusedLimit: limit}
+	return rolled.Refusal(name, refusing, caps, windows)
 }
 
-// stampRefusal records now as the scope's last refusal, under a
-// compare-and-swap that leaves its spend untouched.
+// stampRefusal records now as the last refusal of each refusing window,
+// under a compare-and-swap that leaves the spend untouched.
 //
 // A scope with no record yet gets one at zero spend: a seat refused on its
-// first charge has refused a charge, and that is worth listing.
-func (f *FleetStore) stampRefusal(ctx context.Context, scope string) error {
-	key := encodeKey(scope)
-	for range fleetCASRetries {
-		now := time.Now().UTC()
-		entry, err := f.budgets.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			raw, encoded := encodeBudget(budgetRecord{RefusedAt: now})
-			if encoded != nil {
-				return encoded
-			}
-			_, created := f.budgets.Create(ctx, key, raw)
-			switch {
-			case created == nil:
-				return nil
-			case errors.Is(created, jetstream.ErrKeyExists):
-				continue
-			default:
-				return unavailable("record the budget refusal", created)
-			}
-		}
-		if err != nil {
-			return unavailable("read the budget", err)
-		}
-		var record budgetRecord
-		if decode := json.Unmarshal(entry.Value(), &record); decode != nil {
-			return unavailable("decode the budget", decode)
-		}
-		record.RefusedAt = now
-		raw, encoded := encodeBudget(record)
-		if encoded != nil {
-			return encoded
-		}
-		_, err = f.budgets.Update(ctx, key, raw, entry.Revision())
-		switch {
-		case err == nil:
-			return nil
-		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
-			continue
-		default:
-			return unavailable("record the budget refusal", err)
-		}
-	}
-	return contended("refuse", scope)
+// first charge has refused a charge, and that is worth listing. The record is
+// rolled to the charge's windows first, so a stamp never lands on a slot still
+// counting a window that is over.
+func (f *FleetStore) stampRefusal(ctx context.Context, scope string, refusing []period.Period,
+	refused coord.Tally, windows coord.Windows) error {
+
+	_, err := f.casTally(ctx, scope, "record the budget refusal",
+		func(stored coord.Tally, _ bool) (coord.Tally, bool) {
+			return stored.Roll(windows).Stamp(refusing, refused, time.Now().UTC()), true
+		})
+	return err
 }
 
-// clearRefusal drops the refusal an admitted charge found on the scope.
+// clearRefusal drops the refusals an admitted charge found on the scope.
 //
-// ONLY THE STAMP IT SAW. Between the charge's write and this one another
+// ONLY THE STAMPS IT SAW. Between the charge's write and this one another
 // caller may have been refused and stamped a newer instant, and that refusal
 // is still true; clearing it would hide a scope that is refusing right now.
 // A failure is logged for the reason [FleetStore.refuse] gives: the charge
@@ -1195,154 +1241,195 @@ func (f *FleetStore) stampRefusal(ctx context.Context, scope string) error {
 // dashboard it was refusing charges while it had just admitted one. It cannot
 // hang in the caller's place: the client bounds a request made on a context
 // with no deadline by its own API timeout.
-func (f *FleetStore) clearRefusal(ctx context.Context, scope string, seen time.Time) {
-	key := encodeKey(scope)
-	ctx = context.WithoutCancel(ctx)
-	for range fleetCASRetries {
-		entry, err := f.budgets.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			// Reset by an operator in between, which cleared it.
-			return
-		}
-		if err != nil {
-			f.logUncleared(ctx, scope, unavailable("read the budget", err))
-			return
-		}
-		var record budgetRecord
-		if decode := json.Unmarshal(entry.Value(), &record); decode != nil {
-			f.logUncleared(ctx, scope, unavailable("decode the budget", decode))
-			return
-		}
-		if !record.RefusedAt.Equal(seen) {
-			// Already cleared, or stamped again since.
-			return
-		}
-		record.RefusedAt = time.Time{}
-		raw, encoded := encodeBudget(record)
-		if encoded != nil {
-			f.logUncleared(ctx, scope, encoded)
-			return
-		}
-		_, err = f.budgets.Update(ctx, key, raw, entry.Revision())
-		switch {
-		case err == nil:
-			return
-		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
-			continue
-		default:
-			f.logUncleared(ctx, scope, unavailable("clear the budget refusal", err))
-			return
-		}
-	}
-	f.logUncleared(ctx, scope, contended("clear refusal", scope))
-}
-
-func (f *FleetStore) logUncleared(ctx context.Context, scope string, err error) {
-	log.WarnContext(ctx, "coord_kv_budget_refusal_not_cleared", "scope", scope, "error", err,
-		"detail", "the charge was admitted; the live meter keeps showing the old "+
-			"refusal until the scope's next admitted charge clears it")
-}
-
-// bump applies one scope's delta under a compare-and-swap, reporting the
-// record it wrote and whether the delta fit.
-//
-// A negative delta is a compensation and is never refused: it is undoing a
-// charge this caller already made, so a limit has nothing to say about it.
-//
-// The record's refusal stamp is CARRIED through, never cleared here: see
-// [FleetStore.Charge] for who clears it and why this cannot.
-func (f *FleetStore) bump(ctx context.Context, scope string, delta, limit int) (budgetRecord, bool, error) {
-	key := encodeKey(scope)
-	for range fleetCASRetries {
-		entry, err := f.budgets.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			if limit > 0 && delta > limit {
-				return budgetRecord{}, false, nil
-			}
-			record := budgetRecord{Used: max(delta, 0), At: time.Now().UTC()}
-			raw, encoded := encodeBudget(record)
-			if encoded != nil {
-				return budgetRecord{}, false, encoded
-			}
-			_, created := f.budgets.Create(ctx, key, raw)
-			switch {
-			case created == nil:
-				return record, true, nil
-			case errors.Is(created, jetstream.ErrKeyExists):
-				continue
-			default:
-				return budgetRecord{}, false, unavailable("charge the budget", created)
-			}
-		}
-		if err != nil {
-			return budgetRecord{}, false, unavailable("read the budget", err)
-		}
-		var record budgetRecord
-		if decode := json.Unmarshal(entry.Value(), &record); decode != nil {
-			return budgetRecord{}, false, unavailable("decode the budget", decode)
-		}
-		// Floored at zero: a compensation for a charge whose own write
-		// was already reaped (or reset by an operator mid-turn) must not
-		// leave a counter that reads as credit.
-		next := max(record.Used+delta, 0)
-		if limit > 0 && next > limit {
-			return record, false, nil
-		}
-		record.Used, record.At = next, time.Now().UTC()
-		raw, encoded := encodeBudget(record)
-		if encoded != nil {
-			return budgetRecord{}, false, encoded
-		}
-		_, err = f.budgets.Update(ctx, key, raw, entry.Revision())
-		switch {
-		case err == nil:
-			return record, true, nil
-		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
-			continue
-		default:
-			return budgetRecord{}, false, unavailable("charge the budget", err)
-		}
-	}
-	// Exhausting the retries is reported as an ERROR, never as a refusal:
-	// the caller fails the round rather than telling an agent it is out of
-	// budget, which is the fail-closed direction the contract requires.
-	return budgetRecord{}, false, contended("charge", scope)
-}
-
-func encodeBudget(record budgetRecord) ([]byte, error) {
-	raw, err := json.Marshal(record)
+func (f *FleetStore) clearRefusal(ctx context.Context, scope string, seen coord.Tally) {
+	_, err := f.casTally(context.WithoutCancel(ctx), scope, "clear the budget refusal",
+		func(stored coord.Tally, found bool) (coord.Tally, bool) {
+			// Gone means aged out, which cleared it; unchanged means
+			// already cleared or stamped again since.
+			cleared := stored.Clear(seen)
+			return cleared, found && cleared != stored
+		})
 	if err != nil {
-		return nil, fmt.Errorf("coord/kv: encode the budget: %w", err)
+		log.WarnContext(ctx, "coord_kv_budget_refusal_not_cleared", "scope", scope, "error", err,
+			"detail", "the charge was admitted; the live meter keeps showing the old "+
+				"refusal until the scope's next admitted charge clears it")
 	}
-	return raw, nil
 }
 
-// Used reports one scope's spend.
-func (f *FleetStore) Used(ctx context.Context, scope string) (int, error) {
+// bump rolls one scope's counter to the charge's windows and counts tokens in
+// every one of them, under a compare-and-swap — or reports that a capped
+// window has no room and writes nothing. It answers the counter it wrote, or
+// the rolled counter the refusal was found on.
+//
+// The record's refusal stamps are CARRIED through, never cleared here: see
+// [FleetStore.Charge] for who clears them and why this cannot.
+func (f *FleetStore) bump(ctx context.Context, scope string, tokens int, windows coord.Windows,
+	caps coord.Caps) (coord.Tally, bool, error) {
+
+	fits := true
+	tally, err := f.casTally(ctx, scope, "charge the token counter",
+		func(stored coord.Tally, _ bool) (coord.Tally, bool) {
+			rolled := stored.Roll(windows)
+			if len(rolled.Refusing(tokens, caps)) > 0 {
+				fits = false
+				return rolled, false
+			}
+			fits = true
+			return rolled.Add(tokens, time.Now().UTC()), true
+		})
+	if err != nil {
+		return coord.Tally{}, false, err
+	}
+	return tally, fits, nil
+}
+
+// casTally is one read-modify-write of a scope's counter under a
+// compare-and-swap, retried when a peer wrote in between.
+//
+// change is handed the stored counter — the zero Tally and false when the
+// scope has none — and answers the counter to write and whether to write it at
+// all. casTally answers what change last answered, written or not.
+//
+// A LOST RACE WAITS BEFORE IT RETRIES, which no other compare-and-swap in
+// this file does, because no other key is this hot: the org's counter is
+// written by every round of every seat the company runs, and a seat's by each
+// of its own rounds and its coding runs. Retried at once, N writers that lost
+// together race again together, and measured on the embedded broker 32
+// concurrent charges exhausted sixteen immediate retries in four runs of ten —
+// each one a round failed closed as an outage. See [counterRetryDelay].
+//
+// Exhausting the retries is reported as an ERROR, never as a refusal: a
+// charge's caller then fails the round rather than telling an agent it is out
+// of budget, which is the fail-closed direction the contract requires.
+func (f *FleetStore) casTally(ctx context.Context, scope, verb string,
+	change func(stored coord.Tally, found bool) (coord.Tally, bool)) (coord.Tally, error) {
+
+	key := encodeKey(scope)
+	for attempt := range fleetCASRetries {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return coord.Tally{}, unavailable(verb, ctx.Err())
+			case <-time.After(counterRetryDelay(attempt)):
+			}
+		}
+		var (
+			stored   coord.Tally
+			found    bool
+			revision uint64
+		)
+		entry, err := f.budgets.Get(ctx, key)
+		switch {
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+		case err != nil:
+			return coord.Tally{}, unavailable("read the token counter", err)
+		default:
+			if stored, err = decodeTally(entry.Value()); err != nil {
+				return coord.Tally{}, unavailable("decode the token counter", err)
+			}
+			found, revision = true, entry.Revision()
+		}
+		next, write := change(stored, found)
+		if !write {
+			return next, nil
+		}
+		raw, err := encodeTally(next)
+		if err != nil {
+			return coord.Tally{}, err
+		}
+		if found {
+			_, err = f.budgets.Update(ctx, key, raw, revision)
+		} else {
+			_, err = f.budgets.Create(ctx, key, raw)
+		}
+		switch {
+		case err == nil:
+			return next, nil
+		case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyExists):
+			continue
+		default:
+			return coord.Tally{}, unavailable(verb, err)
+		}
+	}
+	return coord.Tally{}, contended(verb, scope)
+}
+
+// The counter's retry backoff: a doubling wait from counterRetryBase to
+// counterRetryCeiling, jittered across most of itself.
+//
+// A MILLISECOND TO START, because that is a compare-and-swap's own round trip
+// on a clustered broker — a shorter wait is still inside the write that beat
+// this one — and doubling to a CEILING OF 32 ms, so the sixteen attempts
+// [fleetCASRetries] allows span about a third of a second at worst. That is
+// what a round waits behind a contended counter before it fails closed, and it
+// is small beside the model call the round is about to make; what the wait
+// buys is that the losers of one race do not arrive together at the next. The
+// JITTER is the widest [backoff.Jitter] gives, because a counter's writers
+// lost the same race at the same instant and only the spread separates them.
+// Measured on the embedded broker: 32 concurrent charges on one key, which
+// failed four runs in ten with no wait, succeeded in every one of 200.
+const (
+	counterRetryBase    = time.Millisecond
+	counterRetryCeiling = 32 * time.Millisecond
+	counterRetryJitter  = 0.9
+)
+
+// counterRetryDelay is the wait before the counter's attempt'th retry.
+func counterRetryDelay(attempt int) time.Duration {
+	return backoff.Jitter(backoff.Doubling(attempt, counterRetryBase, counterRetryCeiling), counterRetryJitter)
+}
+
+// tally reads one scope's counter rolled to windows, which is what it would
+// be judged on by the charge that wrote next. A scope never charged is the
+// zero Tally rolled, every window unspent.
+func (f *FleetStore) tally(ctx context.Context, scope string, windows coord.Windows) (coord.Tally, error) {
+	entry, err := f.budgets.Get(ctx, encodeKey(scope))
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return coord.Tally{}.Roll(windows), nil
+	}
+	if err != nil {
+		return coord.Tally{}, unavailable("read the token counter", err)
+	}
+	stored, err := decodeTally(entry.Value())
+	if err != nil {
+		return coord.Tally{}, unavailable("decode the token counter", err)
+	}
+	return stored.Roll(windows), nil
+}
+
+// Used reports one scope's counter against the given windows.
+func (f *FleetStore) Used(ctx context.Context, scope string, windows coord.Windows) (coord.Usage, error) {
 	if scope == "" {
-		return 0, errors.New("coord/kv: a budget scope is required")
+		return coord.Usage{}, errors.New("coord/kv: a budget scope is required")
+	}
+	if err := windows.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/kv: %w", err)
 	}
 	entry, err := f.budgets.Get(ctx, encodeKey(scope))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
-		return 0, nil
+		return coord.Unspent(scope, windows), nil
 	}
 	if err != nil {
-		return 0, unavailable("read the budget", err)
+		return coord.Usage{}, unavailable("read the token counter", err)
 	}
-	var record budgetRecord
-	if err := json.Unmarshal(entry.Value(), &record); err != nil {
-		return 0, unavailable("decode the budget", err)
+	stored, err := decodeTally(entry.Value())
+	if err != nil {
+		return coord.Usage{}, unavailable("decode the token counter", err)
 	}
-	return record.Used, nil
+	return stored.Usage(scope, windows), nil
 }
 
-// Usage returns every counter, org first then seats by scope.
-func (f *FleetStore) Usage(ctx context.Context) ([]coord.Usage, error) {
+// Usage returns every counter against the given windows, org first then seats
+// by scope.
+func (f *FleetStore) Usage(ctx context.Context, windows coord.Windows) ([]coord.Usage, error) {
+	if err := windows.Validate(); err != nil {
+		return nil, fmt.Errorf("coord/kv: %w", err)
+	}
 	var out []coord.Usage
 	err := f.each(ctx, f.budgets, func(kve jetstream.KeyValueEntry) error {
-		var record budgetRecord
-		if err := json.Unmarshal(kve.Value(), &record); err != nil {
-			return unavailable("decode the budget", err)
+		stored, err := decodeTally(kve.Value())
+		if err != nil {
+			return unavailable("decode the token counter", err)
 		}
 		scope, ok := decodeKey(kve.Key())
 		if !ok {
@@ -1352,9 +1439,7 @@ func (f *FleetStore) Usage(ctx context.Context) ([]coord.Usage, error) {
 			// a missing one.
 			return nil
 		}
-		out = append(out, coord.Usage{
-			Scope: scope, Used: record.Used, UpdatedAt: record.At, RefusedAt: record.RefusedAt,
-		})
+		out = append(out, stored.Usage(scope, windows))
 		return nil
 	})
 	if err != nil {
@@ -1364,40 +1449,21 @@ func (f *FleetStore) Usage(ctx context.Context) ([]coord.Usage, error) {
 	return out, nil
 }
 
-// Reset zeroes one scope, or every scope when given "".
-//
-// PURGE, not delete: a tombstone would be returned by a later listing as a
-// key with no value, so an operator who cleared a counter would still see the
-// scope in `crewlet budgets`.
-func (f *FleetStore) Reset(ctx context.Context, scope string) (int, error) {
-	if scope != "" {
-		if _, err := f.Used(ctx, scope); err != nil {
-			return 0, err
-		}
-		if err := f.budgets.Purge(ctx, encodeKey(scope)); err != nil {
-			return 0, unavailable("reset the budget", err)
-		}
-		return 1, nil
+// RetireLifetimeCounters deletes the lifetime counters' bucket an earlier
+// build kept, reporting whether it was there. See [coord.LifetimeCounters]
+// for why this is a decision taken under the maintenance duty rather than a
+// step of [OpenFleet]: a node that deleted it at boot would fail every charge
+// an older node still running makes.
+func (f *FleetStore) RetireLifetimeCounters(ctx context.Context) (bool, error) {
+	err := f.js.DeleteKeyValue(ctx, f.bucketPrefix+lifetimeBudgetSuffix)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrBucketNotFound):
+		return false, nil
+	default:
+		return false, unavailable("retire the lifetime token counters", err)
 	}
-	// COLLECTED FIRST, PURGED AFTER. The walk holds a live subscription to
-	// this very bucket, and purging inside it would have the sweep writing
-	// the records its own listing is still delivering. The set is one key
-	// per counted scope, so holding it costs nothing worth the hazard.
-	var keys []string
-	if err := f.each(ctx, f.budgets, func(kve jetstream.KeyValueEntry) error {
-		keys = append(keys, kve.Key())
-		return nil
-	}); err != nil {
-		return 0, err
-	}
-	cleared := 0
-	for _, key := range keys {
-		if err := f.budgets.Purge(ctx, key); err != nil {
-			return cleared, unavailable("reset the budget", err)
-		}
-		cleared++
-	}
-	return cleared, nil
 }
 
 // ---- the config plane -------------------------------------------------- //

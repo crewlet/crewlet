@@ -10,17 +10,25 @@ import (
 // DURABLE counter it enforces with.
 //
 // TWO SPANS, and they are the two that belong together. The cap is config; the
-// counter is every node's spend since the last deliberate reset, which is what
-// the gate actually refuses against, and the refusal stamp beside it is the
-// gate's own record of saying no. The live meter a dashboard is pushed is this
-// same counter, so it is not a third figure here.
+// counter is every node's spend in the same calendar window the cap is
+// written for, which is what the gate actually refuses against, and the
+// refusal stamp beside it is the gate's own record of saying no. The live
+// meter a dashboard is pushed is this same counter, so it is not a third
+// figure here.
 //
-// There used to be a third, `live_used`, labelled as "this process": the
-// per-seat token totals the live projection summed from the turns it happened
-// to have seen since it started. It shared a span with nothing an operator
-// could name, and its org half summed an empty list and was null on every
-// node. What a seat spent over a stated window is the spend rollup's per-agent
-// row, which is one aggregation for every screen that shows spend.
+// ONE WINDOW PER SCOPE, because the answer carries one figure per scope: each
+// scope's binding window ([coord.Usage.Binding]) — a window that is refusing
+// first, else the capped window with the least room left — with that window's
+// ceiling as `max_tokens` and its refusal as `refused_at`, so a cap is never
+// paired with another window's spend. A scope that caps nothing states its
+// month, the widest spend the counter keeps, under a `max_tokens` of 0.
+//
+// There used to be a third figure, `live_used`, labelled as "this process":
+// the per-seat token totals the live projection summed from the turns it
+// happened to have seen since it started. It shared a span with nothing an
+// operator could name, and its org half summed an empty list and was null on
+// every node. What a seat spent over a stated window is the spend rollup's
+// per-agent row, which is one aggregation for every screen that shows spend.
 //
 // So `durable: false` means UNREADABLE, never zero: a company drawn at 0% of
 // its budget when the truth is that nobody looked is the lie this shape exists
@@ -49,12 +57,16 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 		return out, nil
 	}
 
+	// The windows are cut on the company's own clock at this answer's
+	// instant, which is what the gate cuts a charge on.
+	windows := coord.WindowsAt(s.clock(), company.Location())
+
 	// The durable half. A counter that cannot be read leaves `durable` false
 	// and every figure absent — the alternative is drawing a company at 0%
 	// of its budget when the truth is that nobody looked.
 	used := map[string]coord.Usage{}
 	if s.Budget != nil {
-		rows, err := s.Budget.Usage(ctx)
+		rows, err := s.Budget.Usage(ctx, windows)
 		if err != nil {
 			//nolint:nilerr // Deliberate: see the paragraph above.
 			return out, nil
@@ -64,19 +76,20 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 		}
 		out["durable"] = true
 	}
+	read := func(scope string) coord.Usage {
+		if u, found := used[scope]; found {
+			return u
+		}
+		return coord.Unspent(scope, windows)
+	}
 
-	// THE CEILING THE COUNTER IS HELD TO, which is the tightest window the
-	// scope caps: the counter keeps one figure per scope and knows no
-	// calendar, so that is the number the gate refuses against, and 0 —
-	// no window capped — is unlimited, as it always was on this answer.
-	// See engine.counterCeiling.
-	orgCap, _ := organization.TokenBudget.Tightest()
-	orgRow := used[coord.OrgScope]
+	orgRow := read(coord.OrgScope)
+	orgSlot, orgCap, _ := orgRow.Binding(coord.Caps(organization.TokenBudget))
 	out["org"] = map[string]any{
 		"max_tokens":         orgCap,
-		"durable_used":       orgRow.Used,
+		"durable_used":       orgSlot.Used,
 		"durable_updated_at": isoOrEmpty(orgRow.UpdatedAt),
-		"refused_at":         isoOrEmpty(orgRow.RefusedAt),
+		"refused_at":         isoOrEmpty(orgSlot.RefusedAt),
 	}
 
 	seats := []any{}
@@ -88,16 +101,16 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 			// has to learn to ignore.
 			continue
 		}
-		row := used[coord.AgentScope(id.String())]
-		seatCap, _ := role.TokenBudget.Tightest()
+		row := read(coord.AgentScope(id.String()))
+		slot, seatCap, _ := row.Binding(coord.Caps(role.TokenBudget))
 		seats = append(seats, map[string]any{
 			"agent_id":           id.String(),
 			"role":               role.Name,
 			"handle":             role.Handle(),
 			"max_tokens":         seatCap,
-			"durable_used":       row.Used,
+			"durable_used":       slot.Used,
 			"durable_updated_at": isoOrEmpty(row.UpdatedAt),
-			"refused_at":         isoOrEmpty(row.RefusedAt),
+			"refused_at":         isoOrEmpty(slot.RefusedAt),
 		})
 	}
 	out["seats"] = seats

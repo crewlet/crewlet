@@ -12,8 +12,7 @@ subcommand below is served by it.
 | `crewlet run [config.yaml]` | Read Tier A bootstrap (positional, or `-config`; default `./crewlet.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
 | `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
-| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node, because the counter is the fleet's and not this file's. `REFUSING SINCE` names a scope whose cap is turning charges away |
-| `crewlet budgets reset [config]` | Zero token usage on a running node — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
+| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`) in the calendar window each is closest to its ceiling in, read from a running node, because the counters are the fleet's and not this file's. `REFUSING SINCE` names a scope whose cap is turning charges away. There is no reset: a window's allowance comes back when the window turns over |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
@@ -506,12 +505,14 @@ install looks like rather than an error.
 
 ## `crewlet budgets`
 
-Token-budget usage lives in the fleet's [coordination store](../concepts/coordination.md):
-one counter for the whole company, surviving restarts. A counter each node
-kept privately would make an org cap of 500k into N × 500k.
+Token-budget usage lives in the fleet's [coordination store](../concepts/coordination.md#token-budgets-are-windows):
+one counter per scope for the whole company, with a slot for each calendar
+window — the day, the ISO week and the month on the company's clock — and
+surviving restarts. A counter each node kept privately would make an org cap of
+500k into N × 500k.
 
-**These commands talk to a running node**, not to a file. That follows from
-where the counter lives: on the default topology the coordination store is the
+**This command talks to a running node**, not to a file. That follows from
+where the counters live: on the default topology the coordination store is the
 engine's own embedded broker, so there is nothing on disk to open — and opening
 it anyway would be worse than useless, because a second broker on the same
 store directory is accepted rather than refused, and two writers on one store
@@ -519,15 +520,12 @@ is corruption rather than contention.
 
 ```bash
 crewlet budgets show                       # usage per scope
-crewlet budgets reset                      # zero every scope
-crewlet budgets reset -scope org           # just the org
-crewlet budgets reset -scope agent:<id>    # just one seat
 ```
 
 | Flag | Default | What it does |
 |---|---|---|
 | `-url` | the `api` block of the config named on the command line | The running node's base URL. A wildcard bind (`0.0.0.0`, `::`) becomes the loopback address, because a wildcard is not something anything can dial |
-| `-token` | `$CREWLET_API_TOKEN`, then the config's first `api.auth.tokens` entry | The bearer token. `reset` is a write, so it always needs one — `allow_anonymous_read` opens reads and nothing else |
+| `-token` | `$CREWLET_API_TOKEN`, then the config's first `api.auth.tokens` entry | The bearer token, sent on the read. A node with `allow_anonymous_read` off answers nothing without one |
 
 The environment wins over the config so an operator who exported a token
 deliberately gets that one. There is no token *default* on the command line:
@@ -536,16 +534,19 @@ log that echoes the command.
 
 The **caps** are not stored here — they come from the active company config
 (`token_budget` on the org, `role.token_budget` on a seat), so every process
-derives the same numbers without coordinating. Only the usage is shared. The
-`CAP` column is the tightest window a scope's `token_budget` caps, the one its
-counter is held to, and `unlimited` for a scope that caps no window.
+derives the same numbers without coordinating. Only the usage is shared. Each
+row is **one window**: the one the scope is refusing in — where several are,
+the one that ends last, which is the window the refusal itself named — else the
+capped window with the least room left, so `USED` and `CAP` always describe the
+same day, week or month. A scope that caps no window shows its spend this
+month, with a `CAP` of `unlimited`.
 
-`show` prints a `REFUSING SINCE` column: when that scope's cap last turned a
-charge away, or `-` while it is not refusing. Read it rather than `USED`
-against `CAP`, because a refused charge increments nothing: a seat charged in
-3 000-token rounds against a 100 000 cap stops near 99 000 and its row would
-otherwise read as headroom. The next charge the scope admits clears it, and so
-does a reset.
+`show` prints a `REFUSING SINCE` column: when that window last turned a charge
+away, or `-` while it is not refusing. Read it rather than `USED` against
+`CAP`, because a refused charge increments nothing: a seat charged in 3 000-token
+rounds against a 100 000 cap stops near 99 000 and its row would otherwise read
+as headroom. The next charge the scope admits clears it, and so does the window
+turning over.
 
 `show` refuses rather than printing zeros when the node reports it could not
 read the counter (`durable: false` on the query surface). A counter nobody
@@ -554,12 +555,11 @@ company at 0% of its budget at exactly the moment nothing is known. Seats with
 no cap and no spend are left out for the same reason in reverse: a permanent
 zero row per seat buries the seats that matter.
 
-`reset` is an operator action and never a schedule — a budget is a ceiling
-for the life of a deployment, and a counter that rolled itself over would
-silently re-arm a company somebody had stopped on purpose. It **names the
-scopes it cleared**, because a count alone leaves you unable to tell "reset
-the seat I meant" from "reset a scope that was already empty", and a scoped
-reset names only its own scope.
+**There is no `reset`.** A window's allowance comes back when the window
+turns over — at local midnight, on Monday, on the 1st — rolled inside the
+charge that crosses the boundary, and room before then is made by raising the
+ceiling in the company config — which is a revision with an author, where a
+counter zeroed by hand left no record of who made the room or why.
 
 ---
 

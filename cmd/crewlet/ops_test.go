@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -97,14 +96,7 @@ type fakeNode struct {
 	server  *httptest.Server
 	budgets []byte
 	durable bool
-
-	// seen records what the last reset was asked to clear, so a test can
-	// assert the scope actually reached the node rather than only that
-	// the command printed something plausible.
-	seen    string
-	resets  int
 	tokens  []string
-	cleared []string
 }
 
 func newFakeNode(t *testing.T) *fakeNode {
@@ -120,19 +112,6 @@ func newFakeNode(t *testing.T) *fakeNode {
 		}
 		_, _ = fmt.Fprintf(w, `{"durable":%t,"org":{"max_tokens":0,"durable_used":0},"seats":[]}`,
 			n.durable)
-	})
-	mux.HandleFunc("POST /budgets/reset", func(w http.ResponseWriter, r *http.Request) {
-		n.tokens = append(n.tokens, r.Header.Get("Authorization"))
-		n.seen = r.URL.Query().Get("scope")
-		n.resets++
-		body, err := json.Marshal(map[string]any{
-			"cleared": len(n.cleared), "scopes": n.cleared,
-		})
-		if err != nil {
-			t.Errorf("marshal: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(body)
 	})
 	n.server = httptest.NewServer(mux)
 	t.Cleanup(n.server.Close)
@@ -257,52 +236,31 @@ func TestBudgetsShowNamesAScopeThatIsRefusing(t *testing.T) {
 	}
 }
 
-// A RESET NAMES WHAT IT CLEARED. A count alone leaves an operator unable to
-// tell "reset the seat I meant" from "reset a scope that was already empty".
-func TestBudgetsResetNamesTheScopesItCleared(t *testing.T) {
+// THERE IS NO RESET. A budget's ceilings are per calendar window and each
+// window's allowance comes back when it turns over; room before then is made
+// by raising a ceiling. A `reset` that still parsed would be a verb with no
+// route behind it, and one that reached a node would find nothing to call.
+func TestBudgetsHasNoReset(t *testing.T) {
 	node := newFakeNode(t)
-	node.cleared = []string{"agent:swe"}
 	cfg := bootstrapForNode(t, node)
-
-	out, _, err := cli(t, "budgets", "reset", "-config", cfg, "-scope", "agent:swe")
-	if err != nil {
-		t.Fatalf("budgets reset: %v", err)
+	_, _, err := cli(t, "budgets", "reset", "-config", cfg)
+	if err == nil || !strings.Contains(err.Error(), "unknown budgets command") {
+		t.Fatalf("budgets reset = %v, want it refused as an unknown command", err)
 	}
-	if !strings.Contains(out, "agent:swe") {
-		t.Errorf("output = %q", out)
-	}
-	// SCOPED MEANS SCOPED, and the scope has to reach the NODE — a
-	// command that printed the right thing while clearing every counter
-	// would re-arm a company somebody had stopped on purpose.
-	if node.seen != "agent:swe" {
-		t.Errorf("the node was asked to clear %q, want the scope the operator named", node.seen)
+	if len(node.tokens) != 0 {
+		t.Fatalf("a refused command still reached the node %d time(s)", len(node.tokens))
 	}
 }
 
-// RESETTING NOTHING SAYS SO rather than reporting a success that did not
-// happen.
-func TestResettingAScopeThatIsNotThereSaysSo(t *testing.T) {
-	node := newFakeNode(t)
-	cfg := bootstrapForNode(t, node)
-
-	out, _, err := cli(t, "budgets", "reset", "-config", cfg, "-scope", "agent:nobody")
-	if err != nil {
-		t.Fatalf("budgets reset: %v", err)
-	}
-	if !strings.Contains(out, "Nothing to reset") {
-		t.Errorf("output = %q", out)
-	}
-}
-
-// THE TOKEN IS SENT. A reset is a guarded write, so a command that dropped
-// the token would fail against every deployment that has auth on — which is
-// every deployment that is not a laptop.
+// THE TOKEN IS SENT. The counters are read through the node's guarded query
+// surface, so a command that dropped the token would fail against every
+// deployment that turns anonymous reads off.
 func TestABudgetCommandSendsTheConfiguredToken(t *testing.T) {
 	node := newFakeNode(t)
 	cfg := bootstrapForNode(t, node)
 
-	if _, _, err := cli(t, "budgets", "reset", "-config", cfg); err != nil {
-		t.Fatalf("budgets reset: %v", err)
+	if _, _, err := cli(t, "budgets", "show", "-config", cfg); err != nil {
+		t.Fatalf("budgets show: %v", err)
 	}
 	if len(node.tokens) == 0 || node.tokens[len(node.tokens)-1] != "Bearer t0ken" {
 		t.Errorf("Authorization = %v, want the config's token", node.tokens)
@@ -317,8 +275,8 @@ func TestAnExportedTokenBeatsTheConfigs(t *testing.T) {
 	cfg := bootstrapForNode(t, node)
 	t.Setenv(apiTokenEnv, "exported")
 
-	if _, _, err := cli(t, "budgets", "reset", "-config", cfg); err != nil {
-		t.Fatalf("budgets reset: %v", err)
+	if _, _, err := cli(t, "budgets", "show", "-config", cfg); err != nil {
+		t.Fatalf("budgets show: %v", err)
 	}
 	if got := node.tokens[len(node.tokens)-1]; got != "Bearer exported" {
 		t.Errorf("Authorization = %q, want the exported token", got)

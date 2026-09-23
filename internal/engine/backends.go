@@ -498,6 +498,7 @@ func openFleet(ctx context.Context, conn *nats.Conn, replicas int, clustered boo
 		FireRetention:   coord.FireRetention,
 		FollowRetention: coord.FollowRetention,
 		CooldownMax:     coord.CooldownMax,
+		BudgetRetention: coord.BudgetRetention,
 		StatusFreshness: coord.StatusFreshness,
 		Replicas:        replicas,
 		Clustered:       clustered,
