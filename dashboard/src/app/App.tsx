@@ -2,9 +2,10 @@
  * Route dispatch.
  *
  * A flat switch rather than a route table with lazy chunks: there are twenty
- * screens, the whole application is ~180 KB gzipped, and it is served from the
- * same binary as the API — so a code-split chunk buys a round trip against a
- * server that is already answering. The switch is also what makes the screen
+ * screens, the whole application is about 400 KB gzipped (the entry, the React
+ * chunk and the stylesheet, measured as the engine serves them), and it is
+ * served from the same binary as the API — so a code-split chunk buys a round
+ * trip against a server that is already answering. The switch is also what makes the screen
  * list readable in one place.
  *
  * # Two levels of dispatch, matching the two levels of navigation

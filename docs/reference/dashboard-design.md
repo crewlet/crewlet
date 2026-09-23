@@ -3735,3 +3735,16 @@ to.
     browser with nothing on screen but a console violation. A form may post
     to this origin or to an `https:` host, which is what the GitHub App
     manifest flow needs.
+    **And everything under `assets/` is content-hashed, because the engine
+    caches it for good.** `/static/dashboard/assets/*` is served
+    `public, max-age=31536000, immutable`, so a browser holding a file there
+    never asks for it again; that is correct only because the build names
+    each one `<name>-<hash>.<ext>`, so different bytes are a different URL.
+    Emit a file with a fixed name anywhere but `assets/` — the fonts,
+    `protocol.js`, the notices and the brand marks do — and it is served
+    `no-cache` and revalidated on every load, like the shell that names the
+    hashed files. `TestEveryFileUnderAssetsIsContentHashed` fails on an
+    unhashed name under `assets/`. Text is gzipped by the engine for a client
+    that asks, once per file at the best level, so nothing here is
+    pre-compressed and no proxy is needed for it
+    ([API endpoints](api-endpoints.md#wiring)).
