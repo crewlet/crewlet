@@ -120,7 +120,7 @@ func ShredRemoved(ctx context.Context, reader *Reader, keys KeyIndex,
 // has no record left on the log, and its row is what still says it happened.
 func (r *Reader) RemovedPeople(ctx context.Context) ([]string, error) {
 	var out []string
-	err := r.withTx(ctx, func(tx *sql.Tx) error {
+	err := r.scan(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
 			`SELECT person_id FROM iam_removed ORDER BY person_id`)
 		if err != nil {

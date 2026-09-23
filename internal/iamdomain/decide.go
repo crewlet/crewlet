@@ -46,10 +46,16 @@ func (e *ErrClaimed) Error() string {
 // because they are what can be refused, and the person last.
 //
 // A SEQUENCE THAT STOPS HALFWAY leaves a claimed address with no person. That
-// is a LEGAL NAMED STATE rather than corruption: the orphan-claim duty reports
-// it and the sweep collects it, and the alternative — writing the person first
-// — would leave a person nobody can find, holding an address somebody else may
-// then take.
+// is a LEGAL NAMED STATE rather than corruption: the claim report names it
+// once it is [OrphanGrace] old ([Reader.Claims]), and removing the
+// reservation's id releases what it holds — and the alternative, writing the
+// person first, would leave a person nobody can find, holding an address
+// somebody else may then take.
+//
+// THE SWEEP DOES NOT COLLECT IT, deliberately: a reservation is holding a
+// claim whose subject still carries an anchor, and deleting the row on a
+// clock would leave that address arbitrated to nobody the directory can name.
+// Releasing is a decision, and a removal is the record that makes it.
 func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, error) {
 	if err := w.mayAdminister(OpEnrol); err != nil {
 		return statelog.Position{}, err

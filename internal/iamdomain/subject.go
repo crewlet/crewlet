@@ -40,8 +40,8 @@
 // write the person — for the reason the tracker's dependency edge is one: each
 // end arbitrates on its own subject, and a record has exactly one subject to
 // arbitrate on. A sequence that stops halfway leaves a CLAIMED ADDRESS WITH NO
-// PERSON, which is a legal named state rather than corruption: the duplicate
-// and orphan claim duty reports it, and the sweep collects it.
+// PERSON, which is a legal named state rather than corruption: the claim report
+// names it ([Reader.Claims]), and removing the reservation's id releases it.
 //
 // # What a record states that it is not the subject of
 //
