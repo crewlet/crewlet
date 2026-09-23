@@ -219,7 +219,13 @@ type Reconciliation struct {
 	// before the next pass — but a person who mysteriously never gets
 	// mentioned is otherwise invisible, so the count gives it a number.
 	Unresolved int
-	Conflicts  []Conflict
+	// Withheld counts declared identities left out because the identity
+	// directory says the seat's holder may not be reached — see
+	// [Standing]. Counted apart from Unresolved because the remedies are
+	// opposite: one is an environment variable, the other a person's
+	// standing that an administrator set on purpose.
+	Withheld  int
+	Conflicts []Conflict
 }
 
 // ReconcileHumanContacts brings the registry in line with the human seats'
@@ -248,9 +254,22 @@ type Reconciliation struct {
 // identity whose reference does not resolve is skipped and counted, never
 // registered as its literal text — a raw ${VAR} matches no payload any
 // third-party app will ever send.
-func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLookup) Reconciliation {
+//
+// # And the directory decides who may still be reached
+//
+// standing is one reading of the identity directory ([Standing]): a seat whose
+// holder is suspended, retired or removed has its declared identities left out
+// — so on this registry an inbound message from them resolves to an outside
+// party, and nothing attributes their word to the seat. The zero Standing is
+// chart-only and withholds nothing. The registry remembers which reading it
+// was built from ([Registry.Standing]), because that reading is half of what
+// it answers for.
+func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLookup,
+	standing Standing) Reconciliation {
+
 	var rec Reconciliation
 	desired := make(map[identityKey]string)
+	withheld := make(map[string]Withholding)
 	if o != nil {
 		for role := range o.AllRoles() {
 			if !role.IsHuman() || role.Contact == nil {
@@ -263,6 +282,15 @@ func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLoo
 			declared := len(role.Contact.Identities())
 			resolved := role.Contact.ResolvedIdentities(lookup)
 			rec.Unresolved += declared - len(resolved)
+			if why, ok := standing.Withholds(handle); ok {
+				// NOT REGISTERED, which is the whole of a withdrawal:
+				// a pair the previous pass registered is withdrawn
+				// below exactly as an edited contact is, and a fresh
+				// registry simply never holds it.
+				withheld[handle] = why
+				rec.Withheld += len(resolved)
+				continue
+			}
 			for _, id := range resolved {
 				desired[identityKey{string(id.Transport), id.ExternalID}] = handle
 			}
@@ -312,11 +340,14 @@ func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLoo
 
 	r.mu.Lock()
 	r.owned = owned
+	r.standing, r.withheld = standing, withheld
 	r.mu.Unlock()
-	if rec.Registered > 0 || rec.Withdrawn > 0 || len(rec.Conflicts) > 0 {
+	if rec.Registered > 0 || rec.Withdrawn > 0 || rec.Withheld > 0 ||
+		len(rec.Conflicts) > 0 {
 		log.Info("human_contacts_reconciled",
 			"registered", rec.Registered, "withdrawn", rec.Withdrawn,
-			"unresolved", rec.Unresolved, "conflicts", len(rec.Conflicts))
+			"withheld", rec.Withheld, "unresolved", rec.Unresolved,
+			"conflicts", len(rec.Conflicts))
 	}
 	for _, c := range rec.Conflicts {
 		log.Warn("human_contact_id_conflict", "transport", c.Namespace,

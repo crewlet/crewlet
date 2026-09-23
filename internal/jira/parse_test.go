@@ -312,7 +312,8 @@ func TestAHumanSeatsDeclaredAtlassianAccountRoutes(t *testing.T) {
 	}}
 	o.Normalize()
 	reg := notify.NewRegistry(o)
-	reg.ReconcileHumanContacts(o, func(string) (string, bool) { return "", false })
+	reg.ReconcileHumanContacts(o, func(string) (string, bool) { return "", false },
+		notify.Standing{})
 
 	got := vias(route(t, parser(t, nil), reg,
 		issue("jira:issue_updated", acctSWE, map[string]any{"assignee": person(acctFounder)}, nil)))

@@ -237,7 +237,7 @@ func (e *Engine) ChatThreads() *notify.ThreadReaders {
 // reconnected.
 func (e *Engine) refreshParties(c *Company) {
 	reg := notify.NewRegistry(c.Org)
-	rec := reg.ReconcileHumanContacts(c.Org, e.resolver().LookupOK)
+	rec := reg.ReconcileHumanContacts(c.Org, e.resolver().LookupOK, notify.Standing{})
 
 	// The CODE HOST's seat identities are config-derived, so they are
 	// rebuilt from the new company here rather than carried across. Doing

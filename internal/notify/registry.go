@@ -30,6 +30,17 @@ import (
 // and on every org swap. It is small, written rarely and read on the inbound
 // hot path, so a RWMutex is the right trade.
 //
+// # The human half answers for a DIRECTORY READING too
+//
+// Which human seats' contact identities are registered is decided by the org
+// AND by one reading of the identity directory ([Standing]): a seat whose
+// holder is suspended or removed registers none. That reading is fixed for the
+// registry's life on the org's terms — a directory that moved is a NEW registry
+// built whole and swapped in, never this one patched. A diff applied to a
+// fresh registry would drop every identity it did not touch, and a registry
+// that re-read the directory itself would answer "whose standing is this?"
+// with "one of two".
+//
 // # Resolution is ORG-derived, never node-derived
 //
 // Routing an event to a seat needs its handle and its agent id, both of
@@ -65,6 +76,12 @@ type Registry struct {
 	// reconcile registered, so the next one can withdraw exactly its own
 	// stale pairs without ever touching an agent identity.
 	owned map[identityKey]string
+
+	// standing is the reading of the identity directory the last human
+	// reconcile applied, and withheld the seats it left out because of it.
+	// See [Standing].
+	standing Standing
+	withheld map[string]Withholding
 }
 
 // identityKey is one external identity: a namespace and an id within it.
@@ -180,6 +197,33 @@ func NewRegistry(o *org.Organization) *Registry {
 
 // OrgName is the company the registry answers for. Empty without an org.
 func (r *Registry) OrgName() string { return r.orgName }
+
+// Standing is the reading of the identity directory this registry's human
+// contacts were reconciled against — the zero, chart-only value until a
+// reconcile applies one.
+//
+// It is what lets the engine tell a directory that moved from one that did not
+// WITHOUT rebuilding: a fresh reading equal to this one is a registry that
+// would come out identical.
+func (r *Registry) Standing() Standing {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.standing
+}
+
+// Withholding reports whether a human seat's contact identities were left out
+// of this registry because of its holder's standing, and why.
+//
+// The seat itself is still a party — it resolves by handle, a mention of it
+// still names it and a prompt still renders it as a colleague. What is gone is
+// every external identity it declared, which is what stops a suspended
+// person's message on a vendor surface being attributed to the seat.
+func (r *Registry) Withholding(handle string) (Withholding, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	why, ok := r.withheld[handle]
+	return why, ok
+}
 
 // ByHandle resolves a handle to a party.
 func (r *Registry) ByHandle(handle string) (Party, bool) {

@@ -336,7 +336,7 @@ func TestHumanContactsRegisterFromTheOrg(t *testing.T) {
 	o.Normalize()
 	r := notify.NewRegistry(o)
 
-	rec := r.ReconcileHumanContacts(o, env(nil))
+	rec := r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 	if rec.Registered != 2 {
 		t.Fatalf("registered %d identities, want 2: %+v", rec.Registered, rec)
 	}
@@ -357,13 +357,13 @@ func TestAReconcileWithdrawsItsOwnStalePairs(t *testing.T) {
 	o := company()
 	o.Normalize()
 	r := notify.NewRegistry(o)
-	r.ReconcileHumanContacts(o, env(nil))
+	r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 
 	next := company()
 	next.Roles[2].Contact.SlackUserID = "U0CORRECTED"
 	next.Normalize()
 
-	rec := r.ReconcileHumanContacts(next, env(nil))
+	rec := r.ReconcileHumanContacts(next, env(nil), notify.Standing{})
 	if rec.Withdrawn != 1 {
 		t.Fatalf("withdrew %d, want 1: %+v", rec.Withdrawn, rec)
 	}
@@ -385,7 +385,7 @@ func TestAnIDMovingBetweenHumanSeatsLands(t *testing.T) {
 	})
 	o.Normalize()
 	r := notify.NewRegistry(o)
-	r.ReconcileHumanContacts(o, env(nil))
+	r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 	if p, _ := r.ByExternalID("mattermost", "shared"); p.Handle != "sam-ops" {
 		t.Fatalf("the id started at %q", p.Handle)
 	}
@@ -398,7 +398,7 @@ func TestAnIDMovingBetweenHumanSeatsLands(t *testing.T) {
 	})
 	next.Normalize()
 
-	rec := r.ReconcileHumanContacts(next, env(nil))
+	rec := r.ReconcileHumanContacts(next, env(nil), notify.Standing{})
 	if len(rec.Conflicts) != 0 {
 		t.Fatalf("the move collided with itself: %+v", rec.Conflicts)
 	}
@@ -417,7 +417,7 @@ func TestAReconcileNeverTakesAnAgentsIdentity(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	rec := r.ReconcileHumanContacts(o, env(nil))
+	rec := r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 	if len(rec.Conflicts) != 1 {
 		t.Fatalf("conflicts = %+v, want exactly one", rec.Conflicts)
 	}
@@ -430,7 +430,7 @@ func TestAReconcileNeverTakesAnAgentsIdentity(t *testing.T) {
 	}
 	// And the contested pair is NOT owned, so the next reconcile must not
 	// withdraw the agent's mapping on its behalf.
-	r.ReconcileHumanContacts(company(), env(nil))
+	r.ReconcileHumanContacts(company(), env(nil), notify.Standing{})
 	if p, _ := r.ByExternalID("mattermost", "contested"); p.Handle != "backend-engineer" {
 		t.Fatalf("a later reconcile stripped the agent's identity: %q", p.Handle)
 	}
@@ -445,7 +445,7 @@ func TestAnUnresolvedReferenceIsSkippedAndCounted(t *testing.T) {
 	o.Normalize()
 	r := notify.NewRegistry(o)
 
-	rec := r.ReconcileHumanContacts(o, env(nil))
+	rec := r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 	if rec.Unresolved != 1 {
 		t.Fatalf("unresolved = %d, want 1: %+v", rec.Unresolved, rec)
 	}
@@ -454,7 +454,7 @@ func TestAnUnresolvedReferenceIsSkippedAndCounted(t *testing.T) {
 	}
 
 	// The next pass picks it up once the variable is exported.
-	rec = r.ReconcileHumanContacts(o, env(map[string]string{"FOUNDER_SLACK_ID": "U0REAL"}))
+	rec = r.ReconcileHumanContacts(o, env(map[string]string{"FOUNDER_SLACK_ID": "U0REAL"}), notify.Standing{})
 	if rec.Unresolved != 0 || rec.Registered != 2 {
 		t.Fatalf("the exported variable did not land: %+v", rec)
 	}
@@ -469,13 +469,13 @@ func TestASeatThatStopsBeingHumanLosesItsContactIDs(t *testing.T) {
 	o := company()
 	o.Normalize()
 	r := notify.NewRegistry(o)
-	r.ReconcileHumanContacts(o, env(nil))
+	r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 
 	next := company()
 	next.Roles = next.Roles[:2] // the human seat is gone
 	next.Normalize()
 
-	rec := r.ReconcileHumanContacts(next, env(nil))
+	rec := r.ReconcileHumanContacts(next, env(nil), notify.Standing{})
 	if rec.Withdrawn != 2 || rec.Registered != 0 {
 		t.Fatalf("reconcile after removal: %+v", rec)
 	}
@@ -486,7 +486,7 @@ func TestASeatThatStopsBeingHumanLosesItsContactIDs(t *testing.T) {
 
 func TestReconcilingNothingIsSafe(t *testing.T) {
 	r := registry(t)
-	rec := r.ReconcileHumanContacts(nil, env(nil))
+	rec := r.ReconcileHumanContacts(nil, env(nil), notify.Standing{})
 	if rec.Registered != 0 || rec.Withdrawn != 0 || rec.Unresolved != 0 || len(rec.Conflicts) != 0 {
 		t.Fatalf("reconciling a nil org did something: %+v", rec)
 	}

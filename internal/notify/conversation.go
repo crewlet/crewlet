@@ -11,6 +11,16 @@
 // load-bearing rather than tidy: a spine built after its first integration is
 // a spine with that integration's assumptions welded into it, and the second
 // integration then arrives to find its own shape unrepresentable.
+//
+// # Who the parties are has TWO inputs
+//
+// The party [Registry] is built from the org view and from one reading of the
+// identity [Directory]: the org says which seats exist and which contact
+// identities a human seat declares, and the directory says whether the person
+// holding that seat may still be reached through them. A suspended or removed
+// holder's identities are withheld, with no org-chart record at all — see
+// directory.go. Both inputs are fixed for a registry's life, and either moving
+// is a new registry built whole and swapped by the engine.
 package notify
 
 import (
