@@ -374,7 +374,8 @@ func TestAnEditThatChangesNothingAppendsNothing(t *testing.T) {
 	}
 }
 
-// A TRASHED PAGE LEAVES EVERY READER'S WAY AND COMES BACK.
+// A TRASHED PAGE IS STILL READ BY ITS ID, AS TRASHED, AND A RESTORE PUBLISHES
+// IT AGAIN.
 func TestATrashedPageLeavesAndComesBack(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

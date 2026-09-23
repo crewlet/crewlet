@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -40,6 +41,14 @@ import (
 // matched" are different facts, and [Searcher.Building] is how a caller tells
 // them apart so a seat on a fresh node is not told the company has written
 // nothing down.
+//
+// # Built only by [NewSearcher], which refuses a missing part
+//
+// A Searcher has no meaningful zero value, and neither half of its options
+// may be absent: without the index there is nothing to search, and without
+// the store no hit carries its parent chain, so the ancestor exclusion keeps
+// out only the drafts whose titles carry the prefix. Both degrade without an
+// error anywhere, so the constructor refuses them instead.
 type Searcher struct {
 	index *search.Indexer
 
@@ -62,30 +71,27 @@ type Searcher struct {
 	skills func() string
 
 	// db holds the page rows a hit's parent chain is read from, which is
-	// what [knowledge.Query.ExcludeAncestors] is judged against. Nil
-	// reads no chain — see [SearcherOptions.DB].
+	// what [knowledge.Query.ExcludeAncestors] is judged against.
 	db *store.DB
 }
 
 // SearcherOptions configure a searcher.
 type SearcherOptions struct {
+	// Index is this node's lexical index. REQUIRED.
 	Index *search.Indexer
 
 	// Node is this node's id, which is its name in the fan-out's
-	// assignment table. Empty on an embedded engine and in every test,
-	// where there is one participant and its name never travels.
+	// assignment table. Empty names it [soloNode], which is only right
+	// where it has no peers and the name never travels.
 	Node string
 
-	// Peers and Roster are the fleet half of the fan-out. BOTH NIL IS THE
-	// ORDINARY DEPLOYMENT — one node, an embedded engine, every test —
-	// and it means this node takes every bucket, exactly as it did before
-	// the fan-out existed.
+	// Peers and Roster are the fleet half of the fan-out; what each does
+	// when nil is [search.FanOut]'s to say.
 	Peers  search.Peers
 	Roster func(ctx context.Context) ([]string, error)
 
 	// Report is told what every answer covered and what it cost. Nil
-	// counts nothing, which is what an embedded engine with no recorder
-	// gets.
+	// counts nothing.
 	Report func(search.Answer, time.Duration)
 
 	// Enter is called when a search begins and its return when it ends,
@@ -98,24 +104,32 @@ type SearcherOptions struct {
 	// has turned tool skills off.
 	SkillsContainer func() string
 
-	// DB is the store whose replicated estate holds `pages_heads`. Each
-	// hit's parent chain is read from it, as titles outermost first, and
-	// [knowledge.Query.ExcludeAncestors] drops a hit whose chain carries an
-	// excluded title — which is how a page under
+	// DB is the node's store, whose replicated estate holds `pages_heads`.
+	// REQUIRED. Each hit's parent chain is read from it, as titles
+	// outermost first, and [knowledge.Query.ExcludeAncestors] drops a hit
+	// whose chain carries an excluded title — which is how a page under
 	// [knowledge.AutoDraftedParent] stays out of every seat's search.
-	//
-	// NIL READS NO CHAIN, so every hit reaches [knowledge.Excludes] with
-	// none and only its title-prefix backstop can hide a draft: a page
-	// under the draft parent whose title does not carry
-	// [knowledge.AutoDraftTitlePrefix] is returned.
 	DB *store.DB
 }
 
-// NewSearcher builds the native knowledge searcher.
-func NewSearcher(opts SearcherOptions) *Searcher {
-	s := &Searcher{index: opts.Index, skills: opts.SkillsContainer, db: opts.DB}
-	if opts.Index != nil {
-		s.fan = &search.FanOut{
+// NewSearcher builds the native knowledge searcher, refusing options that
+// lack its index or its store — see [Searcher] for what each would silently
+// cost.
+func NewSearcher(opts SearcherOptions) (*Searcher, error) {
+	if opts.Index == nil {
+		return nil, errors.New("pages: a knowledge searcher needs this node's " +
+			"lexical index (SearcherOptions.Index) — without one it can search " +
+			"nothing")
+	}
+	if opts.DB == nil {
+		return nil, errors.New("pages: a knowledge searcher needs the node's " +
+			"store (SearcherOptions.DB) — without it no hit carries its parent " +
+			"chain, and a page under an excluded ancestor is returned unless its " +
+			"title carries the auto-draft prefix")
+	}
+	return &Searcher{
+		index: opts.Index, skills: opts.SkillsContainer, db: opts.DB,
+		fan: &search.FanOut{
 			Self:   cmp.Or(opts.Node, soloNode),
 			Local:  search.NodeScanner{Index: opts.Index},
 			Peers:  opts.Peers,
@@ -123,9 +137,8 @@ func NewSearcher(opts SearcherOptions) *Searcher {
 			Corpus: opts.Index.Corpus,
 			Report: opts.Report,
 			Enter:  opts.Enter,
-		}
-	}
-	return s
+		},
+	}, nil
 }
 
 // soloNode is what a node with no id calls itself in its own assignment table.
@@ -143,14 +156,16 @@ func (s *Searcher) Backend() string { return "native" }
 
 // CanSearch is the cheap, no-I/O pre-gate.
 //
-// TRUE WHENEVER THERE IS AN INDEX, because on this backend every seat can
-// read every page: there is no per-seat credential to be missing, which is
-// the condition that makes Confluence's gate answer false. Its only job is
-// letting the prefetch skip the auxiliary model call when the search is a
-// guaranteed no-op, and here that is only "no index at all".
-func (s *Searcher) CanSearch(*org.Role, *org.Organization) bool { return s.index != nil }
+// ALWAYS TRUE. Its only job is letting the prefetch skip the auxiliary model
+// call when a search is a guaranteed no-op, and here none is: every seat can
+// read every page — there is no per-seat credential to be missing, which is
+// the condition that makes Confluence's gate answer false — and [NewSearcher]
+// refuses a searcher with no index. An index that has not finished its first
+// build is a different answer, and [Searcher.Building] gives it.
+func (s *Searcher) CanSearch(*org.Role, *org.Organization) bool { return true }
 
-// Building reports whether the index is still catching up with the projection.
+// Building reports whether this node's index has yet to finish its first build
+// of the page corpus.
 //
 // SEPARATE FROM CanSearch, because they answer different questions and a
 // caller acts on them differently: CanSearch gates the expensive query
@@ -159,16 +174,23 @@ func (s *Searcher) CanSearch(*org.Role, *org.Organization) bool { return s.index
 // down". A seat on a freshly joined node would otherwise be told the second
 // for the whole first index build.
 //
-// It answers from the indexer's own walk and does no I/O: it is asked on
-// every empty search, which is a path every turn's knowledge block takes.
+// THE PAGE CORPUS ONLY, because that is the only source [Searcher.Search]
+// asks for. The index can also cover the work items, and each corpus finishes
+// its first build on its own — so asked about the whole index, a node whose
+// pages are built would answer "building" for as long as its work items are
+// not, and the prefetch, which asks this before it searches, would search none
+// of the pages it could.
+//
+// It answers from the indexer's own walk and does no I/O, because the
+// prefetch asks it at the start of a turn, before it searches.
 func (s *Searcher) Building(_ context.Context) bool {
-	return s.index != nil && !s.index.Ready()
+	return !s.index.ReadyFor(string(search.SourcePage))
 }
 
 // Search returns up to Limit ranked hits. Best effort: every failure path is
 // an empty result.
 func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
-	if s.index == nil || strings.TrimSpace(q.Text) == "" {
+	if strings.TrimSpace(q.Text) == "" {
 		return nil
 	}
 	scope := knowledge.Scope(scopeOf(q.Org))
@@ -248,10 +270,9 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 
 // ancestry is each hit's parent chain as titles, outermost first, read in one
 // transaction by the same walk a page's breadcrumb is ([parentChains]). A page
-// with no parent has no entry, and so does every page when there is no store
-// to read.
+// with no parent has no entry, and neither does one this node no longer holds.
 func (s *Searcher) ancestry(ctx context.Context, ids []string) (map[string][]string, error) {
-	if s.db == nil || len(ids) == 0 {
+	if len(ids) == 0 {
 		return nil, nil
 	}
 	out := make(map[string][]string, len(ids))

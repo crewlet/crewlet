@@ -80,11 +80,11 @@ type PageDeps struct {
 	// this is a seam rather than a second copy of these five tools.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error)
 
-	// Await blocks until this node's projection has applied a revision.
+	// Await blocks until this node has applied the log through a position.
 	// See [WorkDeps.Await]: same seam, same reason, and it matters more
 	// here — a page's SavePage takes the version it read, so a turn that
-	// writes and then re-reads through a projection that has not caught
-	// up gets a stale version and its next save is refused.
+	// writes and then re-reads rows that have not caught up gets a stale
+	// version and its next save is refused.
 	Await func(ctx context.Context, at statelog.Position) error
 }
 
@@ -152,8 +152,8 @@ func (t *listPages) Description() string {
 	return "List pages in the company's knowledge base by container, parent " +
 		"or title. For BROWSING a structure you know; to find pages ABOUT a " +
 		"subject, use search_knowledge, which ranks by relevance. A " +
-		"`truncated` answer holds only the page you asked for — pass " +
-		"`offset` to see the rest."
+		"`truncated` answer holds only the page you asked for — pass its " +
+		"`next_cursor` back as `after`, with the same filters, to see the rest."
 }
 
 func (t *listPages) Parameters() map[string]any {
@@ -178,16 +178,20 @@ func (t *listPages) Parameters() map[string]any {
 				"description": fmt.Sprintf("How many to return, 1..%d (default %d).",
 					pages.MaxLimit, pages.DefaultLimit),
 			},
-			// THE WAY PAST A FULL PAGE, and the reader has taken it all
-			// along — the tool simply never offered it. A `truncated`
-			// answer with no argument that reaches the rest is a
-			// pointer at nothing, which is the shape this package
-			// refuses everywhere else.
-			"offset": map[string]any{
-				"type": "integer",
-				"description": "How many to skip, for the page after a " +
-					"`truncated` answer. The order is stable (container, " +
-					"then title), so offset pages it.",
+			// THE WAY PAST A FULL PAGE, and a CURSOR rather than an
+			// offset. An offset counts rows, so a page that leaves the
+			// part already read between two calls — trashed, renamed past
+			// it — moves every later page up by one, and the next call
+			// skips one with nothing on either answer to say so; one that
+			// enters it repeats one. The cursor names the last page
+			// returned, so the next call starts exactly after it. See
+			// [pages.Filter.After].
+			"after": map[string]any{
+				"type": "string",
+				"description": "Where to continue, passed back unchanged: " +
+					"the `next_cursor` of a list_pages answer, or the " +
+					"`children_cursor` of a get_page answer with `parent` " +
+					"set to that page.",
 			},
 		},
 	}
@@ -218,29 +222,45 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		Label:     strings.TrimSpace(argString(args, "label")),
 		Status:    []pages.Status{pages.StatusPublished},
 		Limit:     argInt(args, "limit", 0),
-		Offset:    argInt(args, "offset", 0),
+		After:     strings.TrimSpace(argString(args, "after")),
 	}, seatRead)
-	if err != nil {
+	switch {
+	case errors.Is(err, pages.ErrInvalid):
+		// A REFUSAL OF THE REQUEST, not a read that failed: the reader
+		// refuses an `after` that does not decode as a cursor, naming it,
+		// and the read failure's "try again" would send the same value back.
+		return failed(fmt.Sprintf("%s refused that: %v", ListPagesTool, err)), nil
+	case err != nil:
 		return failed(readFailure(ListPagesTool, err)), nil
 	}
-	if len(got.Pages) == 0 {
+	// "NOTHING MATCHES" ONLY FROM A COMPLETE ANSWER. An empty listing over
+	// a deferred scope is one that could not account for everything, and
+	// that is the answer below, flag and all.
+	if len(got.Pages) == 0 && got.Complete {
 		return tools.Result{Output: "No pages match that filter."}, nil
 	}
-	out := map[string]any{"count": len(got.Pages), "pages": got.Pages}
+	rows := got.Pages
+	if rows == nil {
+		// AN EMPTY LIST, NOT JSON NULL: the one answer that reaches here
+		// with no rows is the incomplete one, and it should read as a list
+		// that holds nothing rather than as a field that is missing.
+		rows = []pages.Summary{}
+	}
+	out := map[string]any{"count": len(rows), "pages": rows}
 	// AND WHAT THE ANSWER COULD NOT ACCOUNT FOR. A listing served over a
 	// deferred scope may be missing pages, and a model that reads a short
 	// list as the whole truth writes the duplicate.
 	if !got.Complete {
 		out["complete"] = false
 	}
-	// THE OTHER KIND OF SHORT LIST, which `complete` never covered: the
-	// page filled its limit and the container holds more. Same consequence
-	// — a model reading it as the whole truth writes the duplicate — and
-	// `offset` is how it reaches the rest, which this tool now offers
-	// because a marker pointing at an argument nobody could pass is a
-	// pointer at nothing.
+	// THE OTHER KIND OF SHORT LIST, which `complete` never covers: the
+	// page filled its limit and more pages match. Same consequence — a
+	// model reading it as the whole truth writes the duplicate — so the
+	// answer carries the cursor that reaches the rest, and a marker with
+	// no way past it would be a pointer at nothing.
 	if got.Truncated {
 		out["truncated"] = true
+		out["next_cursor"] = got.NextCursor
 	}
 	return jsonResult(out)
 }
@@ -255,9 +275,10 @@ func (t *getPage) Name() string { return GetPageTool }
 
 func (t *getPage) Description() string {
 	return "Read one page in full: its body, its comments, its revision " +
-		"history and its place in the tree. `children` is the first page of " +
-		"them: when `children_truncated` is true this page has more, and " +
-		"list_pages with `parent` is what lists them all. Take the " +
+		"history and its place in the tree. `children` are its published " +
+		"children, the first page of them: when `children_truncated` is " +
+		"true it has more, and list_pages with `parent` set to this page " +
+		"and `after` set to `children_cursor` lists the rest. Take the " +
 		"`version` from the result and pass it back as `base_version` on " +
 		"save_page — an edit that does not say which version it changed is " +
 		"refused."
@@ -430,9 +451,15 @@ func (t *savePage) Parameters() map[string]any {
 					"what makes somebody else's edit a refusal instead of a " +
 					"silent overwrite.",
 			},
-			"body":   map[string]any{"type": "string", "description": "Replaces the page."},
-			"title":  map[string]any{"type": "string", "description": "Renames it."},
-			"parent": map[string]any{"type": "string", "description": "Moves it under this page."},
+			"body":  map[string]any{"type": "string", "description": "Replaces the page."},
+			"title": map[string]any{"type": "string", "description": "Renames it."},
+			"parent": map[string]any{
+				"type": "string",
+				"description": "The id of the page to move it under — refused " +
+					"when it is this page, a page beneath it, or a page " +
+					"that does not exist. An empty string moves it to the " +
+					"top of its container.",
+			},
 			"labels": map[string]any{
 				"type": "array", "items": map[string]any{"type": "string"},
 				"description": "Replaces the whole label set.",

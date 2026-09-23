@@ -319,3 +319,51 @@ func TestTheFeedNarrowsToWhoWasWriting(t *testing.T) {
 			"none of them", len(got.Records))
 	}
 }
+
+// WHAT THE FEED SHOWS FOR A PURGE IS WHAT `q=` FINDS, lead or no lead.
+//
+// `q=` searches the stored excerpt and nothing else, so a line a row renders
+// has to be a line that column holds. A purge carries a notification only when
+// its project has a lead to tell, and a row takes its excerpt from its
+// notification — so without a lead the purge's line has to be written into its
+// row by the purge itself, or the feed could show a line its own search cannot
+// find. Both with and without a lead, the search for a word of the reason finds
+// the purge's row, and the row it finds reads the same as the unfiltered feed.
+func TestAPurgesLineIsFoundByTheSearchThatShowsIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		lead string
+	}{{"no lead to tell", ""}, {"a lead to tell", "eng-lead"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			filedTask(t, r, "t-1")
+			key := r.strings(`SELECT key FROM tracker_tasks WHERE id = 't-1'`)[0]
+			if tc.lead != "" {
+				r.writer.Leads = fixedLeads{project: tc.lead}
+			}
+			if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "t-1", "ENG",
+				"asked for by legal"); err != nil {
+				t.Fatalf("purge: %v", err)
+			}
+			r.drain()
+
+			shown := ""
+			for _, record := range r.activity(tracker.ActivityQuery{Task: key}).Records {
+				if record.Kind == tracker.ChangePurged {
+					shown = record.Excerpt
+				}
+			}
+			if !strings.Contains(shown, "asked for by legal") {
+				t.Fatalf("the feed shows the purge as %q, which is not its line", shown)
+			}
+			found := r.activity(tracker.ActivityQuery{Task: key, Q: "legal"}).Records
+			if len(found) != 1 || found[0].Kind != tracker.ChangePurged ||
+				found[0].Excerpt != shown {
+				t.Fatalf("q=legal found %+v, want the one purge row the feed shows "+
+					"as %q", found, shown)
+			}
+		})
+	}
+}

@@ -318,18 +318,25 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// searcher is built once per node while an apply can move the
 		// key underneath it.
 		//
-		// THE INDEX ITSELF IS NOT BUILT HERE — see below. It covers the
-		// tracker too, and gating it on the WIKI's backend left a
-		// tracker-native company on Confluence indexing none of its own
-		// work items.
-		n.searcher = pages.NewSearcher(pages.SearcherOptions{
-			Index: n.indexer, SkillsContainer: e.skillsContainer,
-			Node:   nodeID,
-			Peers:  e.searchPeers(),
-			Roster: e.searchRoster,
-			Report: e.reportSearch,
-			Enter:  e.enterSearch,
-		})
+		// THE INDEX ITSELF IS BUILT ABOVE, under either backend: it covers
+		// the tracker's work items too, so built here, a tracker-native
+		// company on Confluence would index none of them.
+		//
+		// THE NODE'S OWN STORE, whose replicated estate holds the page
+		// rows: every hit's parent chain is read from it, and that chain is
+		// what keeps a page under the auto-draft parent out of a seat's
+		// search. The searcher refuses to be built without it.
+		if n.searcher, err = pages.NewSearcher(pages.SearcherOptions{
+			Index: n.indexer, DB: e.backends.Store,
+			SkillsContainer: e.skillsContainer,
+			Node:            nodeID,
+			Peers:           e.searchPeers(),
+			Roster:          e.searchRoster,
+			Report:          e.reportSearch,
+			Enter:           e.enterSearch,
+		}); err != nil {
+			return fmt.Errorf("engine: pages searcher: %w", err)
+		}
 	}
 
 	// NO PROJECTOR LOOP HERE ANY MORE. Both native backends are state-log

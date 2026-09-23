@@ -31,7 +31,7 @@ flowchart TB
     end
 
     subgraph proc["<b>crewlet run</b> — one process, one binary"]
-        NODE["<b>A node</b><br/>ingress · seats · workers<br/><i>embedded event stream · local store file</i>"]
+        NODE["<b>A node</b><br/>ingress · seats · workers<br/><i>embedded event stream · local store files</i>"]
     end
 
     MCPS["<b>MCP servers</b><br/>stdio children this process supervises,<br/>or remote http endpoints"]
@@ -112,8 +112,8 @@ flowchart TB
     SEATS["<b>seats</b>: run agents<br/><i>mailbox → batching → turn engine · MCP bridge</i>"]
     WORK["<b>workers</b> — company-wide singletons<br/><i>each on a worker:DUTY lease</i>"]
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream, an embedded<br/>cluster, or an external one</i>")]
-    KV[("<b>Coordination KV</b><br/><i>rides the stream's own connection</i>")]
-    DB[("<b>Store</b><br/><i>one local file this<br/>process owns exclusively</i>")]
+    KV[("<b>Coordination KV</b><br/><i>rides the stream's own broker</i>")]
+    DB[("<b>Store</b><br/><i>two local files this<br/>process owns exclusively</i>")]
 
     ING --> ALWAYS --> STREAM --> SEATS
     SEATS -->|events| STREAM
@@ -143,10 +143,12 @@ node's own file, opened with them because everything that writes to it is driven
 by them. A node holding one without the others could hear work it may not do,
 hold seats it cannot serve, or run turns it cannot record.
 
-**Coordination rides the stream's connection.** Not a second dial that could
-fail on its own, and never the store file — see [Coordination](coordination.md)
-for the line between the two estates and [section 5](#5-where-state-lives) for
-which fact lives where. Only the *lease* half follows `coordination.type`: on a
+**Coordination rides the stream's broker.** Never a second broker, and never
+the store file: against an external cluster it shares the queue's own
+connection rather than dialling one that could fail on its own, and on the
+embedded broker it connects to the same server inside the process — see
+[Coordination](coordination.md#backends) for why, and for the line between the
+two estates, and [section 5](#5-where-state-lives) for which fact lives where. Only the *lease* half follows `coordination.type`: on a
 single node it falls back to an in-process store, while the shared
 buckets — the activation pointer, the ledgers, the counters, the company's
 secrets — are opened on every topology, because a lone node still has to read
@@ -163,16 +165,18 @@ back what it wrote.
 | `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. The exception on this list: a session lives in the process that opened it, so this route belongs to the node that runs the seat, and a `seats` node without `ingress` binds its listener for this route alone. |
 | `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
-**`workers` is five company-wide singletons, each held on its own
+**`workers` runs the company-wide singletons, each held on its own
 `worker:DUTY` lease.**
 
 | Lease | Duty |
 |---|---|
 | `worker:scheduler` | Role- and unit-scoped cron; a fire is published to the stream. |
 | `worker:sandbox-waiter` | Polls detached runs and resumes the turns waiting on them, over the stream. The same tick is the box keepalive. |
-| `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", and the retirement of a removed seat's mailbox and coding runs. |
+| `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", the retirement of a removed seat's mailbox and coding runs, the purge of bridged calls whose launch no run names, and the native tracker's repairs of work a crash left half-done. |
 | `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: every connected third-party app's pass, on a cadence set by who has to act. |
 | `worker:skill-curator` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |
+| `worker:retention` | The state log's trim: reads each domain's terms from the live fleet, purges from the ordered log what they all permit, and publishes what it concluded, so a node not holding the duty can still say why a log is not shrinking. |
+| `worker:embeddings` | Embeds the company's pages and work items once for the fleet, publishing each vector on the vector domain's log for every node's applier to write, so the provider is billed once. |
 
 **Five more services run on every node, whatever the roles say.**
 
@@ -499,7 +503,7 @@ flowchart LR
     Q{"Who has to agree<br/>on this fact?"}
     LOCAL["<b>This node alone</b> — the node store<br/><i>one file, one process, exclusively owned</i>"]
     DERIVED["<b>Every node, identically</b> — the replicated store<br/><i>a second file, written by a state log's applier</i>"]
-    FLEET["<b>The whole company</b> — coordination KV<br/><i>eighteen buckets on the stream's own connection</i>"]
+    FLEET["<b>The whole company</b> — coordination KV<br/><i>buckets on the stream's own broker</i>"]
     STREAM["<b>In flight, or keyed</b> — the streams<br/><i>6 message streams + one ordered log per domain</i>"]
 
     Q -->|"nobody — it is this node's<br/>own record of what it did"| LOCAL
@@ -568,6 +572,8 @@ exceptions are `adr/0002`, held by
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
 | **`crewlet_budgets`** · `crewlet_rate` · `crewlet_cooldowns` | The token counter, the notification valve, benched credentials |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
+| `crewlet_bridge_calls` | Every tool call an agent-mode coding run made over the MCP bridge, one record per call under the run and its launch — what the run's resume rebuilds its phase from. **No age**: a run's lifecycle purges its calls when it finishes or a second launch replaces the first, and the maintenance duty's `bridge_calls` job purges the calls of any launch no run names |
+| `crewlet_follows` | The chat threads each seat follows, one record per backend, seat, channel and thread. Its age, 90 days, is a last-activity horizon, since every re-assert rewrites the record |
 | `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |
 | `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each owner's newest backup covers, which is the only input the backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
 
@@ -613,8 +619,7 @@ They were moved, and the rule is now the one above. See
 **Retention here is a bucket's age, never a per-write TTL.** On the embedded
 broker a per-key TTL is create-only — an update clears it, leaving the key
 immortal — so a horizon has to be fixed when its bucket is created, and that is
-why there are eighteen of them rather than one with prefixes: three in the lease
-store, fifteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
+why they are separate buckets rather than one with prefixes. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
 lease TTL* — a renew rewrites the key and restarts the clock, so a node that
 stops renewing stops holding and nothing has to notice it died. `crewlet_epochs`
 sits beside it with no age at all, because a fence that restarts is not a fence.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -498,24 +499,42 @@ func TestARankOrderIsAppliedAsTheVersionItWasWrittenAtSays(t *testing.T) {
 	}
 }
 
-// A RANK ORDER IS WRITTEN AT ITS OWN VERSION, AND EVERY OTHER RECORD AT THE FIRST.
+// EACH RECORD IS WRITTEN AT THE VERSION ITS APPLY MEANS, AND NO HIGHER.
 //
-// The version is what tells a node which placement a rank order was written
-// for, so the writer has to stamp it — and only there: a record of any other
-// kind stamped above what an older build reads would be retained by every such
-// node for no change in what it does, together with every later record its
-// scope covers.
-func TestARankOrderIsWrittenAtItsOwnVersionAndNothingElseIs(t *testing.T) {
+// The version is what tells a node which apply a record was written for, so the
+// writer has to stamp it — a rank order and a purge each at their own, and
+// every other record at the first: a record of any other kind stamped above
+// what an older build reads would be retained by every such node for no change
+// in what it does, together with every later record its scope covers.
+func TestEachRecordIsWrittenAtTheVersionItsApplyMeans(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	filedTask(t, r, "t-1")
 	filedTask(t, r, "t-2")
+	filedTask(t, r, "t-3")
 	if _, err := r.writer.MoveTask(t.Context(), "op-drop", "ENG", "t-2", "",
 		"t-1"); err != nil {
 		t.Fatalf("MoveTask: %v", err)
 	}
 	r.drain()
-	versions := map[tracker.ObjectKind]int{}
+	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "t-3", "ENG",
+		"filed twice"); err != nil {
+		t.Fatalf("PurgeTask: %v", err)
+	}
+	r.drain()
+
+	// EVERY RECORD ON THE LOG, each against the version its apply means:
+	// a rank order and a purge at their own, everything else at the first.
+	want := func(env tracker.RecordEnvelope) int {
+		switch {
+		case env.Subject.Kind == tracker.KindRankOrder:
+			return tracker.RankOrderRecordVersion
+		case env.Op == tracker.OpPurge:
+			return tracker.PurgeRecordVersion
+		}
+		return tracker.RecordVersion
+	}
+	seen := map[int]bool{}
 	for seq := uint64(1); seq <= r.consumed; seq++ {
 		_, payload, _, ok, err := r.log.At(t.Context(), seq)
 		if err != nil || !ok {
@@ -525,30 +544,258 @@ func TestARankOrderIsWrittenAtItsOwnVersionAndNothingElseIs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("decode record %d: %v", seq, err)
 		}
-		versions[env.Subject.Kind] = env.V
-	}
-	for kind, want := range map[tracker.ObjectKind]int{
-		tracker.KindRankOrder: tracker.RankOrderRecordVersion,
-		tracker.KindTask:      tracker.RecordVersion,
-		tracker.KindProject:   tracker.RecordVersion,
-	} {
-		if got, held := versions[kind]; !held || got != want {
-			t.Errorf("a %s record was written at version %d (present=%v), want %d",
-				kind, got, held, want)
+		if env.V != want(env) {
+			t.Errorf("the %s %s record at %d was written at version %d, want %d",
+				env.Subject.Kind, env.Op, seq, env.V, want(env))
+		}
+		seen[env.V] = true
+		if env.Op == tracker.OpPurge {
+			// THE PAYLOAD STATES THE SAME NUMBER, because a purge's
+			// payload is what a marker at the first version keeps.
+			record, err := tracker.Decode(payload)
+			if err != nil {
+				t.Fatalf("decode the purge: %v", err)
+			}
+			var body struct {
+				V int `json:"v"`
+			}
+			if err := json.Unmarshal(record.Mutation, &body); err != nil ||
+				body.V != tracker.PurgeRecordVersion {
+				t.Errorf("the purge's payload states version %d (%v), want %d",
+					body.V, err, tracker.PurgeRecordVersion)
+			}
 		}
 	}
-	// AND AN OLDER BUILD RETAINS IT RATHER THAN STOPPING: a rank order
-	// installs no gate, so the framework files it for a build that can
-	// read it.
+	for _, version := range []int{tracker.RecordVersion,
+		tracker.RankOrderRecordVersion, tracker.PurgeRecordVersion} {
+		if !seen[version] {
+			t.Fatalf("no record on the log was written at version %d, so this "+
+				"case is not the shape it names", version)
+		}
+	}
+	// AND AN OLDER BUILD RETAINS A RANK ORDER BUT STOPS AT A PURGE: a rank
+	// order installs no gate, so the framework files it for a build that
+	// can read it, and a purge does — so a build that cannot read its
+	// version halts rather than applying it by an older rule.
 	if (tracker.Domain{}).InstallsGate(statelog.Envelope{
 		Kind: string(tracker.KindRankOrder), Op: string(tracker.OpPatch),
 	}) {
 		t.Error("a rank order reads as a gate, so a build that cannot read its " +
 			"version would stop its applier rather than retain the record")
 	}
-	if got := (tracker.Domain{}).RecordVersion(); got != tracker.RankOrderRecordVersion {
-		t.Errorf("the domain declares it reads version %d, below the %d it writes",
-			got, tracker.RankOrderRecordVersion)
+	if !(tracker.Domain{}).InstallsGate(statelog.Envelope{
+		Kind: string(tracker.KindTask), Op: string(tracker.OpPurge),
+	}) {
+		t.Error("a purge does not read as a gate, so a build that cannot read " +
+			"its version would retain it and go on applying every later record " +
+			"about a task its peers destroyed")
+	}
+	got := (tracker.Domain{}).RecordVersion()
+	for _, version := range []int{tracker.RankOrderRecordVersion,
+		tracker.PurgeRecordVersion} {
+		if got < version {
+			t.Errorf("the domain declares it reads version %d, below the %d it "+
+				"writes", got, version)
+		}
+	}
+}
+
+// appendRecord puts one record on the log exactly as given, which is how a
+// case puts there a record this build's own writer no longer writes — a purge
+// at the first record version, as every purge was written before
+// [tracker.PurgeRecordVersion].
+func (r *roundTrip) appendRecord(rec tracker.MutationRecord) {
+	r.t.Helper()
+	body, err := rec.Encode()
+	if err != nil {
+		r.t.Fatalf("encode the record: %v", err)
+	}
+	subject := tracker.Domain{}.Stream().SubjectPrefix + "." + rec.Subject.String()
+	if _, _, err := r.log.Append(r.t.Context(), subject, rec.OpID, nil, body); err != nil {
+		r.t.Fatalf("append the record: %v", err)
+	}
+}
+
+// firstVersionPurge is a purge of one task as a writer before
+// [tracker.PurgeRecordVersion] wrote it: the record at the first version, its
+// payload stating the same.
+func firstVersionPurge(id, reason string) tracker.MutationRecord {
+	rec := taskRecord(id, tracker.OpPurge, map[string]any{
+		"v": tracker.RecordVersion, "reason": reason,
+	}, nil)
+	rec.Kind = tracker.ChangePurged
+	return rec
+}
+
+// A PURGE IS APPLIED BY THE RULE OF THE VERSION IT WAS WRITTEN AT.
+//
+// Every node's copy is derived from the log, so a node that replays it — a
+// fresh one, or one restored from a snapshot — has to reach exactly the rows
+// its peers hold. A purge at [tracker.PurgeRecordVersion] empties the task's
+// history and inbox content, takes the mirror of its dependencies, writes its
+// own line, and moves its children's documents with their rows, and no later
+// commit writes an edge to it back. A purge at the first version does none of
+// those — that is its version's rule — so this build replaying one has to leave
+// exactly what that rule leaves: the content, the mirror, and a child's next
+// commit writing the purged parent back. Anything else is two copies of one log
+// holding different rows for the same record. One fixture, both versions; only
+// the purge differs.
+func TestAPurgeIsAppliedByTheRuleOfTheVersionItWasWrittenAt(t *testing.T) {
+	t.Parallel()
+	const (
+		title  = "the merger with Contoso"
+		remark = "legal says wait for the filing"
+		reason = "asked for by legal"
+	)
+	for _, tc := range []struct {
+		name    string
+		current bool
+	}{{"first version", false}, {"purge version", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			task := newTask("t-1")
+			task.Title, task.Assignee = title, "bob"
+			if _, err := r.writer.CreateTask(t.Context(), "op-t-1", task, nil); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			r.drain()
+			key := r.strings(`SELECT key FROM tracker_tasks WHERE id = 't-1'`)[0]
+			if _, err := r.writer.UpdateTask(t.Context(), "op-comment", "t-1", "ENG",
+				tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+					ID: "cm-1", Task: "t-1", Author: "ana",
+					AuthorKind: tracker.AuthorHuman, Body: remark, CreatedAt: wednesday,
+				}}, tracker.ChangeComment, &tracker.Notify{
+					Kind: tracker.ChangeComment, Excerpt: remark, CommentID: "cm-1",
+					Snapshot: tracker.Snapshot{
+						Key: key, Project: "ENG", Assignee: "bob",
+						CommentAuthorKind: tracker.AuthorHuman,
+					},
+				}); err != nil {
+				t.Fatalf("comment: %v", err)
+			}
+			r.drain()
+			filedTask(t, r, "blk")
+			if _, err := r.writer.Depend(t.Context(), "op-dep", tracker.DependencyChange{
+				Task: "t-1", Project: "ENG", WaitingOnAdd: []string{"blk"},
+			}, nil); err != nil {
+				t.Fatalf("Depend: %v", err)
+			}
+			r.drain()
+			parent := "t-1"
+			kid := newTask("kid")
+			kid.Parent, kid.Depth = &parent, 1
+			if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+				t.Fatalf("create kid: %v", err)
+			}
+			r.drain()
+			mirror := func() int {
+				return len(r.strings(`SELECT dependent_id FROM tracker_task_dependents
+					WHERE task_id = 'blk' AND dependent_id = 't-1'`))
+			}
+			if contentRows(r, title) == 0 || contentRows(r, remark) == 0 || mirror() != 1 {
+				t.Fatal("the fixture carries no content or no mirror before the " +
+					"purge, so this case is not the shape it names")
+			}
+
+			if tc.current {
+				if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "t-1",
+					"ENG", reason); err != nil {
+					t.Fatalf("purge: %v", err)
+				}
+			} else {
+				r.appendRecord(firstVersionPurge("t-1", reason))
+			}
+			r.drain()
+			// THE CHILD'S OWN DOCUMENT, which the detail read answers from,
+			// before any commit of the child's could rewrite it.
+			kidDocument := parentOf(r.task(t, "kid"))
+			// A COMMIT ON EACH NEIGHBOUR, neither of which touches the edge
+			// or the parent: what each writes is the version's to decide.
+			for _, id := range []string{"kid", "blk"} {
+				if _, err := r.writer.UpdateTask(t.Context(), "op-touch-"+id, id,
+					"ENG", tracker.NoIfMatch,
+					tracker.TaskPatch{Title: ptr("touched " + id)},
+					tracker.ChangeFields, nil); err != nil {
+					t.Fatalf("touch %s: %v", id, err)
+				}
+				r.drain()
+			}
+
+			content := contentRows(r, title) + contentRows(r, remark)
+			kidParent := r.strings(`SELECT COALESCE(parent_id, '') FROM tracker_tasks
+				WHERE id = 'kid'`)[0]
+			var purgeLine string
+			marked := 0
+			for _, record := range r.activity(tracker.ActivityQuery{Task: key}).Records {
+				if record.Kind == tracker.ChangePurged {
+					purgeLine = record.Excerpt
+				} else if record.ContentPurged {
+					marked++
+				}
+			}
+			inbox, err := r.reader.Inbox(t.Context(), tracker.InboxQuery{
+				Handle: "bob", IncludeSnoozed: true, Level: statelog.ReadStale,
+			}, wednesday)
+			if err != nil {
+				t.Fatalf("read bob's inbox: %v", err)
+			}
+			var notice *tracker.InboxNotice
+			for i := range inbox.Notices {
+				if inbox.Notices[i].SubjectID == "t-1" &&
+					inbox.Notices[i].Kind == tracker.ChangeComment {
+					notice = &inbox.Notices[i]
+				}
+			}
+			if notice == nil {
+				t.Fatal("bob's notice of the comment is gone — a purge of " +
+					"either version keeps who was told")
+			}
+
+			if tc.current {
+				if content != 0 {
+					t.Errorf("%d rows still carry the task's content", content)
+				}
+				if mirror() != 0 {
+					t.Error("the blocker's mirror still names the purged task")
+				}
+				if kidDocument != "" || kidParent != "" {
+					t.Errorf("the child's document said parent %q after the purge "+
+						"and its next commit wrote %q, want the root the purge "+
+						"moved it to in both", kidDocument, kidParent)
+				}
+				if !strings.Contains(purgeLine, reason) {
+					t.Errorf("the purge's own row reads %q, want its line", purgeLine)
+				}
+				if marked == 0 || !notice.ContentPurged || notice.Excerpt != "" {
+					t.Errorf("%d feed rows and bob's notice (%q, content_purged=%v) "+
+						"do not say their content was emptied", marked,
+						notice.Excerpt, notice.ContentPurged)
+				}
+				return
+			}
+			if content == 0 {
+				t.Error("a first-version purge emptied the content its version " +
+					"left, so this node now differs from every node that applied it")
+			}
+			if mirror() != 1 {
+				t.Error("a first-version purge took the mirror its version left")
+			}
+			if kidDocument != "t-1" || kidParent != "t-1" {
+				t.Errorf("the child's document said parent %q after the purge and "+
+					"its next commit wrote %q, want the purged parent in both, as "+
+					"the first version's rule leaves them", kidDocument, kidParent)
+			}
+			if purgeLine != "" {
+				t.Errorf("a first-version purge's row reads %q, and that version "+
+					"wrote no line on it", purgeLine)
+			}
+			if marked != 0 || notice.ContentPurged || notice.Excerpt != remark {
+				t.Errorf("%d feed rows and bob's notice (%q, content_purged=%v) "+
+					"claim content a first-version purge never emptied", marked,
+					notice.Excerpt, notice.ContentPurged)
+			}
+		})
 	}
 }
 
@@ -737,6 +984,86 @@ func TestAPurgeReParentsItsChildrenRatherThanOrphaningThem(t *testing.T) {
 	if got := h.count("tracker_task_closure"); got != 3 {
 		t.Errorf("%d closure rows survive; two self-rows and one edge is the "+
 			"whole tree after the purge", got)
+	}
+}
+
+// A CHILD THAT CROSSED A PURGE LANDS WHERE THE PURGE PUT ITS CHILDREN.
+//
+// A child is written on its own subject and a purge on its parent's, so the
+// broker arbitrates neither against the other: a create under a task, or a move
+// onto it, decided on a node that had not yet applied the task's purge lands
+// after the purge on the log — and written as it says, it hangs from a row no
+// node holds. From [tracker.PurgeRecordVersion] it lands where that purge moved
+// the children it found, the purged task's own parent, following the markers
+// when that parent was purged too — so either order of the two ends in one
+// tree. After a purge at the first version it is written by that version's
+// rule: under the parent the record names.
+func TestAChildThatCrossedAPurgeLandsWhereThePurgeMovedItsChildren(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		version int
+		// alsoGrandparent purges the parent's own parent after it, so
+		// the late child has two markers to follow.
+		alsoGrandparent bool
+		want            string
+	}{
+		{"first version leaves it under the purged task", tracker.RecordVersion, false, "x"},
+		{"purge version moves it onto the purged task's parent", tracker.PurgeRecordVersion, false, "gp"},
+		{"purge version follows a purged parent's parent", tracker.PurgeRecordVersion, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newApplyHarness(t)
+			at := time.Unix(1_700_000_100, 0).UTC()
+			for _, id := range []string{"gp", "x", "mover"} {
+				if _, err := h.apply(taskRecord(id, tracker.OpCreate, newTask(id), nil), at); err != nil {
+					t.Fatalf("create %s: %v", id, err)
+				}
+			}
+			gp := "gp"
+			if _, err := h.apply(taskRecord("x", tracker.OpPatch,
+				tracker.TaskPatch{Parent: &gp}, nil), at); err != nil {
+				t.Fatalf("file x under gp: %v", err)
+			}
+			purge := func(id string) {
+				t.Helper()
+				rec := taskRecord(id, tracker.OpPurge, map[string]any{
+					"v": tc.version, "reason": "filed twice",
+				}, nil)
+				rec.V = tc.version
+				if _, err := h.apply(rec, at); err != nil {
+					t.Fatalf("purge %s: %v", id, err)
+				}
+			}
+			purge("x")
+			if tc.alsoGrandparent {
+				purge("gp")
+			}
+
+			// THE TWO WRITES THAT CROSS IT: a create under x, and a move
+			// onto x, each applied after x's purge.
+			x := "x"
+			late := newTask("late")
+			late.Parent, late.Depth = &x, 1
+			if _, err := h.apply(taskRecord("late", tracker.OpCreate, late, nil), at); err != nil {
+				t.Fatalf("create late under x: %v", err)
+			}
+			if _, err := h.apply(taskRecord("mover", tracker.OpPatch,
+				tracker.TaskPatch{Parent: &x}, nil), at); err != nil {
+				t.Fatalf("move mover onto x: %v", err)
+			}
+			for _, id := range []string{"late", "mover"} {
+				row := h.text(`SELECT COALESCE(parent_id, '') FROM tracker_tasks
+					WHERE id = ?`, id)
+				document := h.text(`SELECT COALESCE(json_extract(CAST(document AS TEXT),
+					'$.parent'), '') FROM tracker_tasks WHERE id = ?`, id)
+				if row != tc.want || document != tc.want {
+					t.Errorf("%s's parent is %q in its row and %q in its document, "+
+						"want %q in both", id, row, document, tc.want)
+				}
+			}
+		})
 	}
 }
 

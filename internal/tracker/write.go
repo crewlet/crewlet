@@ -44,6 +44,52 @@ var ErrStaleVersion = errors.New("tracker: the task has changed since it was rea
 // ErrReassignmentBudget reports a hand-off past [ReassignmentBudget].
 var ErrReassignmentBudget = errors.New("tracker: this task has been handed on too many times")
 
+// ErrPurged is a write refused because the task it would file something under,
+// or fold something into, was PURGED.
+//
+// IT WRAPS [ErrNoTask], because to every surface that answers "not found" a
+// purged task is exactly that. And it is a sentinel of its own because one
+// caller has to tell it from every other refusal: a merge that meets it
+// part-way has met the one refusal that can never clear, so it gives the merge
+// up rather than leaving a marker for a repair that would meet it again
+// ([Writer.MergeDuplicates]).
+var ErrPurged = fmt.Errorf("%w: it was purged", ErrNoTask)
+
+// refusePurged refuses a write that names a PURGED task as the place to put
+// something — a parent, or a merge's target — read inside the decide's own
+// snapshot: the one read the record is decided from, so a purge a caller's
+// earlier read missed is seen here once this node has applied it.
+//
+// # Why a refusal and not a guess
+//
+// Every alternative writes something nobody asked for. A root drops the tree
+// the task was meant to join; the purged id is a parent no row holds, which no
+// reader can tell from a parent held on another node; and the purged task's own
+// parent is a place the caller did not name. The caller asked for a place that
+// no longer exists, and while the answer can still be a refusal, the honest one
+// says so.
+//
+// It cannot close the race with a purge this node has not applied yet — the
+// two are writes to different subjects — and a record that crossed one is
+// already committed, so the applier cannot refuse it: [placedParent] is the
+// place it lands instead.
+func refusePurged(ctx context.Context, tx *sql.Tx, id, role string) error {
+	var key, by string
+	var at int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT task_key, by, at FROM tracker_deletions WHERE task_id = ?`,
+		id).Scan(&key, &by, &at)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("tracker: read whether %s %s was purged: %w", role, id, err)
+	}
+	return fmt.Errorf("%w: the %s named, %s (%s), was purged by %s at %s, and "+
+		"a purged task holds nothing — name a task that still exists",
+		ErrPurged, role, key, id, by, store.DecodeTime(at).Format(time.RFC3339))
+}
+
 // NoIfMatch omits an update's version precondition, which MERGES the patch
 // onto whatever the task currently is. Named rather than a bare zero, because
 // a literal 0 in a seven-argument call says nothing about which of the two
@@ -86,6 +132,10 @@ type Writer struct {
 	// refuses by name rather than running without it.
 	claims Claims
 	nodeID string
+
+	// local is this node's half of every such claim, shared by every clone
+	// of this writer — see [localClaims].
+	local *localClaims
 
 	// Actor and ActorKind are who this writer acts as, and OperatorID,
 	// TurnID and Chain the provenance that travels with it.
@@ -154,6 +204,117 @@ type Writer struct {
 	// passes through — see the comment there for why it is carried rather
 	// than returned.
 	refusal error
+
+	// merge is what the next [Writer.UpdateTask] has to find still true
+	// when it is one append of a merge — set by [Writer.mergingInto],
+	// [Writer.whileMerging] and [Writer.movingOutOf]. The zero value asks
+	// nothing, which is every write that is not a merge's.
+	merge mergeStep
+}
+
+// mergeStep is what one append of a merge is decided under, each part read
+// inside that append's own decide snapshot.
+//
+// # Why the merge reads these again at every append
+//
+// A merge reads its duplicate, then the duplicate's subtasks, and then makes
+// one append per step — and every fact those reads found is one another writer
+// can change before the append it feeds. Decided from the earlier read, a step
+// writes over that change: a subtask somebody moved elsewhere in between is
+// moved back onto the target, and a merge a peer already closed is closed a
+// second time. Read in the decide, a fact that moved refuses the step, and a
+// snapshot too old to have seen it is refused by the broker and decided again
+// from rows that have.
+//
+// A PRECONDITION ON THE WRITE rather than a field of the patch, because the
+// patch is the record and every field of it is a change a replay applies —
+// these change nothing, and a record has nothing of them to replay. They ride
+// the writer for the reason [Writer.After] does: they are about this one call.
+type mergeStep struct {
+	// into is the task being folded into, refused when it has been purged
+	// or is not on this node ([mergeTargetHeld]).
+	into string
+
+	// marked is the task being folded still mid-merge, refused as
+	// [errMergeOver] when its marker has been cleared.
+	marked bool
+
+	// from is the task being folded, when this append moves one of its
+	// subtasks: refused as [errLeftTheMerge] when the task is no longer a
+	// live subtask of it.
+	from string
+}
+
+// errMergeOver refuses one of a merge's appends because the merge has already
+// ended: its marker was cleared by a close or a give-up that landed first.
+var errMergeOver = errors.New("tracker: the merge had already ended")
+
+// errLeftTheMerge refuses the move of a subtask a merge no longer moves: one
+// somebody re-parented elsewhere, or put in the trash, after the merge read it.
+var errLeftTheMerge = errors.New("tracker: the task is no longer a live subtask " +
+	"of the one being merged")
+
+// subtask refuses the move of a task that is no longer one of the subtasks the
+// merge moves.
+//
+// A SUBTASK IN THE TRASH IS NOT ONE. A tombstone is a freeze — this writer
+// refuses every patch on a removed task — so its move would be refused on
+// every attempt: a merge that could never finish, and a sweep failing on it at
+// every tick. It stays where it was removed from, and comes back there if it
+// is ever restored.
+func (s mergeStep) subtask(current Task) error {
+	if s.from == "" {
+		return nil
+	}
+	if current.Removed != nil || current.Parent == nil || *current.Parent != s.from {
+		return fmt.Errorf("%w: %s, of %s", errLeftTheMerge, current.ID, s.from)
+	}
+	return nil
+}
+
+// holds refuses a merge's append whose merge has ended or whose target is gone.
+func (s mergeStep) holds(ctx context.Context, tx *sql.Tx, current Task) error {
+	if s.marked && !current.Merging {
+		return fmt.Errorf("%w: %s is no longer mid-merge", errMergeOver, current.ID)
+	}
+	if s.into != "" {
+		return mergeTargetHeld(ctx, tx, current.ID, s.into)
+	}
+	return nil
+}
+
+// mergingInto is this writer making one append of a merge into `into`, which
+// its decide reads as still there ([mergeStep.into]).
+func (w *Writer) mergingInto(into string) *Writer {
+	if w == nil {
+		return nil
+	}
+	clone := *w
+	clone.merge.into = into
+	return &clone
+}
+
+// whileMerging is this writer making one append of a merge that its decide
+// reads as still running ([mergeStep.marked]).
+func (w *Writer) whileMerging() *Writer {
+	if w == nil {
+		return nil
+	}
+	clone := *w
+	clone.merge.marked = true
+	return &clone
+}
+
+// movingOutOf is this writer moving one of `duplicate`'s subtasks for its
+// merge, which its decide reads as still a live subtask of it
+// ([mergeStep.from]).
+func (w *Writer) movingOutOf(duplicate string) *Writer {
+	if w == nil {
+		return nil
+	}
+	clone := *w
+	clone.merge.from = duplicate
+	return &clone
 }
 
 // WriterDeps is everything a writer needs that it does not own.
@@ -320,6 +481,7 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	}
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
+		local:   newLocalClaims(),
 		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
 		Drain: d.Drain, Leads: d.Leads, World: d.World, Now: now,
 	}, nil
@@ -442,6 +604,12 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
 					"on this node: %w", id, statelog.ErrUnavailable)
 			}
+			// BEFORE THE FREEZE, because a merge's move of a subtask in the
+			// trash is not a write to refuse but one the merge does not
+			// make — see [mergeStep.subtask].
+			if err = w.merge.subtask(current); err != nil {
+				return statelog.Decision{}, err
+			}
 			if current.Removed != nil {
 				// A TOMBSTONED TASK IS FROZEN — no comment, body, field
 				// or relation of it can change — which is what makes a
@@ -456,6 +624,18 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 					"version %d and the edit was conditioned on %d — re-read "+
 					"it and decide again rather than re-sending this patch",
 					ErrStaleVersion, id, current.Version, ifMatch)
+			}
+			// A NEW PARENT AND A MERGE'S TARGET ARE READ HERE, in the
+			// snapshot this record is decided from, and nowhere earlier: a
+			// purge that lands after a caller's own read and before this
+			// one is a purge this refuses — see [refusePurged].
+			if patch.Parent != nil && *patch.Parent != "" {
+				if err = refusePurged(ctx, tx, *patch.Parent, "parent"); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
+			if err = w.merge.holds(ctx, tx, current); err != nil {
+				return statelog.Decision{}, err
 			}
 			if patch.Tags != nil {
 				// AGAINST THE TASK'S OWN PROJECT rather than the
@@ -484,7 +664,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			// collection clean and the document heals.
 			if charged.Relate != nil || charged.Depend != nil {
 				if current, err = withoutPurged(ctx, tx, current,
-					w.maxVariables()); err != nil {
+					w.maxVariables(), everyPurge); err != nil {
 					return statelog.Decision{}, err
 				}
 			}
@@ -987,7 +1167,7 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: recordVersionOf(subject), OpID: opID, Subject: subject, Op: op,
+			V: recordVersionOf(subject, op), OpID: opID, Subject: subject, Op: op,
 			CreatedAt: at, Scope: scope,
 		},
 		Kind:       kind,

@@ -427,7 +427,7 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			// below is about — see [withoutPurged].
 			if held {
 				if current, err = withoutPurged(ctx, tx, current,
-					w.maxVariables()); err != nil {
+					w.maxVariables(), everyPurge); err != nil {
 					return err
 				}
 			}

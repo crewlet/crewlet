@@ -907,3 +907,166 @@ func TestAnOverflowingBoardSaysSoRatherThanCountingWrong(t *testing.T) {
 		t.Error("a five-task board reports its columns cut")
 	}
 }
+
+// THE COLUMN WITH NO VALUE IS NAMED AS (none), AND PAGES LIKE EVERY OTHER.
+//
+// A board draws the tasks with no value on its axis as a column of their own,
+// with an empty key. An empty `group=` is no column at all, so that key could
+// not name it, and the rows past its slice were reached by no request. It is
+// named as [tracker.GroupNone], it answers alone as any single cell does — its
+// count over the whole column, its rows paged with a cursor to the end — and
+// `subgroup=` names the lane with no value the same way.
+func TestTheColumnWithNoValueIsNamedAsNone(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for i, assignee := range []string{"", "", "", "ana"} {
+		task := newTask("t-" + itoa(i))
+		task.Assignee = assignee
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+itoa(i), task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	board := r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "assignee", "group_limit": 1,
+	})
+	if none := groupOf(t, board, ""); none.Count != 3 || len(none.Rows) != 1 {
+		t.Fatalf("the board's unassigned column counts %d and carries %d rows, "+
+			"want 3 and 1, so this case is not the shape it names", none.Count,
+			len(none.Rows))
+	}
+	var want []string
+	for _, row := range r.ask(map[string]any{
+		"container": "project:ENG", "assignee": "none",
+	}).Rows {
+		want = append(want, row.ID)
+	}
+
+	var walked []string
+	cursor := ""
+	for page := 0; ; page++ {
+		if page > len(want) {
+			t.Fatalf("a %d-row column was still paging after %d pages",
+				len(want), page)
+		}
+		params := map[string]any{
+			"container": "project:ENG", "group_by": "assignee",
+			"group": tracker.GroupNone, "group_limit": 1,
+		}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		answer := r.ask(params)
+		if len(answer.Groups) != 1 || answer.Groups[0].Key != "" ||
+			answer.Groups[0].Count != 3 {
+			t.Fatalf("group=%s answered %d columns (%+v), want the unassigned "+
+				"column alone, counting all 3", tracker.GroupNone,
+				len(answer.Groups), answer.Groups)
+		}
+		for _, row := range answer.Groups[0].Rows {
+			if row.Assignee != "" {
+				t.Fatalf("the unassigned column answered %s, assigned to %q",
+					row.ID, row.Assignee)
+			}
+			walked = append(walked, row.ID)
+		}
+		if answer.NextCursor == "" {
+			break
+		}
+		cursor = answer.NextCursor
+	}
+	if !slices.Equal(walked, want) {
+		t.Fatalf("paging the unassigned column reached %v, want %v", walked, want)
+	}
+
+	// AND A LANE: the unassigned lane inside the todo column.
+	lane := r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "status",
+		"group_by2": "assignee", "group": string(tracker.StatusTodo),
+		"subgroup": tracker.GroupNone,
+	})
+	if len(lane.Groups) != 1 || len(lane.Groups[0].Subgroups) != 1 ||
+		lane.Groups[0].Subgroups[0].Key != "" ||
+		lane.Groups[0].Subgroups[0].Count != 3 {
+		t.Fatalf("subgroup=%s answered %+v, want the todo column holding the "+
+			"unassigned lane alone, counting 3", tracker.GroupNone, lane.Groups)
+	}
+}
+
+// A SWIMLANE BOARD OVER TWO JOINED AXES DRAWS.
+//
+// A custom field and a tag each reach their value through a join, and a
+// swimlane board's statements carry both axes' joins at once. Compiled under
+// one alias per KIND, two custom fields were two joins of the same name, and
+// the store refused every such board as an ambiguous column. Each axis has an
+// alias of its own, so any two joined axes compose — two single-valued fields,
+// a single- and a multi-valued one, and a field with a tag.
+func TestASwimlaneBoardOverTwoJoinedAxesDraws(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+	r.declareTags("api", "ui")
+	for id, spec := range map[string]struct {
+		impact, owner string
+		areas         []string
+		tags          []string
+	}{
+		"t-1": {"o-high", "platform", []string{"o-api"}, []string{"api"}},
+		"t-2": {"o-high", "growth", []string{"o-ui"}, []string{"ui"}},
+		"t-3": {"o-low", "platform", []string{"o-api", "o-ui"}, []string{"api"}},
+	} {
+		task := newTask(id)
+		task.Tags = spec.tags
+		task.Fields = map[string]json.RawMessage{
+			"f-impact": json.RawMessage(`"` + spec.impact + `"`),
+			"f-owner":  json.RawMessage(`"` + spec.owner + `"`),
+			"f-areas":  mustJSON(spec.areas),
+		}
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+
+	for _, tc := range []struct {
+		lanes string
+		// want is each column's lanes, key to count.
+		want map[string]map[string]int
+	}{
+		{"f.owner", map[string]map[string]int{
+			"o-high": {"platform": 1, "growth": 1},
+			"o-low":  {"platform": 1},
+		}},
+		{"f.areas", map[string]map[string]int{
+			"o-high": {"o-api": 1, "o-ui": 1},
+			"o-low":  {"o-api": 1, "o-ui": 1},
+		}},
+		{"tag", map[string]map[string]int{
+			"o-high": {"api": 1, "ui": 1},
+			"o-low":  {"api": 1},
+		}},
+	} {
+		// THE HARNESS'S OWN ASK, which fails this test naming the store's
+		// refusal — the shape an ambiguous join takes.
+		answer := r.ask(map[string]any{
+			"container": "project:ENG", "group_by": "f.impact",
+			"group_by2": tc.lanes,
+		})
+		got := map[string]map[string]int{}
+		for _, column := range answer.Groups {
+			got[column.Key] = map[string]int{}
+			for _, lane := range column.Subgroups {
+				got[column.Key][lane.Key] = lane.Count
+			}
+		}
+		for column, lanes := range tc.want {
+			for lane, count := range lanes {
+				if got[column][lane] != count {
+					t.Errorf("f.impact by %s: column %s lane %s counts %d, want "+
+						"%d — the board reads %v", tc.lanes, column, lane,
+						got[column][lane], count, got)
+				}
+			}
+		}
+	}
+}

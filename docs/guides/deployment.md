@@ -298,6 +298,47 @@ coordination:
   type: embedded-kv
 ```
 
+> **Every server's `max_payload` must be at least 8 MiB (8388608 bytes), and
+> the NATS default is 1 MiB.**
+>
+> The engine sizes its largest events and coordination records against one
+> ceiling, `queue.MaxPayloadBytes`, which is 8 MiB, and the embedded broker is
+> configured to accept exactly that. A cluster left at nats-server's default
+> `max_payload` accepts 1 MiB, and a node pointed at one **refuses to start**
+> when it opens the coordination store:
+>
+> ```
+> crewlet: engine: coordination: coord/kv: the NATS server this node is connected to accepts messages of at most 1048576 bytes, and a coordination record may be up to 8388608 (queue.MaxPayloadBytes): set max_payload to at least 8388608 on every server of the cluster
+> ```
+>
+> Set it in every server's configuration file:
+>
+> ```
+> max_payload: 8MB
+> ```
+>
+> NATS reads `8MB` as 8 × 1024 × 1024 bytes, which is exactly the ceiling.
+> Write that or `8388608`, **not `8M`**: NATS reads `8M` as 8 000 000 bytes,
+> below the ceiling, and the node refuses it just the same. A configuration
+> reload (`nats-server --signal reload`) applies the new value, and the node
+> reads it when it next starts and connects. At exactly 8 MiB the server logs
+> no warning, since it warns only above that, and `max_pending` (64 MiB by
+> default) must stay at least as large, or the server refuses its own
+> configuration.
+>
+> **Every server, not only the one a node reaches first.** The check runs
+> against the server this node is connected to when it starts. The client
+> moves to another server when that one goes away, and a server set lower
+> that it reaches then refuses the engine's large messages there. A phase
+> record larger than that server accepts is not published
+> (`phase_record_refused_within_ceiling`), and a coding run's bridged call
+> larger than it accepts is kept with only its name and outcome
+> (`sandbox_bridge_call_refused_within_ceiling`). Both log lines name
+> `max_payload`. A payload limit on the NATS account or user the engine
+> connects as caps the same messages, so where one is set (`max_payload` in
+> an account's `limits`, or `payload` in an account or user JWT's limits) it
+> must be at least 8 MiB too.
+
 **The URL goes to the NATS client verbatim**, so a comma-separated list of a
 cluster's members is one value as far as this config is concerned and the
 client fails over between them. `store_dir` is refused here by name: it is
@@ -349,12 +390,12 @@ uses, on every start and idempotently: the six engine streams
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
-call, measured at 1.7 ms), and the eighteen `crewlet_*` KV buckets:
-three in the lease store, holding the seat and presence leases, the duty
-leases and the fencing epochs, and fifteen in the fleet store holding the
-shared records. A credential
-scoped to publishing and consuming fails at boot, on the first stream it
-tries to create.
+call, measured at 1.7 ms), and the `crewlet_*` KV buckets: the lease
+store's three, holding the seat and presence leases, the duty leases and the
+fencing epochs, and the fleet store's, holding the shared records, which
+[Coordination](../concepts/coordination.md#what-the-fleet-shares) lists. A
+credential scoped to publishing and consuming fails at boot, on the first
+stream it tries to create.
 
 **A coordination read costs one ordered pass, and an account needs the
 consumer API.** A node reads a whole coordination bucket constantly — several
@@ -402,8 +443,8 @@ comes back as a peer having won the race. A node no longer fails to start
 because it could not hear.
 
 **A create that is taking a while says so while it is happening.** Provisioning
-was otherwise silent — a node opens eighteen buckets and several streams in a
-row and logged nothing between them, so one that hung emitted nothing at all
+was otherwise silent — a node opens every coordination bucket and several
+streams in a row and logged nothing between them, so one that hung emitted nothing at all
 until its budget expired and the log could not say which object it was on. Any
 create still running after 10 seconds now writes one `WARN` naming it
 (`coord_kv_bucket_slow`, `jetstream_stream_slow`, `jetstream_consumer_slow`),
@@ -516,14 +557,14 @@ Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned c
 
 - **`-roles seats`** runs the agents — claims seat leases, boots the instances, processes their turns
 - **`-roles ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
-- **`-roles workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter
+- **`-roles workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter and the rest of the [singleton duties](../concepts/seat-ownership.md#singleton-duties)
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory, and signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key, logs `sandbox_otel_signing_key_ephemeral`, and every token one process mints is forged as far as the other is concerned. `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
 
 Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field). A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 
 Both communicate through the stream, and through the coordination KV riding
-the same connection — never with each other. Both accept `-debug` for verbose
+the same broker — never with each other. Both accept `-debug` for verbose
 logging.
 
 ### Replica count
@@ -554,7 +595,7 @@ draining, and rolling upgrades. The two things that bite hardest:
 > `coordination.type: embedded-kv`; see [Running a Fleet](fleet.md). The slot
 > governs the *leases* only — the fleet's shared records are on the KV
 > regardless, because they have to survive a restart as much as a peer, and
-> the KV rides the stream's own connection whichever value the slot holds.
+> the KV rides the stream's own broker whichever value the slot holds.
 >
 > **And, when the nodes *are* the broker, a quorum to keep it on.**
 >
@@ -634,8 +675,8 @@ What a fleet gets right, each of which was a real defect before:
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* A shared counter in the coordination slot, so an org cap of 500 k is 500 k across the fleet — and it covers **every** completion the engine makes on a seat's behalf, the turn loop, the coding sandbox and the auxiliary learning passes alike.
-- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the retention sweep, three hours for the curator).
-- *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
+- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the integration reconcile, the embedding pass, the state log's trim and the retention sweeps. The seat-mailbox walk is deliberately not one of them: every node creates every seat's mailbox, because creating one is idempotent and a seat whose mailbox waited on a duty's holder would lose its mail meanwhile. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the retention sweep, three hours for the curator).
+- *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, in the `maintenance` worker, and runs on every node whether or not that node holds the duty, because each node keeps its own copy of both tables. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. A bucket with no age is the exception: nothing expires its records, so something has to end them, and for these it is the duty — agent-to-agent channels, because a bucket age cannot tell an open ask from an answered one; a removed seat's mailbox record; and a coding run's bridged calls that its own lifecycle failed to purge, because a parked run's calls can be days old and still be what its resume is judged on. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 The one thing that is still per-process: `max_concurrent`. Tier A's
 `node.max_concurrent` (default 32) is the gate every agent turn takes a slot

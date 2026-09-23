@@ -265,8 +265,7 @@ func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
 	return statelog.AdoptedAt(ctx, g.db)
 }
 
-// GateRecordVersion is the version every gate-installing record carries, FOR
-// EVER.
+// GateRecordVersion is the version the eviction record carries, FOR EVER.
 //
 // # Why this one number never moves
 //
@@ -275,11 +274,21 @@ func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
 // that deferred an eviction would leave its own gate table empty and go on
 // applying every record the evicted node appends, and there is no inverse that
 // repairs it. So an un-decodable gate record STOPS that build's applier
-// instead — which only works if a gate record is decodable by every build
-// there will ever be, and that is what pinning the version at one buys.
+// instead. For the eviction that stop is the outcome worth never paying: an
+// eviction is written about a node that has already gone silent
+// ([Writer.EvictNode]), and a stop would halt more appliers at the same moment.
+// Pinned at one, every build decodes it and none stops on it — so its SHAPE can
+// only ever grow by addition, never by reshaping, for the life of the
+// deployment, and a semantic change takes a new record kind.
 //
-// The consequence is deliberate: a gate record's SHAPE can only ever grow by
-// addition, never by reshaping, for the life of the deployment.
+// # The purge is a gate too, and it did not stay at one
+//
+// Its apply changed, and it is written at [PurgeRecordVersion] because of
+// that: kept at one, a build that reads one would apply the new purge by the
+// rule it replaced. A new kind was not open to it the way it is to the
+// eviction — a purge's subject is the task it destroys, which is what
+// arbitrates it against every other write to that task. So an older build
+// stops at a purge it cannot read, and that stop is the price.
 const GateRecordVersion = 1
 
 // PurgeResult is what an operator is told after a purge, in THREE SIBLING
@@ -347,7 +356,7 @@ type PurgeResult struct {
 // tell is told nothing, and the record still names itself `purged` because the
 // kind is the writer's and not the notification's. The purge's row in the feed
 // carries the same line either way — with no notification to bring it, the
-// feed builds it from the deletion marker ([readActivity]).
+// applier writes it onto the row ([Applier.purgeLine]).
 func purgeWake(task Task, reason, actor string, leads Leads) *Notify {
 	if leads == nil {
 		return nil
@@ -403,10 +412,9 @@ const purgeReasonSeparator = ": "
 // and it is read in two places that must agree: the lead's notification
 // carries it as an excerpt, which [Notify.Validate] bounds at [MaxExcerpt], and
 // the purge's row in the activity feed carries the same line — the
-// notification's, or with no lead to notify, the one the feed builds from the
-// deletion marker ([readActivity]). A reason cut to fit the notification
-// would leave the lead reading a different sentence from the one the feed
-// shows.
+// notification's, or with no lead to notify, the one the applier writes onto
+// the row ([Applier.purgeLine]). A reason cut to fit the notification would
+// leave the lead reading a different sentence from the one the feed shows.
 //
 // Applied whether or not the project has a lead to tell, so that what a purge
 // accepts does not change when somebody is appointed lead.
@@ -489,10 +497,14 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 					Key: current.Key, Bytes: stated, Room: room,
 				}
 			}
+			// THE PAYLOAD STATES THE RECORD'S OWN VERSION, the one
+			// [Writer.decide] stamps on the envelope, so the two never
+			// disagree about which rule the purge was written for.
 			decision, err := w.decide(subject, OpPurge, ChangePurged, scope, opID, struct {
 				V      int    `json:"v"`
 				Reason string `json:"reason,omitempty"`
-			}{V: GateRecordVersion, Reason: reason}, purgeWake(current, reason, w.Actor, w.Leads), at)
+			}{V: recordVersionOf(subject, OpPurge), Reason: reason},
+				purgeWake(current, reason, w.Actor, w.Leads), at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}

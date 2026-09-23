@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -37,6 +38,12 @@ type roundTrip struct {
 	waiter   *testWaiter
 	metrics  *metrics.Recorder
 	consumed uint64
+
+	// publisher and claims are what [roundTrip.peer] builds a second
+	// node's writer over. The claims are the coordination store every
+	// writer here shares, which a case can take away ([coordtest.Faulty]).
+	publisher *statelog.Publisher
+	claims    *coordtest.Faulty
 
 	// at is the writer's AUTHORED clock, which a case moves when it is
 	// about the order of instants somebody typed. It defaults to
@@ -158,16 +165,21 @@ func newRoundTripOver(t *testing.T,
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
+	r.publisher, r.claims = publisher, coordtest.NewFaulty(memory.New())
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
 		Publisher: publisher, DB: db, NodeID: "node-a",
 		// A REAL CLAIM BACKEND, because the WALKING sequences refuse
 		// without one and a harness that could not run them left the
 		// cross-project move — and everything it reads, including the
 		// subtree walk the trash shares — with no test at all. In-memory
-		// is the whole of what a single-node harness needs: the claim is
-		// there to exclude a SECOND node.
-		Claims: memory.New(),
-		Actor:  "ana", ActorKind: tracker.AuthorHuman,
+		// is the whole of what a single-node harness needs: its leases
+		// exclude a SECOND node, which [roundTrip.peer] stands in for.
+		Claims: r.claims,
+		// THE SAME RECORDER AS THE PUBLISHER'S, for the instruments the
+		// writer owns — a bulk edit's projected occupancy among them,
+		// which is counted only when the edit is admitted.
+		Metrics: recorder,
+		Actor:   "ana", ActorKind: tracker.AuthorHuman,
 		Now: func() time.Time { return r.at },
 	})
 	if err != nil {
@@ -189,6 +201,22 @@ func newRoundTripOver(t *testing.T,
 	r.writer, r.applier = writer, tracker.NewApplier("node-a")
 	r.reader, r.waiter = reader, waiter
 	return r
+}
+
+// peer is a writer acting for ANOTHER NODE over this harness's log, store and
+// claim backend: a lease it takes is held by that node, which is what a walk
+// running on a peer looks like to this one.
+func (r *roundTrip) peer(node string) *tracker.Writer {
+	r.t.Helper()
+	w, err := tracker.NewWriter(tracker.WriterDeps{
+		Publisher: r.publisher, DB: r.db, NodeID: node, Claims: r.claims,
+		Actor: "bea", ActorKind: tracker.AuthorHuman,
+		Now: func() time.Time { return r.at },
+	})
+	if err != nil {
+		r.t.Fatalf("build %s's writer: %v", node, err)
+	}
+	return w
 }
 
 // holdTheAppliersPin takes the pinned writer this harness's replicated estate

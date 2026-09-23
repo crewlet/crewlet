@@ -23,16 +23,12 @@ import (
 // instead, and it is the same copy a seat's own tools read, so an operator and
 // an agent looking at one task see one task.
 //
-// The two halves reach that copy differently, and the difference is visible in
-// the answers rather than hidden here: the tracker's rows are derived by an
-// applier from an ordered log, so every answer carries the level it was served
-// at and what it could not account for; the wiki's are maintained by a
-// projector following a bucket's change feed, which could only say hydrated or
-// not.
+// Both halves' rows are derived by an applier from an ordered log, so every
+// answer carries the level it was served at and what it could not account for.
 //
 // # A COPY THAT HAS NOT CAUGHT UP SAYS SO rather than answering empty
 //
-// Both native backends are state-log domains now, so both say it the same way:
+// Both native backends are state-log domains, so both say it the same way:
 // through the coverage every answer carries, which is a POSITION rather than a
 // boolean. "This company has no work" is an answer a person acts on — they
 // file the duplicate, they conclude the migration failed — and a node that has
@@ -43,19 +39,19 @@ import (
 //
 // # Why every question calls it, and why it is not a second parser
 //
-// Thirteen registered questions here take a level and a staleness bound, and
-// exactly one of them read either: `work_items`, because it is the one that
-// goes through the query grammar. The other twelve wrote a hardcoded `stale`
-// into the query and never looked at `read_level`, `max_lag_seconds` or
-// `max_lag_seq` at all — so a caller asking a project listing for a
-// linearizable answer was served this node's rows and told, in the answer's
-// own `read_level` field, that it came back linearizable.
+// Every question here takes a level and a staleness bound, and only one of
+// them used to read either: `work_items`, because it is the one that goes
+// through the query grammar. The others wrote a hardcoded `stale` into the
+// query and never looked at `read_level`, `max_lag_seconds` or `max_lag_seq`
+// at all — so a caller asking a project listing for a linearizable answer was
+// served this node's rows and told, in the answer's own `read_level` field,
+// that it came back linearizable.
 //
-// A NAMED CONSTANT WOULD NOT HAVE FIXED THAT. Replacing thirteen `stale`
-// literals with one `dashboardReadLevel` makes them agree, which they already
-// did — what was wrong is that they were literals AT ALL, on the one surface
-// whose caller is allowed to choose. So the function is the unit here, and
-// there is no level constant beside it to reach for by mistake.
+// A NAMED CONSTANT WOULD NOT HAVE FIXED THAT. Replacing those `stale` literals
+// with one `dashboardReadLevel` makes them agree, which they already did —
+// what was wrong is that they were literals AT ALL, on the one surface whose
+// caller is allowed to choose. So the function is the unit here, and there is
+// no level constant beside it to reach for by mistake.
 //
 // The rules themselves are [tracker.ParseFreshness]'s and not restated here.
 // One grammar serves the board, the socket, the REST route and a seat's own
@@ -487,6 +483,18 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 
 // ---- pages ------------------------------------------------------------- //
 
+// pageList answers the `pages` question: one page of a filtered listing.
+//
+// A WALK IS BY CURSOR. `after` takes a listing's own `next_cursor` (or a page
+// detail's `children_cursor`, with `parent` and `status=published`) and starts
+// strictly after the page it names, so a page that leaves the part already
+// read between two reads moves nothing else — see [pages.Filter.After].
+//
+// `offset` STAYS FOR ONE CALLER, the dashboard's page browse, which pages by
+// it and carries it in its own URL. It counts rows rather than naming one, so
+// a walk by it skips a page whenever one ahead of it leaves the listing and
+// repeats one whenever one enters; what it shows is a window at a numbered
+// position, as [pages.Filter.Offset] says.
 func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	f := pages.Filter{
 		Container: strings.ToUpper(strings.TrimSpace(p.String("container"))),
@@ -495,6 +503,7 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		Watcher:   strings.TrimSpace(p.String("watcher")),
 		Title:     strings.TrimSpace(p.String("title")),
 		Limit:     Clamp(p.Int("limit", 0), pages.DefaultLimit, pages.MaxLimit),
+		After:     strings.TrimSpace(p.String("after")),
 		Offset:    p.Int("offset", 0),
 	}
 	for _, name := range splitList(p.String("status")) {
@@ -527,19 +536,30 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	list, err := s.Pages.List(ctx, f, fresh)
-	if err != nil {
+	switch {
+	case errors.Is(err, pages.ErrInvalid):
+		// A REFUSAL ABOUT THE REQUEST: the reader refuses an `after` that
+		// does not decode as a cursor, naming it, and the caller has to
+		// change it. Unmapped, it would reach a client as `query_failed`
+		// and a 500 — a broken server rather than a request to fix.
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	case err != nil:
 		return nil, err
 	}
-	return map[string]any{
+	out := map[string]any{
 		"pages": list.Pages, "limit": f.Limit, "offset": f.Offset,
-		// TWO KINDS OF INCOMPLETE, and `complete` only ever covered one.
+		// TWO KINDS OF INCOMPLETE, and `complete` only ever covers one.
 		// It is about a deferred record's scope meeting the read;
-		// `truncated` is about the page filling, which `offset` is how a
-		// caller gets past.
+		// `truncated` is about the page filling, and `next_cursor` is how
+		// a caller gets past it.
 		"truncated":  list.Truncated,
 		"read_level": list.Level, "complete": list.Complete,
 		"position": list.Position, "log_lag": list.LogLag,
-	}, nil
+	}
+	if list.NextCursor != "" {
+		out["next_cursor"] = list.NextCursor
+	}
+	return out, nil
 }
 
 func (s Sources) page(ctx context.Context, p Params) (any, error) {

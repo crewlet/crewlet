@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -387,4 +389,147 @@ func taskOf(t *testing.T, r *roundTrip, id string) tracker.Task {
 		t.Fatalf("read task %s: %v", id, err)
 	}
 	return task
+}
+
+// ONE BULK EDIT APPLIES AT A TIME, ON ONE NODE AS ACROSS TWO — AND ONLY AN
+// ADMITTED ONE IS COUNTED.
+//
+// The admission's lease is taken for the NODE, and a lease asked for again by
+// the owner that holds it is renewed rather than refused — so on the lease
+// alone every bulk edit a node's seats made was admitted whatever else that
+// node was applying, which on a single node is every bulk edit there is. The
+// second is refused while the first applies, and admitted once it has.
+//
+// The occupancy counter is the fleet's read-degradation budget, so a refused
+// bulk, which applies nothing, adds nothing to it.
+func TestOneBulkEditAppliesAtATimeOnOneNode(t *testing.T) {
+	t.Parallel()
+	r, hooked := newHookedRoundTrip(t)
+	for _, id := range []string{"t-1", "t-2", "t-3"} {
+		filedTask(t, r, id)
+	}
+	var second error
+	hooked.arm(func(_, opID string) bool { return opID == "op-bulk.b0" },
+		func() {
+			_, second = r.writer.As("bea", tracker.AuthorAgent, tracker.Provenance{}).
+				UpdateTasks(t.Context(), "op-bulk-2", []string{"t-3"}, "ENG",
+					tracker.TaskPatch{Title: ptr("second")}, tracker.ChangeFields, nil)
+		})
+
+	done := tracker.StatusDone
+	if _, err := r.writer.UpdateTasks(t.Context(), "op-bulk", []string{"t-1", "t-2"},
+		"ENG", tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
+		t.Fatalf("UpdateTasks: %v", err)
+	}
+	if !hooked.didFire() {
+		t.Fatal("the second bulk was never attempted, so this case is not the " +
+			"shape it names")
+	}
+	if !errors.Is(second, tracker.ErrBulkInFlight) {
+		t.Fatalf("a second bulk while the first applied answered %v, want it "+
+			"refused as in flight", second)
+	}
+	// TWO SUBJECTS, at the one-row-a-second floor a writer with no measured
+	// drain projects from: the admitted bulk's two seconds, and nothing for
+	// the one refused.
+	if got := bulkOccupancy(r); got != 2 {
+		t.Errorf("the occupancy counter reads %d seconds, want the admitted "+
+			"bulk's 2", got)
+	}
+	// AND THE CLAIM WAS GIVEN BACK: the next bulk here is admitted.
+	if _, err := r.writer.UpdateTasks(t.Context(), "op-bulk-3", []string{"t-3"},
+		"ENG", tracker.TaskPatch{Title: ptr("third")}, tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("a bulk after the first had applied answered %v", err)
+	}
+}
+
+// bulkOccupancy is the projected applier seconds this rig's bulk edits were
+// admitted for.
+func bulkOccupancy(r *roundTrip) uint64 {
+	var total uint64
+	for _, snap := range r.metrics.Read() {
+		if snap.Name == metrics.TrackerBulkApplySeconds {
+			total += snap.Total
+		}
+	}
+	return total
+}
+
+// WITH THE STORE UNREACHABLE A BULK IS ADMITTED — BUT STILL ONE AT A TIME HERE.
+//
+// The admission fails OPEN on an unknown, because the log is correct with two
+// bulks in flight and merely slow. What the store cannot say is whether a PEER
+// is applying one; whether this node is, it knows without asking. So a second
+// bulk on this node is refused while the first applies, and the first hands
+// its claim back like any other.
+func TestABulkEditOnAnUnreachableStoreIsStillOneAtATimeHere(t *testing.T) {
+	t.Parallel()
+	r, hooked := newHookedRoundTrip(t)
+	for _, id := range []string{"t-1", "t-2", "t-3"} {
+		filedTask(t, r, id)
+	}
+	var second error
+	hooked.arm(func(_, opID string) bool { return opID == "op-bulk.b0" },
+		func() {
+			_, second = r.writer.UpdateTasks(t.Context(), "op-bulk-2",
+				[]string{"t-3"}, "ENG", tracker.TaskPatch{Title: ptr("second")},
+				tracker.ChangeFields, nil)
+		})
+
+	r.claims.Break(nil)
+	done := tracker.StatusDone
+	if _, err := r.writer.UpdateTasks(t.Context(), "op-bulk", []string{"t-1", "t-2"},
+		"ENG", tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
+		t.Fatalf("a bulk with the store unreachable answered %v, want it "+
+			"admitted", err)
+	}
+	if !hooked.didFire() {
+		t.Fatal("the second bulk was never attempted, so this case is not the " +
+			"shape it names")
+	}
+	if !errors.Is(second, tracker.ErrBulkInFlight) {
+		t.Fatalf("a second bulk on this node answered %v, want it refused as "+
+			"in flight", second)
+	}
+	if _, err := r.writer.UpdateTasks(t.Context(), "op-bulk-3", []string{"t-3"},
+		"ENG", tracker.TaskPatch{Title: ptr("third")}, tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("a bulk after the first had applied answered %v", err)
+	}
+}
+
+// AND A BULK'S CLAIM IS NOT FREE HERE UNTIL ITS LEASE IS GIVEN BACK, for the
+// reason a walk's is not ([TestAClaimIsNotFreeHereUntilItsLeaseIsGivenBack]).
+func TestABulkClaimIsNotFreeHereUntilItsLeaseIsGivenBack(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t-1", "t-2"} {
+		filedTask(t, r, id)
+	}
+	claims := &releasingClaims{Claims: r.claims}
+	writer, err := tracker.NewWriter(tracker.WriterDeps{
+		Publisher: r.publisher, DB: r.db, NodeID: "node-a", Claims: claims,
+		Actor: "ana", ActorKind: tracker.AuthorHuman,
+		Now: func() time.Time { return r.at },
+	})
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	var second error
+	claims.arm(func() {
+		_, second = writer.As("bea", tracker.AuthorAgent, tracker.Provenance{}).
+			UpdateTasks(t.Context(), "op-bulk-2", []string{"t-2"}, "ENG",
+				tracker.TaskPatch{Title: ptr("second")}, tracker.ChangeFields, nil)
+	})
+	if _, err := writer.UpdateTasks(t.Context(), "op-bulk", []string{"t-1"}, "ENG",
+		tracker.TaskPatch{Title: ptr("first")}, tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("UpdateTasks: %v", err)
+	}
+	if !claims.fired() {
+		t.Fatal("nothing asked for the claim while it was being given back, so " +
+			"this case is not the shape it names")
+	}
+	if !errors.Is(second, tracker.ErrBulkInFlight) {
+		t.Fatalf("a bulk asking while the admission's lease was being given "+
+			"back answered %v, want it refused as in flight", second)
+	}
 }
