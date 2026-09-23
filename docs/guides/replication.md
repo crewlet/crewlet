@@ -134,6 +134,61 @@ That is why the trim refuses to advance past a floor no backup has reached.
 The backup schedule is a **correctness input**, not hygiene. See
 [Retention](retention.md).
 
+## A node resumes from its rows, never from its reader
+
+Each node reads each log through a durable consumer of its own on the broker,
+named after the node. That consumer's position is a second, weaker number than
+the checkpoint: it moves *after* the commit, and the broker keeps it when the
+node's database does not. The checkpoint is what the node resumes from — but
+resuming can only drop what arrives below it. Nothing on the node's side can
+make the broker hand over again a record it has already delivered and been told
+was applied.
+
+So at every boot the node compares the two, and a consumer that disagrees with
+the rows is deleted and created again at the checkpoint. Each rebuild is logged
+as `jetstream_domain_consumer_rebuilt`, naming the `drift`:
+
+| `drift` | What it means | What it would have cost |
+|---|---|---|
+| `acknowledged_past_checkpoint` (a `WARN`) | The broker was told records past the checkpoint were applied, so this node's replicated database is older than its reader. The database was deleted, or restored from a backup. | The node never hydrates, and every write on the missing objects refuses `behind`. On the vector log, where nothing checks for gaps, the skipped records' rows are just missing. |
+| `delivered_past_checkpoint` | Records past the checkpoint were handed to a process that has since stopped. | The node stays behind until the 30-second ack window returns them. |
+| `in_flight_for_a_gone_reader` | Deliveries at or below the checkpoint are held for a process that has since stopped. | Each one holds a slot of the in-flight ceiling for 30 seconds. When they fill it, nothing new arrives. |
+| `behind_checkpoint` | The rows moved without the reader, which is what adopting a snapshot at boot does. | Every record in between is delivered only to be dropped. |
+
+A clean restart logs none of these: a node that applied and acknowledged
+everything it was handed keeps its consumer as it is.
+
+A node below the trim floor is not ahead of its rows either, although its
+reader reports records past the checkpoint as read: the broker moves a reader
+over the records the trim removed, to the first one the log still holds. The
+node reads the log's first sequence to tell the two apart. If it cannot read
+it, it judges the raw positions and rebuilds, and the
+`acknowledged_past_checkpoint` warning then says the log's first sequence was
+unreadable, so it may be either case.
+
+A rebuild is a delete and a create on the broker, and on a fleet whose broker
+is not answering, either one can fail. What happens then depends on the drift:
+
+- **`behind_checkpoint` and `in_flight_for_a_gone_reader`**: the node asks the
+  broker which reader it now holds, keeps that one, and logs
+  `jetstream_domain_consumer_rebuild_failed` as a `WARN`. Neither drift has
+  handed over a record past the checkpoint, so keeping the reader costs what
+  the table says and loses nothing. The next boot rebuilds it.
+- **`acknowledged_past_checkpoint` and `delivered_past_checkpoint`**: the boot
+  fails and names the domain. A node left on that reader could wait for ever.
+- **Any drift where the broker holds no reader after the failure, or cannot say
+  which it holds**: the boot fails too. A reader the node guessed at could be
+  one that no longer exists, and every read through it would fail while the
+  node reported itself up.
+
+A rebuild touches only this node. No peer reads through its consumer, and no
+retention term reads it either: the trim works from the positions each node
+publishes from its own rows. What the rebuild makes safe is **losing the
+replicated database while the broker keeps its estate**. A node started on an
+empty `crewlet-replicated.db` replays each log from the broker, or adopts a
+peer's snapshot where the trim has already removed the start of one. It no
+longer waits on records its old reader already acknowledged.
+
 ## Replication lag is two positions
 
 Not one number. Every node publishes both:

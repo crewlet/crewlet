@@ -1130,7 +1130,7 @@ func (q *Queue) stampSubscriptionPair(ctx context.Context, stream string,
 	}
 	maps.Copy(config.Metadata, subscriptionMetadata(topic, group))
 
-	// ITS OWN BUDGET, for the reason [Queue.alignDomainConsumer] gives: an
+	// ITS OWN BUDGET, for the reason [DomainConsumer.resumeAt] gives: an
 	// UpdateConsumer is a write against the same metadata group as the
 	// create, and the caller's context either carries the deadline that
 	// just expired or carries none at all, which hands nats.go its
