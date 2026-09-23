@@ -40,6 +40,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -169,11 +170,27 @@ type Narration struct {
 // It carries the REFUSING SCOPE rather than just a boolean, because the
 // alternative — re-reading the caps to work out which budget said no — is a
 // read a peer's spend can invalidate between the refusal and the report.
+//
+// And the WINDOW it refused in, for the same reason and one more: a ceiling is
+// per calendar window (the day, the ISO week or the month on the company's
+// clock), so "the company is out" says nothing about when it will have room
+// again. Period, Window and ResetsAt are the refusing window as the counter
+// named it — the one that ends last where several refused, which is when the
+// scope next admits the charge without a ceiling being raised. All three are
+// empty for a refusal that has no calendar window, which is a sub-agent
+// call's own slice.
 type SpendOutcome struct {
 	OK    bool
 	Scope string
 	Used  int
 	Limit int
+
+	// Period is the refusing window's period, Window its label
+	// (`2026-09-23`, `2026-W39`, `2026-09`) and ResetsAt the instant it
+	// turns over, when its allowance comes back.
+	Period   period.Period
+	Window   string
+	ResetsAt time.Time
 }
 
 // BudgetMeter is the shared token counter a turn charges.
@@ -190,15 +207,27 @@ type BudgetMeter interface {
 // differently.
 var ErrBudgetExhausted = errors.New("toolloop: token budget exhausted")
 
-// BudgetError carries which scope refused.
+// BudgetError carries which scope refused, and in which calendar window — see
+// [SpendOutcome], whose fields it carries unchanged.
 type BudgetError struct {
 	Scope string
 	Used  int
 	Limit int
+
+	Period   period.Period
+	Window   string
+	ResetsAt time.Time
 }
 
+// Error names the window and when it resets where the refusal has one, because
+// that is the half an operator acts on: a day that resets tonight and a month
+// that resets in three weeks are different decisions about raising a ceiling.
 func (e *BudgetError) Error() string {
-	return fmt.Sprintf("%s (%s budget: %d/%d)", ErrBudgetExhausted, e.Scope, e.Used, e.Limit)
+	if e.Window == "" {
+		return fmt.Sprintf("%s (%s budget: %d/%d)", ErrBudgetExhausted, e.Scope, e.Used, e.Limit)
+	}
+	return fmt.Sprintf("%s (%s %s budget, window %s: %d/%d, resets %s)", ErrBudgetExhausted,
+		e.Scope, e.Period, e.Window, e.Used, e.Limit, e.ResetsAt.UTC().Format(time.RFC3339))
 }
 
 // Is makes every budget breach match [ErrBudget], so a caller can test the
@@ -859,7 +888,10 @@ func charge(ctx context.Context, meter BudgetMeter, tokens int) error {
 	if scope == "" {
 		scope = "org"
 	}
-	return &BudgetError{Scope: scope, Used: outcome.Used, Limit: outcome.Limit}
+	return &BudgetError{
+		Scope: scope, Used: outcome.Used, Limit: outcome.Limit,
+		Period: outcome.Period, Window: outcome.Window, ResetsAt: outcome.ResetsAt,
+	}
 }
 
 // ranTerminator reports whether this round ran a tool that ends the loop.

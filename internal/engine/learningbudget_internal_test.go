@@ -103,15 +103,45 @@ func TestAnAuxiliaryCompletionChargesTheSharedCounter(t *testing.T) {
 	}
 }
 
-// WITH NO CEILING TO ENFORCE THE PROVIDER IS UNWRAPPED, so an unlimited
-// company pays no round trip per auxiliary call to be told "yes" — the same
-// reason meterFor returns nil rather than an always-allow meter.
-func TestWithNoBudgetTheProviderIsNotWrapped(t *testing.T) {
+// WITH NO COUNTER TO CHARGE THE PROVIDER IS UNWRAPPED: a wrapper over a nil
+// meter would panic on the first completion rather than charge anything.
+func TestWithNoCounterTheProviderIsNotWrapped(t *testing.T) {
 	t.Parallel()
 	inner := &answeringProvider{in: 5, out: 5}
 	member := meteredHead(t, inner, nil)
 	if member.Provider != llm.Provider(inner) {
-		t.Fatal("a company with no ceiling still got a metered provider")
+		t.Fatal("a seat with no counter still got a metered provider")
+	}
+}
+
+// AN UNCAPPED COMPANY'S AUXILIARY SPEND IS COUNTED TOO. The counters are what
+// a ceiling set later judges, so spend that reached none of them would be a
+// window handed back its whole allowance the moment somebody capped it.
+func TestAnUncappedSeatsAuxiliarySpendIsCounted(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	free := &org.Role{Name: "Free"}
+	c := meteredCompany(config.TokenBudget{}, free)
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	models := meteredModels{
+		inner:  staticModels{provider: &answeringProvider{in: 30, out: 12}},
+		charge: func(seat *org.Role) toolloop.BudgetMeter { return e.meterFor(c, seatHandle(seat)) },
+	}
+	member, err := models.Head(free, phase.Auxiliary)
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if _, err := member.Provider.Complete(ctx, llm.Request{}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, free)} {
+		u, err := fleet.Used(ctx, scope, windows)
+		if err != nil || u.In(period.Day).Used != 42 {
+			t.Errorf("%s's day = (%+v, %v), want the 42 tokens the completion spent",
+				scope, u.In(period.Day), err)
+		}
 	}
 }
 

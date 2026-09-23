@@ -259,7 +259,10 @@ can never refuse a turn, because another ceiling is always reached first:
 
 Spend is counted in the fleet's [coordination store](../concepts/coordination.md#token-budgets-are-windows),
 one figure per window, so it survives restarts and is one number for the whole company however
-many nodes run it. There is **no reset**: a
+many nodes run it — and a window nothing caps is counted too, so a ceiling added mid-window
+judges the spend already in it. A seat whose capped window is refusing is not handed work: its
+mail waits on its inbox until the window turns over or a revision raises the ceiling (see
+[the budget park](../concepts/agent-runtime.md#the-budget-park)). There is **no reset**: a
 window's allowance comes back when the window turns over, and room before then is made by
 raising its ceiling. See [Deployment § Token Budgets](../guides/deployment.md#token-budgets)
 for how a refusal is recorded and reported.

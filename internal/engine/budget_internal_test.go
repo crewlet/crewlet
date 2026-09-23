@@ -110,8 +110,9 @@ func TestAnUnreachableCounterRefusesRatherThanReportingZero(t *testing.T) {
 	}
 }
 
-// AN UNCAPPED SEAT READS ZERO WITH NO ERROR AND NO STORE ROUND TRIP, which is
-// the same "no ceiling" a company that set no budget already has.
+// AN UNCAPPED METER READS ZERO WITH NO ERROR AND NO STORE ROUND TRIP. Nothing
+// is handed one to ask ([Engine.remainingFor] is nil for such a seat); this is
+// the answer if something ever is.
 func TestAnUncappedSeatNeedsNoCounterRead(t *testing.T) {
 	t.Parallel()
 	m := &meter{
@@ -175,5 +176,79 @@ func TestTheBasisIsReadOffTheEpoch(t *testing.T) {
 	}
 	if basisOf(nil, nil).zone != time.UTC {
 		t.Fatal("a missing epoch did not read as UTC")
+	}
+}
+
+// EVERY SEAT IS COUNTED, A COMPANY THAT CAPS NOTHING INCLUDED.
+//
+// The meter used to be nil for such a company, so nothing counted its spend: a
+// ceiling added mid-window started from zero, handing the window back the
+// whole allowance the morning had already spent, and every reader of the
+// counters showed an uncapped company as having spent nothing.
+func TestAnUncappedCompanyIsCounted(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	free := &org.Role{Name: "Free"}
+	c := meteredCompany(config.TokenBudget{}, free)
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+
+	m := e.meterFor(c, free.Handle())
+	if m == nil {
+		t.Fatal("a seat with no ceiling got no meter, so nothing counts its spend")
+	}
+	if got, err := m.Spend(ctx, 250); err != nil || !got.OK {
+		t.Fatalf("Spend = (%+v, %v), want admitted: nothing caps it", got, err)
+	}
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, free)} {
+		u, err := fleet.Used(ctx, scope, windows)
+		if err != nil || u.In(period.Day).Used != 250 || u.In(period.Month).Used != 250 {
+			t.Errorf("%s = (%+v, %v), want the 250 in the day and the month", scope, u, err)
+		}
+	}
+	// And a fan-out is told the seat is uncapped, not that it has 0 left.
+	if e.remainingFor(c, free.Handle()) != nil {
+		t.Error("an uncapped seat was handed a headroom reader; its zero reads as exhausted")
+	}
+}
+
+// THE CAPS A TURN IS JUDGED BY ARE THE ONES IT WAS PINNED TO, and the clock is
+// its epoch's: a revision that raises a ceiling mid-turn takes effect on the
+// NEXT turn, like every other epoch read.
+func TestAMeterPinsItsTurnsCapsAndClock(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	pinned := meteredCompany(config.TokenBudget{}, lead)
+	pinned.Config.Timezone = "Asia/Tokyo"
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	m := e.meterFor(pinned, lead.Handle())
+
+	// The revision that lands mid-turn, current from here on.
+	raisedLead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 1_000_000}}
+	raised := meteredCompany(config.TokenBudget{}, raisedLead)
+	e.epoch.current.Store(raised)
+
+	if got, err := m.Spend(ctx, 100); err != nil || !got.OK {
+		t.Fatalf("Spend(100) = (%+v, %v)", got, err)
+	}
+	got, err := m.Spend(ctx, 1)
+	if err != nil || got.OK {
+		t.Fatalf("a round past the pinned ceiling = (%+v, %v), want refused", got, err)
+	}
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	day := period.At(period.Day, time.Now(), tokyo)
+	if got.Period != period.Day || got.Window != day.Label || !got.ResetsAt.Equal(day.End) {
+		t.Errorf("refusal = %s %q resets %v, want Tokyo's day %q resetting %v",
+			got.Period, got.Window, got.ResetsAt, day.Label, day.End)
+	}
+	// The NEXT turn is built on the revision, and has room.
+	if next, err := e.meterFor(raised, raisedLead.Handle()).Spend(ctx, 1); err != nil || !next.OK {
+		t.Errorf("a turn on the raised ceiling = (%+v, %v), want admitted", next, err)
 	}
 }

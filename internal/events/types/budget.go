@@ -40,6 +40,20 @@ type BudgetExhausted struct {
 	BudgetType BudgetScope `json:"budget_type"`
 	UsedTokens int         `json:"used_tokens"`
 	MaxTokens  int         `json:"max_tokens"`
+	// Period, Window and ResetsAt are the calendar window that refused:
+	// its period (`day`, `week` or `month`), its label on the company's
+	// clock (`2026-09-23`, `2026-W39`, `2026-09`) and the instant it turns
+	// over, as RFC 3339 in UTC. UsedTokens and MaxTokens are that window's
+	// spend and ceiling. Where several windows refused it is the one that
+	// ends last, which is when the scope next has room without a ceiling
+	// being raised.
+	//
+	// ADDITIVE, and omitted rather than empty: a record from a build that
+	// counted one lifetime figure has no window, and a consumer must read
+	// that absence as "not stated" rather than as a window with no name.
+	Period   string `json:"period,omitempty"`
+	Window   string `json:"window,omitempty"`
+	ResetsAt string `json:"resets_at,omitempty"`
 }
 
 // EventType is the "budget_exhausted" wire type, and one of the four

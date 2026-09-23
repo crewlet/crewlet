@@ -338,6 +338,17 @@ func bindsBefore(a WindowUsage, ac, ai int, b WindowUsage, bc, bi int) bool {
 	return outlasts(a.Window, ai, b.Window, bi)
 }
 
+// Outlasts reports whether a scope waits on window a longer than on b: a ends
+// later, or ends at the same instant and is the longer period.
+//
+// Exported so a caller choosing ACROSS scopes — the company's refusing window
+// against the seat's — answers with the one tie-break every "which window"
+// answer here takes, rather than a copy of it that could drift from the window
+// [Spend.RefusedWindow] names.
+func Outlasts(a, b period.Window) bool {
+	return outlasts(a, slotOf(a.Period), b, slotOf(b.Period))
+}
+
 // outlasts reports whether window a, of the period at position ai in
 // [period.Periods], is the one a scope waits on longer than b at bi: it ends
 // later, or ends at the same instant and is the longer period.
